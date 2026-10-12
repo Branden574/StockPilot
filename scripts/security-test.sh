@@ -1329,6 +1329,13 @@ MOBILE_TESTS=(
   # organization, account or selection is refused, never shown; memberships
   # are read as the member (RLS), and a failed read groups nothing.
   src/lib/display-groups.test.ts
+  # Ungroup anything (owner 2026-10-12): the phone's Ungroup review and Save
+  # are online only, sent under the record's organization and only the
+  # signed-in account; a review for another organization, account or
+  # selection, or an answer for another organization, is refused, never
+  # shown; the select bar offers a size family only with sports:manage and
+  # the sports module on.
+  src/lib/ungroup-selected.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

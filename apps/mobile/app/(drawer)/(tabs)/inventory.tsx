@@ -49,6 +49,7 @@ import { IconChip } from '@/components/ui/row';
 import { ItemListSkeleton } from '@/components/ui/skeleton';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { Thumb } from '@/components/ui/thumb';
+import { onRecordsUngrouped } from '@/lib/ungroup-selected';
 import { countSelection, useIsPicked } from '@/lib/use-count-selection';
 import { showWriteCtaForRole } from '@/lib/cta-gating';
 import {
@@ -70,6 +71,7 @@ import { itemListGlyph, type ItemListGlyph } from '@/lib/item-list-glyph';
 import {
   buildGroupUnits,
   buildGroupedRows,
+  ungroupFactsByItem,
   type GroupedRow as InventoryGroupedRow,
 } from '@/lib/inventory-grouping';
 import {
@@ -625,6 +627,14 @@ export default function Inventory() {
     return () => clearTimeout(t);
   }, [q, filter, orgId, load, activeWarehouseId]);
 
+  // An Ungroup saved on the review screen (owner 2026-10-12) can change a
+  // record's SKU or size family as well as its group: re-read the rows (and
+  // their memberships with them), not the memberships alone.
+  React.useEffect(() => {
+    if (!orgId) return;
+    return onRecordsUngrouped(() => void load(orgId, q, filter, activeWarehouseId));
+  }, [q, filter, orgId, load, activeWarehouseId]);
+
   async function onRefresh() {
     if (!orgId) return;
     setRefreshing(true);
@@ -659,10 +669,6 @@ export default function Inventory() {
     },
     [router],
   );
-
-  const onToggleSelect = React.useCallback((it: Item) => {
-    countSelection.toggle({ id: it.id, sku: it.sku, name: it.name, itemType: 'product' });
-  }, []);
 
   const toggleGroup = React.useCallback((styleKey: string) => {
     setExpandedGroups((prev) => {
@@ -726,6 +732,22 @@ export default function Inventory() {
     [items, displayGroups],
   );
   const units = React.useMemo(() => buildGroupUnits(groupedItems), [groupedItems]);
+  // Ungroup anything (owner 2026-10-12): what each record would leave on
+  // Ungroup (its group, a shared SKU, its size family, and the one it is
+  // shown under in these units), kept with the pick when it is ticked.
+  const ungroupFacts = React.useMemo(() => ungroupFactsByItem(groupedItems), [groupedItems]);
+  const onToggleSelect = React.useCallback(
+    (it: Item) => {
+      countSelection.toggle({
+        id: it.id,
+        sku: it.sku,
+        name: it.name,
+        itemType: 'product',
+        grouping: ungroupFacts.get(it.id),
+      });
+    },
+    [ungroupFacts],
+  );
   const pageView = React.useMemo(
     () => paginateGroups(units, { page, groupsPerPage: GROUPS_PER_PAGE }),
     [units, page],

@@ -1921,6 +1921,31 @@ export function chooseUngroupKind(
   return null;
 }
 
+/**
+ * The kind a ticked record would leave, from what a list holds about it, when
+ * this person may undo it; null when nothing (no grouping, a kit, a size family
+ * without permission to unlink one, or a family member that would need its own
+ * SKU: the database refuses that split). The web's bulk bar
+ * (ungroupableItemIds) and the phone's select bar ask this one rule; the review
+ * decides again on what the server reads.
+ */
+export function ungroupOfferKind(
+  facts: { inGroup: boolean; sharesSku: boolean; inFamily: boolean; isBundle?: boolean | null },
+  shownUnder: UngroupKind | null | undefined,
+  canUnlinkFamilies: boolean,
+): UngroupKind | null {
+  if (facts.isBundle) return null;
+  const kinds = new Set<UngroupKind>();
+  if (facts.inGroup) kinds.add('group');
+  if (facts.sharesSku) kinds.add('sku');
+  if (facts.inFamily) kinds.add('family');
+  const kind = chooseUngroupKind(kinds, shownUnder);
+  if (!kind) return null;
+  if (kind === 'family' && !canUnlinkFamilies) return null;
+  if (kind === 'sku' && facts.inFamily) return null;
+  return kind;
+}
+
 /** The facts the bulk bar holds for a loaded row. */
 export interface UngroupRowFacts {
   id: string;
@@ -1964,16 +1989,18 @@ export function ungroupableItemIds(
   const out: string[] = [];
   for (const id of new Set(selectedIds)) {
     const r = byId.get(id);
-    if (!r || r.is_bundle) continue;
-    const kinds = new Set<UngroupKind>();
-    if (r.display_group_id) kinds.add('group');
-    if (shared.has(id)) kinds.add('sku');
-    if (r.group_id) kinds.add('family');
-    const kind = chooseUngroupKind(kinds, options.shownUnder?.get(id));
-    if (!kind) continue;
-    if (kind === 'family' && !options.canUnlinkFamilies) continue;
-    if (kind === 'sku' && r.group_id) continue; // split refuses a family member
-    out.push(id);
+    if (!r) continue;
+    const kind = ungroupOfferKind(
+      {
+        inGroup: !!r.display_group_id,
+        sharesSku: shared.has(id),
+        inFamily: !!r.group_id,
+        isBundle: r.is_bundle,
+      },
+      options.shownUnder?.get(id),
+      options.canUnlinkFamilies,
+    );
+    if (kind) out.push(id);
   }
   return out;
 }

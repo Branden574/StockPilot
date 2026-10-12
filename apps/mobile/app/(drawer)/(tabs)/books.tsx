@@ -53,6 +53,7 @@ import { IconChip } from '@/components/ui/row';
 import { BookListSkeleton } from '@/components/ui/skeleton';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { Thumb } from '@/components/ui/thumb';
+import { onRecordsUngrouped } from '@/lib/ungroup-selected';
 import { countSelection, useIsPicked } from '@/lib/use-count-selection';
 import { showWriteCtaForRole } from '@/lib/cta-gating';
 import {
@@ -79,6 +80,7 @@ import {
   buildGroupUnits,
   buildGroupedRows,
   firstCoverBySku,
+  ungroupFactsByItem,
   type GroupedRow,
 } from '@/lib/inventory-grouping';
 import {
@@ -555,6 +557,14 @@ export default function BooksScreen() {
     return () => clearTimeout(t);
   }, [q, filter, bookCatIds, load, orgId, activeWarehouseId]);
 
+  // An Ungroup saved on the review screen (owner 2026-10-12) can change a
+  // record's SKU as well as its group: re-read the rows (and their
+  // memberships with them), not the memberships alone.
+  React.useEffect(() => {
+    if (!orgId) return;
+    return onRecordsUngrouped(() => void load(q, filter, bookCatIds));
+  }, [q, filter, bookCatIds, load, orgId]);
+
   async function refresh() {
     setRefreshing(true);
     await load(q, filter, bookCatIds);
@@ -584,10 +594,6 @@ export default function BooksScreen() {
     },
     [router],
   );
-
-  const onToggleSelect = React.useCallback((b: BookRow) => {
-    countSelection.toggle({ id: b.id, sku: b.sku, name: b.name, itemType: 'book' });
-  }, []);
 
   const toggleSkuGroup = React.useCallback((sku: string) => {
     setExpandedSkuGroups((prev) => {
@@ -670,6 +676,25 @@ export default function BooksScreen() {
   const units = React.useMemo(
     () => buildGroupUnits(groupedBookRows, { enableSizeRuns: false }),
     [groupedBookRows],
+  );
+  // Ungroup anything (owner 2026-10-12): what each book would leave on
+  // Ungroup (its group, a shared SKU, and the one it is shown under in these
+  // units), kept with the pick when it is ticked.
+  const ungroupFacts = React.useMemo(
+    () => ungroupFactsByItem(groupedBookRows, { enableSizeRuns: false }),
+    [groupedBookRows],
+  );
+  const onToggleSelect = React.useCallback(
+    (b: BookRow) => {
+      countSelection.toggle({
+        id: b.id,
+        sku: b.sku,
+        name: b.name,
+        itemType: 'book',
+        grouping: ungroupFacts.get(b.id),
+      });
+    },
+    [ungroupFacts],
   );
   const pageView = React.useMemo(
     () => paginateGroups(units, { page, groupsPerPage: GROUPS_PER_PAGE }),

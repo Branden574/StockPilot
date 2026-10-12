@@ -4,7 +4,10 @@ import {
   displayGroupChips,
   GROUP_COPY,
   rollupStatus,
+  sharedSkuKey,
+  shownUnderByRecord,
   type DisplayListEntry,
+  type UngroupKind,
 } from '@stockpilot/core';
 
 import type { LifecycleStatus } from './expected-items';
@@ -430,6 +433,51 @@ export function buildGroupedRows<T extends GroupableItem>(
           : GROUP_COPY.chipSameSku(groupName(chip.groupId))
         : null,
       addToGroupId: chip?.kind === 'same-sku' ? chip.groupId : null,
+    });
+  }
+  return out;
+}
+
+/**
+ * What the select bar keeps about a ticked record for Ungroup (owner
+ * 2026-10-12, Ungroup anything): its display group, its size family, whether
+ * another record in the list shares its raw SKU, and the grouping it is shown
+ * under in the list's own composition (core shownUnderByRecord over the same
+ * composeDisplayList the units come from). Taken from the whole filtered set
+ * the tab holds, so a record's header is the one the member sees.
+ */
+export interface UngroupPickFacts {
+  displayGroupId: string | null;
+  familyId: string | null;
+  sharesSku: boolean;
+  shownUnder: UngroupKind | null;
+}
+
+export function ungroupFactsByItem<T extends GroupableItem>(
+  items: readonly T[],
+  opts?: { enableSizeRuns?: boolean },
+): Map<string, UngroupPickFacts> {
+  const shown = shownUnderByRecord(
+    compose(items, opts?.enableSizeRuns !== false, { explicit: EMPTY, skus: EMPTY, runs: EMPTY }),
+    (it) => it.id,
+  );
+  const recordsBySku = new Map<string, Set<string>>();
+  for (const it of items) {
+    const k = sharedSkuKey(it.sku);
+    if (!k) continue;
+    let set = recordsBySku.get(k);
+    if (!set) recordsBySku.set(k, (set = new Set()));
+    set.add(it.id);
+  }
+  const out = new Map<string, UngroupPickFacts>();
+  for (const it of items) {
+    if (out.has(it.id)) continue;
+    const k = sharedSkuKey(it.sku);
+    out.set(it.id, {
+      displayGroupId: it.display_group_id ?? null,
+      familyId: it.group_id ?? null,
+      sharesSku: !!k && (recordsBySku.get(k)?.size ?? 0) >= 2,
+      shownUnder: shown.get(it.id) ?? null,
     });
   }
   return out;

@@ -14,6 +14,15 @@ export interface CountPick {
   sku: string;
   name: string;
   itemType: 'book' | 'product' | string;
+  /** What the list knew about the record for Ungroup when it was ticked
+   *  (lib/inventory-grouping ungroupFactsByItem). Optional: a pick without it
+   *  is offered nothing by Ungroup's bar check (the review reads it again). */
+  grouping?: {
+    displayGroupId: string | null;
+    familyId: string | null;
+    sharesSku: boolean;
+    shownUnder: 'group' | 'sku' | 'family' | null;
+  };
 }
 
 let picks: Record<string, CountPick> = {};

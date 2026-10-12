@@ -83,10 +83,16 @@ const ALLOWED: Record<'web' | 'mobile' | 'core', Record<string, string>> = {
     'app/(drawer)/(tabs)/books.tsx': 'the Books list shows groups',
     'app/(drawer)/(tabs)/inventory.tsx': 'the Items list shows groups',
     'app/group-selected.tsx': 'the review screen',
+    'app/ungroup-selected.tsx':
+      'the Ungroup review (a record leaves its display group; the lists re-read memberships)',
     'app/item/[id].tsx': "the item screen's group line and Remove from group",
     'src/components/count-select-bar.tsx': 'the select bar offers Group',
     'src/lib/display-groups.ts': "the phone's membership reads and grouping client",
     'src/lib/inventory-grouping.ts': "the lists' display rule",
+    'src/lib/ungroup-selected.ts':
+      "the phone's Ungroup client (a pick's display group decides the offer)",
+    'src/lib/use-count-selection.ts':
+      "the shared selection keeps each pick's display group for Ungroup's offer (the count never reads it)",
   },
   core: {
     'inventory/display-units.ts': 'the one display rule (headers and chips)',

@@ -3,13 +3,15 @@ import { ClipboardCheck } from 'lucide-react-native';
 import * as React from 'react';
 import { Alert, Pressable, StyleSheet, View } from 'react-native';
 
-import { GROUP_COPY } from '@stockpilot/core';
+import { GROUP_COPY, UNGROUP_COPY } from '@stockpilot/core';
 
 import { Mono } from '@/components/ui/text';
 import { showWriteCtaForRole } from '@/lib/cta-gating';
 import { groupSelectedHref, phoneGroupingCheck } from '@/lib/display-groups';
+import { useEnabledModules } from '@/lib/enabled-modules';
 import { isOnline } from '@/lib/sync';
 import { TYPE_CEILING, capTo } from '@/lib/theme';
+import { phoneUngroupCheck, phoneUngroupOffer, ungroupSelectedHref } from '@/lib/ungroup-selected';
 import { countSelection, useCountPicks, useCountSelectionCount } from '@/lib/use-count-selection';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useRole } from '@/lib/use-role';
@@ -25,6 +27,12 @@ import { useTheme } from '@/lib/use-theme';
  * as on the item screen; cosmetic, the route refuses on its own). It needs a
  * connection, two or more records, and one type: the bar says which is
  * missing instead of opening a review that could only refuse.
+ *
+ * "Ungroup" (owner 2026-10-12, Ungroup anything) opens the Ungroup review for
+ * EVERY pick when at least one has something to leave that the member may
+ * undo (a display group or a shared SKU with items:update; a size family also
+ * with sports:manage and the sports module on): the same rule as the web's
+ * bulk bar (core ungroupOfferKind). Online only; the route refuses on its own.
  */
 export function CountSelectBar({
   visible,
@@ -40,6 +48,12 @@ export function CountSelectBar({
   const { role } = useRole();
   const permissions = useEffectivePermissions();
   const canGroup = showWriteCtaForRole(role, permissions, 'items:update');
+  const enabledModules = useEnabledModules();
+  const canUngroup = phoneUngroupOffer(picks, {
+    editItems: canGroup,
+    unlinkFamilies:
+      showWriteCtaForRole(role, permissions, 'sports:manage') && enabledModules.has('sports'),
+  });
 
   if (!visible) return null;
 
@@ -54,6 +68,19 @@ export function CountSelectBar({
       return;
     }
     router.push(groupSelectedHref({ itemIds: picks.map((p) => p.id), view: check.view }));
+  }
+
+  async function openUngroup() {
+    if (!(await isOnline())) {
+      Alert.alert(UNGROUP_COPY.bulkAction, UNGROUP_COPY.selectedOffline);
+      return;
+    }
+    const check = phoneUngroupCheck(picks);
+    if (!check.ok) {
+      Alert.alert(UNGROUP_COPY.bulkAction, check.message);
+      return;
+    }
+    router.push(ungroupSelectedHref({ picks, view: check.view }));
   }
 
   return (
@@ -98,6 +125,23 @@ export function CountSelectBar({
               maxFontSizeMultiplier={capTo(12.5, TYPE_CEILING.control)}
             >
               {GROUP_COPY.bulkActionShort}
+            </Mono>
+          </Pressable>
+        ) : null}
+        {canUngroup ? (
+          <Pressable
+            onPress={() => void openUngroup()}
+            disabled={count === 0}
+            hitSlop={GROUP_HIT_SLOP}
+            accessibilityRole="button"
+            accessibilityLabel={UNGROUP_COPY.bulkAction}
+          >
+            <Mono
+              size={12.5}
+              color={count === 0 ? c.ink4 : c.ink}
+              maxFontSizeMultiplier={capTo(12.5, TYPE_CEILING.control)}
+            >
+              {UNGROUP_COPY.bulkAction}
             </Mono>
           </Pressable>
         ) : null}
