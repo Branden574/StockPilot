@@ -16,6 +16,8 @@
 --   stfNo  staff, whA, items:update revoked (user override false)
 --   vwr    viewer, whA (no items:update by default)
 --   vwrUp  viewer, whA, items:update granted (reads, cannot write whA)
+--   vwrCat viewer, whA, items:update granted, category-restricted to catA
+--          (user_category_assignments: reads catA records only; test stage, C5)
 --   dis    a disabled manager    mgrB   a manager of another org
 --   nobody signed in, in no org; anon and service_role hold no EXECUTE.
 --
@@ -40,7 +42,9 @@
 --     (stfC) who sees one record of a three-charter SKU gets not_shared;
 --     charter staff (stfCh) who sees two of three gets the same answer as on
 --     a SKU with no hidden record; a hidden id is item_not_found, the same
---     answer as an unknown id.
+--     answer as an unknown id. A category-restricted member (vwrCat) reads
+--     only the catA record of a two-category SKU and gets the same answer as
+--     on a SKU of one record (test stage, C5).
 -- R.  Refusals: not_shared (alone; a deleted sibling and another
 --     organization's row do not count), family_member_sku, not_groupable
 --     (kit), item_changed, item_not_found (unknown, deleted, other org),
@@ -59,7 +63,9 @@
 --     SEC-1), and applies once the scope is back.
 -- Z.  The fresh-SKU helper (shape, distinct, unused, bounded count); 0234
 --     holds; no stock movement and no holding changed; nothing outside the
---     split rows changed; the other organization is untouched.
+--     split rows changed; the other organization is untouched; an order line,
+--     its reservation, a return line on the split record and the product
+--     family are byte-identical (test stage, C5).
 --
 -- NOWAIT busy (55P03), and a real move by another session between the first
 -- checks and the lock, need two sessions: scripts/db-concurrency/
@@ -70,7 +76,7 @@
 
 begin;
 
-select plan(52);
+select plan(55);
 
 \set orgA   '\'03990000-0000-0000-0000-00000000000a\''
 \set orgB   '\'03990000-0000-0000-0000-00000000000b\''
@@ -83,6 +89,7 @@ select plan(52);
 \set vwr    '\'03990000-0000-0000-0000-0000000000a5\''
 \set vwrUp  '\'03990000-0000-0000-0000-0000000000a6\''
 \set dis    '\'03990000-0000-0000-0000-0000000000a7\''
+\set vwrCat '\'03990000-0000-0000-0000-0000000000a9\''
 \set mgrB   '\'03990000-0000-0000-0000-0000000000b1\''
 \set nobody '\'03990000-0000-0000-0000-0000000000c1\''
 \set whA    '\'03990000-0000-0000-0000-0000000000d1\''
@@ -92,6 +99,7 @@ select plan(52);
 -- A charter no TRIO record carries: stfC's assignment (fix round 2, R2-2).
 \set chC    '\'03990000-0000-0000-0000-0000000000e3\''
 \set catA   '\'03990000-0000-0000-0000-0000000000e8\''
+\set catB   '\'03990000-0000-0000-0000-0000000000e7\''
 \set grp    '\'03990000-0000-0000-0000-0000000000e9\''
 -- The owner's case: one product on two racks, no charter.
 \set pa1    '\'03990000-0000-0000-0000-000000000101\''
@@ -142,6 +150,14 @@ select plan(52);
 -- Scope recheck under the lock (F5/F6): a pair, w2 the record that "moves".
 \set w1     '\'03990000-0000-0000-0000-0000000001c1\''
 \set w2     '\'03990000-0000-0000-0000-0000000001c2\''
+-- A SKU over two categories, for the category-restricted member (C5).
+\set r1     '\'03990000-0000-0000-0000-0000000001d1\''
+\set r2     '\'03990000-0000-0000-0000-0000000001d2\''
+-- An order on the owner's-case record pa2 (split in S): its line, a
+-- reservation, a return and its line (C5).
+\set ord    '\'03990000-0000-0000-0000-0000000002a1\''
+\set ordl   '\'03990000-0000-0000-0000-0000000002a2\''
+\set ret    '\'03990000-0000-0000-0000-0000000002a4\''
 -- Another organization: one row with the owner's-case SKU, one with x1's.
 \set bp     '\'03990000-0000-0000-0000-0000000001b1\''
 \set bx     '\'03990000-0000-0000-0000-0000000001b2\''
@@ -158,6 +174,7 @@ insert into auth.users (id, email, raw_user_meta_data) values
   (:vwr,    '0399-vwr@test.local',    '{}'::jsonb),
   (:vwrUp,  '0399-vwrup@test.local',  '{}'::jsonb),
   (:dis,    '0399-dis@test.local',    '{}'::jsonb),
+  (:vwrCat, '0399-vwrcat@test.local', '{}'::jsonb),
   (:mgrB,   '0399-mgrb@test.local',   '{}'::jsonb),
   (:nobody, '0399-nobody@test.local', '{}'::jsonb)
   on conflict (id) do nothing;
@@ -174,6 +191,7 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   (:orgA, :vwr,   'viewer',  now()),
   (:orgA, :vwrUp, 'viewer',  now()),
   (:orgA, :dis,   'manager', now()),
+  (:orgA, :vwrCat, 'viewer', now()),
   (:orgB, :mgrB,  'manager', now());
 insert into public.warehouses (id, organization_id, name, code, status) values
   (:whA, :orgA, '0399 Main',  'WH-0399A', 'active'),
@@ -186,7 +204,9 @@ insert into public.warehouse_charters (organization_id, warehouse_id, charter_id
   (:orgA, :whA, :chA),
   (:orgA, :whA, :chB),
   (:orgA, :whA, :chC);
-insert into public.categories (id, organization_id, name) values (:catA, :orgA, '0399 Gear');
+insert into public.categories (id, organization_id, name) values
+  (:catA, :orgA, '0399 Gear'),
+  (:catB, :orgA, '0399 Books');
 insert into public.product_groups (id, organization_id, name, group_key, default_counting_unit)
   values (:grp, :orgA, '0399 Family', '0399|family', 'each');
 insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id, charter_id, is_primary) values
@@ -195,10 +215,14 @@ insert into public.user_warehouse_assignments (organization_id, user_id, warehou
   (:orgA, :stfC,  :whA, :chC, true),
   (:orgA, :stfNo, :whA, null, true),
   (:orgA, :vwr,   :whA, null, true),
-  (:orgA, :vwrUp, :whA, null, true);
+  (:orgA, :vwrUp, :whA, null, true),
+  (:orgA, :vwrCat, :whA, null, true);
 insert into public.user_permission_overrides (organization_id, user_id, permission, granted) values
   (:orgA, :stfNo, 'items:update', false),
-  (:orgA, :vwrUp, 'items:update', true);
+  (:orgA, :vwrUp, 'items:update', true),
+  (:orgA, :vwrCat, 'items:update', true);
+insert into public.user_category_assignments (organization_id, user_id, category_id) values
+  (:orgA, :vwrCat, :catA);
 
 -- created_at is set so the "oldest keeps" rule is decided by it, not by id:
 -- o1's id sorts AFTER o2's, and o1 is the older record.
@@ -244,8 +268,24 @@ insert into public.inventory_items
   (:h2,   :orgA, :whA, :chA, :catA, 'X0399-CHART', 'Charter pair',    null,            '2-R',  1, 'active', false, null, '2026-01-02T00:00:00Z', null),
   (:w1,   :orgA, :whA, null, :catA, 'X0399-SCOPE', 'Scope moved',     null,            '1-S',  1, 'active', false, null, '2026-01-01T00:00:00Z', null),
   (:w2,   :orgA, :whA, null, :catA, 'X0399-SCOPE', 'Scope moved',     null,            '2-S',  1, 'active', false, null, '2026-01-02T00:00:00Z', null),
+  (:r1,   :orgA, :whA, null, :catA, 'X0399-CATS',  'Two categories',  null,            '1-T',  1, 'active', false, null, '2026-01-01T00:00:00Z', null),
+  (:r2,   :orgA, :whA, null, :catB, 'X0399-CATS',  'Two categories',  null,            '2-T',  1, 'active', false, null, '2026-01-02T00:00:00Z', null),
   (:bp,   :orgB, :whB, null, null,  'X0399-PAIR',  'Org B mouse pad', null,            '22-A', 5, 'active', false, null, '2026-01-01T00:00:00Z', null),
   (:bx,   :orgB, :whB, null, null,  'X0399-CROSS', 'Org B cross',     null,            '1-M',  5, 'active', false, null, '2026-01-01T00:00:00Z', null);
+
+-- An order on pa2 with a reservation and a return (C5): the split must leave
+-- them byte-identical (they key on the record's id, never its SKU).
+insert into public.order_requests
+  (id, organization_id, warehouse_id, status, source, requester_user_id, requester_name, fulfillment_type) values
+  (:ord, :orgA, :whA, 'approved', 'internal', :own, 'Own Person', 'pickup');
+insert into public.order_request_lines (id, order_request_id, item_id, quantity_requested, quantity_fulfilled) values
+  (:ordl, :ord, :pa2, 2, 1);
+insert into public.stock_reservations (organization_id, item_id, warehouse_id, order_request_id, quantity) values
+  (:orgA, :pa2, :whA, :ord, 1);
+insert into public.returns (id, organization_id, order_request_id, status) values
+  (:ret, :orgA, :ord, 'requested');
+insert into public.return_lines (return_id, organization_id, order_request_line_id, item_id, quantity, disposition) values
+  (:ret, :orgA, :ordl, :pa2, 1, 'restock');
 
 -- The disabled manager, disabled the way the service does it.
 set local role to 'service_role';
@@ -346,12 +386,24 @@ create temp table before_stock as
             from public.item_stock_levels s where s.organization_id in (:orgA, :orgB)) as levels,
          (select md5(coalesce(string_agg(to_jsonb(m)::text, ',' order by m.id), ''))
             from public.stock_movements m where m.organization_id in (:orgA, :orgB)) as movements;
+create temp table before_other as
+  select (select md5(coalesce(string_agg(to_jsonb(r)::text, ',' order by r.id), ''))
+            from public.stock_reservations r where r.organization_id in (:orgA, :orgB)) as reservations,
+         (select md5(coalesce(string_agg(to_jsonb(l)::text, ',' order by l.id), ''))
+            from public.order_request_lines l join public.order_requests o on o.id = l.order_request_id
+           where o.organization_id in (:orgA, :orgB)) as order_lines,
+         (select md5(coalesce(string_agg(to_jsonb(l)::text, ',' order by l.id), ''))
+            from public.return_lines l where l.organization_id in (:orgA, :orgB)) as return_lines,
+         (select md5(coalesce(string_agg(to_jsonb(g)::text, ',' order by g.id), ''))
+            from public.product_groups g where g.organization_id in (:orgA, :orgB)) as product_groups,
+         (select count(*) from public.stock_reservations r where r.organization_id = :orgA) as n_res,
+         (select count(*) from public.return_lines l where l.organization_id = :orgA) as n_retl;
 grant all on ans to authenticated;
 
 -- Guard the fixtures: a silently missing row would let an assertion pass for
 -- the wrong reason.
 do $$ begin
-  if (select count(*) from public.inventory_items where id::text like '03990000-%') <> 41 then
+  if (select count(*) from public.inventory_items where id::text like '03990000-%') <> 43 then
     raise exception 'fixture: items (%)', (select count(*) from public.inventory_items where id::text like '03990000-%');
   end if;
   if (select count(*) from public.user_profiles where id::text like '03990000-%' and disabled_at is not null) <> 1 then
@@ -544,6 +596,26 @@ insert into ans select 'h4', pg_temp.split(:stfCh, pg_temp.req(:stfCh, array[:h2
 select is(pg_temp.brief((select r from ans where tag = 'h4')) || '|' || (select sku from public.inventory_items where id = :h1),
   '192=false/false|X0399-CHART',
   'H4: two records of one SKU in the SAME charter on two racks: charter staff splits one; the other keeps the SKU');
+-- Test stage, C5: a category-restricted member (a viewer limited to catA,
+-- given items:update) reads only the catA record of a two-category SKU, through
+-- RLS and caller_can_read_item alike.
+select is(
+  pg_temp.sees(:vwrCat, 'X0399-CATS'),
+  '1d1;1d1',
+  'H5: the category-restricted member reads only the catA record of X0399-CATS (RLS;caller_can_read_item)');
+-- Category restriction applies to viewers only (0310 rls_cat_unrestricted_org_ids),
+-- and a viewer never writes (user_can_access_warehouse), so such a member can
+-- never split: the catA record answers item_not_writable exactly as a SKU of
+-- one record does, and the catB record it cannot read answers item_not_found,
+-- exactly as an unknown id (H3).
+select is(
+  'r1=' || pg_temp.brief(pg_temp.split(:vwrCat, pg_temp.req(:vwrCat, array[:r1]::uuid[]), pg_temp.k(64)))
+  || '|solo=' || pg_temp.brief(pg_temp.split(:vwrCat, pg_temp.req(:vwrCat, array[:solo]::uuid[]), pg_temp.k(65)))
+  || '|r2=' || pg_temp.brief(pg_temp.split(:vwrCat, pg_temp.req(:vwrCat, array[:r2]::uuid[], null, :orgA,
+                                                   jsonb_build_object(:r2::text, 'X0399-CATS')), pg_temp.k(66)))
+  || '|' || (select string_agg(sku, ',' order by id) from public.inventory_items where id in (:r1, :r2)),
+  'r1=42501:item_not_writable|solo=42501:item_not_writable|r2=P0002:item_not_found|X0399-CATS,X0399-CATS',
+  'H6: the record in the other category never changes the answer: the category-restricted member (a viewer, who never writes) gets item_not_writable for the catA record of X0399-CATS as for a SKU of one record, item_not_found for the catB record it cannot read (as for an unknown id), and neither record changes');
 
 -- ═══ R. Refusals ══════════════════════════════════════════════════════════
 select is(pg_temp.brief(pg_temp.split(:mgr, pg_temp.req(:mgr, array[:solo]::uuid[]), pg_temp.k(30))),
@@ -811,6 +883,21 @@ select is(
   = (select string_agg(b.j::text, ',' order by b.id) from before_items b where b.id in (:bp, :bx)),
   true,
   'Z9: the other organization''s rows (one with the owner''s-case SKU) are byte-identical');
+select is(
+  (select (reservations = (select md5(coalesce(string_agg(to_jsonb(r)::text, ',' order by r.id), ''))
+                             from public.stock_reservations r where r.organization_id in (:orgA, :orgB)))::text
+          || '/' || (order_lines = (select md5(coalesce(string_agg(to_jsonb(l)::text, ',' order by l.id), ''))
+                                      from public.order_request_lines l join public.order_requests o on o.id = l.order_request_id
+                                     where o.organization_id in (:orgA, :orgB)))::text
+          || '/' || (return_lines = (select md5(coalesce(string_agg(to_jsonb(l)::text, ',' order by l.id), ''))
+                                       from public.return_lines l where l.organization_id in (:orgA, :orgB)))::text
+          || '/' || (product_groups = (select md5(coalesce(string_agg(to_jsonb(g)::text, ',' order by g.id), ''))
+                                         from public.product_groups g where g.organization_id in (:orgA, :orgB)))::text
+          || '/' || n_res::text || '/' || n_retl::text
+          || '/' || (select (sku <> 'X0399-PAIR')::text from public.inventory_items where id = :pa2)
+     from before_other),
+  'true/true/true/true/1/1/true',
+  'Z10 (test stage, C5): the reservation, the order line and the return line on the split record pa2, and the product family, are byte-identical after the split (they key on the record id, not the SKU)');
 
 select * from finish();
 rollback;
