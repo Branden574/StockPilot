@@ -30,53 +30,119 @@ export const RELEASES: Release[] = [
   {
     id: 'returns-close-rest-2026-10',
     revision: 1,
-    // Returns RX-4 (migrations 0397 and 0398). Held as a DRAFT until both
-    // migrations and this slice's web deploy are live, the OTA with the
-    // phone's Close the rest sheet is published and launched, and the Demo Co
-    // walk passed (returns plan 10.1 and 11); the follow-up that publishes it
-    // (RX-5) sets 'published' and the real publishedAt and re-reads these
-    // words against what shipped. Newest first: drafts sit above the newest
-    // published release, so it sits at the top, directly above RX-3's
-    // release (published by #347 at 2026-10-12T02:07Z), and is dated after
-    // every release (a placeholder; the publishing follow-up dates it).
+    // Returns RX-4: Close the rest of a replacement handed over in part, and
+    // no sizes on a used-up line, with the token lookup by POST, the
+    // requester lock set and the contract (#348, 7143ec0f6, merged 2026-10-12
+    // 03:40:55Z; migrations 0397 and 0398, pushed before the merge at
+    // 03:37:30.9-03:37:34.6Z: production head 0398, 393 applied). PUBLISHED
+    // by RX-5. Web build e8fc3d8bc491 (the first 12 hex of the sha256 of
+    // 7143ec0f6) was live at 03:43:01Z. The phone part is OTA group 292dd2ec
+    // (iOS update 01a12e36, from main 7143ec0f6, created 03:44:26Z): its
+    // served launch asset equals the local export, and its source map holds
+    // returns-api.ts replacementCall(id, '/close-rest', body) and the RX-4
+    // words. eas update:insights, read 2026-10-12 04:58Z: 1 iOS launch for 1
+    // user, 0 failed. Android was not checked. Main since has only #349
+    // (3d1c01ed7, Sentry off in the simulator: nothing anyone sees).
     //
-    // What a person can see, and who is told:
-    // - People who can open Returns: a received or closed return whose
-    //   replacement was handed over in part, the rest on backorder, offers
-    //   Close the rest (core availableReturnActions close_replacement_rest;
-    //   0397 close_return_replacement_rest). It needs order approval, so the
-    //   words say so; the entry is told to returns readers too, who see the
-    //   return's new state and history line.
-    // - Members who place orders, where Returns is on: Return or exchange no
-    //   longer offers other sizes for an item whose units all got a
-    //   replacement on an earlier return (0397 return_exchange_options leaves
-    //   a line out only when its whole exchange budget is used; RX-3 stock
-    //   desk check F5). The database refuses an exchange there
-    //   (exchange_already_sent), note or size, but the screens still offer
-    //   the warehouse-review note on such a line (as on any line without
-    //   sizes), so the words tell the person to choose Return only (fix
-    //   round 1, desk checks people M1 and complete C9; showing Return only
-    //   on that line is a deferred follow-up).
-    // Not told, on purpose: the contract (0398: the old raw INSERT and
-    // UPDATE privileges, unused by every screen since RX-1), the token lookup
-    // by POST and the requester lock set (server and database only, nothing
-    // anyone sees).
+    // The Demo Co production walk (walk-rx4, 03:53-04:45Z: 143 PASS, 7 FAIL,
+    // each a harness or automation expectation, 66 NOTE). Its independent
+    // audit found production data matching the walk in every respect and
+    // disputed the report only: a display defect the walker missed (D-H1,
+    // below) and the simulator's Sentry events (explained, fixed by #349).
+    // Walked on the web and on the iPhone 17 and iPad simulators on the
+    // published bundle: RMA-20261012-D36F7F (a counter exchange, M x2 for
+    // L x2, L approved on backorder; replacement SO-000033 handed over 1 of
+    // 2) offered Close the rest beside Open replacement, the RMA closed; the
+    // reason is required (the button disabled until one is given; VoiceOver
+    // hint Add a reason.); the iPhone closed the rest: the replacement
+    // completed with no live hold, no stock movement, one replacement_closed
+    // decision, the RMA's revision unchanged, and the requester told Your
+    // replacement order was closed / Part of it was handed over. The rest
+    // will not be sent.; an older web tab's second close answered The rest
+    // of the replacement was already closed. and wrote nothing; the history
+    // line Rest of replacement SO-000033 closed: <reason> on the web, the
+    // iPhone and the iPad; the replacement order's web timeline read Rest
+    // closed from RMA-20261012-D36F7F with What was handed over stays. The
+    // rest will not be sent.
+    // NOT walked in production: the used-up line (the second entry), because
+    // demo manages returns and the requester's Return or exchange is hidden
+    // from returns managers by design. Its evidence is the merged code (0397
+    // return_exchange_options keeps a line only while
+    // _return_exchange_line_budget leaves room; the token page, the portal
+    // and a member's own order, web and phone, all read it through
+    // exchangeOptionsForOrder; _return_exchange_create refuses any exchange
+    // past that budget, a note-only one too, exchange_already_sent) and RX-4's
+    // test stage, browser case U on the token page: options [], Exchange
+    // still offered with no sizes and the warehouse-review note, sending
+    // refused with This item already got a replacement on an earlier return,
+    // so it can only be returned now., nothing written (shots U2, U3).
+    // By design, recorded by the walk: a replacement approved ON BACKORDER
+    // offers Open replacement, not Get replacement ready (core
+    // availableReturnActions), so its part was handed over on the
+    // replacement order's own steps; no line here says how a part is handed
+    // over.
+    // D-H1 (Low, the audit's): after Close the rest, the RMA history's
+    // Replacement handed over line takes the replacement's completed_at,
+    // which the close sets (return-history.ts), so it shows the close time
+    // and sorts after the close line. A separate fix follows with its own
+    // What's New entry; no line here says when the handed-over part went out.
     //
-    // Claims review, each checked against the code: nothing moves in stock
-    // (close_partial releases holds only); the requester is told by the
-    // replacement's own notification ("Your replacement order was closed /
-    // Part of it was handed over. The rest will not be sent.", 0396
-    // _notify_replacement_order_changes) and, by email, the return prompt;
-    // an approved return keeps Cancel return's own close of the backorder
-    // (cancelling the return also cancels the return itself, so the words say
-    // "cancelling the return", fix round 1, desk check people I3).
+    // Corrected at publish (re-read against 7143ec0f6, the walk and the test
+    // stage):
+    // - The used-up entry's title read "No sizes offered ..." to every reader,
+    //   but the staff Create return picker (return_exchange_candidates) still
+    //   lists sizes there, so the title names Return or exchange, and a last
+    //   sentence tells a returns manager (whom its audience cannot leave out)
+    //   that their own orders keep Create return, unchanged.
+    // - "Choosing a size there was always refused after the request was
+    //   sent": the fault was that the refusal came only after sending, so it
+    //   says that, without "always".
+    // - The replacement order's timeline line (fix round 1, desk check people
+    //   L3; walked) was in no entry: Close the rest's entry names it, on the
+    //   web (the phone shows no order timeline).
+    //
+    // Corrected by the claims review of #350 (2026-10-12), against 7143ec0f6:
+    // - The summary said "the return now offers Close the rest". Every reader
+    //   an entry reaches is shown the summary (visibleReleases keeps it, and
+    //   an old phone shows only the title and the summary), and the used-up
+    //   entry reaches members who place orders (orders:request, viewers
+    //   included), whose notice this release is. Close the rest is offered
+    //   only to people with Manage returns (with write access to the
+    //   warehouse) and order approval (core REPLACEMENT_ACTIONS, the
+    //   workbench's canManageReturns, the 0397 gates), so a requester whose
+    //   replacement reads "The rest will follow." would look for it in vain.
+    //   The summary now names who can use it, as RX-2's and RX-3's do.
+    // - "On the web, the replacement order's timeline says the rest was
+    //   closed from the return." The timeline shows only to people who can
+    //   view the audit log (the order page's canReadActivity; anyone else
+    //   reads Only people who can view the audit log can see this order's
+    //   history.), and Manage returns or View returns can be granted without
+    //   it. The line now says "If you can view the audit log".
+    //
+    // Who is told: whoever can open Returns, Close the rest (its only link,
+    // Open Returns, the page's own gate; returns:read too, who see the
+    // return's new state and its history line); members who place orders,
+    // where Returns is on, the used-up entry. The return link's and the
+    // portal's people never read What's New. Not told, on purpose: the
+    // contract (0398: the old raw INSERT and UPDATE privileges, unused by
+    // every screen since RX-1), the token lookup by POST and the requester
+    // lock set (server and database only, nothing anyone sees). No
+    // release-level audience: a reader no entry reaches is not told. Newest
+    // first: published after every release below it, it sits at the top,
+    // above returns RX-3's release (2026-10-12 02:07Z), and no draft is left.
+    // Claims checked against the code: nothing moves in stock (close_partial
+    // releases holds only); the requester hears from the replacement's own
+    // notification (0396 _notify_replacement_order_changes, completed:
+    // ungated) and, with an address on file, the one-time replacement email
+    // (maybeSendReturnPrompt), neither naming the reason; an approved return
+    // keeps Cancel return's own close of the backorder (0396 cancel_return).
     // The words never say "book" for a recorded quantity and claim no
     // inspection.
-    status: 'draft',
+    status: 'published',
     title: 'Close the rest of a replacement on backorder',
     summary:
-      'When part of an exchange replacement was handed over and the rest is on backorder, the return now offers Close the rest once the returned item is in, on the web and in the mobile app after the latest update. Return or exchange no longer offers other sizes for an item whose units all got a replacement on an earlier return.',
-    publishedAt: '2026-10-16T17:10:00Z',
+      'People who manage returns and have order approval can now use Close the rest when part of an exchange replacement was handed over and the rest is on backorder, once the returned item is in, on the web and in the mobile app after the latest update. Return or exchange no longer offers other sizes for an item whose units all got a replacement on an earlier return.',
+    publishedAt: '2026-10-12T06:13:00Z',
     entries: [
       {
         id: 'returns-close-replacement-rest',
@@ -84,7 +150,7 @@ export const RELEASES: Release[] = [
         area: 'Returns',
         title: 'Close the rest of a replacement on backorder',
         whatChanged:
-          'When part of an exchange replacement was handed over and the rest is on backorder, the return now offers Close the rest once the returned item is received. You give a reason; the rest of the replacement is never sent, what was already handed over stays handed over, and anything reserved for the rest is freed. The return keeps the reason in its history.',
+          "When part of an exchange replacement was handed over and the rest is on backorder, the return now offers Close the rest once the returned item is received. You give a reason; the rest of the replacement is never sent, what was already handed over stays handed over, and anything reserved for the rest is freed. The return keeps the reason in its history. If you can view the audit log, the replacement order's timeline on the web says the rest was closed from the return.",
         whyItMatters: 'Such a replacement used to wait on backorder, with no way to end it from its return once the returned item was in.',
         howItAffectsYou:
           'Close the rest needs order approval permission as well as permission to manage returns, like every replacement action. Nothing moves in stock. The requester is told that part of the replacement was handed over and the rest will not be sent, never the reason. While the return still waits for the returned item, cancelling the return closes the rest, as before.',
@@ -96,11 +162,11 @@ export const RELEASES: Release[] = [
         id: 'returns-exchange-sizes-used-up',
         category: 'fixed',
         area: 'Orders',
-        title: 'No sizes offered once every unit of an item got a replacement',
+        title: 'Return or exchange offers no sizes once every unit of an item got a replacement',
         whatChanged:
           'Return or exchange no longer offers other sizes for an item whose units all got a replacement on an earlier return. Choose Return only for it: asking the warehouse for a different replacement there is refused too.',
-        whyItMatters: 'Choosing a size there was always refused after the request was sent.',
-        howItAffectsYou: 'Every other item offers its sizes as before.',
+        whyItMatters: 'Sizes were offered there, but choosing one was refused only after the request was sent.',
+        howItAffectsYou: 'Every other item offers its sizes as before. If you manage returns, your own orders keep Create return, which is unchanged.',
         whatToDo: 'No action needed.',
         audience: { anyPermission: ['orders:request'], modules: ['returns'] },
       },
