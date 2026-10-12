@@ -25,6 +25,7 @@ import {
   exchangeReviewProblem,
   FULLY_GRANTABLE_PERMISSIONS,
   GROUP_COPY,
+  groupCoverRow,
   hasPermission,
   HOLD_AVAILABLE_STOCK_LABEL,
   isDeletedRequester,
@@ -9543,7 +9544,13 @@ describe('the Group selected release (G2, 0400)', () => {
   // Ungroup for any ticked records is told in its own entry, to the same
   // audience as Group selected (items:update, the bulk bar's gate), with the
   // link to Items. Claim kept: the headers and the fix go to every member.
-  it('tells Group selected and Ungroup to whoever can edit items, with the link to Items, and the headers and the fix to every member', () => {
+  // Re-pinned by the group header picture entry (#357 follow-up, added to
+  // docs/whats-new-ungroup-group-selected 2026-10-12; was: four entries): a
+  // fifth entry, group-header-picture (improved), is told to whoever can edit
+  // items, as Group selected, with no link. Claim kept: Group selected and
+  // Ungroup to whoever can edit items with the link to Items, the headers and
+  // the fix to every member.
+  it('tells Group selected, Ungroup and the header picture to whoever can edit items, Group selected and Ungroup with the link to Items, and the headers and the fix to every member', () => {
     const r = release();
     // No release-level audience: every member who opens Items or Books sees
     // grouped records under one header.
@@ -9553,6 +9560,7 @@ describe('the Group selected release (G2, 0400)', () => {
       ['ungroup-any-records', 'new', ['items:update'], '/dashboard/inventory'],
       ['groups-show-under-one-header', 'improved', null, null],
       ['sku-header-rows-stay-under-it', 'fixed', null, null],
+      ['group-header-picture', 'improved', ['items:update'], null],
     ]);
     // Through the real filter, on a copy forced to published (a draft never
     // reaches anyone).
@@ -9564,6 +9572,7 @@ describe('the Group selected release (G2, 0400)', () => {
       'ungroup-any-records',
       'groups-show-under-one-header',
       'sku-header-rows-stay-under-it',
+      'group-header-picture',
     ]);
     expect(entriesFor('viewer', ['items:read'])).toEqual(['groups-show-under-one-header', 'sku-header-rows-stay-under-it']);
   });
@@ -9692,6 +9701,25 @@ describe('the Group selected release (G2, 0400)', () => {
     expect(ungroup.whyItMatters).not.toMatch(/records in a group/);
     // The Save button counts only the records that change (web and phone).
     expect(ungroup.whatChanged).toContain('Ungroup counts only the records that change');
+  });
+
+  // Group selected follow-up #357 (431ab5255; owner 2026-10-12 13:50Z: "it
+  // should just use the first picture of whatever was chosen for the
+  // grouping"): core groupCoverRow picks the first record, in the order the
+  // header lists them, with a non-blank picture; the web header
+  // (inventory-table.tsx, Items and Books) and the phone's Items and Books
+  // headers show it, and keep the placeholder with none. Nothing is written.
+  it("says a group's header shows the first listed record's picture, on the web and the phone, keeps the placeholder with none, and changes no record's picture", () => {
+    const entry = release().entries.find((e) => e.id === 'group-header-picture')!;
+    expect(entry.title).toBe("A group's header shows a picture");
+    expect(entry.whatChanged).toContain('On Items and Books, on the web and in the mobile app');
+    expect(entry.whatChanged).toContain('the picture of the first record listed under it that has one');
+    expect(entry.whatChanged).toContain('the header keeps the placeholder');
+    expect(entry.howItAffectsYou).toContain('Each record keeps its own picture.');
+    expect(entry.whatToDo).toContain('close the app completely and open it again');
+    expect(entry.audience).toEqual({ anyPermission: ['items:update'] });
+    expect(groupCoverRow([{ u: null }, { u: '  ' }, { u: 'b.jpg' }, { u: 'c.jpg' }], (r) => r.u)).toEqual({ u: 'b.jpg' });
+    expect(groupCoverRow([{ u: null }, { u: '' }], (r) => r.u)).toBeNull();
   });
 
   it('says only a manager renames a group (security review SEC-1: apply_item_grouping refuses anyone else on the role alone)', () => {

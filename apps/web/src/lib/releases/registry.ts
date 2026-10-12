@@ -172,6 +172,32 @@ export const RELEASES: Release[] = [
         howItAffectsYou: 'Each row shows once, under its own header.',
         whatToDo: 'No action needed.',
       },
+      {
+        // Group selected follow-up #357 (431ab5255, web build 00b912980244
+        // live at 14:15:05Z, OTA group 13bb3c30 published at 14:16:29Z and
+        // verified). Owner 2026-10-12 13:50Z, verbatim: "so the picture
+        // disapears it should just use the first picture of whatever was
+        // chosen for the grouping" (overruling the people review's P5, no
+        // cover). Checked against 431ab5255: core groupCoverRow picks the
+        // first record, in the order the header lists them, whose picture is
+        // a non-blank URL, or none; the web header (inventory-table.tsx, used
+        // by Items and Books) and the phone's Items and Books headers
+        // (inventory.tsx, books.tsx, through buildGroupedRows' coverUrl) show
+        // it, and with none keep the placeholder. Before it, a group's header
+        // showed no picture on either. Nothing is written: each record keeps
+        // its own picture. Told to whoever can edit items, as Group selected.
+        id: 'group-header-picture',
+        category: 'improved',
+        area: 'Inventory',
+        title: "A group's header shows a picture",
+        whatChanged:
+          "On Items and Books, on the web and in the mobile app, a group's header now shows the picture of the first record listed under it that has one. When none of its records has a picture, the header keeps the placeholder.",
+        whyItMatters: "A group's header showed no picture, so the picture seemed to disappear once records were grouped.",
+        howItAffectsYou: 'Each record keeps its own picture. Grouping changes no picture.',
+        whatToDo:
+          'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['items:update'] },
+      },
     ],
   },
   {
