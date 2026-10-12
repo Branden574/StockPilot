@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import { sharedSkuBannerCopy } from '@stockpilot/core';
@@ -25,6 +26,8 @@ vi.mock('@/server/actions/item-images', () => ({
   recordImageAction: vi.fn(),
 }));
 vi.mock('@/server/actions/tags', () => ({ setItemTagsAction: vi.fn() }));
+
+import { updateItemAction } from '@/server/actions/inventory';
 
 import { ItemForm, skuTakenOpenHref } from './item-form';
 
@@ -104,6 +107,59 @@ describe('ItemForm: a SKU other records share', () => {
     expect(screen.getAllByText('Shared across all placements of this SKU').length).toBeGreaterThan(
       0,
     );
+  });
+});
+
+// Test stage (local walk W8, D4): an edit form opened before an Ungroup in
+// another tab, then saved without touching the SKU, sent the SKU it had loaded;
+// the server took that as a SKU edit and moved the split record back to its old
+// SKU (audit: sku SP-QRKHN-1HVH3I1 -> UG-EDIT). An edit sends the SKU only when
+// the editor changed it, as it already does for the rack label.
+describe("ItemForm: the SKU in an edit's patch", () => {
+  function reorderInput(): HTMLInputElement {
+    const input = screen.getByText('Reorder at').closest('div')?.querySelector('input');
+    if (!input) throw new Error('Reorder at input not found');
+    return input as HTMLInputElement;
+  }
+  function skuInput(): HTMLInputElement {
+    const input = document.querySelector('input[name="sku"]');
+    if (!input) throw new Error('SKU input not found');
+    return input as HTMLInputElement;
+  }
+
+  it('leaves the SKU out when the editor did not change it, so a stale form never moves a record back to an old SKU', async () => {
+    vi.mocked(updateItemAction).mockReset();
+    vi.mocked(updateItemAction).mockResolvedValue({ ok: true, data: { id: DEFAULTS.id } } as never);
+    renderEdit(0);
+    const user = userEvent.setup();
+    expect(skuInput().value).toBe('SP-IIHH8-AZCSKHS');
+    await user.clear(reorderInput());
+    await user.type(reorderInput(), '3');
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+    expect(updateItemAction).toHaveBeenCalledTimes(1);
+    const [id, patch] = vi.mocked(updateItemAction).mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(id).toBe(DEFAULTS.id);
+    expect(patch.reorderPoint).toBe(3);
+    expect(patch).not.toHaveProperty('sku');
+  });
+
+  it('sends the SKU the editor typed', async () => {
+    vi.mocked(updateItemAction).mockReset();
+    vi.mocked(updateItemAction).mockResolvedValue({ ok: true, data: { id: DEFAULTS.id } } as never);
+    renderEdit(0);
+    const user = userEvent.setup();
+    await user.clear(skuInput());
+    await user.type(skuInput(), 'SP-NEW-0001');
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+    expect(updateItemAction).toHaveBeenCalledTimes(1);
+    const [, patch] = vi.mocked(updateItemAction).mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(patch.sku).toBe('SP-NEW-0001');
   });
 });
 

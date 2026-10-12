@@ -1420,9 +1420,18 @@ export function ItemForm({
     // `trackingModeOverride` already rides `values` here (it is a
     // createItemSchema field); only the group needs merging in.
     const finalValues = { ...rentalValues, ...sportsGroupPayload };
+    // An edit sends the SKU only when the editor changed it (Ungroup test
+    // stage, walk W8, D4). The server treats any SKU in the patch that differs
+    // from the record's as a SKU edit (and re-keys every record that shares
+    // it), so a form opened before an Ungroup in another tab, saved without
+    // touching the SKU, used to move the split record back to its old SKU.
+    // The same rule as the rack label above: an untouched field stays out.
+    const loadedSku = (defaults?.sku ?? '').trim();
+    const { sku: formSku, ...valuesSansSku } = finalValues as typeof finalValues & { sku?: string };
+    const editValues = isEdit && (formSku ?? '').trim() === loadedSku ? valuesSansSku : finalValues;
     const action =
       isEdit && defaults?.id
-        ? updateItemAction(defaults.id, finalValues as UpdateItemInput)
+        ? updateItemAction(defaults.id, editValues as UpdateItemInput)
         : createItemAction(finalValues as CreateItemInput);
     const res = await action;
     if (!res.ok) {
