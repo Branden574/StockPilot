@@ -8695,7 +8695,27 @@ describe('the Ungroup release (G1, 0399)', () => {
     expect(r.entries.map((e) => [e.id, e.category, e.audience?.anyPermission, e.link?.href ?? null])).toEqual([
       ['ungroup-shared-sku', 'new', ['items:update'], '/dashboard/inventory'],
       ['sku-taken-names-the-record', 'fixed', ['items:update', 'items:create'], null],
+      // Test stage, decision D1: restore points remember each record, told to
+      // the people who can open Backups & restore (owner/admin floor).
+      ['restore-points-follow-records', 'fixed', ['organization:update'], null],
     ]);
+  });
+
+  // Test stage, decision D1 (a) and (b): new restore points carry each
+  // record's id and a restore matches by it first; restoring an older point
+  // names the records that changed SKU before the typed confirm. The words
+  // match the restore screen's (restore-sku-warning-copy.ts) and claim no
+  // more than the service does.
+  it('says restore points now follow each record, and that an older point names the records that changed SKU first', () => {
+    const entry = release().entries.find((e) => e.id === 'restore-points-follow-records')!;
+    expect(entry.area).toBe('Settings');
+    expect(entry.whatChanged).toContain('Restore points taken after this update remember each record');
+    expect(entry.whatChanged).toContain('before you type RESTORE');
+    expect(entry.howItAffectsYou).toContain("A restore keeps each record's current SKU.");
+    expect(entry.howItAffectsYou).toContain(
+      'An older restore point with no SKU change since it was taken restores as before.',
+    );
+    expect(entry.whatToDo).toContain('Backups & restore');
   });
 
   it('says what changes and what does not, in the screens\' own words, on both platforms', () => {

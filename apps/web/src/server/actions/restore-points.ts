@@ -7,7 +7,9 @@ import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory
 import { ServiceError, withContext } from '@/server/services/context';
 import {
   createSnapshot,
+  restorePointSkuChanges,
   restoreSnapshot,
+  type RestorePointSkuChanges,
   type RestoreResult,
 } from '@/server/services/restore-points';
 
@@ -15,6 +17,7 @@ import { err, ok, type ActionResult } from '@stockpilot/core';
 
 const createSchema = z.object({ label: z.string().trim().max(120).optional() });
 const restoreSchema = z.object({ id: z.string().uuid(), confirm: z.string().max(40) });
+const pointSchema = z.object({ id: z.string().uuid() });
 
 /**
  * Create a manual restore point (snapshot of items + stock). Gating
@@ -62,6 +65,26 @@ export async function restoreFromPointAction(
           : undefined;
       return err(e.code, e.message, reason ? { reason } : undefined);
     }
+    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+  }
+}
+
+/**
+ * Ungroup D1 (b): which records changed SKU after a restore point was taken,
+ * read when its Restore row opens so the warning shows before the typed
+ * confirm. A version 2 point (record ids) answers with no changes. Same gate
+ * as the restore (owner/admin + Business), through the caller's RLS.
+ */
+export async function restorePointSkuChangesAction(
+  input: z.infer<typeof pointSchema>,
+): Promise<ActionResult<RestorePointSkuChanges>> {
+  const parsed = pointSchema.safeParse(input);
+  if (!parsed.success) return err('validation_error', 'Invalid input');
+  try {
+    const ctx = await withContext();
+    return ok(await restorePointSkuChanges(ctx, parsed.data.id));
+  } catch (e) {
+    if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }
 }

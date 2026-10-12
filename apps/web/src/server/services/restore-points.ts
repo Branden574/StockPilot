@@ -35,6 +35,13 @@ export const SNAPSHOT_ITEM_CAP = 50_000;
 export type RestorePointKind = 'manual' | 'auto' | 'pre_restore';
 
 export interface SnapshotItem {
+  /**
+   * The record's id (snapshot version 2, Ungroup D1). A restore matches by it
+   * first, so a record whose SKU changed after the snapshot (an Ungroup, or a
+   * SKU edit) keeps its stock once instead of being re-created under its old
+   * SKU. Absent from version 1 snapshots, which restore by (SKU, bin) as before.
+   */
+  id?: string;
   sku: string;
   name: string;
   barcode: string | null;
@@ -62,10 +69,14 @@ function itemKey(sku: string, bin: string | null): string {
 }
 
 export interface RestoreSnapshot {
-  version: 1;
+  /** 1: items keyed by (SKU, bin) only. 2: each item also carries its id. */
+  version: 1 | 2;
   capturedAt: string;
   items: SnapshotItem[];
 }
+
+/** The version new snapshots are written with (Ungroup D1: item ids). */
+export const SNAPSHOT_VERSION = 2 as const;
 
 export interface RestorePointRow {
   id: string;
@@ -115,6 +126,7 @@ export async function createSnapshot(
   await assertRestorePointsAccess(ctx);
 
   type Row = {
+    id: string;
     sku: string | null;
     name: string;
     barcode: string | null;
@@ -139,7 +151,7 @@ export async function createSnapshot(
       ctx.supabase
         .from('inventory_items')
         .select(
-          'sku, name, barcode, description, unit_cost, retail_price, quantity_on_hand, reorder_point, reorder_quantity, unit_of_measure, status, item_type, warehouse_id, bin_location, category:category_id(name), supplier:supplier_id(name), location:primary_location_id(name)',
+          'id, sku, name, barcode, description, unit_cost, retail_price, quantity_on_hand, reorder_point, reorder_quantity, unit_of_measure, status, item_type, warehouse_id, bin_location, category:category_id(name), supplier:supplier_id(name), location:primary_location_id(name)',
         )
         .eq('organization_id', ctx.organizationId)
         .is('deleted_at', null)
@@ -152,6 +164,7 @@ export async function createSnapshot(
   const items: SnapshotItem[] = rows
     .filter((r) => (r.sku ?? '').trim().length > 0) // sku is the restore key
     .map((r) => ({
+      id: r.id,
       sku: (r.sku as string).trim(),
       name: r.name,
       barcode: r.barcode ?? null,
@@ -172,7 +185,7 @@ export async function createSnapshot(
     }));
 
   const snapshot: RestoreSnapshot = {
-    version: 1,
+    version: SNAPSHOT_VERSION,
     capturedAt: new Date().toISOString(),
     items,
   };
@@ -289,6 +302,7 @@ export async function restoreSnapshot(
 
   // Current ACTIVE items keyed by (sku, bin_location) — matching the live
   // uniqueness index (0126). A product at two racks = two distinct keys.
+  // Version 2 snapshots (Ungroup D1) also match by id, first.
   const activeRows = await fetchAllRows<{
     id: string;
     sku: string | null;
@@ -305,6 +319,7 @@ export async function restoreSnapshot(
       .range(from, to),
   );
   const byKey = new Map<string, { id: string; qty: number }>();
+  const byId = new Map<string, { id: string; qty: number; sku: string }>();
   const activeKeys = new Set<string>();
   for (const r of activeRows) {
     const sku = (r.sku ?? '').trim();
@@ -312,7 +327,28 @@ export async function restoreSnapshot(
     const k = itemKey(sku, r.bin_location);
     activeKeys.add(k);
     byKey.set(k, { id: r.id, qty: Number(r.quantity_on_hand ?? 0) });
+    byId.set(r.id, { id: r.id, qty: Number(r.quantity_on_hand ?? 0), sku });
   }
+
+  // Version 2 (Ungroup D1): each item is matched by its id first. The
+  // (SKU, bin) key is used only for an item whose record no longer exists:
+  // to find a live record now holding that SKU and bin, or else to re-create
+  // it. A key match never takes a record that the snapshot reconciles by its
+  // own id, and never takes one record twice, so a record whose SKU changed
+  // after the snapshot keeps its stock once. Version 1 (no ids) is unchanged.
+  const byIdFirst = snapshot?.version === SNAPSHOT_VERSION;
+  const reconciledById = new Set<string>(
+    byIdFirst ? items.flatMap((it) => (it.id && byId.has(it.id) ? [it.id] : [])) : [],
+  );
+  const claimed = new Set<string>();
+  const matchFor = (it: SnapshotItem, key: string): { id: string; qty: number } | undefined => {
+    if (!byIdFirst) return byKey.get(key);
+    const own = it.id ? byId.get(it.id) : undefined;
+    if (own) return own;
+    const other = byKey.get(key);
+    if (!other || reconciledById.has(other.id) || claimed.has(other.id)) return undefined;
+    return other;
+  };
 
   const svc = new InventoryService(ctx);
   let updated = 0;
@@ -332,8 +368,9 @@ export async function restoreSnapshot(
     const finalStatus = it.status as 'active' | 'archived' | 'discontinued';
 
     try {
-      const existing = byKey.get(key);
+      const existing = matchFor(it, key);
       if (existing) {
+        claimed.add(existing.id);
         // Reconcile fields, forcing 'active' first so the quantity reset (which
         // adjust_stock rejects on archived items) always works regardless of the
         // snapshot's final status.
@@ -398,15 +435,27 @@ export async function restoreSnapshot(
     }
   }
 
-  // Extras: active (sku,bin) keys not present in the snapshot — flagged, never deleted.
-  const extras = [...activeKeys].filter((k) => !snapshotKeys.has(k));
+  // Extras: active records the snapshot did not reconcile — flagged, never
+  // deleted. Version 1: (sku,bin) keys not present in the snapshot. Version 2:
+  // records not matched by id or by key (each listed by its SKU).
+  const extras = byIdFirst
+    ? [...byId.values()].filter((r) => !claimed.has(r.id)).map((r) => itemKey(r.sku, null))
+    : [...activeKeys].filter((k) => !snapshotKeys.has(k));
 
   void audit(
     {
       event: 'restore_point.restored',
       entityType: 'restore_point',
       entityId: opts.id,
-      extra: { updated, recreated, quantityAdjusted, failures, extras: extras.length, preRestoreId: pre.id },
+      extra: {
+        updated,
+        recreated,
+        quantityAdjusted,
+        failures,
+        extras: extras.length,
+        preRestoreId: pre.id,
+        snapshotVersion: byIdFirst ? SNAPSHOT_VERSION : 1,
+      },
     },
     ctx,
   );
@@ -420,6 +469,123 @@ export async function restoreSnapshot(
     // surface the SKU (strip the internal sku␟bin key) for the operator report
     extrasSample: extras.slice(0, 50).map((k) => k.split('␟')[0] ?? k),
     preRestoreId: pre.id,
+  };
+}
+
+/** How many records the restore screen names before it counts the rest. */
+export const SKU_CHANGES_NAMED = 10;
+/** How many SKU-change audit rows the warning reads at most (oldest first). */
+export const SKU_CHANGES_SCAN = 500;
+
+export interface RestorePointSkuChange {
+  itemId: string | null;
+  /** The record's name now, or null when the caller cannot read it. */
+  name: string | null;
+  /** The SKU it had when the first change after the point was made. */
+  before: string | null;
+  /** Its SKU after the last change. */
+  after: string | null;
+  /** True when a SKU edit carried the records that shared it along (Model B). */
+  shared: boolean;
+}
+
+export interface RestorePointSkuChanges {
+  version: 1 | 2;
+  changes: RestorePointSkuChange[];
+  /** Records that changed SKU beyond the ones named. */
+  more: number;
+  /** The audit read stopped at SKU_CHANGES_SCAN rows: `more` is a floor. */
+  truncated: boolean;
+}
+
+/**
+ * Ungroup D1 (b): what the restore screen says BEFORE the typed confirm. A
+ * version 1 snapshot (no record ids) restores by (SKU, bin), so a record whose
+ * SKU changed after it was taken (an Ungroup, or a SKU edit) is re-created
+ * under its old SKU with the stock it had then, while the record with the new
+ * SKU stays and is flagged as an extra. This names those records from the
+ * audit log: inventory.item.ungrouped rows and SKU edits (changed_keys has
+ * 'sku'; a Model B edit's siblings followed it, propagated_to_sku). A version 2
+ * snapshot matches by id, so it needs no warning and reads no audit log.
+ *
+ * Same gate as the restore (owner/admin floor + Business). Reads through the
+ * caller's RLS. A failed audit read throws: an error, never an all-clear.
+ */
+export async function restorePointSkuChanges(
+  ctx: ServiceContext,
+  id: string,
+): Promise<RestorePointSkuChanges> {
+  await assertRestorePointsAccess(ctx);
+  const { data: point, error: pointErr } = await ctx.supabase
+    .from('restore_points')
+    .select('version:snapshot->version, captured_at:snapshot->>capturedAt, created_at')
+    .eq('id', id)
+    .eq('organization_id', ctx.organizationId)
+    .maybeSingle();
+  if (pointErr) throw new ServiceError('internal_error', pointErr.message);
+  if (!point) throw new ServiceError('not_found', 'Restore point not found.');
+  const p = point as { version: unknown; captured_at: string | null; created_at: string };
+  if (Number(p.version) === SNAPSHOT_VERSION) {
+    return { version: SNAPSHOT_VERSION, changes: [], more: 0, truncated: false };
+  }
+  const since = p.captured_at ?? p.created_at;
+
+  const { data: rows, error: auditErr } = await ctx.supabase
+    .from('audit_logs')
+    .select(
+      'entity_id:metadata->>entity_id, event, before_sku:metadata->before->>sku, after_sku:metadata->after->>sku, propagated:metadata->>propagated_to_sku',
+    )
+    .eq('organization_id', ctx.organizationId)
+    .in('event', ['inventory.item.updated', 'inventory.item.ungrouped'])
+    .gt('created_at', since)
+    .filter('metadata->changed_keys', 'cs', '["sku"]')
+    .order('created_at', { ascending: true })
+    .limit(SKU_CHANGES_SCAN);
+  if (auditErr) throw new ServiceError('internal_error', auditErr.message);
+
+  // One line per record: its SKU before the first change and after the last.
+  const byItem = new Map<string, RestorePointSkuChange>();
+  for (const r of (rows ?? []) as Array<{
+    entity_id: string | null;
+    before_sku: string | null;
+    after_sku: string | null;
+    propagated: string | null;
+  }>) {
+    const key = r.entity_id ?? `${r.before_sku}\u0000${r.after_sku}`;
+    const seen = byItem.get(key);
+    if (seen) {
+      seen.after = r.after_sku ?? seen.after;
+      seen.shared ||= r.propagated != null;
+    } else {
+      byItem.set(key, {
+        itemId: r.entity_id,
+        name: null,
+        before: r.before_sku,
+        after: r.after_sku,
+        shared: r.propagated != null,
+      });
+    }
+  }
+  const all = [...byItem.values()];
+  const named = all.slice(0, SKU_CHANGES_NAMED);
+  const ids = named.flatMap((c) => (c.itemId ? [c.itemId] : []));
+  if (ids.length > 0) {
+    const { data: names } = await ctx.supabase
+      .from('inventory_items')
+      .select('id, name, sku')
+      .eq('organization_id', ctx.organizationId)
+      // in-list-bound: at most SKU_CHANGES_NAMED (10) ids, the records named
+      .in('id', ids);
+    const nameById = new Map(
+      ((names ?? []) as Array<{ id: string; name: string }>).map((n) => [n.id, n.name]),
+    );
+    for (const c of named) c.name = (c.itemId && nameById.get(c.itemId)) || null;
+  }
+  return {
+    version: 1,
+    changes: named,
+    more: all.length - named.length,
+    truncated: (rows ?? []).length >= SKU_CHANGES_SCAN,
   };
 }
 

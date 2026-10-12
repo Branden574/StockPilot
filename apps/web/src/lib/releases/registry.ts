@@ -86,6 +86,31 @@ export const RELEASES: Release[] = [
         whatToDo: 'No action needed.',
         audience: { anyPermission: ['items:update', 'items:create'] },
       },
+      {
+        // Test stage, orchestrator decision D1 (2026-10-12): a restore point
+        // used to match records by SKU and rack only, so restoring one taken
+        // before an Ungroup re-created the split record under its old SKU
+        // (restore-points.ts). (a) New points carry each record's id
+        // (snapshot version 2) and a restore matches by it first. (b) An
+        // older point lists the records that changed SKU since it was taken
+        // before the typed confirm (restore-snapshot-button.tsx). The restore
+        // never writes a SKU. Told to whoever can open Backups & restore
+        // (organization:update; the page also needs the Business plan, so no
+        // link). Web only: restore points are not in the mobile app.
+        id: 'restore-points-follow-records',
+        category: 'fixed',
+        area: 'Settings',
+        title: "Restoring a restore point keeps each record's stock in one place after a SKU change",
+        whatChanged:
+          "Restore points taken after this update remember each record, not only its SKU and rack, so restoring one after an Ungroup or a SKU edit puts each record's stock back on that same record. Restoring an older restore point now first names the records that changed SKU since it was taken, before you type RESTORE.",
+        whyItMatters:
+          'Restore points matched records by SKU and rack, so restoring one taken before a record got a new SKU added that record again under its old SKU, with the stock it had then, while the record with the new SKU kept its stock too.',
+        howItAffectsYou:
+          "A restore keeps each record's current SKU. An older restore point with no SKU change since it was taken restores as before. Restore points are on the web, for owners and admins on the Business plan or above.",
+        whatToDo:
+          'If Backups & restore names records that changed SKU, check them before you type RESTORE, or restore a newer point.',
+        audience: { anyPermission: ['organization:update'] },
+      },
     ],
   },
   {
