@@ -7456,7 +7456,14 @@ describe('Close the rest (returns RX-4) is published', () => {
     const timeline = readFileSync(resolve(__dirname, '../../components/orders/order-timeline.tsx'), 'utf8');
     expect(timeline).toContain("if (event === 'order.closed_partial') return `Rest closed from ${rma ?? 'its RMA'}`;");
     expect(timeline).toContain("lines.push('What was handed over stays. The rest will not be sent.');");
-    expect(close.whatChanged).toContain("On the web, the replacement order's timeline says the rest was closed from the return.");
+    // Re-pinned by the claims review of #350 (2026-10-12; was: "On the web,
+    // the replacement order's timeline says the rest was closed from the
+    // return."): the timeline shows only to people who can view the audit
+    // log (pinned in the test below). Claim kept: the entry names the
+    // timeline line, on the web.
+    expect(close.whatChanged).toContain(
+      "If you can view the audit log, the replacement order's timeline on the web says the rest was closed from the return.",
+    );
 
     // The requester hears it from the replacement's own notification
     // (completed: ungated) and, with an address on file, the one-time
@@ -7520,6 +7527,60 @@ describe('Close the rest (returns RX-4) is published', () => {
     // No line says how a part is handed over (a replacement approved on
     // backorder offers Open replacement, not Get replacement ready).
     expect(all).not.toContain(RETURNS_COPY.getReplacementReady);
+  });
+
+  // Corrected by the claims review of #350 (2026-10-12), against 7143ec0f6:
+  // the summary goes to every reader an entry reaches (an old phone shows
+  // only it and the title), and the used-up entry reaches members who place
+  // orders, viewers included, so the summary names who can use Close the
+  // rest instead of saying the return offers it. The replacement order's
+  // timeline shows only to people who can view the audit log, which Manage
+  // returns or View returns does not carry, so its line says so.
+  it('names who can use Close the rest in the summary every reader gets, and who sees the timeline line', () => {
+    const r = release();
+    const close = r.entries[0]!;
+    // A member who places orders (viewers included) is told this release,
+    // with this summary, and is never offered Close the rest: their own
+    // return reads "The rest will follow.".
+    expect(PERMISSION_META['orders:request'].description).toBe('Submit a request for goods. Includes viewers.');
+    expect(hasPermission('viewer', 'orders:request')).toBe(true);
+    const requester: ReleaseViewer = { role: 'viewer', permissions: ['orders:request'], enabledModules: ['returns', 'orders'] };
+    expect(visibleReleases([r], requester)[0]?.entries.map((e) => e.id)).toEqual(['returns-exchange-sizes-used-up']);
+    expect(buildReleaseList([r], requester, [], null).latestUnread?.id).toBe(ID);
+    expect(legacyAnnouncementsFor([r], requester, {})[0]?.body).toBe(r.summary);
+    expect(exchangeRequesterSentence('partly_handed_over')).toBe('Part of your replacement was handed over. The rest will follow.');
+    for (const role of ['staff', 'viewer'] as const) {
+      expect(hasPermission(role, 'returns:manage'), role).toBe(false);
+      expect(hasPermission(role, 'orders:approve'), role).toBe(false);
+    }
+    // Only people who manage returns (the workbench folds in write access to
+    // the warehouse) and have order approval are offered it.
+    const workbench = readFileSync(resolve(__dirname, '../../server/services/returns-workbench.ts'), 'utf8');
+    expect(workbench).toContain("ctx.enabledModules.has('returns') && can(ctx, 'returns:manage') && writeOk;");
+    expect(workbench).toContain("canApproveOrders: can(ctx, 'orders:approve'),");
+    expect(REPLACEMENT_ACTIONS).toContain('close_replacement_rest');
+    expect(r.summary).toMatch(
+      /^People who manage returns and have order approval can now use Close the rest when part of an exchange replacement was handed over and the rest is on backorder, once the returned item is in, on the web and in the mobile app after the latest update\. /,
+    );
+    expect(r.summary).not.toMatch(/the return now offers/i);
+
+    // The order page passes activity_logs:read ("View audit log") to the
+    // timeline, which shows anyone else a sentence instead. Managers hold it
+    // by default; a member granted View returns or Manage returns need not.
+    const orderPage = readFileSync(resolve(DASHBOARD_APP_DIR, 'dashboard/orders/[id]/page.tsx'), 'utf8');
+    expect(orderPage).toContain("canReadActivity={can(ctx, 'activity_logs:read')}");
+    const timeline = readFileSync(resolve(__dirname, '../../components/orders/order-timeline.tsx'), 'utf8');
+    expect(timeline).toContain('if (!canReadActivity) {');
+    expect(timeline).toContain(JSON.stringify("Only people who can view the audit log can see this order's history."));
+    expect(PERMISSION_META['activity_logs:read'].label).toBe('View audit log');
+    expect(hasPermission('manager', 'activity_logs:read')).toBe(true);
+    expect(hasPermission('staff', 'activity_logs:read')).toBe(false);
+    const returnsOnly: ReleaseViewer = { role: 'staff', permissions: ['returns:read'], enabledModules: ['returns'] };
+    expect(visibleReleases([r], returnsOnly)[0]?.entries.map((e) => e.id)).toEqual(['returns-close-replacement-rest']);
+    expect(close.whatChanged).toMatch(
+      /If you can view the audit log, the replacement order's timeline on the web says the rest was closed from the return\.$/,
+    );
+    expect(close.whatChanged).not.toMatch(/On the web, the replacement order's timeline/);
   });
 });
 

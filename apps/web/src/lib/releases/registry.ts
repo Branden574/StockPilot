@@ -101,6 +101,24 @@ export const RELEASES: Release[] = [
     //   L3; walked) was in no entry: Close the rest's entry names it, on the
     //   web (the phone shows no order timeline).
     //
+    // Corrected by the claims review of #350 (2026-10-12), against 7143ec0f6:
+    // - The summary said "the return now offers Close the rest". Every reader
+    //   an entry reaches is shown the summary (visibleReleases keeps it, and
+    //   an old phone shows only the title and the summary), and the used-up
+    //   entry reaches members who place orders (orders:request, viewers
+    //   included), whose notice this release is. Close the rest is offered
+    //   only to people with Manage returns (with write access to the
+    //   warehouse) and order approval (core REPLACEMENT_ACTIONS, the
+    //   workbench's canManageReturns, the 0397 gates), so a requester whose
+    //   replacement reads "The rest will follow." would look for it in vain.
+    //   The summary now names who can use it, as RX-2's and RX-3's do.
+    // - "On the web, the replacement order's timeline says the rest was
+    //   closed from the return." The timeline shows only to people who can
+    //   view the audit log (the order page's canReadActivity; anyone else
+    //   reads Only people who can view the audit log can see this order's
+    //   history.), and Manage returns or View returns can be granted without
+    //   it. The line now says "If you can view the audit log".
+    //
     // Who is told: whoever can open Returns, Close the rest (its only link,
     // Open Returns, the page's own gate; returns:read too, who see the
     // return's new state and its history line); members who place orders,
@@ -123,8 +141,8 @@ export const RELEASES: Release[] = [
     status: 'published',
     title: 'Close the rest of a replacement on backorder',
     summary:
-      'When part of an exchange replacement was handed over and the rest is on backorder, the return now offers Close the rest once the returned item is in, on the web and in the mobile app after the latest update. Return or exchange no longer offers other sizes for an item whose units all got a replacement on an earlier return.',
-    publishedAt: '2026-10-12T05:33:00Z',
+      'People who manage returns and have order approval can now use Close the rest when part of an exchange replacement was handed over and the rest is on backorder, once the returned item is in, on the web and in the mobile app after the latest update. Return or exchange no longer offers other sizes for an item whose units all got a replacement on an earlier return.',
+    publishedAt: '2026-10-12T06:13:00Z',
     entries: [
       {
         id: 'returns-close-replacement-rest',
@@ -132,7 +150,7 @@ export const RELEASES: Release[] = [
         area: 'Returns',
         title: 'Close the rest of a replacement on backorder',
         whatChanged:
-          "When part of an exchange replacement was handed over and the rest is on backorder, the return now offers Close the rest once the returned item is received. You give a reason; the rest of the replacement is never sent, what was already handed over stays handed over, and anything reserved for the rest is freed. The return keeps the reason in its history. On the web, the replacement order's timeline says the rest was closed from the return.",
+          "When part of an exchange replacement was handed over and the rest is on backorder, the return now offers Close the rest once the returned item is received. You give a reason; the rest of the replacement is never sent, what was already handed over stays handed over, and anything reserved for the rest is freed. The return keeps the reason in its history. If you can view the audit log, the replacement order's timeline on the web says the rest was closed from the return.",
         whyItMatters: 'Such a replacement used to wait on backorder, with no way to end it from its return once the returned item was in.',
         howItAffectsYou:
           'Close the rest needs order approval permission as well as permission to manage returns, like every replacement action. Nothing moves in stock. The requester is told that part of the replacement was handed over and the rest will not be sent, never the reason. While the return still waits for the returned item, cancelling the return closes the rest, as before.',
