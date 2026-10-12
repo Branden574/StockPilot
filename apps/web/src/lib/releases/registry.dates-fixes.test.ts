@@ -80,13 +80,35 @@ describe('the dates fixes release is published', () => {
     // first. Claim kept: a member the public link release does not reach is
     // told this one (the hand-over release reaches no member without a
     // returns permission).
+    // Re-pinned by the What's New publish of ungroup-2026-10 and
+    // group-selected-2026-10 (2026-10-12): was returns-history-hand-over-2026-10
+    // for the owner, and ID for a member with no permission. Group selected's
+    // release is published later still and reaches every member (its list
+    // entries have no audience; Ungroup's reaches no member without
+    // items:update or items:create), so both are told it first. Claim kept:
+    // a member the public link release does not reach is told this one once
+    // the newer releases that reach them are read.
     expect(buildReleaseList(RELEASES, everyone, [], null).latestUnread?.id).toBe(
-      'returns-history-hand-over-2026-10',
+      'group-selected-2026-10',
     );
-    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(ID);
-    // An old phone build lists it first for a member, with the notification
-    // settings link (the one entry that member is told).
-    expect(legacyAnnouncementsFor(RELEASES, member, {})[0]).toEqual({
+    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(
+      'group-selected-2026-10',
+    );
+    const groupSelectedRead = {
+      release_id: 'group-selected-2026-10',
+      revision: 1,
+      dismissed_at: null,
+      opened_at: '2026-10-12T13:48:00Z',
+      read_at: '2026-10-12T13:48:00Z',
+    };
+    expect(buildReleaseList(RELEASES, member, [groupSelectedRead], null).latestUnread?.id).toBe(ID);
+    // An old phone build lists it first for a member once Group selected's
+    // release is seen, with the notification settings link (the one entry
+    // of this release that member is told).
+    // Re-pinned by the same publish (2026-10-12; was: first with nothing
+    // seen): Group selected's release is first until it is seen.
+    expect(legacyAnnouncementsFor(RELEASES, member, {})[0]?.id).toBe('group-selected-2026-10');
+    expect(legacyAnnouncementsFor(RELEASES, member, { 'group-selected-2026-10': true })[0]).toEqual({
       id: ID,
       date: '2026-10-06',
       title: release().title,
@@ -141,12 +163,16 @@ describe('the dates fixes release is published', () => {
     // 6, Ungroup's draft at 0): Group selected's draft, dated later still,
     // sits at the top above Ungroup's draft. Claim kept: the public link
     // release, published a minute later, sits directly above.
+    // Re-pinned by the What's New publish of ungroup-2026-10 and
+    // group-selected-2026-10 (2026-10-12): was: both at the top as drafts.
+    // They are published, in the same places. Claim kept: the public link
+    // release, published a minute later, sits directly above.
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBe(7);
     expect(RELEASES[0]?.id).toBe('group-selected-2026-10');
-    expect(RELEASES[0]?.status).toBe('draft');
+    expect(RELEASES[0]?.status).toBe('published');
     expect(RELEASES[1]?.id).toBe('ungroup-2026-10');
-    expect(RELEASES[1]?.status).toBe('draft');
+    expect(RELEASES[1]?.status).toBe('published');
     expect(RELEASES[2]?.id).toBe('returns-history-hand-over-2026-10');
     expect(RELEASES[2]?.status).toBe('published');
     expect(RELEASES[3]?.id).toBe('returns-close-rest-2026-10');
