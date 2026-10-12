@@ -43,7 +43,10 @@
 //      (planGroupAwarePage, Phase 2), so a staff member's pages hold the
 //      units a manager's do; only a view over the cap (and a server-mode
 //      search) still slices a fixed 30 rows, and such a view never switches
-//      modes, so it pages one way only. The CACHED default Items view,
+//      modes, so it pages one way only. A load whose plan scan fails also
+//      slices a fixed 30 rows (planned-page.ts), so that one page can repeat
+//      or skip a row of the planned pages around it until the next load.
+//      The CACHED default Items view,
 //      which paints first and is then re-derived here once the full
 //      dataset streams in, plans its page 1 with planInstantFirstPage
 //      below, so both paints show the same page.

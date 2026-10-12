@@ -1487,8 +1487,10 @@ export class InventoryService {
       if (w.error) throw new ServiceError('internal_error', w.error.message);
       rows.push(...(w.data ?? []));
     }
-    // A record written between two windows can shift one across the boundary
-    // and be read twice; a page must never show it twice.
+    // A record that joins the view between two windows can shift one across
+    // the boundary and be read twice; a page must never show it twice. One
+    // that leaves the view shifts one the other way, unread by either window:
+    // the plan leaves it out until the next load, which scans the view again.
     const seen = new Set<string>();
     rows = rows.filter((r) => {
       if (seen.has(r.id)) return false;
@@ -1624,10 +1626,12 @@ export class InventoryService {
     // >1000 in-scope items, while `total` (count:'exact' on the main query)
     // stays accurate, making the mismatch visible. (Same 1000-row cap class
     // fixed in forecasting.ts / order-requests.ts.) filteredScanPage applies
-    // the main query's scope and its filters (applyContentFilters); only the
-    // column projection and the pagination differ. Build per page so each
-    // `.range()` is applied to a fresh query (reusing one builder would stack
-    // range headers).
+    // the main query's warehouse scope and every one of its filters
+    // (applyContentFilters), with its own columns and pagination. A viewer's
+    // category grants are left to RLS here, which enforces the same grants the
+    // page query above also checks in code (listPlanRows checks them in code
+    // too). Build per page so each `.range()` is applied to a fresh query
+    // (reusing one builder would stack range headers).
     const buildSumPage = (from: number, to: number) =>
       this.filteredScanPage(
         filters,
