@@ -610,6 +610,9 @@ function familyDb(
     adminReadExtra?: string[];
     /** The service-role update answers an error (a lost connection). */
     adminUpdateFails?: boolean;
+    /** The caller's own update answers an error (every one, or only the
+     *  one for this family). */
+    updateFails?: boolean | string;
   } = {},
 ) {
   const rows = new Map<string, string | null>(Object.entries(start));
@@ -654,7 +657,11 @@ function familyDb(
         const ids = (arg(call, 'in', 'id') as string[] | undefined) ?? [];
         const family = arg(call, 'eq', 'group_id');
         (admin ? adminUpdates : updates).push({ family, ids });
-        if (admin && opts.adminUpdateFails) {
+        if (
+          admin
+            ? opts.adminUpdateFails
+            : opts.updateFails === true || (opts.updateFails && opts.updateFails === family)
+        ) {
           return { data: null, error: { message: 'connection reset', code: '08006' } };
         }
         const hit = ids.filter(
@@ -910,12 +917,50 @@ describe('unlinkItems — the undo', () => {
         { itemIds: ['a'], reason: 'Wrong family' },
       ),
     ).rejects.toMatchObject({
-      code: 'internal_error',
+      // PR #361 re-review: a conflict, so its own words reach Product groups
+      // (an internal_error's message is replaced by the generic sentence).
+      code: 'conflict',
+      message:
+        "The item left its product group, but its SKU's record on another rack could not follow. Unlink that record too.",
       details: { reason: 'sku_siblings_unfinished', skuSiblingIds: [] },
     });
     expect(db.rows.get('a')).toBeNull();
     expect(db.rows.get('b')).toBe('grp-1');
     expect(auditedRows().map((r) => r.entityId)).toEqual(['a']);
+  });
+
+  // PR #361 re-review LOW: a refusal keeps its own error (and the raw detail
+  // logs and Sentry read), never a rebuilt one.
+  it("a write error keeps its raw detail for the logs, never the person's words", async () => {
+    const db = familyDb({ a: 'grp-1' }, { updateFails: true });
+    const e = await unlinkItems(
+      { supabase: db.stub.client, ctx: sportsCtx(db.stub.client) },
+      { itemIds: ['a'], reason: 'Wrong family' },
+    ).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(ServiceError);
+    expect(e).toMatchObject({
+      code: 'internal_error',
+      message: 'An internal error occurred. Please try again.',
+      internalDetail: 'connection reset',
+    });
+  });
+
+  it('a later refusal names the other racks that already left, and keeps its raw detail', async () => {
+    const db = familyDb(
+      { a: 'grp-1', b: 'grp-1', c: 'grp-2' },
+      { skus: { a: 'TEE-M', b: 'TEE-M', c: 'TEE-L' }, updateFails: 'grp-2' },
+    );
+    const e = await unlinkItems(
+      { supabase: db.stub.client, ctx: sportsCtx(db.stub.client) },
+      { itemIds: ['a', 'c'], reason: 'Wrong family' },
+    ).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(ServiceError);
+    expect(e).toMatchObject({
+      code: 'internal_error',
+      internalDetail: 'connection reset',
+      details: { skuSiblingIds: ['b'] },
+    });
+    expect(auditedRows().map((r) => r.entityId)).toEqual(['a', 'b']);
   });
 
   // A retry finishes it: Ungroup sends a record already out of its family with

@@ -362,7 +362,7 @@ describe('UngroupSelectedService.apply', () => {
       ],
     });
     unlink.mockRejectedValueOnce(
-      new ServiceError('internal_error', 'The item left the product group.', {
+      new ServiceError('conflict', 'The item left its product group.', {
         reason: 'sku_siblings_unfinished',
         skuSiblingIds: [id(9)],
       }),

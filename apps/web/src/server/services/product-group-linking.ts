@@ -929,16 +929,19 @@ export async function unlinkItems(
       for (const [family, records] of outByFamily) await followSku(family, records);
     }
     if (unfinished) {
+      // A conflict, not an internal_error: those carry only the generic
+      // sentence, and these words must reach Product groups (PR #361 re-review).
       throw new ServiceError(
-        'internal_error',
+        'conflict',
         "The item left its product group, but its SKU's record on another rack could not follow. Unlink that record too.",
-        { reason: 'sku_siblings_unfinished' },
+        { reason: 'sku_siblings_unfinished', skuSiblingIds },
       );
     }
   } catch (e) {
-    // The other racks that did leave are named with any refusal.
-    if (e instanceof ServiceError) {
-      throw new ServiceError(e.code, e.message, { ...(e.details ?? {}), skuSiblingIds });
+    // The other racks that did leave are named with any refusal, on the
+    // refusal itself (its code, words and raw detail for the logs unchanged).
+    if (e instanceof ServiceError && skuSiblingIds.length > 0) {
+      e.details = { ...(e.details ?? {}), skuSiblingIds };
     }
     throw e;
   } finally {
