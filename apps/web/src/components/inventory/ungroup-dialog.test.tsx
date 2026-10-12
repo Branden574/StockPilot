@@ -323,4 +323,30 @@ describe('UngroupDialog', () => {
     render(<UngroupDialog open itemIds={[B]} onOpenChange={() => {}} onDone={() => {}} />);
     expect(await screen.findByRole('alert')).toHaveTextContent(GROUPING_ERROR_WORDS.permission);
   });
+
+  // Test stage (local walk W10, C7d): with 101 records selected the preview is
+  // refused (tooMany) and returns no candidate, so the plan listed every
+  // selected record as "isn't available any more", 101 lines above the real
+  // words. A refused preview says only its own words.
+  it('a refused preview lists no record as unavailable: it says only why (too many records)', async () => {
+    vi.mocked(previewUngroupAction).mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: 'validation_error',
+        message: GROUPING_ERROR_WORDS.tooMany,
+        details: { reason: 'invalid' },
+      },
+    } as never);
+    const ids = Array.from(
+      { length: 101 },
+      (_, i) => `eeeeeeee-eeee-4eee-8eee-${String(i).padStart(12, '0')}`,
+    );
+    render(<UngroupDialog open itemIds={ids} onOpenChange={() => {}} onDone={() => {}} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(GROUPING_ERROR_WORDS.tooMany);
+    expect(screen.queryByText('Left out:')).toBeNull();
+    expect(screen.queryAllByText(new RegExp(UNGROUP_COPY.leftOutReason.not_found))).toHaveLength(0);
+    expect(screen.queryByText(UNGROUP_COPY.barcodeNote)).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Ungroup \d+ records?$/ })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+  });
 });

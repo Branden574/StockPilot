@@ -74,6 +74,10 @@ export function UngroupDialog({ open, onOpenChange, itemIds, onDone }: Props) {
   } | null>(null);
   const [anchorBySku, setAnchorBySku] = React.useState<Record<string, string>>({});
   const [error, setError] = React.useState<{ message: string; stale: boolean } | null>(null);
+  // The preview itself was refused (too many records, a permission, the
+  // network): there is nothing to review, so only its words show, never every
+  // selected record as "isn't available any more" (test stage, walk W10).
+  const [previewRefused, setPreviewRefused] = React.useState(false);
   const [previewNonce, setPreviewNonce] = React.useState(0);
   // The body and key of the current Save, kept for its retries.
   const pending = React.useRef<{ json: string; body: SplitSkuBody } | null>(null);
@@ -90,6 +94,7 @@ export function UngroupDialog({ open, onOpenChange, itemIds, onDone }: Props) {
     /* eslint-disable react-hooks/set-state-in-effect -- reset on open / re-preview */
     setPhase({ kind: 'loading' });
     setError(null);
+    setPreviewRefused(false);
     setAnchorBySku({});
     /* eslint-enable react-hooks/set-state-in-effect */
     void previewUngroupAction(idsKey ? idsKey.split(',') : []).then((r) => {
@@ -97,6 +102,7 @@ export function UngroupDialog({ open, onOpenChange, itemIds, onDone }: Props) {
       if (!r.ok) {
         setCandidates([]);
         setIdentity(null);
+        setPreviewRefused(true);
         setError({ message: r.error.message, stale: false });
         setPhase({ kind: 'ready' });
         return;
@@ -221,7 +227,7 @@ export function UngroupDialog({ open, onOpenChange, itemIds, onDone }: Props) {
               </p>
             ) : null}
           </div>
-        ) : (
+        ) : previewRefused ? null : (
           <div className="space-y-4 text-sm">
             {plan.groups.map((g) => {
               const anchor = g.allSelected ? anchorOf(g.sku, g.defaultAnchorId) : null;
