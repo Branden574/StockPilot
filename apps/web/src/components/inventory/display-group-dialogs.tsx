@@ -454,6 +454,8 @@ export function GroupSelectedDialog({
                     {(!reason || reason === 'chosen') && other ? (
                       // One explicit choice per record (P10): move it here,
                       // or leave it out (not sent; it stays in its group).
+                      // Each radio names its record, so two records in one
+                      // group are told apart by a screen reader (R2-5).
                       <fieldset className="space-y-1 text-xs">
                         <legend>{GROUP_COPY.otherGroup(other.name)}</legend>
                         <label className="flex items-center gap-2">
@@ -463,6 +465,7 @@ export function GroupSelectedDialog({
                             checked={decisions.moveIds.has(r.id)}
                             disabled={phase === 'saving'}
                             onChange={() => choose(r.id, 'move', other.id)}
+                            aria-label={GROUP_COPY.moveOneFor(r.name)}
                           />
                           <span>{GROUP_COPY.moveOne}</span>
                         </label>
@@ -473,6 +476,7 @@ export function GroupSelectedDialog({
                             checked={decisions.leaveOutIds.has(r.id)}
                             disabled={phase === 'saving'}
                             onChange={() => choose(r.id, 'leave', other.id)}
+                            aria-label={GROUP_COPY.leaveOutOneFor(r.name)}
                           />
                           <span>{GROUP_COPY.leaveOutOne}</span>
                         </label>

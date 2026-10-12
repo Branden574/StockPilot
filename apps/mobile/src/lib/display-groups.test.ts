@@ -602,6 +602,14 @@ describe('screen pins', () => {
     expect(screen).toMatch(/setChoices\(\(cur\) => choicesForReview\(cur, r\.review\.records\)\)/);
   });
 
+  // Recheck R2-5: each record's choice is named for its record with core's
+  // words, the same names the web's radios carry.
+  it("each record's Move it and Leave it out choice is named for its record with core's words (R2-5)", () => {
+    const screen = read('../../app/group-selected.tsx');
+    expect(screen).toContain('GROUP_COPY.moveOneFor(r.name)');
+    expect(screen).toContain('GROUP_COPY.leaveOutOneFor(r.name)');
+  });
+
   // Recheck R2-4: "Add them to the selection" stays within one request's 100
   // records (core's plan says why it is off), and Try again after a failed
   // review never resends a request that can only fail again.

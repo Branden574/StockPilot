@@ -233,7 +233,10 @@ describe('GroupSelectedDialog', () => {
     const choice = within(screen.getByTestId(`group-row-${A}`)).getByRole('group', {
       name: GROUP_COPY.otherGroup('Old shirts'),
     });
-    await userEvent.click(within(choice).getByRole('radio', { name: GROUP_COPY.moveOne }));
+    // Re-pinned 2026-10-12 (recheck R2-5): each radio is named for its record.
+    await userEvent.click(
+      within(choice).getByRole('radio', { name: GROUP_COPY.moveOneFor('Polo XXXL') }),
+    );
     expect(save).toBeEnabled();
     await userEvent.click(save);
     await waitFor(() => expect(h.apply).toHaveBeenCalledTimes(1));
@@ -241,6 +244,42 @@ describe('GroupSelectedDialog', () => {
       moveItemIds: [A],
       expectedGroups: { [A]: H, [B]: null },
     });
+  });
+
+  // Recheck R2-5: two records in one group gave identical radios ("Move it
+  // into this group", "Leave it out") to someone moving between form
+  // controls with a screen reader; each now names its record, starting with
+  // the words on screen (as the phone does).
+  it("each record's Move it and Leave it out radios name that record (R2-5)", async () => {
+    const inH = { displayGroup: { id: H, name: 'Old shirts', version: 3 } };
+    h.preview.mockResolvedValueOnce(
+      review([A, B], [rec(A, { ...inH, name: 'Polo S' }), rec(B, { ...inH, name: 'Polo M' })]),
+    );
+    render(
+      <GroupSelectedDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[A, B]}
+        view="items"
+        onDone={() => {}}
+      />,
+    );
+    await screen.findByTestId(`group-row-${A}`);
+    for (const name of ['Polo S', 'Polo M']) {
+      expect(screen.getByRole('radio', { name: GROUP_COPY.moveOneFor(name) })).toBeInTheDocument();
+      expect(
+        screen.getByRole('radio', { name: GROUP_COPY.leaveOutOneFor(name) }),
+      ).toBeInTheDocument();
+    }
+    // Each record's pair is still one group of choices under its legend.
+    const rowB = screen.getByTestId(`group-row-${B}`);
+    await userEvent.click(
+      within(rowB).getByRole('radio', { name: GROUP_COPY.leaveOutOneFor('Polo M') }),
+    );
+    expect(screen.getByRole('radio', { name: GROUP_COPY.leaveOutOneFor('Polo M') })).toBeChecked();
+    expect(
+      screen.getByRole('radio', { name: GROUP_COPY.leaveOutOneFor('Polo S') }),
+    ).not.toBeChecked();
   });
 
   it('a product-family member needs the confirmation (its family is never changed)', async () => {
@@ -455,7 +494,10 @@ describe('GroupSelectedDialog', () => {
     );
     const rowA = await screen.findByTestId(`group-row-${A}`);
     expect(screen.getByTestId('group-blocked')).toHaveTextContent(GROUP_COPY.blocked.otherGroup);
-    await userEvent.click(within(rowA).getByRole('radio', { name: GROUP_COPY.leaveOutOne }));
+    // Re-pinned 2026-10-12 (recheck R2-5): each radio is named for its record.
+    await userEvent.click(
+      within(rowA).getByRole('radio', { name: GROUP_COPY.leaveOutOneFor('Polo XXXL') }),
+    );
     const save = screen.getByRole('button', { name: 'Group 2 records' });
     expect(save).toBeEnabled();
     await userEvent.click(save);

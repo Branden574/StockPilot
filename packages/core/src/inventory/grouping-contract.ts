@@ -1224,6 +1224,11 @@ export const GROUP_COPY = {
   /** The other choice for a record already in another group (P10): it is not
    *  sent and stays where it is. */
   leaveOutOne: 'Leave it out',
+  /** Each record's choice, named for its record so a screen reader tells two
+   *  records in one group apart; it starts with the words on screen (recheck
+   *  R2-5). The web and the phone use the same names. */
+  moveOneFor: (record: string) => `Move it into this group: ${record}`,
+  leaveOutOneFor: (record: string) => `Leave it out: ${record}`,
   /** A selected record that is already in the existing target (P6). */
   alreadyInTarget: 'Already in this group; it stays.',
   /** The existing target's other records the person can see (P8). */

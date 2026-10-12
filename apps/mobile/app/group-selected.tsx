@@ -411,16 +411,21 @@ export default function GroupSelectedScreen() {
                             </Body>
                             {(
                               [
-                                ['move', moving, GROUP_COPY.moveOne],
-                                ['leave', leaving, GROUP_COPY.leaveOutOne],
+                                ['move', moving, GROUP_COPY.moveOne, GROUP_COPY.moveOneFor(r.name)],
+                                [
+                                  'leave',
+                                  leaving,
+                                  GROUP_COPY.leaveOutOne,
+                                  GROUP_COPY.leaveOutOneFor(r.name),
+                                ],
                               ] as const
-                            ).map(([choice, on, label]) => (
+                            ).map(([choice, on, label, a11yLabel]) => (
                               <Pressable
                                 key={choice}
                                 onPress={() => choose(r.id, choice, other.id)}
                                 disabled={busy}
                                 accessibilityRole="radio"
-                                accessibilityLabel={`${label}: ${r.name}`}
+                                accessibilityLabel={a11yLabel}
                                 accessibilityState={{ checked: on, disabled: busy }}
                                 style={styles.choiceRow}
                               >

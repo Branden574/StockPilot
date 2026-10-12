@@ -910,6 +910,16 @@ describe('the words', () => {
   it("names the phone's select-bar control as it reads (P7)", () => {
     expect(GROUP_COPY.bulkActionShort).toBe('Group');
   });
+
+  // Recheck R2-5: each record's choice names its record, so a screen reader
+  // tells two records in one group apart; the name starts with the words on
+  // screen, on the web and the phone alike.
+  it("names each record's Move it and Leave it out choice for that record (R2-5)", () => {
+    expect(GROUP_COPY.moveOneFor('Polo S')).toBe('Move it into this group: Polo S');
+    expect(GROUP_COPY.leaveOutOneFor('Polo S')).toBe('Leave it out: Polo S');
+    expect(GROUP_COPY.moveOneFor('x').startsWith(GROUP_COPY.moveOne)).toBe(true);
+    expect(GROUP_COPY.leaveOutOneFor('x').startsWith(GROUP_COPY.leaveOutOne)).toBe(true);
+  });
 });
 
 describe('what a review answer is for', () => {
