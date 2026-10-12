@@ -2156,10 +2156,19 @@ export function InventoryTable({
                 // collapsing the list just did.
                 const skus = distinctSkuCount ?? effectiveTotal;
                 const rows = placementRowCount ?? effectiveTotal;
+                // A staff member's planned Items page counts the view's
+                // records, not the rack rows they split into on screen
+                // (that needs every record's holdings), so it names them
+                // items (count 1). On Books a record is one row.
+                const rowsLabel = placementRowCount === null && !showBookFields ? 'items' : 'rows';
                 return (
                   <>
                     {formatNumber(skus)} SKUs ·{' '}
-                    {skus !== rows ? <>{formatNumber(rows)} rows · </> : null}
+                    {skus !== rows ? (
+                      <>
+                        {formatNumber(rows)} {rowsLabel} ·{' '}
+                      </>
+                    ) : null}
                     {formatCurrency(valueOnHand)} on hand
                   </>
                 );

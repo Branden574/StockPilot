@@ -2004,6 +2004,48 @@ describe('InventoryTable planned server page (staff and viewers)', () => {
     expect(footerText()).toMatch(/^68 SKUs · /);
   });
 
+  it("names the whole view's records items on Items, where the screen splits them by rack, and rows on Books", () => {
+    // The plan counts the view's records (count 1), not the rack rows they
+    // split into on the Items screen (count 2 needs every record's holdings),
+    // so Items must not call them rows. Books show one row per record.
+    const plan = {
+      page: 2,
+      pageCount: 3,
+      pageStartIndex: 33,
+      pageItemCount: 2,
+      pageIds: ['x1', 'x2'],
+      distinctSkus: 68,
+      skuItemRowCounts: [],
+      unitItemRowCounts: [],
+    };
+    const rows = [item({ id: 'x1', name: 'Planned X' }), item({ id: 'x2', name: 'Planned Y' })];
+    const { unmount } = render(
+      <InventoryTable
+        items={rows}
+        lookups={EMPTY_LOOKUPS}
+        total={70}
+        page={2}
+        pageSize={30}
+        plannedPage={plan}
+      />,
+    );
+    expect(footerText()).toMatch(/^68 SKUs · 70 items · /);
+    expect(footerText()).not.toMatch(/rows/);
+    unmount();
+    render(
+      <InventoryTable
+        items={rows}
+        lookups={EMPTY_LOOKUPS}
+        total={70}
+        page={2}
+        pageSize={30}
+        showBookFields
+        plannedPage={plan}
+      />,
+    );
+    expect(footerText()).toMatch(/^68 SKUs · 70 rows · /);
+  });
+
   it('a SKU family the plan kept whole is not marked partial, though the view spans several pages', () => {
     render(
       <InventoryTable
