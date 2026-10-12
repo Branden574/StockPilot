@@ -23,6 +23,7 @@ import {
   readGroupSelectedParams,
   readItemDisplayGroup,
   reviewAnnouncement,
+  reviewIdsForRetry,
   reviewRecordDetail,
   groupRowAccessibilityActions,
   runGroupRowAccessibilityAction,
@@ -257,6 +258,26 @@ describe('the review screen route', () => {
     expect(readGroupSelectedParams({ ids: 'not-an-id', view: 'items' })).toBeNull();
     expect(readGroupSelectedParams({ ids: A, view: 'kits' })).toBeNull();
     expect(readGroupSelectedParams({ ids: A, view: 'items', groupId: 'x' })).toBeNull();
+  });
+});
+
+// Recheck R2-4: a review that covers more records than one request takes
+// can only fail again, so Try again reviews the records the screen opened
+// with (the select bar and the route cap those at 100).
+describe('reviewIdsForRetry (R2-4)', () => {
+  const ids = (n: number) =>
+    Array.from(
+      { length: n },
+      (_, i) => `${String(i).padStart(8, '0')}-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
+    );
+
+  it('keeps the records under review when one request takes them', () => {
+    const current = ids(100);
+    expect(reviewIdsForRetry(current, [A, B])).toBe(current);
+  });
+
+  it('falls back to the records the screen opened with when there are more than 100', () => {
+    expect(reviewIdsForRetry(ids(101), [A, B])).toEqual([A, B]);
   });
 });
 
@@ -579,6 +600,16 @@ describe('screen pins', () => {
     expect(screen).not.toMatch(/useState<Set<string>>/);
     // Pruned the moment a review arrives, not only when a radio is pressed.
     expect(screen).toMatch(/setChoices\(\(cur\) => choicesForReview\(cur, r\.review\.records\)\)/);
+  });
+
+  // Recheck R2-4: "Add them to the selection" stays within one request's 100
+  // records (core's plan says why it is off), and Try again after a failed
+  // review never resends a request that can only fail again.
+  it('Add them to the selection stays within 100 records, and Try again falls back to the records the screen opened with (R2-4)', () => {
+    const screen = read('../../app/group-selected.tsx');
+    expect(screen).toContain('plan?.addSiblingsBlockedReason');
+    expect(screen).toMatch(/disabled=\{busy \|\| !!plan\?\.addSiblingsBlockedReason\}/);
+    expect(screen).toContain('reviewIdsForRetry(cur, params?.itemIds ?? [])');
   });
 
   it("the item screen names the record's group and offers Remove from group to an editor, online only", () => {

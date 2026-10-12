@@ -42,6 +42,7 @@ import {
   previewGrouping,
   readGroupSelectedParams,
   reviewAnnouncement,
+  reviewIdsForRetry,
   reviewRecordDetail,
   type GroupingIdentity,
   type PendingGroupingBody,
@@ -351,7 +352,17 @@ export default function GroupSelectedScreen() {
             <Body size={14} color={c.ink}>
               {loadState.kind === 'offline' ? GROUP_COPY.offline : loadState.message}
             </Body>
-            <Button variant="outline" size="sm" onPress={() => setNonce((n) => n + 1)}>
+            <Button
+              variant="outline"
+              size="sm"
+              onPress={() => {
+                // Never the same request when it could only fail again: more
+                // records than one request takes fall back to the ones the
+                // screen opened with (R2-4).
+                setItemIds((cur) => reviewIdsForRetry(cur, params?.itemIds ?? []));
+                setNonce((n) => n + 1);
+              }}
+            >
               Try again
             </Button>
           </View>
@@ -473,13 +484,23 @@ export default function GroupSelectedScreen() {
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={busy}
-                  onPress={() =>
-                    setItemIds((cur) => [...new Set([...cur, ...siblings.map((s) => s.id)])])
-                  }
+                  // One request reviews at most 100 records: past that the
+                  // review could only fail, so the button is off and says why
+                  // (recheck R2-4).
+                  disabled={busy || !!plan?.addSiblingsBlockedReason}
+                  accessibilityHint={plan?.addSiblingsBlockedReason ?? undefined}
+                  onPress={() => {
+                    if (plan?.addSiblingsBlockedReason) return;
+                    setItemIds((cur) => [...new Set([...cur, ...siblings.map((s) => s.id)])]);
+                  }}
                 >
                   {GROUP_COPY.addSiblings}
                 </Button>
+                {plan?.addSiblingsBlockedReason ? (
+                  <Body muted size={12.5}>
+                    {plan.addSiblingsBlockedReason}
+                  </Body>
+                ) : null}
               </View>
             ) : null}
 

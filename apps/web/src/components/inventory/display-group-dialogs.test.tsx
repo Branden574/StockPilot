@@ -654,6 +654,71 @@ describe('GroupSelectedDialog', () => {
     });
   });
 
+  // Recheck R2-4: "Add them to the selection" reviews the selection and its
+  // same-SKU records in one request, which takes at most 100 records.
+  it('Add them to the selection is off, and says why, when it would take the review past 100 records (R2-4)', async () => {
+    const many = Array.from(
+      { length: 99 },
+      (_, i) => `${String(i).padStart(8, '0')}-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
+    );
+    const sib = (id: string) => ({
+      id,
+      name: 'Tee',
+      sku: 'X',
+      itemType: 'product',
+      displayGroupId: null,
+    });
+    h.preview.mockResolvedValueOnce(
+      review(
+        many,
+        many.map((id) => rec(id, { sku: 'X' })),
+        { sameSkuSiblings: [sib(B), sib(C)] },
+      ),
+    );
+    const onAddToSelection = vi.fn();
+    render(
+      <GroupSelectedDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={many}
+        view="items"
+        onAddToSelection={onAddToSelection}
+        onDone={() => {}}
+      />,
+    );
+    const add = await screen.findByRole('button', { name: GROUP_COPY.addSiblings });
+    expect(add).toBeDisabled();
+    expect(add).toHaveAccessibleDescription(GROUPING_ERROR_WORDS.groupTooMany);
+    await userEvent.click(add);
+    expect(onAddToSelection).not.toHaveBeenCalled();
+  });
+
+  it('Add them to the selection adds the same-SKU records when they fit (R2-4)', async () => {
+    h.preview.mockResolvedValueOnce(
+      review([A, B], [rec(A, { sku: 'X' }), rec(B, { sku: 'X' })], {
+        sameSkuSiblings: [
+          { id: C, name: 'Tee', sku: 'X', itemType: 'product', displayGroupId: null },
+        ],
+      }),
+    );
+    const onAddToSelection = vi.fn();
+    render(
+      <GroupSelectedDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[A, B]}
+        view="items"
+        onAddToSelection={onAddToSelection}
+        onDone={() => {}}
+      />,
+    );
+    const add = await screen.findByRole('button', { name: GROUP_COPY.addSiblings });
+    expect(add).toBeEnabled();
+    expect(screen.queryByText(GROUPING_ERROR_WORDS.groupTooMany)).not.toBeInTheDocument();
+    await userEvent.click(add);
+    expect(onAddToSelection).toHaveBeenCalledWith([C]);
+  });
+
   it('adding to an existing group re-reads that group and sends its version', async () => {
     h.preview
       .mockResolvedValueOnce(

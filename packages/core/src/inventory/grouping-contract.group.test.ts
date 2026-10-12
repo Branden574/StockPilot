@@ -562,6 +562,46 @@ describe('the review plan', () => {
     expect(plain.send.map((r) => r.id)).toEqual([B, C]);
   });
 
+  // Recheck R2-4: "Add them to the selection" reviews the selection and its
+  // same-SKU records in ONE request, which takes at most 100 records; past
+  // that the review could only fail, so the plan says why they cannot be
+  // added instead.
+  it('says why same-SKU records cannot be added when the selection would pass 100 records (R2-4)', () => {
+    const many = Array.from(
+      { length: 99 },
+      (_, i) => `${String(i).padStart(8, '0')}-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
+    );
+    const sib = (id: string) => ({
+      id,
+      name: 'Tee',
+      sku: 'X',
+      item_type: 'product',
+      display_group_id: null,
+    });
+    const p = preview([record(many[0]!, { sku: 'X' }), record(many[1]!, { sku: 'X' })], {
+      same_sku_siblings: [sib(B), sib(C)],
+    });
+    // 99 selected and 2 more: 101.
+    const over = planGrouping(many, p, { kind: 'new', name: 'Tees' }, {});
+    expect(over.conflicts.sameSkuSiblings.map((s) => s.id)).toEqual([B, C]);
+    expect(over.addSiblingsBlockedReason).toBe(GROUPING_ERROR_WORDS.groupTooMany);
+    // 98 selected and 2 more: exactly 100, which one request takes.
+    const fits = planGrouping(many.slice(0, 98), p, { kind: 'new', name: 'Tees' }, {});
+    expect(fits.addSiblingsBlockedReason).toBeNull();
+    // A sibling that is already selected is not counted twice.
+    const counted = planGrouping([...many.slice(0, 98), B], p, { kind: 'new', name: 'Tees' }, {});
+    expect(counted.conflicts.sameSkuSiblings.map((s) => s.id)).toEqual([C]);
+    expect(counted.addSiblingsBlockedReason).toBeNull();
+    // No siblings: nothing to say.
+    const none = planGrouping(
+      [A, B],
+      preview([record(A), record(B)]),
+      { kind: 'new', name: 'X' },
+      {},
+    );
+    expect(none.addSiblingsBlockedReason).toBeNull();
+  });
+
   it('the preview header sums on hand once per record', () => {
     const plan = planGrouping(
       [A, B],

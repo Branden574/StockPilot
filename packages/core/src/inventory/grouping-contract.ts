@@ -1398,6 +1398,11 @@ export interface GroupingPlan {
     /** Books: distinct editions, and books with no ISBN. */
     editions: { editions: number; unknown: number } | null;
   };
+  /** Why the same-SKU records cannot be added to the selection ("Add them to
+   *  the selection"): the review would then cover more records than one
+   *  request takes (GROUPING_MAX_ITEMS), so it could only fail (recheck
+   *  R2-4). Null when they fit, or when there are none. */
+  addSiblingsBlockedReason: string | null;
   /** Nothing would change: every record is already where the request puts it. */
   noop: { groupId: string; name: string } | null;
   /** "<name> · N records · Q on hand", as the list will show the group. */
@@ -1487,6 +1492,13 @@ export function planGrouping(
   const sameSkuSiblings = preview.sameSkuSiblings.filter(
     (sib) => !selected.has(sib.id.toLowerCase()) && !(targetId && sib.displayGroupId === targetId),
   );
+  // "Add them to the selection" reviews the selection and these records in
+  // ONE request, which takes at most GROUPING_MAX_ITEMS (R2-4).
+  const withSiblings = new Set([...selected, ...sameSkuSiblings.map((s) => s.id.toLowerCase())]);
+  const addSiblingsBlockedReason =
+    sameSkuSiblings.length > 0 && withSiblings.size > GROUPING_MAX_ITEMS
+      ? GROUPING_ERROR_WORDS.groupTooMany
+      : null;
   const family = changing.filter((r) => r.productGroupId !== null);
   const books = send.filter((r) => r.itemType === 'book');
   const editions = books.length >= 2 ? bookEditionCount(books) : null;
@@ -1548,6 +1560,7 @@ export function planGrouping(
     alreadyInTarget,
     targetMembers,
     conflicts: { otherGroup, family, sameSkuSiblings, editions },
+    addSiblingsBlockedReason,
     noop,
     previewHeader,
     targetVersion: target.kind === 'existing' ? (tg?.version ?? cand?.version ?? null) : null,

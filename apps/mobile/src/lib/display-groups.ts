@@ -299,6 +299,17 @@ export function readGroupSelectedParams(p: {
   return { itemIds: ids, view, groupId: gid ? gid : null };
 }
 
+/**
+ * The records Try again reviews after a failed review (recheck R2-4): the
+ * ones under review, or the ones the screen opened with when there are more
+ * than one request takes (GROUPING_MAX_ITEMS), since that request could only
+ * fail again. The screen's own "Add them to the selection" stays within the
+ * cap; this keeps the way out if anything else ever pushes it past.
+ */
+export function reviewIdsForRetry(current: string[], opened: readonly string[]): string[] {
+  return current.length > GROUPING_MAX_ITEMS ? [...opened] : current;
+}
+
 // ── The review ─────────────────────────────────────────────────────────────
 
 /** A selected record as the review shows it: the preview's facts (read as the

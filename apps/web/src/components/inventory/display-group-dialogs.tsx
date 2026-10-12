@@ -290,6 +290,8 @@ export function GroupSelectedDialog({
   const keyed = useKeyedSave();
   // P11: a disabled Save is described by the reason it is off.
   const blockedId = React.useId();
+  // R2-4: so is a disabled "Add them to the selection".
+  const siblingsBlockedId = React.useId();
 
   /** One record's choice when it is in another group (P10): move it here, or
    *  leave it out (not sent; it stays where it is). Kept with the group the
@@ -511,14 +513,30 @@ export function GroupSelectedDialog({
                   </p>
                 ))}
                 {onAddToSelection ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={phase === 'saving'}
-                    onClick={() => onAddToSelection(siblings.map((s) => s.id))}
-                  >
-                    {GROUP_COPY.addSiblings}
-                  </Button>
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      // One request reviews at most 100 records: past that the
+                      // review could only fail, so the button is off and says
+                      // why (recheck R2-4).
+                      disabled={phase === 'saving' || !!plan?.addSiblingsBlockedReason}
+                      aria-describedby={
+                        plan?.addSiblingsBlockedReason ? siblingsBlockedId : undefined
+                      }
+                      onClick={() => {
+                        if (plan?.addSiblingsBlockedReason) return;
+                        onAddToSelection(siblings.map((s) => s.id));
+                      }}
+                    >
+                      {GROUP_COPY.addSiblings}
+                    </Button>
+                    {plan?.addSiblingsBlockedReason ? (
+                      <p id={siblingsBlockedId} className="text-muted-foreground">
+                        {plan.addSiblingsBlockedReason}
+                      </p>
+                    ) : null}
+                  </>
                 ) : null}
               </div>
             ) : null}
