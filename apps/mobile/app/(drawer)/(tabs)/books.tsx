@@ -790,8 +790,10 @@ export default function BooksScreen() {
     ({ item: row }: { item: BookGroupedRow }) => {
       if (row.kind === 'explicit-header') {
         // Group selected (0400): a group with two or more of its books here.
-        // Same card as a SKU group; it counts records, not placements, and
-        // shows no cover (its books can be different titles or editions).
+        // Same card as a SKU group; it counts records, not placements. Its
+        // cover is the first of its books, in the order it lists them, that
+        // has one (owner 2026-10-12, overruling P5's "no cover"); none keeps
+        // the placeholder.
         return (
           <BookGroupHeaderCard
             name={row.name}
@@ -801,7 +803,7 @@ export default function BooksScreen() {
             countLabel={GROUP_COPY.headerCount(row.recordCount, narrowed)}
             partial={row.partial}
             lifecycle={row.status}
-            imageUrl={null}
+            imageUrl={row.coverUrl}
             expected={row.expected}
             expanded={expandedExplicitGroups.has(row.groupId)}
             onToggle={() => toggleExplicitGroup(row.groupId)}

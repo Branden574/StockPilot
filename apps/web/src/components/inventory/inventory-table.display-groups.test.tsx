@@ -49,20 +49,34 @@ vi.mock('@/server/actions/saved-views', () => ({
   toggleSavedViewShareAction: vi.fn(),
 }));
 vi.mock('@/lib/download-export', () => ({ downloadInventoryExport: vi.fn() }));
+const { previews } = vi.hoisted(() => ({
+  // What each hover preview was handed, by its title (a group header's title
+  // is the group's name): the master src and the lazy master loader.
+  previews: new Map<string, { src: string | null; srcLoader?: () => Promise<string | null> }>(),
+}));
 vi.mock('@/components/ui/image-hover-preview', () => ({
   // The hover card's meta (where a header's "partial" mark lives) renders too.
   ImageHoverPreview: ({
     children,
     meta,
+    src,
+    srcLoader,
+    title,
   }: {
     children: React.ReactNode;
     meta?: React.ReactNode;
-  }) => (
-    <span>
-      {children}
-      {meta}
-    </span>
-  ),
+    src: string | null;
+    srcLoader?: () => Promise<string | null>;
+    title?: string;
+  }) => {
+    if (title) previews.set(title, { src, srcLoader });
+    return (
+      <span>
+        {children}
+        {meta}
+      </span>
+    );
+  },
   prewarmPreviewImages: vi.fn(),
 }));
 vi.mock('@/lib/cycle-counts/use-count-selection', () => ({
@@ -159,6 +173,7 @@ beforeEach(() => {
   spy.groupItemIds = undefined;
   spy.ungroupItemIds = undefined;
   spy.groupingView = undefined;
+  previews.clear();
 });
 
 describe('InventoryTable: explicit display group headers', () => {
@@ -314,9 +329,10 @@ describe('InventoryTable: explicit display group headers', () => {
 
   // People review P5: "N matching" whenever anything narrows the list (a
   // search, a filter, a stock view, Expected or Archived), the same words in
-  // the chevron's name, and no cover on a group's header (its records can be
-  // different products or editions; the phone shows none either).
-  it('a stock view counts the header as matching, in its words and its button name; a group header shows no cover (P5)', () => {
+  // the chevron's name. P5 also said a group's header shows no cover; the
+  // owner overruled that on 2026-10-12: it shows the first picture among the
+  // group's records (see the cover tests below).
+  it('a stock view counts the header as matching, in its words and its button name; the header shows the first record picture (owner 2026-10-12)', () => {
     urlState.params = new URLSearchParams('stock=low');
     const items = [
       row('a', 'A', {
@@ -341,7 +357,7 @@ describe('InventoryTable: explicit display group headers', () => {
     expect(
       screen.getByRole('button', { name: 'Expand group Pads (2 matching)' }),
     ).toBeInTheDocument();
-    expect(header.querySelector('img')).toBeNull();
+    expect(header.querySelector('img')?.getAttribute('src')).toBe('https://img.test/a.png');
   });
 
   it('a lifecycle view counts as narrowing only when it shows fewer records than the default: Archived yes, Active or All no (P5)', () => {
@@ -584,5 +600,126 @@ describe('InventoryTable: Group selected in the bulk bar', () => {
     );
     await selectAll();
     expect(spy.groupItemIds ?? []).toEqual([]);
+  });
+});
+
+// Owner 2026-10-12, verbatim: "so the picture disapears it should just use the
+// first picture of whatever was chosen for the grouping". A group's header
+// shows the picture of the FIRST record, in the order the header lists them,
+// that has one (thumb or master), and its hover preview shows that record's
+// master; with no picture anywhere in the group it keeps the placeholder.
+describe('InventoryTable: a group header shows the first picture among its records', () => {
+  it('skips records without a picture and shows the first one that has one, thumb in the row and master in the preview', () => {
+    const items = [
+      row('a', 'GOWN-S', { ...inGroup('g', 'Grad gowns') }),
+      row('b', 'GOWN-M', {
+        ...inGroup('g', 'Grad gowns'),
+        image_url: 'https://img.test/b-master.png',
+        image_thumb_url: 'https://img.test/b-thumb.webp',
+      }),
+      row('c', 'GOWN-L', {
+        ...inGroup('g', 'Grad gowns'),
+        image_url: 'https://img.test/c-master.png',
+        image_thumb_url: 'https://img.test/c-thumb.webp',
+      }),
+    ];
+    const { container } = render(
+      <InventoryTable
+        items={items as never}
+        lookups={LOOKUPS}
+        total={3}
+        initialQuery=""
+        pageSize={30}
+      />,
+    );
+    const header = bodyRows(container)[0] as HTMLElement;
+    expect(within(header).getByText('Grad gowns')).toBeInTheDocument();
+    expect(header.querySelector('img')?.getAttribute('src')).toBe('https://img.test/b-thumb.webp');
+    expect(previews.get('Grad gowns')?.src).toBe('https://img.test/b-master.png');
+    expect(previews.get('Grad gowns')?.srcLoader).toBeUndefined();
+  });
+
+  it("follows the order the header lists its records in: stored sizes put S before L, so S's picture wins", () => {
+    const items = [
+      row('l', 'CAP-L', {
+        ...inGroup('g', 'Caps'),
+        variant_size: 'L',
+        image_url: 'https://img.test/l.png',
+      }),
+      row('s', 'CAP-S', {
+        ...inGroup('g', 'Caps'),
+        variant_size: 'S',
+        image_url: 'https://img.test/s.png',
+      }),
+    ];
+    const { container } = render(
+      <InventoryTable
+        items={items as never}
+        lookups={LOOKUPS}
+        total={2}
+        initialQuery=""
+        pageSize={30}
+      />,
+    );
+    const header = bodyRows(container)[0] as HTMLElement;
+    expect(header.querySelector('img')?.getAttribute('src')).toBe('https://img.test/s.png');
+    expect(previews.get('Caps')?.src).toBe('https://img.test/s.png');
+  });
+
+  it("a thumb-only record's master loads on demand for the preview, from that record", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ url: 'https://img.test/b-master-signed.png' }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const items = [
+        row('a', 'A', { ...inGroup('g', 'Pads') }),
+        row('thumbonly', 'B', {
+          ...inGroup('g', 'Pads'),
+          image_thumb_url: 'https://img.test/b-thumb.webp',
+        }),
+      ];
+      const { container } = render(
+        <InventoryTable
+          items={items as never}
+          lookups={LOOKUPS}
+          total={2}
+          initialQuery=""
+          pageSize={30}
+        />,
+      );
+      const header = bodyRows(container)[0] as HTMLElement;
+      expect(header.querySelector('img')?.getAttribute('src')).toBe(
+        'https://img.test/b-thumb.webp',
+      );
+      const preview = previews.get('Pads');
+      expect(preview?.src).toBeNull();
+      expect(preview?.srcLoader).toBeTypeOf('function');
+      await expect(preview!.srcLoader!()).resolves.toBe('https://img.test/b-master-signed.png');
+      expect(fetchMock).toHaveBeenCalledWith('/api/items/thumbonly/image-master');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps the placeholder when no record in the group has a picture', () => {
+    const items = [
+      row('a', 'A', { ...inGroup('g', 'Pads') }),
+      row('b', 'B', { ...inGroup('g', 'Pads') }),
+    ];
+    const { container } = render(
+      <InventoryTable
+        items={items as never}
+        lookups={LOOKUPS}
+        total={2}
+        initialQuery=""
+        pageSize={30}
+      />,
+    );
+    const header = bodyRows(container)[0] as HTMLElement;
+    expect(header.querySelector('img')).toBeNull();
+    expect(previews.get('Pads')?.src).toBeNull();
+    expect(previews.get('Pads')?.srcLoader).toBeUndefined();
   });
 });

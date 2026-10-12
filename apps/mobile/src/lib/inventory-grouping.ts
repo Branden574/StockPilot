@@ -3,6 +3,7 @@ import {
   DISPLAY_GROUP_FALLBACK_NAME,
   displayGroupChips,
   GROUP_COPY,
+  groupCoverRow,
   rollupStatus,
   sharedSkuKey,
   shownUnderByRecord,
@@ -102,6 +103,12 @@ export interface GroupableItem {
   display_group_id?: string | null;
   display_group_name?: string | null;
   display_group_version?: number | null;
+  /**
+   * The record's list picture once the screen has resolved it (both lists
+   * sign thumbnails after the rows load). Read only for an explicit group's
+   * header picture (`coverUrl`). Optional: absent is no picture.
+   */
+  imageUrl?: string | null;
 }
 
 /** A single flattened FlatList entry. */
@@ -164,6 +171,14 @@ export type GroupedRow<T extends GroupableItem> =
       key: string;
       groupId: string;
       name: string;
+      /**
+       * The header's picture: the first record, in the order the header lists
+       * them, that has one (core groupCoverRow, the web's rule too); null
+       * keeps the placeholder. The people review (P5) had the header show
+       * none; the owner overruled that on 2026-10-12 ("it should just use the
+       * first picture of whatever was chosen for the grouping").
+       */
+      coverUrl: string | null;
       recordCount: number;
       total: number;
       reorderPoint: number;
@@ -357,6 +372,8 @@ export function buildGroupedRows<T extends GroupableItem>(
         key: `grp:${e.groupId}`,
         groupId: e.groupId,
         name: groupName(e.groupId),
+        // `e.rows` are in the order the header lists and expands them.
+        coverUrl: groupCoverRow(e.rows, (r) => r.imageUrl)?.imageUrl ?? null,
         recordCount: new Set(e.rows.map((r) => r.id)).size,
         total: e.rows.reduce((sum, r) => sum + (Number(r.quantity_on_hand) || 0), 0),
         // Summed like the SKU header's (see there): threshold and quantity on

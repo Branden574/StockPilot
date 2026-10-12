@@ -6,6 +6,7 @@ import {
   countUnclaimedItemRowsBySku,
   displayGroupChips,
   formedDisplayGroups,
+  groupCoverRow,
   indexDisplayGroupMemberships,
   makeDisplayUnitKeyer,
   type DisplayListEntry,
@@ -652,5 +653,45 @@ describe('the shared parity fixture (core, web and phone run it)', () => {
       const units = unitsOf(c.rows, makeDisplayUnitKeyer(c.rows, { sizeRuns: c.sizeRuns }));
       expect({ name: c.name, units }).toEqual({ name: c.name, units: c.units });
     }
+  });
+});
+
+// Owner 2026-10-12 (overrules P5): a display group's header shows the picture
+// of the first record, in the order the header lists its records, that has
+// one; a group with no picture at all keeps the placeholder.
+describe('groupCoverRow: the record a group header takes its picture from', () => {
+  interface Pic {
+    id: string;
+    thumb?: string | null;
+    master?: string | null;
+  }
+  const pictureOf = (r: Pic) => r.thumb ?? r.master;
+
+  it('is the first record with a picture, skipping records without one', () => {
+    const rows: Pic[] = [
+      { id: 'a' },
+      { id: 'b', thumb: null, master: '' },
+      { id: 'c', thumb: 'https://img.test/c-thumb.webp' },
+      { id: 'd', master: 'https://img.test/d.png' },
+    ];
+    expect(groupCoverRow(rows, pictureOf)?.id).toBe('c');
+  });
+
+  it('takes a master-only record too (the row has no thumb)', () => {
+    const rows: Pic[] = [{ id: 'a' }, { id: 'b', master: 'https://img.test/b.png' }];
+    expect(groupCoverRow(rows, pictureOf)?.id).toBe('b');
+  });
+
+  it('keeps the order it is given: the first record shown wins, not the first id', () => {
+    const rows: Pic[] = [
+      { id: 'z', thumb: 'https://img.test/z.webp' },
+      { id: 'a', thumb: 'https://img.test/a.webp' },
+    ];
+    expect(groupCoverRow(rows, pictureOf)?.id).toBe('z');
+  });
+
+  it('is null when no record has a picture (the header keeps its placeholder)', () => {
+    expect(groupCoverRow<Pic>([{ id: 'a' }, { id: 'b', thumb: '  ' }], pictureOf)).toBeNull();
+    expect(groupCoverRow<Pic>([], pictureOf)).toBeNull();
   });
 });

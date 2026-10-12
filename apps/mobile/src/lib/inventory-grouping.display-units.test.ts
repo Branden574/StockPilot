@@ -169,3 +169,57 @@ describe('buildGroupedRows with explicit display groups', () => {
     expect(rows.map((r) => r.kind)).toEqual(['row', 'row']);
   });
 });
+
+// Owner 2026-10-12 (overrules P5, "the phone shows none either"): a group's
+// header shows the picture of the first record, in the order the header lists
+// them, that has one; none at all keeps the placeholder. Same rule as the web
+// (core groupCoverRow).
+describe("an explicit group header's picture", () => {
+  it('is the first record with a picture, skipping records without one', () => {
+    const rows = buildGroupedRows(
+      [
+        item('a', 'GOWN-S', 'Gown S', { display_group_id: 'g', imageUrl: null }),
+        item('b', 'GOWN-M', 'Gown M', {
+          display_group_id: 'g',
+          imageUrl: 'https://img.test/b.webp',
+        }),
+        item('c', 'GOWN-L', 'Gown L', {
+          display_group_id: 'g',
+          imageUrl: 'https://img.test/c.webp',
+        }),
+      ],
+      { expandedSizeRuns: NONE, expandedSkuGroups: NONE },
+    );
+    expect(rows[0]).toMatchObject({ kind: 'explicit-header', coverUrl: 'https://img.test/b.webp' });
+  });
+
+  it('follows the order the header lists its records in (stored sizes: S before L)', () => {
+    const rows = buildGroupedRows(
+      [
+        item('l', 'CAP-L', 'Cap', {
+          display_group_id: 'g',
+          variant_size: 'L',
+          imageUrl: 'https://img.test/l.webp',
+        }),
+        item('s', 'CAP-S', 'Cap', {
+          display_group_id: 'g',
+          variant_size: 'S',
+          imageUrl: 'https://img.test/s.webp',
+        }),
+      ],
+      { expandedSizeRuns: NONE, expandedSkuGroups: NONE },
+    );
+    expect(rows[0]).toMatchObject({ kind: 'explicit-header', coverUrl: 'https://img.test/s.webp' });
+  });
+
+  it('is null when no record in the group has one (the header keeps its placeholder), on Books too', () => {
+    const rows = buildGroupedRows(
+      [
+        item('a', 'B1', 'Book one', { display_group_id: 'g' }),
+        item('b', 'B2', 'Book two', { display_group_id: 'g', imageUrl: null }),
+      ],
+      { expandedSizeRuns: NONE, expandedSkuGroups: NONE, enableSizeRuns: false },
+    );
+    expect(rows[0]).toMatchObject({ kind: 'explicit-header', coverUrl: null });
+  });
+});

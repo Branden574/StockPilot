@@ -414,3 +414,20 @@ describe('both lists — a failed read is never "no results" or a zero count', (
     expect(empty.indexOf('loadError !== null ?')).toBeLessThan(empty.indexOf('tourActive &&'));
   });
 });
+
+// Owner 2026-10-12 (overrules P5): a group's header shows the first picture
+// among its records on both lists, the one buildGroupedRows picked.
+describe('both lists: an explicit group header shows its cover', () => {
+  const explicitHeader = (src: string): string => {
+    const start = src.indexOf("if (row.kind === 'explicit-header') {");
+    expect(start).toBeGreaterThan(-1);
+    const end = src.indexOf("if (row.kind === 'sku-header') {", start);
+    expect(end).toBeGreaterThan(start);
+    return src.slice(start, end);
+  };
+  it.each(screens)('%s passes the header the cover of its records', (_name, src) => {
+    const block = explicitHeader(src);
+    expect(block).toContain('imageUrl={row.coverUrl}');
+    expect(block).not.toContain('imageUrl={null}');
+  });
+});
