@@ -13,6 +13,7 @@ import {
   parseGroupingOutcome,
   parseGroupingPreview,
   planGrouping,
+  planRemoval,
   removeBodyFor,
   suggestGroupName,
   toGroupingRpcRequest,
@@ -571,6 +572,80 @@ describe('the review plan', () => {
 });
 
 describe('remove', () => {
+  // People review P9: Remove from group dropped records silently and never
+  // said the group closes; the plan now says which records leave, which are
+  // left out and why, and what stays in each group (as far as the person
+  // can see: a hidden record is never counted or named).
+  it('plans a removal: what leaves, what is left out and why, and what stays in each group (P9)', () => {
+    const D = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    const p = preview(
+      [
+        record(A, { display_group: { id: G, name: 'Pads', version: 2 } }),
+        record(B, { display_group: { id: G, name: 'Pads', version: 2 } }),
+        record(C, { display_group: { id: H, name: 'Desks', version: 1 }, writable: false }),
+        record(D),
+      ],
+      {
+        unavailable_count: 1,
+        candidate_groups: [
+          {
+            id: G,
+            name: 'Pads',
+            version: 2,
+            item_type: 'product',
+            member_count: 2,
+            holds_selected: true,
+          },
+          {
+            id: H,
+            name: 'Desks',
+            version: 1,
+            item_type: 'product',
+            member_count: 5,
+            holds_selected: true,
+          },
+        ],
+      },
+    );
+    const plan = planRemoval([A, B, C, D], p);
+    expect(plan.remove.map((r) => r.id)).toEqual([A, B]);
+    expect(plan.leftOut).toEqual([
+      { id: C, reason: 'not_writable' },
+      { id: D, reason: 'not_in_group' },
+    ]);
+    expect(plan.unavailableCount).toBe(1);
+    // Pads loses both records the person can see: it closes (unless a
+    // record hidden from them is in it, which the words allow for).
+    expect(plan.groups).toEqual([{ id: G, name: 'Pads', removing: 2, staying: 0 }]);
+    expect(GROUP_COPY.removeLast('Pads')).toBe(
+      'This removes the last records in Pads that you can see. A group with no records left closes.',
+    );
+    // One of three readable records leaves: two stay, and the dialog says so.
+    const some = planRemoval(
+      [A],
+      preview([record(A, { display_group: { id: G, name: 'Pads', version: 2 } })], {
+        candidate_groups: [
+          {
+            id: G,
+            name: 'Pads',
+            version: 2,
+            item_type: 'product',
+            member_count: 3,
+            holds_selected: true,
+          },
+        ],
+      }),
+    );
+    expect(some.groups).toEqual([{ id: G, name: 'Pads', removing: 1, staying: 2 }]);
+    expect(GROUP_COPY.removeStays(2, 'Pads')).toBe('2 other records you can see stay in Pads.');
+    // A group the preview did not count says nothing about what stays.
+    const unknown = planRemoval(
+      [A],
+      preview([record(A, { display_group: { id: G, name: 'Pads', version: 2 } })]),
+    );
+    expect(unknown.groups).toEqual([{ id: G, name: 'Pads', removing: 1, staying: null }]);
+  });
+
   it('names the group each record is in, as the screen saw it', () => {
     const body = removeBodyFor(
       [

@@ -569,11 +569,166 @@ describe('RemoveFromGroupDialog and RenameGroupDialog', () => {
     });
   });
 
+  // People review P9: nothing is dropped silently, and the dialog says when
+  // the group loses its last records the person can see, or what stays.
+  it('Remove names what is left out and why, counts what is unavailable, and says the group loses its last records you can see (P9)', async () => {
+    const D = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    h.preview.mockResolvedValueOnce(
+      review(
+        [A, B, C, D],
+        [
+          rec(A, { displayGroup: { id: G, name: 'Pads', version: 2 } }),
+          rec(B, { displayGroup: { id: G, name: 'Pads', version: 2 } }),
+          rec(C, {
+            name: 'Desk',
+            displayGroup: { id: H, name: 'Desks', version: 1 },
+            writable: false,
+          }),
+          rec(D, { name: 'Lamp' }),
+        ],
+        {
+          unavailableCount: 1,
+          candidateGroups: [
+            {
+              id: G,
+              name: 'Pads',
+              version: 2,
+              itemType: 'product',
+              memberCount: 2,
+              holdsSelected: true,
+            },
+            {
+              id: H,
+              name: 'Desks',
+              version: 1,
+              itemType: 'product',
+              memberCount: 5,
+              holdsSelected: true,
+            },
+          ],
+        },
+      ),
+    );
+    render(
+      <RemoveFromGroupDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[A, B, C, D]}
+        view="items"
+        onDone={() => {}}
+      />,
+    );
+    expect(await screen.findByRole('button', { name: 'Remove 2 records' })).toBeEnabled();
+    expect(
+      screen.getByText(`Left out: Desk ${GROUP_COPY.removeLeftOutReason.not_writable}.`),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(`Left out: Lamp ${GROUP_COPY.removeLeftOutReason.not_in_group}.`),
+    ).toBeInTheDocument();
+    expect(screen.getByText(GROUP_COPY.unavailable(1))).toBeInTheDocument();
+    expect(screen.getByText(GROUP_COPY.removeLast('Pads'))).toBeInTheDocument();
+  });
+
+  it('Remove says how many records you can see stay in the group, on this page or not (P9)', async () => {
+    h.preview.mockResolvedValueOnce(
+      review([A], [rec(A, { displayGroup: { id: G, name: 'Pads', version: 2 } })], {
+        candidateGroups: [
+          {
+            id: G,
+            name: 'Pads',
+            version: 2,
+            itemType: 'product',
+            memberCount: 3,
+            holdsSelected: true,
+          },
+        ],
+      }),
+    );
+    render(
+      <RemoveFromGroupDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[A]}
+        view="items"
+        onDone={() => {}}
+      />,
+    );
+    expect(await screen.findByText(GROUP_COPY.removeStays(2, 'Pads'))).toBeInTheDocument();
+    expect(screen.queryByText(GROUP_COPY.removeLast('Pads'))).not.toBeInTheDocument();
+  });
+
+  // Data review D3: one request takes at most 100 records; a group can hold
+  // 200, all on screen in instant mode.
+  it('Remove with more than 100 records on screen reviews the first 100 and says so (D3)', async () => {
+    const many = Array.from(
+      { length: 101 },
+      (_, i) => `${String(i).padStart(8, '0')}-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
+    );
+    const first = many.slice(0, 100);
+    h.preview.mockResolvedValueOnce(
+      review(
+        first,
+        first.map((id) => rec(id, { displayGroup: { id: G, name: 'Pads', version: 2 } })),
+        {
+          candidateGroups: [
+            {
+              id: G,
+              name: 'Pads',
+              version: 2,
+              itemType: 'product',
+              memberCount: 101,
+              holdsSelected: true,
+            },
+          ],
+        },
+      ),
+    );
+    render(
+      <RemoveFromGroupDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={many}
+        view="items"
+        onDone={() => {}}
+      />,
+    );
+    expect(await screen.findByText(GROUP_COPY.removeCapped(101))).toBeInTheDocument();
+    expect(h.preview).toHaveBeenCalledWith(first, null);
+    expect(screen.getByRole('button', { name: 'Remove 100 records' })).toBeEnabled();
+    expect(screen.getByText(GROUP_COPY.removeStays(1, 'Pads'))).toBeInTheDocument();
+  });
+
+  it('Rename reads the group through ONE of its records, so a group of more than 100 on screen can be renamed (D3)', async () => {
+    const many = Array.from(
+      { length: 150 },
+      (_, i) => `${String(i).padStart(8, '0')}-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
+    );
+    h.preview.mockResolvedValueOnce(
+      review(
+        [many[0]!],
+        [rec(many[0]!)],
+        { targetGroup: { id: G, name: 'Pads', version: 7, itemType: 'product', members: [] } },
+        G,
+      ),
+    );
+    render(
+      <RenameGroupDialog
+        open
+        onOpenChange={() => {}}
+        groupId={G}
+        memberIds={many}
+        onDone={() => {}}
+      />,
+    );
+    expect(await screen.findByDisplayValue('Pads')).toBeInTheDocument();
+    expect(h.preview).toHaveBeenCalledWith([many[0]], G);
+  });
+
   it('Rename sends the group, its version and the trimmed name', async () => {
     h.preview.mockResolvedValueOnce(
       review(
-        [A, B],
-        [rec(A), rec(B)],
+        [A],
+        [rec(A)],
         { targetGroup: { id: G, name: 'Pads', version: 7, itemType: 'product', members: [] } },
         G,
       ),

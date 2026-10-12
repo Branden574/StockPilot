@@ -6,10 +6,12 @@ import * as React from 'react';
 import {
   GROUP_COPY,
   GROUPING_ERROR_WORDS,
+  GROUPING_MAX_ITEMS,
   groupBodyForPlan,
   groupingPreviewKey,
   normalizeGroupName,
   planGrouping,
+  planRemoval,
   randomRequestUuid,
   removeBodyFor,
   suggestGroupName,
@@ -652,7 +654,11 @@ interface RemoveFromGroupDialogProps {
 }
 
 /** Remove from group: deletes only the memberships. Records, SKUs, stock,
- *  charters and racks stay exactly as they are. */
+ *  charters and racks stay exactly as they are. It names every selected
+ *  record it leaves out and why, counts the unavailable ones, and says when a
+ *  group loses its last records the person can see, or how many stay (people
+ *  review P9). One request takes at most 100 records: with more on screen
+ *  it reviews the first 100 and says so (data review D3). */
 export function RemoveFromGroupDialog({
   open,
   onOpenChange,
@@ -661,18 +667,27 @@ export function RemoveFromGroupDialog({
   onDone,
 }: RemoveFromGroupDialogProps) {
   const [nonce, setNonce] = React.useState(0);
+  const capped = itemIds.length > GROUPING_MAX_ITEMS;
+  const reviewIds = capped ? itemIds.slice(0, GROUPING_MAX_ITEMS) : itemIds;
   const {
     review,
     identity,
     error: previewError,
     loading,
-  } = useGroupingReview(open, itemIds, null, nonce);
+  } = useGroupingReview(open, reviewIds, null, nonce);
   const [phase, setPhase] = React.useState<'ready' | 'saving' | 'done'>('ready');
   const [error, setError] = React.useState<{ message: string; stale: boolean } | null>(null);
   const [outcome, setOutcome] = React.useState<GroupingOutcome | null>(null);
   const doneRef = React.useRef<HTMLButtonElement>(null);
   const keyed = useKeyedSave();
-  const grouped = (review?.records ?? []).filter((r) => r.displayGroup && r.writable);
+  const plan = review ? planRemoval(reviewIds, review) : null;
+  // The plan holds the preview's records; the review's carry the names, rack
+  // line and picture too.
+  const reviewById = new Map((review?.records ?? []).map((r) => [r.id, r]));
+  const grouped = (plan?.remove ?? []).flatMap((r) => {
+    const full = reviewById.get(r.id);
+    return full ? [full] : [];
+  });
 
   React.useEffect(() => {
     if (phase === 'done') doneRef.current?.focus();
@@ -704,7 +719,7 @@ export function RemoveFromGroupDialog({
     <Dialog open={open} onOpenChange={(v) => (phase === 'saving' ? null : onOpenChange(v))}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>{GROUP_COPY.removeTitle(grouped.length || itemIds.length)}</DialogTitle>
+          <DialogTitle>{GROUP_COPY.removeTitle(grouped.length || reviewIds.length)}</DialogTitle>
           <DialogDescription>{GROUP_COPY.removeIntro}</DialogDescription>
         </DialogHeader>
         {phase === 'done' && outcome ? (
@@ -716,21 +731,44 @@ export function RemoveFromGroupDialog({
             <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> Loading the records…
           </div>
         ) : previewError ? null : (
-          <ul className="space-y-2 text-sm" aria-label="Records to remove from their group">
-            {grouped.map((r) => (
-              <li key={r.id} className="space-y-0.5">
-                <RecordLine r={r} view={view} />
-                <p className="text-muted-foreground pl-9 text-xs">
-                  {GROUP_COPY.itemPageInGroup(r.displayGroup!.name)}
-                </p>
-              </li>
+          <div className="space-y-3 text-sm">
+            {capped ? <p className="text-xs">{GROUP_COPY.removeCapped(itemIds.length)}</p> : null}
+            <ul className="space-y-2" aria-label="Records to remove from their group">
+              {grouped.map((r) => (
+                <li key={r.id} className="space-y-0.5">
+                  <RecordLine r={r} view={view} />
+                  <p className="text-muted-foreground pl-9 text-xs">
+                    {GROUP_COPY.itemPageInGroup(r.displayGroup!.name)}
+                  </p>
+                </li>
+              ))}
+              {grouped.length === 0 ? (
+                <li className="text-muted-foreground text-xs">
+                  None of these records is in a group you can change.
+                </li>
+              ) : null}
+            </ul>
+            {(plan?.leftOut ?? []).map((l) => (
+              <p key={l.id} className="text-muted-foreground text-xs">
+                Left out: {reviewById.get(l.id)?.name ?? ''}{' '}
+                {GROUP_COPY.removeLeftOutReason[l.reason]}.
+              </p>
             ))}
-            {grouped.length === 0 ? (
-              <li className="text-muted-foreground text-xs">
-                None of these records is in a group you can change.
-              </li>
+            {plan && plan.unavailableCount > 0 ? (
+              <p className="text-muted-foreground text-xs">
+                {GROUP_COPY.unavailable(plan.unavailableCount)}
+              </p>
             ) : null}
-          </ul>
+            {(plan?.groups ?? []).map((g) =>
+              g.staying === null ? null : (
+                <p key={g.id} className="text-xs">
+                  {g.staying === 0
+                    ? GROUP_COPY.removeLast(g.name)
+                    : GROUP_COPY.removeStays(g.staying, g.name)}
+                </p>
+              ),
+            )}
+          </div>
         )}
         {previewError || error ? (
           <p role="alert" className="text-destructive text-sm">
@@ -795,12 +833,15 @@ export function RenameGroupDialog({
   onDone,
 }: RenameGroupDialogProps) {
   const [nonce, setNonce] = React.useState(0);
+  // The group is read through ONE of its records on screen (any readable
+  // member names it): a group can hold 200 records and one request reads at
+  // most 100 (data review D3).
   const {
     review,
     identity,
     error: previewError,
     loading,
-  } = useGroupingReview(open, memberIds, groupId, nonce);
+  } = useGroupingReview(open, memberIds.slice(0, 1), groupId, nonce);
   const [name, setName] = React.useState<string | null>(null);
   const [phase, setPhase] = React.useState<'ready' | 'saving' | 'done'>('ready');
   const [error, setError] = React.useState<{ message: string; stale: boolean } | null>(null);

@@ -1249,8 +1249,22 @@ export const GROUP_COPY = {
   removeTitle: (n: number) => `Remove ${n} record${n === 1 ? '' : 's'} from the group`,
   removeIntro:
     "Removing records from a group doesn't delete them or change their SKU, stock, charter or rack. Records that share a SKU still show together automatically.",
-  removeLast:
-    'This removes the last records in the group you can see. A group with no records left closes.',
+  /** Why a selected record is not removed (people review P9). */
+  removeLeftOutReason: {
+    not_in_group: 'is in no group',
+    not_writable: "is in a warehouse you can't change",
+  } as Record<RemoveLeftOutReason, string>,
+  /** The removal empties the group as far as the person can see (P9). It
+   *  closes unless a record hidden from them is still in it, so the words
+   *  claim no more than that. */
+  removeLast: (name: string) =>
+    `This removes the last records in ${name} that you can see. A group with no records left closes.`,
+  /** Records the person can see stay in the group (P9): on this page or not. */
+  removeStays: (n: number, name: string) =>
+    `${n} other record${n === 1 ? '' : 's'} you can see stay${n === 1 ? 's' : ''} in ${name}.`,
+  /** More records than one request takes (data review D3). */
+  removeCapped: (total: number) =>
+    `Remove from group takes ${GROUPING_MAX_ITEMS} records at a time: this removes the first ${GROUPING_MAX_ITEMS} of ${total}. Open it again for the rest.`,
   removeConfirm: (n: number) => `Remove ${n} record${n === 1 ? '' : 's'}`,
   removeDone: (n: number) => `${n} record${n === 1 ? '' : 's'} removed from the group.`,
   renameDone: (name: string) => `Renamed to ${name}.`,
@@ -1503,6 +1517,72 @@ export function groupBodyForPlan(
     moveItemIds,
     acknowledgeProductFamily:
       decisions.acknowledgeFamily === true && plan.conflicts.family.length > 0,
+  };
+}
+
+/** Why a selected record is not in a removal (P9). */
+export type RemoveLeftOutReason = 'not_in_group' | 'not_writable';
+
+export interface RemovalPlan {
+  /** Readable selected records, in the order selected. */
+  records: GroupingPreviewRecord[];
+  /** Selected ids the caller cannot read (or that are gone): a count only. */
+  unavailableCount: number;
+  /** The records the request names: in a group, and editable by the caller. */
+  remove: GroupingPreviewRecord[];
+  /** Selected records that are not removed, with the reason. */
+  leftOut: Array<{ id: string; reason: RemoveLeftOutReason }>;
+  /** Each group losing records: how many leave, and how many records the
+   *  caller can see stay (null when the preview did not count the group).
+   *  Hidden records are never counted, so 0 means "the last ones you can
+   *  see", not "the group closes". */
+  groups: Array<{ id: string; name: string; removing: number; staying: number | null }>;
+}
+
+/**
+ * Remove from group's plan (people review P9): which selected records leave
+ * their group, which are left out and why (in no group, or not editable by
+ * the caller), and, per group, how many records the caller can see stay (the
+ * preview's candidate count is the caller's readable live records), so the
+ * dialog can say that a group is losing its last visible records or that
+ * others stay, on this page or not.
+ */
+export function planRemoval(selectedIds: readonly string[], preview: GroupingPreview): RemovalPlan {
+  const byId = new Map(preview.records.map((r) => [r.id, r]));
+  const seen = new Set<string>();
+  const records: GroupingPreviewRecord[] = [];
+  for (const id of selectedIds) {
+    const r = byId.get(id.toLowerCase()) ?? byId.get(id);
+    if (r && !seen.has(r.id)) {
+      seen.add(r.id);
+      records.push(r);
+    }
+  }
+  const remove: GroupingPreviewRecord[] = [];
+  const leftOut: RemovalPlan['leftOut'] = [];
+  for (const r of records) {
+    if (!r.displayGroup) leftOut.push({ id: r.id, reason: 'not_in_group' });
+    else if (!r.writable) leftOut.push({ id: r.id, reason: 'not_writable' });
+    else remove.push(r);
+  }
+  const counted = new Map(preview.candidateGroups.map((g) => [g.id, g.memberCount]));
+  const groups = new Map<string, RemovalPlan['groups'][number]>();
+  for (const r of remove) {
+    const g = r.displayGroup!;
+    const cur = groups.get(g.id) ?? { id: g.id, name: g.name, removing: 0, staying: null };
+    cur.removing += 1;
+    groups.set(g.id, cur);
+  }
+  for (const g of groups.values()) {
+    const readable = counted.get(g.id);
+    g.staying = readable === undefined ? null : Math.max(0, readable - g.removing);
+  }
+  return {
+    records,
+    unavailableCount: preview.unavailableCount,
+    remove,
+    leftOut,
+    groups: [...groups.values()],
   };
 }
 
