@@ -41,42 +41,62 @@ export const RELEASES: Release[] = [
     // the decision was listed first). It now reads signed_at, which both
     // signature RPCs stamp at every hand-over (return-history.ts
     // handOverOf); completed_at only tells whether that signature completed
-    // the order, and stands in for a row completed with no signature. Web
-    // server only: no migration, no phone change. Held as a DRAFT until this
-    // fix's web deploy is live, the Demo Co RMA's history was re-read on the
-    // web and the phone (the part's line at 04:13:50Z, before the close), and
-    // returns RX-4's release (returns-close-rest-2026-10) is published: its
-    // whyItMatters opens with Close the rest, which that release announces
-    // (fix round 1, review; #350 published it at 2026-10-12T06:13Z, and a
-    // registry test still checks the order). The follow-up that publishes it
-    // sets 'published' and the real publishedAt and re-reads these words
-    // against what shipped. Newest first: drafts sit above the newest
-    // published release, so it sits at the top, directly above returns RX-4's
-    // release, and is dated after every release (a placeholder; the
-    // publishing follow-up dates it).
+    // the order, and stands in for a row completed with no signature.
+    //
+    // Fixed by #353 (24dbb08db, merged 2026-10-12 07:40:28Z; no migration,
+    // web server only). PUBLISHED by docs/whats-new-return-history-hand-over.
+    // Web build 1d67b31ea2df (the first 12 hex of the sha256 of 24dbb08db)
+    // was live at 07:41:37Z. No phone update: the phone draws the server's
+    // lines in the server's order (GET /api/v1/returns/[id] runs the same
+    // buildReturnWorkbench as the web page; the mobile returns-screen-wiring
+    // test pins the card), so every installed app shows the fix with the web
+    // deploy.
+    //
+    // The production re-read (read only, as the Demo Co demo account, through
+    // GET /api/v1/returns/[id] at 07:41:51Z, the session signed out after):
+    // RMA-20261012-D36F7F lists Replacement picked: Walk Exchange Tee L ×1
+    // from 31-B ×1 (SO-000033) at 04:12:17Z, then Replacement partly handed
+    // over (SO-000033) at 04:13:50.37339Z (its signature), then Rest of
+    // replacement SO-000033 closed: Demo walk: close the rest at 04:28:45Z;
+    // the original's Handed over (SO-000032) sits at its signature,
+    // 04:00:01Z. That read is the phone's; the web page renders the chain the
+    // same buildReturnWorkbench builds (RMAService.workbench). Exactly one
+    // production history changed, Demo Co's; no Learn4Life history did (the
+    // D-H1 census, read only, 2026-10-12 05:19-05:21Z: Learn4Life's returns
+    // have no replacement, and each original was completed at its
+    // signature).
     //
     // Who is told: whoever can open Returns (returns:read or returns:manage,
-    // with Returns on), the people who read a return's history; the link is
-    // that page's own gate. The phone draws the server's lines in the
-    // server's order (GET /api/v1/returns/[id] builds the same history; the
-    // mobile returns-screen-wiring test pins it), so no update is needed and
-    // the words say so.
+    // with Returns on), the people who read a return's history. The web RMA
+    // page checks the same, and so does the phone's read (GET
+    // /api/v1/returns/[id], whose RMAService.workbench calls gateRead); the
+    // link, Open Returns, is the Returns page's own gate. The requester's
+    // return link, the portal and a member's own order show no history
+    // (RX-3's redacted tracking), so no requester is told. No release-level
+    // audience. Newest first: published after every release below it, it
+    // sits at the top, above returns RX-4's release (#350,
+    // 2026-10-12T06:13Z), which announces Close the rest, and no draft is
+    // left.
     //
-    // Claims review, each checked against the code: only the history
-    // changes (nothing is written: stock, the order and the return are
-    // untouched); a replacement handed over in full reads Replacement handed
-    // over at the same time as before (its signature is its completion); a
-    // part reads Replacement partly handed over at its signature, while the
-    // rest is on backorder and once Close the rest or the return's cancel
-    // closed it, before that line; the original order's Handed over line
+    // Claims re-read at publish against 24dbb08db (web and phone) and the
+    // production re-read; no word changed. Only the history changes: the fix
+    // reads one more column on rows the workbench already read and writes
+    // nothing, and no other part of the workbench uses it. A replacement
+    // handed over in full reads Replacement handed over at the same time as
+    // before (a signature that leaves nothing owed sets completed_at to the
+    // same now() as signed_at). A part reads Replacement partly handed over
+    // at its signature, while the rest is on backorder and once Close the
+    // rest or the return's cancel closed it (close_partial, in that later
+    // transaction), before that line. The original order's Handed over line
     // moves to its signature only when it has one. Not claimed: a line for
-    // each of several hand-overs (the order keeps only its latest signature;
+    // each of several hand-overs (the order keeps only its latest signature,
+    // and a rest resumed into picking lists none until it is signed for;
     // owner question 1). The words never say "book" for a recorded quantity.
-    status: 'draft',
+    status: 'published',
     title: "A return's history shows when the replacement was handed over",
     summary:
       "A return's history now shows the replacement's hand-over at the time it was signed for, on the web and in the mobile app. When only part of it was handed over, the line reads Replacement partly handed over and comes before any line that says the rest was closed.",
-    publishedAt: '2026-10-17T17:00:00Z',
+    publishedAt: '2026-10-12T08:06:00Z',
     entries: [
       {
         id: 'returns-history-hand-over-time',
