@@ -32,7 +32,11 @@
 --     updated_by, updated_at and the search vector changed on the split row.
 -- I.  Idempotency: the same key and body replays (replay true, nothing
 --     written, same SKU); another body under the key is idempotency_conflict;
---     one request row per applied key.
+--     one request row per applied key. A key is the caller's own: another
+--     member who can split sends the manager's spent key with their own uid
+--     and gets a fresh evaluation, never the manager's answer and never
+--     idempotency_conflict; the key then holds one row per user (PR stage,
+--     security review SEC-T1).
 -- A.  Every record of a SKU selected: the named anchor keeps the SKU; with
 --     no anchor the oldest (created_at, then id) keeps it; an anchor named
 --     for a SKU that still has unselected readable records is
@@ -76,7 +80,7 @@
 
 begin;
 
-select plan(55);
+select plan(56);
 
 \set orgA   '\'03990000-0000-0000-0000-00000000000a\''
 \set orgB   '\'03990000-0000-0000-0000-00000000000b\''
@@ -147,6 +151,9 @@ select plan(55);
 -- Charter pair (same charter chA, two racks) for charter staff.
 \set h1     '\'03990000-0000-0000-0000-000000000191\''
 \set h2     '\'03990000-0000-0000-0000-000000000192\''
+-- Another member's split under the manager's spent key (I4, PR stage SEC-T1).
+\set u1     '\'03990000-0000-0000-0000-0000000001e1\''
+\set u2     '\'03990000-0000-0000-0000-0000000001e2\''
 -- Scope recheck under the lock (F5/F6): a pair, w2 the record that "moves".
 \set w1     '\'03990000-0000-0000-0000-0000000001c1\''
 \set w2     '\'03990000-0000-0000-0000-0000000001c2\''
@@ -268,6 +275,8 @@ insert into public.inventory_items
   (:h2,   :orgA, :whA, :chA, :catA, 'X0399-CHART', 'Charter pair',    null,            '2-R',  1, 'active', false, null, '2026-01-02T00:00:00Z', null),
   (:w1,   :orgA, :whA, null, :catA, 'X0399-SCOPE', 'Scope moved',     null,            '1-S',  1, 'active', false, null, '2026-01-01T00:00:00Z', null),
   (:w2,   :orgA, :whA, null, :catA, 'X0399-SCOPE', 'Scope moved',     null,            '2-S',  1, 'active', false, null, '2026-01-02T00:00:00Z', null),
+  (:u1,   :orgA, :whA, null, :catA, 'X0399-KEYS',  'Own keys',        null,            '1-U',  1, 'active', false, null, '2026-01-01T00:00:00Z', null),
+  (:u2,   :orgA, :whA, null, :catA, 'X0399-KEYS',  'Own keys',        null,            '2-U',  1, 'active', false, null, '2026-01-02T00:00:00Z', null),
   (:r1,   :orgA, :whA, null, :catA, 'X0399-CATS',  'Two categories',  null,            '1-T',  1, 'active', false, null, '2026-01-01T00:00:00Z', null),
   (:r2,   :orgA, :whA, null, :catB, 'X0399-CATS',  'Two categories',  null,            '2-T',  1, 'active', false, null, '2026-01-02T00:00:00Z', null),
   (:bp,   :orgB, :whB, null, null,  'X0399-PAIR',  'Org B mouse pad', null,            '22-A', 5, 'active', false, null, '2026-01-01T00:00:00Z', null),
@@ -403,7 +412,7 @@ grant all on ans to authenticated;
 -- Guard the fixtures: a silently missing row would let an assertion pass for
 -- the wrong reason.
 do $$ begin
-  if (select count(*) from public.inventory_items where id::text like '03990000-%') <> 43 then
+  if (select count(*) from public.inventory_items where id::text like '03990000-%') <> 45 then
     raise exception 'fixture: items (%)', (select count(*) from public.inventory_items where id::text like '03990000-%');
   end if;
   if (select count(*) from public.user_profiles where id::text like '03990000-%' and disabled_at is not null) <> 1 then
@@ -540,6 +549,31 @@ select is(
   pg_temp.brief(pg_temp.split(:mgr, pg_temp.req(:mgr, array[:pa1]::uuid[]), pg_temp.k(2))),
   'P0001:not_shared',
   'I3: a new key on the record left alone is not_shared: the pair is already split');
+-- PR stage, SEC-T1: the key is the caller's own (the table's key is
+-- (organization, user, key); the claim reads user_id = auth.uid(); the hash
+-- covers the uid). stf, who can split (staff, whA, every charter there), sends
+-- the manager's spent key k(1) with its own uid and its own body.
+create temp table k1_mgr_before as
+  select to_jsonb(r) as j from public.item_grouping_requests r
+   where r.organization_id = :orgA and r.user_id = :mgr and r.key = pg_temp.k(1)::uuid;
+insert into ans select 'i4', pg_temp.split(:stf, pg_temp.req(:stf, array[:u2]::uuid[]), pg_temp.k(1));
+-- Each part is coalesced to '-', so a failure reads as what happened.
+select is(
+  pg_temp.brief((select r from ans where tag = 'i4'))
+  || '|' || coalesce((select string_agg(right(r.user_id::text, 2), ',' order by r.user_id)
+                        from public.item_grouping_requests r where r.organization_id = :orgA and r.key = pg_temp.k(1)::uuid), '-')
+  || '|' || coalesce(((select to_jsonb(r) from public.item_grouping_requests r
+                        where r.organization_id = :orgA and r.user_id = :mgr and r.key = pg_temp.k(1)::uuid)
+                      = (select j from k1_mgr_before))::text, '-')
+  || '|' || coalesce((select (sku <> 'X0399-KEYS')::text from public.inventory_items where id = :u2), '-')
+  || '/' || coalesce((select sku from public.inventory_items where id = :u1), '-')
+  || '|' || coalesce((select string_agg(right(a.user_id::text, 2), ',') from public.audit_logs a
+                        where a.organization_id = :orgA and a.event = 'inventory.item.ungrouped'
+                          and a.metadata->>'entity_id' = :u2::text), '-')
+  || '|' || coalesce((select (sku = ((select r from ans where tag = 's1')::jsonb #>> '{items,0,after_sku}'))::text
+                        from public.inventory_items where id = :pa2), '-'),
+  '1e2=false/false|a1,a2|true|true/X0399-KEYS|a2|true',
+  'I4 (PR stage, SEC-T1): another member who can split sends the manager''s spent key with their own uid and body: a fresh evaluation that applies (not a replay of the manager''s answer, not idempotency_conflict); the key now holds two rows, the manager''s and theirs, and the manager''s row is unchanged; the split is theirs (audit as stf); the manager''s split record is untouched');
 
 -- ═══ A. Every record of a SKU selected ════════════════════════════════════
 insert into ans select 'a1', pg_temp.split(:mgr, pg_temp.req(:mgr, array[:n1, :n2, :n3]::uuid[], array[:n3]::uuid[]), pg_temp.k(10));
@@ -675,8 +709,8 @@ select is(
 select is(
   (select count(*) from public.item_grouping_requests where organization_id = :orgA)::text || '/'
   || (select count(*) from public.audit_logs where organization_id = :orgA and event = 'inventory.item.ungrouped')::text,
-  '6/7',
-  'R10: refusals record nothing: six applied requests (S1, A1, A3, H2 QUAD, H2 CTRL, H4) and seven audit rows (pa2; n1, n2; o2; q2; c2; h2)');
+  '7/8',
+  'R10: refusals record nothing: seven applied requests (S1, I4, A1, A3, H2 QUAD, H2 CTRL, H4) and eight audit rows (pa2; u2; n1, n2; o2; q2; c2; h2)');
 
 -- ═══ P. Permission ════════════════════════════════════════════════════════
 select is(
@@ -871,13 +905,13 @@ select is(
 select is(
   (select string_agg(right(a.id::text, 3), ',' order by a.id)
      from pg_temp.fp_full(:orgA) a join before_items b on b.id = a.id where (a.j->>'sku') <> (b.j->>'sku')),
-  '102,122,132,141,142,151,186,187,192,1c2',
+  '102,122,132,141,142,151,186,187,192,1c2,1e2',
   'Z7: exactly the records split above have a new SKU');
 select is(
   (select count(*)::text from public.audit_logs where organization_id = :orgA and event = 'inventory.item.ungrouped')
   || '/' || (select count(*)::text from public.audit_logs where organization_id = :orgB),
-  '10/0',
-  'Z8: one audit row per changed record (ten), none for a kept record, none in the other organization');
+  '11/0',
+  'Z8: one audit row per changed record (eleven), none for a kept record, none in the other organization');
 select is(
   (select string_agg(a.j::text, ',' order by a.id) from pg_temp.fp_full(:orgB) a)
   = (select string_agg(b.j::text, ',' order by b.id) from before_items b where b.id in (:bp, :bx)),
