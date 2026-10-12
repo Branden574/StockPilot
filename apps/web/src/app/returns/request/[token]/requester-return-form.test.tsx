@@ -10,7 +10,9 @@ vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh, push: vi.fn() }
 
 import { RequesterReturnForm } from './requester-return-form';
 
-const TOKEN = '7d0f3c1a-2b4e-4c5d-8e6f-9a0b1c2d3e4f';
+// A placeholder for the return link's token: a valid v4 UUID with low entropy,
+// so it never reads as a secret, and no other id in this file shares it.
+const LINK_ID = '22222222-2222-4222-8222-222222222222';
 const LINE: RequesterReturnableLine = {
   orderRequestLineId: '11111111-1111-4111-8111-111111111111',
   name: 'New Hire Shirt',
@@ -51,7 +53,7 @@ function calls(url: string): Array<{ init: RequestInit; body: Record<string, unk
 
 function renderForm(over: Partial<React.ComponentProps<typeof RequesterReturnForm>> = {}) {
   return render(
-    <RequesterReturnForm token={TOKEN} lines={[LINE]} exchangesEnabled requesterName="Dana Smith" hasRequests={false} {...over} />,
+    <RequesterReturnForm token={LINK_ID} lines={[LINE]} exchangesEnabled requesterName="Dana Smith" hasRequests={false} {...over} />,
   );
 }
 
@@ -90,8 +92,8 @@ describe('RequesterReturnForm (returns RX-3)', () => {
     expect(sizes[0]!.init.method).toBe('POST');
     expect(sizes[0]!.init.cache).toBe('no-store');
     // Nothing but the token: no item, group, warehouse or quantity (no oracle).
-    expect(sizes[0]!.body).toEqual({ token: TOKEN });
-    for (const c of fetchMock.mock.calls) expect(String(c[0])).not.toContain(TOKEN);
+    expect(sizes[0]!.body).toEqual({ token: LINK_ID });
+    for (const c of fetchMock.mock.calls) expect(String(c[0])).not.toContain(LINK_ID);
   });
 
   it('sends the exchange with the token, the honeypot and the key, then confirms in the words for an exchange and refreshes the tracking', async () => {
@@ -107,7 +109,7 @@ describe('RequesterReturnForm (returns RX-3)', () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]!.init.method).toBe('POST');
     expect(sent[0]!.body).toEqual({
-      token: TOKEN,
+      token: LINK_ID,
       hp: '',
       idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/),
       lines: [{ orderRequestLineId: LINE.orderRequestLineId, quantity: 3, exchange: { itemId: SIZE_L, quantity: 3 } }],
@@ -172,7 +174,7 @@ describe('RequesterReturnForm (returns RX-3)', () => {
     const { rerender } = renderForm({ lines: [] });
     expect(screen.getByText('Nothing left to return')).toBeInTheDocument();
     expect(screen.getByText(/already been returned, or this order has no returnable items/)).toBeInTheDocument();
-    rerender(<RequesterReturnForm token={TOKEN} lines={[]} exchangesEnabled requesterName={null} hasRequests />);
+    rerender(<RequesterReturnForm token={LINK_ID} lines={[]} exchangesEnabled requesterName={null} hasRequests />);
     expect(screen.getByText(/already returned or in one of your requests below/)).toBeInTheDocument();
   });
 });

@@ -811,7 +811,9 @@ describe('(e) the phone says what the web page renders — pinned against the MO
 
 describe("(h) the requester's own order: Return or exchange, and their requests in their words (returns RX-3)", () => {
   const ADMIN = { tag: 'service-role' };
-  const TOKEN = '7d0f3c1a-2b4e-4c5d-8e6f-9a0b1c2d3e4f';
+  // A placeholder for the return link's token: a valid v4 UUID with low entropy,
+  // so it never reads as a secret, and no other id in this file shares it.
+  const LINK_ID = '22222222-2222-4222-8222-222222222222';
   const REQUEST = {
     returnNumber: 'RMA-20261011-ABC123',
     createdAt: '2026-10-11T17:00:00.000Z',
@@ -832,13 +834,13 @@ describe("(h) the requester's own order: Return or exchange, and their requests 
     // The requester's own completed order, in an organization with Returns on.
     orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ requester_user_id: 'u1' }) }));
     checkModuleAccessMock.mockImplementation(async (moduleId: string) => ({ enabled: moduleId === 'returns', canManage: false }));
-    resolveReturnTokenMock.mockResolvedValue(TOKEN);
+    resolveReturnTokenMock.mockResolvedValue(LINK_ID);
     trackingForOrderMock.mockResolvedValue([REQUEST]);
   });
 
   it('labels the link Return or exchange, and lists their requests with the sentences, the items and the replacement SO', async () => {
     const { container } = await renderPage();
-    const link = Array.from(container.querySelectorAll('a')).find((a) => a.getAttribute('href') === `/returns/request/${TOKEN}`);
+    const link = Array.from(container.querySelectorAll('a')).find((a) => a.getAttribute('href') === `/returns/request/${LINK_ID}`);
     expect(link?.textContent).toBe('Return or exchange');
     expect(resolveReturnTokenMock).toHaveBeenCalledWith(ADMIN, ORDER_ID);
     expect(trackingForOrderMock).toHaveBeenCalledTimes(1);
@@ -870,7 +872,7 @@ describe("(h) the requester's own order: Return or exchange, and their requests 
   it('says Request a return while exchanges are switched off', async () => {
     exchangeSwitch.on = false;
     const { container } = await renderPage();
-    const link = Array.from(container.querySelectorAll('a')).find((a) => a.getAttribute('href') === `/returns/request/${TOKEN}`);
+    const link = Array.from(container.querySelectorAll('a')).find((a) => a.getAttribute('href') === `/returns/request/${LINK_ID}`);
     expect(link?.textContent).toBe('Request a return');
   });
 

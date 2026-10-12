@@ -32,15 +32,15 @@ export const RELEASES: Release[] = [
     revision: 1,
     // Returns RX-3 (no migration: the requester tier and its predicate,
     // return_exchange_options, shipped in RX-2's 0396). Held as a DRAFT until
-    // RX-2's migration and this slice's web deploy are live, the OTA with the
-    // phone's requester sheet is published and launched, and the Demo Co
-    // walk passed (returns plan 10.1 and 11); the follow-up that publishes it
-    // (RX-5) sets 'published' and the real publishedAt and re-reads these
-    // words against what shipped. Newest first: drafts sit above the newest
-    // published release, so it sits at the top, directly above RX-2's
-    // release (published by #345 at 2026-10-11T22:18Z), and is dated after
-    // every release (a placeholder; the publishing follow-up dates and orders
-    // it for real).
+    // this slice's web deploy is live (RX-2's 0396 is already in production),
+    // the OTA with the phone's requester sheet is published and launched, and
+    // the Demo Co walk passed (returns plan 10.1 and 11); the follow-up that
+    // publishes it (RX-5) sets 'published' and the real publishedAt and
+    // re-reads these words against what shipped. Newest first: drafts sit
+    // above the newest published release, so it sits at the top, directly
+    // above RX-2's release (published by #345 at 2026-10-11T22:18Z), and is
+    // dated after every release (a placeholder; the publishing follow-up
+    // dates and orders it for real).
     //
     // What a person can see, and who is told:
     // - Members who place orders, where Returns is on: their own handed-over

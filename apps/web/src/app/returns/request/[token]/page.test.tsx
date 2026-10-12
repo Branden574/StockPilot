@@ -23,7 +23,9 @@ vi.mock('@/lib/returns/exchange-switch', () => ({ exchangeCreateEnabled: () => s
 
 import RequesterReturnPage, { generateMetadata } from './page';
 
-const TOKEN = '7d0f3c1a-2b4e-4c5d-8e6f-9a0b1c2d3e4f';
+// A placeholder for the return link's token: a valid v4 UUID with low entropy,
+// so it never reads as a secret, and no other id in this file shares it.
+const LINK_ID = '22222222-2222-4222-8222-222222222222';
 
 function sheet(over: Partial<RequesterReturnSheet> = {}): RequesterReturnSheet {
   return {
@@ -46,7 +48,7 @@ function sheet(over: Partial<RequesterReturnSheet> = {}): RequesterReturnSheet {
 }
 
 async function renderPage() {
-  return render(await RequesterReturnPage({ params: Promise.resolve({ token: TOKEN }) }));
+  return render(await RequesterReturnPage({ params: Promise.resolve({ token: LINK_ID }) }));
 }
 
 beforeEach(() => {
@@ -59,7 +61,7 @@ beforeEach(() => {
 describe('the token page (returns RX-3)', () => {
   it("loads the requester sheet for the page's own token through the service role, and says Return or exchange", async () => {
     await renderPage();
-    expect(loadSheet).toHaveBeenCalledWith(ADMIN, TOKEN);
+    expect(loadSheet).toHaveBeenCalledWith(ADMIN, LINK_ID);
     expect(screen.getByRole('heading', { level: 1, name: RETURNS_COPY.requesterReturnOrExchange })).toBeInTheDocument();
     expect(screen.getByText(/Order SO-000103/)).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: RETURNS_COPY.exchangeRequester })).toBeInTheDocument();
