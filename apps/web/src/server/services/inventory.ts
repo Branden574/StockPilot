@@ -1231,13 +1231,150 @@ export class InventoryService {
   }
 
   /**
-   * One window of the skinny scan of the WHOLE filtered view: every filter
-   * list()'s main query applies (warehouse scope, status, expected, search,
-   * barcode, category, location, supplier, charter, stock, item type,
-   * bundles, rentals, dates), selecting only `columns`, ordered by id so the
-   * windows never overlap. list() sums the value from it; listPlanRows plans a
-   * group-aware page from it. `narrow` adds a filter the caller needs (a
-   * viewer's category grants).
+   * Every filter of a list() view except its scope: status, auto-archived,
+   * expected, search, barcode, rack, category, location, supplier, charter,
+   * stock, unit cost, item type, bundles, rentals, dates and ids. list()'s
+   * main query and the skinny scans of the whole view (its value footer, and
+   * the plan of a staff member's group-aware page) all take them from here, so
+   * the three can never disagree (PR #364 review: the scans had missed rack,
+   * unit cost and ids). The scope (the caller's warehouses, a viewer's grants)
+   * is each caller's; PostgREST ANDs every filter, so the order is free.
+   */
+  private applyContentFilters(query: any, filters: ItemListFilters): any {
+    if (!filters.status || filters.status === 'active') {
+      query = query.eq('status', 'active');
+    } else if (filters.status !== 'all') {
+      query = query.eq('status', filters.status);
+    }
+    if (filters.autoArchived) {
+      query = query.eq('auto_archived', true);
+    }
+    // Expected-items visibility (mig 0277): default = hide phantoms
+    // awaiting their first receipt; expected=true = ONLY them (the
+    // "Expected" chip view); expected='any' = no predicate (PO pickers /
+    // ids-narrowed exports / AI search — see the ItemListFilters doc).
+    // Column is NOT NULL so eq() is total.
+    if (filters.expected !== 'any') {
+      query = query.eq('awaiting_first_receipt', filters.expected === true);
+    }
+
+    if (filters.q && filters.q.trim()) {
+      const clause = buildItemSearchClause(filters.q, filters.isbnVariants);
+      if (clause) query = query.or(clause);
+    }
+    if (filters.barcode && filters.barcode.trim()) {
+      query = query.eq('barcode', filters.barcode.trim());
+    }
+    if (filters.rack && filters.rack.trim()) {
+      // Books use the legacy book_rack_* keys; everything else the neutral
+      // rack_* keys. buildRackFilterClause owns the split, the sanitization and
+      // the legacy-composite tolerance — see its doc comment.
+      const clause = buildRackFilterClause(filters.rack, filters.itemType);
+      if (clause.kind === 'eq') query = query.filter(clause.column, 'eq', clause.value);
+      else if (clause.kind === 'or') query = query.or(clause.expr);
+    }
+    // Multi-select takes precedence; fall back to legacy single-id when
+    // the array is empty/missing so AI tools and any prior caller keep
+    // working unchanged.
+    if (filters.categoryIds && filters.categoryIds.length > 0) {
+      query = query.in('category_id', filters.categoryIds);
+    } else if (filters.categoryId) {
+      query = query.eq('category_id', filters.categoryId);
+    }
+    if (filters.locationIds && filters.locationIds.length > 0) {
+      query = query.in('primary_location_id', filters.locationIds);
+    } else if (filters.locationId) {
+      query = query.eq('primary_location_id', filters.locationId);
+    }
+    if (filters.supplierIds && filters.supplierIds.length > 0) {
+      query = query.in('supplier_id', filters.supplierIds);
+    } else if (filters.supplierId) {
+      query = query.eq('supplier_id', filters.supplierId);
+    }
+    // Charter filter — UUID list filters charter_id IN (...) and the
+    // sentinel 'generic' translates to charter_id IS NULL (items that
+    // any charter can pull from). When BOTH are present we OR them so
+    // a user can pick "Generic + Acme" together.
+    if (filters.charterIds && filters.charterIds.length > 0) {
+      const includesGeneric = filters.charterIds.includes('generic');
+      const realIds = filters.charterIds.filter((id) => id !== 'generic' && CHARTER_ID_RE.test(id));
+      if (includesGeneric && realIds.length > 0) {
+        const list = realIds.map((id) => `"${id}"`).join(',');
+        query = query.or(`charter_id.is.null,charter_id.in.(${list})`);
+      } else if (includesGeneric) {
+        query = query.is('charter_id', null);
+      } else if (realIds.length > 0) {
+        query = query.in('charter_id', realIds);
+      }
+    }
+    if (filters.outOfStock) query = query.lte('quantity_on_hand', 0);
+    if (filters.hasUnitCost) {
+      // Exclude rows where unit_cost is NULL or 0. Used by AI cost-
+      // ranking so "cheapest" doesn't surface the (typically large)
+      // pool of items whose cost just hasn't been recorded yet.
+      query = query.gt('unit_cost', 0);
+    }
+    // PostgREST can't express qty_on_hand <= reorder_point in a single
+    // filter, so narrow with an OR pre-filter and do the final
+    // cross-column compare in JS on the rows read (list(), listPlanRows):
+    //   - reorder_point > 0 → traditional "low": qty <= reorder_point
+    //   - qty <= 0           → critical regardless of reorder_point
+    // The OR catches items with reorder_point = 0 AND qty = 0, which
+    // were previously hidden from the "Review low stock" dashboard
+    // alert because the dashboard count = lowStock + outOfStock but
+    // ?stock=low only returned the lowStock half.
+    if (filters.lowStock) {
+      query = query.or('reorder_point.gt.0,quantity_on_hand.lte.0');
+    }
+
+    // item_type defaults to 'product' so the legacy /dashboard/inventory tab
+    // doesn't accidentally show books/assets. Pass 'all' to disable, or
+    // itemTypes for a multi-type set (which wins when present).
+    if (filters.itemTypes && filters.itemTypes.length > 0) {
+      // in-list-bound: item types are a fixed enum of four values
+      query = query.in('item_type', filters.itemTypes);
+    } else if (filters.itemType === undefined) {
+      query = query.eq('item_type', 'product');
+    } else if (filters.itemType !== 'all') {
+      query = query.eq('item_type', filters.itemType);
+    }
+
+    // Bundles are containers, not pickable stock. Only callers that say so
+    // (the order add-items picker, matching loadCatalogItems) drop them.
+    if (filters.excludeBundles) {
+      query = query.or('is_bundle.is.null,is_bundle.eq.false');
+    }
+
+    // Rentals (circulating assets like canopies) are a separate
+    // inventory class. Every regular surface (this list method is
+    // used by /dashboard/inventory, /dashboard/books, the orders
+    // picker, AI search, etc.) leaves rentalsOnly undefined, which
+    // means is_rental=false — rental items never leak in. Only
+    // /dashboard/rentals/items passes rentalsOnly: true, and gets
+    // ONLY rentals, so its page size and total count rentals.
+    // `is_rental` is NOT NULL (0131), so the equality is total.
+    query = query.eq('is_rental', filters.rentalsOnly === true);
+
+    if (filters.createdSince) query = query.gte('created_at', filters.createdSince);
+    if (filters.createdUntil) query = query.lt('created_at', filters.createdUntil);
+    if (filters.updatedSince) query = query.gte('updated_at', filters.updatedSince);
+    if (filters.updatedUntil) query = query.lt('updated_at', filters.updatedUntil);
+
+    // Narrowing to given records (a planned page, an 'export selected'). It
+    // sits ON TOP of the caller's warehouse scope, so ids only ever subtract.
+    if (filters.ids && filters.ids.length > 0) {
+      // in-list-bound: list() and listPlanRows refuse past IN_FILTER_MAX_VALUES ids
+      query = query.in('id', filters.ids);
+    }
+    return query;
+  }
+
+  /**
+   * One window of the skinny scan of the WHOLE filtered view: list()'s
+   * warehouse scope and every one of its filters (applyContentFilters),
+   * selecting only `columns`, ordered by id so the windows never overlap.
+   * list() sums the value from it; listPlanRows plans a group-aware page from
+   * it. `narrow` adds a filter the caller needs (a viewer's category grants).
    */
   private filteredScanPage(
     filters: ItemListFilters,
@@ -1264,73 +1401,7 @@ export class InventoryService {
     } else if (filters.warehouseId) {
       sumQuery = sumQuery.eq('warehouse_id', filters.warehouseId);
     }
-    if (!filters.status || filters.status === 'active') {
-      sumQuery = sumQuery.eq('status', 'active');
-    } else if (filters.status !== 'all') {
-      sumQuery = sumQuery.eq('status', filters.status);
-    }
-    if (filters.autoArchived) {
-      sumQuery = sumQuery.eq('auto_archived', true);
-    }
-    // Mirror the main query's expected-items predicate (mig 0277),
-    // including the tri-state 'any' escape hatch (no predicate).
-    if (filters.expected !== 'any') {
-      sumQuery = sumQuery.eq('awaiting_first_receipt', filters.expected === true);
-    }
-    if (filters.q && filters.q.trim()) {
-      const clause = buildItemSearchClause(filters.q, filters.isbnVariants);
-      if (clause) sumQuery = sumQuery.or(clause);
-    }
-    if (filters.barcode && filters.barcode.trim()) {
-      sumQuery = sumQuery.eq('barcode', filters.barcode.trim());
-    }
-    if (filters.categoryIds && filters.categoryIds.length > 0) {
-      sumQuery = sumQuery.in('category_id', filters.categoryIds);
-    } else if (filters.categoryId) {
-      sumQuery = sumQuery.eq('category_id', filters.categoryId);
-    }
-    if (filters.locationIds && filters.locationIds.length > 0) {
-      sumQuery = sumQuery.in('primary_location_id', filters.locationIds);
-    } else if (filters.locationId) {
-      sumQuery = sumQuery.eq('primary_location_id', filters.locationId);
-    }
-    if (filters.supplierIds && filters.supplierIds.length > 0) {
-      sumQuery = sumQuery.in('supplier_id', filters.supplierIds);
-    } else if (filters.supplierId) {
-      sumQuery = sumQuery.eq('supplier_id', filters.supplierId);
-    }
-    if (filters.charterIds && filters.charterIds.length > 0) {
-      const includesGeneric = filters.charterIds.includes('generic');
-      const realIds = filters.charterIds.filter((id) => id !== 'generic' && CHARTER_ID_RE.test(id));
-      if (includesGeneric && realIds.length > 0) {
-        const list = realIds.map((id) => `"${id}"`).join(',');
-        sumQuery = sumQuery.or(`charter_id.is.null,charter_id.in.(${list})`);
-      } else if (includesGeneric) {
-        sumQuery = sumQuery.is('charter_id', null);
-      } else if (realIds.length > 0) {
-        sumQuery = sumQuery.in('charter_id', realIds);
-      }
-    }
-    if (filters.outOfStock) sumQuery = sumQuery.lte('quantity_on_hand', 0);
-    if (filters.lowStock) {
-      sumQuery = sumQuery.or('reorder_point.gt.0,quantity_on_hand.lte.0');
-    }
-    if (filters.itemTypes && filters.itemTypes.length > 0) {
-      // in-list-bound: item types are a fixed enum of four values
-      sumQuery = sumQuery.in('item_type', filters.itemTypes);
-    } else if (filters.itemType === undefined) {
-      sumQuery = sumQuery.eq('item_type', 'product');
-    } else if (filters.itemType !== 'all') {
-      sumQuery = sumQuery.eq('item_type', filters.itemType);
-    }
-    if (filters.excludeBundles) {
-      sumQuery = sumQuery.or('is_bundle.is.null,is_bundle.eq.false');
-    }
-    sumQuery = sumQuery.eq('is_rental', filters.rentalsOnly === true);
-    if (filters.createdSince) sumQuery = sumQuery.gte('created_at', filters.createdSince);
-    if (filters.createdUntil) sumQuery = sumQuery.lt('created_at', filters.createdUntil);
-    if (filters.updatedSince) sumQuery = sumQuery.gte('updated_at', filters.updatedSince);
-    if (filters.updatedUntil) sumQuery = sumQuery.lt('updated_at', filters.updatedUntil);
+    sumQuery = this.applyContentFilters(sumQuery, filters);
     if (narrow) sumQuery = narrow(sumQuery);
     // Stable sort keeps each row on exactly one page across the loop.
     return sumQuery.order('id', { ascending: true }).range(from, to);
@@ -1342,8 +1413,8 @@ export class InventoryService {
    * (planGroupAwarePage), so a size run, a SKU family or a display group whose
    * records sort far apart is never split across their pages (the reported XS
    * alone on page 2). Same scope as list(): the caller's own client and RLS,
-   * their warehouses, a viewer's category grants, every list() filter
-   * (filteredScanPage), the low-stock rule. Read in 1000-row windows; null
+   * their warehouses, a viewer's category grants, list()'s own filters
+   * (applyContentFilters), the low-stock rule. Read in 1000-row windows; null
    * when the view holds more than INSTANT_MODE_MAX_ROWS records (the caller
    * keeps fixed pages, as managers' instant mode does past the same cap).
    */
@@ -1352,6 +1423,13 @@ export class InventoryService {
     total: number;
     valueOnHand: number;
   } | null> {
+    // As list(): past one batch the ids would overflow the URL.
+    if (filters.ids && filters.ids.length > IN_FILTER_MAX_VALUES) {
+      throw new ServiceError(
+        'validation_error',
+        `Narrow by at most ${IN_FILTER_MAX_VALUES} item ids here; use listByIdsForExport for a larger selection.`,
+      );
+    }
     const viewerGrantsRead = this.viewerCategoryGrants();
     const access = await getWarehouseAccess(this.ctx);
     const empty = { rows: [] as PlanRow[], total: 0, valueOnHand: 0 };
@@ -1506,131 +1584,9 @@ export class InventoryService {
       }
     }
 
-    if (!filters.status || filters.status === 'active') {
-      query = query.eq('status', 'active');
-    } else if (filters.status !== 'all') {
-      query = query.eq('status', filters.status);
-    }
-    if (filters.autoArchived) {
-      query = query.eq('auto_archived', true);
-    }
-    // Expected-items visibility (mig 0277): default = hide phantoms
-    // awaiting their first receipt; expected=true = ONLY them (the
-    // "Expected" chip view); expected='any' = no predicate (PO pickers /
-    // ids-narrowed exports / AI search — see the ItemListFilters doc).
-    // Column is NOT NULL so eq() is total.
-    if (filters.expected !== 'any') {
-      query = query.eq('awaiting_first_receipt', filters.expected === true);
-    }
-
-    if (filters.q && filters.q.trim()) {
-      const clause = buildItemSearchClause(filters.q, filters.isbnVariants);
-      if (clause) query = query.or(clause);
-    }
-    if (filters.barcode && filters.barcode.trim()) {
-      query = query.eq('barcode', filters.barcode.trim());
-    }
-    if (filters.rack && filters.rack.trim()) {
-      // Books use the legacy book_rack_* keys; everything else the neutral
-      // rack_* keys. buildRackFilterClause owns the split, the sanitization and
-      // the legacy-composite tolerance — see its doc comment.
-      const clause = buildRackFilterClause(filters.rack, filters.itemType);
-      if (clause.kind === 'eq') query = query.filter(clause.column, 'eq', clause.value);
-      else if (clause.kind === 'or') query = query.or(clause.expr);
-    }
-    // Multi-select takes precedence; fall back to legacy single-id when
-    // the array is empty/missing so AI tools and any prior caller keep
-    // working unchanged.
-    if (filters.categoryIds && filters.categoryIds.length > 0) {
-      query = query.in('category_id', filters.categoryIds);
-    } else if (filters.categoryId) {
-      query = query.eq('category_id', filters.categoryId);
-    }
-    if (filters.locationIds && filters.locationIds.length > 0) {
-      query = query.in('primary_location_id', filters.locationIds);
-    } else if (filters.locationId) {
-      query = query.eq('primary_location_id', filters.locationId);
-    }
-    if (filters.supplierIds && filters.supplierIds.length > 0) {
-      query = query.in('supplier_id', filters.supplierIds);
-    } else if (filters.supplierId) {
-      query = query.eq('supplier_id', filters.supplierId);
-    }
-    // Charter filter — UUID list filters charter_id IN (...) and the
-    // sentinel 'generic' translates to charter_id IS NULL (items that
-    // any charter can pull from). When BOTH are present we OR them so
-    // a user can pick "Generic + Acme" together.
-    if (filters.charterIds && filters.charterIds.length > 0) {
-      const includesGeneric = filters.charterIds.includes('generic');
-      const realIds = filters.charterIds.filter((id) => id !== 'generic' && CHARTER_ID_RE.test(id));
-      if (includesGeneric && realIds.length > 0) {
-        const list = realIds.map((id) => `"${id}"`).join(',');
-        query = query.or(`charter_id.is.null,charter_id.in.(${list})`);
-      } else if (includesGeneric) {
-        query = query.is('charter_id', null);
-      } else if (realIds.length > 0) {
-        query = query.in('charter_id', realIds);
-      }
-    }
-    // Additional narrowing for 'export selected'. This sits ON TOP of the
-    // warehouse-access scoping above, so a user still can't export items
-    // outside their RLS/warehouse access — ids only ever subtracts.
-    if (filters.ids && filters.ids.length > 0) {
-      // in-list-bound: refused above past IN_FILTER_MAX_VALUES ids
-      query = query.in('id', filters.ids);
-    }
-    if (filters.outOfStock) query = query.lte('quantity_on_hand', 0);
-    if (filters.hasUnitCost) {
-      // Exclude rows where unit_cost is NULL or 0. Used by AI cost-
-      // ranking so "cheapest" doesn't surface the (typically large)
-      // pool of items whose cost just hasn't been recorded yet.
-      query = query.gt('unit_cost', 0);
-    }
-    // PostgREST can't express qty_on_hand <= reorder_point in a single
-    // filter, so narrow with an OR pre-filter and do the final
-    // cross-column compare in JS below:
-    //   - reorder_point > 0 → traditional "low": qty <= reorder_point
-    //   - qty <= 0           → critical regardless of reorder_point
-    // The OR catches items with reorder_point = 0 AND qty = 0, which
-    // were previously hidden from the "Review low stock" dashboard
-    // alert because the dashboard count = lowStock + outOfStock but
-    // ?stock=low only returned the lowStock half.
-    if (filters.lowStock) {
-      query = query.or('reorder_point.gt.0,quantity_on_hand.lte.0');
-    }
-
-    // item_type defaults to 'product' so the legacy /dashboard/inventory tab
-    // doesn't accidentally show books/assets. Pass 'all' to disable, or
-    // itemTypes for a multi-type set (which wins when present).
-    if (filters.itemTypes && filters.itemTypes.length > 0) {
-      // in-list-bound: item types are a fixed enum of four values
-      query = query.in('item_type', filters.itemTypes);
-    } else if (filters.itemType === undefined) {
-      query = query.eq('item_type', 'product');
-    } else if (filters.itemType !== 'all') {
-      query = query.eq('item_type', filters.itemType);
-    }
-
-    // Bundles are containers, not pickable stock. Only callers that say so
-    // (the order add-items picker, matching loadCatalogItems) drop them.
-    if (filters.excludeBundles) {
-      query = query.or('is_bundle.is.null,is_bundle.eq.false');
-    }
-
-    // Rentals (circulating assets like canopies) are a separate
-    // inventory class. Every regular surface (this list method is
-    // used by /dashboard/inventory, /dashboard/books, the orders
-    // picker, AI search, etc.) leaves rentalsOnly undefined, which
-    // means is_rental=false — rental items never leak in. Only
-    // /dashboard/rentals/items passes rentalsOnly: true, and gets
-    // ONLY rentals, so its page size and total count rentals.
-    // `is_rental` is NOT NULL (0131), so the equality is total.
-    query = query.eq('is_rental', filters.rentalsOnly === true);
-
-    if (filters.createdSince) query = query.gte('created_at', filters.createdSince);
-    if (filters.createdUntil) query = query.lt('created_at', filters.createdUntil);
-    if (filters.updatedSince) query = query.gte('updated_at', filters.updatedSince);
-    if (filters.updatedUntil) query = query.lt('updated_at', filters.updatedUntil);
+    // Every filter of the view, from the one place the value and plan scans
+    // take them too (applyContentFilters).
+    query = this.applyContentFilters(query, filters);
 
     // Build a parallel skinny query that mirrors every filter applied
     // above but selects only the three columns needed for the org-wide
@@ -1646,10 +1602,11 @@ export class InventoryService {
     // accumulate — otherwise the footer silently undercounts for orgs with
     // >1000 in-scope items, while `total` (count:'exact' on the main query)
     // stays accurate, making the mismatch visible. (Same 1000-row cap class
-    // fixed in forecasting.ts / order-requests.ts.) The filters below mirror
-    // the main list query exactly; only the column projection and the
-    // pagination differ. Build per page so each `.range()` is applied to a
-    // fresh query (reusing one builder would stack range headers).
+    // fixed in forecasting.ts / order-requests.ts.) filteredScanPage applies
+    // the main query's scope and its filters (applyContentFilters); only the
+    // column projection and the pagination differ. Build per page so each
+    // `.range()` is applied to a fresh query (reusing one builder would stack
+    // range headers).
     const buildSumPage = (from: number, to: number) =>
       this.filteredScanPage(
         filters,

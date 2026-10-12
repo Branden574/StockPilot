@@ -42,7 +42,7 @@ vi.mock('./user-categories', () => ({
 
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 
-import { InventoryService } from './inventory';
+import { buildRackFilterClause, InventoryService, type ItemListFilters } from './inventory';
 
 const arg = (call: MockCall, method: string, col?: string) => {
   const i = call.methods.findIndex(
@@ -201,5 +201,148 @@ describe('InventoryService.list with planned totals', () => {
     expect(arg(calls[0]!, 'in', 'id')).toEqual(['id', ['id-b', 'id-a']]);
     expect(out.total).toBe(485);
     expect(out.valueOnHand).toBe(1234.5);
+  });
+});
+
+describe("list()'s page, its value scan and the plan scan take one set of filters", () => {
+  // PR #364 review: the scans kept their own copy of list()'s filters and
+  // missed `?rack=` (and unit cost, and ids), so a staff member's rack view was
+  // planned over the WHOLE view: "Page 1 of 17", the whole view's total and
+  // value, and pages with nothing on them. Every filter now comes from one
+  // place (applyContentFilters); these cases pin that the three queries agree.
+  const UUID_A = '11111111-1111-4111-8111-111111111111';
+  const UUID_B = '22222222-2222-4222-8222-222222222222';
+  const CASES: Array<[string, ItemListFilters]> = [
+    ['the default view', {}],
+    ['a search', { q: 'tee' }],
+    ['a search with ISBN variants', { q: '9780306406157', isbnVariants: ['0306406152'] }],
+    ['a barcode', { barcode: '0123' }],
+    ['a rack', { rack: '17-B' }],
+    ['a rack number', { rack: '17' }],
+    ['a Books rack', { rack: '17-B', itemType: 'book' }],
+    ['a rack over every type', { rack: '17-B', itemType: 'all' }],
+    ['a status', { status: 'archived' }],
+    ['every status', { status: 'all' }],
+    ['auto-archived', { status: 'archived', autoArchived: true }],
+    ['expected items', { expected: true }],
+    ['expected or not', { expected: 'any' }],
+    ['categories', { categoryIds: [UUID_A, UUID_B] }],
+    ['one category', { categoryId: UUID_A }],
+    ['locations', { locationIds: [UUID_A] }],
+    ['one location', { locationId: UUID_A }],
+    ['suppliers', { supplierIds: [UUID_A] }],
+    ['one supplier', { supplierId: UUID_A }],
+    ['charters and Generic', { charterIds: ['generic', UUID_A] }],
+    ['Generic only', { charterIds: ['generic'] }],
+    ['charters', { charterIds: [UUID_A, UUID_B] }],
+    ['out of stock', { outOfStock: true }],
+    ['low stock', { lowStock: true }],
+    ['with a unit cost', { hasUnitCost: true }],
+    ['item types', { itemTypes: ['product', 'asset'] }],
+    ['every type', { itemType: 'all' }],
+    ['no bundles', { excludeBundles: true }],
+    ['rentals', { rentalsOnly: true }],
+    [
+      'dates',
+      {
+        createdSince: '2026-01-01',
+        createdUntil: '2026-02-01',
+        updatedSince: '2026-03-01',
+        updatedUntil: '2026-04-01',
+      },
+    ],
+    ['ids', { ids: [UUID_A, UUID_B] }],
+    ['a warehouse', { warehouseId: 'wh-a' }],
+    [
+      'everything at once',
+      {
+        q: 'tee',
+        barcode: '0123',
+        rack: '17-B',
+        status: 'all',
+        categoryIds: [UUID_A],
+        locationIds: [UUID_B],
+        supplierIds: [UUID_A],
+        charterIds: ['generic', UUID_B],
+        warehouseId: 'wh-a',
+        outOfStock: true,
+        lowStock: true,
+        hasUnitCost: true,
+        itemType: 'book',
+        excludeBundles: true,
+        createdSince: '2026-01-01',
+        updatedUntil: '2026-04-01',
+        expected: 'any',
+        ids: [UUID_A],
+      },
+    ],
+  ];
+
+  const SHAPE = new Set(['select', 'order', 'range', 'limit']);
+  const filtersOf = (methods: string[], args: unknown[][]) =>
+    methods
+      .map((m, k) => (SHAPE.has(m) ? null : `${m}:${JSON.stringify(args[k])}`))
+      .filter((x): x is string => x !== null)
+      .sort();
+
+  const ACCESS = {
+    staff: { readableIds: ['wh-a'], writableIds: ['wh-a'], hasAllAccess: false },
+    manager: { readableIds: ['wh-a', 'wh-b'], writableIds: ['wh-a', 'wh-b'], hasAllAccess: true },
+  } as const;
+
+  for (const role of ['staff', 'manager'] as const) {
+    it.each(CASES)(`%s: one set of filters (${role})`, async (_name, filters) => {
+      vi.mocked(getWarehouseAccess).mockResolvedValue({
+        ...ACCESS[role],
+        readableIds: [...ACCESS[role].readableIds],
+        writableIds: [...ACCESS[role].writableIds],
+        primaryWarehouseId: 'wh-a',
+      });
+      const stub = makeSupabaseStub({
+        'inventory_items.select': { data: [], error: null, count: 0 },
+      });
+      const svc = new InventoryService(makeServiceContext(stub.client, { role }));
+      await svc.list({ ...filters, limit: 30, offset: 0 });
+      await svc.listPlanRows(filters);
+      const methods = stub.chainsAll.get('inventory_items.select')!;
+      const args = stub.chainArgsAll.get('inventory_items.select')!;
+      const isPage = (k: number) =>
+        args[k]!.some(
+          (a, i) => methods[k]![i] === 'select' && JSON.stringify(a).includes('"count":"exact"'),
+        );
+      const page = methods.findIndex((_m, k) => isPage(k));
+      const scans = methods.map((_m, k) => k).filter((k) => !isPage(k));
+      // One value-scan window (an empty view) and one plan window.
+      expect(page).toBeGreaterThanOrEqual(0);
+      expect(scans).toHaveLength(2);
+      const want = filtersOf(methods[page]!, args[page]!);
+      for (const k of scans) expect(filtersOf(methods[k]!, args[k]!)).toEqual(want);
+    });
+  }
+
+  it("a rack view plans that rack's records, not the whole view", async () => {
+    const clause = buildRackFilterClause('17-B', undefined);
+    expect(clause.kind).toBe('or');
+    const stub = makeSupabaseStub({
+      'inventory_items.select': (call) => {
+        // The database: three records on rack 17-B in a view of forty.
+        const onRack = call.methods.some(
+          (m, k) => clause.kind === 'or' && m === 'or' && call.args[k]![0] === clause.expr,
+        );
+        const n = onRack ? 3 : 40;
+        return { data: Array.from({ length: n }, (_x, i) => lightRow(i)), error: null };
+      },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client, { role: 'staff' }));
+    const out = await svc.listPlanRows({ rack: '17-B' });
+    expect(out!.total).toBe(3);
+    expect(out!.rows).toHaveLength(3);
+  });
+
+  it('refuses more ids than one request carries, as list() does', async () => {
+    const { stub } = viewStub(3);
+    const svc = new InventoryService(makeServiceContext(stub.client, { role: 'staff' }));
+    const ids = Array.from({ length: 101 }, (_x, i) => `id-${i}`);
+    await expect(svc.listPlanRows({ ids })).rejects.toMatchObject({ code: 'validation_error' });
   });
 });
