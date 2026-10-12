@@ -33,6 +33,18 @@
 #      live record; no membership crosses organizations; no item row changed
 #      except the split's SKU (3) and the edits (5, 6).
 #
+# After the races (fix round 1, completeness review C2, as Ungroup's PR stage
+# evidence review EV-2) the log records what the run left: the md5 of every
+# 0400 function's body (to compare with the kit's), that no planted function
+# is left, the fixture rows left after a cleanup run in the open (0), and the
+# run's wall time.
+#
+# The item_changed refusal (a record deleted, moved or put out of the
+# caller's write scope between apply's first read and its FOR SHARE lock) is
+# not raced here: that window lies between two statements of one call, and
+# no session can commit into it on purpose without a pause planted inside
+# the function. It is defensive (recorded in G2-NOTES, C7).
+#
 # Runs against the LOCAL stack only (docker container supabase_db_stockpilot)
 # with 0399 and 0400 applied. Fixtures are committed under the 04001111-...
 # namespace and removed at the start, at the end and by the EXIT trap. Exit
@@ -126,6 +138,7 @@ trap 'exit 143' TERM
 trap 'exit 129' HUP
 
 cleanup || exit 1
+T_START=$(now_ms)
 
 if [ "$(q "select count(*) from pg_proc where proname in ('apply_item_grouping', 'split_item_sku') and pronamespace = 'public'::regnamespace")" != "2" ]; then
   echo "0399 and 0400 are not both applied on this stack"; exit 1
@@ -305,6 +318,15 @@ fi
 check "7: no open group without a live record; no row in a closed group; no membership across organizations" \
   "$(q "select (select count(*) from public.item_display_groups g where g.organization_id = '$ORG' and g.closed_at is null and not exists (select 1 from public.item_display_group_members m join public.inventory_items i on i.id = m.item_id where m.group_id = g.id and i.deleted_at is null)) || '/' || (select count(*) from public.item_display_group_members m join public.item_display_groups g on g.id = m.group_id where g.organization_id = '$ORG' and g.closed_at is not null) || '/' || (select count(*) from public.item_display_group_members m join public.inventory_items i on i.id = m.item_id where m.organization_id <> i.organization_id)")" \
   "0/0/0"
+
+# ═══ After: what the run left (C2, as Ungroup's EV-2) ═════════════════════
+wait
+echo "after: 0400 function md5s: $(q "select string_agg(p.proname || '=' || md5(p.prosrc), ' ' order by p.proname) from pg_proc p where p.pronamespace = 'public'::regnamespace and (p.proname like '\_display\_grouping\_%' or p.proname in ('apply_item_grouping', 'item_grouping_preview', 'tg_item_display_group_members_consistency'))")"
+check "after: no planted function is left" "$(q "select count(*) from pg_proc where proname like '\_zz0400\_%'")" "0"
+if cleanup; then ok "after: cleanup removed every fixture"; else bad "after: cleanup failed"; fi
+check "after: fixture rows left (items, groups, memberships, requests, audit rows, the organization, the users)" \
+  "$(q "select (select count(*) from public.inventory_items where organization_id = '$ORG') + (select count(*) from public.item_display_groups where organization_id = '$ORG') + (select count(*) from public.item_display_group_members where organization_id = '$ORG') + (select count(*) from public.item_grouping_requests where organization_id = '$ORG') + (select count(*) from public.audit_logs where organization_id = '$ORG') + (select count(*) from public.organizations where id = '$ORG') + (select count(*) from auth.users where id in ('$MGR', '$MGR2'))")" "0"
+echo "wall time: $(( ($(now_ms) - T_START) / 1000 )) s"
 
 echo
 if [ "$FAILS" -eq 0 ]; then echo "all checks passed"; else echo "$FAILS check(s) failed"; fi
