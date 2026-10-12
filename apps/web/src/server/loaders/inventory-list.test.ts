@@ -622,6 +622,10 @@ function cachedRow(over: Partial<InventoryListCachedRow> = {}): InventoryListCac
     variant_size_system: null,
     jersey_number: null,
     variant_key: null,
+    // Group selected (0400): no display group.
+    display_group_id: null,
+    display_group_name: null,
+    display_group_version: null,
     ...over,
   };
 }
@@ -1153,7 +1157,9 @@ describe('sub-loader cache wiring', () => {
     // (one-time cold recompute) — bump deliberately, never accidentally.
     expect(calls.map(([, keyParts]) => keyParts[0]).sort()).toEqual([
       // v6 = Items page 1 is the planned group-aware page (+ firstPage).
-      'inventory-list-v6',
+      // v7 (Group selected, 2026-10-12) = rows carry their display group and
+      // page 1 is planned with explicit groups as units.
+      'inventory-list-v7',
       'inventory-lookups-v1',
       // v2 = cold fill moved to the inventory_trend_buckets SQL
       // aggregate (mig 0223); provenance changed, so the key bumped.
@@ -1409,8 +1415,10 @@ describe('loadInventoryDataset (instant-mode full-view rows)', () => {
       expect(sizes).toEqual(Array.from({ length: 20 }, () => 100));
     }
     // The main row read (1) is done before the second wave starts; then both
-    // tables' 20 batches are in flight together.
-    expect(maxInFlight).toBe(40);
+    // tables' 20 batches are in flight together, with the organization's two
+    // display group reads (Group selected, 2026-10-12: memberships and open
+    // groups, one each, not per id).
+    expect(maxInFlight).toBe(42);
   });
 
   it('over-cap view → resolves null WITHOUT fetching rows, and the cached fn THROWS (so "too large" — like null — is never cached)', async () => {
@@ -1429,7 +1437,7 @@ describe('loadInventoryDataset (instant-mode full-view rows)', () => {
     // would be written into the shared entry and served for a TTL.
     const datasetCall = vi
       .mocked(unstable_cache)
-      .mock.calls.find(([, keyParts]) => (keyParts as string[])[0] === 'inventory-dataset-v2');
+      .mock.calls.find(([, keyParts]) => (keyParts as string[])[0] === 'inventory-dataset-v3');
     expect(datasetCall).toBeDefined();
     const cachedFn = datasetCall![0] as (o: string, w: string, v: string) => Promise<unknown>;
     await expect(cachedFn('org-1', 'all', 'items')).rejects.toThrow(/INSTANT_MODE_MAX_ROWS/);
@@ -1460,7 +1468,7 @@ describe('loadInventoryDataset (instant-mode full-view rows)', () => {
     );
   });
 
-  it('caches under the SAME org tag revalidateInventoryList expires, keyPart inventory-dataset-v2, 60s TTL (write-path invalidation covers instant mode with zero extra wiring)', async () => {
+  it('caches under the SAME org tag revalidateInventoryList expires, keyPart inventory-dataset-v3, 60s TTL (write-path invalidation covers instant mode with zero extra wiring)', async () => {
     fetchAllRowsInvokesBuildPage();
     createAdminClientMock.mockReturnValue(
       makeRecordingAdmin({
@@ -1472,7 +1480,7 @@ describe('loadInventoryDataset (instant-mode full-view rows)', () => {
 
     const call = vi
       .mocked(unstable_cache)
-      .mock.calls.find(([, keyParts]) => (keyParts as string[])[0] === 'inventory-dataset-v2') as
+      .mock.calls.find(([, keyParts]) => (keyParts as string[])[0] === 'inventory-dataset-v3') as
       | [unknown, string[], { revalidate: number; tags: string[] }]
       | undefined;
     expect(call).toBeDefined();

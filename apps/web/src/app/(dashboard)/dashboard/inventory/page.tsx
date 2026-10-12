@@ -37,6 +37,10 @@ import { CategoriesService } from '@/server/services/categories';
 import { ChartersService } from '@/server/services/charters';
 import { InventoryService } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
+import {
+  displayGroupFields,
+  readDisplayGroupsByItemIds,
+} from '@/server/services/lib/display-groups';
 import { LocationsService } from '@/server/services/locations';
 import { getItemTrends } from '@/server/services/movements';
 import { SavedViewsService } from '@/server/services/saved-views';
@@ -782,7 +786,7 @@ async function inventoryTableSection({
       id: i.id,
       quantityOnHand: i.quantity_on_hand,
     }));
-    const [trends, imagesById, placementMap] = await Promise.all([
+    const [trends, imagesById, placementMap, displayGroups] = await Promise.all([
       trendBuckets
         ? Promise.resolve(deriveInventoryTrends(trendInputs, trendBuckets))
         : tagged('getItemTrends', getItemTrends(trendInputs)),
@@ -795,6 +799,13 @@ async function inventoryTableSection({
       ),
       // Per-(item, location) holdings so the list shows ONE LINE PER RACK.
       tagged('inventorySvc.placementBreakdown', inventorySvc.placementBreakdown(itemIdList)),
+      // Group selected (0400): the page's records' display groups, through
+      // the caller's own client (RLS), 100 ids per request. Never fails the
+      // page: a failed read renders the records ungrouped.
+      tagged(
+        'displayGroups.byItemIds',
+        readDisplayGroupsByItemIds(createClient(), sessionCtx.organizationId, itemIdList),
+      ),
     ]);
     const itemsWithImages = inventory.items.map((i) => {
       const cf = (i as { custom_fields?: Record<string, unknown> | null }).custom_fields;
@@ -812,6 +823,7 @@ async function inventoryTableSection({
         image_thumb_url: img?.thumbUrl ?? null,
         // base64 LQIP for next/image's blurDataURL; null pre-0122.
         image_lqip: img?.lqip ?? null,
+        ...displayGroupFields(displayGroups.get(i.id)),
       };
     });
 

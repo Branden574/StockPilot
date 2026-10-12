@@ -4,15 +4,24 @@ import { revalidateTag } from 'next/cache';
 
 import {
   formatPlacementLabel,
+  groupingPreviewKey,
   GROUPING_ERROR_WORDS,
   GROUPING_MAX_ITEMS,
   mapGroupingError,
+  parseGroupingBody,
+  parseGroupingOutcome,
+  parseGroupingPreview,
   parseSplitSkuBody,
   parseSplitSkuOutcome,
   resolvePlacement,
   sharedSkuKey,
+  toGroupingRpcRequest,
   toSplitSkuRpcRequest,
+  type GroupingAction,
   type GroupingDbError,
+  type GroupingOutcome,
+  type GroupingPreview,
+  type GroupingPreviewRecord,
   type GroupingSurface,
   type SplitCandidate,
   type SplitSkuOutcomeItem,
@@ -23,10 +32,15 @@ import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import { fetchRackHoldingsByItem } from './rack-holdings';
 
 /**
- * Grouping writes, shared by the web action (server/actions/item-grouping.ts)
- * and the phone's bearer route (POST /api/v1/items/ungroup). Slice G1 is
+ * Grouping writes, shared by the web actions (server/actions/item-grouping.ts)
+ * and the phone's bearer routes (POST /api/v1/items/ungroup,
+ * /api/v1/items/grouping and /api/v1/items/grouping/preview). Slice G1 is
  * Ungroup: split_item_sku (migration 0399) gives each selected record that
- * shares its SKU a fresh SKU of its own, changing that record only.
+ * shares its SKU a fresh SKU of its own, changing that record only. Slice G2
+ * is Group selected: apply_item_grouping (migration 0400) puts records in an
+ * explicit display group, takes them out, or renames a group, writing only the
+ * group tables (never an item row, a SKU, a charter or stock); its review
+ * reads item_grouping_preview as the caller.
  *
  * It never calls InventoryService.update(): that method's Model B fan-out
  * re-keys every record of a SKU together, which is exactly why a group could
@@ -72,6 +86,30 @@ export interface UngroupResult {
   items: SplitSkuOutcomeItem[];
 }
 
+/** A selected record as Group selected's review shows it: the preview's facts
+ *  (read as the caller) plus where it is, its charter and warehouse names and
+ *  its picture, each read under the caller's RLS. */
+export interface GroupingReviewRecord extends GroupingPreviewRecord {
+  charterName: string | null;
+  warehouseName: string | null;
+  /** The rack line, as the lists say it (core resolvePlacement), or null. */
+  placementLabel: string | null;
+  /** A signed thumbnail URL, or null. */
+  imageUrl: string | null;
+}
+
+export interface GroupingReview extends Omit<GroupingPreview, 'records'> {
+  records: GroupingReviewRecord[];
+  /** What this answer is for (organization, the sorted ids, the target):
+   *  the dialog ignores an answer whose key is not its current selection's. */
+  previewKey: string;
+}
+
+export interface GroupingResult {
+  organizationId: string;
+  outcome: GroupingOutcome;
+}
+
 interface Options {
   /** Injected by tests; real calls wait 150 to 400 ms between busy retries. */
   sleep?: (ms: number) => Promise<void>;
@@ -79,12 +117,12 @@ interface Options {
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-function refusal(error: GroupingDbError): ServiceError {
-  const m = mapGroupingError(error);
+function refusal(error: GroupingDbError, action: GroupingAction = 'split_sku'): ServiceError {
+  const m = mapGroupingError(error, action);
   if (m.code === 'internal_error') {
     return new ServiceError(
       'internal_error',
-      `split_item_sku: ${error.code ?? ''} ${error.message ?? ''}`.trim(),
+      `${action === 'split_sku' ? 'split_item_sku' : 'apply_item_grouping'}: ${error.code ?? ''} ${error.message ?? ''}`.trim(),
     );
   }
   return new ServiceError(m.code, m.message, {
@@ -315,6 +353,180 @@ export class ItemGroupingService {
         replay: outcome.replay,
         items: outcome.items,
       };
+    }
+  }
+
+  /**
+   * Group selected's review: the selected records the caller can read (the
+   * rest as a count), their current group, product family and whether the
+   * caller can edit each, the readable same-SKU records not selected, the
+   * candidate groups and the named target group's readable records
+   * (item_grouping_preview, SECURITY INVOKER: every read is the caller's),
+   * plus each record's rack line, charter, warehouse and picture, read under
+   * the caller's RLS too. Reads only; Cancel writes nothing.
+   */
+  async previewGroup(
+    itemIds: readonly string[],
+    groupId: string | null = null,
+  ): Promise<GroupingReview> {
+    gate(this.ctx);
+    if (itemIds.length > GROUPING_MAX_ITEMS) {
+      throw new ServiceError('validation_error', GROUPING_ERROR_WORDS.groupTooMany, {
+        reason: 'invalid',
+        field: 'item_ids',
+      });
+    }
+    if (!itemIds.every((id) => UUID.test(id)) || (groupId !== null && !UUID.test(groupId))) {
+      throw new ServiceError('validation_error', GROUPING_ERROR_WORDS.invalid, {
+        reason: 'invalid',
+        field: groupId !== null && !UUID.test(groupId) ? 'group_id' : 'item_ids',
+      });
+    }
+    const ids = [...new Set(itemIds.map((id) => id.toLowerCase()))];
+    const gid = groupId?.toLowerCase() ?? null;
+    const previewKey = groupingPreviewKey(this.ctx.organizationId, ids, gid);
+    if (ids.length === 0) {
+      return {
+        records: [],
+        unavailableCount: 0,
+        sameSkuSiblings: [],
+        candidateGroups: [],
+        targetGroup: null,
+        previewKey,
+      };
+    }
+    const { data, error } = await this.ctx.supabase.rpc('item_grouping_preview', {
+      p_request: {
+        organization_id: this.ctx.organizationId,
+        item_ids: ids,
+        ...(gid ? { group_id: gid } : {}),
+      },
+    });
+    if (error) throw refusal(error, 'group');
+    const preview = parseGroupingPreview(data);
+    if (!preview)
+      throw new ServiceError(
+        'internal_error',
+        'item_grouping_preview answered something unreadable',
+      );
+
+    const recordIds = preview.records.map((r) => r.id);
+    const charterIds = [
+      ...new Set(preview.records.map((r) => r.charterId).filter((v): v is string => !!v)),
+    ];
+    const warehouseIds = [
+      ...new Set(preview.records.map((r) => r.warehouseId).filter((v): v is string => !!v)),
+    ];
+    const named = async (table: 'charters' | 'warehouses', list: string[]) => {
+      if (list.length === 0) return new Map<string, string>();
+      const { data: rows, error: e } = await this.ctx.supabase
+        .from(table)
+        .select('id, name')
+        .eq('organization_id', this.ctx.organizationId)
+        // in-list-bound: one charter/warehouse per readable selected record, 100 at most
+        .in('id', list);
+      if (e) return new Map<string, string>();
+      return new Map(
+        ((rows ?? []) as Array<{ id: string; name: string }>).map((r) => [r.id, r.name]),
+      );
+    };
+    // Each read is decoration: a failure degrades to "no name / no picture",
+    // never to an error, and none is cached (pattern #13).
+    const [holdings, images, charters, warehouses] = await Promise.all([
+      fetchRackHoldingsByItem(this.ctx, recordIds),
+      // Loaded on demand: the image service pulls in the data cache helpers,
+      // which the split path (and its tests) never need.
+      import('./item-images')
+        .then(({ ItemImagesService }) =>
+          new ItemImagesService(this.ctx).primaryImagesWithThumbsForItems(recordIds),
+        )
+        .catch(() => new Map()),
+      named('charters', charterIds),
+      named('warehouses', warehouseIds),
+    ]);
+    const records: GroupingReviewRecord[] = preview.records.map((r) => {
+      const img = images.get(r.id) as { url?: string; thumbUrl?: string | null } | undefined;
+      return {
+        ...r,
+        charterName: r.charterId ? (charters.get(r.charterId) ?? null) : null,
+        warehouseName: r.warehouseId ? (warehouses.get(r.warehouseId) ?? null) : null,
+        placementLabel: formatPlacementLabel(
+          resolvePlacement({
+            itemType: r.itemType,
+            customFields: r.customFields,
+            binLocation: r.binLocation,
+            holdings: holdings.get(r.id) ?? [],
+          }),
+        ),
+        imageUrl: img?.thumbUrl ?? img?.url ?? null,
+      };
+    });
+    return { ...preview, records, previewKey };
+  }
+
+  /**
+   * Group selected, Remove from group and Rename: apply_item_grouping with the
+   * body the screen built (core GroupingBody). The organization and the account
+   * must be the ones this request runs as. A busy answer is retried at most
+   * twice with the SAME key; a replay answers the first outcome. After an
+   * applied answer (a replay included: the first answer may have been lost
+   * before its refresh) the Items/Books cache is refreshed for the
+   * organization, and the order catalog's tag with it (targeted, never a
+   * full-app refresh). A no-op wrote nothing and refreshes nothing.
+   */
+  async applyGrouping(raw: unknown, surface: GroupingSurface): Promise<GroupingResult> {
+    gate(this.ctx);
+    const parsed = parseGroupingBody(raw);
+    if (!parsed.ok) {
+      throw new ServiceError('validation_error', parsed.refusal.message, {
+        reason: parsed.refusal.reason,
+        field: parsed.refusal.field,
+      });
+    }
+    const body = parsed.body;
+    if (body.organizationId !== this.ctx.organizationId.toLowerCase()) {
+      throw new ServiceError('forbidden', GROUPING_ERROR_WORDS.workspaceChanged, {
+        reason: 'workspace_changed',
+      });
+    }
+    if (body.actorUserId !== this.ctx.userId.toLowerCase()) {
+      throw new ServiceError('forbidden', GROUPING_ERROR_WORDS.actorMismatch, {
+        reason: 'actor_mismatch',
+      });
+    }
+    const args = toGroupingRpcRequest(body, surface);
+
+    let attempt = 0;
+    for (;;) {
+      const { data, error } = await this.ctx.supabase.rpc('apply_item_grouping', args);
+      if (error) {
+        const mapped = mapGroupingError(error, body.action);
+        if (mapped.reason === 'busy' && attempt < UNGROUP_BUSY_RETRIES) {
+          attempt += 1;
+          await this.sleep(150 + Math.floor(Math.random() * 250));
+          continue;
+        }
+        throw refusal(error, body.action);
+      }
+      const outcome = parseGroupingOutcome(data);
+      if (!outcome) {
+        throw new ServiceError(
+          'internal_error',
+          'apply_item_grouping answered something unreadable',
+        );
+      }
+      if (outcome.outcome === 'applied') {
+        invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.grouping');
+        try {
+          revalidateTag(ORDER_CATALOG_TAG, 'max');
+        } catch (err) {
+          console.warn(
+            '[item-grouping] order catalog refresh skipped:',
+            err instanceof Error ? err.message : String(err),
+          );
+        }
+      }
+      return { organizationId: this.ctx.organizationId, outcome };
     }
   }
 }

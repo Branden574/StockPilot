@@ -37,7 +37,12 @@ import {
 import { CategoriesService } from '@/server/services/categories';
 import { ChartersService } from '@/server/services/charters';
 import { InventoryService } from '@/server/services/inventory';
+import { createClient } from '@/lib/supabase/server';
 import { ItemImagesService } from '@/server/services/item-images';
+import {
+  displayGroupFields,
+  readDisplayGroupsByItemIds,
+} from '@/server/services/lib/display-groups';
 import { LocationsService } from '@/server/services/locations';
 import { getItemTrends } from '@/server/services/movements';
 import { SavedViewsService } from '@/server/services/saved-views';
@@ -544,11 +549,19 @@ async function booksTableSection({
       id: i.id,
       quantityOnHand: i.quantity_on_hand,
     }));
-    const [trends, imagesById] = await Promise.all([
+    const [trends, imagesById, displayGroups] = await Promise.all([
       trendBuckets
         ? Promise.resolve(deriveInventoryTrends(trendInputs, trendBuckets))
         : getItemTrends(trendInputs),
       imagesSvc.primaryImagesWithThumbsForItems(inventory.items.map((i) => i.id)),
+      // Group selected (0400): the page's records' display groups, through
+      // the caller's own client (RLS), 100 ids per request. Never fails the
+      // page: a failed read renders the records ungrouped.
+      readDisplayGroupsByItemIds(
+        createClient(),
+        sessionCtx.organizationId,
+        inventory.items.map((i) => i.id),
+      ),
     ]);
     const itemsWithImages = inventory.items.map((i) => {
       const cf = (i as { custom_fields?: Record<string, unknown> | null })
@@ -563,6 +576,7 @@ async function booksTableSection({
         image_url: img?.url ?? cfThumb ?? null,
         image_thumb_url: img?.thumbUrl ?? null,
         image_lqip: img?.lqip ?? null,
+        ...displayGroupFields(displayGroups.get(i.id)),
       };
     });
 

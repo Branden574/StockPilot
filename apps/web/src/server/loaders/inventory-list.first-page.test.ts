@@ -47,6 +47,7 @@ vi.mock('@/server/services/item-images', () => ({
 
 import {
   countDistinctSkuLines,
+  countItemRowsByHeaderUnit,
   countItemRowsBySku,
   countPlacementRows,
   deriveInstantView,
@@ -80,6 +81,7 @@ async function instantPageOne(db: FixtureDb, warehouseKey = 'all') {
   expect(dataset).not.toBeNull();
   const derived = deriveInstantView(dataset!.items, DEFAULT_STATE, 'items', 30);
   const bySku = countItemRowsBySku(derived.filteredRows);
+  const byUnit = countItemRowsByHeaderUnit(derived.filteredRows);
   return {
     dataset: dataset!,
     derived,
@@ -94,6 +96,20 @@ async function instantPageOne(db: FixtureDb, warehouseKey = 'all') {
       skuItemRowCounts: [...new Set(derived.pageItems.map((r) => r.sku))]
         .filter((sku) => bySku.has(sku))
         .map((sku) => [sku, bySku.get(sku)!] as [string, number]),
+      // Group selected (2026-10-12): the header units on page 1 over the whole
+      // view (core's display rule). This fixture has no display group, so each
+      // unit is a SKU over its unclaimed records.
+      unitItemRowCounts: [
+        ...new Set(
+          derived.pageItems.map((r) =>
+            r.display_group_id && byUnit.has(`grp:${r.display_group_id}`)
+              ? `grp:${r.display_group_id}`
+              : `sku:${r.sku}`,
+          ),
+        ),
+      ]
+        .filter((k) => byUnit.has(k))
+        .map((k) => [k, byUnit.get(k)!] as [string, number]),
     },
   };
 }

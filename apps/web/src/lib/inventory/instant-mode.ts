@@ -56,7 +56,12 @@
  * sub-millisecond filter/sort passes on commodity hardware — Linear-
  * class feel with headroom above the largest current org (~251 rows).
  */
-import { parseRackLabel, sizeRunStyleKey } from '@stockpilot/core';
+import {
+  countItemRowsByDisplayGroup,
+  countUnclaimedItemRowsBySku,
+  makeDisplayUnitKeyer,
+  parseRackLabel,
+} from '@stockpilot/core';
 
 export const INSTANT_MODE_MAX_ROWS = 2000;
 
@@ -98,6 +103,12 @@ export interface InstantModeRow {
    *  is every row in every non-sports org, which keeps the legacy name
    *  fallback and pages byte-identically to before. */
   group_id?: string | null;
+  /** The record's explicit display group (Group selected, migration 0400),
+   *  read from item_display_group_members next to the rows. Read ONLY by
+   *  `runAwarePages` (through core's display rule) and the table's headers.
+   *  Optional: null/absent is a record in no group, and a view with none pages
+   *  exactly as before. */
+  display_group_id?: string | null;
 }
 
 /** One holding line, structurally identical to the loader's
@@ -498,45 +509,27 @@ export function sortInstantRows<T extends InstantModeRow>(
  * token the regex recognizes, so nothing but the group id can cluster them.
  */
 export function runAwarePages<
-  T extends { id: string; name: string; sku?: string | null; group_id?: string | null },
+  T extends {
+    id: string;
+    name: string;
+    sku?: string | null;
+    group_id?: string | null;
+    display_group_id?: string | null;
+  },
 >(
   sorted: readonly T[],
   pageSize: number,
   options?: { sizeRuns?: boolean },
 ): T[][] {
-  const withSizeRuns = options?.sizeRuns !== false;
-  /** Stored identity first, name regex second — mirrors `runKey`. The
-   *  `group:` prefix keeps the two key spaces disjoint so a group id can never
-   *  collide with a derived style key. */
-  const runKeyOf = (r: T): string | null => {
-    const gid = (r.group_id ?? '').trim();
-    if (gid) return `group:${gid}`;
-    return sizeRunStyleKey(r.name);
-  };
-  // Count keys over the whole set so lone members stay singletons.
-  const runCounts = new Map<string, number>();
-  const skuCounts = new Map<string, number>();
-  for (const r of sorted) {
-    if (withSizeRuns) {
-      const k = runKeyOf(r);
-      if (k) runCounts.set(k, (runCounts.get(k) ?? 0) + 1);
-    }
-    const s = (r.sku ?? '').trim();
-    if (s) skuCounts.set(s, (skuCounts.get(s) ?? 0) + 1);
-  }
-  // Unit key per row: SKU family first, then size run, else singleton. SKU
-  // still wins over a stored group for the same reason it wins over a name
-  // run — the renderer collapses same-SKU placements FIRST and marks that
-  // header non-groupable, so a unit keyed on the group would cluster rows the
-  // renderer never folds together.
-  const unitKeyOf = (r: T): string | null => {
-    const s = (r.sku ?? '').trim();
-    if (s && (skuCounts.get(s) ?? 0) >= 2) return `sku:${s}`;
-    if (!withSizeRuns) return null;
-    const k = runKeyOf(r);
-    if (k && (runCounts.get(k) ?? 0) >= 2) return `run:${k}`;
-    return null;
-  };
+  // Group selected (0400): the unit key is core's ONE display rule
+  // (makeDisplayUnitKeyer) -- explicit display group, then same-SKU family
+  // (on the RAW sku, the key the table's groupPlacementsBySku and the 0234
+  // index use; this function used to trim it), then size run / stored family,
+  // else a single row -- the rule the table renders with and the phone pages
+  // with, so a page never holds part of a unit the renderer draws as one.
+  // With no explicit groups the units are exactly the ones this function made
+  // before (core display-units.test.ts P3).
+  const unitKeyOf = makeDisplayUnitKeyer(sorted, { sizeRuns: options?.sizeRuns !== false });
   // Build units, clustering members at the unit's first-seen position.
   const units: T[][] = [];
   const unitOf = new Map<string, number>();
@@ -739,6 +732,16 @@ export interface InstantFirstPage {
   /** Item rows per raw SKU over the whole view, for the SKUs on page 1 only
    *  (the split detector's input). Pairs, not an object: a SKU is free text. */
   skuItemRowCounts: Array<[string, number]>;
+  /**
+   * Group selected (0400): records per HEADER UNIT over the whole view, for
+   * the units on page 1 only: 'grp:<display group id>' for an explicit group
+   * that forms, 'sku:<raw sku>' for a same-SKU family counted over the records
+   * no formed group claims. The headers' split detectors compare against these
+   * (the raw `skuItemRowCounts` would stamp a false "partial" on every partly
+   * grouped SKU). Optional: a payload cached before Group selected has none,
+   * and the table then falls back to the raw counts.
+   */
+  unitItemRowCounts?: Array<[string, number]>;
 }
 
 /**
@@ -760,6 +763,14 @@ export function planInstantFirstPage<T extends InstantModeRow>(
     const n = bySku.get(r.sku);
     if (n !== undefined) onPage.set(r.sku, n);
   }
+  const units = countItemRowsByHeaderUnit(view.filteredRows);
+  const unitsOnPage = new Map<string, number>();
+  for (const r of view.pageItems) {
+    const g = r.display_group_id ?? null;
+    const gk = g ? `grp:${g}` : null;
+    if (gk && units.has(gk)) unitsOnPage.set(gk, units.get(gk)!);
+    else if (units.has(`sku:${r.sku}`)) unitsOnPage.set(`sku:${r.sku}`, units.get(`sku:${r.sku}`)!);
+  }
   return {
     view,
     firstPage: {
@@ -768,8 +779,30 @@ export function planInstantFirstPage<T extends InstantModeRow>(
       distinctSkus: countDistinctSkuLines(view.filteredRows),
       placementRows: countPlacementRows(view.filteredRows, holdingLines),
       skuItemRowCounts: [...onPage],
+      unitItemRowCounts: [...unitsOnPage],
     },
   };
+}
+
+/**
+ * Records per HEADER UNIT over a set (Group selected, 0400): 'grp:<id>' for
+ * every explicit group that forms over it (two or more of its records
+ * present), 'sku:<raw sku>' for every SKU counted over the records no formed
+ * group claims. Core's display rule decides both (display-units.ts), so a
+ * header's split detector compares against the population it was built from.
+ */
+export function countItemRowsByHeaderUnit(
+  rows: readonly {
+    id: string;
+    name: string;
+    sku: string;
+    display_group_id?: string | null;
+  }[],
+): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const [g, n] of countItemRowsByDisplayGroup(rows)) out.set(`grp:${g}`, n);
+  for (const [k, n] of countUnclaimedItemRowsBySku(rows)) out.set(`sku:${k}`, n);
+  return out;
 }
 
 /* ---- placement expansion (Items page's one-line-per-rack) ------------------ */

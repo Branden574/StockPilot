@@ -828,6 +828,15 @@ WEB_TESTS=(
   # read or call and refuses another organization or actor.
   src/app/api/v1/items/ungroup/route.test.ts
   src/server/services/item-grouping.test.ts
+  # Group selected (0400): the phone's bearer routes authenticate, then
+  # rate-limit, and map refusals by reason (a 403 keeps its MFA reason); the
+  # service checks items:update before any read or call, refuses another
+  # organization or actor, and never imports InventoryService (no fan-out);
+  # no consumer path (exchange, PO import, reports, exports, order catalog,
+  # kits, families, scan) reads a display group.
+  src/app/api/v1/items/grouping/route.test.ts
+  src/server/services/item-grouping.group.test.ts
+  src/server/services/display-groups-consumers.guard.test.ts
   src/app/api/orders/[id]/signature/route.test.ts
   src/server/actions/po-imports.gates.test.ts
   src/server/actions/purchase-orders.gates.test.ts

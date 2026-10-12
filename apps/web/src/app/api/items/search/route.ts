@@ -9,6 +9,7 @@ import { isbnVariants } from '@/lib/books/isbn-variants';
 import { IN_FILTER_MAX_VALUES } from '@/lib/supabase/in-filter';
 import { InventoryService, type ItemListSort } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
+import { displayGroupFields, readDisplayGroupsByItemIds } from '@/server/services/lib/display-groups';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -282,9 +283,15 @@ export async function GET(req: Request): Promise<Response> {
   // Attach signed image URLs in batch. Mirrors what page.tsx does for
   // the SSR render so the client-side swap is visually consistent.
   const imagesSvc = new ItemImagesService(ctx);
-  const imagesById = await imagesSvc.primaryImagesForItems(
-    result.items.map((i) => i.id as string),
-  );
+  const hitIds = result.items.map((i) => i.id as string);
+  // Group selected (0400): each hit's display group, through the caller's own
+  // client (RLS: a membership only when its record is readable), so a search
+  // hit on one member keeps its group context ("In group <name>"). In parallel
+  // with the images; never fails the search.
+  const [imagesById, displayGroups] = await Promise.all([
+    imagesSvc.primaryImagesForItems(hitIds),
+    readDisplayGroupsByItemIds(ctx.supabase, ctx.organizationId, hitIds),
+  ]);
 
   const items = result.items.map((i) => {
     const cf = (i as { custom_fields?: Record<string, unknown> | null })
@@ -323,6 +330,7 @@ export async function GET(req: Request): Promise<Response> {
       updated_at: i.updated_at as string,
       image_url:
         imagesById.get(i.id as string) ?? cfThumb ?? null,
+      ...displayGroupFields(displayGroups.get(i.id as string)),
     };
   });
 
