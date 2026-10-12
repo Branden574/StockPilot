@@ -8022,7 +8022,8 @@ describe('requesters ask for an exchange themselves (returns RX-3) is published'
  * only, no migration): held as a DRAFT until its web deploy is live, the
  * Demo Co RMA's history (RMA-20261012-D36F7F) was re-read on the web and the
  * phone, and returns RX-4's release, which announces Close the rest, is
- * published. Pinned by id.
+ * published (#350 published it at 2026-10-12T06:13Z; the guard below still
+ * checks it). Pinned by id.
  */
 describe("a return's history shows when the replacement was handed over (D-H1) is held as a draft", () => {
   const ID = 'returns-history-hand-over-2026-10';
@@ -8043,12 +8044,18 @@ describe("a return's history shows when the replacement was handed over (D-H1) i
     expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
   });
 
-  // Drafts sit above the newest published release, newest first. Its
-  // placeholder is dated after returns RX-4's draft placeholder, so it stays
-  // the newest when RX-4 is published with its real, earlier date.
-  it("is the newest draft, at the top directly above returns RX-4's, dated after every release", () => {
+  // Drafts sit above the newest published release, newest first. Re-pinned
+  // at the PR stage of the return history hand-over fix (D-H1, 2026-10-12;
+  // was: "is the newest draft, at the top directly above returns RX-4's"
+  // draft): RX-4's release is published (#350, at 2026-10-12T06:13Z), so
+  // this one is the only draft, at the top directly above RX-4's release,
+  // the newest published one, and dated after every release.
+  it("is the only draft, at the top directly above returns RX-4's release (the newest published), dated after every release", () => {
     expect(RELEASES[0]?.id).toBe(ID);
     expect(RELEASES[1]?.id).toBe('returns-close-rest-2026-10');
+    expect(RELEASES[1]?.status).toBe('published');
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe('returns-close-rest-2026-10');
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([ID]);
     for (const r of RELEASES.filter((x) => x.id !== ID)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }

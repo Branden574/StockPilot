@@ -47,12 +47,13 @@ export const RELEASES: Release[] = [
     // web and the phone (the part's line at 04:13:50Z, before the close), and
     // returns RX-4's release (returns-close-rest-2026-10) is published: its
     // whyItMatters opens with Close the rest, which that release announces
-    // (fix round 1, review). The follow-up that publishes it sets
-    // 'published' and the real publishedAt and re-reads these words against
-    // what shipped. Newest first: drafts sit above the newest published
-    // release, so it sits at the top, dated after every release (a
-    // placeholder after RX-4's draft placeholder, 2026-10-16T17:10Z, so it
-    // stays newest when RX-4 is published with its real, earlier date).
+    // (fix round 1, review; #350 published it at 2026-10-12T06:13Z, and a
+    // registry test still checks the order). The follow-up that publishes it
+    // sets 'published' and the real publishedAt and re-reads these words
+    // against what shipped. Newest first: drafts sit above the newest
+    // published release, so it sits at the top, directly above returns RX-4's
+    // release, and is dated after every release (a placeholder; the
+    // publishing follow-up dates it).
     //
     // Who is told: whoever can open Returns (returns:read or returns:manage,
     // with Returns on), the people who read a return's history; the link is
