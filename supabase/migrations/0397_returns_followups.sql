@@ -66,7 +66,8 @@
 -- The functions (all plpgsql) lock no table, so they come first. Then one
 -- NOWAIT prelude (0390's, RX-1's and RX-2's pattern) takes the only table
 -- lock the rest needs: ACCESS EXCLUSIVE on return_decisions (DROP and ADD
--- CONSTRAINT; the new CHECKs scan its rows, 5 in production on 2026-10-11).
+-- CONSTRAINT; the new CHECKs scan its rows, a few dozen in production in
+-- October 2026; the lock footprint measured 1 ms from the prelude to the end).
 -- No policy is created or altered, so supautils takes nothing more. A busy
 -- table fails one attempt, its subtransaction releases what it took, and the
 -- next attempt starts after 50 to 150 ms holding nothing, up to 40 attempts;
