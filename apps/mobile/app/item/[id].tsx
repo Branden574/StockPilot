@@ -791,7 +791,7 @@ export default function ItemDetail() {
       ).catch(() => null),
       // Group selected (0400): the record's display group, read as the
       // member (RLS). A failed read says nothing (null).
-      readItemDisplayGroup(supabase, r.organization_id as string, r.id as string),
+      readItemDisplayGroup(supabase as never, r.organization_id as string, r.id as string),
     ]);
     if (seq !== loadSeq.current) return;
     const rackHoldings: RackHoldingLike[] = ((holdingResp?.data ?? []) as unknown as {
@@ -983,7 +983,7 @@ export default function ItemDetail() {
     if (!itemId || !org) return;
     let live = true;
     const off = onDisplayGroupsChanged(() => {
-      void readItemDisplayGroup(supabase, org, itemId).then((g) => {
+      void readItemDisplayGroup(supabase as never, org, itemId).then((g) => {
         if (live) setDisplayGroup(g);
       });
     });

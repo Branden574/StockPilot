@@ -50,9 +50,12 @@ export const MEMBERSHIP_SELECT =
   'item_id, group_id, item_display_groups!item_display_group_members_group_fk(id, name, version)';
 
 /** A minimal Supabase client shape, so this module stays testable (the
- *  screens pass `supabase`, the tests a recording fake). */
+ *  screens pass `supabase as never`, the tests a recording fake). Each read
+ *  names its table and select right at `.from(...).select(...)`, so the
+ *  PostgREST embed guard (apps/web/src/test/postgrest-embeds.guard.test.ts)
+ *  resolves the embed and checks it against the relationship snapshot. */
 interface MembershipClient {
-  from: (table: string) => unknown;
+  from: (table: string) => MembershipQuery;
 }
 
 interface MembershipQuery {
@@ -61,10 +64,6 @@ interface MembershipQuery {
   order: (c: string, o: { ascending: boolean }) => MembershipQuery;
   range: (from: number, to: number) => PromiseLike<PageResult<DisplayGroupMembershipRow>>;
   limit: (n: number) => PromiseLike<PageResult<DisplayGroupMembershipRow>>;
-}
-
-function members(client: MembershipClient): MembershipQuery {
-  return client.from('item_display_group_members') as MembershipQuery;
 }
 
 /**
@@ -79,7 +78,8 @@ export async function readDisplayGroups(
 ): Promise<Map<string, DisplayGroupRef>> {
   try {
     const rows = await fetchAllRows<DisplayGroupMembershipRow>((from, to) =>
-      members(client)
+      client
+        .from('item_display_group_members')
         .select(MEMBERSHIP_SELECT)
         .eq('organization_id', organizationId)
         .order('item_id', { ascending: true })
@@ -103,7 +103,8 @@ export async function readItemDisplayGroup(
   itemId: string,
 ): Promise<DisplayGroupRef | null> {
   try {
-    const { data, error } = await members(client)
+    const { data, error } = await client
+      .from('item_display_group_members')
       .select(MEMBERSHIP_SELECT)
       .eq('organization_id', organizationId)
       .eq('item_id', itemId)

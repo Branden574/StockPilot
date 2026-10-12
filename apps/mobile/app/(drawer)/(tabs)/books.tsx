@@ -438,7 +438,7 @@ export default function BooksScreen() {
       // Group selected (0400): the memberships, read beside the rows (never a
       // column of them). It never fails the list: a failed read groups
       // nothing, and the cards render as they always did.
-      const groupsRead = readDisplayGroups(supabase, orgId);
+      const groupsRead = readDisplayGroups(supabase as never, orgId);
       const { data, count, error, status: listStatus } = await scoped(BOOK_COLUMNS, { count: 'exact' })
         .order(ord.col, { ascending: ord.asc })
         .order('id', { ascending: true })
@@ -534,7 +534,7 @@ export default function BooksScreen() {
     if (!orgId) return;
     let live = true;
     const off = onDisplayGroupsChanged(() => {
-      void readDisplayGroups(supabase, orgId).then((next) => {
+      void readDisplayGroups(supabase as never, orgId).then((next) => {
         if (live) setDisplayGroups(next);
       });
     });

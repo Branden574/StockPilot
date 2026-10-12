@@ -487,7 +487,7 @@ export default function Inventory() {
       // Group selected (0400): the memberships, read beside the rows (never a
       // column of them). It never fails the list: a failed read groups
       // nothing, and the rows render as they always did.
-      const groupsRead = readDisplayGroups(supabase, orgIdParam);
+      const groupsRead = readDisplayGroups(supabase as never, orgIdParam);
       const { data, count, error, status: listStatus } =
         f.locationIds.length > 0
           ? await listRead(ITEM_COLUMNS_AT_LOCATIONS)
@@ -604,7 +604,7 @@ export default function Inventory() {
     if (!orgId) return;
     let live = true;
     const off = onDisplayGroupsChanged(() => {
-      void readDisplayGroups(supabase, orgId).then((next) => {
+      void readDisplayGroups(supabase as never, orgId).then((next) => {
         if (live) setDisplayGroups(next);
       });
     });
