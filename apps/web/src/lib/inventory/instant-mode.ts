@@ -776,8 +776,8 @@ export function planInstantFirstPage<T extends InstantModeRow>(
  *  formed explicit group, else 'sku:<raw>'). Shared by the planned first page
  *  and the planned server page so the two can never count differently. */
 function pageUnitCounts(
-  wholeSet: readonly Pick<InstantModeRow, 'id' | 'sku' | 'display_group_id'>[],
-  pageItems: readonly Pick<InstantModeRow, 'id' | 'sku' | 'display_group_id'>[],
+  wholeSet: readonly Pick<InstantModeRow, 'id' | 'sku' | 'name' | 'display_group_id'>[],
+  pageItems: readonly Pick<InstantModeRow, 'id' | 'sku' | 'name' | 'display_group_id'>[],
 ): { skuItemRowCounts: Array<[string, number]>; unitItemRowCounts: Array<[string, number]> } {
   const bySku = countItemRowsBySku(wholeSet);
   const onPage = new Map<string, number>();

@@ -14,6 +14,7 @@ import type { PlaceDest } from '@/lib/locations/destination-option';
 import { isRackShelfLocation, isSystemLocation } from '@/lib/locations/groups';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { INSTANT_MODE_MAX_ROWS } from '@/lib/inventory/instant-mode';
 import { encodedInValueLength, IN_FILTER_MAX_VALUES } from '@/lib/supabase/in-filter';
 
 import type {
@@ -427,6 +428,13 @@ export type ItemListSort =
   | 'created_asc';
 
 export interface ItemListFilters {
+  /**
+   * Phase 2 of the grouping brief: the totals of the WHOLE filtered view,
+   * already read by listPlanRows for a group-aware page (planGroupAwarePage).
+   * list() then reads only the planned page (`ids`) and runs no value scan of
+   * its own; `total` and `valueOnHand` are these.
+   */
+  plannedTotals?: { total: number; valueOnHand: number };
   q?: string;
   /**
    * Exact-match filter on inventory_items.barcode. Used by the
@@ -1151,6 +1159,26 @@ function keepGranted<Row extends { category_id: string | null }>(
   return rows.filter((r) => r.category_id !== null && grants.has(r.category_id));
 }
 
+/** The light columns a group-aware page is planned from (listPlanRows):
+ *  what sortInstantRows and runAwarePages read, the value footer, the
+ *  low-stock rule and a viewer's grants. */
+const PLAN_ROW_COLUMNS =
+  'id, sku, name, group_id, quantity_on_hand, unit_cost, reorder_point, category_id, status, created_at, updated_at';
+
+export interface PlanRow {
+  id: string;
+  sku: string;
+  name: string;
+  group_id: string | null;
+  quantity_on_hand: number;
+  unit_cost: number;
+  reorder_point: number;
+  category_id: string | null;
+  status: 'active' | 'archived' | 'discontinued';
+  created_at: string;
+  updated_at: string;
+}
+
 export class InventoryService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -1200,6 +1228,183 @@ export class InventoryService {
     const read = new UserCategoriesService(this.ctx).getGrantedCategoryIdsForViewer(this.ctx.userId);
     read.catch(() => {});
     return read;
+  }
+
+  /**
+   * One window of the skinny scan of the WHOLE filtered view: every filter
+   * list()'s main query applies (warehouse scope, status, expected, search,
+   * barcode, category, location, supplier, charter, stock, item type,
+   * bundles, rentals, dates), selecting only `columns`, ordered by id so the
+   * windows never overlap. list() sums the value from it; listPlanRows plans a
+   * group-aware page from it. `narrow` adds a filter the caller needs (a
+   * viewer's category grants).
+   */
+  private filteredScanPage(
+    filters: ItemListFilters,
+    access: { hasAllAccess: boolean; readableIds: string[] },
+    columns: string,
+    from: number,
+    to: number,
+    narrow?: (q: any) => any,
+  ) {
+    let sumQuery = this.ctx.supabase
+      .from('inventory_items')
+      .select(columns)
+      .eq('organization_id', this.ctx.organizationId)
+      .is('deleted_at', null);
+    if (!access.hasAllAccess) {
+      if (access.readableIds.length === 0) {
+        // Same early-return logic as the main query path above. We
+        // already returned earlier in this case; keep this guard for
+        // safety if the access guard moves.
+      } else {
+        // in-list-bound: the caller's readable warehouses (an org's handful of sites)
+        sumQuery = sumQuery.in('warehouse_id', access.readableIds);
+      }
+    } else if (filters.warehouseId) {
+      sumQuery = sumQuery.eq('warehouse_id', filters.warehouseId);
+    }
+    if (!filters.status || filters.status === 'active') {
+      sumQuery = sumQuery.eq('status', 'active');
+    } else if (filters.status !== 'all') {
+      sumQuery = sumQuery.eq('status', filters.status);
+    }
+    if (filters.autoArchived) {
+      sumQuery = sumQuery.eq('auto_archived', true);
+    }
+    // Mirror the main query's expected-items predicate (mig 0277),
+    // including the tri-state 'any' escape hatch (no predicate).
+    if (filters.expected !== 'any') {
+      sumQuery = sumQuery.eq('awaiting_first_receipt', filters.expected === true);
+    }
+    if (filters.q && filters.q.trim()) {
+      const clause = buildItemSearchClause(filters.q, filters.isbnVariants);
+      if (clause) sumQuery = sumQuery.or(clause);
+    }
+    if (filters.barcode && filters.barcode.trim()) {
+      sumQuery = sumQuery.eq('barcode', filters.barcode.trim());
+    }
+    if (filters.categoryIds && filters.categoryIds.length > 0) {
+      sumQuery = sumQuery.in('category_id', filters.categoryIds);
+    } else if (filters.categoryId) {
+      sumQuery = sumQuery.eq('category_id', filters.categoryId);
+    }
+    if (filters.locationIds && filters.locationIds.length > 0) {
+      sumQuery = sumQuery.in('primary_location_id', filters.locationIds);
+    } else if (filters.locationId) {
+      sumQuery = sumQuery.eq('primary_location_id', filters.locationId);
+    }
+    if (filters.supplierIds && filters.supplierIds.length > 0) {
+      sumQuery = sumQuery.in('supplier_id', filters.supplierIds);
+    } else if (filters.supplierId) {
+      sumQuery = sumQuery.eq('supplier_id', filters.supplierId);
+    }
+    if (filters.charterIds && filters.charterIds.length > 0) {
+      const includesGeneric = filters.charterIds.includes('generic');
+      const realIds = filters.charterIds.filter((id) => id !== 'generic' && CHARTER_ID_RE.test(id));
+      if (includesGeneric && realIds.length > 0) {
+        const list = realIds.map((id) => `"${id}"`).join(',');
+        sumQuery = sumQuery.or(`charter_id.is.null,charter_id.in.(${list})`);
+      } else if (includesGeneric) {
+        sumQuery = sumQuery.is('charter_id', null);
+      } else if (realIds.length > 0) {
+        sumQuery = sumQuery.in('charter_id', realIds);
+      }
+    }
+    if (filters.outOfStock) sumQuery = sumQuery.lte('quantity_on_hand', 0);
+    if (filters.lowStock) {
+      sumQuery = sumQuery.or('reorder_point.gt.0,quantity_on_hand.lte.0');
+    }
+    if (filters.itemTypes && filters.itemTypes.length > 0) {
+      // in-list-bound: item types are a fixed enum of four values
+      sumQuery = sumQuery.in('item_type', filters.itemTypes);
+    } else if (filters.itemType === undefined) {
+      sumQuery = sumQuery.eq('item_type', 'product');
+    } else if (filters.itemType !== 'all') {
+      sumQuery = sumQuery.eq('item_type', filters.itemType);
+    }
+    if (filters.excludeBundles) {
+      sumQuery = sumQuery.or('is_bundle.is.null,is_bundle.eq.false');
+    }
+    sumQuery = sumQuery.eq('is_rental', filters.rentalsOnly === true);
+    if (filters.createdSince) sumQuery = sumQuery.gte('created_at', filters.createdSince);
+    if (filters.createdUntil) sumQuery = sumQuery.lt('created_at', filters.createdUntil);
+    if (filters.updatedSince) sumQuery = sumQuery.gte('updated_at', filters.updatedSince);
+    if (filters.updatedUntil) sumQuery = sumQuery.lt('updated_at', filters.updatedUntil);
+    if (narrow) sumQuery = narrow(sumQuery);
+    // Stable sort keeps each row on exactly one page across the loop.
+    return sumQuery.order('id', { ascending: true }).range(from, to);
+  }
+
+  /**
+   * Phase 2 of the grouping brief (owner 2026-10-11): the WHOLE filtered view
+   * as light rows, for planning a staff member's or viewer's page group-aware
+   * (planGroupAwarePage), so a size run, a SKU family or a display group whose
+   * records sort far apart is never split across their pages (the reported XS
+   * alone on page 2). Same scope as list(): the caller's own client and RLS,
+   * their warehouses, a viewer's category grants, every list() filter
+   * (filteredScanPage), the low-stock rule. Read in 1000-row windows; null
+   * when the view holds more than INSTANT_MODE_MAX_ROWS records (the caller
+   * keeps fixed pages, as managers' instant mode does past the same cap).
+   */
+  async listPlanRows(filters: ItemListFilters = {}): Promise<{
+    rows: PlanRow[];
+    total: number;
+    valueOnHand: number;
+  } | null> {
+    const viewerGrantsRead = this.viewerCategoryGrants();
+    const access = await getWarehouseAccess(this.ctx);
+    const empty = { rows: [] as PlanRow[], total: 0, valueOnHand: 0 };
+    if (!access.hasAllAccess && access.readableIds.length === 0) return empty;
+    // A viewer's category grants, as list() applies them: in the request when
+    // they fit the URL, else on the rows read.
+    let grantsInUrl: string[] | null = null;
+    let granted: Set<string> | null = null;
+    if (this.ctx.role === 'viewer') {
+      try {
+        const cats = await viewerGrantsRead;
+        if (cats !== null) {
+          if (cats.size === 0) return empty;
+          if (grantsFitInUrl(cats)) grantsInUrl = [...cats];
+          // Checked on the rows too, whichever way they were read: a record
+          // outside the grants never plans a page.
+          granted = cats;
+        }
+      } catch {
+        // As list(): the DB RLS policy still enforces the same visibility.
+      }
+    }
+    const window = (from: number, to: number) =>
+      this.filteredScanPage(filters, access, PLAN_ROW_COLUMNS, from, to, (q) =>
+        grantsInUrl
+          ? // in-list-bound: grantsFitInUrl keeps this under GRANTS_IN_URL_MAX_CHARS
+            q.in('category_id', grantsInUrl)
+          : q,
+      );
+    let rows: PlanRow[] = [];
+    for (let from = 0; from < INSTANT_MODE_MAX_ROWS; from += 1000) {
+      const { data, error } = await window(from, Math.min(from + 999, INSTANT_MODE_MAX_ROWS - 1));
+      if (error) throw new ServiceError('internal_error', error.message);
+      // The column list is a constant the builder cannot parse as a type.
+      const got = (data ?? []) as unknown as PlanRow[];
+      rows.push(...got);
+      if (got.length < 1000) break;
+    }
+    if (rows.length >= INSTANT_MODE_MAX_ROWS) {
+      // One row past the cap says the view is bigger than a plan covers.
+      const { data, error } = await window(INSTANT_MODE_MAX_ROWS, INSTANT_MODE_MAX_ROWS);
+      if (error) throw new ServiceError('internal_error', error.message);
+      if ((data ?? []).length > 0) return null;
+    }
+    rows = keepGranted(rows, granted);
+    if (filters.lowStock) {
+      rows = rows.filter((r) => r.quantity_on_hand <= r.reorder_point || r.quantity_on_hand <= 0);
+    }
+    const valueOnHand = rows.reduce(
+      (acc, r) => acc + (Number(r.quantity_on_hand) || 0) * (Number(r.unit_cost) || 0),
+      0,
+    );
+    return { rows, total: rows.length, valueOnHand };
   }
 
   async list(filters: ItemListFilters = {}) {
@@ -1445,100 +1650,28 @@ export class InventoryService {
     // the main list query exactly; only the column projection and the
     // pagination differ. Build per page so each `.range()` is applied to a
     // fresh query (reusing one builder would stack range headers).
-    const buildSumPage = (from: number, to: number) => {
-      let sumQuery = this.ctx.supabase
-        .from('inventory_items')
-        .select('quantity_on_hand, unit_cost, reorder_point')
-        .eq('organization_id', this.ctx.organizationId)
-        .is('deleted_at', null);
-      if (!access.hasAllAccess) {
-        if (access.readableIds.length === 0) {
-          // Same early-return logic as the main query path above. We
-          // already returned earlier in this case; keep this guard for
-          // safety if the access guard moves.
-        } else {
-          // in-list-bound: the caller's readable warehouses (an org's handful of sites)
-          sumQuery = sumQuery.in('warehouse_id', access.readableIds);
-        }
-      } else if (filters.warehouseId) {
-        sumQuery = sumQuery.eq('warehouse_id', filters.warehouseId);
-      }
-      if (!filters.status || filters.status === 'active') {
-        sumQuery = sumQuery.eq('status', 'active');
-      } else if (filters.status !== 'all') {
-        sumQuery = sumQuery.eq('status', filters.status);
-      }
-      if (filters.autoArchived) {
-        sumQuery = sumQuery.eq('auto_archived', true);
-      }
-      // Mirror the main query's expected-items predicate (mig 0277),
-      // including the tri-state 'any' escape hatch (no predicate).
-      if (filters.expected !== 'any') {
-        sumQuery = sumQuery.eq('awaiting_first_receipt', filters.expected === true);
-      }
-      if (filters.q && filters.q.trim()) {
-        const clause = buildItemSearchClause(filters.q, filters.isbnVariants);
-        if (clause) sumQuery = sumQuery.or(clause);
-      }
-      if (filters.barcode && filters.barcode.trim()) {
-        sumQuery = sumQuery.eq('barcode', filters.barcode.trim());
-      }
-      if (filters.categoryIds && filters.categoryIds.length > 0) {
-        sumQuery = sumQuery.in('category_id', filters.categoryIds);
-      } else if (filters.categoryId) {
-        sumQuery = sumQuery.eq('category_id', filters.categoryId);
-      }
-      if (filters.locationIds && filters.locationIds.length > 0) {
-        sumQuery = sumQuery.in('primary_location_id', filters.locationIds);
-      } else if (filters.locationId) {
-        sumQuery = sumQuery.eq('primary_location_id', filters.locationId);
-      }
-      if (filters.supplierIds && filters.supplierIds.length > 0) {
-        sumQuery = sumQuery.in('supplier_id', filters.supplierIds);
-      } else if (filters.supplierId) {
-        sumQuery = sumQuery.eq('supplier_id', filters.supplierId);
-      }
-      if (filters.charterIds && filters.charterIds.length > 0) {
-        const includesGeneric = filters.charterIds.includes('generic');
-        const realIds = filters.charterIds.filter((id) => id !== 'generic' && CHARTER_ID_RE.test(id));
-        if (includesGeneric && realIds.length > 0) {
-          const list = realIds.map((id) => `"${id}"`).join(',');
-          sumQuery = sumQuery.or(`charter_id.is.null,charter_id.in.(${list})`);
-        } else if (includesGeneric) {
-          sumQuery = sumQuery.is('charter_id', null);
-        } else if (realIds.length > 0) {
-          sumQuery = sumQuery.in('charter_id', realIds);
-        }
-      }
-      if (filters.outOfStock) sumQuery = sumQuery.lte('quantity_on_hand', 0);
-      if (filters.lowStock) {
-        sumQuery = sumQuery.or('reorder_point.gt.0,quantity_on_hand.lte.0');
-      }
-      if (filters.itemTypes && filters.itemTypes.length > 0) {
-        // in-list-bound: item types are a fixed enum of four values
-        sumQuery = sumQuery.in('item_type', filters.itemTypes);
-      } else if (filters.itemType === undefined) {
-        sumQuery = sumQuery.eq('item_type', 'product');
-      } else if (filters.itemType !== 'all') {
-        sumQuery = sumQuery.eq('item_type', filters.itemType);
-      }
-      if (filters.excludeBundles) {
-        sumQuery = sumQuery.or('is_bundle.is.null,is_bundle.eq.false');
-      }
-      sumQuery = sumQuery.eq('is_rental', filters.rentalsOnly === true);
-      if (filters.createdSince) sumQuery = sumQuery.gte('created_at', filters.createdSince);
-      if (filters.createdUntil) sumQuery = sumQuery.lt('created_at', filters.createdUntil);
-      if (filters.updatedSince) sumQuery = sumQuery.gte('updated_at', filters.updatedSince);
-      if (filters.updatedUntil) sumQuery = sumQuery.lt('updated_at', filters.updatedUntil);
-      // Stable sort keeps each row on exactly one page across the loop.
-      return sumQuery.order('id', { ascending: true }).range(from, to);
-    };
+    const buildSumPage = (from: number, to: number) =>
+      this.filteredScanPage(
+        filters,
+        access,
+        'quantity_on_hand, unit_cost, reorder_point',
+        from,
+        to,
+      ) as unknown as PromiseLike<{
+        data: Array<{ quantity_on_hand: number; unit_cost: number; reorder_point: number }> | null;
+        error: { message: string } | null;
+      }>;
 
+    // A planned group-aware page (Phase 2) brings the whole view's totals from
+    // listPlanRows: no second scan of the view for the page it already planned.
+    const planned = filters.plannedTotals ?? null;
     const [mainRes, sumRowsRaw] = await Promise.all([
       query,
-      fetchAllRows<{ quantity_on_hand: number; unit_cost: number; reorder_point: number }>(
-        (from, to) => buildSumPage(from, to),
-      ),
+      planned
+        ? Promise.resolve([] as Array<{ quantity_on_hand: number; unit_cost: number; reorder_point: number }>)
+        : fetchAllRows<{ quantity_on_hand: number; unit_cost: number; reorder_point: number }>(
+            (from, to) => buildSumPage(from, to),
+          ),
     ]);
     const { data, error, count } = mainRes;
     if (error) throw new ServiceError('internal_error', error.message);
@@ -1566,10 +1699,13 @@ export class InventoryService {
       totalCount = sumRows.length;
     }
 
-    const valueOnHand = sumRows.reduce(
-      (acc, r) => acc + (Number(r.quantity_on_hand) || 0) * (Number(r.unit_cost) || 0),
-      0,
-    );
+    const valueOnHand = planned
+      ? planned.valueOnHand
+      : sumRows.reduce(
+          (acc, r) => acc + (Number(r.quantity_on_hand) || 0) * (Number(r.unit_cost) || 0),
+          0,
+        );
+    if (planned) totalCount = planned.total;
 
     // Per-item placement, derived from the ACTUAL holdings (item_stock_levels),
     // NOT the free-text bin_location label (which can go stale — an item placed

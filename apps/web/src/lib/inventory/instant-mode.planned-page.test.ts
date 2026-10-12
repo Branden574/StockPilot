@@ -14,10 +14,7 @@ import { planGroupAwarePage, type InstantModeRow } from './instant-mode';
 
 const SIZES_ON_PAGE_1 = ['L', 'M', 'S', 'XL', 'XXL', 'XXXL', 'XXXXL'];
 
-function row(
-  id: string,
-  over: Partial<InstantModeRow> & { rank: number },
-): InstantModeRow {
+function row(id: string, over: Partial<InstantModeRow> & { rank: number }): InstantModeRow {
   const { rank, ...rest } = over;
   return {
     id,
@@ -39,7 +36,8 @@ function row(
 /** 60 plain records plus the T-shirt's eight sizes at the given ranks. */
 function view(sizeRanks: Record<string, number>, idOf = (size: string) => `tee-${size}`) {
   const rows: InstantModeRow[] = [];
-  for (let i = 1; i <= 60; i++) rows.push(row(`r${String(i).padStart(3, '0')}`, { rank: i * 2 + 1 }));
+  for (let i = 1; i <= 60; i++)
+    rows.push(row(`r${String(i).padStart(3, '0')}`, { rank: i * 2 + 1 }));
   for (const [size, rank] of Object.entries(sizeRanks)) {
     rows.push(row(idOf(size), { rank, name: `Limits Tee - ${size}`, sku: `TEE-${size}` }));
   }
@@ -56,7 +54,9 @@ describe('planGroupAwarePage: a server page that keeps every size run, SKU famil
     for (const s of [...SIZES_ON_PAGE_1, 'XS']) expect(plan.pageIds).toContain(`tee-${s}`);
     // No page after it shows XS again.
     for (let p = 2; p <= plan.pageCount; p++) {
-      expect(planGroupAwarePage(rows, 'updated_desc', p, 30, 'items').pageIds).not.toContain('tee-XS');
+      expect(planGroupAwarePage(rows, 'updated_desc', p, 30, 'items').pageIds).not.toContain(
+        'tee-XS',
+      );
     }
   });
 
@@ -66,8 +66,13 @@ describe('planGroupAwarePage: a server page that keeps every size run, SKU famil
     for (const idOf of [(s: string) => `tee-${s}`, (s: string) => `zz-${s === 'XS' ? '0' : s}`]) {
       const rows = view(ranks, idOf);
       const pageOf = new Map<string, number>();
-      for (let p = 1; p <= planGroupAwarePage(rows, 'updated_desc', 1, 30, 'items').pageCount; p++) {
-        for (const id of planGroupAwarePage(rows, 'updated_desc', p, 30, 'items').pageIds) pageOf.set(id, p);
+      for (
+        let p = 1;
+        p <= planGroupAwarePage(rows, 'updated_desc', 1, 30, 'items').pageCount;
+        p++
+      ) {
+        for (const id of planGroupAwarePage(rows, 'updated_desc', p, 30, 'items').pageIds)
+          pageOf.set(id, p);
       }
       const pages = new Set([...SIZES_ON_PAGE_1, 'XS'].map((s) => pageOf.get(idOf(s))));
       expect(pages.size).toBe(1);
@@ -93,8 +98,12 @@ describe('planGroupAwarePage: a server page that keeps every size run, SKU famil
 
   it('keeps a display group and a SKU family whole, and Books builds no size runs', () => {
     const rows: InstantModeRow[] = [];
-    for (let i = 1; i <= 40; i++) rows.push(row(`r${String(i).padStart(3, '0')}`, { rank: i * 2 + 1 }));
-    rows.push(row('g-1', { rank: 4, display_group_id: 'grp-1' }), row('g-2', { rank: 90, display_group_id: 'grp-1' }));
+    for (let i = 1; i <= 40; i++)
+      rows.push(row(`r${String(i).padStart(3, '0')}`, { rank: i * 2 + 1 }));
+    rows.push(
+      row('g-1', { rank: 4, display_group_id: 'grp-1' }),
+      row('g-2', { rank: 90, display_group_id: 'grp-1' }),
+    );
     rows.push(row('k-1', { rank: 6, sku: 'PAIR' }), row('k-2', { rank: 88, sku: 'PAIR' }));
     rows.push(row('t-S', { rank: 8, name: 'Tee - S' }), row('t-M', { rank: 86, name: 'Tee - M' }));
     const items = planGroupAwarePage(rows, 'updated_desc', 1, 30, 'items').pageIds;
@@ -107,9 +116,17 @@ describe('planGroupAwarePage: a server page that keeps every size run, SKU famil
 
   it('gives the pager and the headers what the whole view says: pages, the start, and the counts for the units on the page', () => {
     const rows: InstantModeRow[] = [];
-    for (let i = 1; i <= 45; i++) rows.push(row(`r${String(i).padStart(3, '0')}`, { rank: i * 2 + 1 }));
-    rows.push(row('k-1', { rank: 4, sku: 'PAIR' }), row('k-2', { rank: 80, sku: 'PAIR' }), row('k-3', { rank: 84, sku: 'PAIR' }));
-    rows.push(row('g-1', { rank: 6, display_group_id: 'grp-1' }), row('g-2', { rank: 82, display_group_id: 'grp-1' }));
+    for (let i = 1; i <= 45; i++)
+      rows.push(row(`r${String(i).padStart(3, '0')}`, { rank: i * 2 + 1 }));
+    rows.push(
+      row('k-1', { rank: 4, sku: 'PAIR' }),
+      row('k-2', { rank: 80, sku: 'PAIR' }),
+      row('k-3', { rank: 84, sku: 'PAIR' }),
+    );
+    rows.push(
+      row('g-1', { rank: 6, display_group_id: 'grp-1' }),
+      row('g-2', { rank: 82, display_group_id: 'grp-1' }),
+    );
     const plan = planGroupAwarePage(rows, 'updated_desc', 1, 30, 'items');
     expect(plan.page).toBe(1);
     expect(plan.pageStartIndex).toBe(0);
@@ -126,7 +143,13 @@ describe('planGroupAwarePage: a server page that keeps every size run, SKU famil
     expect(last.page).toBe(last.pageCount);
     expect(last.pageIds.length).toBeGreaterThan(0);
     const empty = planGroupAwarePage([], 'updated_desc', 3, 30, 'items');
-    expect(empty).toMatchObject({ page: 1, pageCount: 1, pageIds: [], pageStartIndex: 0, pageItemCount: 0 });
+    expect(empty).toMatchObject({
+      page: 1,
+      pageCount: 1,
+      pageIds: [],
+      pageStartIndex: 0,
+      pageItemCount: 0,
+    });
   });
 
   it('sorts as instant mode does, so a staff member and a manager see one order', () => {
