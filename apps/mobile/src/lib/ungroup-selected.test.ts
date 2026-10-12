@@ -366,6 +366,10 @@ describe('screen pins', () => {
     // rule, not only when a record is counted as changed.
     expect(screen).toContain('if (ungroupListMayBeStale(o)) {');
     expect(screen).not.toContain('if (o.parts.some((p) => p.changedItemIds.length > 0)) {');
+    // PR #358 review (2026-10-12): Review again sits beside Try again (never
+    // only in the else branch), as on the web.
+    expect(screen).toContain('{retryBody ? (');
+    expect(screen).not.toMatch(/\) : \(\s*<Button block variant="outline" onPress=\{reviewAgain\}>/);
     // UNGROUP_COPY words exist for every left-out reason the plan names.
     expect(Object.keys(UNGROUP_COPY.selectedLeftOutReason).sort()).toEqual(
       ['family_permission', 'family_sku', 'kit', 'not_writable', 'nothing'].sort(),

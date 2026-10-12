@@ -11,7 +11,7 @@ const h = vi.hoisted(() => ({
     itemIds: readonly string[];
     view: string;
     shownUnder?: ReadonlyMap<string, string>;
-    onDone: () => void;
+    onDone: (o: unknown) => void;
     onOpenChange: (v: boolean) => void;
   }>,
 }));
@@ -91,16 +91,57 @@ describe('BulkActions: Ungroup', () => {
     expect([...(h.dialogProps.at(-1)!.shownUnder ?? [])]).toEqual([...shown]);
   });
 
+  // Re-pinned 2026-10-12 (PR #358): onDone now carries the answer, and the
+  // selection clears only when something changed or a step applied.
   it('after a split it refreshes at once, and clears the selection when the dialog closes', async () => {
     const onClear = vi.fn();
     render(bar({ selectedIds: ['a'], ungroupItemIds: ['a'], onClear }));
     await userEvent.click(screen.getByRole('button', { name: /Ungroup/ }));
     const props = h.dialogProps.at(-1)!;
-    props.onDone();
+    props.onDone({
+      complete: true,
+      parts: [
+        {
+          kind: 'split',
+          status: 'applied',
+          changedItemIds: ['a'],
+          notChangedItemIds: [],
+          message: null,
+          reason: null,
+          retryable: false,
+        },
+      ],
+    });
     expect(h.refresh).toHaveBeenCalledTimes(1);
     expect(onClear).not.toHaveBeenCalled();
     props.onOpenChange(false);
     expect(onClear).toHaveBeenCalledTimes(1);
+  });
+
+  // PR #358 review (2026-10-12): an answer that was lost may have applied, so
+  // the list re-reads, but the ticks stay for another try after Done.
+  it('after a lost answer it refreshes, and keeps the selection when the dialog closes', async () => {
+    const onClear = vi.fn();
+    render(bar({ selectedIds: ['a'], ungroupItemIds: ['a'], onClear }));
+    await userEvent.click(screen.getByRole('button', { name: /Ungroup/ }));
+    const props = h.dialogProps.at(-1)!;
+    props.onDone({
+      complete: false,
+      parts: [
+        {
+          kind: 'split',
+          status: 'refused',
+          changedItemIds: [],
+          notChangedItemIds: ['a'],
+          message: 'The answer was lost.',
+          reason: 'unknown',
+          retryable: true,
+        },
+      ],
+    });
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    props.onOpenChange(false);
+    expect(onClear).not.toHaveBeenCalled();
   });
 
   it('closing without a split clears nothing', async () => {

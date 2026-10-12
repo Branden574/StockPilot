@@ -789,8 +789,11 @@ export function BulkActions({
           itemIds={ungroupOpen.ids}
           view={groupingView}
           shownUnder={ungroupOpen.shownUnder}
-          onDone={() => {
-            ungroupDone.current = true;
+          onDone={(o) => {
+            // Clear the ticks on close only when something changed or a step
+            // applied; after a lost answer they stay for another try.
+            if (o.parts.some((p) => p.changedItemIds.length > 0 || p.status === 'applied'))
+              ungroupDone.current = true;
             router.refresh();
           }}
           onOpenChange={(v) => {

@@ -551,6 +551,9 @@ describe('UngroupSelectedDialog', () => {
     );
     await screen.findByTestId(`ungroup-selected-row-${id(1)}`);
     await userEvent.click(screen.getByRole('button', { name: UNGROUP_COPY.confirm(1) }));
+    // PR #358 review (2026-10-12): Review again sits beside Try again, so a
+    // refusal that keeps coming back never leaves Try again as the only way on.
+    expect(await screen.findByRole('button', { name: 'Review again' })).toBeInTheDocument();
     await userEvent.click(await screen.findByRole('button', { name: 'Try again' }));
     const [first, second] = vi.mocked(ungroupSelectedAction).mock.calls.map((c) => c[0]);
     expect(second).toEqual(first);
@@ -590,6 +593,7 @@ describe('UngroupSelectedDialog', () => {
     );
     expect(screen.getByRole('alert')).not.toHaveTextContent('Not done');
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Review again' })).toBeInTheDocument();
     expect(onDone).toHaveBeenCalledTimes(1);
   });
 

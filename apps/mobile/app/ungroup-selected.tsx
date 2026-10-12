@@ -417,15 +417,16 @@ export default function UngroupSelectedScreen() {
         {phase === 'done' ? (
           <View style={{ gap: 10 }}>
             {outcome && !outcome.complete ? (
-              retryBody ? (
-                <Button block variant="outline" onPress={() => void send(retryBody)}>
-                  Try again
-                </Button>
-              ) : (
+              <>
+                {retryBody ? (
+                  <Button block variant="outline" onPress={() => void send(retryBody)}>
+                    Try again
+                  </Button>
+                ) : null}
                 <Button block variant="outline" onPress={reviewAgain}>
                   Review again
                 </Button>
-              )
+              </>
             ) : null}
             <Button block onPress={close}>
               Done

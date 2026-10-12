@@ -451,15 +451,16 @@ export function UngroupSelectedDialog({
           {phase === 'result' ? (
             <>
               {outcome && !outcome.complete ? (
-                retryBody ? (
-                  <Button variant="outline" onClick={() => void send(retryBody)}>
-                    Try again
-                  </Button>
-                ) : (
+                <>
+                  {retryBody ? (
+                    <Button variant="outline" onClick={() => void send(retryBody)}>
+                      Try again
+                    </Button>
+                  ) : null}
                   <Button variant="outline" onClick={reviewAgain}>
                     Review again
                   </Button>
-                )
+                </>
               ) : null}
               <Button ref={doneRef} onClick={() => onOpenChange(false)}>
                 Done
