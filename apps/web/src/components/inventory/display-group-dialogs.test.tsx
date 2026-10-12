@@ -467,6 +467,193 @@ describe('GroupSelectedDialog', () => {
     });
   });
 
+  // Recheck R2-1: a choice for a record already in another group was made for
+  // the group it was in then. Save is refused when a colleague moved the record
+  // meanwhile (membership_changed); Review again then finds it in another
+  // group, and the choice must not carry over to it.
+  const radio = (row: HTMLElement, words: string) =>
+    within(row).getByRole('radio', { name: new RegExp(`^${words}`) });
+  const membershipChanged = {
+    ok: false,
+    error: {
+      code: 'conflict',
+      message: GROUPING_ERROR_WORDS.membershipChanged,
+      details: { reason: 'membership_changed' },
+    },
+  };
+
+  it('a move chosen while a record was in one group does not carry over when Review again finds it in another (R2-1)', async () => {
+    h.preview
+      .mockResolvedValueOnce(
+        review(
+          [A, B],
+          [rec(A, { displayGroup: { id: H, name: 'Old shirts', version: 3 } }), rec(B)],
+        ),
+      )
+      .mockResolvedValueOnce(
+        review([A, B], [rec(A, { displayGroup: { id: G, name: 'Tees', version: 1 } }), rec(B)]),
+      );
+    h.apply.mockResolvedValueOnce(membershipChanged).mockResolvedValueOnce(APPLIED);
+    render(
+      <GroupSelectedDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[A, B]}
+        view="items"
+        onDone={() => {}}
+      />,
+    );
+    const first = await screen.findByTestId(`group-row-${A}`);
+    await userEvent.click(radio(first, GROUP_COPY.moveOne));
+    await userEvent.click(screen.getByRole('button', { name: 'Group 2 records' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      GROUPING_ERROR_WORDS.membershipChanged,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Review again' }));
+    // The new review: A is in Tees now. Its radios are empty and Save is off.
+    await screen.findByText(GROUP_COPY.otherGroup('Tees'));
+    const row = screen.getByTestId(`group-row-${A}`);
+    expect(radio(row, GROUP_COPY.moveOne)).not.toBeChecked();
+    expect(radio(row, GROUP_COPY.leaveOutOne)).not.toBeChecked();
+    const save = screen.getByRole('button', { name: 'Group 2 records' });
+    expect(save).toBeDisabled();
+    expect(screen.getByTestId('group-blocked')).toHaveTextContent(GROUP_COPY.blocked.otherGroup);
+    expect(h.apply).toHaveBeenCalledTimes(1);
+    // Deciding again, for Tees, is what moves it.
+    await userEvent.click(radio(row, GROUP_COPY.moveOne));
+    expect(save).toBeEnabled();
+    await userEvent.click(save);
+    await waitFor(() => expect(h.apply).toHaveBeenCalledTimes(2));
+    expect(h.apply.mock.calls[1]![0]).toMatchObject({
+      moveItemIds: [A],
+      expectedGroups: { [A]: G, [B]: null },
+    });
+  });
+
+  it('a Leave it out chosen for one group does not carry over to another either (R2-1)', async () => {
+    h.preview
+      .mockResolvedValueOnce(
+        review(
+          [A, B, C],
+          [rec(A, { displayGroup: { id: H, name: 'Old shirts', version: 3 } }), rec(B), rec(C)],
+        ),
+      )
+      .mockResolvedValueOnce(
+        review(
+          [A, B, C],
+          [rec(A, { displayGroup: { id: G, name: 'Tees', version: 1 } }), rec(B), rec(C)],
+        ),
+      );
+    h.apply.mockResolvedValueOnce(membershipChanged);
+    render(
+      <GroupSelectedDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[A, B, C]}
+        view="items"
+        onDone={() => {}}
+      />,
+    );
+    const first = await screen.findByTestId(`group-row-${A}`);
+    await userEvent.click(radio(first, GROUP_COPY.leaveOutOne));
+    await userEvent.click(screen.getByRole('button', { name: 'Group 2 records' }));
+    await screen.findByRole('alert');
+    await userEvent.click(screen.getByRole('button', { name: 'Review again' }));
+    await screen.findByText(GROUP_COPY.otherGroup('Tees'));
+    const row = screen.getByTestId(`group-row-${A}`);
+    expect(radio(row, GROUP_COPY.moveOne)).not.toBeChecked();
+    expect(radio(row, GROUP_COPY.leaveOutOne)).not.toBeChecked();
+    expect(screen.getByTestId('group-blocked')).toHaveTextContent(GROUP_COPY.blocked.otherGroup);
+    expect(screen.getByRole('button', { name: 'Group 3 records' })).toBeDisabled();
+  });
+
+  it('a dropped choice does not come back when a later review finds the record in its first group again (R2-1)', async () => {
+    const K = '77777777-7777-4777-8777-777777777777';
+    const caps = { id: K, name: 'Caps', version: 1, itemType: 'product' };
+    const inH = { displayGroup: { id: H, name: 'Old shirts', version: 3 } };
+    h.preview
+      .mockResolvedValueOnce(review([A, B], [rec(A, inH), rec(B)]))
+      .mockResolvedValueOnce(
+        review([A, B], [rec(A, { displayGroup: { id: G, name: 'Tees', version: 1 } }), rec(B)], {
+          candidateGroups: [{ ...caps, memberCount: 1, holdsSelected: false }],
+        }),
+      )
+      .mockResolvedValueOnce(
+        review(
+          [A, B],
+          [rec(A, inH), rec(B)],
+          {
+            candidateGroups: [{ ...caps, memberCount: 1, holdsSelected: false }],
+            targetGroup: { ...caps, members: [] },
+          },
+          K,
+        ),
+      );
+    h.apply.mockResolvedValueOnce(membershipChanged);
+    render(
+      <GroupSelectedDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[A, B]}
+        view="items"
+        onDone={() => {}}
+      />,
+    );
+    const first = await screen.findByTestId(`group-row-${A}`);
+    await userEvent.click(radio(first, GROUP_COPY.moveOne));
+    await userEvent.click(screen.getByRole('button', { name: 'Group 2 records' }));
+    await screen.findByRole('alert');
+    await userEvent.click(screen.getByRole('button', { name: 'Review again' }));
+    await screen.findByText(GROUP_COPY.otherGroup('Tees'));
+    // Without deciding again, the person picks an existing group: the next
+    // review finds A back in its first group. The choice was dropped, not
+    // hidden, so it does not come back.
+    await userEvent.click(screen.getByRole('radio', { name: GROUP_COPY.targetExisting }));
+    await userEvent.selectOptions(
+      screen.getByRole('combobox', { name: GROUP_COPY.existingLabel }),
+      K,
+    );
+    await waitFor(() => expect(h.preview).toHaveBeenLastCalledWith([A, B], K));
+    await screen.findByText(GROUP_COPY.otherGroup('Old shirts'));
+    const row = screen.getByTestId(`group-row-${A}`);
+    expect(radio(row, GROUP_COPY.moveOne)).not.toBeChecked();
+    expect(radio(row, GROUP_COPY.leaveOutOne)).not.toBeChecked();
+    expect(screen.getByRole('button', { name: 'Add 2 records to Caps' })).toBeDisabled();
+    expect(h.apply).toHaveBeenCalledTimes(1);
+  });
+
+  it('a choice still holds when the next review finds the record in the same group (R2-1)', async () => {
+    const inH = { displayGroup: { id: H, name: 'Old shirts', version: 3 } };
+    h.preview
+      .mockResolvedValueOnce(review([A, B], [rec(A, inH), rec(B)]))
+      .mockResolvedValueOnce(review([A, B], [rec(A, inH), rec(B)]));
+    h.apply.mockResolvedValueOnce(membershipChanged).mockResolvedValueOnce(APPLIED);
+    render(
+      <GroupSelectedDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[A, B]}
+        view="items"
+        onDone={() => {}}
+      />,
+    );
+    const first = await screen.findByTestId(`group-row-${A}`);
+    await userEvent.click(radio(first, GROUP_COPY.moveOne));
+    await userEvent.click(screen.getByRole('button', { name: 'Group 2 records' }));
+    await screen.findByRole('alert');
+    await userEvent.click(screen.getByRole('button', { name: 'Review again' }));
+    await waitFor(() => expect(h.preview).toHaveBeenCalledTimes(2));
+    const save = await screen.findByRole('button', { name: 'Group 2 records' });
+    await waitFor(() => expect(save).toBeEnabled());
+    expect(radio(screen.getByTestId(`group-row-${A}`), GROUP_COPY.moveOne)).toBeChecked();
+    await userEvent.click(save);
+    await waitFor(() => expect(h.apply).toHaveBeenCalledTimes(2));
+    expect(h.apply.mock.calls[1]![0]).toMatchObject({
+      moveItemIds: [A],
+      expectedGroups: { [A]: H, [B]: null },
+    });
+  });
+
   it('adding to an existing group re-reads that group and sends its version', async () => {
     h.preview
       .mockResolvedValueOnce(

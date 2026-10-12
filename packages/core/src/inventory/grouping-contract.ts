@@ -1313,6 +1313,57 @@ export interface GroupingDecisions {
   acknowledgeFamily?: boolean;
 }
 
+/** A person's choice for a selected record that is already in another group
+ *  (P10), kept with the group the record was in when they chose (recheck
+ *  R2-1). */
+export interface GroupRecordChoice {
+  choice: 'move' | 'leave';
+  /** The group the record was in when the person chose. */
+  fromGroupId: string;
+}
+
+/**
+ * The choices that still hold for a review (recheck R2-1). A choice ("Move it
+ * into this group" or "Leave it out") was made for the group a record was in
+ * then, so it holds only while the record is still in that group. A choice
+ * for a record that is now in another group (a colleague moved it between the
+ * preview and Save, so Save was refused and the person pressed Review again),
+ * in no group, or not in this review is dropped: its radios come back empty
+ * and Save stays off until the person decides again, so a record is never
+ * moved out of a group the person did not choose to move it from. Answers the
+ * same map when every choice holds, so a screen that prunes its choices on
+ * each new review does not render again for nothing.
+ */
+export function choicesForReview(
+  choices: ReadonlyMap<string, GroupRecordChoice>,
+  records: ReadonlyArray<{ id: string; displayGroup: { id: string } | null }>,
+): ReadonlyMap<string, GroupRecordChoice> {
+  const groupOf = new Map(records.map((r) => [r.id, r.displayGroup?.id ?? null]));
+  const held = new Map<string, GroupRecordChoice>();
+  for (const [id, c] of choices) if (groupOf.get(id) === c.fromGroupId) held.set(id, c);
+  return held.size === choices.size ? choices : held;
+}
+
+/**
+ * The plan's decisions from a screen's choices: only the choices that hold
+ * for this review (choicesForReview) become a move or a leave-out, so a
+ * choice made for another group never reaches planGrouping or the request.
+ * The screens build their decisions with this and nothing else (R2-1).
+ */
+export function groupingDecisionsFor(
+  choices: ReadonlyMap<string, GroupRecordChoice>,
+  records: ReadonlyArray<{ id: string; displayGroup: { id: string } | null }>,
+  acknowledgeFamily: boolean,
+): Required<GroupingDecisions> {
+  const moveIds = new Set<string>();
+  const leaveOutIds = new Set<string>();
+  for (const [id, c] of choicesForReview(choices, records)) {
+    if (c.choice === 'move') moveIds.add(id);
+    else leaveOutIds.add(id);
+  }
+  return { moveIds, leaveOutIds, acknowledgeFamily };
+}
+
 /** The target as the dialog holds it (the version comes from the preview). */
 export type GroupDialogTarget =
   { kind: 'new'; name: string } | { kind: 'existing'; groupId: string | null };

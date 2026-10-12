@@ -7,7 +7,9 @@ import {
   GROUP_COPY,
   GROUPING_ERROR_WORDS,
   GROUPING_MAX_ITEMS,
+  choicesForReview,
   groupBodyForPlan,
+  groupingDecisionsFor,
   groupingPreviewKey,
   normalizeGroupName,
   planGrouping,
@@ -16,6 +18,7 @@ import {
   removeBodyFor,
   suggestGroupName,
   type GroupDialogTarget,
+  type GroupRecordChoice,
   type GroupingBody,
   type GroupingOutcome,
 } from '@stockpilot/core';
@@ -51,10 +54,13 @@ import type { GroupingReview, GroupingReviewRecord } from '@/server/services/ite
  *
  * A record already in another group is never moved silently: Save stays off
  * until the person chooses, for that record, "Move it into this group" or
- * "Leave it out" (it is then not sent and stays where it is). A product-family
- * member needs the confirmation; its family is not changed either way. A
- * preview that answers for another selection than the dialog now holds is
- * ignored (its key differs).
+ * "Leave it out" (it is then not sent and stays where it is). Each choice is
+ * kept with the group the record was in when it was made: a new review that
+ * finds the record in another group (Review again after a colleague moved it)
+ * drops the choice, so the person decides again (recheck R2-1). A
+ * product-family member needs the confirmation; its family is not changed
+ * either way. A preview that answers for another selection than the dialog
+ * now holds is ignored (its key differs).
  *
  * Adding to an existing group lists the group's other records the person can
  * see, marks a selected record already in it, and counts on Save only the
@@ -224,8 +230,10 @@ export function GroupSelectedDialog({
   const [name, setName] = React.useState('');
   const [nameTouched, setNameTouched] = React.useState(false);
   const [groupId, setGroupId] = React.useState<string | null>(initialGroupId);
-  const [moveIds, setMoveIds] = React.useState<Set<string>>(new Set());
-  const [leaveOutIds, setLeaveOutIds] = React.useState<Set<string>>(new Set());
+  // Each choice with the group it was made for (R2-1), never a bare id set.
+  const [choices, setChoices] = React.useState<ReadonlyMap<string, GroupRecordChoice>>(
+    () => new Map(),
+  );
   const [ackFamily, setAckFamily] = React.useState(false);
   const [nonce, setNonce] = React.useState(0);
   const [phase, setPhase] = React.useState<'ready' | 'saving' | 'done'>('ready');
@@ -237,20 +245,10 @@ export function GroupSelectedDialog({
   const blockedId = React.useId();
 
   /** One record's choice when it is in another group (P10): move it here, or
-   *  leave it out (not sent; it stays where it is). */
-  function choose(id: string, choice: 'move' | 'leave') {
-    setMoveIds((cur) => {
-      const n = new Set(cur);
-      if (choice === 'move') n.add(id);
-      else n.delete(id);
-      return n;
-    });
-    setLeaveOutIds((cur) => {
-      const n = new Set(cur);
-      if (choice === 'leave') n.add(id);
-      else n.delete(id);
-      return n;
-    });
+   *  leave it out (not sent; it stays where it is). Kept with the group the
+   *  record is in as the person chooses (R2-1). */
+  function choose(id: string, choice: 'move' | 'leave', fromGroupId: string) {
+    setChoices((cur) => new Map(cur).set(id, { choice, fromGroupId }));
   }
 
   const targetGroupId = mode === 'existing' ? groupId : null;
@@ -261,6 +259,22 @@ export function GroupSelectedDialog({
     loading,
   } = useGroupingReview(open, itemIds, targetGroupId, nonce);
 
+  // R2-1: a review that arrives drops every choice made for a group its
+  // record is no longer in (or a record no longer in the review), so the
+  // radios come back empty and Save stays off until the person decides again;
+  // a choice for a record still in that group holds. The render reads the
+  // same rule (groupingDecisionsFor), so no frame shows or sends a dropped
+  // choice before this runs.
+  React.useEffect(() => {
+    if (!review) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- prune the choices once per new review (R2-1)
+    setChoices((cur) => choicesForReview(cur, review.records));
+  }, [review]);
+  const decisions = React.useMemo(
+    () => groupingDecisionsFor(choices, review?.records ?? [], ackFamily),
+    [choices, review, ackFamily],
+  );
+
   // The name: a suggestion from the records (an editable field, never a link
   // made on a name) until the person types one.
   const nameValue = nameTouched ? name : review ? suggestGroupName(review.records, view) : '';
@@ -270,14 +284,10 @@ export function GroupSelectedDialog({
   const plan = React.useMemo(
     () =>
       review
-        ? planGrouping(itemIds, { ...review, records: review.records }, target, {
-            moveIds,
-            leaveOutIds,
-            acknowledgeFamily: ackFamily,
-          })
+        ? planGrouping(itemIds, { ...review, records: review.records }, target, decisions)
         : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps -- target is derived from mode/nameValue/groupId
-    [review, itemIds, mode, nameValue, groupId, moveIds, leaveOutIds, ackFamily],
+    [review, itemIds, mode, nameValue, groupId, decisions],
   );
 
   React.useEffect(() => {
@@ -306,15 +316,10 @@ export function GroupSelectedDialog({
     }
     if (!plan.canSave) return;
     const body = keyed.bodyFor(
-      groupBodyForPlan(
-        plan,
-        target,
-        { moveIds, leaveOutIds, acknowledgeFamily: ackFamily },
-        {
-          idempotencyKey: 'pending',
-          ...identity,
-        },
-      ),
+      groupBodyForPlan(plan, target, decisions, {
+        idempotencyKey: 'pending',
+        ...identity,
+      }),
     );
     setError(null);
     setPhase('saving');
@@ -405,9 +410,9 @@ export function GroupSelectedDialog({
                           <input
                             type="radio"
                             name={`group-choice-${r.id}`}
-                            checked={moveIds.has(r.id)}
+                            checked={decisions.moveIds.has(r.id)}
                             disabled={phase === 'saving'}
-                            onChange={() => choose(r.id, 'move')}
+                            onChange={() => choose(r.id, 'move', other.id)}
                           />
                           <span>{GROUP_COPY.moveOne}</span>
                         </label>
@@ -415,9 +420,9 @@ export function GroupSelectedDialog({
                           <input
                             type="radio"
                             name={`group-choice-${r.id}`}
-                            checked={leaveOutIds.has(r.id)}
+                            checked={decisions.leaveOutIds.has(r.id)}
                             disabled={phase === 'saving'}
-                            onChange={() => choose(r.id, 'leave')}
+                            onChange={() => choose(r.id, 'leave', other.id)}
                           />
                           <span>{GROUP_COPY.leaveOutOne}</span>
                         </label>

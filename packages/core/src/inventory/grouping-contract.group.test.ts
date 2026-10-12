@@ -5,7 +5,9 @@ import {
   GROUPING_ERROR_TABLE,
   GROUPING_ERROR_WORDS,
   bookEditionCount,
+  choicesForReview,
   groupBodyForPlan,
+  groupingDecisionsFor,
   groupingPreviewKey,
   groupingSelectionFacts,
   mapGroupingError,
@@ -568,6 +570,90 @@ describe('the review plan', () => {
       {},
     );
     expect(plan.previewHeader).toBe('Polo · 2 records · 7 on hand');
+  });
+});
+
+// Recheck R2-1: a choice for a record already in another group ("Move it into
+// this group" or "Leave it out") was made for the group the record was in
+// then. A new review that finds the record in another group (a colleague moved
+// it between the preview and Save, so Save was refused and the person pressed
+// Review again) drops the choice: Save stays off until the person decides
+// again, and nothing moves the record out of a group they never chose to move
+// it from. A choice still holds while the record stays in that group.
+describe('choices across reviews (recheck R2-1)', () => {
+  const inH = (id: string) => record(id, { display_group: { id: H, name: 'Old', version: 4 } });
+  const inG = (id: string) => record(id, { display_group: { id: G, name: 'Tees', version: 2 } });
+  const target = { kind: 'new' as const, name: 'New' };
+
+  it('a move chosen while a record was in one group is dropped when the next review finds it in another', () => {
+    const choices = new Map([[A, { choice: 'move' as const, fromGroupId: H }]]);
+    // The first review: A in H. The choice holds, and Save moves A out of H.
+    const first = preview([inH(A), record(B)]);
+    const d1 = groupingDecisionsFor(choices, first.records, false);
+    const p1 = planGrouping([A, B], first, target, d1);
+    expect(p1.canSave).toBe(true);
+    expect(groupBodyForPlan(p1, target, d1, ids)).toMatchObject({
+      moveItemIds: [A],
+      expectedGroups: { [A]: H, [B]: null },
+    });
+    // A colleague put A into G; Review again reads it there.
+    const second = preview([inG(A), record(B)]);
+    expect([...choicesForReview(choices, second.records).keys()]).toEqual([]);
+    const d2 = groupingDecisionsFor(choices, second.records, false);
+    expect(d2.moveIds?.has(A)).toBe(false);
+    const p2 = planGrouping([A, B], second, target, d2);
+    expect(p2.canSave).toBe(false);
+    expect(p2.blockedReason).toBe(GROUP_COPY.blocked.otherGroup);
+    // A new choice, made for G, is honoured.
+    const chosenAgain = new Map([[A, { choice: 'move' as const, fromGroupId: G }]]);
+    const d3 = groupingDecisionsFor(chosenAgain, second.records, false);
+    const p3 = planGrouping([A, B], second, target, d3);
+    expect(p3.canSave).toBe(true);
+    expect(groupBodyForPlan(p3, target, d3, ids)).toMatchObject({
+      moveItemIds: [A],
+      expectedGroups: { [A]: G, [B]: null },
+    });
+  });
+
+  it('a leave-out is dropped the same way, and so is a choice for a record now in no group or not in the review', () => {
+    const choices = new Map([
+      [A, { choice: 'leave' as const, fromGroupId: H }],
+      [B, { choice: 'move' as const, fromGroupId: H }],
+      [C, { choice: 'move' as const, fromGroupId: H }],
+    ]);
+    // A moved to G, B left every group, C is not in this review.
+    const next = preview([inG(A), record(B)]);
+    expect([...choicesForReview(choices, next.records).keys()]).toEqual([]);
+    const d = groupingDecisionsFor(choices, next.records, true);
+    expect([...(d.leaveOutIds ?? [])]).toEqual([]);
+    expect([...(d.moveIds ?? [])]).toEqual([]);
+    expect(d.acknowledgeFamily).toBe(true);
+    // A is no longer left out: it needs a decision for G.
+    const plan = planGrouping([A, B], next, target, d);
+    expect(plan.leftOut).toEqual([]);
+    expect(plan.blockedReason).toBe(GROUP_COPY.blocked.otherGroup);
+  });
+
+  it('a choice holds while the record stays in that group, and an unchanged set of choices comes back as is', () => {
+    const choices = new Map([
+      [A, { choice: 'move' as const, fromGroupId: H }],
+      [B, { choice: 'leave' as const, fromGroupId: H }],
+    ]);
+    const again = preview([inH(A), inH(B), record(C)]);
+    // Nothing dropped: the very same map (a screen that prunes on each new
+    // review then renders nothing again for it).
+    expect(choicesForReview(choices, again.records)).toBe(choices);
+    const d = groupingDecisionsFor(choices, again.records, false);
+    expect([...(d.moveIds ?? [])]).toEqual([A]);
+    expect([...(d.leaveOutIds ?? [])]).toEqual([B]);
+    const plan = planGrouping([A, B, C], again, target, d);
+    expect(plan.canSave).toBe(true);
+    expect(plan.leftOut).toEqual([{ id: B, reason: 'chosen' }]);
+    expect(groupBodyForPlan(plan, target, d, ids)).toMatchObject({
+      itemIds: [A, C],
+      moveItemIds: [A],
+      expectedGroups: { [A]: H, [C]: null },
+    });
   });
 });
 

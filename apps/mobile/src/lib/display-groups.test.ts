@@ -566,6 +566,21 @@ describe('screen pins', () => {
     expect(screen).toContain('plan?.conflicts.sameSkuSiblings');
   });
 
+  // Recheck R2-1: a "Move it into this group" or "Leave it out" choice is kept
+  // with the group the record was in when it was made (core
+  // choicesForReview, tested in core). A new review that finds the record in
+  // another group drops it, so Save stays off until the member decides again;
+  // the plan's decisions come only from the choices that hold.
+  it('the review keeps each choice with its group and drops it when a new review finds the record elsewhere (R2-1)', () => {
+    const screen = read('../../app/group-selected.tsx');
+    expect(screen).toContain('groupingDecisionsFor(');
+    expect(screen).toContain('fromGroupId');
+    // No bare id sets that outlive the review they were chosen in.
+    expect(screen).not.toMatch(/useState<Set<string>>/);
+    // Pruned the moment a review arrives, not only when a radio is pressed.
+    expect(screen).toMatch(/setChoices\(\(cur\) => choicesForReview\(cur, r\.review\.records\)\)/);
+  });
+
   it("the item screen names the record's group and offers Remove from group to an editor, online only", () => {
     const item = read('../../app/item/[id].tsx');
     expect(item).toContain('GROUP_COPY.itemPageInGroup');

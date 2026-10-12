@@ -17,11 +17,14 @@ import {
   GROUP_COPY,
   GROUPING_ERROR_WORDS,
   GROUP_NAME_MAX_LENGTH,
+  choicesForReview,
   groupBodyForPlan,
+  groupingDecisionsFor,
   normalizeGroupName,
   planGrouping,
   suggestGroupName,
   type GroupDialogTarget,
+  type GroupRecordChoice,
   type GroupingOutcome,
 } from '@stockpilot/core';
 
@@ -60,7 +63,9 @@ import { useWorkspace } from '@/lib/use-workspace';
  * record the member can read (the rest as a count): its picture, name, SKU (a
  * book's ISBN, its edition), size, charter, rack and on hand; whether it is in
  * another group (never moved silently: per record, "Move it into this group"
- * or "Leave it out", which sends nothing for it); a product family it belongs
+ * or "Leave it out", which sends nothing for it; each choice is kept with the
+ * group the record was in when it was made, and a new review that finds the
+ * record in another group drops it, recheck R2-1); a product family it belongs
  * to (confirmed, never changed); records sharing a SKU that are not selected
  * and stay outside the group (never the group's own records); how the list
  * will show the group afterwards, and, when adding to a group that exists,
@@ -105,8 +110,10 @@ export default function GroupSelectedScreen() {
   const [name, setName] = React.useState('');
   const [nameTouched, setNameTouched] = React.useState(false);
   const [groupId, setGroupId] = React.useState<string | null>(params?.groupId ?? null);
-  const [moveIds, setMoveIds] = React.useState<Set<string>>(new Set());
-  const [leaveOutIds, setLeaveOutIds] = React.useState<Set<string>>(new Set());
+  // Each choice with the group it was made for (R2-1), never a bare id set.
+  const [choices, setChoices] = React.useState<ReadonlyMap<string, GroupRecordChoice>>(
+    () => new Map(),
+  );
   const [ackFamily, setAckFamily] = React.useState(false);
   const [nonce, setNonce] = React.useState(0);
 
@@ -149,6 +156,9 @@ export default function GroupSelectedScreen() {
         });
         if (mine !== seq.current) return;
         setLoadState({ kind: 'ready', review: r.review, identity: r.identity });
+        // R2-1: the review that arrives drops every choice made for a group
+        // its record is no longer in, so the member decides again.
+        setChoices((cur) => choicesForReview(cur, r.review.records));
       } catch (e) {
         if (mine !== seq.current) return;
         setLoadState({ kind: 'failed', message: describeGroupingError(e).message });
@@ -164,34 +174,22 @@ export default function GroupSelectedScreen() {
   const nameValue = nameTouched ? name : review ? suggestGroupName(review.records, view) : '';
   const target: GroupDialogTarget =
     mode === 'new' ? { kind: 'new', name: nameValue } : { kind: 'existing', groupId };
+  // Only the choices that hold for this review (R2-1).
+  const decisions = React.useMemo(
+    () => groupingDecisionsFor(choices, review?.records ?? [], ackFamily),
+    [choices, review, ackFamily],
+  );
   const plan = React.useMemo(
-    () =>
-      review
-        ? planGrouping(itemIds, review, target, {
-            moveIds,
-            leaveOutIds,
-            acknowledgeFamily: ackFamily,
-          })
-        : null,
+    () => (review ? planGrouping(itemIds, review, target, decisions) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- target is derived from mode/nameValue/groupId
-    [review, itemIds, mode, nameValue, groupId, moveIds, leaveOutIds, ackFamily],
+    [review, itemIds, mode, nameValue, groupId, decisions],
   );
 
   /** One record's choice when it is in another group (P10): move it here, or
-   *  leave it out (not sent; it stays where it is). */
-  function choose(id: string, choice: 'move' | 'leave') {
-    setMoveIds((cur) => {
-      const n = new Set(cur);
-      if (choice === 'move') n.add(id);
-      else n.delete(id);
-      return n;
-    });
-    setLeaveOutIds((cur) => {
-      const n = new Set(cur);
-      if (choice === 'leave') n.add(id);
-      else n.delete(id);
-      return n;
-    });
+   *  leave it out (not sent; it stays where it is). Kept with the group the
+   *  record is in as the member chooses (R2-1). */
+  function choose(id: string, choice: 'move' | 'leave', fromGroupId: string) {
+    setChoices((cur) => new Map(cur).set(id, { choice, fromGroupId }));
   }
 
   // P11: announce the review's load outcome (records ready, a failure's own
@@ -243,12 +241,7 @@ export default function GroupSelectedScreen() {
     if (!plan.canSave) return;
     pending.current = keyedGroupingBody(
       pending.current,
-      groupBodyForPlan(
-        plan,
-        target,
-        { moveIds, leaveOutIds, acknowledgeFamily: ackFamily },
-        { idempotencyKey: 'pending', ...identity },
-      ),
+      groupBodyForPlan(plan, target, decisions, { idempotencyKey: 'pending', ...identity }),
     );
     setSaveError(null);
     setPhase('saving');
@@ -370,8 +363,8 @@ export default function GroupSelectedScreen() {
                 const other =
                   r.displayGroup && r.displayGroup.id !== targetGroupId ? r.displayGroup : null;
                 const inTarget = !!targetGroupId && r.displayGroup?.id === targetGroupId;
-                const moving = moveIds.has(r.id);
-                const leaving = leaveOutIds.has(r.id);
+                const moving = decisions.moveIds.has(r.id);
+                const leaving = decisions.leaveOutIds.has(r.id);
                 return (
                   <View key={r.id}>
                     <View style={styles.recordRow}>
@@ -413,7 +406,7 @@ export default function GroupSelectedScreen() {
                             ).map(([choice, on, label]) => (
                               <Pressable
                                 key={choice}
-                                onPress={() => choose(r.id, choice)}
+                                onPress={() => choose(r.id, choice, other.id)}
                                 disabled={busy}
                                 accessibilityRole="radio"
                                 accessibilityLabel={`${label}: ${r.name}`}
