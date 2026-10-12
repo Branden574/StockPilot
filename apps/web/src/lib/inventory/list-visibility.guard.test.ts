@@ -30,6 +30,16 @@ function codeOnly(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
 }
 
+/** A class method's code, from its signature to its closing brace (class
+ *  members sit two spaces in, so the first `\n  }\n` after it closes it). */
+function methodBody(code: string, signature: string): string {
+  const start = code.indexOf(signature);
+  expect(start, `${signature} exists`).toBeGreaterThanOrEqual(0);
+  const end = code.indexOf('\n  }\n', start);
+  expect(end, `${signature} closes`).toBeGreaterThan(start);
+  return code.slice(start, end);
+}
+
 describe('one definition of what belongs on an inventory tab', () => {
   it('resolves every file (the scans below would pass vacuously otherwise)', () => {
     for (const file of [
@@ -109,10 +119,19 @@ describe('rental items are listed by the database, on both clients', () => {
   it('the service filters is_rental in BOTH the page query and the value sum', () => {
     const code = codeOnly(readFileSync(INVENTORY_SERVICE, 'utf8'));
     expect(code).not.toContain('includeRentals');
-    const filters = code.match(
-      /\.eq\(\s*'is_rental'\s*,\s*filters\.rentalsOnly\s*===\s*true\s*\)/g,
+    // Since PR #364 the page query and the value sum take every filter from
+    // one method, so the rental rule is written once and both must call it.
+    const rental = /\.eq\(\s*'is_rental'\s*,\s*filters\.rentalsOnly\s*===\s*true\s*\)/;
+    expect(code.match(new RegExp(rental.source, 'g'))?.length).toBe(1);
+    expect(methodBody(code, 'private applyContentFilters(')).toMatch(rental);
+    const list = methodBody(code, 'async list(');
+    expect(list, 'the page query').toMatch(
+      /this\.applyContentFilters\(\s*query\s*,\s*filters\s*\)/,
     );
-    expect(filters?.length).toBe(2);
+    expect(list, 'the value sum reads the scan').toMatch(/this\.filteredScanPage\(/);
+    expect(methodBody(code, 'private filteredScanPage('), 'the value sum').toMatch(
+      /this\.applyContentFilters\(\s*sumQuery\s*,\s*filters\s*\)/,
+    );
   });
 
   it('mobile lists rental items with the shared predicate, in every warehouse', () => {
