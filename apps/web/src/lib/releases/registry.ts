@@ -28,6 +28,91 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'ungroup-follow-ups-2026-10',
+    revision: 1,
+    // The Group selected review follow-ups (2026-10-12), all merged and live:
+    // #358 (10c7cc4d2, web 4b696f5a9aa2), #359 (b41b5d7e9, web 1e34a8a6d08c),
+    // #360 (8c949a90f, web 45ce9bd4cd99) and #361 (a424bb345, web
+    // 716b474f8e0b); the phone parts of #358 and #361 in OTA group 281dcf15
+    // (17:34Z, iOS bundle verified against the local export; update:insights
+    // at 17:57Z: iOS 1 launch, 0 failed), walked on the
+    // iPhone simulator with the published bundle in Demo Co (Ungroup offered
+    // for a size-family member, its review read, Cancel; nothing written).
+    // Claims checked against a424bb345:
+    // - a size on more than one rack: unlinkItems takes every other live
+    //   record of a written record's exact SKU in that family out too
+    //   (unlinkSkuSiblings, service-role, family and organization filters);
+    //   core lists them under the ticked record (familySkuSiblings, once each,
+    //   ungroupRackLine: rack, warehouse, on hand) and counts them
+    //   (ungroupChangeCount); a family member shown under its SKU offers
+    //   Ungroup (ungroupOfferKind, with sports:manage) and leaves the family;
+    //   the note says they still share the SKU (UNGROUP_COPY.familySkuNote);
+    //   Product groups' toast names how many other racks' records left; a
+    //   record moved to another family since the review is refused at the
+    //   write (#359, UNGROUP_COPY.familyChanged); a fan-out that stops says so
+    //   and Ungroup's Try again finishes it (UNGROUP_COPY.familySkuUnfinished,
+    //   healing through the reviewed family), Product groups says "Unlink
+    //   that record too.";
+    // - a lost answer (#358): a keyed step's internal error is reason
+    //   'unknown', retryable, words UNGROUP_COPY.stepUnknown, the line "Not
+    //   confirmed: ..." (partUnknown); Review again shows whenever a Save did
+    //   not complete, Try again beside it when a part is retryable; a remove
+    //   names records already out of any group (alreadyOutOfGroup);
+    // - the 100-record limit (#360): the web bar says
+    //   GROUPING_ERROR_WORDS.tooMany / groupTooMany past GROUPING_MAX_ITEMS
+    //   distinct ticked records, as the phone does, and opens no review.
+    // Who is told: the size-family entry needs sports:manage with the sports
+    // module (Ungroup's family step and Unlink on Product groups); the other
+    // two, whoever can edit items (items:update, the bar's gate). No links.
+    status: 'published',
+    title: 'Sizes on more than one rack ungroup together, and Ungroup says more clearly what happened',
+    summary:
+      "Ungroup now takes every rack's record of a size out of its size family together, on the web and in the mobile app after the latest update, and Unlink on Product groups does the same. When Ungroup's answer is lost on the way back, it says Not confirmed and offers Try again. On the web, Group selected and Ungroup say straight away that they work on at most 100 records at a time.",
+    publishedAt: '2026-10-12T17:58:00Z',
+    entries: [
+      {
+        id: 'size-on-several-racks-leaves-together',
+        category: 'improved',
+        area: 'Inventory',
+        title: 'A size on more than one rack leaves its size family together',
+        whatChanged:
+          "When one size of a size family is stocked on more than one rack, each rack has its own record and they share one SKU. Ungroup on Items or Books now takes every rack's record of that SKU out of the family together, on the web and in the mobile app; its review lists the other racks under the ticked record with their rack, warehouse and stock, and counts them. A size shown under its SKU's header now offers Ungroup too. Unlink on Product groups does the same and says how many other racks' records left with it.",
+        whyItMatters:
+          "A size family belongs to the SKU, so taking one rack's record out on its own left the same size half in the family.",
+        howItAffectsYou:
+          'The records still share their SKU, so the list keeps showing them together under it. Stock, charter, rack and history stay as they are. If a record moved to another size family since you opened the review, it is not taken out of the new one, and Ungroup asks you to review again. If the other racks cannot follow, for example when the connection drops, Ungroup says so and Try again finishes it; Product groups asks you to unlink that record too.',
+        whatToDo:
+          'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['sports:manage'], modules: ['sports'] },
+      },
+      {
+        id: 'ungroup-answer-not-confirmed',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'Ungroup says Not confirmed when its answer is lost',
+        whatChanged:
+          "If Ungroup's answer is lost on the way back after you choose Ungroup, its result now says Not confirmed instead of Not done, on the web and in the mobile app. When Ungroup did not finish, Review again is always offered, with Try again next to it when the same request can safely be sent again; what was already done is not done twice. Records that were already out of their group are now named as such instead of being counted as leaving it.",
+        whyItMatters: 'It used to say Not done and offer no Try again, even when the change may have been made.',
+        howItAffectsYou: 'Choose Try again to finish, or Review again to see where each record is now.',
+        whatToDo:
+          'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['items:update'] },
+      },
+      {
+        id: 'group-ungroup-limit-at-the-button',
+        category: 'improved',
+        area: 'Inventory',
+        title: 'Group selected and Ungroup say the 100-record limit straight away',
+        whatChanged:
+          'On the web, choosing Group selected or Ungroup with more than 100 records ticked now says straight away that it works on at most 100 records at a time, as the mobile app does, instead of opening a review that could only refuse.',
+        whyItMatters: 'The review opened only to say the selection was too large.',
+        howItAffectsYou: 'Tick 100 records or fewer, then choose it again.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:update'] },
+      },
+    ],
+  },
+  {
     id: 'group-selected-2026-10',
     revision: 1,
     // Group selected, slice G2 of the grouping work (migration 0400, a
