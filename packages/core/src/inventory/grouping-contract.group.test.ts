@@ -445,6 +445,120 @@ describe('the review plan', () => {
     expect(plan.previewHeader).toBe(GROUP_COPY.previewHeader('Polo', 2, 5));
   });
 
+  // People review P1: Add to group (a Same SKU chip) reviews [record] with
+  // the target G, and the preview's same-SKU siblings include G's own
+  // records: they are already in the group, so they never "stay outside
+  // this group", and are never offered as "Add them to the selection".
+  it('same-SKU records already in the target are not siblings that stay outside it (P1)', () => {
+    const D = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    const E = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+    const p = preview([record(D, { sku: 'X' })], {
+      same_sku_siblings: [
+        { id: A, name: 'Limits Tee', sku: 'X', item_type: 'product', display_group_id: G },
+        { id: B, name: 'Limits Tee', sku: 'X', item_type: 'product', display_group_id: G },
+        { id: E, name: 'Limits Tee', sku: 'X', item_type: 'product', display_group_id: null },
+      ],
+      target_group: {
+        id: G,
+        name: 'Limits Tee',
+        version: 2,
+        item_type: 'product',
+        members: [
+          { id: A, name: 'Limits Tee', sku: 'X', quantity_on_hand: 4 },
+          { id: B, name: 'Limits Tee', sku: 'X', quantity_on_hand: 5 },
+        ],
+      },
+    });
+    const plan = planGrouping([D], p, { kind: 'existing', groupId: G }, {});
+    expect(plan.conflicts.sameSkuSiblings.map((s) => s.id)).toEqual([E]);
+    // A new group: every unselected same-SKU record stays outside it, those
+    // in another group (G) included.
+    const fresh = planGrouping([D], p, { kind: 'new', name: 'Tees' }, {});
+    expect(fresh.conflicts.sameSkuSiblings.map((s) => s.id)).toEqual([A, B, E]);
+    // A selected record is never its own sibling, even on an answer read for
+    // a smaller selection.
+    const more = planGrouping([D, E], p, { kind: 'new', name: 'Tees' }, {});
+    expect(more.conflicts.sameSkuSiblings.map((s) => s.id)).toEqual([A, B]);
+  });
+
+  // P6 and P8: Save counts the records that JOIN, a selected record already
+  // in the target says so, and the target's other records are listed.
+  it('counts only the records that join an existing group, marks those already in it, and lists its other records (P6, P8)', () => {
+    const D = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    const p = preview(
+      [record(A, { display_group: { id: G, name: 'Tees', version: 3 } }), record(D)],
+      {
+        target_group: {
+          id: G,
+          name: 'Tees',
+          version: 3,
+          item_type: 'product',
+          members: [
+            { id: A, name: 'Tee S', sku: 'T-S', quantity_on_hand: 2 },
+            { id: B, name: 'Tee M', sku: 'T-M', quantity_on_hand: 2 },
+            { id: C, name: 'Tee L', sku: 'T-L', quantity_on_hand: 3 },
+          ],
+        },
+      },
+    );
+    const plan = planGrouping([A, D], p, { kind: 'existing', groupId: G }, {});
+    expect(plan.send.map((r) => r.id)).toEqual([A, D]);
+    // (?. so a plan without these fields fails on the values, not on a throw)
+    expect(plan.joining?.map((r) => r.id)).toEqual([D]);
+    expect(plan.alreadyInTarget?.map((r) => r.id)).toEqual([A]);
+    expect(plan.targetMembers?.map((m) => m.id)).toEqual([B, C]);
+    expect(GROUP_COPY.confirmExisting(plan.joining?.length ?? -1, 'Tees')).toBe(
+      'Add 1 record to Tees',
+    );
+    expect(plan.previewHeader).toBe(GROUP_COPY.previewHeader('Tees', 4, 9));
+    // A new group: nothing is "already in" it, every sent record joins.
+    const fresh = planGrouping([A, D], p, { kind: 'new', name: 'X' }, { moveIds: new Set([A]) });
+    expect(fresh.joining.map((r) => r.id)).toEqual([A, D]);
+    expect(fresh.alreadyInTarget).toEqual([]);
+    expect(fresh.targetMembers).toEqual([]);
+  });
+
+  // P10: the words promise "move it, or leave it out"; leaving it out is a
+  // choice in the review, not a trip back to the list.
+  it('a record in another group can be left out instead of moved: it is not sent and stays where it is (P10)', () => {
+    const recs = [
+      record(A, { display_group: { id: H, name: 'Old', version: 4 } }),
+      record(B),
+      record(C),
+    ];
+    const blocked = planGrouping([A, B, C], preview(recs), { kind: 'new', name: 'New' }, {});
+    expect(blocked.blockedReason).toBe(
+      'Decide for each record already in another group: move it, or leave it out.',
+    );
+    const left = planGrouping(
+      [A, B, C],
+      preview(recs),
+      { kind: 'new', name: 'New' },
+      { leaveOutIds: new Set([A]) },
+    );
+    expect(left.send.map((r) => r.id)).toEqual([B, C]);
+    expect(left.leftOut).toEqual([{ id: A, reason: 'chosen' }]);
+    expect(left.conflicts.otherGroup).toEqual([]);
+    expect(left.canSave).toBe(true);
+    const body = groupBodyForPlan(
+      left,
+      { kind: 'new', name: 'New' },
+      { leaveOutIds: new Set([A]) },
+      ids,
+    );
+    expect(body.itemIds).toEqual([B, C]);
+    expect(body.moveItemIds).toEqual([]);
+    expect(body.expectedGroups).toEqual({ [B]: null, [C]: null });
+    // Leaving out a record that is in no other group changes nothing.
+    const plain = planGrouping(
+      [B, C],
+      preview(recs),
+      { kind: 'new', name: 'New' },
+      { leaveOutIds: new Set([B]) },
+    );
+    expect(plain.send.map((r) => r.id)).toEqual([B, C]);
+  });
+
   it('the preview header sums on hand once per record', () => {
     const plan = planGrouping(
       [A, B],

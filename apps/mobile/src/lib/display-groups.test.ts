@@ -484,6 +484,25 @@ describe('screen pins', () => {
     expect(screen).toContain('maxFontSizeMultiplier');
   });
 
+  // People review P1, P6, P8 and P10, on the phone's review as on the web
+  // (the decisions are core planGrouping's; the screen renders them).
+  it('the review counts only the records that join, lists the target group, and lets a record in another group be left out', () => {
+    const screen = read('../../app/group-selected.tsx');
+    // P6: Save counts plan.joining, never every sent record; a repeat says OK.
+    expect(screen).toContain('GROUP_COPY.confirmExisting(plan.joining.length');
+    expect(screen).not.toContain('GROUP_COPY.confirmExisting(sendCount');
+    expect(screen).toContain('GROUP_COPY.noopConfirm');
+    expect(screen).toContain('GROUP_COPY.alreadyInTarget');
+    // P8: the existing group's other records.
+    expect(screen).toContain('plan.targetMembers');
+    expect(screen).toContain('GROUP_COPY.targetMembers(');
+    // P10: move it, or leave it out.
+    expect(screen).toContain('GROUP_COPY.leaveOutOne');
+    expect(screen).toMatch(/leaveOutIds/);
+    // P1: only siblings outside the group are offered (core filters them).
+    expect(screen).toContain('plan?.conflicts.sameSkuSiblings');
+  });
+
   it("the item screen names the record's group and offers Remove from group to an editor, online only", () => {
     const item = read('../../app/item/[id].tsx');
     expect(item).toContain('GROUP_COPY.itemPageInGroup');

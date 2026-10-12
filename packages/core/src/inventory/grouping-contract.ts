@@ -1206,9 +1206,18 @@ export const GROUP_COPY = {
     kit: "is a kit (kits can't be grouped)",
     rental: "is a rental (rentals can't be grouped)",
     not_writable: "is in a warehouse you can't change",
+    chosen: 'stays in its group (you chose to leave it out)',
   } as Record<GroupLeftOutReason, string>,
   otherGroup: (name: string) => `Already in group ${name}.`,
   moveOne: 'Move it into this group',
+  /** The other choice for a record already in another group (P10): it is not
+   *  sent and stays where it is. */
+  leaveOutOne: 'Leave it out',
+  /** A selected record that is already in the existing target (P6). */
+  alreadyInTarget: 'Already in this group; it stays.',
+  /** The existing target's other records the person can see (P8). */
+  targetMembers: (name: string) => `Already in ${name}`,
+  moreTargetMembers: (n: number) => `and ${n} more`,
   family: (name: string | null) =>
     `In the product family ${name ?? 'of linked sizes'}. Its sizes stay linked for exchanges and imports; only the list shows it in this group.`,
   acknowledgeFamily: 'Show product-family records in this group',
@@ -1223,13 +1232,16 @@ export const GROUP_COPY = {
     tooFew: 'Choose at least two records for a new group.',
     tooFewExisting: 'Choose at least one record to add.',
     name: 'Give the group a name.',
-    otherGroup: 'Decide for each record already in another group: move it, or deselect it.',
+    otherGroup: 'Decide for each record already in another group: move it, or leave it out.',
     family: 'Confirm the product-family records, or deselect them.',
     noTarget: 'Choose a group to add to.',
     targetType: 'This group holds records of another type.',
   },
   confirmNew: (n: number) => `Group ${n} record${n === 1 ? '' : 's'}`,
+  /** n: the records that JOIN (not those already in the group, P6). */
   confirmExisting: (n: number, name: string) => `Add ${n} record${n === 1 ? '' : 's'} to ${name}`,
+  /** The button when nothing would change (every record is already there). */
+  noopConfirm: 'OK',
   done: (name: string) => `Grouped in ${name}.`,
   noop: (name: string) => `These records are already in ${name}.`,
   cancel: 'Cancel',
@@ -1250,12 +1262,19 @@ export const GROUP_COPY = {
   itemPageInGroup: (name: string) => `In group ${name}`,
 } as const;
 
-export type GroupLeftOutReason = 'kit' | 'rental' | 'not_writable';
+/** Why a selected record is not sent: a kit, a rental, a record the caller
+ *  cannot edit, or one already in another group that the person chose to
+ *  leave out ('chosen', P10). */
+export type GroupLeftOutReason = 'kit' | 'rental' | 'not_writable' | 'chosen';
 
 /** What the review plan decided about one Save. */
 export interface GroupingDecisions {
   /** Records the person chose to move out of another group. */
   moveIds?: ReadonlySet<string>;
+  /** Records already in another group the person chose to leave out: they
+   *  are not sent and stay where they are (people review P10). Only honoured
+   *  for a record in another group than the target. */
+  leaveOutIds?: ReadonlySet<string>;
   /** The person confirmed the product-family records. */
   acknowledgeFamily?: boolean;
 }
@@ -1272,12 +1291,24 @@ export interface GroupingPlan {
   leftOut: Array<{ id: string; reason: GroupLeftOutReason }>;
   /** The records the request names. */
   send: GroupingPreviewRecord[];
+  /** Sent records not in the target yet: the ones that join or move. Save
+   *  counts these (people review P6). */
+  joining: GroupingPreviewRecord[];
+  /** Sent records already in the existing target: nothing changes for them. */
+  alreadyInTarget: GroupingPreviewRecord[];
+  /** The existing target's readable records that are not selected, which the
+   *  review lists so the person sees what the group holds (P8). */
+  targetMembers: NonNullable<GroupingPreview['targetGroup']>['members'];
   conflicts: {
     /** Sent records in another group than the target: each needs a move. */
     otherGroup: GroupingPreviewRecord[];
     /** Sent product-family members (not already in the target). */
     family: GroupingPreviewRecord[];
-    /** Readable unselected records of a selected SKU (informational). */
+    /** Readable unselected records of a selected SKU that stay OUTSIDE this
+     *  group (informational). Records already in the existing target are
+     *  not among them: they are listed with targetMembers (people review
+     *  P1: "they stay outside this group" was said of the group's own
+     *  records when Add to group came from a Same SKU chip). */
     sameSkuSiblings: GroupingPreview['sameSkuSiblings'];
     /** Books: distinct editions, and books with no ISBN. */
     editions: { editions: number; unknown: number } | null;
@@ -1319,9 +1350,11 @@ export function bookEditionCount(
 
 /**
  * The review dialog's plan: which selected records will be sent, which are
- * left out (kits, rentals, records the caller cannot edit), the conflicts
- * that need an explicit decision (a record in another group: move it or
- * deselect it; a product-family member: confirm), and whether Save is
+ * left out (kits, rentals, records the caller cannot edit, and records in
+ * another group the person chose to leave out), which join and which are
+ * already in an existing target (with the target's other records), the
+ * conflicts that need an explicit decision (a record in another group: move
+ * it or leave it out; a product-family member: confirm), and whether Save is
  * allowed. The database decides again under its locks; this only shows the
  * person what will happen.
  */
@@ -1341,22 +1374,34 @@ export function planGrouping(
       records.push(r);
     }
   }
+  const targetId = target.kind === 'existing' ? target.groupId : null;
   const leftOut: GroupingPlan['leftOut'] = [];
   const send: GroupingPreviewRecord[] = [];
   for (const r of records) {
     if (r.isBundle) leftOut.push({ id: r.id, reason: 'kit' });
     else if (r.isRental) leftOut.push({ id: r.id, reason: 'rental' });
     else if (!r.writable) leftOut.push({ id: r.id, reason: 'not_writable' });
+    else if (
+      decisions.leaveOutIds?.has(r.id) &&
+      r.displayGroup !== null &&
+      r.displayGroup.id !== targetId
+    )
+      leftOut.push({ id: r.id, reason: 'chosen' });
     else send.push(r);
   }
-  const targetId = target.kind === 'existing' ? target.groupId : null;
   const tg = targetId && preview.targetGroup?.id === targetId ? preview.targetGroup : null;
   const cand = targetId ? preview.candidateGroups.find((g) => g.id === targetId) : undefined;
   const targetName =
     target.kind === 'new' ? normalizeGroupName(target.name) : (tg?.name ?? cand?.name ?? null);
 
   const changing = send.filter((r) => !(targetId && r.displayGroup?.id === targetId));
+  const alreadyInTarget = send.filter((r) => !!targetId && r.displayGroup?.id === targetId);
   const otherGroup = changing.filter((r) => r.displayGroup !== null);
+  const targetMembers = tg ? tg.members.filter((m) => !seen.has(m.id)) : [];
+  const selected = new Set(selectedIds.map((id) => id.toLowerCase()));
+  const sameSkuSiblings = preview.sameSkuSiblings.filter(
+    (sib) => !selected.has(sib.id.toLowerCase()) && !(targetId && sib.displayGroupId === targetId),
+  );
   const family = changing.filter((r) => r.productGroupId !== null);
   const books = send.filter((r) => r.itemType === 'book');
   const editions = books.length >= 2 ? bookEditionCount(books) : null;
@@ -1366,7 +1411,11 @@ export function planGrouping(
   let noop: GroupingPlan['noop'] = null;
   if (send.length > 0 && target.kind === 'existing' && targetId && changing.length === 0) {
     noop = { groupId: targetId, name: targetName ?? send[0]!.displayGroup?.name ?? '' };
-  } else if (target.kind === 'new' && send.length >= 2 && (decisions.moveIds?.size ?? 0) === 0) {
+  } else if (
+    target.kind === 'new' &&
+    send.length >= 2 &&
+    !send.some((r) => decisions.moveIds?.has(r.id))
+  ) {
     const first = send[0]!.displayGroup;
     if (first && send.every((r) => r.displayGroup?.id === first.id)) {
       noop = { groupId: first.id, name: first.name };
@@ -1410,7 +1459,10 @@ export function planGrouping(
     unavailableCount: preview.unavailableCount,
     leftOut,
     send,
-    conflicts: { otherGroup, family, sameSkuSiblings: preview.sameSkuSiblings, editions },
+    joining: changing,
+    alreadyInTarget,
+    targetMembers,
+    conflicts: { otherGroup, family, sameSkuSiblings, editions },
     noop,
     previewHeader,
     targetVersion: target.kind === 'existing' ? (tg?.version ?? cand?.version ?? null) : null,

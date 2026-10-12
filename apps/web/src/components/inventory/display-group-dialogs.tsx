@@ -48,14 +48,24 @@ import type { GroupingReview, GroupingReviewRecord } from '@/server/services/ite
  * answers with the group the records are already in.
  *
  * A record already in another group is never moved silently: Save stays off
- * until the person ticks "Move it into this group" for that record, or
- * deselects it. A product-family member needs the confirmation; its family is
- * not changed either way. A preview that answers for another selection than
- * the dialog now holds is ignored (its key differs).
+ * until the person chooses, for that record, "Move it into this group" or
+ * "Leave it out" (it is then not sent and stays where it is). A product-family
+ * member needs the confirmation; its family is not changed either way. A
+ * preview that answers for another selection than the dialog now holds is
+ * ignored (its key differs).
+ *
+ * Adding to an existing group lists the group's other records the person can
+ * see, marks a selected record already in it, and counts on Save only the
+ * records that join; same-SKU records already in the group are never said to
+ * "stay outside" it (people review P1, P6, P8).
  */
 
 /** Retry the same body only for these refusals; anything else needs a new look. */
 const RETRY_SAME = new Set(['busy', 'rate_limited']);
+
+/** How many of an existing group's other records the review lists by name
+ *  (the header above counts them all). */
+const TARGET_MEMBERS_SHOWN = 20;
 
 type Identity = { organizationId: string; actorUserId: string };
 
@@ -213,6 +223,7 @@ export function GroupSelectedDialog({
   const [nameTouched, setNameTouched] = React.useState(false);
   const [groupId, setGroupId] = React.useState<string | null>(initialGroupId);
   const [moveIds, setMoveIds] = React.useState<Set<string>>(new Set());
+  const [leaveOutIds, setLeaveOutIds] = React.useState<Set<string>>(new Set());
   const [ackFamily, setAckFamily] = React.useState(false);
   const [nonce, setNonce] = React.useState(0);
   const [phase, setPhase] = React.useState<'ready' | 'saving' | 'done'>('ready');
@@ -220,6 +231,23 @@ export function GroupSelectedDialog({
   const [error, setError] = React.useState<{ message: string; stale: boolean } | null>(null);
   const doneRef = React.useRef<HTMLButtonElement>(null);
   const keyed = useKeyedSave();
+
+  /** One record's choice when it is in another group (P10): move it here, or
+   *  leave it out (not sent; it stays where it is). */
+  function choose(id: string, choice: 'move' | 'leave') {
+    setMoveIds((cur) => {
+      const n = new Set(cur);
+      if (choice === 'move') n.add(id);
+      else n.delete(id);
+      return n;
+    });
+    setLeaveOutIds((cur) => {
+      const n = new Set(cur);
+      if (choice === 'leave') n.add(id);
+      else n.delete(id);
+      return n;
+    });
+  }
 
   const targetGroupId = mode === 'existing' ? groupId : null;
   const {
@@ -240,11 +268,12 @@ export function GroupSelectedDialog({
       review
         ? planGrouping(itemIds, { ...review, records: review.records }, target, {
             moveIds,
+            leaveOutIds,
             acknowledgeFamily: ackFamily,
           })
         : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps -- target is derived from mode/nameValue/groupId
-    [review, itemIds, mode, nameValue, groupId, moveIds, ackFamily],
+    [review, itemIds, mode, nameValue, groupId, moveIds, leaveOutIds, ackFamily],
   );
 
   React.useEffect(() => {
@@ -276,7 +305,7 @@ export function GroupSelectedDialog({
       groupBodyForPlan(
         plan,
         target,
-        { moveIds, acknowledgeFamily: ackFamily },
+        { moveIds, leaveOutIds, acknowledgeFamily: ackFamily },
         {
           idempotencyKey: 'pending',
           ...identity,
@@ -310,10 +339,14 @@ export function GroupSelectedDialog({
   const showEditions = editions !== null && (editions.editions > 1 || editions.unknown > 0);
   const candidates = review?.candidateGroups ?? [];
   const sendCount = plan?.send.length ?? 0;
+  // Save counts the records that JOIN an existing group, never those already
+  // in it (P6).
+  const joinCount = plan?.joining.length ?? 0;
   const targetName =
     mode === 'existing'
       ? (review?.targetGroup?.name ?? candidates.find((c) => c.id === groupId)?.name ?? '')
       : (normalizeGroupName(nameValue) ?? '');
+  const targetMembers = mode === 'existing' ? (plan?.targetMembers ?? []) : [];
 
   return (
     <Dialog open={open} onOpenChange={(v) => (phase === 'saving' ? null : onOpenChange(v))}>
@@ -343,6 +376,7 @@ export function GroupSelectedDialog({
                 const reason = leftOutReason.get(r.id);
                 const other =
                   r.displayGroup && r.displayGroup.id !== targetGroupId ? r.displayGroup : null;
+                const inTarget = !!targetGroupId && r.displayGroup?.id === targetGroupId;
                 return (
                   <li
                     key={r.id}
@@ -350,34 +384,42 @@ export function GroupSelectedDialog({
                     className="border-border space-y-1 rounded-md border p-2"
                   >
                     <RecordLine r={r} view={view} />
-                    {reason ? (
+                    {reason && reason !== 'chosen' ? (
                       <p className="text-muted-foreground text-xs">
                         Left out: {r.name} {GROUP_COPY.leftOutReason[reason]}.
                       </p>
                     ) : null}
-                    {!reason && other ? (
-                      <label className="flex items-center gap-2 text-xs">
-                        <input
-                          type="checkbox"
-                          checked={moveIds.has(r.id)}
-                          disabled={phase === 'saving'}
-                          onChange={(e) =>
-                            setMoveIds((s) => {
-                              const n = new Set(s);
-                              if (e.target.checked) n.add(r.id);
-                              else n.delete(r.id);
-                              return n;
-                            })
-                          }
-                        />
-                        <span>
-                          {GROUP_COPY.otherGroup(other.name)} {GROUP_COPY.moveOne}
-                        </span>
-                      </label>
+                    {!reason && inTarget ? (
+                      <p className="text-muted-foreground text-xs">{GROUP_COPY.alreadyInTarget}</p>
                     ) : null}
-                    {!reason &&
-                    r.productGroupId &&
-                    !(targetGroupId && r.displayGroup?.id === targetGroupId) ? (
+                    {(!reason || reason === 'chosen') && other ? (
+                      // One explicit choice per record (P10): move it here,
+                      // or leave it out (not sent; it stays in its group).
+                      <fieldset className="space-y-1 text-xs">
+                        <legend>{GROUP_COPY.otherGroup(other.name)}</legend>
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="radio"
+                            name={`group-choice-${r.id}`}
+                            checked={moveIds.has(r.id)}
+                            disabled={phase === 'saving'}
+                            onChange={() => choose(r.id, 'move')}
+                          />
+                          <span>{GROUP_COPY.moveOne}</span>
+                        </label>
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="radio"
+                            name={`group-choice-${r.id}`}
+                            checked={leaveOutIds.has(r.id)}
+                            disabled={phase === 'saving'}
+                            onChange={() => choose(r.id, 'leave')}
+                          />
+                          <span>{GROUP_COPY.leaveOutOne}</span>
+                        </label>
+                      </fieldset>
+                    ) : null}
+                    {!reason && r.productGroupId && !inTarget ? (
                       <p className="text-muted-foreground text-xs">
                         {GROUP_COPY.family(r.productGroupName)}
                       </p>
@@ -509,6 +551,29 @@ export function GroupSelectedDialog({
                 >
                   {plan.previewHeader}
                 </p>
+                {targetMembers.length > 0 ? (
+                  // The group's other records the person can see (P8).
+                  <div className="space-y-0.5 pt-1 text-xs">
+                    <p className="font-medium">{GROUP_COPY.targetMembers(targetName)}</p>
+                    <ul
+                      className="text-muted-foreground space-y-0.5"
+                      aria-label={GROUP_COPY.targetMembers(targetName)}
+                    >
+                      {targetMembers.slice(0, TARGET_MEMBERS_SHOWN).map((m) => (
+                        <li key={m.id}>
+                          {[m.name, m.sku ? `SKU ${m.sku}` : null, `${m.quantityOnHand} on hand`]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </li>
+                      ))}
+                    </ul>
+                    {targetMembers.length > TARGET_MEMBERS_SHOWN ? (
+                      <p className="text-muted-foreground">
+                        {GROUP_COPY.moreTargetMembers(targetMembers.length - TARGET_MEMBERS_SHOWN)}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             ) : null}
             <p className="text-muted-foreground text-xs">{GROUP_COPY.skuNote}</p>
@@ -562,9 +627,11 @@ export function GroupSelectedDialog({
                   disabled={phase === 'saving' || !identity || (!plan.noop && !plan.canSave)}
                 >
                   {phase === 'saving' ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                  {mode === 'existing' && targetName
-                    ? GROUP_COPY.confirmExisting(sendCount, targetName)
-                    : GROUP_COPY.confirmNew(sendCount)}
+                  {plan.noop
+                    ? GROUP_COPY.noopConfirm
+                    : mode === 'existing' && targetName
+                      ? GROUP_COPY.confirmExisting(joinCount, targetName)
+                      : GROUP_COPY.confirmNew(sendCount)}
                 </Button>
               ) : null}
             </>

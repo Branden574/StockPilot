@@ -57,16 +57,22 @@ import { useWorkspace } from '@/lib/use-workspace';
  * does not combine stock, change ownership, or move items. Then every selected
  * record the member can read (the rest as a count): its picture, name, SKU (a
  * book's ISBN, its edition), size, charter, rack and on hand; whether it is in
- * another group (never moved silently: "Move it into this group" per record,
- * or go back and deselect it); a product family it belongs to (confirmed,
- * never changed); records sharing a SKU that are not selected; and how the
- * list will show the group afterwards.
+ * another group (never moved silently: per record, "Move it into this group"
+ * or "Leave it out", which sends nothing for it); a product family it belongs
+ * to (confirmed, never changed); records sharing a SKU that are not selected
+ * and stay outside the group (never the group's own records); how the list
+ * will show the group afterwards, and, when adding to a group that exists,
+ * its other records (people review P1, P6, P8, P10).
  *
  * ONLINE ONLY and never queued. Cancel writes nothing. Save sends one key per
  * body and keeps it for a retry of that body (busy, a lost answer), so the
  * database replays the first outcome instead of making a second group; a
  * repeat after it applied answers that the records are already there.
  */
+/** How many of an existing group's other records the review lists by name
+ *  (the header above counts them all), as on the web. */
+const TARGET_MEMBERS_SHOWN = 20;
+
 export default function GroupSelectedScreen() {
   const router = useRouter();
   const { c } = useTheme();
@@ -91,6 +97,7 @@ export default function GroupSelectedScreen() {
   const [nameTouched, setNameTouched] = React.useState(false);
   const [groupId, setGroupId] = React.useState<string | null>(params?.groupId ?? null);
   const [moveIds, setMoveIds] = React.useState<Set<string>>(new Set());
+  const [leaveOutIds, setLeaveOutIds] = React.useState<Set<string>>(new Set());
   const [ackFamily, setAckFamily] = React.useState(false);
   const [nonce, setNonce] = React.useState(0);
 
@@ -151,11 +158,32 @@ export default function GroupSelectedScreen() {
   const plan = React.useMemo(
     () =>
       review
-        ? planGrouping(itemIds, review, target, { moveIds, acknowledgeFamily: ackFamily })
+        ? planGrouping(itemIds, review, target, {
+            moveIds,
+            leaveOutIds,
+            acknowledgeFamily: ackFamily,
+          })
         : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps -- target is derived from mode/nameValue/groupId
-    [review, itemIds, mode, nameValue, groupId, moveIds, ackFamily],
+    [review, itemIds, mode, nameValue, groupId, moveIds, leaveOutIds, ackFamily],
   );
+
+  /** One record's choice when it is in another group (P10): move it here, or
+   *  leave it out (not sent; it stays where it is). */
+  function choose(id: string, choice: 'move' | 'leave') {
+    setMoveIds((cur) => {
+      const n = new Set(cur);
+      if (choice === 'move') n.add(id);
+      else n.delete(id);
+      return n;
+    });
+    setLeaveOutIds((cur) => {
+      const n = new Set(cur);
+      if (choice === 'leave') n.add(id);
+      else n.delete(id);
+      return n;
+    });
+  }
 
   function announce(message: string) {
     AccessibilityInfo.announceForAccessibility(message);
@@ -190,7 +218,7 @@ export default function GroupSelectedScreen() {
       groupBodyForPlan(
         plan,
         target,
-        { moveIds, acknowledgeFamily: ackFamily },
+        { moveIds, leaveOutIds, acknowledgeFamily: ackFamily },
         { idempotencyKey: 'pending', ...identity },
       ),
     );
@@ -248,6 +276,7 @@ export default function GroupSelectedScreen() {
     mode === 'existing'
       ? (review?.targetGroup?.name ?? candidates.find((g) => g.id === groupId)?.name ?? '')
       : (normalizeGroupName(nameValue) ?? '');
+  const targetMembers = mode === 'existing' && plan ? plan.targetMembers : [];
   const busy = phase === 'saving';
 
   return (
@@ -312,7 +341,9 @@ export default function GroupSelectedScreen() {
                 const reason = leftOutReason.get(r.id);
                 const other =
                   r.displayGroup && r.displayGroup.id !== targetGroupId ? r.displayGroup : null;
+                const inTarget = !!targetGroupId && r.displayGroup?.id === targetGroupId;
                 const moving = moveIds.has(r.id);
+                const leaving = leaveOutIds.has(r.id);
                 return (
                   <View key={r.id}>
                     <View style={styles.recordRow}>
@@ -329,39 +360,51 @@ export default function GroupSelectedScreen() {
                         <Mono size={11} color={c.ink4} tracking={0.02}>
                           {reviewRecordDetail(r, view)}
                         </Mono>
-                        {reason ? (
+                        {reason && reason !== 'chosen' ? (
                           <Body muted size={12}>
                             {`Left out: ${r.name} ${GROUP_COPY.leftOutReason[reason]}.`}
                           </Body>
                         ) : null}
-                        {!reason && other ? (
-                          <Pressable
-                            onPress={() =>
-                              setMoveIds((s) => {
-                                const n = new Set(s);
-                                if (n.has(r.id)) n.delete(r.id);
-                                else n.add(r.id);
-                                return n;
-                              })
-                            }
-                            disabled={busy}
-                            accessibilityRole="checkbox"
-                            accessibilityState={{ checked: moving, disabled: busy }}
-                            style={styles.choiceRow}
-                          >
-                            {moving ? (
-                              <CheckCircle2 size={20} color={c.ink} strokeWidth={2} />
-                            ) : (
-                              <Circle size={20} color={c.ink4} strokeWidth={1.6} />
-                            )}
-                            <Body size={12.5} color={c.ink} style={{ flex: 1 }}>
-                              {`${GROUP_COPY.otherGroup(other.name)} ${GROUP_COPY.moveOne}`}
-                            </Body>
-                          </Pressable>
+                        {!reason && inTarget ? (
+                          <Body muted size={12}>
+                            {GROUP_COPY.alreadyInTarget}
+                          </Body>
                         ) : null}
-                        {!reason &&
-                        r.productGroupId &&
-                        !(targetGroupId && r.displayGroup?.id === targetGroupId) ? (
+                        {(!reason || reason === 'chosen') && other ? (
+                          // One explicit choice per record (P10): move it
+                          // here, or leave it out (it stays in its group).
+                          <View accessibilityRole="radiogroup" style={{ gap: 2 }}>
+                            <Body size={12.5} color={c.ink}>
+                              {GROUP_COPY.otherGroup(other.name)}
+                            </Body>
+                            {(
+                              [
+                                ['move', moving, GROUP_COPY.moveOne],
+                                ['leave', leaving, GROUP_COPY.leaveOutOne],
+                              ] as const
+                            ).map(([choice, on, label]) => (
+                              <Pressable
+                                key={choice}
+                                onPress={() => choose(r.id, choice)}
+                                disabled={busy}
+                                accessibilityRole="radio"
+                                accessibilityLabel={`${label}: ${r.name}`}
+                                accessibilityState={{ checked: on, disabled: busy }}
+                                style={styles.choiceRow}
+                              >
+                                {on ? (
+                                  <CircleDot size={20} color={c.ink} strokeWidth={2} />
+                                ) : (
+                                  <Circle size={20} color={c.ink4} strokeWidth={1.6} />
+                                )}
+                                <Body size={12.5} color={c.ink} style={{ flex: 1 }}>
+                                  {label}
+                                </Body>
+                              </Pressable>
+                            ))}
+                          </View>
+                        ) : null}
+                        {!reason && r.productGroupId && !inTarget ? (
                           <Body muted size={12}>
                             {GROUP_COPY.family(r.productGroupName)}
                           </Body>
@@ -546,6 +589,26 @@ export default function GroupSelectedScreen() {
                     {plan.previewHeader}
                   </Body>
                 </View>
+                {targetMembers.length > 0 ? (
+                  // The group's other records the member can see (P8).
+                  <View style={{ gap: 3, paddingTop: 4 }}>
+                    <Mono size={11} tracking={0.04} color={c.ink3}>
+                      {GROUP_COPY.targetMembers(targetName)}
+                    </Mono>
+                    {targetMembers.slice(0, TARGET_MEMBERS_SHOWN).map((m) => (
+                      <Body key={m.id} muted size={12.5}>
+                        {[m.name, m.sku ? `SKU ${m.sku}` : null, `${m.quantityOnHand} on hand`]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </Body>
+                    ))}
+                    {targetMembers.length > TARGET_MEMBERS_SHOWN ? (
+                      <Body muted size={12.5}>
+                        {GROUP_COPY.moreTargetMembers(targetMembers.length - TARGET_MEMBERS_SHOWN)}
+                      </Body>
+                    ) : null}
+                  </View>
+                ) : null}
               </View>
             ) : null}
 
@@ -590,9 +653,11 @@ export default function GroupSelectedScreen() {
                 disabled={busy || !identity || (!plan.noop && !plan.canSave)}
                 leading={busy ? <ActivityIndicator size="small" color={c.paper} /> : undefined}
               >
-                {mode === 'existing' && targetName
-                  ? GROUP_COPY.confirmExisting(sendCount, targetName)
-                  : GROUP_COPY.confirmNew(sendCount)}
+                {plan.noop
+                  ? GROUP_COPY.noopConfirm
+                  : mode === 'existing' && targetName
+                    ? GROUP_COPY.confirmExisting(plan.joining.length, targetName)
+                    : GROUP_COPY.confirmNew(sendCount)}
               </Button>
             ) : null}
             <Button block variant="ghost" onPress={close} disabled={busy}>

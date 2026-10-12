@@ -228,11 +228,10 @@ describe('GroupSelectedDialog', () => {
     const save = screen.getByRole('button', { name: 'Group 2 records' });
     expect(save).toBeDisabled();
     expect(screen.getByTestId('group-blocked')).toHaveTextContent(GROUP_COPY.blocked.otherGroup);
-    await userEvent.click(
-      screen.getByRole('checkbox', {
-        name: /Already in group Old shirts\. Move it into this group/,
-      }),
-    );
+    const choice = within(screen.getByTestId(`group-row-${A}`)).getByRole('group', {
+      name: GROUP_COPY.otherGroup('Old shirts'),
+    });
+    await userEvent.click(within(choice).getByRole('radio', { name: GROUP_COPY.moveOne }));
     expect(save).toBeEnabled();
     await userEvent.click(save);
     await waitFor(() => expect(h.apply).toHaveBeenCalledTimes(1));
@@ -304,7 +303,9 @@ describe('GroupSelectedDialog', () => {
     );
     await screen.findByTestId(`group-row-${A}`);
     expect(screen.getAllByText(GROUP_COPY.noop('Polo XXXL')).length).toBeGreaterThan(0);
-    await userEvent.click(screen.getByRole('button', { name: 'Group 2 records' }));
+    // Nothing would be grouped, so the button does not say it groups.
+    expect(screen.queryByRole('button', { name: 'Group 2 records' })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: GROUP_COPY.noopConfirm }));
     expect(h.apply).not.toHaveBeenCalled();
   });
 
@@ -347,6 +348,121 @@ describe('GroupSelectedDialog', () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(screen.queryByTestId(`group-row-${C}`)).not.toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent(/Loading the records/);
+  });
+
+  // People review P1, P6 and P8: Add to group from a "Same SKU as records in
+  // Tees" chip reviews the record with Tees as the target.
+  it("Add to group from a Same SKU chip: the group's own records are listed as already in it, never as staying outside, and Save counts only the record that joins", async () => {
+    const D = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    const tees = { id: G, name: 'Tees', version: 2, itemType: 'product' };
+    h.preview.mockResolvedValueOnce(
+      review(
+        [D],
+        [rec(D, { name: 'Limits Tee', sku: 'X' })],
+        {
+          sameSkuSiblings: [
+            { id: A, name: 'Limits Tee', sku: 'X', itemType: 'product', displayGroupId: G },
+            { id: B, name: 'Limits Tee', sku: 'X', itemType: 'product', displayGroupId: G },
+          ],
+          candidateGroups: [{ ...tees, memberCount: 2, holdsSelected: false }],
+          targetGroup: {
+            ...tees,
+            members: [
+              { id: A, name: 'Limits Tee', sku: 'X', quantityOnHand: 4 },
+              { id: B, name: 'Limits Tee', sku: 'X', quantityOnHand: 5 },
+            ],
+          },
+        },
+        G,
+      ),
+    );
+    const onAddToSelection = vi.fn();
+    render(
+      <GroupSelectedDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[D]}
+        initialGroupId={G}
+        view="items"
+        onAddToSelection={onAddToSelection}
+        onDone={() => {}}
+      />,
+    );
+    await screen.findByTestId(`group-row-${D}`);
+    expect(screen.queryByText(/stay outside this group/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: GROUP_COPY.addSiblings })).not.toBeInTheDocument();
+    const members = screen.getByRole('list', { name: GROUP_COPY.targetMembers('Tees') });
+    expect(within(members).getAllByRole('listitem')).toHaveLength(2);
+    expect(within(members).getAllByText(/SKU X/)).toHaveLength(2);
+    expect(screen.getByTestId('group-preview-header')).toHaveTextContent(
+      'Tees · 3 records · 11 on hand',
+    );
+    expect(screen.getByRole('button', { name: 'Add 1 record to Tees' })).toBeEnabled();
+  });
+
+  it('a selected record already in the target says so, and Save counts only the records that join (P6)', async () => {
+    const D = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    const tees = { id: G, name: 'Tees', version: 3, itemType: 'product' };
+    h.preview.mockResolvedValueOnce(
+      review(
+        [A, D],
+        [rec(A, { displayGroup: { id: G, name: 'Tees', version: 3 } }), rec(D)],
+        {
+          candidateGroups: [{ ...tees, memberCount: 1, holdsSelected: true }],
+          targetGroup: {
+            ...tees,
+            members: [{ id: A, name: 'Polo XXXL', sku: 'SKU-A', quantityOnHand: 2 }],
+          },
+        },
+        G,
+      ),
+    );
+    render(
+      <GroupSelectedDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[A, D]}
+        initialGroupId={G}
+        view="items"
+        onDone={() => {}}
+      />,
+    );
+    const rowA = await screen.findByTestId(`group-row-${A}`);
+    expect(screen.getByRole('button', { name: /^Add \d+ records? to Tees$/ })).toHaveTextContent(
+      'Add 1 record to Tees',
+    );
+    expect(within(rowA).getByText(GROUP_COPY.alreadyInTarget)).toBeInTheDocument();
+  });
+
+  it('a record in another group can be left out from the review: it is not sent and its group is untouched (P10)', async () => {
+    h.preview.mockResolvedValueOnce(
+      review(
+        [A, B, C],
+        [rec(A, { displayGroup: { id: H, name: 'Old shirts', version: 3 } }), rec(B), rec(C)],
+      ),
+    );
+    h.apply.mockResolvedValueOnce(APPLIED);
+    render(
+      <GroupSelectedDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[A, B, C]}
+        view="items"
+        onDone={() => {}}
+      />,
+    );
+    const rowA = await screen.findByTestId(`group-row-${A}`);
+    expect(screen.getByTestId('group-blocked')).toHaveTextContent(GROUP_COPY.blocked.otherGroup);
+    await userEvent.click(within(rowA).getByRole('radio', { name: GROUP_COPY.leaveOutOne }));
+    const save = screen.getByRole('button', { name: 'Group 2 records' });
+    expect(save).toBeEnabled();
+    await userEvent.click(save);
+    await waitFor(() => expect(h.apply).toHaveBeenCalledTimes(1));
+    expect(h.apply.mock.calls[0]![0]).toMatchObject({
+      itemIds: [B, C],
+      moveItemIds: [],
+      expectedGroups: { [B]: null, [C]: null },
+    });
   });
 
   it('adding to an existing group re-reads that group and sends its version', async () => {
