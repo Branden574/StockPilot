@@ -33,12 +33,13 @@ import { unlinkItems } from './product-group-linking';
  *           stock, rack, charter and history unchanged).
  * This service only REUSES those writes: ItemGroupingService.applyGrouping
  * and .splitSku (keyed, idempotent, each one transaction, a busy answer
- * retried with the same key) and unlinkItems (one row at a time, audited,
- * no key: a record already out of its family is done).
+ * retried with the same key) and unlinkItems (one update per family batch,
+ * filtered on the family each record was reviewed in, audited, no key: a
+ * record already out of its family is done).
  *
  * THE ORDER is fixed: remove, then split, then unlink (UNGROUP_PART_ORDER).
- * The two keyed, all-or-nothing steps go first; the unkeyed, row-at-a-time
- * one goes last. A step runs only when every step before it applied: the
+ * The two keyed, all-or-nothing steps go first; the unkeyed one, which can
+ * stop part-way, goes last. A step runs only when every step before it applied: the
  * first refusal stops the run, and the answer names each step's records as
  * applied, refused, partly applied or not tried, so nothing is ever left
  * half-applied without saying so. Sending the SAME body again replays the
@@ -353,8 +354,8 @@ export class UngroupSelectedService {
       }
     }
 
-    // 3. Records leaving their size family (row at a time: read back which
-    //    ones left when it stops part-way).
+    // 3. Records leaving their size family (it can stop part-way: read back
+    //    which ones left when it does).
     if (body.unlink) {
       const ids = body.unlink.itemIds;
       if (stopped) parts.push(notTried('unlink', ids));
