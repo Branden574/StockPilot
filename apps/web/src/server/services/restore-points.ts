@@ -719,6 +719,27 @@ export async function restorePointSkuChanges(
     );
     for (const c of named) c.name = (c.itemId && nameById.get(c.itemId)) || null;
   }
+  // update() writes propagated_to_sku whenever its Model B fan-out runs, even
+  // when no other record had the SKU (PR stage, found by the D1 lab), so the
+  // flag alone does not mean the siblings followed. Say so only when other
+  // live records hold the record's new SKU now. A failed read keeps the flag:
+  // the stronger warning.
+  const afters = [...new Set(named.flatMap((c) => (c.shared && c.after ? [c.after] : [])))];
+  if (afters.length > 0) {
+    const { data: holders, error: holdersErr } = await ctx.supabase
+      .from('inventory_items')
+      .select('sku')
+      .eq('organization_id', ctx.organizationId)
+      .is('deleted_at', null)
+      // in-list-bound: at most SKU_CHANGES_NAMED (10) SKUs, the named records' new SKUs
+      .in('sku', afters);
+    if (!holdersErr) {
+      const held = new Map<string, number>();
+      for (const h of (holders ?? []) as Array<{ sku: string }>)
+        held.set(h.sku, (held.get(h.sku) ?? 0) + 1);
+      for (const c of named) if (c.shared) c.shared = (c.after ? (held.get(c.after) ?? 0) : 0) > 1;
+    }
+  }
   return {
     version: 1,
     changes: named,

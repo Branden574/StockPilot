@@ -129,6 +129,8 @@ interface World {
   point?: { version: unknown; captured_at: string | null; created_at: string } | null;
   audit?: Array<Record<string, unknown>>;
   names?: Array<{ id: string; name: string; sku: string }>;
+  /** live records holding the named records' new SKUs (the shared check) */
+  holders?: Array<{ sku: string }>;
   auditError?: { message: string } | null;
 }
 
@@ -146,6 +148,7 @@ function harness(world: World, who: { role?: string; permissions?: Set<Permissio
       if (r.select.startsWith('id, sku, bin_location'))
         return { data: world.active ?? [], error: null };
       if (r.select === 'id, name, sku') return { data: world.names ?? [], error: null };
+      if (r.select === 'sku') return { data: world.holders ?? [], error: null };
       return { data: world.capture ?? [], error: null };
     }
     return { data: [], error: null };
@@ -670,6 +673,8 @@ describe('restorePointSkuChanges (the warning before restoring a version 1 point
         { id: C, name: 'Hoodie', sku: 'SP-LAST' },
         { id: B, name: 'Black Mouse Pad', sku: 'SP-NEW1' },
       ],
+      // C's sibling followed it to SP-LAST (the Model B edit carried it along).
+      holders: [{ sku: 'SP-LAST' }, { sku: 'SP-LAST' }],
     });
     const res = await restorePointSkuChanges(ctx, POINT);
     expect(res).toEqual({
@@ -710,6 +715,51 @@ describe('restorePointSkuChanges (the warning before restoring a version 1 point
       truncated: false,
     });
     expect(reads.some((r) => r.table === 'audit_logs')).toBe(false);
+  });
+
+  // PR stage (found by the D1 lab): update() writes propagated_to_sku whenever
+  // its Model B fan-out runs, even when no other record had the SKU, so the flag
+  // alone made the warning say "with the records that shared it" for a record
+  // that shared nothing. The line now says it only when other live records hold
+  // the record's new SKU now (the siblings that followed it).
+  it('says "with the records that shared it" only when other records now hold the new SKU, not for a record that shared nothing', async () => {
+    const { ctx, reads } = harness({
+      point: V1,
+      audit: [
+        {
+          entity_id: B,
+          event: 'inventory.item.updated',
+          before_sku: 'QA-CABLE',
+          after_sku: 'QA-CABLE-2',
+          propagated: 'QA-CABLE-2',
+        },
+        {
+          entity_id: C,
+          event: 'inventory.item.updated',
+          before_sku: 'SP-OLD',
+          after_sku: 'SP-NEW',
+          propagated: 'SP-NEW',
+        },
+      ],
+      names: [
+        { id: B, name: 'HDMI Cable', sku: 'QA-CABLE-2' },
+        { id: C, name: 'Hoodie', sku: 'SP-NEW' },
+      ],
+      // B alone holds QA-CABLE-2; C and the sibling that followed it hold SP-NEW.
+      holders: [{ sku: 'QA-CABLE-2' }, { sku: 'SP-NEW' }, { sku: 'SP-NEW' }],
+    });
+    expect((await restorePointSkuChanges(ctx, POINT)).changes).toEqual([
+      { itemId: B, name: 'HDMI Cable', before: 'QA-CABLE', after: 'QA-CABLE-2', shared: false },
+      { itemId: C, name: 'Hoodie', before: 'SP-OLD', after: 'SP-NEW', shared: true },
+    ]);
+    const holders = reads.find((r) => r.table === 'inventory_items' && r.select === 'sku')!;
+    expect(holders.filters).toEqual(
+      expect.arrayContaining([
+        ['eq', 'organization_id', ORG],
+        ['is', 'deleted_at', null],
+        ['in', 'sku', ['QA-CABLE-2', 'SP-NEW']],
+      ]),
+    );
   });
 
   it('a version 1 point with no SKU change since gives an empty list', async () => {
