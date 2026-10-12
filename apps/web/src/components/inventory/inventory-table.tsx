@@ -1062,15 +1062,17 @@ export function InventoryTable({
 
   const activeFilterCount = categoryIds.size + locationIds.size + charterIds.size;
   // People review P5: an explicit group's header says "N matching" whenever
-  // anything narrows the list (a search, a filter, a stock view, Expected,
-  // Archived or a rack), as the phone does: its count is then the records
-  // listed, not the group's.
+  // anything narrows the list (a search, a filter, a stock view, Expected, a
+  // rack, or a lifecycle view that shows fewer records than the default:
+  // Archived or Discontinued; Active is the default and All shows more), as
+  // the phone does: its count is then the records listed, not the group's.
+  const lifecycleParam = params.get('status');
   const listNarrowed =
     !!q.trim() ||
     activeFilterCount > 0 ||
     !!params.get('stock') ||
     !!params.get('rack') ||
-    !!params.get('status') ||
+    (!!lifecycleParam && lifecycleParam !== 'active' && lifecycleParam !== 'all') ||
     params.get('expected') === '1';
   function clearAllFilters() {
     setQ('');

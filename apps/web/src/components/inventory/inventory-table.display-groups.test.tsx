@@ -344,6 +344,32 @@ describe('InventoryTable: explicit display group headers', () => {
     expect(header.querySelector('img')).toBeNull();
   });
 
+  it('a lifecycle view counts as narrowing only when it shows fewer records than the default: Archived yes, Active or All no (P5)', () => {
+    const items = [
+      row('a', 'A', { ...inGroup('g', 'Pads') }),
+      row('b', 'B', { ...inGroup('g', 'Pads') }),
+    ];
+    const header = (status: string) => {
+      urlState.params = new URLSearchParams(`status=${status}`);
+      const { container, unmount } = render(
+        <InventoryTable
+          items={items as never}
+          lookups={LOOKUPS}
+          total={2}
+          initialQuery=""
+          pageSize={30}
+        />,
+      );
+      const text = (bodyRows(container)[0] as HTMLElement).textContent ?? '';
+      unmount();
+      return text;
+    };
+    expect(header('archived')).toContain('2 matching');
+    expect(header('discontinued')).toContain('2 matching');
+    expect(header('active')).toContain('2 records');
+    expect(header('all')).toContain('2 records');
+  });
+
   it('server mode on a multi-page result marks the group header partial', () => {
     const items = [
       row('a', 'A', { ...inGroup('g', 'Pads') }),
