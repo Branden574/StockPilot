@@ -90,11 +90,31 @@ export const RELEASES: Release[] = [
     // ends in a size is still listed with the other sizes of its name under
     // one header (size-run.ts runKey), so the entry says so in the review's
     // words (UNGROUP_COPY.familyNameNote).
-    status: 'draft',
+    // PUBLISHED by docs/whats-new-ungroup-group-selected (2026-10-12), a
+    // minute after Ungroup's release. #355 merged as 91ca32894 at 12:31:16Z
+    // after migration 0400 was pushed (12:22:30Z); web build f003492ad020
+    // was live at 12:33:55Z; OTA group 4d243f25 was published at 12:35:07Z
+    // (iOS bundle verified against the local export). The Demo Co
+    // production walk (WALK-G2) passed: on the web Group selected (a), Ungroup
+    // of that group (b), Ungroup of one size-family member with the Returns
+    // note shown (c1, then re-linked, c2); on the iPhone simulator with the
+    // published bundle, Group (d1) and Ungroup (d2); no stock, movement or
+    // notification came from it.
+    // Claims re-read at publish against 91ca32894 and that walk. Changed:
+    // the summary offers Group selected for two or more ticked records (one
+    // record offers none: core groupingSelectionFacts canGroup, walk c1);
+    // Remove from group on a header takes the group's listed records out,
+    // not one record (the header passes every listed member to
+    // RemoveFromGroupDialog); Group them is offered only when the refusal
+    // names a record you can see (InventoryService skuTakenError reads the
+    // holder under the caller's client); Ungroup's why-it-matters no longer
+    // says ticked records in a group offered no Ungroup (groups shipped with
+    // their Ungroup, so no build ever showed that).
+    status: 'published',
     title: 'Group or ungroup any records',
     summary:
-      "On Items and Books, tick any records, then choose Group selected on the web, or Group on the mobile app's select bar after the latest update, to show them together under one header with the group's name; or choose Ungroup to take each one out of the grouping it shows under. Grouping organizes these records together. It does not combine stock, change ownership, or move items.",
-    publishedAt: '2026-10-24T17:00:00Z',
+      "On Items and Books, tick two or more records, then choose Group selected on the web, or Group on the mobile app's select bar after the latest update, to show them together under one header with the group's name; or tick any records and choose Ungroup to take each one out of the grouping it shows under. Grouping organizes these records together. It does not combine stock, change ownership, or move items.",
+    publishedAt: '2026-10-12T13:47:00Z',
     entries: [
       {
         id: 'group-selected',
@@ -102,11 +122,11 @@ export const RELEASES: Release[] = [
         area: 'Inventory',
         title: 'Group selected',
         whatChanged:
-          "On Items or Books, tick two or more records and choose Group selected on the web, or Group on the mobile app's select bar. The review lists each record with its picture, SKU (and ISBN for a book), charter, rack and stock, and shows how the list will show the group. Start a new group with a name, or add the records to a group that already exists. A record already in another group moves only when you choose Move it into this group for it. Remove from group takes a record out from a group's header on the web or from the item page on both. On the web, a manager can rename a group from its header.",
+          "On Items or Books, tick two or more records and choose Group selected on the web, or Group on the mobile app's select bar. The review lists each record with its picture, SKU (and ISBN for a book), charter, rack and stock, and shows how the list will show the group. Start a new group with a name, or add the records to a group that already exists. A record already in another group moves only when you choose Move it into this group for it. Remove from group takes records out of a group, from its header on the web or the item page on both. On the web, a manager can rename a group from its header.",
         whyItMatters:
           'Records showed together only when they shared a SKU, so putting them under one header meant copying a SKU onto another record, and sometimes changing its charter or rack as well.',
         howItAffectsYou:
-          "Grouping organizes these records together. It does not combine stock, change ownership, or move items. Each record keeps its own SKU, barcode/ISBN, charter, rack, stock and history; orders, exchanges, purchase orders and reports treat each one on its own. Kits and rentals cannot be grouped. Records in no group that share a SKU still show together automatically; one sharing a SKU with a group's records, a new one included, stays outside it, marked Same SKU, until you choose Add to group. Editing a record's SKU on the web to one already used in its charter and rack offers Group them.",
+          "Grouping organizes these records together. It does not combine stock, change ownership, or move items. Each record keeps its own SKU, barcode/ISBN, charter, rack, stock and history; orders, exchanges, purchase orders and reports treat each one on its own. Kits and rentals cannot be grouped. Records in no group that share a SKU still show together automatically; one sharing a SKU with a group's records, even a new one, stays outside it, marked Same SKU, until you choose Add to group. Editing a record's SKU on the web to one held by a record you can see in its charter and rack offers Group them.",
         whatToDo:
           'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
         link: { href: '/dashboard/inventory', label: 'Open Items' },
@@ -120,7 +140,7 @@ export const RELEASES: Release[] = [
         whatChanged:
           "On Items or Books, tick any records and choose Ungroup, on the web or on the mobile app's select bar. Each record leaves the grouping it shows under on the list: a record in a group leaves it (Leaves group), a record that shares its SKU with another record gets one of its own (Gets its own SKU; when you tick every record of a SKU, one keeps it), and a size in a size family leaves the family (Leaves the size family). The review lists each record with its charter, rack, warehouse and stock and what happens to it, or why it is left out, and Ungroup counts only the records that change.",
         whyItMatters:
-          'Ungroup used to work only on records that share a SKU, so ticked records in a group, or the sizes of a size family, offered no Ungroup.',
+          'Ungroup used to work only on records that share a SKU, so the sizes of a size family could not be ungrouped from the list.',
         howItAffectsYou:
           "Stock, charter, rack, barcode/ISBN and history stay as they are; only a record that shared its SKU gets a new one. In Returns, a size taken out of its size family is no longer listed under Other sizes for an exchange, and the family's sizes are no longer listed for it. Records whose names end in a size (S, M, L and so on) are still listed together under one header by their name. Only the size family is undone. Taking sizes out of a size family needs permission to manage sports products. A record in more than one grouping leaves the one it shows under.",
         whatToDo:
@@ -151,6 +171,32 @@ export const RELEASES: Release[] = [
           'Those rows used to move into the size run instead, so the header lost them and the run counted their stock as well.',
         howItAffectsYou: 'Each row shows once, under its own header.',
         whatToDo: 'No action needed.',
+      },
+      {
+        // Group selected follow-up #357 (431ab5255, web build 00b912980244
+        // live at 14:15:05Z, OTA group 13bb3c30 published at 14:16:29Z and
+        // verified). Owner 2026-10-12 13:50Z, verbatim: "so the picture
+        // disapears it should just use the first picture of whatever was
+        // chosen for the grouping" (overruling the people review's P5, no
+        // cover). Checked against 431ab5255: core groupCoverRow picks the
+        // first record, in the order the header lists them, whose picture is
+        // a non-blank URL, or none; the web header (inventory-table.tsx, used
+        // by Items and Books) and the phone's Items and Books headers
+        // (inventory.tsx, books.tsx, through buildGroupedRows' coverUrl) show
+        // it, and with none keep the placeholder. Before it, a group's header
+        // showed no picture on either. Nothing is written: each record keeps
+        // its own picture. Told to whoever can edit items, as Group selected.
+        id: 'group-header-picture',
+        category: 'improved',
+        area: 'Inventory',
+        title: "A group's header shows a picture",
+        whatChanged:
+          "On Items and Books, on the web and in the mobile app, a group's header now shows the picture of the first record listed under it that has one. When none of its records has a picture, the header keeps the placeholder.",
+        whyItMatters: "A group's header showed no picture, so the picture seemed to disappear once records were grouped.",
+        howItAffectsYou: 'Each record keeps its own picture. Grouping changes no picture.',
+        whatToDo:
+          'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['items:update'] },
       },
     ],
   },
@@ -185,11 +231,35 @@ export const RELEASES: Release[] = [
     // words on a new record). The words name the screens' own labels, claim
     // no number nobody measured, and never call a recorded quantity "the
     // book".
-    status: 'draft',
+    // PUBLISHED by docs/whats-new-ungroup-group-selected (2026-10-12), first,
+    // a minute before Group selected's release. #351 merged as 640812e08 at
+    // 10:04:17Z after migration 0399 was pushed (10:02:30Z); web build
+    // 32a0b96a2316 was live at 10:06:26Z; OTA group d22e3a75 was published
+    // at 10:07:40Z (iOS bundle verified against the local export). The Demo
+    // Co production walk (stage 1, CONFIRMED by an independent read-only
+    // audit) gave three shared-SKU records their own SKU on the web (a book
+    // kept its ISBN) and one with Make this its own item on the iPhone
+    // simulator, and a save onto a SKU in use was refused naming the record.
+    // No production restore was run: the restore-points entry rests on the
+    // PR's tests and its local labs, and it claims no more.
+    // Claims re-read at publish against 640812e08 and 91ca32894. Since #355
+    // the bulk bar's Ungroup takes any ticked records (a group, a shared SKU,
+    // a size family) and its Save counts only the records that change; no
+    // sentence here says what that button counts or that it is offered only
+    // for a shared SKU, and the summary's "On the web" Ungroup was true then
+    // and still is. Changed: the summary's "gives the records you choose a
+    // new SKU of their own and changes nothing else" now reads "gives the
+    // ones you choose ... and changes nothing else about them" (the records
+    // that share a SKU), and "Only the records you choose change, and only
+    // their SKU" now says a record that gets a new SKU changes only its SKU
+    // and the others keep theirs (the record that keeps a fully ticked SKU
+    // is ticked too, and an Ungroup can now also take a ticked record out of
+    // a group or a size family).
+    status: 'published',
     title: 'Give records that share a SKU a SKU of their own',
     summary:
-      'Records that share a SKU can now be separated: Ungroup gives the records you choose a new SKU of their own and changes nothing else, so stock, charter, rack, barcode/ISBN and history stay as they are. On the web, select them on Items or Books and choose Ungroup. On an item page, on the web or in the mobile app after the latest update, use Make this its own item.',
-    publishedAt: '2026-10-20T17:00:00Z',
+      'Records that share a SKU can now be separated: Ungroup gives the ones you choose a new SKU of their own and changes nothing else about them, so stock, charter, rack, barcode/ISBN and history stay as they are. On the web, select them on Items or Books and choose Ungroup. On an item page, on the web or in the mobile app after the latest update, use Make this its own item.',
+    publishedAt: '2026-10-12T13:46:00Z',
     audience: { anyPermission: ['items:update', 'items:create'] },
     entries: [
       {
@@ -202,7 +272,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'Editing the SKU on one record changed it on every record with that SKU, so records that should not share a SKU could not be separated.',
         howItAffectsYou:
-          'Only the records you choose change, and only their SKU. Stock, charter, rack, barcode/ISBN and history stay as they are, so two records can now share a barcode: scanning it asks which one you mean. Kits and records in a product family keep their SKU. Labels without a barcode print the SKU: until you reprint them for the records that changed, scanning one finds the records that keep the old SKU; the review links to Print labels. The item edit form now says how many other records share the SKU and that saving the shared fields changes all of them.',
+          'A record that gets a new SKU changes only its SKU, and the others keep theirs. Stock, charter, rack, barcode/ISBN and history stay as they are, so two records can now share a barcode: scanning it asks which one you mean. Kits and records in a product family keep their SKU. Labels without a barcode print the SKU: until you reprint them for the records that changed, scanning one finds the records that keep the old SKU; the review links to Print labels. The item edit form now says how many other records share the SKU and that saving the shared fields changes all of them.',
         whatToDo:
           'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
         link: { href: '/dashboard/inventory', label: 'Open Items' },

@@ -92,7 +92,16 @@ describe('the public order link release (a sent request leaves nothing behind)',
     // and reaches that owner first, so ID is the notice once the four returns
     // releases are read. Claim kept: it is the notice for whoever manages
     // public links (below), whom no returns release reaches.
-    expect(list.latestUnread?.id).toBe('returns-history-hand-over-2026-10');
+    // Re-pinned by the What's New publish of ungroup-2026-10 and
+    // group-selected-2026-10 (2026-10-12): was returns-history-hand-over-2026-10,
+    // and ID once the four returns releases were read. Ungroup's release and
+    // then Group selected's, a minute later, are published later still and
+    // reach that owner first, so ID is the notice once those two and the four
+    // returns releases are read. Group selected's reaches every member (its
+    // list entries have no audience), so whoever manages public links is told
+    // it first, and this one once it is read. Claim kept: it is the notice
+    // for whoever manages public links, whom no returns release reaches.
+    expect(list.latestUnread?.id).toBe('group-selected-2026-10');
     const rx2Read = {
       release_id: 'returns-exchange-2026-10',
       revision: 1,
@@ -103,29 +112,44 @@ describe('the public order link release (a sent request leaves nothing behind)',
     const rx3Read = { ...rx2Read, release_id: 'returns-requester-exchange-2026-10' };
     const rx4Read = { ...rx2Read, release_id: 'returns-close-rest-2026-10' };
     const handOverRead = { ...rx2Read, release_id: 'returns-history-hand-over-2026-10' };
+    const ungroupRead = { ...rx2Read, release_id: 'ungroup-2026-10' };
+    const groupSelectedRead = { ...rx2Read, release_id: 'group-selected-2026-10' };
+    const newerRead = [groupSelectedRead, ungroupRead];
     expect(buildReleaseList(RELEASES, everyone, [rx2Read], null).latestUnread?.id).toBe(
+      'group-selected-2026-10',
+    );
+    expect(buildReleaseList(RELEASES, everyone, [rx2Read, groupSelectedRead], null).latestUnread?.id).toBe(
+      'ungroup-2026-10',
+    );
+    expect(buildReleaseList(RELEASES, everyone, [rx2Read, ...newerRead], null).latestUnread?.id).toBe(
       'returns-history-hand-over-2026-10',
     );
-    expect(buildReleaseList(RELEASES, everyone, [rx2Read, handOverRead], null).latestUnread?.id).toBe(
+    expect(buildReleaseList(RELEASES, everyone, [rx2Read, handOverRead, ...newerRead], null).latestUnread?.id).toBe(
       'returns-close-rest-2026-10',
     );
-    expect(buildReleaseList(RELEASES, everyone, [rx2Read, rx4Read, handOverRead], null).latestUnread?.id).toBe(
-      'returns-requester-exchange-2026-10',
-    );
     expect(
-      buildReleaseList(RELEASES, everyone, [rx2Read, rx3Read, rx4Read, handOverRead], null).latestUnread?.id,
+      buildReleaseList(RELEASES, everyone, [rx2Read, rx4Read, handOverRead, ...newerRead], null).latestUnread?.id,
+    ).toBe('returns-requester-exchange-2026-10');
+    expect(
+      buildReleaseList(RELEASES, everyone, [rx2Read, rx3Read, rx4Read, handOverRead, ...newerRead], null)
+        .latestUnread?.id,
     ).toBe(ID);
     const linkManager: ReleaseViewer = {
       role: 'staff',
       permissions: ['public_links:manage'],
       enabledModules: ['public_requests'],
     };
-    expect(buildReleaseList(RELEASES, linkManager, [], null).latestUnread?.id).toBe(ID);
+    expect(buildReleaseList(RELEASES, linkManager, [], null).latestUnread?.id).toBe('group-selected-2026-10');
+    expect(buildReleaseList(RELEASES, linkManager, [groupSelectedRead], null).latestUnread?.id).toBe(ID);
     // An old phone build lists it first, with its link.
     // Re-pinned by docs/whats-new-returns-exchange (2026-10-11; was: the
     // owner with every module, who is now told RX-2's release first): the
     // reader who manages public links.
-    expect(legacyAnnouncementsFor(RELEASES, linkManager, {})[0]).toEqual({
+    // Re-pinned by the What's New publish of ungroup-2026-10 and
+    // group-selected-2026-10 (2026-10-12; was: first with nothing seen):
+    // Group selected's release is first for that reader until it is seen.
+    expect(legacyAnnouncementsFor(RELEASES, linkManager, {})[0]?.id).toBe('group-selected-2026-10');
+    expect(legacyAnnouncementsFor(RELEASES, linkManager, { 'group-selected-2026-10': true })[0]).toEqual({
       id: ID,
       date: '2026-10-06',
       title: release().title,
@@ -201,11 +225,18 @@ describe('the public order link release (a sent request leaves nothing behind)',
   // two drafts. Claim kept: directly below RX-2's release, with RX-3's,
   // RX-4's and the hand-over release above that, dated after every release
   // below it.
-  it('sits directly below returns RX-2\'s release, with returns RX-3\'s, RX-4\'s and the return history hand-over release above that (all published later), dated after every release below it, and the Group selected and Ungroup drafts at the top, the only drafts', () => {
+  // Re-pinned by the What's New publish of ungroup-2026-10 and
+  // group-selected-2026-10 (2026-10-12; was: "... and the Group selected and
+  // Ungroup drafts at the top, the only drafts", the hand-over release the
+  // newest published): both are published in the same places, so Group
+  // selected's is the newest published release and no draft is left. Claim
+  // kept: directly below RX-2's release, with RX-3's, RX-4's and the
+  // hand-over release above that, dated after every release below it.
+  it('sits directly below returns RX-2\'s release, with returns RX-3\'s, RX-4\'s and the return history hand-over release above that, and the Ungroup and Group selected releases at the top (all published later), dated after every release below it, and no draft is left', () => {
     expect(RELEASES[0]?.id).toBe('group-selected-2026-10');
-    expect(RELEASES[0]?.status).toBe('draft');
+    expect(RELEASES[0]?.status).toBe('published');
     expect(RELEASES[1]?.id).toBe('ungroup-2026-10');
-    expect(RELEASES[1]?.status).toBe('draft');
+    expect(RELEASES[1]?.status).toBe('published');
     expect(RELEASES[2]?.id).toBe('returns-history-hand-over-2026-10');
     expect(RELEASES[2]?.status).toBe('published');
     expect(RELEASES[3]?.id).toBe('returns-close-rest-2026-10');
@@ -215,14 +246,13 @@ describe('the public order link release (a sent request leaves nothing behind)',
     expect(RELEASES[5]?.id).toBe('returns-exchange-2026-10');
     expect(RELEASES[5]?.status).toBe('published');
     expect(RELEASES[6]?.id).toBe(ID);
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe('returns-history-hand-over-2026-10');
-    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
-      'group-selected-2026-10',
-      'ungroup-2026-10',
-    ]);
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe('group-selected-2026-10');
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([]);
     for (const r of RELEASES.slice(7)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
+    expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
+    expect(Date.parse(RELEASES[1]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
     expect(Date.parse(RELEASES[2]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
     expect(Date.parse(RELEASES[3]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
     expect(Date.parse(RELEASES[4]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
