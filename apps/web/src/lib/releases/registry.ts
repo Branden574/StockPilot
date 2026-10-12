@@ -67,7 +67,7 @@ export const RELEASES: Release[] = [
     status: 'published',
     title: 'Sizes on more than one rack ungroup together, and Ungroup says more clearly what happened',
     summary:
-      "Ungroup now takes every rack's record of a size out of its size family together, on the web and in the mobile app after the latest update, and Unlink on Product groups does the same. When Ungroup's answer is lost on the way back, it says Not confirmed and offers Try again. On the web, Group selected and Ungroup say straight away that they work on at most 100 records at a time.",
+      "Ungroup now takes every rack's record of a size out of its size family together, on the web and in the mobile app after the latest update, and Unlink on Product groups does the same. When Ungroup cannot tell whether a step was done, it says Not confirmed, and offers Try again when that is safe. On the web, Group selected and Ungroup say straight away that they work on at most 100 records at a time.",
     publishedAt: '2026-10-12T17:58:00Z',
     entries: [
       {
@@ -89,9 +89,9 @@ export const RELEASES: Release[] = [
         id: 'ungroup-answer-not-confirmed',
         category: 'fixed',
         area: 'Inventory',
-        title: 'Ungroup says Not confirmed when its answer is lost',
+        title: 'Ungroup says Not confirmed when it cannot tell whether a step was done',
         whatChanged:
-          "If Ungroup's answer is lost on the way back after you choose Ungroup, its result now says Not confirmed instead of Not done, on the web and in the mobile app. When Ungroup did not finish, Review again is always offered, with Try again next to it when the same request can safely be sent again; what was already done is not done twice. Records that were already out of their group are now named as such instead of being counted as leaving it.",
+          'If Ungroup cannot tell whether a step was done, for example because the answer to it was lost, its result now says Not confirmed instead of Not done, on the web and in the mobile app. When the result shows Ungroup did not finish, Review again is offered, with Try again next to it when trying again is safe; what was already done is not done twice. Records that were already out of their group are now named as such instead of being counted as leaving it.',
         whyItMatters: 'It used to say Not done and offer no Try again, even when the change may have been made.',
         howItAffectsYou: 'Choose Try again to finish, or Review again to see where each record is now.',
         whatToDo:

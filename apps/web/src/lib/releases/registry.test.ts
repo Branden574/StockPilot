@@ -9938,7 +9938,7 @@ describe('the Ungroup follow-ups release (#358 to #361)', () => {
     const [family, notConfirmed, limit] = release().entries;
     expect(UNGROUP_COPY.partUnknown('x', 'y')).toMatch(/^Not confirmed: /);
     expect(notConfirmed!.whatChanged).toContain('Not confirmed instead of Not done');
-    expect(notConfirmed!.whatChanged).toContain('Review again is always offered, with Try again next to it');
+    expect(notConfirmed!.whatChanged).toContain('Review again is offered, with Try again next to it when trying again is safe');
     expect(GROUPING_ERROR_WORDS.tooMany).toContain('at most 100 records at a time');
     expect(GROUPING_ERROR_WORDS.groupTooMany).toContain('at most 100 records at a time');
     expect(limit!.whatChanged).toContain('at most 100 records at a time');
