@@ -38,12 +38,18 @@
 //      (pages can come up short); the client filters THEN paginates, so
 //      every page is full and consistent with `total`.
 //   6. Page boundaries — this module paginates GROUP-AWARE (runAwarePages:
-//      a SKU family or size run is never cut), the live server path slices
-//      a fixed 30 rows. That divergence is confined to the views that never
-//      switch modes (staff, viewers, orgs over the cap): each pages one way
-//      only. The CACHED default Items view, which paints first and is then
-//      re-derived here once the full dataset streams in, plans its page 1
-//      with planInstantFirstPage below, so both paints show the same page.
+//      a SKU family or size run is never cut). The live server path plans
+//      its pages with the same rule over the whole filtered view
+//      (planGroupAwarePage, Phase 2), so a staff member's pages hold the
+//      units a manager's do; only a view over the cap (and a server-mode
+//      search) still slices a fixed 30 rows, and such a view never switches
+//      modes, so it pages one way only. A load whose plan scan fails also
+//      slices a fixed 30 rows (planned-page.ts), so that one page can repeat
+//      or skip a row of the planned pages around it until the next load.
+//      The CACHED default Items view,
+//      which paints first and is then re-derived here once the full
+//      dataset streams in, plans its page 1 with planInstantFirstPage
+//      below, so both paints show the same page.
 //      If that dataset fails, the table keeps the planned page 1 and offers
 //      no page 2 (a fixed-slice page 2 would skip or repeat its rows), only
 //      a note to refresh (inventory-table.tsx, plannedPageStranded).
@@ -638,10 +644,11 @@ export function deriveInstantView<T extends InstantModeRow>(
   // The group is the unit of display, so the group must be the unit of
   // pagination. Size-run clustering stays Items-only: books are never
   // sized and the table gates that grouping off for them.
-  // The LIVE server path slices a fixed 30 rows instead (divergence #6 in
-  // the parity block above). The cached default Items view does not: it
-  // runs this function at cache-fill time (planInstantFirstPage), so its
-  // first paint is this page.
+  // The LIVE server path plans its pages with this same rule within the cap
+  // (planGroupAwarePage) and slices a fixed 30 rows past it (divergence #6
+  // in the parity block above). The cached default Items view runs this
+  // function at cache-fill time (planInstantFirstPage), so its first paint
+  // is this page.
   const pages = runAwarePages(sorted, pageSize, { sizeRuns: view === 'items' });
   const pageCount = Math.max(1, pages.length);
   const page = Math.min(Math.max(1, state.page), pageCount);
@@ -757,20 +764,7 @@ export function planInstantFirstPage<T extends InstantModeRow>(
   pageSize: number,
 ): { view: InstantViewResult<T>; firstPage: InstantFirstPage } {
   const view = deriveInstantView(rows, instantStateFromPageParams({}), 'items', pageSize);
-  const bySku = countItemRowsBySku(view.filteredRows);
-  const onPage = new Map<string, number>();
-  for (const r of view.pageItems) {
-    const n = bySku.get(r.sku);
-    if (n !== undefined) onPage.set(r.sku, n);
-  }
-  const units = countItemRowsByHeaderUnit(view.filteredRows);
-  const unitsOnPage = new Map<string, number>();
-  for (const r of view.pageItems) {
-    const g = r.display_group_id ?? null;
-    const gk = g ? `grp:${g}` : null;
-    if (gk && units.has(gk)) unitsOnPage.set(gk, units.get(gk)!);
-    else if (units.has(`sku:${r.sku}`)) unitsOnPage.set(`sku:${r.sku}`, units.get(`sku:${r.sku}`)!);
-  }
+  const counts = pageUnitCounts(view.filteredRows, view.pageItems);
   return {
     view,
     firstPage: {
@@ -778,9 +772,91 @@ export function planInstantFirstPage<T extends InstantModeRow>(
       pageItemCount: view.pageItems.length,
       distinctSkus: countDistinctSkuLines(view.filteredRows),
       placementRows: countPlacementRows(view.filteredRows, holdingLines),
-      skuItemRowCounts: [...onPage],
-      unitItemRowCounts: [...unitsOnPage],
+      skuItemRowCounts: counts.skuItemRowCounts,
+      unitItemRowCounts: counts.unitItemRowCounts,
     },
+  };
+}
+
+/** The whole-set record counts the headers' split detectors read, for the
+ *  units on one page only: per raw SKU, and per header unit ('grp:<id>' for a
+ *  formed explicit group, else 'sku:<raw>'). Shared by the planned first page
+ *  and the planned server page so the two can never count differently. */
+function pageUnitCounts(
+  wholeSet: readonly Pick<InstantModeRow, 'id' | 'sku' | 'name' | 'display_group_id'>[],
+  pageItems: readonly Pick<InstantModeRow, 'id' | 'sku' | 'name' | 'display_group_id'>[],
+): { skuItemRowCounts: Array<[string, number]>; unitItemRowCounts: Array<[string, number]> } {
+  const bySku = countItemRowsBySku(wholeSet);
+  const onPage = new Map<string, number>();
+  for (const r of pageItems) {
+    const n = bySku.get(r.sku);
+    if (n !== undefined) onPage.set(r.sku, n);
+  }
+  const units = countItemRowsByHeaderUnit(wholeSet);
+  const unitsOnPage = new Map<string, number>();
+  for (const r of pageItems) {
+    const g = r.display_group_id ?? null;
+    const gk = g ? `grp:${g}` : null;
+    if (gk && units.has(gk)) unitsOnPage.set(gk, units.get(gk)!);
+    else if (units.has(`sku:${r.sku}`)) unitsOnPage.set(`sku:${r.sku}`, units.get(`sku:${r.sku}`)!);
+  }
+  return { skuItemRowCounts: [...onPage], unitItemRowCounts: [...unitsOnPage] };
+}
+
+/** One server page planned group-aware (planGroupAwarePage). */
+export interface PlannedServerPage {
+  /** The page shown, clamped to [1, pageCount]. */
+  page: number;
+  /** Pages in the group-aware derivation ("Page X of N"). */
+  pageCount: number;
+  /** 0-based index of the page's first record in the whole sorted view. */
+  pageStartIndex: number;
+  /** Records on the page (pages run a few rows long to keep a unit whole). */
+  pageItemCount: number;
+  /** The page's records, in display order: the rows to read in full. */
+  pageIds: string[];
+  /** COUNT 3 over the whole view (the footer's "N SKUs"). */
+  distinctSkus: number;
+  /** Whole-view records per raw SKU, for the SKUs on the page. */
+  skuItemRowCounts: Array<[string, number]>;
+  /** Whole-view records per header unit, for the units on the page. */
+  unitItemRowCounts: Array<[string, number]>;
+}
+
+/**
+ * Plan one server page of a list group-aware (Phase 2 of the grouping brief,
+ * 2026-10-12): staff and viewers read the Items and Books lists a page at a
+ * time, and fixed 30-row slices split a size run, a SKU family or a display
+ * group whose members sort far apart (the reported XS alone on page 2). Given
+ * the WHOLE filtered view as light rows (the server already applied the
+ * filters; each row carries its display group), sort it exactly as instant
+ * mode does and pack it with runAwarePages, so a staff member's page holds
+ * the same units, in the same order, as a manager's. Pure.
+ */
+export function planGroupAwarePage<T extends InstantModeRow>(
+  rows: readonly T[],
+  sort: InstantModeSort,
+  page: number,
+  pageSize: number,
+  view: 'items' | 'books',
+): PlannedServerPage {
+  const sorted = sortInstantRows(rows, sort);
+  const pages = runAwarePages(sorted, pageSize, { sizeRuns: view === 'items' });
+  const pageCount = Math.max(1, pages.length);
+  const clamped = Math.min(Math.max(1, Math.floor(page) || 1), pageCount);
+  const pageItems = pages[clamped - 1] ?? [];
+  let pageStartIndex = 0;
+  for (let i = 0; i < clamped - 1; i++) pageStartIndex += pages[i]?.length ?? 0;
+  const counts = pageUnitCounts(rows, pageItems);
+  return {
+    page: clamped,
+    pageCount,
+    pageStartIndex,
+    pageItemCount: pageItems.length,
+    pageIds: pageItems.map((r) => r.id),
+    distinctSkus: countDistinctSkuLines(rows),
+    skuItemRowCounts: counts.skuItemRowCounts,
+    unitItemRowCounts: counts.unitItemRowCounts,
   };
 }
 

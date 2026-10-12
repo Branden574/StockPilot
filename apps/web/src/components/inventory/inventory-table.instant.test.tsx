@@ -1957,6 +1957,123 @@ describe('InventoryTable planned first page (streamed default view)', () => {
   });
 });
 
+// Phase 2 of the grouping brief (owner 2026-10-11, go to start 2026-10-12):
+// staff and viewers read the list a server page at a time, and the server now
+// plans every page group-aware (planGroupAwarePage) instead of slicing a fixed
+// 30 rows, so a size run, a SKU family or a display group is never split
+// across their pages (the reported XS alone on page 2). The planned page
+// brings the pager's numbers, the footer's SKU count and the headers' whole-
+// view counts; nothing streams in behind it, so it is never stranded.
+describe('InventoryTable planned server page (staff and viewers)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getSearchParams('page=2');
+    window.history.replaceState(null, '', '/dashboard/inventory?page=2');
+  });
+
+  const footerText = () =>
+    Array.from(document.querySelectorAll('p'))
+      .map((p) => p.textContent ?? '')
+      .find((t) => t.includes('on hand') || t.includes('matching'))!;
+
+  it('page 2 says where it starts and how many pages there are, and keeps its pager (nothing streams in)', () => {
+    render(
+      <InventoryTable
+        items={[item({ id: 'x1', name: 'Planned X' }), item({ id: 'x2', name: 'Planned Y' })]}
+        lookups={EMPTY_LOOKUPS}
+        total={70}
+        page={2}
+        pageSize={30}
+        plannedPage={{
+          page: 2,
+          pageCount: 3,
+          pageStartIndex: 33,
+          pageItemCount: 2,
+          pageIds: ['x1', 'x2'],
+          distinctSkus: 68,
+          skuItemRowCounts: [],
+          unitItemRowCounts: [],
+        }}
+      />,
+    );
+    expect(screen.getAllByText(/^Showing/)[0]).toHaveTextContent('Showing 34–35 of 70');
+    expect(screen.getAllByRole('button', { name: /jump to page/i })[0]).toHaveTextContent(
+      'Page 2 of 3',
+    );
+    expect(screen.queryByText(/Refresh to see more/)).not.toBeInTheDocument();
+    expect(footerText()).toMatch(/^68 SKUs · /);
+  });
+
+  it("names the whole view's records items on Items, where the screen splits them by rack, and rows on Books", () => {
+    // The plan counts the view's records (count 1), not the rack rows they
+    // split into on the Items screen (count 2 needs every record's holdings),
+    // so Items must not call them rows. Books show one row per record.
+    const plan = {
+      page: 2,
+      pageCount: 3,
+      pageStartIndex: 33,
+      pageItemCount: 2,
+      pageIds: ['x1', 'x2'],
+      distinctSkus: 68,
+      skuItemRowCounts: [],
+      unitItemRowCounts: [],
+    };
+    const rows = [item({ id: 'x1', name: 'Planned X' }), item({ id: 'x2', name: 'Planned Y' })];
+    const { unmount } = render(
+      <InventoryTable
+        items={rows}
+        lookups={EMPTY_LOOKUPS}
+        total={70}
+        page={2}
+        pageSize={30}
+        plannedPage={plan}
+      />,
+    );
+    expect(footerText()).toMatch(/^68 SKUs · 70 items · /);
+    expect(footerText()).not.toMatch(/rows/);
+    unmount();
+    render(
+      <InventoryTable
+        items={rows}
+        lookups={EMPTY_LOOKUPS}
+        total={70}
+        page={2}
+        pageSize={30}
+        showBookFields
+        plannedPage={plan}
+      />,
+    );
+    expect(footerText()).toMatch(/^68 SKUs · 70 rows · /);
+  });
+
+  it('a SKU family the plan kept whole is not marked partial, though the view spans several pages', () => {
+    render(
+      <InventoryTable
+        items={[
+          item({ id: 'f1', name: 'Chromebook 14', sku: 'CB-14', quantity_on_hand: 4 }),
+          item({ id: 'f2', name: 'Chromebook 14', sku: 'CB-14', quantity_on_hand: 6 }),
+        ]}
+        lookups={EMPTY_LOOKUPS}
+        total={60}
+        page={2}
+        pageSize={30}
+        plannedPage={{
+          page: 2,
+          pageCount: 3,
+          pageStartIndex: 30,
+          pageItemCount: 2,
+          pageIds: ['f1', 'f2'],
+          distinctSkus: 59,
+          skuItemRowCounts: [['CB-14', 2]],
+          unitItemRowCounts: [['sku:CB-14', 2]],
+        }}
+      />,
+    );
+    expect(screen.getByText('10')).toBeInTheDocument();
+    expect(screen.queryByText('*')).not.toBeInTheDocument();
+  });
+});
+
 // PER-RACK-ROW SELECTION. The Items list splits one item into one table row
 // per holding location (rowKey = `${item.id}:${locationId}`). Selection keys
 // on rowKey so checking ONE rack row doesn't visually check the item's OTHER

@@ -81,6 +81,7 @@ import {
   filterInstantRows,
   instantStateFromSearchParams,
   type InstantFirstPage,
+  type PlannedServerPage,
   type InstantModeState,
   type InstantPlacementLine,
 } from '@/lib/inventory/instant-mode';
@@ -457,8 +458,18 @@ export interface InventoryTableProps {
       null, a note to refresh replaces the pager: a server page 2 would be
       a fixed 30-row slice that skips or repeats rows of this page. Ignored
       in instant mode and while a server-mode search is on screen. Absent →
-      server mode as before (staff/viewer, over-cap orgs, deep links). */
+      server mode (staff/viewer, over-cap orgs, deep links), whose page may
+      be planned too (`plannedPage`, below). */
   firstPage?: InstantFirstPage | null;
+  /** Phase 2 of the grouping brief (staff and viewers, and anyone on the live
+      path within the instant-mode cap): this server page was planned
+      group-aware over the whole filtered view (planGroupAwarePage), so no
+      size run, SKU family or display group is split across pages. Like
+      `firstPage` for the pager, the footer's SKU count and the headers'
+      whole-view counts, but for any page, and never stranded: nothing streams
+      in behind it. Ignored in instant mode and while a server-mode search is
+      on screen. Absent: fixed server slices (over the cap). */
+  plannedPage?: PlannedServerPage | null;
   /** Server-computed count of ACTIVE items awaiting their first receipt
       (migration 0277) for this view — the badge on the "Expected" chip.
       Instant mode ignores it and derives the count from the full
@@ -715,6 +726,7 @@ export function InventoryTable({
   instant,
   instantPromise,
   firstPage,
+  plannedPage,
   expectedCount = 0,
   productGroupUnits,
 }: InventoryTableProps) {
@@ -741,7 +753,7 @@ export function InventoryTable({
   // dataset the moment it lands. The flip changes nothing on screen: the
   // cached rows ARE page 1 of the default derivation because the loader
   // plans them with it, and `firstPage` carries the pager and footer
-  // numbers instant mode will print (see `plannedFirstPage` below). `null`
+  // numbers instant mode will print (see `planned` below). `null`
   // (over-cap org / loader failure) keeps server mode (a loader failure
   // under the planned page: see `plannedPageStranded`). The promise is
   // consumed by use(), NEVER a `.then().catch()` effect — that was the
@@ -1343,15 +1355,20 @@ export function InventoryTable({
   //                       group-by-sku.ts). Always ≤ item rows.
   //
   // WHO USES WHICH:
-  //   • footer "N SKUs"        → 3 (instant mode, and the planned first
-  //                              page, whose counts the server took over
-  //                              the whole view; plain server mode holds one
-  //                              page and cannot count SKUs set-wide, so
-  //                              it labels its number "items" — 1).
+  //   • footer "N SKUs"        → 3 (instant mode, and a planned page — the
+  //                              streamed first page or a staff member's
+  //                              planned server page — whose counts the
+  //                              server took over the whole view; fixed-slice
+  //                              server mode holds one page and cannot count
+  //                              SKUs set-wide, so it labels its number
+  //                              "items" — 1).
   //   • footer "N rows"        → 2, because "rows" must mean the rows on
   //                              screen. Shown only when it differs from
   //                              the SKU count (that difference IS the
-  //                              collapsing the list just did).
+  //                              collapsing the list just did). A planned
+  //                              server page knows no rack rows set-wide, so
+  //                              on Items it prints its records as "items"
+  //                              (1) instead; on Books a record is one row.
   //   • "$X on hand"           → whole filtered set, unaffected.
   //   • Pagination / "Page X of Y" / "Showing X–Y of N" → 1, matching the
   //                              derivation, which paginates ITEM rows.
@@ -1378,7 +1395,33 @@ export function InventoryTable({
   // 455 items" turned into "Showing 1–24 of 455, 441 SKUs · 455 rows" half a
   // second after a refresh). Only while no search is on screen: a server-mode
   // search shows /api/items/search results, which this page does not describe.
-  const plannedFirstPage = !instantMode && firstPage && !q.trim() ? firstPage : null;
+  // Phase 2: a staff member's or viewer's server page planned group-aware
+  // brings the same numbers for ANY page (and is never stranded: nothing
+  // streams in behind it). Both plans read the same way from here on.
+  const planned = React.useMemo(() => {
+    if (instantMode || q.trim()) return null;
+    if (plannedPage) {
+      return {
+        pageCount: plannedPage.pageCount,
+        pageItemCount: plannedPage.pageItemCount,
+        pageStartIndex: plannedPage.pageStartIndex,
+        distinctSkus: plannedPage.distinctSkus,
+        placementRows: null as number | null,
+        skuItemRowCounts: plannedPage.skuItemRowCounts,
+        unitItemRowCounts: plannedPage.unitItemRowCounts as Array<[string, number]> | undefined,
+        streamed: false,
+      };
+    }
+    if (firstPage) {
+      return {
+        ...firstPage,
+        placementRows: firstPage.placementRows as number | null,
+        pageStartIndex: 0,
+        streamed: true,
+      };
+    }
+    return null;
+  }, [instantMode, q, plannedPage, firstPage]);
   // Instant mode paginates GROUP-AWARE — a SKU family is never split
   // across pages — so pages hold a VARIABLE number of item rows and
   // `page × pageSize` is no longer the range this page covers. Hand the
@@ -1396,16 +1439,16 @@ export function InventoryTable({
         endRow: instantView.pageStartIndex + shown,
       };
     }
-    if (plannedFirstPage) {
-      const shown = plannedFirstPage.pageItemCount;
+    if (planned) {
+      const shown = planned.pageItemCount;
       return {
-        pageCount: plannedFirstPage.pageCount,
-        startRow: shown === 0 ? 0 : 1,
-        endRow: shown,
+        pageCount: planned.pageCount,
+        startRow: shown === 0 ? 0 : planned.pageStartIndex + 1,
+        endRow: planned.pageStartIndex + shown,
       };
     }
     return undefined;
-  }, [instantView, plannedFirstPage]);
+  }, [instantView, planned]);
   // COUNT 3 — DISTINCT SKUs. The footer says "N SKUs", but
   // `effectiveTotal` is an ITEM-ROW count, and with grouping live that
   // visibly contradicts the screen: 47 book rows collapse into 19 headers
@@ -1417,8 +1460,8 @@ export function InventoryTable({
   // count distinct SKUs across the set.
   const distinctSkuCount = React.useMemo(() => {
     if (instantView) return countDistinctSkuLines(instantView.filteredRows);
-    return plannedFirstPage?.distinctSkus ?? null;
-  }, [instantView, plannedFirstPage]);
+    return planned?.distinctSkus ?? null;
+  }, [instantView, planned]);
   // COUNT 2 — PLACEMENT ROWS over the full filtered set: what the footer's
   // "rows" term means, because "rows" has to mean the rows on screen. The
   // Items list expands each item into one row per holding line, so its
@@ -1433,8 +1476,8 @@ export function InventoryTable({
       if (!placement) return instantView.total;
       return countPlacementRows(instantView.filteredRows, (id) => placement[id]?.length ?? 0);
     }
-    return plannedFirstPage?.placementRows ?? null;
-  }, [instantView, effectiveInstant, plannedFirstPage]);
+    return planned?.placementRows ?? null;
+  }, [instantView, effectiveInstant, planned]);
   // THE PLANNED PAGE, STRANDED (review 2026-10-05): the dataset resolved null
   // (a loader failure) while the planned page is on screen. The page and its
   // numbers stay (they still describe it), but its pager cannot: page 2 would
@@ -1445,7 +1488,7 @@ export function InventoryTable({
   // showed. A plain note to refresh replaces the pager: a refresh streams the
   // dataset again. A planned page that is the whole list needs no note.
   const plannedPageStranded =
-    plannedFirstPage !== null && adopted === null && plannedFirstPage.pageCount > 1;
+    planned !== null && planned.streamed && adopted === null && planned.pageCount > 1;
   // Show pagination when there is genuinely more than one page. Instant
   // mode asks the derivation (group-aware page count) rather than
   // `total > pageSize`, which over-counts pages whenever a family runs a
@@ -1454,8 +1497,8 @@ export function InventoryTable({
   // stranded, see above).
   const showPagination = instantMode
     ? (instantView?.pageCount ?? 1) > 1
-    : plannedFirstPage
-      ? plannedFirstPage.pageCount > 1 && !plannedPageStranded
+    : planned
+      ? planned.pageCount > 1 && !plannedPageStranded
       : !q.trim() && total > pageSize;
 
   // What the table actually renders. Instant mode: the one complete
@@ -1557,9 +1600,9 @@ export function InventoryTable({
     // Blank SKUs are never grouped (group-by-sku.ts), so countItemRowsBySku
     // skips them.
     if (instantView) return countItemRowsBySku(instantView.filteredRows);
-    if (plannedFirstPage) return new Map(plannedFirstPage.skuItemRowCounts);
+    if (planned) return new Map(planned.skuItemRowCounts);
     return null;
-  }, [instantView, plannedFirstPage]);
+  }, [instantView, planned]);
 
   // Group selected (0400): records per HEADER UNIT over the whole set, for
   // the headers' split detectors: 'grp:<id>' for an explicit group that forms
@@ -1596,16 +1639,14 @@ export function InventoryTable({
 
   const headerUnitCountsFull = React.useMemo<Map<string, number> | null>(() => {
     if (instantView) return countItemRowsByHeaderUnit(instantView.filteredRows);
-    if (plannedFirstPage) {
+    if (planned) {
       return new Map(
-        plannedFirstPage.unitItemRowCounts ??
-          plannedFirstPage.skuItemRowCounts.map(
-            ([sku, n]) => [`sku:${sku}`, n] as [string, number],
-          ),
+        planned.unitItemRowCounts ??
+          planned.skuItemRowCounts.map(([sku, n]) => [`sku:${sku}`, n] as [string, number]),
       );
     }
     return null;
-  }, [instantView, plannedFirstPage]);
+  }, [instantView, planned]);
 
   // THE COMPOSITION (core composeDisplayList, the one rule the phone uses
   // too): explicit display groups with two or more records on screen, then
@@ -2107,7 +2148,7 @@ export function InventoryTable({
               // complete. The planned first page prints the same line from
               // the counts the server took over the whole view, so the
               // footer does not change when the dataset is adopted.
-              if (instantMode || plannedFirstPage) {
+              if (instantMode || planned) {
                 // Label and number must agree (see THE THREE COUNTS
                 // above): "SKUs" counts DISTINCT SKUs (count 3), "rows"
                 // counts the PLACEMENT rows actually rendered (count 2) —
@@ -2119,10 +2160,19 @@ export function InventoryTable({
                 // collapsing the list just did.
                 const skus = distinctSkuCount ?? effectiveTotal;
                 const rows = placementRowCount ?? effectiveTotal;
+                // A staff member's planned Items page counts the view's
+                // records, not the rack rows they split into on screen
+                // (that needs every record's holdings), so it names them
+                // items (count 1). On Books a record is one row.
+                const rowsLabel = placementRowCount === null && !showBookFields ? 'items' : 'rows';
                 return (
                   <>
                     {formatNumber(skus)} SKUs ·{' '}
-                    {skus !== rows ? <>{formatNumber(rows)} rows · </> : null}
+                    {skus !== rows ? (
+                      <>
+                        {formatNumber(rows)} {rowsLabel} ·{' '}
+                      </>
+                    ) : null}
                     {formatCurrency(valueOnHand)} on hand
                   </>
                 );

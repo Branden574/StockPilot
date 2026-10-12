@@ -25,15 +25,21 @@ import { fetchAllRows } from './paginate';
  *                               viewers, the phone's item screen, the search
  *                               route. A failed read is decoration lost, never
  *                               a failed list: the rows render ungrouped.
+ *   readDisplayGroupsForOrgAsMember  every membership of an organization the
+ *                               member can read, in ONE request, through the
+ *                               CALLER'S client: the plan of a staff member's
+ *                               or viewer's page (Phase 2) reads it beside the
+ *                               view's scan. Past one request it answers null
+ *                               and the caller reads by ids instead.
  *   readDisplayGroupsForOrg     every membership of an organization, for the
  *                               manager's cached loaders (admin client; those
  *                               loaders serve only callers who read every
  *                               record: canUseSharedInventoryCaches). Throws,
  *                               so a failed read is never cached.
  *
- * Both embed the group through the one key between the tables
- * (item_display_group_members_group_fk), named so the embed can never become
- * ambiguous (PGRST201).
+ * The two member reads embed the group through the one key between the
+ * tables (item_display_group_members_group_fk), named so the embed can never
+ * become ambiguous (PGRST201); the admin read joins the two tables here.
  */
 
 const MEMBERSHIP_SELECT =
@@ -100,6 +106,48 @@ export async function readDisplayGroupsByItemIds(
           .order('item_id', { ascending: true })
           .range(from, to) as unknown as PromiseLike<PageResult>,
     );
+    return indexDisplayGroupMemberships(rows);
+  } catch (err) {
+    console.warn(
+      '[display-groups] membership read failed; rows render ungrouped:',
+      err instanceof Error ? err.message : String(err),
+    );
+    return new Map();
+  }
+}
+
+/** The most memberships readDisplayGroupsForOrgAsMember reads: one request
+ *  (PostgREST answers at most 1000 rows). */
+export const ORG_MEMBERSHIPS_ONE_READ = 1000;
+
+/**
+ * Every membership of an organization the MEMBER can read, with each group's
+ * name and version, through the member's own client (RLS decides; never the
+ * admin client). Phase 2 of the grouping brief: a staff member's or viewer's
+ * page is planned group-aware over the whole filtered view, so the plan needs
+ * every record's group, and this read runs beside the view's scan (the phone
+ * reads its memberships the same way). ONE request, so a big organization
+ * never pays a long paged read on every page: when the organization holds
+ * ORG_MEMBERSHIPS_ONE_READ or more, it answers null and the caller reads the
+ * memberships of the records it has (readDisplayGroupsByItemIds). A failed
+ * read renders the records ungrouped, as readDisplayGroupsByItemIds does.
+ */
+export async function readDisplayGroupsForOrgAsMember(
+  clientOrPromise: ReadClient | PromiseLike<ReadClient>,
+  organizationId: string,
+): Promise<Map<string, DisplayGroupRef> | null> {
+  try {
+    const client = await clientOrPromise;
+    const { data, error } = (await client
+      .from('item_display_group_members')
+      .select(MEMBERSHIP_SELECT)
+      .eq('organization_id', organizationId)
+      .order('item_id', { ascending: true })
+      .range(0, ORG_MEMBERSHIPS_ONE_READ - 1)) as unknown as PageResult;
+    if (error) throw new Error(error.message);
+    const rows = data ?? [];
+    // A full answer may have more behind it: not one request's worth.
+    if (rows.length >= ORG_MEMBERSHIPS_ONE_READ) return null;
     return indexDisplayGroupMemberships(rows);
   } catch (err) {
     console.warn(

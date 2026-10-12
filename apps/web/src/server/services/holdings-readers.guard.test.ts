@@ -355,4 +355,21 @@ describe('pages that render the item tables from list() ask for the hidden stock
       expect(src).toMatch(/<ElsewhereUnavailableNotice unavailable=\{[\w.]+\.elsewhereUnavailable\}>/);
     },
   );
+
+  it("a staff member's planned page (Phase 2) is read through planned-page.ts, whose every list() call asks too and carries list()'s flag", () => {
+    const helper = readFileSync(path.join(WEB_SRC, 'server/services/lib/planned-page.ts'), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '');
+    const calls = [...helper.matchAll(/inventorySvc\.list\(\{/g)];
+    expect(calls.length, 'the helper reads through inventorySvc.list').toBeGreaterThan(0);
+    for (const call of calls) {
+      const body = helper.slice(call.index!, helper.indexOf('})', call.index!));
+      expect(body).toContain('withElsewhere: true');
+    }
+    expect(helper).toMatch(/elsewhereUnavailable: parts\.some\(\(p\) => p\.elsewhereUnavailable\)/);
+    for (const page of ['books', 'inventory']) {
+      const src = pages.find((p) => p.rel === `app/(dashboard)/dashboard/${page}/page.tsx`)!.src;
+      expect(src, page).toContain('readPlannedPage(');
+    }
+  });
 });

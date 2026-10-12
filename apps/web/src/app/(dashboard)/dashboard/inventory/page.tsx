@@ -18,6 +18,7 @@ import {
   deriveInstantView,
   instantStateFromPageParams,
   type InstantFirstPage,
+  type PlannedServerPage,
 } from '@/lib/inventory/instant-mode';
 import {
   ALL_WAREHOUSES_KEY,
@@ -41,6 +42,7 @@ import {
   displayGroupFields,
   readDisplayGroupsByItemIds,
 } from '@/server/services/lib/display-groups';
+import { planLivePage, readPlannedPage } from '@/server/services/lib/planned-page';
 import { LocationsService } from '@/server/services/locations';
 import { getItemTrends } from '@/server/services/movements';
 import { SavedViewsService } from '@/server/services/saved-views';
@@ -292,6 +294,10 @@ type SectionData = {
    *  the instant derivation and this is what the table prints for it until
    *  the streamed dataset lands. null/absent: server mode, fixed slices. */
   firstPage?: InstantFirstPage | null;
+  /** Live path (staff, viewers, anyone within the cap): this page planned
+   *  group-aware over the whole filtered view (Phase 2). null over the cap:
+   *  fixed server slices. */
+  plannedPage?: PlannedServerPage | null;
 };
 
 /**
@@ -675,11 +681,12 @@ async function inventoryTableSection({
     // gate as the cached default view) the filter-independent pieces —
     // the five lookup tables and the org-wide trend buckets — are read
     // from the org-shared caches instead of re-queried live. valueOnHand
-    // deliberately stays live: list()'s footer sum mirrors the active
-    // filters (and runs in parallel with the rows query — no serial
-    // cost). Staff/viewer run EVERYTHING live through their RLS-scoped
-    // clients, exactly as before — useSharedCaches is false for them,
-    // so no cached branch below is reachable.
+    // deliberately stays live and mirrors the active filters: summed by
+    // the plan's scan of the whole view (listPlanRows) when the page is
+    // planned, else by list()'s scan beside the rows query. Staff/viewer
+    // run EVERYTHING live through their RLS-scoped clients, the plan
+    // included — useSharedCaches is false for them, so no cached branch
+    // below is reachable.
     const [inventorySvc, imagesSvc] = await Promise.all([
       InventoryService.forCurrentUser(),
       ItemImagesService.forCurrentUser(),
@@ -722,35 +729,67 @@ async function inventoryTableSection({
       };
     };
 
+    const viewFilters = {
+      q: params.q,
+      // The Expected view spans lifecycles (mirrors mobile's
+      // listStatusPredicate lifecycle:null) so a flagged item someone
+      // manually archived is still reachable there — it is excluded
+      // from the Archived view by the awaiting_first_receipt=false
+      // default, which would otherwise make it unreachable anywhere.
+      status: params.expected === '1' ? ('all' as const) : lifecycleStatus,
+      lowStock: params.stock === 'low',
+      outOfStock: params.stock === 'out',
+      autoArchived: params.auto === '1',
+      expected: params.expected === '1',
+      itemType,
+      warehouseId: warehouseFilter,
+      categoryIds,
+      locationIds,
+      charterIds,
+      rack,
+      sort,
+    };
+    // Phase 2 of the grouping brief (owner 2026-10-11): plan this page
+    // group-aware over the WHOLE filtered view, the rule managers' instant mode
+    // pages with, so a size run, a SKU family or a display group whose records
+    // sort far apart is never split across a staff member's pages (the
+    // reported XS alone on page 2). Both reads go through the caller's own
+    // client; the memberships also serve the page's rows below. Over the
+    // instant-mode cap (or if the scan fails) the page keeps its fixed slices.
+    const {
+      plannedPage,
+      totals: planTotals,
+      displayGroups: orgDisplayGroups,
+    } = await planLivePage({
+      inventorySvc,
+      viewFilters,
+      sort,
+      page,
+      pageSize: PAGE_SIZE,
+      view: 'items',
+      client: createClient(),
+      organizationId: sessionCtx.organizationId,
+      logLabel: '[inventory page]',
+      tag: tagged,
+    });
+
     const [inventory, expectedCountLive, lookups, trendBuckets] = await Promise.all([
-      tagged(
-        'inventorySvc.list',
-        inventorySvc.list({
-          q: params.q,
-          // The Expected view spans lifecycles (mirrors mobile's
-          // listStatusPredicate lifecycle:null) so a flagged item someone
-          // manually archived is still reachable there — it is excluded
-          // from the Archived view by the awaiting_first_receipt=false
-          // default, which would otherwise make it unreachable anywhere.
-          status: params.expected === '1' ? 'all' : lifecycleStatus,
-          lowStock: params.stock === 'low',
-          outOfStock: params.stock === 'out',
-          autoArchived: params.auto === '1',
-          expected: params.expected === '1',
-          itemType,
-          warehouseId: warehouseFilter,
-          categoryIds,
-          locationIds,
-          charterIds,
-          rack,
-          sort,
-          limit: PAGE_SIZE,
-          offset: (page - 1) * PAGE_SIZE,
-          // The placement columns add holdings up next to on hand, so they
-          // need the stock a staff member or viewer cannot see (0371).
-          withElsewhere: true,
-        }),
-      ),
+      plannedPage && planTotals
+        ? tagged(
+            'inventorySvc.list',
+            readPlannedPage(inventorySvc, viewFilters, plannedPage.pageIds, planTotals),
+          )
+        : tagged(
+            'inventorySvc.list',
+            inventorySvc.list({
+              ...viewFilters,
+              limit: PAGE_SIZE,
+              offset: (page - 1) * PAGE_SIZE,
+              // The placement columns add holdings up next to on hand, so they
+              // need the stock a staff member or viewer cannot see (0371).
+              withElsewhere: true,
+            }),
+          ),
       // Expected-chip badge count (mig 0277) — one HEAD count on the
       // 0277 partial index, in parallel with the rows query. Carries the
       // page's active q/cat/loc/charter/rack filters so the badge N
@@ -813,12 +852,16 @@ async function inventoryTableSection({
       // Per-(item, location) holdings so the list shows ONE LINE PER RACK.
       tagged('inventorySvc.placementBreakdown', inventorySvc.placementBreakdown(itemIdList)),
       // Group selected (0400): the page's records' display groups, through
-      // the caller's own client (RLS), 100 ids per request. Never fails the
+      // the caller's own client (RLS): read above with the plan, or, in an
+      // organization with more memberships than one request carries and no
+      // plan, the page's own records' (100 ids per request). Never fails the
       // page: a failed read renders the records ungrouped.
-      tagged(
-        'displayGroups.byItemIds',
-        readDisplayGroupsByItemIds(createClient(), sessionCtx.organizationId, itemIdList),
-      ),
+      orgDisplayGroups
+        ? Promise.resolve(orgDisplayGroups)
+        : tagged(
+            'displayGroups.byItemIds',
+            readDisplayGroupsByItemIds(createClient(), sessionCtx.organizationId, itemIdList),
+          ),
     ]);
     const itemsWithImages = inventory.items.map((i) => {
       const cf = (i as { custom_fields?: Record<string, unknown> | null }).custom_fields;
@@ -849,6 +892,7 @@ async function inventoryTableSection({
       placementMap,
       expectedCount: expectedCountLive,
       elsewhereUnavailable: inventory.elsewhereUnavailable,
+      plannedPage,
     };
   }
 
@@ -944,6 +988,7 @@ async function inventoryTableSection({
       // that streams the dataset behind its first paint (the cached default
       // view; null over the instant cap). Everyone else: server mode as before.
       firstPage={instantPromise ? data.firstPage : undefined}
+      plannedPage={data.plannedPage ?? null}
       expectedCount={data.expectedCount}
       productGroupUnits={productGroupUnits}
     />

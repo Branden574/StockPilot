@@ -36,6 +36,8 @@ const h = vi.hoisted(() => ({
   savedViewsError: null as null | Error,
   /** Extra fields on the live list's answer (0371: elsewhere figures). */
   liveExtra: null as null | Record<string, unknown>,
+  /** listPlanRows' answer (null: the view is over the cap, fixed pages). */
+  planRows: null as null | { rows: unknown[]; total: number; valueOnHand: number },
 }));
 
 const m = vi.hoisted(() => ({
@@ -50,6 +52,9 @@ const m = vi.hoisted(() => ({
   loadInventoryTrendBuckets: vi.fn(),
   resolveInventoryListImages: vi.fn(),
   inventoryList: vi.fn(),
+  listPlanRows: vi.fn(),
+  forOrgAsMember: vi.fn(),
+  byItemIds: vi.fn(),
   tableProps: vi.fn(),
   notEnabledProps: vi.fn(),
   toggleProps: vi.fn(),
@@ -122,6 +127,7 @@ vi.mock('@/server/services/inventory', () => ({
     forCurrentUser: vi.fn(async () => ({
       listDistinctRacks: m.listDistinctRacks,
       list: m.inventoryList,
+      listPlanRows: m.listPlanRows,
       countExpected: vi.fn(async () => 0),
     })),
   },
@@ -147,6 +153,18 @@ vi.mock('@/server/services/suppliers', () => ({
 }));
 vi.mock('@/server/services/tags', () => ({ TagsService: lookupSvc('list') }));
 vi.mock('@/server/services/charters', () => ({ ChartersService: lookupSvc('list') }));
+vi.mock('@/server/services/lib/display-groups', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/services/lib/display-groups')>()),
+  // As the real readers do, the client (a promise) is awaited inside a try.
+  readDisplayGroupsForOrgAsMember: async (client: unknown, ...rest: unknown[]) => {
+    await Promise.resolve(client).catch(() => {});
+    return m.forOrgAsMember(client, ...rest);
+  },
+  readDisplayGroupsByItemIds: async (client: unknown, ...rest: unknown[]) => {
+    await Promise.resolve(client).catch(() => {});
+    return m.byItemIds(client, ...rest);
+  },
+}));
 
 import { ELSEWHERE_UNAVAILABLE_NOTE } from '@stockpilot/core';
 
@@ -220,6 +238,10 @@ beforeEach(() => {
   m.resolveInventoryListImages.mockImplementation((_org: string, items: unknown[]) =>
     logged('images', async () => items),
   );
+  h.planRows = null;
+  m.listPlanRows.mockImplementation(() => logged('planRows', async () => h.planRows));
+  m.forOrgAsMember.mockResolvedValue(new Map());
+  m.byItemIds.mockResolvedValue(new Map());
   m.inventoryList.mockImplementation(() =>
     logged('liveList', async () => ({
       items: [BOOK],
@@ -418,4 +440,101 @@ describe('Books page: the Auto-archived only parameter', () => {
       expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ total: 0 });
     },
   );
+});
+
+// Phase 2 of the grouping brief: a staff member's or viewer's Books page is
+// planned group-aware too, so a title on more than one rack (one SKU, a
+// record per rack) or a display group is never split across their pages.
+// Books build no size runs, so two titles that merely share a name are not
+// pulled together.
+describe('Books page: a staff page is planned group-aware', () => {
+  const book = (id: string, minutes: number, over: Record<string, unknown> = {}) => ({
+    id,
+    sku: `BK-${id}`,
+    name: `Book ${id}`,
+    group_id: null,
+    quantity_on_hand: 1,
+    unit_cost: 1,
+    reorder_point: 0,
+    category_id: null,
+    status: 'active',
+    created_at: '2026-09-01T00:00:00Z',
+    updated_at: new Date(Date.UTC(2026, 9, 1) - minutes * 60_000).toISOString(),
+    ...over,
+  });
+
+  it('staff: a title on two racks is read on one page, with the planned totals, and the plan reaches the table', async () => {
+    h.role = 'staff';
+    const rows: unknown[] = [];
+    for (let i = 1; i <= 50; i++) rows.push(book(`b${String(i).padStart(3, '0')}`, i * 2 + 1));
+    rows.push(book('dune-a', 4, { sku: 'DUNE' }), book('dune-b', 90, { sku: 'DUNE' }));
+    rows.push(book('tee-s', 6, { name: 'Tee - S' }), book('tee-m', 92, { name: 'Tee - M' }));
+    h.planRows = { rows, total: rows.length, valueOnHand: 54 };
+    m.inventoryList.mockImplementation((filters: { ids?: string[] }) =>
+      logged('liveList', async () => ({
+        items: (filters.ids ?? []).map((id) => ({ ...BOOK, id })),
+        total: 1,
+        valueOnHand: 0,
+      })),
+    );
+    render(await callPage());
+    const filters = m.inventoryList.mock.calls[0]![0] as {
+      ids: string[];
+      itemType: string;
+      plannedTotals: unknown;
+      withElsewhere: boolean;
+    };
+    expect(filters.ids).toEqual(expect.arrayContaining(['dune-a', 'dune-b']));
+    // No size runs on Books: the second "Tee" is not pulled up.
+    expect(filters.ids).not.toContain('tee-m');
+    expect(filters).toMatchObject({
+      itemType: 'book',
+      plannedTotals: { total: 54, valueOnHand: 54 },
+      withElsewhere: true,
+    });
+    const props = m.tableProps.mock.calls[0]![0] as {
+      plannedPage: { page: number };
+      total: number;
+    };
+    expect(props.plannedPage.page).toBe(1);
+    expect(props.total).toBe(54);
+  });
+
+  it("over the cap, in an organization with more memberships than one request, the page reads its own records' groups", async () => {
+    h.role = 'staff';
+    h.planRows = null;
+    m.forOrgAsMember.mockResolvedValue(null);
+    m.byItemIds.mockResolvedValue(new Map([[BOOK.id, { id: 'grp-1', name: 'Pair', version: 2 }]]));
+    render(await callPage());
+    expect(m.byItemIds).toHaveBeenCalledTimes(1);
+    expect(m.byItemIds.mock.calls[0]!.slice(1)).toEqual(['org-1', [BOOK.id]]);
+    const props = m.tableProps.mock.calls[0]![0] as {
+      items: Array<{ id: string; display_group_id: string | null }>;
+    };
+    expect(props.items.find((r) => r.id === BOOK.id)!.display_group_id).toBe('grp-1');
+  });
+
+  it("with the organization's memberships in hand, the page reads no more of them", async () => {
+    h.role = 'staff';
+    h.planRows = null;
+    m.forOrgAsMember.mockResolvedValue(
+      new Map([[BOOK.id, { id: 'grp-1', name: 'Pair', version: 2 }]]),
+    );
+    render(await callPage());
+    expect(m.byItemIds).not.toHaveBeenCalled();
+    const props = m.tableProps.mock.calls[0]![0] as {
+      items: Array<{ id: string; display_group_id: string | null }>;
+    };
+    expect(props.items.find((r) => r.id === BOOK.id)!.display_group_id).toBe('grp-1');
+  });
+
+  it('staff over the cap keeps fixed pages, as before', async () => {
+    h.role = 'staff';
+    h.planRows = null;
+    render(await callPage({ page: '2' }));
+    expect(m.inventoryList.mock.calls[0]![0]).toMatchObject({ limit: 30, offset: 30 });
+    expect(
+      (m.tableProps.mock.calls[0]![0] as { plannedPage?: unknown }).plannedPage ?? null,
+    ).toBeNull();
+  });
 });
