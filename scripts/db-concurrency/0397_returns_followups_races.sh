@@ -242,7 +242,7 @@ select 'P=' || (public.complete_picking('$o')).status;
 select 'P=' || (public.generate_order_packing_slips('$o')).status;
 update public.order_requests set status = 'staged_for_pickup', staged_by = auth.uid() where id = '$o';
 select 'P=' || (public.confirm_physical_signature('$o', 'Race tester')).status;
-select 'P=' || (public.receive_return('$R'))->>'status';" > "$TMP/prep.$N.out"
+select 'P=' || ((public.receive_return('$R'))->>'status');" > "$TMP/prep.$N.out"
   check "set up $1 (picked, packed, signed: backordered; the RMA received)" \
     "$(sed -n 's/^P=//p' "$TMP/prep.$N.out" | tr '\n' '/')" "picking_complete/packing_slip_generated/backordered/received/"
   O="$(repl_of "$R")"
