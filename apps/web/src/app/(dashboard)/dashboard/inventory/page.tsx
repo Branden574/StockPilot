@@ -435,6 +435,14 @@ async function inventoryTableSection({
   // Group selected (0400): a group's header offers Rename to a manager only
   // (apply_item_grouping refuses anyone else on the role alone, SEC-1).
   const canRenameGroups = canUngroup && isManagerOrAbove(sessionCtx.role as Role);
+  // Ungroup anything (owner 2026-10-12): Ungroup also takes a record out of
+  // its size family for a viewer who may unlink one (unlinkItems' gate:
+  // sports:manage with the sports module on). getModulesForRequest is
+  // request-cached, so this costs no extra round trip.
+  const canUnlinkFamilies =
+    canUngroup &&
+    can(sessionCtx, 'sports:manage') &&
+    (await getModulesForRequest(sessionCtx.organizationId)).has('sports');
   // "Start an order" bulk shortcut: viewer can place order requests AND the
   // (optional) orders module is on. getModulesForRequest is request-cached and
   // shared with the layout, so this costs no extra round trip.
@@ -600,6 +608,7 @@ async function inventoryTableSection({
         canCreate={canCreate}
         canSetPublicVisibility={canSetPublicVisibility}
         canUngroup={canUngroup}
+        canUnlinkFamilies={canUnlinkFamilies}
         canRenameGroups={canRenameGroups}
         canStartOrder={canStartOrder}
         categories={lookups.categories.map((c) => ({ id: c.id, name: c.name }))}
@@ -914,6 +923,7 @@ async function inventoryTableSection({
       canCreate={canCreate}
       canSetPublicVisibility={canSetPublicVisibility}
       canUngroup={canUngroup}
+      canUnlinkFamilies={canUnlinkFamilies}
       canRenameGroups={canRenameGroups}
       canStartOrder={canStartOrder}
       categories={data.categories.map((c) => ({ id: c.id, name: c.name }))}

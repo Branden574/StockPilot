@@ -6,9 +6,9 @@ import { GROUP_COPY } from '@stockpilot/core';
 
 import { BulkActions } from './bulk-actions';
 
-// Group selected and Remove from group in the Items and Books bulk bar
-// (migration 0400): offered only for the records the table hands over (two
-// or more distinct records of one type; the grouped ones), each opening its
+// Group selected in the Items and Books bulk bar (migration 0400): offered
+// only for the records the table hands over (two or more distinct records of
+// one type; taking records out is Ungroup's since 2026-10-12), opening its
 // review for exactly those records; a change refreshes the page at once and
 // clears the selection when the review closes; closing without a change
 // clears nothing.
@@ -57,7 +57,7 @@ beforeEach(() => {
 function bar(p: {
   selectedIds: string[];
   groupItemIds?: string[];
-  groupedItemIds?: string[];
+  ungroupItemIds?: string[];
   onClear?: () => void;
   onAddToSelection?: (ids: string[]) => void;
   onGrouped?: (groupId: string) => void;
@@ -66,7 +66,7 @@ function bar(p: {
     <BulkActions
       selectedIds={p.selectedIds}
       groupItemIds={p.groupItemIds}
-      groupedItemIds={p.groupedItemIds}
+      ungroupItemIds={p.ungroupItemIds}
       groupingView="books"
       onAddToSelection={p.onAddToSelection}
       onGrouped={p.onGrouped}
@@ -131,16 +131,15 @@ describe('BulkActions: Group selected and Remove from group', () => {
     expect(await screen.findByText('books:a,b,c')).toBeInTheDocument();
   });
 
-  it('Remove from group reviews the grouped records only', async () => {
-    const onClear = vi.fn();
-    render(bar({ selectedIds: ['a', 'b'], groupedItemIds: ['a'], onClear }));
-    await userEvent.click(
-      screen.getByRole('button', { name: new RegExp(GROUP_COPY.removeAction) }),
-    );
-    expect(screen.getByTestId('remove-dialog')).toHaveTextContent('a');
-    h.remove.at(-1)!.onDone({ outcome: 'applied' });
-    h.remove.at(-1)!.onOpenChange(false);
-    expect(h.refresh).toHaveBeenCalledTimes(1);
-    expect(onClear).toHaveBeenCalledTimes(1);
+  // Re-pinned by Ungroup anything (owner 2026-10-12; was: "Remove from group
+  // reviews the grouped records only", a third grouping button on the bar):
+  // the bar offers Group selected and Ungroup, and Ungroup takes a record out
+  // of the group it is shown under (bulk-actions.ungroup.test.tsx). Claim
+  // kept: records in a group can be taken out of it from the bulk bar.
+  it('offers no separate Remove from group: Ungroup takes the grouped records out', () => {
+    render(bar({ selectedIds: ['a', 'b'], ungroupItemIds: ['a'] }));
+    expect(screen.queryByRole('button', { name: new RegExp(GROUP_COPY.removeAction) })).toBeNull();
+    expect(screen.getByRole('button', { name: /Ungroup/ })).toBeInTheDocument();
+    expect(h.remove).toHaveLength(0);
   });
 });

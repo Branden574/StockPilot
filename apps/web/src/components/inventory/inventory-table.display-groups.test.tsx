@@ -86,7 +86,7 @@ const { spy } = vi.hoisted(() => ({
   spy: {
     selectedIds: [] as string[],
     groupItemIds: undefined as string[] | undefined,
-    groupedItemIds: undefined as string[] | undefined,
+    ungroupItemIds: undefined as string[] | undefined,
     groupingView: undefined as string | undefined,
     onGrouped: undefined as ((groupId: string) => void) | undefined,
   },
@@ -95,13 +95,13 @@ vi.mock('@/components/inventory/bulk-actions', () => ({
   BulkActions: (props: {
     selectedIds: string[];
     groupItemIds?: string[];
-    groupedItemIds?: string[];
+    ungroupItemIds?: string[];
     groupingView?: string;
     onGrouped?: (groupId: string) => void;
   }) => {
     spy.selectedIds = props.selectedIds;
     spy.groupItemIds = props.groupItemIds;
-    spy.groupedItemIds = props.groupedItemIds;
+    spy.ungroupItemIds = props.ungroupItemIds;
     spy.groupingView = props.groupingView;
     spy.onGrouped = props.onGrouped;
     return <div data-testid="bulk-actions" />;
@@ -157,7 +157,7 @@ beforeEach(() => {
   urlState.params = new URLSearchParams('');
   spy.selectedIds = [];
   spy.groupItemIds = undefined;
-  spy.groupedItemIds = undefined;
+  spy.ungroupItemIds = undefined;
   spy.groupingView = undefined;
 });
 
@@ -457,7 +457,11 @@ describe('InventoryTable: Group selected in the bulk bar', () => {
     await userEvent.click(screen.getAllByRole('checkbox')[0]!);
   }
 
-  it('offers Group selected for two or more DISTINCT records of one type, and Remove for the grouped ones', async () => {
+  // Re-pinned by Ungroup anything (owner 2026-10-12; was: "... and Remove for
+  // the grouped ones", groupedItemIds handed to the bar's Remove from group):
+  // the bar's Ungroup takes the grouped record out of its group. Claim kept:
+  // the grouped record is offered a way out of its group from the bar.
+  it('offers Group selected for two or more DISTINCT records of one type, and Ungroup for the grouped ones', async () => {
     const items = [row('a', 'A', { ...inGroup('g', 'Pads') }), row('b', 'B'), row('c', 'C')];
     render(
       <InventoryTable
@@ -471,7 +475,7 @@ describe('InventoryTable: Group selected in the bulk bar', () => {
     );
     await selectAll();
     expect([...(spy.groupItemIds ?? [])].sort()).toEqual(['a', 'b', 'c']);
-    expect(spy.groupedItemIds).toEqual(['a']);
+    expect(spy.ungroupItemIds).toEqual(['a']);
     expect(spy.groupingView).toBe('items');
   });
 

@@ -653,6 +653,8 @@ export const UNGROUP_COPY = {
   partNotDone: (what: string, message: string) => `Not done: ${what}. ${message}`,
   partNotTried: (what: string) =>
     `Not tried: ${what}, because the step before it was not done. Review again to see where each record is now.`,
+  /** The bulk Ungroup needs a connection (the web when offline, the phone). */
+  selectedOffline: 'Ungroup needs a connection. Try again when you are online.',
   /** Nothing in the selection can be ungrouped by this person. */
   selectedNothing: 'None of the selected records has a grouping you can undo.',
   familyChanged: "A record's size family changed since you opened this. Review it again.",

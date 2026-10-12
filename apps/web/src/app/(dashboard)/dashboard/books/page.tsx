@@ -303,6 +303,15 @@ async function booksTableSection({
   // Group selected (0400): a group's header offers Rename to a manager only
   // (apply_item_grouping refuses anyone else on the role alone, SEC-1).
   const canRenameGroups = canUngroup && isManagerOrAbove(sessionCtx.role as Role);
+  // Ungroup anything (owner 2026-10-12): Ungroup also takes a record out of
+  // its size family for a viewer who may unlink one (unlinkItems' gate:
+  // sports:manage with the sports module on). The module set is
+  // request-cached (checkModuleAccess, as the gates above), so this costs no
+  // extra round trip.
+  const canUnlinkFamilies =
+    canUngroup &&
+    can(sessionCtx, 'sports:manage') &&
+    (await checkModuleAccess('sports')).enabled;
 
   // INSTANT MODE — same contract as the Items page: manager+ orgs at or
   // under INSTANT_MODE_MAX_ROWS get the FULL Books dataset and the
@@ -384,6 +393,7 @@ async function booksTableSection({
         canCreate={canCreate}
         canSetPublicVisibility={canSetPublicVisibility}
         canUngroup={canUngroup}
+        canUnlinkFamilies={canUnlinkFamilies}
         canRenameGroups={canRenameGroups}
         categories={lookups.categories.map((c) => ({ id: c.id, name: c.name }))}
         locations={lookups.locations}
@@ -626,6 +636,7 @@ async function booksTableSection({
       canCreate={canCreate}
       canSetPublicVisibility={canSetPublicVisibility}
       canUngroup={canUngroup}
+      canUnlinkFamilies={canUnlinkFamilies}
       canRenameGroups={canRenameGroups}
       categories={data.categories.map((c) => ({ id: c.id, name: c.name }))}
       locations={data.locations}

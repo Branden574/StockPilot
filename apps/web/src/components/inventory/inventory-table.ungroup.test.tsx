@@ -55,12 +55,21 @@ vi.mock('@/lib/cycle-counts/use-count-selection', () => ({
 }));
 
 const { spy } = vi.hoisted(() => ({
-  spy: { selectedIds: [] as string[], ungroupItemIds: undefined as string[] | undefined },
+  spy: {
+    selectedIds: [] as string[],
+    ungroupItemIds: undefined as string[] | undefined,
+    shownUnder: undefined as ReadonlyMap<string, string> | undefined,
+  },
 }));
 vi.mock('@/components/inventory/bulk-actions', () => ({
-  BulkActions: (props: { selectedIds: string[]; ungroupItemIds?: string[] }) => {
+  BulkActions: (props: {
+    selectedIds: string[];
+    ungroupItemIds?: string[];
+    ungroupShownUnder?: ReadonlyMap<string, string>;
+  }) => {
     spy.selectedIds = props.selectedIds;
     spy.ungroupItemIds = props.ungroupItemIds;
+    spy.shownUnder = props.ungroupShownUnder;
     return <div data-testid="bulk-actions" />;
   },
 }));
@@ -100,6 +109,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   spy.selectedIds = [];
   spy.ungroupItemIds = undefined;
+  spy.shownUnder = undefined;
 });
 
 async function selectAll() {
@@ -152,5 +162,96 @@ describe('InventoryTable: Ungroup in the bulk bar', () => {
     );
     await selectAll();
     expect([...(spy.ungroupItemIds ?? [])].sort()).toEqual(['a', 'b']);
+  });
+});
+
+// Ungroup anything (owner 2026-10-12, verbatim: "im supposed to be able to
+// check box whatever item and then group or ungroup it that was the point.").
+// The owner ticked the eight sizes of a T-shirt size family (each its own SKU)
+// and saw no Ungroup. The bar now offers it for any ticked record with
+// something to leave that the viewer may undo, and hands over which grouping
+// each record is shown under on the list.
+describe('InventoryTable: Ungroup anything in the bulk bar', () => {
+  const FAM = 'fam-limits-tee';
+  const sizes = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL'].map((size, i) => ({
+    ...row(`t${i}`, `TEE-${size}`),
+    name: `Limits Tee - ${size}`,
+    group_id: FAM,
+    variant_size: size,
+  }));
+
+  it("the owner's case: the eight sizes of a family, each its own SKU, are offered to someone who may unlink them", async () => {
+    render(
+      <InventoryTable
+        items={sizes as never}
+        lookups={LOOKUPS}
+        total={8}
+        initialQuery=""
+        pageSize={30}
+        canUngroup
+        canUnlinkFamilies
+      />,
+    );
+    await selectAll();
+    expect([...(spy.ungroupItemIds ?? [])].sort()).toEqual(sizes.map((r) => r.id).sort());
+    for (const r of sizes) expect(spy.shownUnder?.get(r.id)).toBe('family');
+  });
+
+  it('a family is not offered to someone who may not unlink one (no sports permission)', async () => {
+    render(
+      <InventoryTable
+        items={sizes as never}
+        lookups={LOOKUPS}
+        total={8}
+        initialQuery=""
+        pageSize={30}
+        canUngroup
+      />,
+    );
+    await selectAll();
+    expect(spy.ungroupItemIds ?? []).toEqual([]);
+  });
+
+  it('records in a display group are offered and shown under their group; a lone record keeps its own SKU header kind', async () => {
+    const items = [
+      { ...row('g1', 'P-1'), display_group_id: 'grp-1', display_group_name: 'Polos' },
+      { ...row('g2', 'P-2'), display_group_id: 'grp-1', display_group_name: 'Polos' },
+      row('x', 'SOLO'),
+    ];
+    render(
+      <InventoryTable
+        items={items as never}
+        lookups={LOOKUPS}
+        total={3}
+        initialQuery=""
+        pageSize={30}
+        canUngroup
+      />,
+    );
+    await selectAll();
+    expect([...(spy.ungroupItemIds ?? [])].sort()).toEqual(['g1', 'g2']);
+    expect(spy.shownUnder?.get('g1')).toBe('group');
+    expect(spy.shownUnder?.has('x')).toBe(false);
+  });
+
+  it("a family member in a group with no other record here shows under its family's run, and leaves the family", async () => {
+    const items = [
+      { ...sizes[0]!, display_group_id: 'grp-9', display_group_name: 'Front table' },
+      sizes[1]!,
+    ];
+    render(
+      <InventoryTable
+        items={items as never}
+        lookups={LOOKUPS}
+        total={2}
+        initialQuery=""
+        pageSize={30}
+        canUngroup
+        canUnlinkFamilies
+      />,
+    );
+    await selectAll();
+    expect(spy.shownUnder?.get(sizes[0]!.id)).toBe('family');
+    expect([...(spy.ungroupItemIds ?? [])].sort()).toEqual([sizes[0]!.id, sizes[1]!.id].sort());
   });
 });

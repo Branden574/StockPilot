@@ -34,9 +34,10 @@ import {
   groupRollupLabel,
   placementPhysicalNames,
   resolvePlacement,
-  sharedSkuItemIds,
   composeDisplayList,
   displayGroupChips,
+  shownUnderByRecord,
+  ungroupableItemIds,
   DISPLAY_GROUP_FALLBACK_NAME,
   GROUP_COPY,
   groupingSelectionFacts,
@@ -383,6 +384,11 @@ export interface InventoryTableProps {
    *  Ungroup for selected records that share a SKU with another loaded
    *  record. Default false: never offered. The server re-checks everything. */
   canUngroup?: boolean;
+  /** Ungroup anything (owner 2026-10-12): the viewer may also take records
+   *  out of a size family (sports:manage with the sports module on, the gate
+   *  of unlinkItems), so Ungroup is offered for a family member shown under
+   *  its family. Default false. The server re-checks everything. */
+  canUnlinkFamilies?: boolean;
   /** Group selected (0400): the viewer is a manager (or above) who can edit
    *  items, so an explicit group's header offers Rename. Only a manager may
    *  rename a group (security review SEC-1: apply_item_grouping answers on the
@@ -694,6 +700,7 @@ export function InventoryTable({
   canSetPublicVisibility = false,
   canStartOrder = false,
   canUngroup = false,
+  canUnlinkFamilies = false,
   canRenameGroups = false,
   onScanRequest,
   page = 1,
@@ -1553,22 +1560,6 @@ export function InventoryTable({
     return null;
   }, [instantView, plannedFirstPage]);
 
-  // Ungroup (0399, design 5): the selected records that share their SKU with
-  // another LOADED record, from the rows on hand only (the full dataset in
-  // instant mode, else this page and any search hits) plus the full-set
-  // per-SKU counts when known. No per-row query and no stored preference, so
-  // the server-planned page 1 is untouched. The server decides on what the
-  // viewer can read; this only decides whether to offer the button.
-  const ungroupItemIds = React.useMemo<string[]>(() => {
-    if (!canUngroup || selectedItemIds.length === 0) return [];
-    const pool = [...(effectiveInstant?.items ?? items), ...(serverHits ?? [])];
-    return sharedSkuItemIds(
-      selectedItemIds,
-      pool.map((r) => ({ id: r.id, sku: r.sku ?? null })),
-      skuItemRowCountsFull,
-    );
-  }, [canUngroup, selectedItemIds, effectiveInstant, items, serverHits, skuItemRowCountsFull]);
-
   // Group selected (0400): records per HEADER UNIT over the whole set, for
   // the headers' split detectors: 'grp:<id>' for an explicit group that forms
   // (two or more of its records present), 'sku:<raw>' for a SKU counted over
@@ -1579,8 +1570,8 @@ export function InventoryTable({
   // per-SKU counts, used as they always were). Null in plain server mode.
   // Group selected (0400, design 5): the bulk bar offers Group selected for
   // two or more DISTINCT records of one type (two rack rows of one record are
-  // ONE record) and Remove from group for the selected records in a group,
-  // from the loaded rows only: no per-row query, and select-all stays
+  // ONE record), from the loaded rows only (taking records out of a group is
+  // Ungroup's now: owner 2026-10-12): no per-row query, and select-all stays
   // page-scoped, so hidden rows, off-page siblings and every search match are
   // never added. Offered to viewers who can edit items (items:update, the
   // same gate as Ungroup); the server decides again on what they can read and
@@ -1665,6 +1656,50 @@ export function InventoryTable({
       expandedStyleGroups,
     ],
   );
+
+  // Ungroup anything (owner 2026-10-12): the header each record is SHOWN
+  // under in this composition (an explicit group, a shared SKU, a stored size
+  // family's run). A ticked record with more than one grouping leaves this
+  // one; the review says so for each record.
+  const ungroupShownUnder = React.useMemo(
+    () => shownUnderByRecord(displayList, (it) => it.id),
+    [displayList],
+  );
+
+  // The bulk bar offers Ungroup when a ticked record has something to leave
+  // this viewer may undo (core ungroupableItemIds), from the rows on hand
+  // only (the full dataset in instant mode, else this page and any search
+  // hits) plus the full-set per-SKU counts when known: no per-row query, and
+  // the server-planned page 1 is untouched. The review reads every ticked
+  // record again and decides on what the viewer can read and edit.
+  const ungroupItemIds = React.useMemo<string[]>(() => {
+    if (!canUngroup || selectedItemIds.length === 0) return [];
+    const pool = [...(effectiveInstant?.items ?? items), ...(serverHits ?? [])];
+    return ungroupableItemIds(
+      selectedItemIds,
+      pool.map((r) => ({
+        id: r.id,
+        sku: r.sku ?? null,
+        display_group_id: r.display_group_id ?? null,
+        group_id: r.group_id ?? null,
+      })),
+      {
+        canEditItems: canUngroup,
+        canUnlinkFamilies,
+        fullSkuCounts: skuItemRowCountsFull,
+        shownUnder: ungroupShownUnder,
+      },
+    );
+  }, [
+    canUngroup,
+    canUnlinkFamilies,
+    selectedItemIds,
+    effectiveInstant,
+    items,
+    serverHits,
+    skuItemRowCountsFull,
+    ungroupShownUnder,
+  ]);
 
   // Chips (Group selected): a record whose group has only it on screen ("In
   // group <name>", so a search hit keeps its context) and a record in no group
@@ -2128,8 +2163,8 @@ export function InventoryTable({
             // rack rows of the same item are checked.
             selectedIds={selectedItemIds}
             ungroupItemIds={ungroupItemIds}
+            ungroupShownUnder={ungroupShownUnder}
             groupItemIds={groupFacts?.canGroup ? selectedItemIds : []}
-            groupedItemIds={groupFacts?.groupedIds ?? []}
             groupingView={showBookFields ? 'books' : 'items'}
             // C3 (design 5): after a grouping the list opens the group.
             onGrouped={openExplicitGroup}
