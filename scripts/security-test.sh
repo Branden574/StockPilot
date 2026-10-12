@@ -716,6 +716,18 @@ PGTAP_TESTS=(
   # defence in depth. The lock footprint is
   # scripts/db-concurrency/0398_migration_lock_footprint.sh.
   supabase/tests/0398_returns_contract.test.sql
+  # Ungroup (0399, slice G1): split_item_sku gives a record that shares its
+  # SKU a fresh SKU of its own. SECURITY DEFINER with EXECUTE to
+  # authenticated only (anon, service_role and the private steps none); the
+  # caller's items:update and write scope are checked before any write and
+  # again under the row lock; visible siblings are decided by
+  # caller_can_read_item, so a record the caller cannot read (another
+  # charter, another category) never changes the answer and an unreadable id
+  # answers item_not_found like an unknown one; item_grouping_requests has
+  # RLS on and no API privilege. The two-session proofs (busy, double tap, a
+  # scope move between the checks and the lock) are
+  # scripts/db-concurrency/0399_split_sku_races.sh.
+  supabase/tests/0399_ungroup_shared_sku.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -800,6 +812,11 @@ WEB_TESTS=(
   src/server/services/books-import.ssrf.test.ts
 
   # Authorization gates on server actions and routes.
+  # Ungroup (0399): the phone's bearer route authenticates, then rate-limits,
+  # and a 403 keeps its MFA reason; the service checks items:update before any
+  # read or call and refuses another organization or actor.
+  src/app/api/v1/items/ungroup/route.test.ts
+  src/server/services/item-grouping.test.ts
   src/app/api/orders/[id]/signature/route.test.ts
   src/server/actions/po-imports.gates.test.ts
   src/server/actions/purchase-orders.gates.test.ts
