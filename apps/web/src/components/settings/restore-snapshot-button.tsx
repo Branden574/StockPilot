@@ -105,6 +105,10 @@ export function RestoreSnapshotButton({ id, when }: { id: string; when: string }
   }
 
   const changes = skuCheck.state === 'done' ? skuCheck.data.changes : [];
+  // PR stage fix round 1 (F3): the check reads at most SKU_CHANGES_SCAN audit
+  // rows, and the split rows it leaves out count against that limit, so a
+  // check cut off there may have named nothing. That is never an all-clear.
+  const cutOff = skuCheck.state === 'done' && skuCheck.data.truncated;
   return (
     <>
       {stepUp.modal}
@@ -118,6 +122,11 @@ export function RestoreSnapshotButton({ id, when }: { id: string; when: string }
           {skuCheck.noAuditAccess ? RESTORE_SKU_COPY.noAuditAccess : RESTORE_SKU_COPY.failed}
         </p>
       ) : null}
+      {cutOff && changes.length === 0 ? (
+        <p className="mb-2 text-left text-[11px] text-amber-700 dark:text-amber-400">
+          {RESTORE_SKU_COPY.cutOff}
+        </p>
+      ) : null}
       {skuCheck.state === 'done' && changes.length > 0 ? (
         <div
           role="alert"
@@ -129,7 +138,7 @@ export function RestoreSnapshotButton({ id, when }: { id: string; when: string }
             {changes.map((c, i) => (
               <li key={c.itemId ?? i}>{RESTORE_SKU_COPY.line(c)}</li>
             ))}
-            {skuCheck.data.more > 0 ? (
+            {skuCheck.data.more > 0 || cutOff ? (
               <li>{RESTORE_SKU_COPY.more(skuCheck.data.more, skuCheck.data.truncated)}</li>
             ) : null}
           </ul>

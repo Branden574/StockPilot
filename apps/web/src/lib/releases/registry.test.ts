@@ -8723,10 +8723,16 @@ describe('the Ungroup release (G1, 0399)', () => {
   // (restore-points.ts planSplitMatches), so only SKU edits are named before the
   // typed confirm; an admin who cannot view the audit log is told the check
   // could not run (restore-sku-warning-copy.ts noAuditAccess).
+  // Re-pinned by PR stage fix round 1 (2026-10-12, F2; was: "... finds each
+  // record that got its own SKU, when it is still on the same rack."): the
+  // restore finds a split record by the SKU its split left, so a record whose
+  // SKU changed between the point and the Ungroup is not found that way; the
+  // warning names it instead (an edited SKU). Claim kept: an older point
+  // finds a split record on the same rack, and edited SKUs are named.
   it('says an older point finds a record that got its own SKU, names only edited SKUs, and says when it cannot check', () => {
     const entry = release().entries.find((e) => e.id === 'restore-points-follow-records')!;
     expect(entry.whatChanged).toContain(
-      'Restoring an older restore point after an Ungroup finds each record that got its own SKU, when it is still on the same rack.',
+      'Restoring an older restore point after an Ungroup finds each record that got its own SKU, when it is still on the same rack and its SKU was not changed between the restore point and the Ungroup.',
     );
     expect(entry.whatChanged).toContain(
       'Backups & restore names the records whose SKU was edited since it was taken, before you type RESTORE.',

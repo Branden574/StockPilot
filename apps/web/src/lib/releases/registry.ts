@@ -110,12 +110,17 @@ export const RELEASES: Release[] = [
         // row when it is still on the same rack (restore-points.ts
         // planSplitMatches), so the warning names only SKU edits; an admin
         // whose audit-log view was revoked is told the check could not run.
+        // PR stage fix round 1 (2026-10-12, F2): the restore finds a split
+        // record by the SKU its split left, so a record whose SKU changed
+        // between the point and the Ungroup is not found that way; the
+        // warning names it (an edited SKU), and the first sentence about
+        // older points says when a split record is found.
         id: 'restore-points-follow-records',
         category: 'fixed',
         area: 'Settings',
         title: "Restoring a restore point keeps each record's stock in one place after a SKU change",
         whatChanged:
-          "Restore points taken after this update remember each record, not only its SKU and rack, so restoring one after an Ungroup or a SKU edit puts each record's stock back on that same record. Restoring an older restore point after an Ungroup finds each record that got its own SKU, when it is still on the same rack. For an older point, Backups & restore names the records whose SKU was edited since it was taken, before you type RESTORE.",
+          "Restore points taken after this update remember each record, not only its SKU and rack, so restoring one after an Ungroup or a SKU edit puts each record's stock back on that same record. Restoring an older restore point after an Ungroup finds each record that got its own SKU, when it is still on the same rack and its SKU was not changed between the restore point and the Ungroup. For an older point, Backups & restore names the records whose SKU was edited since it was taken, before you type RESTORE.",
         whyItMatters:
           'Restore points matched records by SKU and rack, so restoring one taken before a record got a new SKU added that record again under its old SKU, with the stock it had then, while the record with the new SKU kept its stock too.',
         howItAffectsYou:

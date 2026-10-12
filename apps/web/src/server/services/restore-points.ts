@@ -584,6 +584,8 @@ function planSplitMatches(
 export const SKU_CHANGES_NAMED = 10;
 /** How many SKU-change audit rows the warning reads at most (oldest first). */
 export const SKU_CHANGES_SCAN = 500;
+/** The audit event of a record Ungroup gave its own SKU (migration 0399). */
+const UNGROUPED_EVENT = 'inventory.item.ungrouped';
 
 export interface RestorePointSkuChange {
   itemId: string | null;
@@ -613,9 +615,13 @@ export interface RestorePointSkuChanges {
  * stock it had then, while the record with the new SKU stays and is flagged as
  * an extra. This names those records from the audit log: SKU edits
  * (changed_keys has 'sku'; a Model B edit's siblings followed it,
- * propagated_to_sku). A record Ungroup split is left out (PR stage, DATA-1):
- * the restore finds it through its inventory.item.ungrouped row. A version 2
- * snapshot matches by id, so it needs no warning and reads no audit log.
+ * propagated_to_sku). A record Ungroup split straight from its SKU at the
+ * point is left out (PR stage, DATA-1): the restore finds it through its
+ * inventory.item.ungrouped row. One whose SKU was edited before its split is
+ * named, and an edit whose followers left its SKU through an Ungroup keeps
+ * "with the records that shared it" (PR stage fix round 1, F2): the restore
+ * finds neither. A version 2 snapshot matches by id, so it needs no warning
+ * and reads no audit log.
  *
  * Same gate as the restore (owner/admin floor + Business). Reads through the
  * caller's RLS. A failed audit read throws, and so does a caller who cannot
@@ -669,10 +675,6 @@ export async function restorePointSkuChanges(
     .limit(SKU_CHANGES_SCAN);
   if (auditErr) throw new ServiceError('internal_error', auditErr.message);
 
-  // PR stage, data review DATA-1 (3): a record Ungroup split is found through
-  // its split when the point is restored (restoreSnapshot), so it is never
-  // added again: leave it out, a later SKU edit of it included. What is named
-  // is SKU edits of records that were not split.
   type Row = {
     entity_id: string | null;
     event: string;
@@ -681,33 +683,71 @@ export async function restorePointSkuChanges(
     propagated: string | null;
   };
   const scanned = (rows ?? []) as Row[];
-  const split = new Set(
-    scanned.flatMap((r) =>
-      r.event === 'inventory.item.ungrouped' && r.entity_id ? [r.entity_id] : [],
-    ),
-  );
+
+  // PR stage, data review DATA-1 (3), narrowed by fix round 1 (F2): the
+  // restore finds a split record by the SKU its split left (planSplitMatches
+  // matches left_sku to the point's SKU). That is its SKU at the point only
+  // when nothing changed it before the split, so a record is left out only
+  // when its FIRST row after the point is its Ungroup row, with every later
+  // row of it (the restore keeps whatever SKU it has now). A record whose SKU
+  // was edited and then split is not found that way: it is named, from its SKU
+  // at the point to its newest.
+  const firstEvent = new Map<string, string>();
+  for (const r of scanned) {
+    if (r.entity_id && !firstEvent.has(r.entity_id)) firstEvent.set(r.entity_id, r.event);
+  }
 
   // One line per record: its SKU before the first change and after the last.
-  const byItem = new Map<string, RestorePointSkuChange>();
+  // carried: an edit of it carried the records sharing its SKU along (Model B
+  // writes propagated_to_sku and one audit row, the edited record's);
+  // lastCarriedTo: the newest SKU such an edit carried them to; leftBySplit: a
+  // record left a SKU one of its edits carried records to, through an Ungroup
+  // after that edit. No row says a record followed an edit, but its Ungroup
+  // row names the SKU it left, and the restore cannot find it by that SKU, so
+  // it adds that record again too (F2, the sibling case).
+  interface Line {
+    change: RestorePointSkuChange;
+    carried: boolean;
+    lastCarriedTo: string | null;
+    leftBySplit: boolean;
+  }
+  const byItem = new Map<string, Line>();
+  const carriedTo = new Map<string, Line[]>();
   for (const r of scanned) {
-    if (r.entity_id && split.has(r.entity_id)) continue;
+    if (r.event === UNGROUPED_EVENT && r.before_sku) {
+      for (const line of carriedTo.get(r.before_sku) ?? []) {
+        if (line.change.itemId !== r.entity_id) line.leftBySplit = true;
+      }
+    }
+    if (r.entity_id && firstEvent.get(r.entity_id) === UNGROUPED_EVENT) continue;
     const key = r.entity_id ?? `${r.before_sku}\u0000${r.after_sku}`;
-    const seen = byItem.get(key);
-    if (seen) {
-      seen.after = r.after_sku ?? seen.after;
-      seen.shared ||= r.propagated != null;
+    let line = byItem.get(key);
+    if (line) {
+      line.change.after = r.after_sku ?? line.change.after;
     } else {
-      byItem.set(key, {
-        itemId: r.entity_id,
-        name: null,
-        before: r.before_sku,
-        after: r.after_sku,
-        shared: r.propagated != null,
-      });
+      line = {
+        change: {
+          itemId: r.entity_id,
+          name: null,
+          before: r.before_sku,
+          after: r.after_sku,
+          shared: false,
+        },
+        carried: false,
+        lastCarriedTo: null,
+        leftBySplit: false,
+      };
+      byItem.set(key, line);
+    }
+    if (r.propagated != null) {
+      line.carried = true;
+      line.lastCarriedTo = r.propagated;
+      carriedTo.set(r.propagated, [...(carriedTo.get(r.propagated) ?? []), line]);
     }
   }
   const all = [...byItem.values()];
-  const named = all.slice(0, SKU_CHANGES_NAMED);
+  const namedLines = all.slice(0, SKU_CHANGES_NAMED);
+  const named = namedLines.map((l) => l.change);
   const ids = named.flatMap((c) => (c.itemId ? [c.itemId] : []));
   if (ids.length > 0) {
     const { data: names } = await ctx.supabase
@@ -721,26 +761,42 @@ export async function restorePointSkuChanges(
     );
     for (const c of named) c.name = (c.itemId && nameById.get(c.itemId)) || null;
   }
-  // update() writes propagated_to_sku whenever its Model B fan-out runs, even
-  // when no other record had the SKU (PR stage, found by the D1 lab), so the
-  // flag alone does not mean the siblings followed. Say so only when other
-  // live records hold the record's new SKU now. A failed read keeps the flag:
-  // the stronger warning.
-  const afters = [...new Set(named.flatMap((c) => (c.shared && c.after ? [c.after] : [])))];
-  if (afters.length > 0) {
-    const { data: holders, error: holdersErr } = await ctx.supabase
+  // "with the records that shared it". update() writes propagated_to_sku
+  // whenever its Model B fan-out runs, even when no other record had the SKU
+  // (PR stage, found by the D1 lab), so the flag alone does not mean records
+  // followed. Say it when a record left a SKU the edit carried records to
+  // through an Ungroup since (above), or when other live records hold the
+  // record's SKU now or the newest SKU its edits carried records to (the
+  // records that followed it and are still there; F2: the edited record may
+  // have been split away from them since). The record itself is never counted.
+  // A failed read keeps the flag: the stronger warning.
+  const toCheck = namedLines.filter((l) => l.carried && !l.leftBySplit);
+  const skus = [
+    ...new Set(
+      toCheck.flatMap((l) =>
+        [l.change.after, l.lastCarriedTo].filter((s): s is string => Boolean(s)),
+      ),
+    ),
+  ];
+  let holders: Array<{ id: string; sku: string }> | null = [];
+  if (skus.length > 0) {
+    const { data, error: holdersErr } = await ctx.supabase
       .from('inventory_items')
-      .select('sku')
+      .select('id, sku')
       .eq('organization_id', ctx.organizationId)
       .is('deleted_at', null)
-      // in-list-bound: at most SKU_CHANGES_NAMED (10) SKUs, the named records' new SKUs
-      .in('sku', afters);
-    if (!holdersErr) {
-      const held = new Map<string, number>();
-      for (const h of (holders ?? []) as Array<{ sku: string }>)
-        held.set(h.sku, (held.get(h.sku) ?? 0) + 1);
-      for (const c of named) if (c.shared) c.shared = (c.after ? (held.get(c.after) ?? 0) : 0) > 1;
+      // in-list-bound: at most 2 x SKU_CHANGES_NAMED (20) SKUs, each named record's SKU now and the newest SKU its edits carried records to
+      .in('sku', skus);
+    holders = holdersErr ? null : ((data ?? []) as Array<{ id: string; sku: string }>);
+  }
+  for (const l of namedLines) {
+    if (!l.carried) continue;
+    if (l.leftBySplit || holders === null) {
+      l.change.shared = true;
+      continue;
     }
+    const mine = new Set([l.change.after, l.lastCarriedTo]);
+    l.change.shared = holders.some((h) => h.id !== l.change.itemId && mine.has(h.sku));
   }
   return {
     version: 1,

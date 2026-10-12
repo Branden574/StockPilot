@@ -103,6 +103,40 @@ describe('RestoreSnapshotButton: SKU changes since the point', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('and at least 489 more');
   });
 
+  // PR stage fix round 1 (F3): the check reads at most SKU_CHANGES_SCAN audit
+  // rows, and the split rows it leaves out count against that limit. A check
+  // cut off there that names nothing showed nothing at all: an all-clear
+  // nobody checked.
+  it('says it could not check every SKU change when the check stopped at its limit and named nothing, and still lets an owner confirm', async () => {
+    h.changes.mockResolvedValue(answer({ version: 1, changes: [], more: 0, truncated: true }));
+    const user = await open();
+    await waitFor(() => expect(screen.queryByText(RESTORE_SKU_COPY.checking)).toBeNull());
+    expect(document.body.textContent).toContain(RESTORE_SKU_COPY.cutOff);
+    await user.type(screen.getByPlaceholderText('RESTORE'), 'RESTORE');
+    expect(screen.getByRole('button', { name: 'Confirm' })).toBeEnabled();
+  });
+
+  it('says more may exist when the check stopped at its limit, even with every record it read named', async () => {
+    h.changes.mockResolvedValue(
+      answer({
+        version: 1,
+        changes: [
+          {
+            itemId: B,
+            name: 'Black Mouse Pad',
+            before: 'SP-PAIR',
+            after: 'SP-NEW1',
+            shared: false,
+          },
+        ],
+        more: 0,
+        truncated: true,
+      }),
+    );
+    await open();
+    expect((await screen.findByRole('alert')).textContent).toContain('and possibly more');
+  });
+
   it('shows no warning for a point that matches records by id, or when no SKU changed', async () => {
     for (const data of [
       { version: 2, changes: [], more: 0, truncated: false },
@@ -202,6 +236,8 @@ describe('RestoreSnapshotButton: SKU changes since the point', () => {
     const text = [
       RESTORE_SKU_COPY.checking,
       RESTORE_SKU_COPY.failed,
+      RESTORE_SKU_COPY.noAuditAccess,
+      RESTORE_SKU_COPY.cutOff,
       RESTORE_SKU_COPY.heading,
       RESTORE_SKU_COPY.body,
       RESTORE_SKU_COPY.advice,

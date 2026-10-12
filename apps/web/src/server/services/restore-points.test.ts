@@ -130,7 +130,7 @@ interface World {
   audit?: Array<Record<string, unknown>>;
   names?: Array<{ id: string; name: string; sku: string }>;
   /** live records holding the named records' new SKUs (the shared check) */
-  holders?: Array<{ sku: string }>;
+  holders?: Array<{ id?: string; sku: string }>;
   auditError?: { message: string } | null;
 }
 
@@ -148,7 +148,8 @@ function harness(world: World, who: { role?: string; permissions?: Set<Permissio
       if (r.select.startsWith('id, sku, bin_location'))
         return { data: world.active ?? [], error: null };
       if (r.select === 'id, name, sku') return { data: world.names ?? [], error: null };
-      if (r.select === 'sku') return { data: world.holders ?? [], error: null };
+      if (r.select === 'sku' || r.select === 'id, sku')
+        return { data: world.holders ?? [], error: null };
       return { data: world.capture ?? [], error: null };
     }
     return { data: [], error: null };
@@ -674,7 +675,10 @@ describe('restorePointSkuChanges (the warning before restoring a version 1 point
         { id: B, name: 'Black Mouse Pad', sku: 'SP-NEW1' },
       ],
       // C's sibling followed it to SP-LAST (the Model B edit carried it along).
-      holders: [{ sku: 'SP-LAST' }, { sku: 'SP-LAST' }],
+      holders: [
+        { id: C, sku: 'SP-LAST' },
+        { id: D, sku: 'SP-LAST' },
+      ],
     });
     const res = await restorePointSkuChanges(ctx, POINT);
     expect(res).toEqual({
@@ -746,14 +750,24 @@ describe('restorePointSkuChanges (the warning before restoring a version 1 point
         { id: C, name: 'Hoodie', sku: 'SP-NEW' },
       ],
       // B alone holds QA-CABLE-2; C and the sibling that followed it hold SP-NEW.
-      holders: [{ sku: 'QA-CABLE-2' }, { sku: 'SP-NEW' }, { sku: 'SP-NEW' }],
+      holders: [
+        { id: B, sku: 'QA-CABLE-2' },
+        { id: C, sku: 'SP-NEW' },
+        { id: D, sku: 'SP-NEW' },
+      ],
     });
     expect((await restorePointSkuChanges(ctx, POINT)).changes).toEqual([
       { itemId: B, name: 'HDMI Cable', before: 'QA-CABLE', after: 'QA-CABLE-2', shared: false },
       { itemId: C, name: 'Hoodie', before: 'SP-OLD', after: 'SP-NEW', shared: true },
     ]);
-    const holders = reads.find((r) => r.table === 'inventory_items' && r.select === 'sku')!;
-    expect(holders.filters).toEqual(
+    const holders = reads.find(
+      (r) =>
+        r.table === 'inventory_items' && r.filters.some((f) => f[0] === 'in' && f[1] === 'sku'),
+    );
+    // PR stage fix round 1 (F2): the holders' ids are read too, so the record
+    // itself is never counted as one that shared its SKU.
+    expect(holders?.select).toBe('id, sku');
+    expect(holders!.filters).toEqual(
       expect.arrayContaining([
         ['eq', 'organization_id', ORG],
         ['is', 'deleted_at', null],
@@ -874,6 +888,102 @@ describe('restorePointSkuChanges (the warning before restoring a version 1 point
       more: 0,
       truncated: false,
     });
+  });
+
+  // PR stage fix round 1 (F2, the owner's mouse pads): A on 22-A and B on 22-C
+  // shared SP-PAIR when the version 1 point was taken. After it, A's SKU was
+  // edited to SP-PAD3 and B followed (Model B writes one audit row, A's). Then
+  // Ungroup split one of them. The restore finds a split record only by the
+  // SKU its split left (planSplitMatches), and both left SP-PAD3, not the
+  // point's SP-PAIR, so the restore adds both again under SP-PAIR. The warning
+  // left out every record with an Ungroup row, the edit before its split
+  // included: it named nothing, or A without the records that shared it.
+  const EDIT_A = {
+    entity_id: A,
+    event: 'inventory.item.updated',
+    before_sku: 'SP-PAIR',
+    after_sku: 'SP-PAD3',
+    propagated: 'SP-PAD3',
+  };
+
+  it('names a record whose SKU was edited and then split, from its SKU at the point to its newest, with the records that shared it', async () => {
+    const { ctx } = harness({
+      point: V1,
+      audit: [
+        EDIT_A,
+        {
+          entity_id: A,
+          event: 'inventory.item.ungrouped',
+          before_sku: 'SP-PAD3',
+          after_sku: 'SP-NEW1',
+          propagated: null,
+        },
+      ],
+      names: [{ id: A, name: 'Black Mouse Pad', sku: 'SP-NEW1' }],
+      // B followed A's edit and still holds SP-PAD3; A alone holds SP-NEW1.
+      holders: [
+        { id: B, sku: 'SP-PAD3' },
+        { id: A, sku: 'SP-NEW1' },
+      ],
+    });
+    expect(await restorePointSkuChanges(ctx, POINT)).toEqual({
+      version: 1,
+      changes: [
+        { itemId: A, name: 'Black Mouse Pad', before: 'SP-PAIR', after: 'SP-NEW1', shared: true },
+      ],
+      more: 0,
+      truncated: false,
+    });
+  });
+
+  it('keeps "with the records that shared it" on a SKU edit when a record that followed it was split since, and leaves that split record out', async () => {
+    const { ctx } = harness({
+      point: V1,
+      audit: [
+        EDIT_A,
+        {
+          entity_id: B,
+          event: 'inventory.item.ungrouped',
+          before_sku: 'SP-PAD3',
+          after_sku: 'SP-NEW1',
+          propagated: null,
+        },
+      ],
+      names: [{ id: A, name: 'Black Mouse Pad', sku: 'SP-PAD3' }],
+      // A alone holds SP-PAD3 now: B left it through its split.
+      holders: [{ id: A, sku: 'SP-PAD3' }],
+    });
+    expect(await restorePointSkuChanges(ctx, POINT)).toEqual({
+      version: 1,
+      changes: [
+        { itemId: A, name: 'Black Mouse Pad', before: 'SP-PAIR', after: 'SP-PAD3', shared: true },
+      ],
+      more: 0,
+      truncated: false,
+    });
+  });
+
+  it('does not count a record that left the new SKU through a split before the edit as one that followed it', async () => {
+    const { ctx } = harness({
+      point: V1,
+      audit: [
+        // C left SP-PAD3, its SKU at the point, before A was edited to it: the
+        // restore finds C through its split, and C never followed A.
+        {
+          entity_id: C,
+          event: 'inventory.item.ungrouped',
+          before_sku: 'SP-PAD3',
+          after_sku: 'SP-NEW2',
+          propagated: null,
+        },
+        EDIT_A,
+      ],
+      names: [{ id: A, name: 'Black Mouse Pad', sku: 'SP-PAD3' }],
+      holders: [{ id: A, sku: 'SP-PAD3' }],
+    });
+    expect((await restorePointSkuChanges(ctx, POINT)).changes).toEqual([
+      { itemId: A, name: 'Black Mouse Pad', before: 'SP-PAIR', after: 'SP-PAD3', shared: false },
+    ]);
   });
 
   it('a version 1 point with only splits since gives an empty list: the restore finds them', async () => {
