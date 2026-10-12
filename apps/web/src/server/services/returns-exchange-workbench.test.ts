@@ -48,6 +48,7 @@ const repl = (over: Partial<ReplacementRow> = {}): ReplacementRow => ({
   fulfillment_type: 'pickup',
   warehouse_id: 'wh',
   completed_at: null,
+  signed_at: null,
   created_at: '2026-10-05T10:05:00Z',
   ...over,
 });

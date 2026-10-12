@@ -383,6 +383,16 @@ async function canWriteWarehouse(ctx: ServiceContext, warehouseId: string | null
 
 // ── Workbench ──────────────────────────────────────────────────────────────
 
+type HeaderOrder = {
+  order_number: number | null;
+  warehouse_id: string | null;
+  requester_name: string | null;
+  requester_email: string | null;
+  completed_at: string | null;
+  /** The hand-over the history shows (return-history handOverOf). */
+  signed_at: string | null;
+};
+
 type HeaderRow = {
   id: string;
   return_number: string | null;
@@ -406,10 +416,7 @@ type HeaderRow = {
   /** 0393: {requested_by|approved_by|received_by|closed_by|denied_by: when}. */
   deleted_users?: unknown;
   created_at: string;
-  order_request?:
-    | { order_number: number | null; warehouse_id: string | null; requester_name: string | null; requester_email: string | null; completed_at: string | null }
-    | Array<{ order_number: number | null; warehouse_id: string | null; requester_name: string | null; requester_email: string | null; completed_at: string | null }>
-    | null;
+  order_request?: HeaderOrder | HeaderOrder[] | null;
   lines?: Array<{
     id: string;
     order_request_line_id: string;
@@ -463,7 +470,7 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
       `id, return_number, status, source, reason_code, notes, denial_reason, order_request_id,
        requester_name, requester_email, requested_by, approved_by, approved_at, received_by, received_at,
        closed_by, closed_at, denied_by, denied_at, deleted_users, created_at,
-       order_request:order_requests!order_request_id (order_number, warehouse_id, requester_name, requester_email, completed_at),
+       order_request:order_requests!order_request_id (order_number, warehouse_id, requester_name, requester_email, completed_at, signed_at),
        lines:return_lines (id, order_request_line_id, item_id, quantity, disposition, applied, created_at),
        ${EXCHANGE_LINES_EMBED}`,
     )
@@ -735,6 +742,7 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
   }
   const chain = buildReturnChainEvents({
     orderNumber: order?.order_number ?? null,
+    signedAt: order?.signed_at ?? null,
     completedAt: order?.completed_at ?? null,
     picks,
     itemNames,
@@ -746,7 +754,7 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
     },
     replacementPicks,
     replacement: liveReplacement
-      ? { orderNumber: liveReplacement.order_number, completedAt: liveReplacement.completed_at }
+      ? { orderNumber: liveReplacement.order_number, signedAt: liveReplacement.signed_at, completedAt: liveReplacement.completed_at }
       : null,
     decisions: named,
     movements: movements.map((m) => ({
