@@ -16,6 +16,9 @@ const { auditMock, auditManyMock } = vi.hoisted(() => ({
   })),
 }));
 vi.mock('./audit', () => ({ audit: auditMock, auditMany: auditManyMock }));
+// The service-role client the unlink's same-SKU fan-out uses (familyDb sets it).
+const adminHolder = vi.hoisted(() => ({ client: null as unknown }));
+vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: () => adminHolder.client }));
 
 /** The per-item rows, which go out through ONE batched write (auditMany),
  *  never one audit() call per item. */
@@ -586,49 +589,96 @@ describe('linkFamily — refuses a duplicate variant_key in the destination grou
 
 /**
  * inventory_items as a tiny database for the unlink tests: a read answers the
- * current family of the ids in its in-list; an update takes out of the family
- * only the ids in its in-list whose family equals its group_id filter (as
- * PostgREST would), and answers those ids. `refuse` ids are never written
- * (an RLS write refusal); `beforeWrite` runs once before the first update
- * (another session acting between the read and the write).
+ * current family (and SKU) of the rows its in-list / group_id filter names; an
+ * update takes out of the family only the ids in its in-list whose family
+ * equals its group_id filter (as PostgREST would), and answers those ids.
+ * `refuse` ids are never written (an RLS write refusal); `hidden` ids are
+ * invisible and unwritable to the caller's client but not to the
+ * service-role client (`admin`, also installed as createAdminClient's
+ * answer); `beforeWrite` runs once before the first update (another session
+ * acting between the read and the write).
  */
 function familyDb(
   start: Record<string, string | null>,
-  opts: { refuse?: string[]; beforeWrite?: (rows: Map<string, string | null>) => void } = {},
+  opts: {
+    refuse?: string[];
+    hidden?: string[];
+    skus?: Record<string, string>;
+    beforeWrite?: (rows: Map<string, string | null>) => void;
+    /** Rows the service-role read also answers whatever its sku filter says
+     *  (a SKU with a quote widening the in-list: the review's MEDIUM). */
+    adminReadExtra?: string[];
+    /** The service-role update answers an error (a lost connection). */
+    adminUpdateFails?: boolean;
+    /** The caller's own update answers an error (every one, or only the
+     *  one for this family). */
+    updateFails?: boolean | string;
+  } = {},
 ) {
   const rows = new Map<string, string | null>(Object.entries(start));
   const updates: Array<{ family: unknown; ids: string[] }> = [];
+  const adminUpdates: Array<{ family: unknown; ids: string[] }> = [];
   let wrote = false;
   const arg = (call: MockCall, method: string, col: string) => {
     const i = call.methods.findIndex((m, k) => m === method && call.args[k]![0] === col);
     return i >= 0 ? call.args[i]![1] : undefined;
   };
-  const stub = makeSupabaseStub({
-    'inventory_items.select': (call) => {
-      const ids = (arg(call, 'in', 'id') as string[] | undefined) ?? [];
-      return {
-        data: ids
-          .filter((id) => rows.has(id))
-          .map((id) => ({ id, group_id: rows.get(id), variant_key: rows.get(id) ? 'size=L' : null })),
-        error: null,
-      };
-    },
-    'inventory_items.update': (call) => {
-      if (!wrote) {
-        wrote = true;
-        opts.beforeWrite?.(rows);
-      }
-      const ids = (arg(call, 'in', 'id') as string[] | undefined) ?? [];
-      const family = arg(call, 'eq', 'group_id');
-      updates.push({ family, ids });
-      const hit = ids.filter(
-        (id) => rows.has(id) && rows.get(id) === family && !(opts.refuse ?? []).includes(id),
-      );
-      for (const id of hit) rows.set(id, null);
-      return { data: hit.map((id) => ({ id })), error: null };
-    },
-  });
-  return { stub, rows, updates };
+  const sku = (id: string) => opts.skus?.[id] ?? null;
+  const client = (admin: boolean) =>
+    makeSupabaseStub({
+      'inventory_items.select': (call) => {
+        const byId = arg(call, 'in', 'id') as string[] | undefined;
+        const bySku = arg(call, 'in', 'sku') as string[] | undefined;
+        const family = arg(call, 'eq', 'group_id');
+        const ids = [...rows.keys()].filter(
+          (id) =>
+            (admin || !(opts.hidden ?? []).includes(id)) &&
+            (!byId || byId.includes(id)) &&
+            (!bySku ||
+              bySku.includes(sku(id) ?? '') ||
+              (admin && (opts.adminReadExtra ?? []).includes(id))) &&
+            (family === undefined || rows.get(id) === family),
+        );
+        return {
+          data: ids.map((id) => ({
+            id,
+            group_id: rows.get(id),
+            variant_key: rows.get(id) ? 'size=L' : null,
+            sku: sku(id),
+          })),
+          error: null,
+        };
+      },
+      'inventory_items.update': (call) => {
+        if (!wrote) {
+          wrote = true;
+          opts.beforeWrite?.(rows);
+        }
+        const ids = (arg(call, 'in', 'id') as string[] | undefined) ?? [];
+        const family = arg(call, 'eq', 'group_id');
+        (admin ? adminUpdates : updates).push({ family, ids });
+        if (
+          admin
+            ? opts.adminUpdateFails
+            : opts.updateFails === true || (opts.updateFails && opts.updateFails === family)
+        ) {
+          return { data: null, error: { message: 'connection reset', code: '08006' } };
+        }
+        const hit = ids.filter(
+          (id) =>
+            rows.has(id) &&
+            rows.get(id) === family &&
+            !(opts.refuse ?? []).includes(id) &&
+            (admin || !(opts.hidden ?? []).includes(id)),
+        );
+        for (const id of hit) rows.set(id, null);
+        return { data: hit.map((id) => ({ id })), error: null };
+      },
+    });
+  const stub = client(false);
+  const admin = client(true);
+  adminHolder.client = admin.client;
+  return { stub, admin, rows, updates, adminUpdates };
 }
 
 describe('unlinkItems — the undo', () => {
@@ -644,7 +694,7 @@ describe('unlinkItems — the undo', () => {
       { supabase: stub.client, ctx: sportsCtx(stub.client) },
       { itemIds: ['i-l'], reason: 'Wrong family' },
     );
-    expect(out).toEqual({ unlinked: 1 });
+    expect(out).toEqual({ unlinked: 1, skuSiblingIds: [] });
     const patch = (stub.chainArgs.get('inventory_items.update') ?? [])[0]![0] as Record<
       string,
       unknown
@@ -725,7 +775,7 @@ describe('unlinkItems — the undo', () => {
       { supabase: db.stub.client, ctx: sportsCtx(db.stub.client) },
       { itemIds: ['i-s', 'i-x', 'i-m'], reason: 'Wrong family' },
     );
-    expect(out).toEqual({ unlinked: 3 });
+    expect(out).toEqual({ unlinked: 3, skuSiblingIds: [] });
     expect(db.updates).toEqual([
       { family: 'grp-1', ids: ['i-s', 'i-m'] },
       { family: 'grp-2', ids: ['i-x'] },
@@ -796,6 +846,168 @@ describe('unlinkItems — the undo', () => {
     expect(db.updates).toEqual([{ family: 'grp-1', ids: ['i-l'] }]);
   });
 
+  // Owner 2026-10-12 ("Move them together"): the family link belongs to the
+  // SKU (InventoryService SHARED_ITEM_FIELDS), so the other racks' records of
+  // a SKU leave its family with it, through the service-role client as the
+  // edit's fan-out does: a person who cannot see a rack never leaves the SKU
+  // half linked. Each one is audited and named.
+  it("takes every other rack's record of the SKU out of that family too, audited, and names them", async () => {
+    const db = familyDb(
+      { a: 'grp-1', b: 'grp-1', c: 'grp-1', d: 'grp-2', e: null },
+      {
+        skus: { a: 'TEE-M', b: 'TEE-M', c: 'TEE-L', d: 'TEE-M', e: 'TEE-M' },
+        // The other rack is in a warehouse this person cannot see.
+        hidden: ['b'],
+      },
+    );
+    const out = await unlinkItems(
+      { supabase: db.stub.client, ctx: sportsCtx(db.stub.client) },
+      { itemIds: ['a'], reason: 'Wrong family' },
+    );
+    expect(out).toEqual({ unlinked: 1, skuSiblingIds: ['b'] });
+    // Same SKU and family: out. Another SKU (c), another family (d) and a
+    // record in no family (e) are never touched.
+    expect([...db.rows]).toEqual([
+      ['a', null],
+      ['b', null],
+      ['c', 'grp-1'],
+      ['d', 'grp-2'],
+      ['e', null],
+    ]);
+    expect(db.updates).toEqual([{ family: 'grp-1', ids: ['a'] }]);
+    expect(db.adminUpdates).toEqual([{ family: 'grp-1', ids: ['b'] }]);
+    const rowsAudited = auditedRows();
+    expect(rowsAudited.map((r) => r.entityId)).toEqual(['a', 'b']);
+    expect(rowsAudited[1]).toMatchObject({
+      event: 'sports.item.group_unlinked',
+      reason: 'Wrong family',
+      before: { group_id: 'grp-1', variant_key: 'size=L' },
+      after: { group_id: null, variant_key: null },
+      extra: { source: 'group_linking_review', sku_sibling_of: 'a' },
+    });
+  });
+
+  // PR #361 review MEDIUM: postgrest-js quotes an in-list value but does not
+  // escape a quote inside it, so a SKU like X","Y can widen the read to SKU Y.
+  // Only rows whose SKU is exactly a written record's SKU are ever written.
+  it('a SKU with a quote in it never widens the fan-out to another SKU', async () => {
+    const db = familyDb(
+      { a: 'grp-1', y: 'grp-1' },
+      { skus: { a: 'X","Y', y: 'Y' }, adminReadExtra: ['y'] },
+    );
+    const out = await unlinkItems(
+      { supabase: db.stub.client, ctx: sportsCtx(db.stub.client) },
+      { itemIds: ['a'], reason: 'Wrong family' },
+    );
+    expect(out).toEqual({ unlinked: 1, skuSiblingIds: [] });
+    expect(db.rows.get('y')).toBe('grp-1');
+    expect(db.adminUpdates).toEqual([]);
+  });
+
+  // PR #361 review MEDIUM/LOW: when the other racks cannot follow, say so
+  // (never done); the record that left is still audited.
+  it('says so when the other racks could not follow, and still audits the record that left', async () => {
+    const db = familyDb(
+      { a: 'grp-1', b: 'grp-1' },
+      { skus: { a: 'TEE-M', b: 'TEE-M' }, adminUpdateFails: true },
+    );
+    await expect(
+      unlinkItems(
+        { supabase: db.stub.client, ctx: sportsCtx(db.stub.client) },
+        { itemIds: ['a'], reason: 'Wrong family' },
+      ),
+    ).rejects.toMatchObject({
+      // PR #361 re-review: a conflict, so its own words reach Product groups
+      // (an internal_error's message is replaced by the generic sentence).
+      code: 'conflict',
+      message:
+        "The item left its product group, but its SKU's record on another rack could not follow. Unlink that record too.",
+      details: { reason: 'sku_siblings_unfinished', skuSiblingIds: [] },
+    });
+    expect(db.rows.get('a')).toBeNull();
+    expect(db.rows.get('b')).toBe('grp-1');
+    expect(auditedRows().map((r) => r.entityId)).toEqual(['a']);
+  });
+
+  // PR #361 re-review LOW: a refusal keeps its own error (and the raw detail
+  // logs and Sentry read), never a rebuilt one.
+  it("a write error keeps its raw detail for the logs, never the person's words", async () => {
+    const db = familyDb({ a: 'grp-1' }, { updateFails: true });
+    const e = await unlinkItems(
+      { supabase: db.stub.client, ctx: sportsCtx(db.stub.client) },
+      { itemIds: ['a'], reason: 'Wrong family' },
+    ).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(ServiceError);
+    expect(e).toMatchObject({
+      code: 'internal_error',
+      message: 'An internal error occurred. Please try again.',
+      internalDetail: 'connection reset',
+    });
+  });
+
+  it('a later refusal names the other racks that already left, and keeps its raw detail', async () => {
+    const db = familyDb(
+      { a: 'grp-1', b: 'grp-1', c: 'grp-2' },
+      { skus: { a: 'TEE-M', b: 'TEE-M', c: 'TEE-L' }, updateFails: 'grp-2' },
+    );
+    const e = await unlinkItems(
+      { supabase: db.stub.client, ctx: sportsCtx(db.stub.client) },
+      { itemIds: ['a', 'c'], reason: 'Wrong family' },
+    ).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(ServiceError);
+    expect(e).toMatchObject({
+      code: 'internal_error',
+      internalDetail: 'connection reset',
+      details: { skuSiblingIds: ['b'] },
+    });
+    expect(auditedRows().map((r) => r.entityId)).toEqual(['a', 'b']);
+  });
+
+  // A retry finishes it: Ungroup sends a record already out of its family with
+  // the family it was reviewed in, and the other racks of its SKU follow then.
+  it('a record already out, sent with the family it was reviewed in, takes the other racks out too', async () => {
+    const db = familyDb({ a: null, b: 'grp-1' }, { skus: { a: 'TEE-M', b: 'TEE-M' } });
+    const out = await unlinkItems(
+      { supabase: db.stub.client, ctx: sportsCtx(db.stub.client) },
+      {
+        itemIds: ['a'],
+        reason: 'Taken out of its size family with Ungroup (web)',
+        source: 'ungroup',
+        surface: 'web',
+        expectedFamilies: { a: 'grp-1' },
+      },
+    );
+    expect(out).toEqual({ unlinked: 0, skuSiblingIds: ['b'] });
+    expect(db.rows.get('b')).toBeNull();
+    expect(db.updates).toEqual([]);
+    expect(auditedRows()).toEqual([
+      expect.objectContaining({
+        entityId: 'b',
+        before: { group_id: 'grp-1', variant_key: 'size=L' },
+        extra: { source: 'ungroup', surface: 'web', sku_sibling_of: 'a' },
+      }),
+    ]);
+    // Without a reviewed family (Product groups), a record already out is
+    // nothing to undo, and nothing is guessed.
+    const plain = familyDb({ a: null, b: 'grp-1' }, { skus: { a: 'TEE-M', b: 'TEE-M' } });
+    const out2 = await unlinkItems(
+      { supabase: plain.stub.client, ctx: sportsCtx(plain.stub.client) },
+      { itemIds: ['a'], reason: 'Wrong family' },
+    );
+    expect(out2).toEqual({ unlinked: 0, skuSiblingIds: [] });
+    expect(plain.rows.get('b')).toBe('grp-1');
+  });
+
+  it('a record with no other rack in its family fans out to nothing', async () => {
+    const db = familyDb({ a: 'grp-1', c: 'grp-1' }, { skus: { a: 'TEE-M', c: 'TEE-L' } });
+    const out = await unlinkItems(
+      { supabase: db.stub.client, ctx: sportsCtx(db.stub.client) },
+      { itemIds: ['a'], reason: 'Wrong family' },
+    );
+    expect(out).toEqual({ unlinked: 1, skuSiblingIds: [] });
+    expect(db.adminUpdates).toEqual([]);
+  });
+
   it('a record someone else took out between the read and the write is done, not a refusal', async () => {
     const db = familyDb(
       { 'i-l': 'grp-1', 'i-m': 'grp-1' },
@@ -806,7 +1018,7 @@ describe('unlinkItems — the undo', () => {
       { itemIds: ['i-l', 'i-m'], reason: 'Wrong family' },
     );
     // Only the record this call wrote is counted and audited.
-    expect(out).toEqual({ unlinked: 1 });
+    expect(out).toEqual({ unlinked: 1, skuSiblingIds: [] });
     expect(auditedRows().map((r) => r.entityId)).toEqual(['i-l']);
   });
 
@@ -821,7 +1033,7 @@ describe('unlinkItems — the undo', () => {
       { supabase: stub.client, ctx: sportsCtx(stub.client) },
       { itemIds: ['i-l'], reason: 'ok' },
     );
-    expect(out).toEqual({ unlinked: 0 });
+    expect(out).toEqual({ unlinked: 0, skuSiblingIds: [] });
     expect(stub.chains.has('inventory_items.update')).toBe(false);
     expect(auditedRows()).toEqual([]);
   });

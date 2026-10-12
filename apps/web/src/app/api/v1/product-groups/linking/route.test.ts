@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModuleId } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import { ServiceError } from '@/server/services/context';
 import {
   linkFamily,
@@ -26,6 +27,7 @@ vi.mock('@/server/services/product-group-linking', () => ({
 }));
 
 const ITEM_A = '11111111-1111-1111-1111-111111111111';
+const ITEM_B = '11111111-1111-1111-1111-111111111112';
 const GROUP_A = '22222222-2222-2222-2222-222222222222';
 
 function buildCtx(over: Partial<{ role: 'owner' | 'manager' | 'staff'; modules: ModuleId[] }> = {}) {
@@ -158,9 +160,42 @@ describe('DELETE /api/v1/product-groups/linking', () => {
 
   it('unlinks and reports the count', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
-    vi.mocked(unlinkItems).mockResolvedValueOnce({ unlinked: 1 });
+    // 2026-10-12 (owner: "Move them together"): the answer also names the
+    // other racks' records of the SKU that left the family with it.
+    vi.mocked(unlinkItems).mockResolvedValueOnce({ unlinked: 1, skuSiblingIds: [ITEM_B] });
     const res = await DELETE(req('DELETE', { itemIds: [ITEM_A], reason: 'wrong family' }));
     expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toEqual({ ok: true, unlinked: 1 });
+    await expect(res.json()).resolves.toEqual({ ok: true, unlinked: 1, skuSiblingIds: [ITEM_B] });
+  });
+
+  // PR #361 re-review: the item left but its SKU on another rack could not
+  // follow; the write happened, so the list cache is refreshed as on success,
+  // and the refusal's own words and ids go back.
+  it('an unlink whose other racks could not follow refreshes the list and says so (409)', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
+    vi.mocked(unlinkItems).mockRejectedValueOnce(
+      new ServiceError('conflict', 'Unlink that record too.', {
+        reason: 'sku_siblings_unfinished',
+        skuSiblingIds: [ITEM_B],
+      }),
+    );
+    const res = await DELETE(req('DELETE', { itemIds: [ITEM_A], reason: 'wrong family' }));
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toMatchObject({
+      error: 'conflict',
+      message: 'Unlink that record too.',
+      details: { reason: 'sku_siblings_unfinished', skuSiblingIds: [ITEM_B] },
+    });
+    expect(revalidateInventoryList).toHaveBeenCalledWith('org-1');
+  });
+
+  it('a refusal that wrote nothing refreshes nothing', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
+    vi.mocked(unlinkItems).mockRejectedValueOnce(
+      new ServiceError('forbidden', 'Not allowed.'),
+    );
+    const res = await DELETE(req('DELETE', { itemIds: [ITEM_A], reason: 'wrong family' }));
+    expect(res.status).toBe(403);
+    expect(revalidateInventoryList).not.toHaveBeenCalled();
   });
 });

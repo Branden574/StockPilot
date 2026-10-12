@@ -70,7 +70,7 @@ export async function linkFamilyAction(
 /** Undo a link. Same gates, same invalidations. */
 export async function unlinkItemsAction(
   input: unknown,
-): Promise<ActionResult<{ unlinked: number }>> {
+): Promise<ActionResult<{ unlinked: number; skuSiblingIds: string[] }>> {
   const parsed = unlinkItemsSchema.safeParse(input);
   if (!parsed.success) {
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
@@ -83,6 +83,13 @@ export async function unlinkItemsAction(
     revalidatePath('/dashboard/inventory');
     return ok(result);
   } catch (e) {
+    // The item left but its SKU's record on another rack could not follow:
+    // the write happened, so the caches are refreshed as on success.
+    if (e instanceof ServiceError && e.details?.reason === 'sku_siblings_unfinished') {
+      await revalidateInventoryListForCurrentOrg();
+      revalidatePath('/dashboard/product-groups');
+      revalidatePath('/dashboard/inventory');
+    }
     return toResult(e);
   }
 }

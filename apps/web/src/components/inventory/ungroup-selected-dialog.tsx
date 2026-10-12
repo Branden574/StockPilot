@@ -6,6 +6,7 @@ import * as React from 'react';
 
 import {
   familyStaysListedByName,
+  familySkuTogether,
   familyStaysListedByNameAfter,
   GROUP_COPY,
   GROUPING_ERROR_WORDS,
@@ -19,6 +20,7 @@ import {
   ungroupListMayBeStale,
   UNGROUP_COPY,
   ungroupOutcomeWords,
+  ungroupRackLine,
   ungroupRecordOutcome,
   ungroupResultLines,
   ungroupSelectedBodyForPlan,
@@ -398,6 +400,25 @@ export function UngroupSelectedDialog({
                         {ungroupOutcomeWords(o)}
                       </span>
                     </div>
+                    {(() => {
+                      // The other racks' records of its SKU leave the family
+                      // with it (owner 2026-10-12, "Move them together").
+                      const with_ = plan.familySkuSiblings.get(rec.id);
+                      if (!with_) return null;
+                      return (
+                        <div className="pl-9 text-xs">
+                          <p className="text-muted-foreground">{UNGROUP_COPY.familySkuWith}</p>
+                          <ul className="space-y-0.5">
+                            {with_.map((c) => (
+                              <li key={c.id} data-testid={`ungroup-selected-sibling-${c.id}`}>
+                                <span className="font-medium">{c.name}</span>{' '}
+                                <span className="text-muted-foreground">{ungroupRackLine(c)}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      );
+                    })()}
                   </li>
                 );
               })}
@@ -425,6 +446,9 @@ export function UngroupSelectedDialog({
             )}
             {plan.leaveFamily.length > 0 ? (
               <p className="text-xs">{UNGROUP_COPY.familyNote}</p>
+            ) : null}
+            {familySkuTogether(plan) ? (
+              <p className="text-xs">{UNGROUP_COPY.familySkuNote}</p>
             ) : null}
             {familyStaysListedByName(plan.leaveFamily, view) ? (
               <p className="text-xs">{UNGROUP_COPY.familyNameNote}</p>

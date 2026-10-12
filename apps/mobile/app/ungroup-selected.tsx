@@ -13,6 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
   familyStaysListedByName,
+  familySkuTogether,
   familyStaysListedByNameAfter,
   GROUP_COPY,
   GROUPING_ERROR_WORDS,
@@ -24,6 +25,7 @@ import {
   ungroupListMayBeStale,
   UNGROUP_COPY,
   ungroupOutcomeWords,
+  ungroupRackLine,
   ungroupRecordOutcome,
   ungroupResultLines,
   ungroupSelectedBodyForPlan,
@@ -355,6 +357,20 @@ export default function UngroupSelectedScreen() {
                             {ungroupOutcomeWords(o)}
                           </Body>
                         )}
+                        {plan.familySkuSiblings.get(rec.id) ? (
+                          // The other racks' records of its SKU leave the
+                          // family with it (owner 2026-10-12, "Move them together").
+                          <View style={{ gap: 2 }}>
+                            <Body muted size={12}>
+                              {UNGROUP_COPY.familySkuWith}
+                            </Body>
+                            {plan.familySkuSiblings.get(rec.id)!.map((x) => (
+                              <Body key={x.id} size={12} color={c.ink}>
+                                {`${x.name} · ${ungroupRackLine(x)}`}
+                              </Body>
+                            ))}
+                          </View>
+                        ) : null}
                       </View>
                     </View>
                     {i < plan.records.length - 1 ? <Hair inset={72} /> : null}
@@ -387,6 +403,11 @@ export default function UngroupSelectedScreen() {
             {plan.leaveFamily.length > 0 ? (
               <Body size={12.5} color={c.ink}>
                 {UNGROUP_COPY.familyNote}
+              </Body>
+            ) : null}
+            {familySkuTogether(plan) ? (
+              <Body size={12.5} color={c.ink}>
+                {UNGROUP_COPY.familySkuNote}
               </Body>
             ) : null}
             {familyStaysListedByName(plan.leaveFamily, view) ? (

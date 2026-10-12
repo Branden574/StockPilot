@@ -91,7 +91,7 @@ beforeEach(() => {
     ok: true,
     data: { variants: [variant(), variant({ id: 'itm-10', sku: 'PEG-10', variantSize: '10', quantity: 20 })] },
   });
-  unlinkMock.mockResolvedValue({ ok: true, data: { unlinked: 1 } });
+  unlinkMock.mockResolvedValue({ ok: true, data: { unlinked: 1, skuSiblingIds: [] } });
   archiveMock.mockResolvedValue({ ok: true, data: { id: 'grp-1' } });
   restoreMock.mockResolvedValue({ ok: true, data: { id: 'grp-1' } });
 });
@@ -155,6 +155,52 @@ describe('ProductGroupRollupList — unlink', () => {
     // rather than guessed at here.
     await waitFor(() => expect(screen.queryByText('PEG-9')).not.toBeInTheDocument());
     expect(screen.getByText('PEG-10')).toBeInTheDocument();
+    expect(routerMock.refresh).toHaveBeenCalled();
+  });
+
+  // Owner 2026-10-12 ("Move them together"): the other racks' records of the
+  // size's SKU leave the family with it; the toast says so and their rows go.
+  it("says when the other racks' records of the size left with it, and drops their rows", async () => {
+    const user = userEvent.setup();
+    unlinkMock.mockResolvedValue({ ok: true, data: { unlinked: 1, skuSiblingIds: ['itm-10'] } });
+    render(<ProductGroupRollupList groups={[group()]} />);
+    await user.click(screen.getByRole('button', { name: /expand/i }));
+    await screen.findByText('PEG-9');
+    await user.click(screen.getByRole('button', { name: /unlink size 9 from nike pegasus 41/i }));
+    await user.type(screen.getByRole('textbox', { name: /reason for unlinking/i }), 'Wrong style');
+    await user.click(screen.getByRole('button', { name: 'Confirm unlink' }));
+    await waitFor(() =>
+      expect(toastMock.success).toHaveBeenCalledWith(
+        'Item unlinked from this product group, with 1 other record of its SKU (the same size on another rack).',
+      ),
+    );
+    expect(screen.queryByText('PEG-9')).not.toBeInTheDocument();
+    expect(screen.queryByText('PEG-10')).not.toBeInTheDocument();
+  });
+
+  // PR #361 re-review: a conflict can follow a write (the item left, but its
+  // SKU on another rack could not follow), so the rows and the header are
+  // read again rather than left as they were.
+  it('after a conflict it says so, then reads the rows and the header again', async () => {
+    const user = userEvent.setup();
+    unlinkMock.mockResolvedValue({
+      ok: false,
+      error: { code: 'conflict', message: 'Unlink that record too.' },
+    });
+    render(<ProductGroupRollupList groups={[group()]} />);
+    await user.click(screen.getByRole('button', { name: /expand/i }));
+    await screen.findByText('PEG-9');
+    loadVariantsMock.mockResolvedValueOnce({
+      ok: true,
+      data: { variants: [variant({ id: 'itm-10', sku: 'PEG-10', variantSize: '10' })] },
+    });
+    await user.click(screen.getByRole('button', { name: /unlink size 9 from/i }));
+    await user.type(screen.getByRole('textbox', { name: /reason for unlinking/i }), 'oops');
+    await user.click(screen.getByRole('button', { name: 'Confirm unlink' }));
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith('Unlink that record too.'));
+    await waitFor(() => expect(screen.queryByText('PEG-9')).not.toBeInTheDocument());
+    expect(screen.getByText('PEG-10')).toBeInTheDocument();
+    expect(loadVariantsMock).toHaveBeenCalledTimes(2);
     expect(routerMock.refresh).toHaveBeenCalled();
   });
 

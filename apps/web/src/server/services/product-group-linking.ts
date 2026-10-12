@@ -11,6 +11,7 @@ import {
   type CreateProductGroupInput,
 } from '@stockpilot/core';
 
+import { createAdminClient } from '@/lib/supabase/admin';
 import { chunkInFilterValues } from '@/lib/supabase/in-filter';
 
 import { auditMany, type AuditPayload } from './audit';
@@ -619,6 +620,82 @@ async function assertNoVariantKeyCollision(args: {
   );
 }
 
+/**
+ * Model B (owner 2026-10-12, "Move them together"): the family link belongs
+ * to the SKU, not the rack (InventoryService SHARED_ITEM_FIELDS carries
+ * group_id and variant_key to every placement), so every OTHER live record of
+ * a written record's SKU in that family leaves it too. Through the
+ * service-role client, exactly as InventoryService.update's sibling fan-out:
+ * a person scoped to some warehouses would otherwise leave the SKU half
+ * linked. The organization filter is the tenant floor; the family filter
+ * means a record in another family, or none, is never touched. Matches the
+ * SKU exactly, as that fan-out does. Answers each record written, with the
+ * requested record whose SKU it shares.
+ */
+async function unlinkSkuSiblings(
+  ctx: ServiceContext,
+  family: string,
+  written: ReadonlyArray<{ id: string; sku: string | null }>,
+  requested: ReadonlySet<string>,
+): Promise<{
+  written: Array<{ id: string; variant_key: string | null; of: string }>;
+  /** Some of them may still be in the family (a read or a write failed). */
+  failed: boolean;
+}> {
+  const ofSku = new Map<string, string>();
+  for (const r of written) {
+    if (r.sku && r.sku.trim().length > 0 && !ofSku.has(r.sku)) ofSku.set(r.sku, r.id);
+  }
+  const out: Array<{ id: string; variant_key: string | null; of: string }> = [];
+  if (ofSku.size === 0) return { written: out, failed: false };
+  try {
+    const admin = createAdminClient();
+    const found: Array<{ id: string; sku: string; variant_key: string | null }> = [];
+    for (const batch of chunkInFilterValues([...ofSku.keys()])) {
+      const { data, error } = await admin
+        .from('inventory_items')
+        .select('id, sku, variant_key')
+        .eq('organization_id', ctx.organizationId)
+        .eq('group_id', family)
+        .in('sku', batch)
+        .is('deleted_at', null);
+      if (error) throw new Error(error.message);
+      found.push(
+        ...((data ?? []) as Array<{ id: string; sku: string; variant_key: string | null }>),
+      );
+    }
+    // Exactly the written records' SKUs: postgrest-js quotes an in-list value
+    // but does not escape a quote inside it, so a SKU like X","Y could widen
+    // the read to SKU Y (PR #361 review). Nothing else is ever written.
+    const targets = found.filter((r) => ofSku.has(r.sku) && !requested.has(r.id.toLowerCase()));
+    for (const batch of chunkInFilterValues(targets.map((t) => t.id))) {
+      const { data, error } = await admin
+        .from('inventory_items')
+        .update({ group_id: null, variant_key: null, updated_by: ctx.userId })
+        .eq('organization_id', ctx.organizationId)
+        .eq('group_id', family)
+        .in('id', batch)
+        .is('deleted_at', null)
+        .select('id');
+      if (error) throw new Error(error.message);
+      const done = new Set(((data ?? []) as Array<{ id: string }>).map((r) => r.id.toLowerCase()));
+      for (const t of targets) {
+        if (batch.includes(t.id) && done.has(t.id.toLowerCase())) {
+          out.push({ id: t.id, variant_key: t.variant_key, of: ofSku.get(t.sku)! });
+        }
+      }
+    }
+    return { written: out, failed: false };
+  } catch (e) {
+    // Never a raw message to the person; what was written is still answered.
+    console.error('[unlink] same-SKU fan-out stopped:', e instanceof Error ? e.message : String(e));
+    return { written: out, failed: true };
+  } finally {
+    if (out.length > 0)
+      invalidateInventoryListAfterWrite(ctx.organizationId, 'sports.unlink_items');
+  }
+}
+
 /** A record is no longer in the family the unlink was to take it out of. */
 function familyChanged(itemIds: string[]): ServiceError {
   return new ServiceError(
@@ -695,7 +772,7 @@ export async function unlinkItems(
      *  Without it, the family read here is the one the write must find. */
     expectedFamilies?: Readonly<Record<string, string>>;
   },
-): Promise<{ unlinked: number }> {
+): Promise<{ unlinked: number; skuSiblingIds: string[] }> {
   const { ctx, supabase } = deps;
   assertPermission(ctx, 'sports:manage');
   assertModuleEnabled(ctx, 'sports');
@@ -720,12 +797,13 @@ export async function unlinkItems(
     id: string;
     group_id: string | null;
     variant_key: string | null;
+    sku: string | null;
   }>(
     ids,
     (batch) => (from, to) =>
       supabase
         .from('inventory_items')
-        .select('id, group_id, variant_key')
+        .select('id, group_id, variant_key, sku')
         .eq('organization_id', ctx.organizationId)
         .in('id', batch)
         .is('deleted_at', null)
@@ -767,9 +845,35 @@ export async function unlinkItems(
   }
 
   let unlinked = 0;
+  const skuSiblingIds: string[] = [];
+  const requested = new Set(ids.map((id) => id.toLowerCase()));
+  const extra = {
+    source: input.source ?? 'group_linking_review',
+    ...(input.surface ? { surface: input.surface } : {}),
+  };
   // Same finally as linkFamily: the records written are audited even when a
   // later batch refuses.
   const auditRows: AuditPayload[] = [];
+  let unfinished = false;
+  const followSku = async (
+    family: string,
+    records: ReadonlyArray<{ id: string; sku: string | null }>,
+  ): Promise<void> => {
+    const r = await unlinkSkuSiblings(ctx, family, records, requested);
+    if (r.failed) unfinished = true;
+    for (const sib of r.written) {
+      skuSiblingIds.push(sib.id);
+      auditRows.push({
+        event: 'sports.item.group_unlinked',
+        entityType: 'inventory_item',
+        entityId: sib.id,
+        reason,
+        before: { group_id: family, variant_key: sib.variant_key },
+        after: { group_id: null, variant_key: null },
+        extra: { ...extra, sku_sibling_of: sib.of },
+      });
+    }
+  };
   try {
     for (const [family, familyIds] of byFamily) {
       for (const batch of chunkInFilterValues(familyIds)) {
@@ -799,19 +903,50 @@ export async function unlinkItems(
             reason,
             before: { group_id: before.group_id, variant_key: before.variant_key },
             after: { group_id: null, variant_key: null },
-            extra: {
-              source: input.source ?? 'group_linking_review',
-              ...(input.surface ? { surface: input.surface } : {}),
-            },
+            extra,
           });
         }
+        // The other racks' records of the SKUs just written leave with them.
+        await followSku(
+          family,
+          batch.filter((id) => written.has(id.toLowerCase())).map((id) => byId.get(id)!),
+        );
         const short = batch.filter((id) => !written.has(id.toLowerCase()));
         if (short.length > 0) await refuseUnwritten(deps, short, family);
       }
     }
+    // A record already out of the family it was reviewed in (Ungroup): its
+    // other racks follow now, so the same Save again finishes what a lost
+    // connection left (PR #361 review). Without a reviewed family nothing is
+    // guessed.
+    if (input.expectedFamilies) {
+      const outByFamily = new Map<string, Array<{ id: string; sku: string | null }>>();
+      for (const id of ids) {
+        if (familyOf(id) !== null) continue;
+        const family = input.expectedFamilies[id]!;
+        outByFamily.set(family, [...(outByFamily.get(family) ?? []), byId.get(id)!]);
+      }
+      for (const [family, records] of outByFamily) await followSku(family, records);
+    }
+    if (unfinished) {
+      // A conflict, not an internal_error: those carry only the generic
+      // sentence, and these words must reach Product groups (PR #361 re-review).
+      throw new ServiceError(
+        'conflict',
+        "The item left its product group, but its SKU's record on another rack could not follow. Unlink that record too.",
+        { reason: 'sku_siblings_unfinished', skuSiblingIds },
+      );
+    }
+  } catch (e) {
+    // The other racks that did leave are named with any refusal, on the
+    // refusal itself (its code, words and raw detail for the logs unchanged).
+    if (e instanceof ServiceError && skuSiblingIds.length > 0) {
+      e.details = { ...(e.details ?? {}), skuSiblingIds };
+    }
+    throw e;
   } finally {
     await auditMany(auditRows, ctx);
   }
 
-  return { unlinked };
+  return { unlinked, skuSiblingIds };
 }

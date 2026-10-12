@@ -121,6 +121,10 @@ function unlinkWords(e: unknown): { message: string; reason: string; retryable: 
     // A record moved to another family between the check and the write.
     if (e.code === 'conflict' && reason === 'family_changed')
       return { message: UNGROUP_COPY.familyChanged, reason, retryable: false };
+    // The records left, but other racks of their SKU could not all follow:
+    // the same Save again finishes it (they are sent with their family).
+    if (reason === 'sku_siblings_unfinished')
+      return { message: UNGROUP_COPY.familySkuUnfinished, reason, retryable: true };
   }
   console.error('[ungroup-selected] unlink failed:', e instanceof Error ? e.message : String(e));
   return { message: GROUPING_ERROR_WORDS.internal, reason: 'internal_error', retryable: false };
@@ -359,22 +363,14 @@ export class UngroupSelectedService {
     if (body.unlink) {
       const ids = body.unlink.itemIds;
       if (stopped) parts.push(notTried('unlink', ids));
-      else if (toUnlink.length === 0) {
-        parts.push({
-          kind: 'unlink',
-          status: 'applied',
-          changedItemIds: alreadyOut,
-          notChangedItemIds: [],
-          message: null,
-          reason: null,
-          retryable: false,
-        });
-      } else {
+      else {
         try {
-          await this.unlink(
+          const done = await this.unlink(
             { supabase: this.ctx.supabase, ctx: this.ctx },
             {
-              itemIds: toUnlink,
+              // Records already out go too: nothing is written for them, but
+              // the other racks of their SKU follow (a retry finishes it).
+              itemIds: ids,
               reason: UNGROUP_COPY.unlinkReason(surface),
               source: 'ungroup',
               surface,
@@ -385,7 +381,8 @@ export class UngroupSelectedService {
           parts.push({
             kind: 'unlink',
             status: 'applied',
-            changedItemIds: [...alreadyOut, ...toUnlink],
+            // The other racks' records of a SKU left the family with it.
+            changedItemIds: [...alreadyOut, ...toUnlink, ...done.skuSiblingIds],
             notChangedItemIds: [],
             message: null,
             reason: null,
@@ -393,12 +390,19 @@ export class UngroupSelectedService {
           });
         } catch (e) {
           const w = unlinkWords(e);
+          // The other racks' records that did leave (unlinkItems names them).
+          const sib =
+            e instanceof ServiceError && Array.isArray(e.details?.skuSiblingIds)
+              ? (e.details.skuSiblingIds as unknown[]).filter(
+                  (x): x is string => typeof x === 'string',
+                )
+              : [];
           const now = await this.readFamilies(toUnlink).catch(() => null);
           if (!now) {
             parts.push({
               kind: 'unlink',
               status: 'refused',
-              changedItemIds: alreadyOut,
+              changedItemIds: [...alreadyOut, ...sib],
               notChangedItemIds: toUnlink,
               message: UNGROUP_COPY.unlinkUnknown,
               reason: 'unknown',
@@ -406,7 +410,7 @@ export class UngroupSelectedService {
             });
           } else {
             const left = toUnlink.filter((id) => now.has(id) && now.get(id) === null);
-            const changed = [...alreadyOut, ...left];
+            const changed = [...alreadyOut, ...left, ...sib];
             parts.push({
               kind: 'unlink',
               status: changed.length > 0 ? 'partial' : 'refused',

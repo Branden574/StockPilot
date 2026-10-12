@@ -133,7 +133,14 @@ export function readUngroupSelectedParams(p: {
 
 export interface PhoneUngroupReview {
   review: PhoneGroupingReview;
-  candidates: (SplitCandidate & { barcode: string | null })[];
+  /** The server's UngroupCandidate: the rack facts name the other racks'
+   *  records of a SKU leaving its family with a ticked one. */
+  candidates: (SplitCandidate & {
+    barcode: string | null;
+    placementLabel?: string | null;
+    warehouseName?: string | null;
+    quantityOnHand?: number | null;
+  })[];
   canUnlinkFamilies: boolean;
 }
 

@@ -202,14 +202,31 @@ function GroupRow({
       const res = await unlinkItemsAction({ itemIds: [itemId], reason });
       if (!res.ok) {
         toast.error(res.error.message);
+        // A conflict can follow a write (the item left, but its SKU's record
+        // on another rack could not follow): read the rows and header again.
+        if (res.error.code === 'conflict') {
+          setUnlinking(null);
+          load();
+          router.refresh();
+        }
         return;
       }
       // Drop the row locally so the expansion agrees with what just happened;
       // the header's figures come from the roll-up view, so refresh re-reads
       // them rather than this component guessing at the new total.
-      setVariants((prev) => (prev ? prev.filter((v) => v.id !== itemId) : prev));
+      // The other racks' records of its SKU left the family with it (owner
+      // 2026-10-12, "Move them together"): their rows go too, and it is said.
+      const others = new Set(res.data.skuSiblingIds);
+      setVariants((prev) =>
+        prev ? prev.filter((v) => v.id !== itemId && !others.has(v.id)) : prev,
+      );
       setUnlinking(null);
-      toast.success('Item unlinked from this product group.');
+      const n = others.size;
+      toast.success(
+        n > 0
+          ? `Item unlinked from this product group, with ${n} other record${n === 1 ? '' : 's'} of its SKU (the same size on another rack).`
+          : 'Item unlinked from this product group.',
+      );
       router.refresh();
     });
   }

@@ -633,6 +633,18 @@ export const UNGROUP_COPY = {
    *  so the list looks the same after the Save (test stage 2026-10-12). */
   familyNameNote:
     'Records whose names end in a size (S, M, L and so on) are still listed together under one header by their name. Only the size family is undone.',
+  /** Above the other racks' records of a SKU leaving its size family with a
+   *  ticked one (owner 2026-10-12: "Move them together"). */
+  familySkuWith: 'Leaves with it (the same SKU on another rack):',
+  /** Said once when any record leaves its size family with other racks'
+   *  records of its SKU (familySkuTogether). */
+  familySkuNote:
+    "Every rack's record of a SKU leaves its size family together. They still share the SKU, so the list still shows them together under it.",
+  /** The ticked records left their family but the other racks' records of
+   *  their SKU could not all follow (a lost connection): the same Save again
+   *  finishes it (unlinkItems takes them out with the reviewed family). */
+  familySkuUnfinished:
+    "These records left their size family, but some other racks' records of their SKU may still be in it. Try again to finish.",
   /** Why a ticked record is left out of an Ungroup. */
   selectedLeftOutReason: {
     kit: 'is a kit (kits keep their SKU and are never in a group)',
@@ -1940,11 +1952,13 @@ export function chooseUngroupKind(
 
 /**
  * The kind a ticked record would leave, from what a list holds about it, when
- * this person may undo it; null when nothing (no grouping, a kit, a size family
- * without permission to unlink one, or a family member that would need its own
- * SKU: the database refuses that split). The web's bulk bar
- * (ungroupableItemIds) and the phone's select bar ask this one rule; the review
- * decides again on what the server reads.
+ * this person may undo it; null when nothing (no grouping, a kit, or a size
+ * family without permission to unlink one). A family member shown under its
+ * shared SKU (one size on more than one rack) leaves its size family instead:
+ * the database refuses its own SKU, and every rack's record of the SKU leaves
+ * the family together (owner 2026-10-12, "Move them together"). The web's bulk
+ * bar (ungroupableItemIds) and the phone's select bar ask this one rule; the
+ * review decides again on what the server reads.
  */
 export function ungroupOfferKind(
   facts: { inGroup: boolean; sharesSku: boolean; inFamily: boolean; isBundle?: boolean | null },
@@ -1958,8 +1972,8 @@ export function ungroupOfferKind(
   if (facts.inFamily) kinds.add('family');
   const kind = chooseUngroupKind(kinds, shownUnder);
   if (!kind) return null;
+  if (kind === 'sku' && facts.inFamily) return canUnlinkFamilies ? 'family' : null;
   if (kind === 'family' && !canUnlinkFamilies) return null;
-  if (kind === 'sku' && facts.inFamily) return null;
   return kind;
 }
 
@@ -2053,6 +2067,11 @@ export interface UngroupSelectedPlan<
   split: SplitPlan<C>;
   /** Records leaving their size family. */
   leaveFamily: T[];
+  /** Per record leaving its size family: the other racks' records of its SKU
+   *  in a family (the SKU preview's candidates) that leave it with it, each
+   *  listed under the first ticked record of that SKU only. The server takes
+   *  every rack's record of the SKU out of that family (unlinkItems). */
+  familySkuSiblings: Map<string, C[]>;
   /** Per display group losing records: how many leave, how many records the
    *  person can see stay (null when not counted). */
   groups: RemovalPlan['groups'];
@@ -2064,9 +2083,10 @@ export interface UngroupSelectedPlan<
  * `candidates` from the SKU preview (every live record of the ticked records'
  * SKUs the person can read, oldest first), `shownUnder` from the list's own
  * composition (shownUnderByRecord). A record is left out when it is a kit,
- * has nothing to ungroup, cannot be edited by the person, is in a size family
- * the person may not unlink, or would get its own SKU while in a family (the
- * database refuses that split).
+ * has nothing to ungroup, cannot be edited by the person, or is in a size
+ * family the person may not unlink. A family member shown under its shared
+ * SKU leaves its size family (never a split: the database refuses one), with
+ * every rack's record of that SKU (familySkuSiblings).
  */
 export function planUngroupSelected<T extends UngroupSelectedRecord, C extends SplitCandidate>(
   selectedIds: readonly string[],
@@ -2108,15 +2128,16 @@ export function planUngroupSelected<T extends UngroupSelectedRecord, C extends S
     const k = sharedSkuKey(r.sku);
     if (k && (skuCount.get(k) ?? 0) >= 2) kinds.add('sku');
     if (r.productGroupId) kinds.add('family');
-    const kind = chooseUngroupKind(
+    const shown = chooseUngroupKind(
       kinds,
       options.shownUnder?.get(r.id) ?? options.shownUnder?.get(raw),
     );
+    // A family member under its shared SKU leaves the family instead.
+    const kind = shown === 'sku' && r.productGroupId ? 'family' : shown;
     if (!kind) leftOut.push({ id: r.id, reason: 'nothing' });
     else if (!r.writable) leftOut.push({ id: r.id, reason: 'not_writable' });
     else if (kind === 'family' && !options.canUnlinkFamilies)
       leftOut.push({ id: r.id, reason: 'family_permission' });
-    else if (kind === 'sku' && r.productGroupId) leftOut.push({ id: r.id, reason: 'family_sku' });
     else {
       kindOf.set(r.id, kind);
       if (kind === 'group') leaveGroup.push(r);
@@ -2130,6 +2151,25 @@ export function planUngroupSelected<T extends UngroupSelectedRecord, C extends S
   for (const l of split.leftOut) {
     kindOf.delete(l.id);
     leftOut.push({ id: l.id, reason: l.reason === 'family' ? 'family_sku' : 'nothing' });
+  }
+  // The other racks' records of each leaving family member's SKU leave the
+  // family with it; each is listed once, under the first ticked record.
+  const familySkuSiblings = new Map<string, C[]>();
+  const leaving = new Set(leaveFamily.map((r) => r.id));
+  const listed = new Set<string>();
+  for (const r of leaveFamily) {
+    const k = sharedSkuKey(r.sku);
+    if (!k) continue;
+    const with_ = candidates.filter(
+      (c) => c.inFamily && sharedSkuKey(c.sku) === k && !leaving.has(c.id) && !listed.has(c.id),
+    );
+    for (const c of with_) listed.add(c.id);
+    if (with_.length > 0) familySkuSiblings.set(r.id, with_);
+  }
+  // A ticked record listed there (one the person cannot edit) leaves with its
+  // SKU all the same, so it is never said to be left out.
+  for (let i = leftOut.length - 1; i >= 0; i--) {
+    if (listed.has(leftOut[i]!.id)) leftOut.splice(i, 1);
   }
   const removal = planRemoval(
     leaveGroup.map((r) => r.id),
@@ -2149,8 +2189,41 @@ export function planUngroupSelected<T extends UngroupSelectedRecord, C extends S
     leaveGroup,
     split,
     leaveFamily,
+    familySkuSiblings,
     groups: removal.groups,
   };
+}
+
+/** One other rack's record of a SKU leaving its family with a ticked one,
+ *  in the review (web and phone): its rack, warehouse and on hand. */
+export function ungroupRackLine(c: {
+  placementLabel?: string | null;
+  warehouseName?: string | null;
+  quantityOnHand?: number | null;
+}): string {
+  return [
+    c.placementLabel ?? 'No rack',
+    c.warehouseName ?? null,
+    typeof c.quantityOnHand === 'number' ? `${c.quantityOnHand} on hand` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+/** Any record leaves its size family with another record of its SKU (the
+ *  same size on another rack): the review says UNGROUP_COPY.familySkuNote. */
+export function familySkuTogether(
+  plan: Pick<UngroupSelectedPlan, 'leaveFamily' | 'familySkuSiblings'>,
+): boolean {
+  if (plan.familySkuSiblings.size > 0) return true;
+  const seen = new Set<string>();
+  for (const r of plan.leaveFamily) {
+    const k = sharedSkuKey(r.sku);
+    if (!k) continue;
+    if (seen.has(k)) return true;
+    seen.add(k);
+  }
+  return false;
 }
 
 /** The record that keeps a fully ticked SKU: the person's choice, else the
@@ -2195,6 +2268,13 @@ export function ungroupRecordOutcome(
       ? { kind: 'split', keeps: true, sku: g.sku }
       : { kind: 'split', keeps: false };
   }
+  // A ticked record leaving its family with another rack's record of its SKU.
+  for (const [owner, list] of plan.familySkuSiblings) {
+    if (list.some((c) => c.id === id)) {
+      const r = plan.leaveFamily.find((x) => x.id === owner);
+      return { kind: 'family', familyName: r?.productGroupName ?? null };
+    }
+  }
   return null;
 }
 
@@ -2228,7 +2308,12 @@ export function ungroupChangeCount(
   for (const g of plan.split.groups) {
     split += g.selected.length - (ungroupAnchorFor(g, anchorBySku) ? 1 : 0);
   }
-  return plan.leaveGroup.length + split + plan.leaveFamily.length;
+  // The other racks' records leaving a family with a ticked one change too
+  // (counted once: one planned for another kind already is).
+  let siblings = 0;
+  for (const list of plan.familySkuSiblings.values())
+    for (const c of list) if (!plan.kindOf.has(c.id)) siblings += 1;
+  return plan.leaveGroup.length + split + plan.leaveFamily.length + siblings;
 }
 
 // ── The request ────────────────────────────────────────────────────────────
@@ -2541,7 +2626,12 @@ export function ungroupResultLines(outcome: UngroupSelectedOutcome): {
       );
     }
     const m = p.notChangedItemIds.length;
-    if (m === 0) continue;
+    if (m === 0) {
+      // Every record it named changed, yet it did not finish (the other racks
+      // of a SKU could not follow): its own words say what is left.
+      if ((p.status === 'partial' || p.status === 'refused') && p.message) notDone.push(p.message);
+      continue;
+    }
     // A remove that applied left the records already out of any group as
     // they were: said as such, never as leaving.
     if (p.status === 'applied' && p.kind === 'remove') {
