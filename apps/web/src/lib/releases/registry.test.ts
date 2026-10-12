@@ -8673,7 +8673,7 @@ describe("a return's history shows when the replacement was handed over (D-H1) i
   });
 });
 
-// Ungroup, slice G1 (migration 0399, placeholder number): a DRAFT until the
+// Ungroup, slice G1 (migration 0399, confirmed at the PR stage): a DRAFT until the
 // push, the web deploy, the OTA and a Demo Co walk (which needs seeded records
 // and the owner's go). The publishing follow-up dates it, sets 'published' and
 // re-reads the words.

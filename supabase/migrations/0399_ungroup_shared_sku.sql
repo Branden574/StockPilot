@@ -2,10 +2,9 @@
 --
 -- UNGROUP (slice G1 of the one grouping contract; owner bug 2026-10-05): give
 -- a record that shares its SKU with other records a SKU of its own, changing
--- that record only. The number is a placeholder (returns RX-4 takes 0397 and
--- 0398 first); it is fixed at the PR stage to the next free number, and no
--- function body names it, so no fingerprint recorded here changes when the
--- file is renumbered.
+-- that record only. The number was confirmed at the PR stage (2026-10-12):
+-- main and production end at 0398 (returns RX-4), and no other branch or
+-- open pull request claims 0399. No function body names it.
 --
 -- Design: stockpilot-work/grouping-visibility-push/design-merged.md, sections
 -- 2 (the idempotency table, caller_can_write_item, the fresh-SKU helper), 3.2

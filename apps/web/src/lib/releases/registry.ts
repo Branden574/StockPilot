@@ -30,8 +30,8 @@ export const RELEASES: Release[] = [
   {
     id: 'ungroup-2026-10',
     revision: 1,
-    // Ungroup, slice G1 of the grouping work (migration 0399, a placeholder
-    // number fixed at the PR stage; owner bug 2026-10-05). Held as a DRAFT
+    // Ungroup, slice G1 of the grouping work (migration 0399, the number
+    // confirmed at the PR stage; owner bug 2026-10-05). Held as a DRAFT
     // until the migration is pushed and verified, the web deploy is READY,
     // the OTA with the phone's Make this its own item is published and
     // launched, and a Demo Co walk passed (Demo Co has no shared SKU, so the
