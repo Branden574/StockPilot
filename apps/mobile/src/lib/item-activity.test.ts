@@ -279,6 +279,12 @@ describe('formatAuditEventLabel', () => {
     expect(formatAuditEventLabel('item.serial.deleted')).toBe('Item Serial · Deleted');
   });
 
+  // Fix round 1, C7(b): the web item feed says "Made its own item" for an
+  // Ungroup (0399); the phone said the generic "Inventory Item · Ungrouped".
+  it('words an Ungroup as the web item feed does', () => {
+    expect(formatAuditEventLabel('inventory.item.ungrouped')).toBe('Made its own item');
+  });
+
   it('falls back to plain title-casing for events with no subject override (e.g. tag.*)', () => {
     expect(formatAuditEventLabel('tag.applied')).toBe('Tag · Applied');
     expect(formatAuditEventLabel('tag.removed')).toBe('Tag · Removed');

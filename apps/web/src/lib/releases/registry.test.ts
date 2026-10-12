@@ -4194,14 +4194,19 @@ describe('one order per submission (phone ordering PO-2) is published', () => {
     // at 5, RX-4's release at 0): its draft, dated later still, sits at the
     // top above RX-4's release. Claim kept: the public link and dates fixes
     // releases sit directly above.
+    // Re-pinned by Ungroup G1 (2026-10-12, rebased onto #354; was: at 6, the
+    // return history hand-over release at 0): Ungroup's draft, dated later
+    // still, sits at the top above it. Claim kept: the public link and dates
+    // fixes releases sit directly above.
     const at = RELEASES.findIndex((r) => r.id === ID);
-    expect(at).toBe(6);
-    expect(RELEASES[0]?.id).toBe('returns-history-hand-over-2026-10');
-    expect(RELEASES[1]?.id).toBe('returns-close-rest-2026-10');
-    expect(RELEASES[2]?.id).toBe('returns-requester-exchange-2026-10');
-    expect(RELEASES[3]?.id).toBe('returns-exchange-2026-10');
-    expect(RELEASES[4]?.id).toBe('public-link-sent-request-2026-10');
-    expect(RELEASES[5]?.id).toBe('dates-fixes-2026-10');
+    expect(at).toBe(7);
+    expect(RELEASES[0]?.id).toBe('ungroup-2026-10');
+    expect(RELEASES[1]?.id).toBe('returns-history-hand-over-2026-10');
+    expect(RELEASES[2]?.id).toBe('returns-close-rest-2026-10');
+    expect(RELEASES[3]?.id).toBe('returns-requester-exchange-2026-10');
+    expect(RELEASES[4]?.id).toBe('returns-exchange-2026-10');
+    expect(RELEASES[5]?.id).toBe('public-link-sent-request-2026-10');
+    expect(RELEASES[6]?.id).toBe('dates-fixes-2026-10');
     // Re-pinned by 0395 (was: the Items first-paint and weekly digest drafts
     // and this one): the partial-approval draft (small fixes slice 2) sits
     // right below this one and is dated earlier.
@@ -4242,11 +4247,15 @@ describe('one order per submission (phone ordering PO-2) is published', () => {
     // Re-pinned by docs/whats-new-return-history-hand-over (2026-10-12; was:
     // its draft the only one): it is published, in the same place, so no
     // draft is left. Claim kept: these three are published.
-    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([]);
-    expect(RELEASES[0]?.status).toBe('published');
+    // Re-pinned by Ungroup G1 (2026-10-12, rebased onto #354; was: no draft,
+    // RELEASES[0] to [3] published): Ungroup's draft is the only one, at the
+    // top, and the hand-over, RX-4's, RX-3's and RX-2's releases below it are
+    // published. Claim kept: these three are published.
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual(['ungroup-2026-10']);
     expect(RELEASES[1]?.status).toBe('published');
     expect(RELEASES[2]?.status).toBe('published');
     expect(RELEASES[3]?.status).toBe('published');
+    expect(RELEASES[4]?.status).toBe('published');
     for (const id of ['public-link-sent-request-2026-10', 'dates-fixes-2026-10', ID]) {
       expect(RELEASES.find((r) => r.id === id)?.status, id).toBe('published');
     }
@@ -4304,8 +4313,11 @@ describe('one order per submission (phone ordering PO-2) is published', () => {
     // Re-pinned by the return history hand-over fix (D-H1, 2026-10-12; was:
     // RELEASES[4] and [3]): the same two releases, one place lower again
     // under its draft.
-    expect(Date.parse(RELEASES[5]!.publishedAt) - Date.parse(release().publishedAt)).toBe(60_000);
-    expect(Date.parse(RELEASES[4]!.publishedAt) - Date.parse(RELEASES[5]!.publishedAt)).toBe(60_000);
+    // Re-pinned by Ungroup G1 (2026-10-12, rebased onto #354; was:
+    // RELEASES[5] and [4]): the same two releases, one place lower again
+    // under Ungroup's draft.
+    expect(Date.parse(RELEASES[6]!.publishedAt) - Date.parse(release().publishedAt)).toBe(60_000);
+    expect(Date.parse(RELEASES[5]!.publishedAt) - Date.parse(RELEASES[6]!.publishedAt)).toBe(60_000);
   });
 
   it('is told to whoever can open the New order page, and links there', () => {
@@ -4537,7 +4549,11 @@ describe('placing an order in the mobile app (phone ordering PO-4) is published'
   // "all published but the return history hand-over draft at the top"): its
   // release is published, in the same place, so all of them are published
   // again.
-  it('is dated after every release below it (pinned by id), returns RX-1\'s a minute below it; the releases above it, all published, are dated later', () => {
+  // Re-pinned by Ungroup G1 (2026-10-12, rebased onto #354; was: "the
+  // releases above it, all published, are dated later"): Ungroup's draft,
+  // dated later still, sits at the top above the return history hand-over
+  // release. Claim kept: every release above it is dated later.
+  it('is dated after every release below it (pinned by id), returns RX-1\'s a minute below it; the releases above it, all published but the Ungroup draft at the top, are dated later', () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBeGreaterThanOrEqual(0);
     // Re-pinned by the weekly digest fixes (2026-10-05): their draft sits at
@@ -4566,7 +4582,11 @@ describe('placing an order in the mobile app (phone ordering PO-4) is published'
     // later still, at the top.
     // Re-pinned by the return history hand-over fix (D-H1, 2026-10-12; was:
     // without it): a draft dated later still, at the top.
+    // Re-pinned by Ungroup G1 (2026-10-12, rebased onto #354; was: without
+    // it): its draft, dated later still, sits at the top above the return
+    // history hand-over release.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
+      'ungroup-2026-10',
       'returns-history-hand-over-2026-10',
       'returns-close-rest-2026-10',
       'returns-requester-exchange-2026-10',
@@ -4602,7 +4622,11 @@ describe('placing an order in the mobile app (phone ordering PO-4) is published'
     // Re-pinned by docs/whats-new-return-history-hand-over (2026-10-12; was:
     // draft, then published x10): its release is published, so all eleven
     // are.
+    // Re-pinned by Ungroup G1 (2026-10-12, rebased onto #354; was:
+    // published x11): Ungroup's draft at the top, then the same eleven,
+    // published.
     expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual([
+      'draft',
       'published',
       'published',
       'published',
@@ -5640,7 +5664,12 @@ describe('the small fixes release (slice 1) is published', () => {
   // Re-pinned by docs/whats-new-return-history-hand-over (2026-10-12; was:
   // "... and the return history hand-over draft at the top"): its release is
   // published, in the same place, so no draft is left above it.
-  it("sits directly below the Items first-paint release, published later, with the weekly digest, slice 2, PO-2, dates fixes, public link and returns RX-2, RX-3, RX-4 and return history hand-over releases above that one, published later still; phone ordering's below it", () => {
+  // Re-pinned by Ungroup G1 (2026-10-12, rebased onto #354; was: "...;
+  // phone ordering's below it" with no draft above it): Ungroup's draft,
+  // dated later still, sits at the top above the return history hand-over
+  // release. Claim kept: directly below the Items first-paint release, every
+  // release above it dated later.
+  it("sits directly below the Items first-paint release, published later, with the weekly digest, slice 2, PO-2, dates fixes, public link and returns RX-2, RX-3, RX-4 and return history hand-over releases above that one, published later still, and the Ungroup draft at the top; phone ordering's below it", () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBeGreaterThanOrEqual(0);
     // Drafts go above the newest published release, newest first: the Items
@@ -5666,7 +5695,11 @@ describe('the small fixes release (slice 1) is published', () => {
     // later still, at the top.
     // Re-pinned by the return history hand-over fix (D-H1, 2026-10-12; was:
     // without it): a draft dated later still, at the top.
+    // Re-pinned by Ungroup G1 (2026-10-12, rebased onto #354; was: without
+    // it): its draft, dated later still, sits at the top above the return
+    // history hand-over release.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
+      'ungroup-2026-10',
       'returns-history-hand-over-2026-10',
       'returns-close-rest-2026-10',
       'returns-requester-exchange-2026-10',
@@ -5700,7 +5733,11 @@ describe('the small fixes release (slice 1) is published', () => {
     // published x9): its draft at the top, then the same nine, published.
     // Re-pinned by docs/whats-new-return-history-hand-over (2026-10-12; was:
     // draft, then published x9): its release is published, so all ten are.
+    // Re-pinned by Ungroup G1 (2026-10-12, rebased onto #354; was:
+    // published x10): Ungroup's draft at the top, then the same ten,
+    // published.
     expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual([
+      'draft',
       'published',
       'published',
       'published',
@@ -6081,7 +6118,11 @@ describe('the weekly digest and fixes release', () => {
     // later still, at the top.
     // Re-pinned by the return history hand-over fix (D-H1, 2026-10-12; was:
     // without it): a draft dated later still, at the top.
+    // Re-pinned by Ungroup G1 (2026-10-12, rebased onto #354; was: without
+    // it): its draft, dated later still, sits at the top above the return
+    // history hand-over release.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
+      'ungroup-2026-10',
       'returns-history-hand-over-2026-10',
       'returns-close-rest-2026-10',
       'returns-requester-exchange-2026-10',
@@ -6113,7 +6154,11 @@ describe('the weekly digest and fixes release', () => {
     // published x7): its draft at the top, then the same seven, published.
     // Re-pinned by docs/whats-new-return-history-hand-over (2026-10-12; was:
     // draft, then published x7): its release is published, so all eight are.
+    // Re-pinned by Ungroup G1 (2026-10-12, rebased onto #354; was:
+    // published x8): Ungroup's draft at the top, then the same eight,
+    // published.
     expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual([
+      'draft',
       'published',
       'published',
       'published',
@@ -6391,7 +6436,11 @@ describe('the Items first-paint release', () => {
     // later still, at the top.
     // Re-pinned by the return history hand-over fix (D-H1, 2026-10-12; was:
     // without it): a draft dated later still, at the top.
+    // Re-pinned by Ungroup G1 (2026-10-12, rebased onto #354; was: without
+    // it): its draft, dated later still, sits at the top above the return
+    // history hand-over release.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
+      'ungroup-2026-10',
       'returns-history-hand-over-2026-10',
       'returns-close-rest-2026-10',
       'returns-requester-exchange-2026-10',
@@ -6424,7 +6473,11 @@ describe('the Items first-paint release', () => {
     // published x8): its draft at the top, then the same eight, published.
     // Re-pinned by docs/whats-new-return-history-hand-over (2026-10-12; was:
     // draft, then published x8): its release is published, so all nine are.
+    // Re-pinned by Ungroup G1 (2026-10-12, rebased onto #354; was:
+    // published x9): Ungroup's draft at the top, then the same nine,
+    // published.
     expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual([
+      'draft',
       'published',
       'published',
       'published',
@@ -6723,7 +6776,11 @@ describe('a partly approved order says what is reserved (small fixes slice 2) is
     // Re-pinned by the return history hand-over fix (D-H1, 2026-10-12; was:
     // without it): its draft, dated later still, sits at the top, above
     // RX-4's release.
+    // Re-pinned by Ungroup G1 (2026-10-12, rebased onto #354; was: without
+    // it): its draft, dated later still, sits at the top, above the return
+    // history hand-over release.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
+      'ungroup-2026-10',
       'returns-history-hand-over-2026-10',
       'returns-close-rest-2026-10',
       'returns-requester-exchange-2026-10',
@@ -6765,9 +6822,13 @@ describe('a partly approved order says what is reserved (small fixes slice 2) is
     // slice(1, at) published, RX-4's the newest, its draft the only draft):
     // its release is published, in the same place, the newest, and no draft
     // is left. Claim kept: every release above this one is published.
-    expect(RELEASES.slice(0, at).every((r) => r.status === 'published')).toBe(true);
+    // Re-pinned by Ungroup G1 (2026-10-12, rebased onto #354; was:
+    // slice(0, at) all published and no draft): Ungroup's draft is the only
+    // draft, at the top. Claim kept: every release between it and this one
+    // is published, the return history hand-over release the newest.
+    expect(RELEASES.slice(1, at).every((r) => r.status === 'published')).toBe(true);
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe('returns-history-hand-over-2026-10');
-    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([]);
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual(['ungroup-2026-10']);
     expect(RELEASES[at + 1]?.id).toBe('weekly-digest-and-fixes-2026-10');
     expect(RELEASES.slice(at + 1).every((r) => r.status === 'published' || r.status === 'withdrawn')).toBe(true);
     for (const r of RELEASES.slice(0, at)) {
@@ -7265,24 +7326,33 @@ describe('exchanges on returns (returns RX-2) is published', () => {
   // newest release and no draft is left. Claim kept: directly below RX-3's
   // release, with RX-4's and the hand-over release above that, and above the
   // public order link release, dated after every release but those three.
-  it('sits directly below returns RX-3\'s release, with returns RX-4\'s and the return history hand-over release above that (all published later), and above the public order link release, dated after every release but those three, and no draft is left', () => {
-    expect(RELEASES[0]?.id).toBe('returns-history-hand-over-2026-10');
-    expect(RELEASES[0]?.status).toBe('published');
-    expect(RELEASES[1]?.id).toBe('returns-close-rest-2026-10');
+  // Re-pinned by Ungroup G1 (2026-10-12, rebased onto #354; was: at 3, the
+  // return history hand-over release at 0, "and no draft is left"):
+  // Ungroup's draft, dated later still, sits at the top above the hand-over
+  // release and is the only draft. Claim kept: directly below RX-3's
+  // release, with RX-4's and the hand-over release above that, and above the
+  // public order link release, dated after every release but those three and
+  // Ungroup's draft.
+  it('sits directly below returns RX-3\'s release, with returns RX-4\'s and the return history hand-over release above that (all published later), and above the public order link release, dated after every release but those three and the Ungroup draft at the top, the only draft', () => {
+    expect(RELEASES[0]?.id).toBe('ungroup-2026-10');
+    expect(RELEASES[0]?.status).toBe('draft');
+    expect(RELEASES[1]?.id).toBe('returns-history-hand-over-2026-10');
     expect(RELEASES[1]?.status).toBe('published');
-    expect(RELEASES[2]?.id).toBe('returns-requester-exchange-2026-10');
+    expect(RELEASES[2]?.id).toBe('returns-close-rest-2026-10');
     expect(RELEASES[2]?.status).toBe('published');
-    expect(RELEASES[3]?.id).toBe(ID);
-    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([]);
+    expect(RELEASES[3]?.id).toBe('returns-requester-exchange-2026-10');
+    expect(RELEASES[3]?.status).toBe('published');
+    expect(RELEASES[4]?.id).toBe(ID);
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual(['ungroup-2026-10']);
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe('returns-history-hand-over-2026-10');
-    expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
     expect(Date.parse(RELEASES[1]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
     expect(Date.parse(RELEASES[2]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
-    expect(RELEASES[4]?.id).toBe('public-link-sent-request-2026-10');
-    expect(RELEASES[4]?.status).toBe('published');
+    expect(Date.parse(RELEASES[3]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
+    expect(RELEASES[5]?.id).toBe('public-link-sent-request-2026-10');
+    expect(RELEASES[5]?.status).toBe('published');
     const rx1 = RELEASES.findIndex((r) => r.id === 'returns-original-rack-2026-10');
     expect(RELEASES[rx1]?.status).toBe('published');
-    const above = new Set([ID, 'returns-requester-exchange-2026-10', 'returns-close-rest-2026-10', 'returns-history-hand-over-2026-10']);
+    const above = new Set([ID, 'returns-requester-exchange-2026-10', 'returns-close-rest-2026-10', 'returns-history-hand-over-2026-10', 'ungroup-2026-10']);
     for (const r of RELEASES.filter((x) => !above.has(x.id))) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
@@ -7600,16 +7670,24 @@ describe('Close the rest (returns RX-4) is published', () => {
   // the same place, so it is the newest release and no draft is left. Claim
   // kept: directly below it and directly above returns RX-3's release, dated
   // after every release but it.
-  it("sits directly below the return history hand-over release (published later) and directly above returns RX-3's release, dated after every release but that one, and no draft is left", () => {
-    expect(RELEASES[0]?.id).toBe('returns-history-hand-over-2026-10');
-    expect(RELEASES[0]?.status).toBe('published');
-    expect(RELEASES[1]?.id).toBe(ID);
-    expect(RELEASES[2]?.id).toBe('returns-requester-exchange-2026-10');
-    expect(RELEASES[2]?.status).toBe('published');
+  // Re-pinned by Ungroup G1 (2026-10-12, rebased onto #354; was: at 1, the
+  // return history hand-over release at 0, "and no draft is left"):
+  // Ungroup's draft, dated later still, sits at the top above that release
+  // and is the only draft. Claim kept: directly below the hand-over release
+  // and directly above returns RX-3's release, dated after every release
+  // but it and Ungroup's draft.
+  it("sits directly below the return history hand-over release (published later) and directly above returns RX-3's release, dated after every release but that one and the Ungroup draft at the top, the only draft", () => {
+    expect(RELEASES[0]?.id).toBe('ungroup-2026-10');
+    expect(RELEASES[0]?.status).toBe('draft');
+    expect(RELEASES[1]?.id).toBe('returns-history-hand-over-2026-10');
+    expect(RELEASES[1]?.status).toBe('published');
+    expect(RELEASES[2]?.id).toBe(ID);
+    expect(RELEASES[3]?.id).toBe('returns-requester-exchange-2026-10');
+    expect(RELEASES[3]?.status).toBe('published');
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe('returns-history-hand-over-2026-10');
-    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([]);
-    expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
-    for (const r of RELEASES.filter((x) => x.id !== ID && x.id !== 'returns-history-hand-over-2026-10')) {
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual(['ungroup-2026-10']);
+    expect(Date.parse(RELEASES[1]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
+    for (const r of RELEASES.filter((x) => x.id !== ID && x.id !== 'returns-history-hand-over-2026-10' && x.id !== 'ungroup-2026-10')) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -8069,19 +8147,27 @@ describe('requesters ask for an exchange themselves (returns RX-3) is published'
   // newest release and no draft is left. Claim kept: directly below RX-4's
   // release and directly above returns RX-2's release, dated after every
   // release but RX-4's and the hand-over release.
-  it("sits directly below returns RX-4's release, with the return history hand-over release above that (both published later), and directly above returns RX-2's release, dated after every release but those two, and no draft is left", () => {
-    expect(RELEASES[0]?.id).toBe('returns-history-hand-over-2026-10');
-    expect(RELEASES[0]?.status).toBe('published');
-    expect(RELEASES[1]?.id).toBe('returns-close-rest-2026-10');
+  // Re-pinned by Ungroup G1 (2026-10-12, rebased onto #354; was: at 2, the
+  // return history hand-over release at 0, "and no draft is left"):
+  // Ungroup's draft, dated later still, sits at the top above the hand-over
+  // release and is the only draft. Claim kept: directly below RX-4's release
+  // and directly above returns RX-2's release, dated after every release but
+  // RX-4's, the hand-over release and Ungroup's draft.
+  it("sits directly below returns RX-4's release, with the return history hand-over release above that (both published later), and directly above returns RX-2's release, dated after every release but those two and the Ungroup draft at the top, the only draft", () => {
+    expect(RELEASES[0]?.id).toBe('ungroup-2026-10');
+    expect(RELEASES[0]?.status).toBe('draft');
+    expect(RELEASES[1]?.id).toBe('returns-history-hand-over-2026-10');
     expect(RELEASES[1]?.status).toBe('published');
-    expect(RELEASES[2]?.id).toBe(ID);
-    expect(RELEASES[3]?.id).toBe('returns-exchange-2026-10');
-    expect(RELEASES[3]?.status).toBe('published');
+    expect(RELEASES[2]?.id).toBe('returns-close-rest-2026-10');
+    expect(RELEASES[2]?.status).toBe('published');
+    expect(RELEASES[3]?.id).toBe(ID);
+    expect(RELEASES[4]?.id).toBe('returns-exchange-2026-10');
+    expect(RELEASES[4]?.status).toBe('published');
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe('returns-history-hand-over-2026-10');
-    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([]);
-    expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual(['ungroup-2026-10']);
     expect(Date.parse(RELEASES[1]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
-    for (const r of RELEASES.filter((x) => x.id !== ID && x.id !== 'returns-close-rest-2026-10' && x.id !== 'returns-history-hand-over-2026-10')) {
+    expect(Date.parse(RELEASES[2]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
+    for (const r of RELEASES.filter((x) => x.id !== ID && x.id !== 'returns-close-rest-2026-10' && x.id !== 'returns-history-hand-over-2026-10' && x.id !== 'ungroup-2026-10')) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -8384,13 +8470,21 @@ describe("a return's history shows when the replacement was handed over (D-H1) i
   // same place, it is the newest release, and no draft is left. Claim kept:
   // at the top, directly above returns RX-4's release, dated after every
   // release.
-  it("is the newest release, at the top directly above returns RX-4's release, dated after every release, and no draft is left", () => {
-    expect(RELEASES[0]?.id).toBe(ID);
-    expect(RELEASES[1]?.id).toBe('returns-close-rest-2026-10');
-    expect(RELEASES[1]?.status).toBe('published');
+  // Re-pinned by Ungroup G1 (2026-10-12, rebased onto #354; was: "is the
+  // newest release, at the top directly above returns RX-4's release, dated
+  // after every release, and no draft is left", at 0): Ungroup's draft,
+  // dated later still, sits at the top above it and is the only draft.
+  // Claim kept: the newest published release, directly above returns RX-4's
+  // release, dated after every release but Ungroup's draft.
+  it("is the newest published release, directly below the Ungroup draft (the only draft) and directly above returns RX-4's release, dated after every release but that draft", () => {
+    expect(RELEASES[0]?.id).toBe('ungroup-2026-10');
+    expect(RELEASES[0]?.status).toBe('draft');
+    expect(RELEASES[1]?.id).toBe(ID);
+    expect(RELEASES[2]?.id).toBe('returns-close-rest-2026-10');
+    expect(RELEASES[2]?.status).toBe('published');
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
-    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([]);
-    for (const r of RELEASES.filter((x) => x.id !== ID)) {
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual(['ungroup-2026-10']);
+    for (const r of RELEASES.filter((x) => x.id !== ID && x.id !== 'ungroup-2026-10')) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -8576,5 +8670,114 @@ describe("a return's history shows when the replacement was handed over (D-H1) i
     const phoneClient = readFileSync(resolve(__dirname, '../../../../mobile/src/lib/returns-api.ts'), 'utf8');
     expect(phoneClient).toContain('chain: raw.chain ?? [],');
     expect(r.summary).toMatch(/^A return's history now shows the replacement's hand-over at the time it was signed for, on the web and in the mobile app\. /);
+  });
+});
+
+// Ungroup, slice G1 (migration 0399, confirmed at the PR stage): a DRAFT until the
+// push, the web deploy, the OTA and a Demo Co walk (which needs seeded records
+// and the owner's go). The publishing follow-up dates it, sets 'published' and
+// re-reads the words.
+describe('the Ungroup release (G1, 0399)', () => {
+  const ID = 'ungroup-2026-10';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+
+  it('is a draft at the top, dated after every release (a placeholder the publishing follow-up replaces)', () => {
+    expect(release().status).toBe('draft');
+    expect(RELEASES[0]?.id).toBe(ID);
+    for (const r of RELEASES.slice(1)) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+  });
+
+  it('is told to whoever can edit items, and its link goes to Items for those who can Ungroup', () => {
+    const r = release();
+    expect(r.audience).toEqual({ anyPermission: ['items:update', 'items:create'] });
+    expect(r.entries.map((e) => [e.id, e.category, e.audience?.anyPermission, e.link?.href ?? null])).toEqual([
+      ['ungroup-shared-sku', 'new', ['items:update'], '/dashboard/inventory'],
+      ['sku-taken-names-the-record', 'fixed', ['items:update', 'items:create'], null],
+      // Test stage, decision D1: restore points remember each record, told to
+      // the people who can open Backups & restore (owner/admin floor).
+      ['restore-points-follow-records', 'fixed', ['organization:update'], null],
+    ]);
+  });
+
+  // Test stage, decision D1 (a) and (b): new restore points carry each
+  // record's id and a restore matches by it first; restoring an older point
+  // names the records that changed SKU before the typed confirm. The words
+  // match the restore screen's (restore-sku-warning-copy.ts) and claim no
+  // more than the service does.
+  it('says restore points now follow each record, and that an older point names the records that changed SKU first', () => {
+    const entry = release().entries.find((e) => e.id === 'restore-points-follow-records')!;
+    expect(entry.area).toBe('Settings');
+    expect(entry.whatChanged).toContain('Restore points taken after this update remember each record');
+    expect(entry.whatChanged).toContain('before you type RESTORE');
+    expect(entry.howItAffectsYou).toContain("A restore keeps each record's current SKU.");
+    expect(entry.howItAffectsYou).toContain(
+      'An older restore point with no SKU change since it was taken restores as before.',
+    );
+    expect(entry.whatToDo).toContain('Backups & restore');
+  });
+
+  // PR stage, data review DATA-1: an older (version 1) point restored after an
+  // Ungroup finds the split record when it is still on the same rack
+  // (restore-points.ts planSplitMatches), so only SKU edits are named before the
+  // typed confirm; an admin who cannot view the audit log is told the check
+  // could not run (restore-sku-warning-copy.ts noAuditAccess).
+  // Re-pinned by PR stage fix round 1 (2026-10-12, F2; was: "... finds each
+  // record that got its own SKU, when it is still on the same rack."): the
+  // restore finds a split record by the SKU its split left, so a record whose
+  // SKU changed between the point and the Ungroup is not found that way; the
+  // warning names it instead (an edited SKU). Claim kept: an older point
+  // finds a split record on the same rack, and edited SKUs are named.
+  // Re-pinned by the final round (2026-10-12, review DR2-1; was: "... names
+  // only edited SKUs ...", the first sentence ending "... between the restore
+  // point and the Ungroup."): the restore skips the split when another record
+  // now has the split record's old SKU on its rack (it gives that record the
+  // stock instead), so the first sentence says so, and how it affects you
+  // says the warning names such a record too (whatChanged holds 600
+  // characters). Claim kept: an older point finds a split record on the same
+  // rack, edited SKUs are named, and it says when it cannot check.
+  it('says an older point finds a record that got its own SKU unless another record has its old SKU on that rack now, names edited SKUs and such records, and says when it cannot check', () => {
+    const entry = release().entries.find((e) => e.id === 'restore-points-follow-records')!;
+    expect(entry.whatChanged).toContain(
+      'Restoring an older restore point after an Ungroup finds each record that got its own SKU, when it is still on the same rack, its SKU was not changed between the restore point and the Ungroup, and no other record has its old SKU on that rack now.',
+    );
+    expect(entry.whatChanged).toContain(
+      'Backups & restore names the records whose SKU was edited since it was taken, before you type RESTORE.',
+    );
+    expect(entry.howItAffectsYou).toContain(
+      'For an older point, Backups & restore also names a record that got its own SKU when another record now has its old SKU on the same rack, since restoring can give that record the stock this one had then.',
+    );
+    expect(entry.howItAffectsYou).toContain(
+      'If you cannot view the audit log, Backups & restore says it could not check for SKU changes.',
+    );
+  });
+
+  it('says what changes and what does not, in the screens\' own words, on both platforms', () => {
+    const r = release();
+    const [ungroup] = r.entries;
+    // Fix round 1, P3: the bulk Ungroup is on the web only (the phone's select
+    // bar gets it in G3); the phone has the item screen's action.
+    expect(r.summary).toContain('On the web, select them on Items or Books and choose Ungroup.');
+    expect(r.summary).toContain(
+      'On an item page, on the web or in the mobile app after the latest update, use Make this its own item.',
+    );
+    expect(r.summary).not.toMatch(/Items or Books[^.]*mobile app/);
+    // Fix round 1, D2: what an old SKU label does until it is reprinted.
+    expect(ungroup!.howItAffectsYou).toContain(
+      'until you reprint them for the records that changed, scanning one finds the records that keep the old SKU',
+    );
+    expect(ungroup!.whatChanged).toContain('Ungroup');
+    expect(ungroup!.whatChanged).toContain('Make this its own item');
+    expect(ungroup!.howItAffectsYou).toContain(
+      'Stock, charter, rack, barcode/ISBN and history stay as they are',
+    );
+    expect(ungroup!.howItAffectsYou).toContain('Kits and records in a product family keep their SKU');
+  });
+
+  it('never calls a recorded quantity "the book", and never tells anyone to change a charter or rack to get around a rule', () => {
+    const text = [release().title, release().summary, ...release().entries.flatMap((e) => [e.title, e.whatChanged, e.whyItMatters, e.howItAffectsYou, e.whatToDo])].join(' ');
+    expect(text).not.toMatch(/\bthe book\b|\bbook (count|quantity|stock)\b/i);
+    expect(text).not.toMatch(/(change|switch|pick|choose) (the |a |another |a different )?charter (or|to)/i);
   });
 });

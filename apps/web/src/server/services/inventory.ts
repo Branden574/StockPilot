@@ -387,6 +387,31 @@ const SHARED_ITEM_FIELDS = [
   'group_id',
 ] as const;
 
+/**
+ * The words for a SKU that is already taken where a record is going: the 0234
+ * index allows one record per (organization, SKU, charter, rack label). They
+ * say what collided and NEVER advise changing the charter or the rack to get
+ * around the rule. The old words did ("change the SKU, the charter, or the
+ * rack/location"), and the owner changed charters to force records to group
+ * (2026-10-05); Ungroup and, later, Group selected are the honest ways. With
+ * `conflictName` (the record the caller can read) they name it; a hidden one
+ * is never described.
+ */
+export function skuTakenMessage(
+  sku: string,
+  conflictName: string | null,
+  kind: 'edit' | 'duplicate' = 'edit',
+): string {
+  if (kind === 'duplicate') {
+    return conflictName
+      ? `“${conflictName}” already has SKU ${sku} at that spot, so there is nothing to duplicate there. To add stock there, adjust “${conflictName}” instead.`
+      : `A record with SKU ${sku} is already at that spot, so there is nothing to duplicate there.`;
+  }
+  return conflictName
+    ? `SKU ${sku} is already used by “${conflictName}” in the same charter and rack, and two records can't share a SKU there. Use a different SKU, or open “${conflictName}” instead.`
+    : `SKU ${sku} is already used by another record in the same charter and rack, and two records can't share a SKU there. Use a different SKU.`;
+}
+
 export type ItemListSort =
   | 'updated_desc'
   | 'updated_asc'
@@ -3265,7 +3290,7 @@ export class InventoryService {
 
     if (error) {
       if (error.code === '23505') {
-        throw new ServiceError('conflict', 'A item with that SKU already exists');
+        throw await this.skuTakenError(sku, resolvedCharterId ?? null, input.binLocation ?? null);
       }
       throw new ServiceError('internal_error', error.message);
     }
@@ -3454,7 +3479,7 @@ export class InventoryService {
     // Load the original SKU so we can pass it through to the RPC.
     const { data: original, error: origErr } = await this.ctx.supabase
       .from('inventory_items')
-      .select('sku, warehouse_id')
+      .select('sku, warehouse_id, charter_id')
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', input.originalId)
       .maybeSingle();
@@ -3527,9 +3552,14 @@ export class InventoryService {
         throw new ServiceError('not_found', 'Original item no longer exists.');
       }
       if (rpcErr.code === '23505') {
-        throw new ServiceError(
-          'conflict',
-          'This SKU already exists at the chosen rack. Pick a different rack or row.',
+        // The copy keeps the original's SKU and charter (0299); only its rack
+        // label is new, so that is the slot that collided.
+        throw await this.skuTakenError(
+          sku,
+          (original as { charter_id: string | null }).charter_id ?? null,
+          (overrides.bin_location as string | null) ?? null,
+          undefined,
+          'duplicate',
         );
       }
       throw new ServiceError('internal_error', rpcErr.message);
@@ -4545,6 +4575,43 @@ export class InventoryService {
     };
   }
 
+  /**
+   * A 23505 on (organization, SKU, charter, rack label) as plain words: one
+   * lookup of the record that holds the slot, under the CALLER's client, so a
+   * record they cannot read is never named (design 5, SKU collision). The
+   * error carries its id when readable, for an "Open it" link.
+   */
+  private async skuTakenError(
+    sku: string,
+    charterId: string | null,
+    binLocation: string | null,
+    excludeId?: string,
+    kind: 'edit' | 'duplicate' = 'edit',
+  ): Promise<ServiceError> {
+    let hit: { id: string; name: string } | null = null;
+    try {
+      let q = this.ctx.supabase
+        .from('inventory_items')
+        .select('id, name')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('sku', sku)
+        .is('deleted_at', null);
+      q = charterId ? q.eq('charter_id', charterId) : q.is('charter_id', null);
+      q = binLocation === null ? q.is('bin_location', null) : q.eq('bin_location', binLocation);
+      if (excludeId) q = q.neq('id', excludeId);
+      const { data } = await q.limit(1);
+      const row = ((data ?? []) as Array<{ id: string; name: string | null }>)[0];
+      if (row) hit = { id: row.id, name: row.name ?? '' };
+    } catch {
+      // The words without a name are still right.
+    }
+    return new ServiceError('conflict', skuTakenMessage(sku, hit?.name || null, kind), {
+      reason: 'sku_taken',
+      sku,
+      ...(hit ? { conflictItemId: hit.id } : {}),
+    });
+  }
+
   async update(id: string, patch: UpdateItemInput) {
     assertPermission(this.ctx, 'items:update');
 
@@ -4820,9 +4887,12 @@ export class InventoryService {
       // already carries that SKU. Surface it as a clear, actionable message
       // instead of the opaque "internal error" the raw rethrow produced.
       if (error.code === '23505') {
-        throw new ServiceError(
-          'conflict',
-          'Another item in the same charter and rack already uses that SKU. The same SKU can live under different charters — change the SKU, the charter, or the rack/location.',
+        const cur = current as { sku?: string | null; charter_id?: string | null; bin_location?: string | null };
+        throw await this.skuTakenError(
+          ('sku' in updates ? (updates.sku as string) : cur.sku) ?? '',
+          ('charter_id' in updates ? (updates.charter_id as string | null) : cur.charter_id) ?? null,
+          ('bin_location' in updates ? (updates.bin_location as string | null) : cur.bin_location) ?? null,
+          id,
         );
       }
       throw new ServiceError('internal_error', error.message);
@@ -4880,9 +4950,17 @@ export class InventoryService {
         .neq('id', id);
       if (sibErr) {
         if (sibErr.code === '23505') {
+          // Honest about the known limitation above: this record already has
+          // the new SKU; the others could not follow and keep the old one.
+          // Only a SKU re-key can collide (no other shared field is in the
+          // 0234 key); the second sentence is a fallback that never fires.
+          const newSku = sharedUpdates.sku as string | undefined;
           throw new ServiceError(
             'conflict',
-            'Another placement (same charter and rack) already uses that SKU. Change the SKU, or resolve the conflicting placement first.',
+            newSku
+              ? `This record's SKU is now ${newSku}, but the other records that shared SKU ${originalSku} could not follow: another record already uses ${newSku} in the same charter and rack as one of them. They keep SKU ${originalSku}.`
+              : `This record was saved, but the other records that share SKU ${originalSku} could not be updated. Try again.`,
+            { reason: 'sku_taken_by_sibling', sku: newSku ?? originalSku, previousSku: originalSku },
           );
         }
         throw new ServiceError('internal_error', sibErr.message);

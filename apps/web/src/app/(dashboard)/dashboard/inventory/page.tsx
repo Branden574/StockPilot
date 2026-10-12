@@ -426,6 +426,8 @@ async function inventoryTableSection({
   // Public-catalog visibility (P3): shows the "Set public visibility" bulk
   // action in the table's bulk bar; the server action re-asserts.
   const canSetPublicVisibility = can(sessionCtx, 'public_links:manage');
+  // Ungroup (0399): the bulk bar offers it only to a viewer who can edit items.
+  const canUngroup = can(sessionCtx, 'items:update');
   // "Start an order" bulk shortcut: viewer can place order requests AND the
   // (optional) orders module is on. getModulesForRequest is request-cached and
   // shared with the layout, so this costs no extra round trip.
@@ -590,6 +592,7 @@ async function inventoryTableSection({
         }}
         canCreate={canCreate}
         canSetPublicVisibility={canSetPublicVisibility}
+        canUngroup={canUngroup}
         canStartOrder={canStartOrder}
         categories={lookups.categories.map((c) => ({ id: c.id, name: c.name }))}
         locations={lookups.locations}
@@ -894,6 +897,7 @@ async function inventoryTableSection({
       lookups={lookups}
       canCreate={canCreate}
       canSetPublicVisibility={canSetPublicVisibility}
+      canUngroup={canUngroup}
       canStartOrder={canStartOrder}
       categories={data.categories.map((c) => ({ id: c.id, name: c.name }))}
       locations={data.locations}

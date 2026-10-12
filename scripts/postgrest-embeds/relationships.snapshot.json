@@ -1,6 +1,6 @@
 {
   "generatedBy": "scripts/gen-postgrest-embed-snapshot.mjs (do not edit by hand)",
-  "source": "production catalog, project xizpqmhhslgzbuqtjubv, read-only SELECT on pg_constraint/pg_class/pg_attribute (public schema), 2026-10-11, migrations through 0396",
+  "source": "local database catalog (scripts/postgrest-embeds/census.sql), 2026-10-12",
   "foreignKeys": [
     ["activity_logs","activity_logs_organization_id_fkey","organizations",["organization_id"],["id"]],
     ["activity_logs","activity_logs_user_id_fkey","user_profiles",["user_id"],["id"]],
@@ -121,6 +121,8 @@
     ["item_attachments","item_attachments_created_by_fkey","user_profiles",["created_by"],["id"]],
     ["item_attachments","item_attachments_item_id_fkey","inventory_items",["item_id"],["id"]],
     ["item_attachments","item_attachments_organization_id_fkey","organizations",["organization_id"],["id"]],
+    ["item_grouping_requests","item_grouping_requests_organization_id_fkey","organizations",["organization_id"],["id"]],
+    ["item_grouping_requests","item_grouping_requests_user_id_fkey","user_profiles",["user_id"],["id"]],
     ["item_images","item_images_item_id_fkey","inventory_items",["item_id"],["id"]],
     ["item_images","item_images_organization_id_fkey","organizations",["organization_id"],["id"]],
     ["item_import_batches","item_import_batches_imported_by_fkey","user_profiles",["imported_by"],["id"]],
@@ -443,6 +445,7 @@
     "inventory_items": ["id"],
     "inventory_stock": ["id"],
     "item_attachments": ["id"],
+    "item_grouping_requests": ["organization_id","user_id","key"],
     "item_images": ["id"],
     "item_import_batches": ["id"],
     "item_price_observations": ["id"],
@@ -541,6 +544,7 @@
   "junctions": [
     {"junction":"bundle_components","a":"bundles","b":"inventory_items","via":["bundle_components_bundle_id_fkey","bundle_components_item_id_fkey"]},
     {"junction":"customer_catalog","a":"customers","b":"inventory_items","via":["customer_catalog_customer_id_fkey","customer_catalog_item_id_fkey"]},
+    {"junction":"item_grouping_requests","a":"organizations","b":"user_profiles","via":["item_grouping_requests_organization_id_fkey","item_grouping_requests_user_id_fkey"]},
     {"junction":"item_tags","a":"inventory_items","b":"tags","via":["item_tags_item_id_fkey","item_tags_tag_id_fkey"]},
     {"junction":"order_submissions","a":"organizations","b":"user_profiles","via":["order_submissions_organization_id_fkey","order_submissions_user_id_fkey"]},
     {"junction":"price_list_items","a":"inventory_items","b":"price_lists","via":["price_list_items_item_id_fkey","price_list_items_price_list_id_fkey"]},
@@ -568,7 +572,7 @@
     {"a":"order_requests","b":"user_profiles","relationships":["order_requests_approved_by_fkey","order_requests_assigned_delivery_by_fkey","order_requests_assigned_delivery_user_id_fkey","order_requests_assigned_picker_id_fkey","order_requests_cancelled_by_fkey","order_requests_completed_by_fkey","order_requests_in_transit_by_fkey","order_requests_packing_slip_generated_by_fkey","order_requests_pick_slip_generated_by_fkey","order_requests_picking_claimed_by_fkey","order_requests_picking_completed_by_fkey","order_requests_requester_user_id_fkey","order_requests_staged_by_fkey"]},
     {"a":"organization_members","b":"user_profiles","relationships":["organization_members_invited_by_fkey","organization_members_user_id_fkey"]},
     {"a":"organizations","b":"platform_impersonation_sessions","relationships":["platform_impersonation_sessions_previous_organization_id_fkey","platform_impersonation_sessions_target_organization_id_fkey"]},
-    {"a":"organizations","b":"user_profiles","relationships":["order_submissions","user_permission_overrides","user_profiles_default_organization_id_fkey"]},
+    {"a":"organizations","b":"user_profiles","relationships":["item_grouping_requests","order_submissions","user_permission_overrides","user_profiles_default_organization_id_fkey"]},
     {"a":"platform_admin_audit","b":"user_profiles","relationships":["platform_admin_audit_actor_user_id_fkey","platform_admin_audit_target_user_id_fkey"]},
     {"a":"po_imports","b":"user_profiles","relationships":["po_imports_approved_by_fkey","po_imports_uploaded_by_fkey"]},
     {"a":"procedures","b":"user_profiles","relationships":["procedures_created_by_fkey","procedures_updated_by_fkey"]},

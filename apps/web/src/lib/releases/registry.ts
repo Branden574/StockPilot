@@ -28,6 +28,116 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'ungroup-2026-10',
+    revision: 1,
+    // Ungroup, slice G1 of the grouping work (migration 0399, the number
+    // confirmed at the PR stage; owner bug 2026-10-05). Held as a DRAFT
+    // until the migration is pushed and verified, the web deploy is READY,
+    // the OTA with the phone's Make this its own item is published and
+    // launched, and a Demo Co walk passed (Demo Co has no shared SKU, so the
+    // walk needs seeded records, a production write that waits for the
+    // owner's go); the follow-up that publishes it sets 'published' and the
+    // real publishedAt and re-reads these words against what shipped. Newest
+    // first: drafts sit above the newest published release, so this one, the
+    // only draft, sits at the top, directly above the return history
+    // hand-over release (returns-history-hand-over-2026-10, published by #354
+    // at 2026-10-12T08:06Z), which sits directly above returns RX-4's release
+    // (returns-close-rest-2026-10, published by #350 at 2026-10-12T06:13Z).
+    // It is dated after every release (a placeholder, 2026-10-20T17:00Z; the
+    // publishing follow-up dates it for real, after the hand-over release).
+    // Re-placed at the rebase onto RX-4 (2026-10-12; was: dated after RX-2's
+    // draft, at the top above it), again at the rebase onto main 24dbb08db
+    // (2026-10-12; was: dated after returns RX-4's draft, itself a
+    // placeholder, directly above it; #350 published RX-4's release and #353
+    // added its draft since), and again at the rebase onto main 502845a31
+    // (2026-10-12; was: directly above the return history hand-over draft;
+    // #354 published that release in place).
+    // Who is told: whoever can edit items (items:update), the gate of the
+    // bulk bar's Ungroup, the item page's button and the server; Items is a
+    // core page, so no module. The fixed entry adds items:create (the same
+    // words on a new record). The words name the screens' own labels, claim
+    // no number nobody measured, and never call a recorded quantity "the
+    // book".
+    status: 'draft',
+    title: 'Give records that share a SKU a SKU of their own',
+    summary:
+      'Records that share a SKU can now be separated: Ungroup gives the records you choose a new SKU of their own and changes nothing else, so stock, charter, rack, barcode/ISBN and history stay as they are. On the web, select them on Items or Books and choose Ungroup. On an item page, on the web or in the mobile app after the latest update, use Make this its own item.',
+    publishedAt: '2026-10-20T17:00:00Z',
+    audience: { anyPermission: ['items:update', 'items:create'] },
+    entries: [
+      {
+        id: 'ungroup-shared-sku',
+        category: 'new',
+        area: 'Inventory',
+        title: 'Ungroup records that share a SKU',
+        whatChanged:
+          'On Items or Books, select records that share a SKU and choose Ungroup. The review lists each record with its charter, rack and stock and says which ones get a new SKU; when you select every record of a SKU that you can see, choose the one that keeps it. On an item page, Make this its own item does the same for that one record, on the web and in the mobile app.',
+        whyItMatters:
+          'Editing the SKU on one record changed it on every record with that SKU, so records that should not share a SKU could not be separated.',
+        howItAffectsYou:
+          'Only the records you choose change, and only their SKU. Stock, charter, rack, barcode/ISBN and history stay as they are, so two records can now share a barcode: scanning it asks which one you mean. Kits and records in a product family keep their SKU. Labels without a barcode print the SKU: until you reprint them for the records that changed, scanning one finds the records that keep the old SKU; the review links to Print labels. The item edit form now says how many other records share the SKU and that saving the shared fields changes all of them.',
+        whatToDo:
+          'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
+        link: { href: '/dashboard/inventory', label: 'Open Items' },
+        audience: { anyPermission: ['items:update'] },
+      },
+      {
+        id: 'sku-taken-names-the-record',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'A SKU already in use says which record has it',
+        whatChanged:
+          'Saving a record with a SKU that another record already uses in the same charter and rack used to suggest changing the SKU, the charter or the rack. It now names the SKU and, when you can see it, the record that has it, with Open it.',
+        whyItMatters:
+          'Changing the charter or the rack only to get past that message gave records the same SKU that were not meant to share one.',
+        howItAffectsYou: 'Use a different SKU, or open the record that already has it.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:update', 'items:create'] },
+      },
+      {
+        // Test stage, orchestrator decision D1 (2026-10-12): a restore point
+        // used to match records by SKU and rack only, so restoring one taken
+        // before an Ungroup re-created the split record under its old SKU
+        // (restore-points.ts). (a) New points carry each record's id
+        // (snapshot version 2) and a restore matches by it first. (b) An
+        // older point lists the records that changed SKU since it was taken
+        // before the typed confirm (restore-snapshot-button.tsx). The restore
+        // never writes a SKU. Told to whoever can open Backups & restore
+        // (organization:update; the page also needs the Business plan, so no
+        // link). Web only: restore points are not in the mobile app.
+        // PR stage, data review DATA-1 (2026-10-12): an older point restored
+        // after an Ungroup finds the split record through the split's audit
+        // row when it is still on the same rack (restore-points.ts
+        // planSplitMatches), so the warning names only SKU edits; an admin
+        // whose audit-log view was revoked is told the check could not run.
+        // PR stage fix round 1 (2026-10-12, F2): the restore finds a split
+        // record by the SKU its split left, so a record whose SKU changed
+        // between the point and the Ungroup is not found that way; the
+        // warning names it (an edited SKU), and the first sentence about
+        // older points says when a split record is found.
+        // Final round (2026-10-12, review DR2-1): the restore finds a split
+        // record through its split only when no other live record has its old
+        // SKU on its rack (otherwise it gives that record the split record's
+        // stock), so the first sentence says so, and how it affects you says
+        // the warning names such a record too, with what restoring does to
+        // that record's stock (whatChanged holds 600 characters).
+        id: 'restore-points-follow-records',
+        category: 'fixed',
+        area: 'Settings',
+        title: "Restoring a restore point keeps each record's stock in one place after a SKU change",
+        whatChanged:
+          "Restore points taken after this update remember each record, not only its SKU and rack, so restoring one after an Ungroup or a SKU edit puts each record's stock back on that same record. Restoring an older restore point after an Ungroup finds each record that got its own SKU, when it is still on the same rack, its SKU was not changed between the restore point and the Ungroup, and no other record has its old SKU on that rack now. For an older point, Backups & restore names the records whose SKU was edited since it was taken, before you type RESTORE.",
+        whyItMatters:
+          'Restore points matched records by SKU and rack, so restoring one taken before a record got a new SKU added that record again under its old SKU, with the stock it had then, while the record with the new SKU kept its stock too.',
+        howItAffectsYou:
+          "A restore keeps each record's current SKU. An older restore point with no SKU change since it was taken restores as before. For an older point, Backups & restore also names a record that got its own SKU when another record now has its old SKU on the same rack, since restoring can give that record the stock this one had then. If you cannot view the audit log, Backups & restore says it could not check for SKU changes. Restore points are on the web, for owners and admins on the Business plan or above.",
+        whatToDo:
+          'If Backups & restore names records that changed SKU, check them before you type RESTORE, or restore a newer point.',
+        audience: { anyPermission: ['organization:update'] },
+      },
+    ],
+  },
+  {
     id: 'returns-history-hand-over-2026-10',
     revision: 1,
     // D-H1 (Low), from the independent audit of the returns RX-4 Demo Co walk

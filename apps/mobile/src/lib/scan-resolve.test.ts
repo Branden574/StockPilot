@@ -1,6 +1,14 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
-import { resolveScanMatches, sanitizeScanCode } from './scan-resolve';
+import {
+  resolveScanMatches,
+  sanitizeScanCode,
+  SCAN_PICKER_COPY,
+  scanPickerSubtitle,
+} from './scan-resolve';
 
 interface Row {
   id: string;
@@ -77,5 +85,37 @@ describe('sanitizeScanCode', () => {
 
   it('leaves an ordinary alphanumeric barcode/SKU untouched', () => {
     expect(sanitizeScanCode('SKU-1234-ABC')).toBe('SKU-1234-ABC');
+  });
+});
+
+// Ungroup test stage, orchestrator decision R3-1 (a): after an Ungroup the
+// split record keeps its barcode/ISBN, so scanning that code matches records
+// with DIFFERENT SKUs. The picker then must not say "This SKU", and each row
+// shows its SKU so the person can tell the records apart.
+describe('the placement picker words (R3-1)', () => {
+  it('matches that share one SKU keep the placement sentence', () => {
+    expect(scanPickerSubtitle([{ sku: 'SKU-1' }, { sku: 'SKU-1' }])).toBe(
+      'This SKU is stocked in more than one place. Choose which one to adjust.',
+    );
+    expect(SCAN_PICKER_COPY.sameSku).toBe(
+      'This SKU is stocked in more than one place. Choose which one to adjust.',
+    );
+  });
+
+  it('matches that carry more than one SKU say the code matches more than one record', () => {
+    expect(scanPickerSubtitle([{ sku: 'SP-PAIR' }, { sku: 'SP-NEW1' }])).toBe(
+      'This code matches more than one record. Choose which one.',
+    );
+    // A SKU differing only by surrounding spaces is the same SKU.
+    expect(scanPickerSubtitle([{ sku: 'SKU-1' }, { sku: ' SKU-1 ' }])).toBe(
+      SCAN_PICKER_COPY.sameSku,
+    );
+  });
+
+  it("the scan screen uses these words and shows each row's SKU (source pin: the screen is not rendered under vitest)", () => {
+    const src = readFileSync(resolve(__dirname, '../../app/(drawer)/(tabs)/scan.tsx'), 'utf8');
+    expect(src).toContain('scanPickerSubtitle(placementChoices)');
+    expect(src).not.toContain('This SKU is stocked in more than one place');
+    expect(src).toMatch(/SKU \{c\.sku\}/);
   });
 });

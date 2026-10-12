@@ -50,3 +50,20 @@ export function resolveScanMatches<T extends ScanMatchLike>(
   if (finalRows.length === 1) return { kind: 'single', match: finalRows[0] };
   return { kind: 'multiple', matches: [...finalRows] };
 }
+
+/**
+ * The placement picker's words (Ungroup test stage, decision R3-1). Under
+ * Model B the matches of one scan share a SKU, one row per charter or rack.
+ * After an Ungroup the split record keeps its barcode/ISBN, so a scan of that
+ * code can match records with DIFFERENT SKUs; "This SKU" is then wrong, and
+ * the screen shows each row's SKU so the records can be told apart.
+ */
+export const SCAN_PICKER_COPY = {
+  sameSku: 'This SKU is stocked in more than one place. Choose which one to adjust.',
+  manyRecords: 'This code matches more than one record. Choose which one.',
+} as const;
+
+export function scanPickerSubtitle(matches: readonly { sku: string }[]): string {
+  const skus = new Set(matches.map((m) => (m.sku ?? '').trim()));
+  return skus.size > 1 ? SCAN_PICKER_COPY.manyRecords : SCAN_PICKER_COPY.sameSku;
+}

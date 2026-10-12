@@ -189,25 +189,33 @@ describe('the public order link release (a sent request leaves nothing behind)',
   // the same place, so it is the newest published release and no draft is
   // left. Claim kept: directly below RX-2's release, with RX-3's, RX-4's and
   // the hand-over release above that, dated after every release below it.
-  it('sits directly below returns RX-2\'s release, with returns RX-3\'s, RX-4\'s and the return history hand-over release above that (all published later), dated after every release below it, and no draft is left', () => {
-    expect(RELEASES[0]?.id).toBe('returns-history-hand-over-2026-10');
-    expect(RELEASES[0]?.status).toBe('published');
-    expect(RELEASES[1]?.id).toBe('returns-close-rest-2026-10');
+  // Re-pinned by Ungroup G1 (2026-10-12, rebased onto #354; was: at 4, the
+  // return history hand-over release at 0, "and no draft is left"):
+  // Ungroup's draft, dated later still, sits at the top above the hand-over
+  // release, and it is the only draft. Claim kept: directly below RX-2's
+  // release, with RX-3's, RX-4's and the hand-over release above that, dated
+  // after every release below it.
+  it('sits directly below returns RX-2\'s release, with returns RX-3\'s, RX-4\'s and the return history hand-over release above that (all published later), dated after every release below it, and the Ungroup draft at the top, the only draft', () => {
+    expect(RELEASES[0]?.id).toBe('ungroup-2026-10');
+    expect(RELEASES[0]?.status).toBe('draft');
+    expect(RELEASES[1]?.id).toBe('returns-history-hand-over-2026-10');
     expect(RELEASES[1]?.status).toBe('published');
-    expect(RELEASES[2]?.id).toBe('returns-requester-exchange-2026-10');
+    expect(RELEASES[2]?.id).toBe('returns-close-rest-2026-10');
     expect(RELEASES[2]?.status).toBe('published');
-    expect(RELEASES[3]?.id).toBe('returns-exchange-2026-10');
+    expect(RELEASES[3]?.id).toBe('returns-requester-exchange-2026-10');
     expect(RELEASES[3]?.status).toBe('published');
-    expect(RELEASES[4]?.id).toBe(ID);
+    expect(RELEASES[4]?.id).toBe('returns-exchange-2026-10');
+    expect(RELEASES[4]?.status).toBe('published');
+    expect(RELEASES[5]?.id).toBe(ID);
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe('returns-history-hand-over-2026-10');
-    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([]);
-    for (const r of RELEASES.slice(5)) {
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual(['ungroup-2026-10']);
+    for (const r of RELEASES.slice(6)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
-    expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
     expect(Date.parse(RELEASES[1]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
     expect(Date.parse(RELEASES[2]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
     expect(Date.parse(RELEASES[3]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
+    expect(Date.parse(RELEASES[4]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
   });
 
   it('is told to whoever can open the Public requests settings page, and links there', () => {

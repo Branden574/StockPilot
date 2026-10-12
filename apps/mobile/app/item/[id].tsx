@@ -44,11 +44,15 @@ import {
   isCountableItem,
   itemPhotoPath,
   formatOrderNumber,
+  GROUPING_ERROR_WORDS,
   legacyOrderRefId,
   randomPhotoFileBase,
+  randomRequestUuid,
   readDisplayStorage,
   reasonWithoutRefLabel,
   resolveMovementRefReason,
+  sharedSkuNoteCopy,
+  UNGROUP_COPY,
   type ItemElsewhere,
   type RackHoldingLike,
   type Role,
@@ -66,6 +70,7 @@ import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { api } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 import { showWriteCta, showWriteCtaForRole } from '@/lib/cta-gating';
 import { canMintPlacementDestination } from '@/lib/move-stock-form';
 import { useEnabledModules } from '@/lib/enabled-modules';
@@ -80,6 +85,14 @@ import { cycleCountSync, useSyncStatus } from '@/lib/cycle-count-sync';
 import { submitItemAdjust, type ItemAdjustOutcome } from '@/lib/item-adjust';
 import { enqueue, pendingAdjustFor } from '@/lib/queue';
 import { isOnline, syncNow } from '@/lib/sync';
+import {
+  confirmOneMessage,
+  describeUngroupError,
+  doneOneMessage,
+  postUngroup,
+  readSkuSiblingCount,
+  singleUngroupBody,
+} from '@/lib/ungroup';
 import {
   unconfirmedStock,
   useUnconfirmedStock,
@@ -199,6 +212,9 @@ interface Item {
    *  item" is not offered for them (F1-2). */
   is_rental: boolean;
   is_bundle: boolean;
+  /** A product-family member (sports group_id set): it keeps its SKU on an
+   *  Ungroup (family_member_sku, 0399). */
+  group_id: string | null;
   /** Since 0371 `rackHoldings` are only the holdings this member can SEE (a
    *  staff member or viewer: their own warehouses, plus locations with no
    *  warehouse). This is the rest, as totals from item_holdings_elsewhere:
@@ -483,6 +499,10 @@ export default function ItemDetail() {
   const { orgId } = useOrg();
   const { role } = useRole();
   const [item, setItem] = React.useState<Item | null>(null);
+  // Ungroup (0399): other records this member can read with the same SKU.
+  const [skuSiblings, setSkuSiblings] = React.useState<number | null>(null);
+  const [ungroupBusy, setUngroupBusy] = React.useState(false);
+  const { user } = useAuth();
   const [movements, setMovements] = React.useState<MovementRow[]>([]);
   const [movementsTotal, setMovementsTotal] = React.useState(0);
   const [movementsLoading, setMovementsLoading] = React.useState(true);
@@ -563,6 +583,10 @@ export default function ItemDetail() {
   // items:update inside InventoryService.bulkUpdate.
   const canRestore =
     isManager || (role !== null && can({ role: role as Role, permissions }, 'items:update'));
+  // "Make this its own item" (Ungroup, 0399): the permission alone decides, as
+  // for stock:adjust. Cosmetic only; POST /api/v1/items/ungroup and
+  // split_item_sku both re-check items:update and the warehouse.
+  const canMakeOwnItem = showWriteCtaForRole(role, permissions, 'items:update');
   // Movement-note edit gate — mirrors the additive RLS/RPC gate exactly:
   // manager-or-above OR the grantable 'movements:edit_notes' permission
   // (mig 0274). Cosmetic only; PATCH /api/v1/movements/[id]/note re-asserts
@@ -648,7 +672,7 @@ export default function ItemDetail() {
         `id, organization_id, name, sku, barcode, description, quantity_on_hand,
          reorder_point, reorder_quantity, unit_cost, retail_price,
          unit_of_measure, status, auto_archived, awaiting_first_receipt,
-         category_id, item_type, bin_location, is_rental, is_bundle,
+         category_id, item_type, bin_location, is_rental, is_bundle, group_id,
          warehouse_id, charter_id, custom_fields, tracking_type,
          category:categories!category_id (name),
          supplier:suppliers!supplier_id (name),
@@ -718,7 +742,7 @@ export default function ItemDetail() {
     // Serial count rides the same round trip — a cheap head-only count so
     // the Serials card can show for items that hold registry rows even
     // when tracking_type isn't 'serial' (e.g. tracking switched off later).
-    const [whResp, chResp, serialResp, holdingResp, elsewhere] = await Promise.all([
+    const [whResp, chResp, serialResp, holdingResp, elsewhere, skuSiblingCount] = await Promise.all([
       whId
         ? supabase.from('warehouses').select('name').eq('id', whId).maybeSingle()
         : Promise.resolve(null),
@@ -741,6 +765,15 @@ export default function ItemDetail() {
         .in('locations.kind', ['rack', 'crate'])
         .gt('quantity', 0),
       elsewhereRead,
+      // Ungroup (0399): how many OTHER records this member can read carry
+      // this SKU, for the note and "Make this its own item". A failed read
+      // says nothing (null).
+      readSkuSiblingCount(
+        supabase as never,
+        r.organization_id as string,
+        r.id as string,
+        (r.sku as string | null) ?? null,
+      ).catch(() => null),
     ]);
     if (seq !== loadSeq.current) return;
     const rackHoldings: RackHoldingLike[] = ((holdingResp?.data ?? []) as unknown as {
@@ -813,9 +846,67 @@ export default function ItemDetail() {
       rackHoldings,
       is_rental: r.is_rental === true,
       is_bundle: r.is_bundle === true,
+      group_id: (r.group_id as string | null) ?? null,
       elsewhere,
     });
+    setSkuSiblings(skuSiblingCount);
   }, [id, router, role]);
+
+  // ═══ MAKE THIS ITS OWN ITEM (Ungroup, 0399) ═══
+  // One record, ONLINE ONLY (never queued: the answer is the point). One key
+  // per attempt, kept with its body for "Try again" after a busy or lost
+  // answer: the server replays the first outcome instead of splitting twice.
+  async function sendUngroup(
+    body: ReturnType<typeof singleUngroupBody>,
+    barcode: string | null | undefined,
+  ) {
+    setUngroupBusy(true);
+    try {
+      const answer = await postUngroup(body);
+      Alert.alert(UNGROUP_COPY.done(1), doneOneMessage(answer.newSku, barcode));
+      void load();
+    } catch (e) {
+      const { message, retrySame } = describeUngroupError(e);
+      if (retrySame) {
+        Alert.alert(UNGROUP_COPY.makeOwnItem, message, [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Try again', onPress: () => void sendUngroup(body, barcode) },
+        ]);
+      } else {
+        Alert.alert(UNGROUP_COPY.makeOwnItem, message);
+        void load();
+      }
+    } finally {
+      setUngroupBusy(false);
+    }
+  }
+
+  function onMakeOwnItem() {
+    if (!item || !user?.id) return;
+    if (offline) {
+      Alert.alert(UNGROUP_COPY.makeOwnItem, UNGROUP_COPY.offline);
+      return;
+    }
+    const target = item;
+    const actorUserId = user.id;
+    Alert.alert(UNGROUP_COPY.makeOwnItem, confirmOneMessage(target.barcode), [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: UNGROUP_COPY.makeOwnItem,
+        onPress: () =>
+          void sendUngroup(
+            singleUngroupBody({
+              itemId: target.id,
+              sku: target.sku,
+              organizationId: target.organization_id,
+              actorUserId,
+              key: randomRequestUuid(),
+            }),
+            target.barcode,
+          ),
+      },
+    ]);
+  }
 
   // The outbox count this screen last saw for the item, so a DROP (a queued
   // adjustment was sent, or parked as refused or not confirmed) re-reads the
@@ -1907,10 +1998,41 @@ export default function ItemDetail() {
                 across every placement of this SKU (see InventoryService.update,
                 Task 3) — none of them are editable in-app, so this just tells
                 the user what "Edit on web" (below) will affect. */}
-            <Body muted size={11} style={{ textAlign: 'center' }}>
-              Shared across all placements of this SKU — name, SKU, cost, price, and category update
-              everywhere this item lives when edited on web.
-            </Body>
+            {skuSiblings && skuSiblings > 0 ? (
+              // Ungroup (0399): other records this member can read share the
+              // SKU. Say how many, and offer the way to change this one alone.
+              <View style={{ gap: 8, alignItems: 'center' }}>
+                <Body muted size={11} style={{ textAlign: 'center' }}>
+                  {sharedSkuNoteCopy(skuSiblings, item.sku)}
+                </Body>
+                {canMakeOwnItem ? (
+                  item.is_bundle ? (
+                    <Body muted size={11} style={{ textAlign: 'center' }}>
+                      {GROUPING_ERROR_WORDS.kit}
+                    </Body>
+                  ) : item.group_id ? (
+                    <Body muted size={11} style={{ textAlign: 'center' }}>
+                      {GROUPING_ERROR_WORDS.family}
+                    </Body>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onPress={onMakeOwnItem}
+                      disabled={ungroupBusy}
+                      leading={ungroupBusy ? <ActivityIndicator size="small" color={c.ink} /> : undefined}
+                    >
+                      {UNGROUP_COPY.makeOwnItem}
+                    </Button>
+                  )
+                ) : null}
+              </View>
+            ) : (
+              <Body muted size={11} style={{ textAlign: 'center' }}>
+                Shared across all placements of this SKU — name, SKU, cost, price, and category update
+                everywhere this item lives when edited on web.
+              </Body>
+            )}
 
             {/* Location block — only render when at least one field is
                 populated. Mirrors what the web detail page shows under

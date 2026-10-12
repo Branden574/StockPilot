@@ -107,10 +107,16 @@ describe('InventoryService.update — duplicate SKU handling', () => {
     );
     const err = await svc.update('itm-1', { sku: 'COPIED-SKU' }).catch((e: unknown) => e);
     expect((err as { code: string }).code).toBe('conflict');
-    expect((err as Error).message).toMatch(/already uses that SKU/i);
-    // Post-0234: the copy must tell the user the same SKU is fine across
-    // charters (so they don't think SKUs must be globally unique).
-    expect((err as Error).message).toMatch(/charter/i);
+    // Re-pinned by Ungroup (2026-10-11; was: "already uses that SKU" and a
+    // sentence telling the user to change the SKU, the charter or the rack,
+    // which the owner did to force records to group): the words now name the
+    // SKU that collided and say the clash is in the same charter and rack (so
+    // nobody thinks SKUs must be unique across charters), and offer only a
+    // different SKU. inventory.sku-conflict-wording.test.ts pins the rest.
+    expect((err as Error).message).toMatch(/already used/i);
+    expect((err as Error).message).toContain('COPIED-SKU');
+    expect((err as Error).message).toMatch(/same charter and rack/i);
+    expect((err as Error).message).not.toMatch(/change (the sku, )?(the )?charter|different charter|rack\/location/i);
   });
 
   it('still surfaces a non-23505 DB error as internal_error', async () => {

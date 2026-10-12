@@ -109,6 +109,9 @@ const STOCK_RPCS: Record<string, string> = {
     'inventory_items.created_from_purchase_order_id (tags PO-born custom items, bumping updated_at; 0366)',
   draft_order_shortfall_pos:
     'save_purchase_order_draft per draft (0385); it passes no custom items, so the tag never runs, but the call reaches the write',
+  // Ungroup (0399): a fresh SKU on each split record, bumping updated_at and
+  // changing the SKU every list, search and label shows.
+  split_item_sku: 'inventory_items.sku and updated_by on the split records (0399, through _item_grouping_split_apply)',
 };
 
 /**

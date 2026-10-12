@@ -14,6 +14,7 @@ import {
   Tags as TagsIcon,
   Truck,
   Undo2,
+  Ungroup,
   X,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
@@ -58,6 +59,7 @@ import {
   ExportBuilderDialog,
   type ExportBuilderDialogProps,
 } from './export-builder/export-builder-dialog';
+import { UngroupDialog } from './ungroup-dialog';
 
 export interface BulkActionsCategory {
   id: string;
@@ -126,6 +128,10 @@ interface BulkActionsProps {
       Grade/Rack/Crate fields, no catalog layout, "Name" instead of "Title",
       covers off, and an `inventory-` filename slug. */
   itemType?: ExportBuilderDialogProps['itemType'];
+  /** Ungroup (0399): the selected records that share their SKU with another
+      loaded record (core sharedSkuItemIds), already narrowed to viewers who
+      can edit items. Empty or absent: no Ungroup button. */
+  ungroupItemIds?: string[];
 }
 
 type ActiveDialog =
@@ -171,8 +177,14 @@ export function BulkActions({
   onCycleCount,
   canSetPublicVisibility = false,
   itemType = 'all',
+  ungroupItemIds = [],
 }: BulkActionsProps) {
   const router = useRouter();
+  // Ungroup's dialog reviews the ids it was OPENED with: a refresh after the
+  // split can change the selection under it, and its result must stay on
+  // screen until it is closed. The selection is cleared on that close.
+  const [ungroupIds, setUngroupIds] = React.useState<string[] | null>(null);
+  const ungroupDone = React.useRef(false);
   const [dialog, setDialog] = React.useState<ActiveDialog>(null);
   const [busy, setBusy] = React.useState(false);
   const [categoryId, setCategoryId] = React.useState<string>('__none__');
@@ -546,6 +558,23 @@ export function BulkActions({
           <ClipboardCheck className="h-3 w-3" /> Cycle count
         </button>
 
+        {ungroupItemIds.length > 0 ? (
+          <>
+            <span className="text-[var(--ed-ink-4)]">·</span>
+            <button
+              type="button"
+              onClick={() => {
+                ungroupDone.current = false;
+                setUngroupIds([...ungroupItemIds]);
+              }}
+              title="Give the selected records that share a SKU a SKU of their own"
+              className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
+            >
+              <Ungroup className="h-3 w-3" /> Ungroup
+            </button>
+          </>
+        ) : null}
+
         <span className="text-[var(--ed-ink-4)]">·</span>
         <button
           type="button"
@@ -660,6 +689,25 @@ export function BulkActions({
           <X className="h-3 w-3" /> Clear
         </button>
       </div>
+
+      {ungroupIds ? (
+        <UngroupDialog
+          open
+          itemIds={ungroupIds}
+          onDone={() => {
+            ungroupDone.current = true;
+            router.refresh();
+          }}
+          onOpenChange={(v) => {
+            if (v) return;
+            setUngroupIds(null);
+            if (ungroupDone.current) {
+              ungroupDone.current = false;
+              onClear();
+            }
+          }}
+        />
+      ) : null}
 
       <ExportBuilderDialog
         open={exportOpen}

@@ -30,6 +30,7 @@ import {
   groupRollupLabel,
   placementPhysicalNames,
   resolvePlacement,
+  sharedSkuItemIds,
   type CountingUnit,
   type RackHoldingLike,
   type SizeRunGroup,
@@ -353,6 +354,10 @@ export interface InventoryTableProps {
   /** Viewer can place order requests AND the orders module is enabled. Enables
    *  the bulk 'Start an order' shortcut. Default false → hidden. */
   canStartOrder?: boolean;
+  /** Ungroup (0399): the viewer holds items:update, so the bulk bar may offer
+   *  Ungroup for selected records that share a SKU with another loaded
+   *  record. Default false: never offered. The server re-checks everything. */
+  canUngroup?: boolean;
   /**
    * When provided, renders a small camera button inside the search
    * input on the right edge. Click invokes the callback so the
@@ -658,6 +663,7 @@ export function InventoryTable({
   canCreate = true,
   canSetPublicVisibility = false,
   canStartOrder = false,
+  canUngroup = false,
   onScanRequest,
   page = 1,
   pageSize = 50,
@@ -1489,6 +1495,22 @@ export function InventoryTable({
     return null;
   }, [instantView, plannedFirstPage]);
 
+  // Ungroup (0399, design 5): the selected records that share their SKU with
+  // another LOADED record, from the rows on hand only (the full dataset in
+  // instant mode, else this page and any search hits) plus the full-set
+  // per-SKU counts when known. No per-row query and no stored preference, so
+  // the server-planned page 1 is untouched. The server decides on what the
+  // viewer can read; this only decides whether to offer the button.
+  const ungroupItemIds = React.useMemo<string[]>(() => {
+    if (!canUngroup || selectedItemIds.length === 0) return [];
+    const pool = [...(effectiveInstant?.items ?? items), ...(serverHits ?? [])];
+    return sharedSkuItemIds(
+      selectedItemIds,
+      pool.map((r) => ({ id: r.id, sku: r.sku ?? null })),
+      skuItemRowCountsFull,
+    );
+  }, [canUngroup, selectedItemIds, effectiveInstant, items, serverHits, skuItemRowCountsFull]);
+
   const skuGroups = React.useMemo<SkuGroup[] | null>(() => {
     const rows: SkuGroupInputRow[] = displayed.map((it) => ({
       id: it.rowKey ?? it.id,
@@ -1927,6 +1949,7 @@ export function InventoryTable({
             // counter is selectedIds.length, so both stay correct even when two
             // rack rows of the same item are checked.
             selectedIds={selectedItemIds}
+            ungroupItemIds={ungroupItemIds}
             canStartOrder={canStartOrder}
             onStartOrder={() => {
               // Resolve ONE warehouse for the selection (an order is per

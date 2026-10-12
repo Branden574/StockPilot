@@ -716,6 +716,18 @@ PGTAP_TESTS=(
   # defence in depth. The lock footprint is
   # scripts/db-concurrency/0398_migration_lock_footprint.sh.
   supabase/tests/0398_returns_contract.test.sql
+  # Ungroup (0399, slice G1): split_item_sku gives a record that shares its
+  # SKU a fresh SKU of its own. SECURITY DEFINER with EXECUTE to
+  # authenticated only (anon, service_role and the private steps none); the
+  # caller's items:update and write scope are checked before any write and
+  # again under the row lock; visible siblings are decided by
+  # caller_can_read_item, so a record the caller cannot read (another
+  # charter, another category) never changes the answer and an unreadable id
+  # answers item_not_found like an unknown one; item_grouping_requests has
+  # RLS on and no API privilege. The two-session proofs (busy, double tap, a
+  # scope move between the checks and the lock) are
+  # scripts/db-concurrency/0399_split_sku_races.sh.
+  supabase/tests/0399_ungroup_shared_sku.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -800,6 +812,11 @@ WEB_TESTS=(
   src/server/services/books-import.ssrf.test.ts
 
   # Authorization gates on server actions and routes.
+  # Ungroup (0399): the phone's bearer route authenticates, then rate-limits,
+  # and a 403 keeps its MFA reason; the service checks items:update before any
+  # read or call and refuses another organization or actor.
+  src/app/api/v1/items/ungroup/route.test.ts
+  src/server/services/item-grouping.test.ts
   src/app/api/orders/[id]/signature/route.test.ts
   src/server/actions/po-imports.gates.test.ts
   src/server/actions/purchase-orders.gates.test.ts
@@ -868,6 +885,12 @@ WEB_TESTS=(
   src/server/actions/rentals.test.ts
   src/server/services/rentals.hardening.test.ts
   src/app/api/cron/rental-overdue/route.test.ts
+  # Restore points (Ungroup PR stage, SEC-T2): create, restore and the
+  # SKU-change check answer an internal failure with fixed words and no
+  # details, never the raw PostgREST or network text (logged on the server);
+  # every other refusal keeps its words and its reason. The file carries the
+  # "Security invariant" marker.
+  src/server/actions/restore-points.test.ts
 
   # Warehouse scoping (defence in depth behind the RLS policies).
   src/lib/warehouse-scope.test.ts
@@ -1156,13 +1179,13 @@ WEB_TESTS=(
   src/server/actions/portal.test.ts
   # RX-3 fix round 1 (completeness critic L3): the redaction the requester
   # sees (tracking in their words, never a staff field), the portal's sheet
-  # and the token page, the public submit's no-store and stripping, and the
-  # web order page showing a requester each own request once, never the
-  # staff card beside it.
+  # and the token page, the public submit's no-store and stripping (its suite,
+  # src/app/api/v1/public/returns/route.test.ts, is listed once, under RX-1
+  # above), and the web order page showing a requester each own request
+  # once, never the staff card beside it.
   src/components/returns/requester-tracking.test.tsx
   src/components/portal/portal-shop.test.tsx
   'src/app/returns/request/[token]/page.test.tsx'
-  src/app/api/v1/public/returns/route.test.ts
   'src/app/(dashboard)/dashboard/orders/[id]/page.returns.test.tsx'
 )
 
@@ -1337,6 +1360,27 @@ if [ ${#MISSING[@]} -gt 0 ]; then
   exit 1
 fi
 pass "$(( ${#PGTAP_TESTS[@]} + ${#WEB_TESTS[@]} + ${#MOBILE_TESTS[@]} + ${#CORE_TESTS[@]} )) manifest entries all present"
+
+# Each entry once (Ungroup PR stage, evidence review EV-7). vitest runs a file
+# named twice once, so a duplicate adds no coverage; it only makes this gate's
+# own count wrong (the web section said 165 files and ran 164, because the
+# public returns route test was listed under RX-1 and again under RX-3).
+dupes_in() { printf '%s\n' "$@" | sort | uniq -d; }
+DUPES="$(
+  dupes_in "${PGTAP_TESTS[@]}"
+  dupes_in "${WEB_TESTS[@]}"
+  dupes_in "${MOBILE_TESTS[@]}"
+  dupes_in "${CORE_TESTS[@]}"
+)"
+if [ -n "$DUPES" ]; then
+  fail "manifest entr(y/ies) listed more than once:"
+  printf '%s\n' "$DUPES" | while IFS= read -r f; do say "       $f"; done
+  say ""
+  say "Keep one entry, under the section that matches the property it pins, and"
+  say "name the other sections in its comment instead."
+  exit 1
+fi
+pass "every manifest entry is listed once"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # PRE-CHECK 2 — the apps/web manifest must also be COMPLETE.

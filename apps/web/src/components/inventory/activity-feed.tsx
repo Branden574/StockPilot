@@ -10,6 +10,7 @@ import {
   Plus,
   RefreshCcw,
   Trash2,
+  Ungroup,
   type LucideIcon,
 } from 'lucide-react';
 import Link from 'next/link';
@@ -80,6 +81,10 @@ function specFor(e: ActivityEvent): VisualSpec {
       return { Icon: Trash2, label: 'Item deleted', tone: 'neg' };
     case 'item.tracking_type.changed':
       return { Icon: RefreshCcw, label: 'Tracking changed', tone: 'neutral' };
+    // Ungroup (0399): this record got a SKU of its own (split_item_sku writes
+    // it with before/after SKU; the diff below shows both).
+    case 'inventory.item.ungrouped':
+      return { Icon: Ungroup, label: 'Made its own item', tone: 'neutral' };
     default:
       // Ported from the (now-removed) item-detail AuditTimeline: every
       // audit event type gets the same "Subject · Action" formatting

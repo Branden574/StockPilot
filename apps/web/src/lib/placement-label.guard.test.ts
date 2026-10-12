@@ -684,6 +684,12 @@ const DELEGATES_TO_RESOLVER = [
   'apps/web/src/components/inventory/item-detail.tsx',
   'apps/web/src/lib/pdf/count-sheet-location.ts',
   'apps/web/src/lib/pdf/slip-location.ts',
+  // Ungroup's review dialog (0399, fix round 1 P2): one line per record naming
+  // where it is, so the person can tell records of one SKU apart and choose
+  // which keeps it. It used bin_location alone and so told a book on rack 37-B
+  // it had "No rack"; it now reads the rack and crate holdings and calls the
+  // resolver like the lists do.
+  'apps/web/src/server/services/item-grouping.ts',
 ] as const;
 
 /** THE RULE itself, and the readers it is built on. */

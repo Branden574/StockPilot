@@ -7,7 +7,9 @@ import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory
 import { ServiceError, withContext } from '@/server/services/context';
 import {
   createSnapshot,
+  restorePointSkuChanges,
   restoreSnapshot,
+  type RestorePointSkuChanges,
   type RestoreResult,
 } from '@/server/services/restore-points';
 
@@ -15,6 +17,27 @@ import { err, ok, type ActionResult } from '@stockpilot/core';
 
 const createSchema = z.object({ label: z.string().trim().max(120).optional() });
 const restoreSchema = z.object({ id: z.string().uuid(), confirm: z.string().max(40) });
+const pointSchema = z.object({ id: z.string().uuid() });
+
+/**
+ * A refusal as the browser gets it (Ungroup PR stage, security review SEC-T2).
+ * An internal error's text is database or network detail, so it stays in the
+ * server log and the browser gets the fixed words, with no details; every
+ * other refusal keeps the words the service wrote for people, and its reason
+ * (the MFA step-up, the audit log the SKU-change check cannot read), which the
+ * screens act on.
+ */
+function refusal(e: unknown, internalWords: string): ActionResult<never> {
+  if (e instanceof ServiceError && e.code !== 'internal_error') {
+    const reason =
+      e.details && typeof e.details === 'object'
+        ? (e.details as { reason?: unknown }).reason
+        : undefined;
+    return err(e.code, e.message, typeof reason === 'string' ? { reason } : undefined);
+  }
+  console.error(e);
+  return err('internal_error', internalWords);
+}
 
 /**
  * Create a manual restore point (snapshot of items + stock). Gating
@@ -32,8 +55,7 @@ export async function createRestorePointAction(
     revalidatePath('/dashboard/settings/restore-points');
     return ok(res);
   } catch (e) {
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return refusal(e, 'Could not create the restore point. Please try again.');
   }
 }
 
@@ -55,13 +77,27 @@ export async function restoreFromPointAction(
     await revalidateInventoryListForCurrentOrg();
     return ok(res);
   } catch (e) {
-    if (e instanceof ServiceError) {
-      const reason =
-        e.details && typeof e.details === 'object'
-          ? (e.details as { reason?: string }).reason
-          : undefined;
-      return err(e.code, e.message, reason ? { reason } : undefined);
-    }
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return refusal(e, 'Could not restore this point. Please try again.');
+  }
+}
+
+/**
+ * Ungroup D1 (b): which records changed SKU after a restore point was taken,
+ * read when its Restore row opens so the warning shows before the typed
+ * confirm. A version 2 point (record ids) answers with no changes. Same gate
+ * as the restore (owner/admin + Business), through the caller's RLS; a caller
+ * who cannot view the audit log is refused with reason audit_log_hidden, which
+ * the row says plainly (PR stage, DATA-1).
+ */
+export async function restorePointSkuChangesAction(
+  input: z.infer<typeof pointSchema>,
+): Promise<ActionResult<RestorePointSkuChanges>> {
+  const parsed = pointSchema.safeParse(input);
+  if (!parsed.success) return err('validation_error', 'Invalid input');
+  try {
+    const ctx = await withContext();
+    return ok(await restorePointSkuChanges(ctx, parsed.data.id));
+  } catch (e) {
+    return refusal(e, 'Could not check for SKU changes. Please try again.');
   }
 }
