@@ -21,6 +21,7 @@ import {
   EXCEPTION_EVIDENCE_MAX_PHOTOS,
   EXCEPTION_EVIDENCE_NOTE_MAX,
   EXCEPTION_RULES,
+  exchangeRequesterSentence,
   exchangeReviewProblem,
   FULLY_GRANTABLE_PERMISSIONS,
   hasPermission,
@@ -42,6 +43,7 @@ import {
   PUT_AWAY_NEEDS_TRANSFER_COPY,
   PUT_AWAY_NEEDS_VIEW_ITEMS_COPY,
   releaseRegistrySchema,
+  REPLACEMENT_ACTIONS,
   RETURN_ACTION_LABELS,
   returnActionLabel,
   returnListFilter,
@@ -631,7 +633,11 @@ describe('F1-5 (escalate an exception to maintenance) is published', () => {
     // Re-pinned by docs/whats-new-returns-requester (2026-10-12; was:
     // returns-exchange-2026-10): returns RX-3's release is published after
     // it, and this reader (an owner with every module) is told it.
-    expect(list.latestUnread?.id).toBe('returns-requester-exchange-2026-10');
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was:
+    // returns-requester-exchange-2026-10): returns RX-4's release is
+    // published after it, and this reader (an owner with every module) is
+    // told it.
+    expect(list.latestUnread?.id).toBe('returns-close-rest-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // F1-5 comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -825,7 +831,11 @@ describe('F2-1 (order readiness) is published', () => {
     // Re-pinned by docs/whats-new-returns-requester (2026-10-12; was:
     // returns-exchange-2026-10): returns RX-3's release is published after
     // it, and this reader (an owner with every module) is told it.
-    expect(list.latestUnread?.id).toBe('returns-requester-exchange-2026-10');
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was:
+    // returns-requester-exchange-2026-10): returns RX-4's release is
+    // published after it, and this reader (an owner with every module) is
+    // told it.
+    expect(list.latestUnread?.id).toBe('returns-close-rest-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // F2-1 comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -1104,7 +1114,11 @@ describe('F2-2 (held, and caught before it leaves) is published', () => {
     // Re-pinned by docs/whats-new-returns-requester (2026-10-12; was:
     // returns-exchange-2026-10): returns RX-3's release is published after
     // it, and this reader (an owner with every module) is told it.
-    expect(list.latestUnread?.id).toBe('returns-requester-exchange-2026-10');
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was:
+    // returns-requester-exchange-2026-10): returns RX-4's release is
+    // published after it, and this reader (an owner with every module) is
+    // told it.
+    expect(list.latestUnread?.id).toBe('returns-close-rest-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // F2-2 comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -1389,7 +1403,11 @@ describe('Book Order Totals is published', () => {
     // Re-pinned by docs/whats-new-returns-requester (2026-10-12; was:
     // returns-exchange-2026-10): returns RX-3's release is published after
     // it, and this reader (an owner with every module) is told it.
-    expect(list.latestUnread?.id).toBe('returns-requester-exchange-2026-10');
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was:
+    // returns-requester-exchange-2026-10): returns RX-4's release is
+    // published after it, and this reader (an owner with every module) is
+    // told it.
+    expect(list.latestUnread?.id).toBe('returns-close-rest-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -1515,7 +1533,11 @@ describe('the report scope release is published', () => {
     // Re-pinned by docs/whats-new-returns-requester (2026-10-12; was:
     // returns-exchange-2026-10): returns RX-3's release is published after
     // it, and this reader (an owner with every module) is told it.
-    expect(list.latestUnread?.id).toBe('returns-requester-exchange-2026-10');
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was:
+    // returns-requester-exchange-2026-10): returns RX-4's release is
+    // published after it, and this reader (an owner with every module) is
+    // told it.
+    expect(list.latestUnread?.id).toBe('returns-close-rest-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(RELEASES.slice(0, at).map((r) => [r.id, true]));
@@ -1597,7 +1619,11 @@ describe("F2-3 (fix what's holding an order up) is published", () => {
     // Re-pinned by docs/whats-new-returns-requester (2026-10-12; was:
     // returns-exchange-2026-10): returns RX-3's release is published after
     // it, and this reader (an owner with every module) is told it.
-    expect(list.latestUnread?.id).toBe('returns-requester-exchange-2026-10');
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was:
+    // returns-requester-exchange-2026-10): returns RX-4's release is
+    // published after it, and this reader (an owner with every module) is
+    // told it.
+    expect(list.latestUnread?.id).toBe('returns-close-rest-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one, the small fixes' and the
     // report scope fix's.
@@ -1736,7 +1762,11 @@ describe('the ended-session fix on exceptions is published', () => {
     // Re-pinned by docs/whats-new-returns-requester (2026-10-12; was:
     // returns-exchange-2026-10): returns RX-3's release is published after
     // it, and this reader (an owner with every module) is told it.
-    expect(list.latestUnread?.id).toBe('returns-requester-exchange-2026-10');
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was:
+    // returns-requester-exchange-2026-10): returns RX-4's release is
+    // published after it, and this reader (an owner with every module) is
+    // told it.
+    expect(list.latestUnread?.id).toBe('returns-close-rest-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one, the count confirm's and
     // F2-5's.
@@ -1875,7 +1905,11 @@ describe('count differences release 2 (confirm this count) is published', () => 
     // Re-pinned by docs/whats-new-returns-requester (2026-10-12; was:
     // returns-exchange-2026-10): returns RX-3's release is published after
     // it, and this reader (an owner with every module) is told it.
-    expect(list.latestUnread?.id).toBe('returns-requester-exchange-2026-10');
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was:
+    // returns-requester-exchange-2026-10): returns RX-4's release is
+    // published after it, and this reader (an owner with every module) is
+    // told it.
+    expect(list.latestUnread?.id).toBe('returns-close-rest-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer release is read, this one, F2-5's and F2-4's.
     const newer = Object.fromEntries(
@@ -2078,7 +2112,11 @@ describe('approval follows the permission is published', () => {
     // Re-pinned by docs/whats-new-returns-requester (2026-10-12; was:
     // returns-exchange-2026-10): returns RX-3's release is published after
     // it, and this reader (an owner with every module) is told it.
-    expect(list.latestUnread?.id).toBe('returns-requester-exchange-2026-10');
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was:
+    // returns-requester-exchange-2026-10): returns RX-4's release is
+    // published after it, and this reader (an owner with every module) is
+    // told it.
+    expect(list.latestUnread?.id).toBe('returns-close-rest-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one and slice B's two.
     const newer = Object.fromEntries(
@@ -2322,7 +2360,11 @@ describe('account deletion for people who placed orders is published', () => {
     // Re-pinned by docs/whats-new-returns-requester (2026-10-12; was:
     // returns-exchange-2026-10): returns RX-3's release is published after
     // it, and this reader (an owner with every module) is told it.
-    expect(list.latestUnread?.id).toBe('returns-requester-exchange-2026-10');
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was:
+    // returns-requester-exchange-2026-10): returns RX-4's release is
+    // published after it, and this reader (an owner with every module) is
+    // told it.
+    expect(list.latestUnread?.id).toBe('returns-close-rest-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one, the refusal's and the
     // session-ended fix's.
@@ -2496,7 +2538,11 @@ describe('a refused account deletion says why, and is published with the account
     // Re-pinned by docs/whats-new-returns-requester (2026-10-12; was:
     // returns-exchange-2026-10): returns RX-3's release is published after
     // it, and this reader (an owner with every module) is told it.
-    expect(list.latestUnread?.id).toBe('returns-requester-exchange-2026-10');
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was:
+    // returns-requester-exchange-2026-10): returns RX-4's release is
+    // published after it, and this reader (an owner with every module) is
+    // told it.
+    expect(list.latestUnread?.id).toBe('returns-close-rest-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one, the session-ended fix's and
     // the count confirm's.
@@ -2653,7 +2699,11 @@ describe('F2-5 (draft a PO for what an order is short) is published', () => {
     // Re-pinned by docs/whats-new-returns-requester (2026-10-12; was:
     // returns-exchange-2026-10): returns RX-3's release is published after
     // it, and this reader (an owner with every module) is told it.
-    expect(list.latestUnread?.id).toBe('returns-requester-exchange-2026-10');
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was:
+    // returns-requester-exchange-2026-10): returns RX-4's release is
+    // published after it, and this reader (an owner with every module) is
+    // told it.
+    expect(list.latestUnread?.id).toBe('returns-close-rest-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer release is read, this one, F2-4's and Book Order Totals
     // by charter's.
@@ -2833,7 +2883,11 @@ describe("F2-4 (change an order's needed-by date) is published", () => {
     // Re-pinned by docs/whats-new-returns-requester (2026-10-12; was:
     // returns-exchange-2026-10): returns RX-3's release is published after
     // it, and this reader (an owner with every module) is told it.
-    expect(list.latestUnread?.id).toBe('returns-requester-exchange-2026-10');
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was:
+    // returns-requester-exchange-2026-10): returns RX-4's release is
+    // published after it, and this reader (an owner with every module) is
+    // told it.
+    expect(list.latestUnread?.id).toBe('returns-close-rest-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer release is read, this one, Book Order Totals by
     // charter's and the count difference words'.
@@ -2969,7 +3023,11 @@ describe('the small-fixes release is published', () => {
     // Re-pinned by docs/whats-new-returns-requester (2026-10-12; was:
     // returns-exchange-2026-10): returns RX-3's release is published after
     // it, and this reader (an owner with every module) is told it.
-    expect(list.latestUnread?.id).toBe('returns-requester-exchange-2026-10');
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was:
+    // returns-requester-exchange-2026-10): returns RX-4's release is
+    // published after it, and this reader (an owner with every module) is
+    // told it.
+    expect(list.latestUnread?.id).toBe('returns-close-rest-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -3189,7 +3247,11 @@ describe('Book Order Totals by charter and dates is published', () => {
     // Re-pinned by docs/whats-new-returns-requester (2026-10-12; was:
     // returns-exchange-2026-10): returns RX-3's release is published after
     // it, and this reader (an owner with every module) is told it.
-    expect(list.latestUnread?.id).toBe('returns-requester-exchange-2026-10');
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was:
+    // returns-requester-exchange-2026-10): returns RX-4's release is
+    // published after it, and this reader (an owner with every module) is
+    // told it.
+    expect(list.latestUnread?.id).toBe('returns-close-rest-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -3336,7 +3398,11 @@ describe('count differences say what clears them (release 1) is published', () =
     // Re-pinned by docs/whats-new-returns-requester (2026-10-12; was:
     // returns-exchange-2026-10): returns RX-3's release is published after
     // it, and this reader (an owner with every module) is told it.
-    expect(list.latestUnread?.id).toBe('returns-requester-exchange-2026-10');
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was:
+    // returns-requester-exchange-2026-10): returns RX-4's release is
+    // published after it, and this reader (an owner with every module) is
+    // told it.
+    expect(list.latestUnread?.id).toBe('returns-close-rest-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -3483,7 +3549,11 @@ describe('the Sports required details release is published', () => {
     // Re-pinned by docs/whats-new-returns-requester (2026-10-12; was:
     // returns-exchange-2026-10): returns RX-3's release is published after
     // it, and this reader (an owner with every module) is told it.
-    expect(list.latestUnread?.id).toBe('returns-requester-exchange-2026-10');
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was:
+    // returns-requester-exchange-2026-10): returns RX-4's release is
+    // published after it, and this reader (an owner with every module) is
+    // told it.
+    expect(list.latestUnread?.id).toBe('returns-close-rest-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -3610,7 +3680,11 @@ describe('order secrets slice B (a digital signature on the order timeline) is p
     // Re-pinned by docs/whats-new-returns-requester (2026-10-12; was:
     // returns-exchange-2026-10): returns RX-3's release is published after
     // it, and this reader (an owner with every module) is told it.
-    expect(list.latestUnread?.id).toBe('returns-requester-exchange-2026-10');
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was:
+    // returns-requester-exchange-2026-10): returns RX-4's release is
+    // published after it, and this reader (an owner with every module) is
+    // told it.
+    expect(list.latestUnread?.id).toBe('returns-close-rest-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer release is read, this one, the signature image release
     // and the account deletion release.
@@ -3760,7 +3834,11 @@ describe('the signature image in the mobile app is for approvers and the driver,
     // Re-pinned by docs/whats-new-returns-requester (2026-10-12; was:
     // returns-exchange-2026-10): returns RX-3's release is published after
     // it, and this reader (an owner with every module) is told it.
-    expect(list.latestUnread?.id).toBe('returns-requester-exchange-2026-10');
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was:
+    // returns-requester-exchange-2026-10): returns RX-4's release is
+    // published after it, and this reader (an owner with every module) is
+    // told it.
+    expect(list.latestUnread?.id).toBe('returns-close-rest-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one and the two account deletion
     // releases.
@@ -3904,12 +3982,20 @@ describe('one order per submission (phone ordering PO-2) is published', () => {
     // reaches both readers (a requester through its busy and pickup entries),
     // so each is told it first, and this one once it is read too. Claim kept:
     // a requester is told the dates fixes release, then this one.
-    expect(list.latestUnread?.id).toBe('returns-requester-exchange-2026-10');
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was: RX-3's
+    // release first for that owner, this one once it and the three below it
+    // are read): returns RX-4's release is published later still and reaches
+    // that owner, so it is told first, and this one once it is read too. It
+    // reaches no requester without Returns on, so the requester's lines are
+    // unchanged. Claim kept: a requester is told the dates fixes release,
+    // then this one.
+    expect(list.latestUnread?.id).toBe('returns-close-rest-2026-10');
     expect(
       buildReleaseList(
         RELEASES,
         everyone,
         [
+          readNow('returns-close-rest-2026-10'),
           readNow('returns-requester-exchange-2026-10'),
           readNow('returns-exchange-2026-10'),
           readNow('public-link-sent-request-2026-10'),
@@ -3919,6 +4005,7 @@ describe('one order per submission (phone ordering PO-2) is published', () => {
       ).latestUnread?.id,
     ).toBe(ID);
     const requester: ReleaseViewer = { role: 'viewer', permissions: ['orders:request'], enabledModules: ['orders'] };
+    expect(visibleReleases(RELEASES, requester).map((r) => r.id)).not.toContain('returns-close-rest-2026-10');
     expect(buildReleaseList(RELEASES, requester, [], null).latestUnread?.id).toBe(
       'returns-requester-exchange-2026-10',
     );
@@ -3942,7 +4029,15 @@ describe('one order per submission (phone ordering PO-2) is published', () => {
     // Re-pinned by docs/whats-new-returns-requester (2026-10-12; was: with
     // RX-2's release read): returns RX-3's release is newer still, so the
     // list is read with both read; the same three, this one third.
-    const rx2Read = { 'returns-requester-exchange-2026-10': true, 'returns-exchange-2026-10': true };
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was: with
+    // RX-2's and RX-3's releases read): returns RX-4's release is newer
+    // still, so the list is read with the three read; the same three, this
+    // one third.
+    const rx2Read = {
+      'returns-close-rest-2026-10': true,
+      'returns-requester-exchange-2026-10': true,
+      'returns-exchange-2026-10': true,
+    };
     expect(legacyAnnouncementsFor(RELEASES, everyone, rx2Read).map((a) => a.id)).toEqual([
       'public-link-sent-request-2026-10',
       'dates-fixes-2026-10',
@@ -4042,7 +4137,11 @@ describe('one order per submission (phone ordering PO-2) is published', () => {
     // [1] published): RX-4's draft is the only one, at the top, and RX-3's and
     // RX-2's releases below it are published. Claim kept: these three are
     // published.
-    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual(['returns-close-rest-2026-10']);
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was: RX-4's
+    // draft the only one): it is published, in the same place, so no draft
+    // is left. Claim kept: these three are published.
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([]);
+    expect(RELEASES[0]?.status).toBe('published');
     expect(RELEASES[1]?.status).toBe('published');
     expect(RELEASES[2]?.status).toBe('published');
     for (const id of ['public-link-sent-request-2026-10', 'dates-fixes-2026-10', ID]) {
@@ -4275,7 +4374,11 @@ describe('placing an order in the mobile app (phone ordering PO-4) is published'
     // Re-pinned by docs/whats-new-returns-requester (2026-10-12; was:
     // returns-exchange-2026-10): returns RX-3's release is published after
     // it, and this reader (an owner with every module) is told it.
-    expect(list.latestUnread?.id).toBe('returns-requester-exchange-2026-10');
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was:
+    // returns-requester-exchange-2026-10): returns RX-4's release is
+    // published after it, and this reader (an owner with every module) is
+    // told it.
+    expect(list.latestUnread?.id).toBe('returns-close-rest-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer release is read, this one, returns RX-1's and account
     // deletion for every member.
@@ -4314,7 +4417,10 @@ describe('placing an order in the mobile app (phone ordering PO-4) is published'
   // Re-pinned by returns RX-4 (2026-10-12; was: "the releases above it, all
   // published, are dated later"): RX-4's draft, dated later still, sits at
   // the top above RX-3's release.
-  it('is dated after every release below it (pinned by id), returns RX-1\'s a minute below it; the releases above it, all published but the returns RX-4 draft at the top, are dated later', () => {
+  // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was: "all
+  // published but the returns RX-4 draft at the top"): RX-4's release is
+  // published, in the same place, so all of them are published again.
+  it('is dated after every release below it (pinned by id), returns RX-1\'s a minute below it; the releases above it, all published, are dated later', () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBeGreaterThanOrEqual(0);
     // Re-pinned by the weekly digest fixes (2026-10-05): their draft sits at
@@ -4369,8 +4475,10 @@ describe('placing an order in the mobile app (phone ordering PO-4) is published'
     // then published x8): RX-3's release is published, so all nine are.
     // Re-pinned by returns RX-4 (2026-10-12; was: published x9): RX-4's
     // draft at the top, then the same nine, published.
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was: draft,
+    // then published x9): RX-4's release is published, so all ten are.
     expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual([
-      'draft',
+      'published',
       'published',
       'published',
       'published',
@@ -4558,7 +4666,11 @@ describe('account deletion for every member (slice A3) is published', () => {
     // Re-pinned by docs/whats-new-returns-requester (2026-10-12; was:
     // returns-exchange-2026-10): returns RX-3's release is published after
     // it, and this reader (an owner with every module) is told it.
-    expect(list.latestUnread?.id).toBe('returns-requester-exchange-2026-10');
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was:
+    // returns-requester-exchange-2026-10): returns RX-4's release is
+    // published after it, and this reader (an owner with every module) is
+    // told it.
+    expect(list.latestUnread?.id).toBe('returns-close-rest-2026-10');
     const member: ReleaseViewer = { role: 'viewer', permissions: [], enabledModules: [] };
     // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
     // small-fixes-2026-10): its digest and warehouse entries reach every member,
@@ -4809,7 +4921,11 @@ describe('returns remember the original rack (returns RX-1) is published', () =>
     // Re-pinned by docs/whats-new-returns-requester (2026-10-12; was:
     // returns-exchange-2026-10): returns RX-3's release is published after
     // it, and this reader (an owner with every module) is told it.
-    expect(list.latestUnread?.id).toBe('returns-requester-exchange-2026-10');
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was:
+    // returns-requester-exchange-2026-10): returns RX-4's release is
+    // published after it, and this reader (an owner with every module) is
+    // told it.
+    expect(list.latestUnread?.id).toBe('returns-close-rest-2026-10');
     const returnsOnly: ReleaseViewer = { role: 'staff', permissions: ['returns:read'], enabledModules: ['returns'] };
     // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
     // small-fixes-2026-10): its digest and warehouse entries reach every member,
@@ -4841,10 +4957,27 @@ describe('returns remember the original rack (returns RX-1) is published', () =>
     // open Returns, is this reader's notice now; RX-2's comes once it is read,
     // the dates fixes release once both are, and each later step reads both.
     // Claim kept: the same order after it.
-    expect(buildReleaseList(RELEASES, returnsOnly, [], null).latestUnread?.id).toBe(
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was:
+    // returns-requester-exchange-2026-10, then RX-2's once it is read):
+    // returns RX-4's release, published later still and told to whoever can
+    // open Returns (Close the rest), is this reader's notice now; RX-3's comes
+    // once it is read, and each later step reads it too. Claim kept: the same
+    // order after it.
+    expect(buildReleaseList(RELEASES, returnsOnly, [], null).latestUnread?.id).toBe('returns-close-rest-2026-10');
+    const rx4Read = [
+      {
+        release_id: 'returns-close-rest-2026-10',
+        revision: 1,
+        dismissed_at: null,
+        opened_at: '2026-10-12T06:00:00Z',
+        read_at: '2026-10-12T06:00:00Z',
+      },
+    ];
+    expect(buildReleaseList(RELEASES, returnsOnly, rx4Read, null).latestUnread?.id).toBe(
       'returns-requester-exchange-2026-10',
     );
     const rx3Read = [
+      ...rx4Read,
       {
         release_id: 'returns-requester-exchange-2026-10',
         revision: 1,
@@ -5223,7 +5356,11 @@ describe('the small fixes release (slice 1) is published', () => {
     // Re-pinned by docs/whats-new-returns-requester (2026-10-12; was:
     // returns-exchange-2026-10): returns RX-3's release is published after
     // it, and this reader (an owner with every module) is told it.
-    expect(list.latestUnread?.id).toBe('returns-requester-exchange-2026-10');
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was:
+    // returns-requester-exchange-2026-10): returns RX-4's release is
+    // published after it, and this reader (an owner with every module) is
+    // told it.
+    expect(list.latestUnread?.id).toBe('returns-close-rest-2026-10');
     const member: ReleaseViewer = { role: 'viewer', permissions: [], enabledModules: [] };
     // Checked again at the publishing of the slice 2 release (2026-10-06):
     // unchanged, since none of that release's entries reaches a member with
@@ -5283,13 +5420,18 @@ describe('the small fixes release (slice 1) is published', () => {
     // the public link and the dates fixes releases, and this one once those
     // and the releases between were seen): returns RX-3's release, published
     // later still, is first, and this one comes back once it is seen too.
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was: RX-3's,
+    // RX-2's and the public link releases, and this one once those and the
+    // releases between were seen): returns RX-4's release, published later
+    // still, is first, and this one comes back once it is seen too.
     expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toEqual([
+      'returns-close-rest-2026-10',
       'returns-requester-exchange-2026-10',
       'returns-exchange-2026-10',
-      'public-link-sent-request-2026-10',
     ]);
     expect(
       legacyAnnouncementsFor(RELEASES, everyone, {
+        'returns-close-rest-2026-10': true,
         'returns-requester-exchange-2026-10': true,
         'returns-exchange-2026-10': true,
         'public-link-sent-request-2026-10': true,
@@ -5322,7 +5464,10 @@ describe('the small fixes release (slice 1) is published', () => {
   // it" with no draft above it): RX-4's draft, dated later still, sits at the
   // top above RX-3's release. Claim kept: directly below the Items
   // first-paint release, every release above it dated later.
-  it("sits directly below the Items first-paint release, published later, with the weekly digest, slice 2, PO-2, dates fixes, public link and returns RX-2 and RX-3 releases above that one, published later still, and the returns RX-4 draft at the top; phone ordering's below it", () => {
+  // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was: "...
+  // and the returns RX-4 draft at the top"): RX-4's release is published, in
+  // the same place, so no draft is left above it.
+  it("sits directly below the Items first-paint release, published later, with the weekly digest, slice 2, PO-2, dates fixes, public link and returns RX-2, RX-3 and RX-4 releases above that one, published later still; phone ordering's below it", () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBeGreaterThanOrEqual(0);
     // Drafts go above the newest published release, newest first: the Items
@@ -5373,8 +5518,10 @@ describe('the small fixes release (slice 1) is published', () => {
     // then published x7): RX-3's release is published, so all eight are.
     // Re-pinned by returns RX-4 (2026-10-12; was: published x8): RX-4's
     // draft at the top, then the same eight, published.
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was: draft,
+    // then published x8): RX-4's release is published, so all nine are.
     expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual([
-      'draft',
+      'published',
       'published',
       'published',
       'published',
@@ -5776,8 +5923,10 @@ describe('the weekly digest and fixes release', () => {
     // then published x5): RX-3's release is published, so all six are.
     // Re-pinned by returns RX-4 (2026-10-12; was: published x6): RX-4's
     // draft at the top, then the same six, published.
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was: draft,
+    // then published x6): RX-4's release is published, so all seven are.
     expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual([
-      'draft',
+      'published',
       'published',
       'published',
       'published',
@@ -5838,9 +5987,13 @@ describe('the weekly digest and fixes release', () => {
     // are read): returns RX-3's release, published later still, is that
     // owner's notice, and this one comes once it is read too. Claim kept: a
     // member is told the dates fixes release, then this one.
-    expect(buildReleaseList(RELEASES, everyone, [], null).latestUnread?.id).toBe(
-      'returns-requester-exchange-2026-10',
-    );
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was:
+    // returns-requester-exchange-2026-10, and this one once it and the five
+    // below it are read): returns RX-4's release, published later still, is
+    // that owner's notice, and this one comes once it is read too. It reaches
+    // no member without a permission, so the member's lines are unchanged.
+    // Claim kept: a member is told the dates fixes release, then this one.
+    expect(buildReleaseList(RELEASES, everyone, [], null).latestUnread?.id).toBe('returns-close-rest-2026-10');
     const slice2Read = [
       {
         release_id: 'order-partial-approval-held-2026-10',
@@ -5851,6 +6004,7 @@ describe('the weekly digest and fixes release', () => {
       },
     ];
     const newerRead = [
+      readNow('returns-close-rest-2026-10'),
       readNow('returns-requester-exchange-2026-10'),
       readNow('returns-exchange-2026-10'),
       readNow('public-link-sent-request-2026-10'),
@@ -6062,8 +6216,10 @@ describe('the Items first-paint release', () => {
     // then published x6): RX-3's release is published, so all seven are.
     // Re-pinned by returns RX-4 (2026-10-12; was: published x7): RX-4's
     // draft at the top, then the same seven, published.
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was: draft,
+    // then published x7): RX-4's release is published, so all eight are.
     expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual([
-      'draft',
+      'published',
       'published',
       'published',
       'published',
@@ -6236,18 +6392,27 @@ describe('a partly approved order says what is reserved (small fixes slice 2) is
     // read too. It reaches no member without a permission, so the member's
     // lines are unchanged. Claim kept: a requester is told the dates fixes
     // and PO-2 releases, then this one.
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was: RX-3's
+    // release the owner's notice, and this one once the newer ones are read):
+    // returns RX-4's release, published later still, is the owner's notice,
+    // and this one comes once it is read too. It reaches neither this
+    // requester (Returns is off for them) nor the member, so their lines are
+    // unchanged. Claim kept: a requester is told the dates fixes and PO-2
+    // releases, then this one.
     const newerRead = [
+      readNow('returns-close-rest-2026-10'),
       readNow('returns-requester-exchange-2026-10'),
       readNow('returns-exchange-2026-10'),
       readNow('public-link-sent-request-2026-10'),
       readNow('dates-fixes-2026-10'),
       readNow('order-submit-once-2026-10'),
     ];
-    expect(list.latestUnread?.id).toBe('returns-requester-exchange-2026-10');
+    expect(list.latestUnread?.id).toBe('returns-close-rest-2026-10');
     expect(buildReleaseList(RELEASES, everyone, newerRead, null).latestUnread?.id).toBe(ID);
     const requester: ReleaseViewer = { role: 'viewer', permissions: ['orders:request'], enabledModules: ['orders'] };
     expect(visibleReleases(RELEASES, requester).map((r) => r.id)).not.toContain('public-link-sent-request-2026-10');
     expect(visibleReleases(RELEASES, requester).map((r) => r.id)).not.toContain('returns-exchange-2026-10');
+    expect(visibleReleases(RELEASES, requester).map((r) => r.id)).not.toContain('returns-close-rest-2026-10');
     expect(buildReleaseList(RELEASES, requester, [], null).latestUnread?.id).toBe(
       'returns-requester-exchange-2026-10',
     );
@@ -6277,12 +6442,17 @@ describe('a partly approved order says what is reserved (small fixes slice 2) is
     // the public link and the dates fixes releases, and this one first once
     // the four are seen): returns RX-3's release, published later still,
     // leads, and this one leads once the five are seen.
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was: RX-3's,
+    // RX-2's and the public link releases, and this one first once the five
+    // are seen): returns RX-4's release, published later still, leads, and
+    // this one leads once the six are seen.
     expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toEqual([
+      'returns-close-rest-2026-10',
       'returns-requester-exchange-2026-10',
       'returns-exchange-2026-10',
-      'public-link-sent-request-2026-10',
     ]);
     const newerSeen = {
+      'returns-close-rest-2026-10': true,
       'returns-requester-exchange-2026-10': true,
       'returns-exchange-2026-10': true,
       'public-link-sent-request-2026-10': true,
@@ -6358,9 +6528,13 @@ describe('a partly approved order says what is reserved (small fixes slice 2) is
     // Re-pinned by returns RX-4 (2026-10-12; was: slice(0, at) all published
     // and no draft): RX-4's draft is the only draft, at the top. Claim kept:
     // every release between it and this one is published, RX-3's the newest.
-    expect(RELEASES.slice(1, at).every((r) => r.status === 'published')).toBe(true);
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe('returns-requester-exchange-2026-10');
-    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual(['returns-close-rest-2026-10']);
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was:
+    // slice(1, at) published, RX-3's the newest, RX-4's draft the only
+    // draft): RX-4's release is published, in the same place, the newest, and
+    // no draft is left. Claim kept: every release above this one is published.
+    expect(RELEASES.slice(0, at).every((r) => r.status === 'published')).toBe(true);
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe('returns-close-rest-2026-10');
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([]);
     expect(RELEASES[at + 1]?.id).toBe('weekly-digest-and-fixes-2026-10');
     expect(RELEASES.slice(at + 1).every((r) => r.status === 'published' || r.status === 'withdrawn')).toBe(true);
     for (const r of RELEASES.slice(0, at)) {
@@ -6699,6 +6873,14 @@ describe('exchanges on returns (returns RX-2) is published', () => {
     // published later, reaches each of them, so it is their notice, and this
     // one is once it is read. Claim kept: this one is the notice for whoever
     // it reaches, after RX-3's.
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was: RX-3's
+    // release the notice for all three readers, this one once it is read):
+    // returns RX-4's release, published later still, reaches the owner and
+    // whoever can open Returns, so it is their notice, RX-3's once it is
+    // read, and this one once both are. It reaches no order approver without
+    // a returns permission or Place orders, so the approver's lines are
+    // unchanged. Claim kept: this one is the notice for whoever it reaches,
+    // after the newer returns releases.
     const rx3Read = [
       {
         release_id: 'returns-requester-exchange-2026-10',
@@ -6708,14 +6890,18 @@ describe('exchanges on returns (returns RX-2) is published', () => {
         read_at: '2026-10-12T03:00:00Z',
       },
     ];
-    expect(list.latestUnread?.id).toBe('returns-requester-exchange-2026-10');
-    expect(buildReleaseList(RELEASES, everyone, rx3Read, null).latestUnread?.id).toBe(ID);
+    const rx4Read = [{ ...rx3Read[0]!, release_id: 'returns-close-rest-2026-10', opened_at: '2026-10-12T06:00:00Z', read_at: '2026-10-12T06:00:00Z' }];
+    expect(list.latestUnread?.id).toBe('returns-close-rest-2026-10');
+    expect(buildReleaseList(RELEASES, everyone, rx4Read, null).latestUnread?.id).toBe('returns-requester-exchange-2026-10');
+    expect(buildReleaseList(RELEASES, everyone, [...rx4Read, ...rx3Read], null).latestUnread?.id).toBe(ID);
     const returnsOnly: ReleaseViewer = { role: 'staff', permissions: ['returns:read'], enabledModules: ['returns'] };
-    expect(buildReleaseList(RELEASES, returnsOnly, [], null).latestUnread?.id).toBe(
+    expect(buildReleaseList(RELEASES, returnsOnly, [], null).latestUnread?.id).toBe('returns-close-rest-2026-10');
+    expect(buildReleaseList(RELEASES, returnsOnly, rx4Read, null).latestUnread?.id).toBe(
       'returns-requester-exchange-2026-10',
     );
-    expect(buildReleaseList(RELEASES, returnsOnly, rx3Read, null).latestUnread?.id).toBe(ID);
+    expect(buildReleaseList(RELEASES, returnsOnly, [...rx4Read, ...rx3Read], null).latestUnread?.id).toBe(ID);
     const approver: ReleaseViewer = { role: 'staff', permissions: ['orders:approve'], enabledModules: ['returns', 'orders'] };
+    expect(visibleReleases(RELEASES, approver).map((r) => r.id)).not.toContain('returns-close-rest-2026-10');
     expect(buildReleaseList(RELEASES, approver, [], null).latestUnread?.id).toBe('returns-requester-exchange-2026-10');
     expect(buildReleaseList(RELEASES, approver, rx3Read, null).latestUnread?.id).toBe(ID);
     expect(visibleReleases(RELEASES, approver).find((r) => r.id === ID)!.entries.map((e) => e.id)).toEqual([
@@ -6731,9 +6917,15 @@ describe('exchanges on returns (returns RX-2) is published', () => {
     // Re-pinned by docs/whats-new-returns-requester (2026-10-12; was: first
     // with nothing seen): returns RX-3's release is newer, so the list is
     // read with it seen. Claim kept: this one first, with or without the link.
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was: RX-3's
+    // release seen, for both readers): returns RX-4's release is newer
+    // still and reaches the owner, so the owner's list is read with both
+    // seen; it never reaches the approver. Claim kept: this one first, with or
+    // without the link.
     const rx3Seen = { 'returns-requester-exchange-2026-10': true };
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {})[0]?.id).toBe('returns-requester-exchange-2026-10');
-    expect(legacyAnnouncementsFor(RELEASES, everyone, rx3Seen)[0]).toEqual({
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {})[0]?.id).toBe('returns-close-rest-2026-10');
+    expect(legacyAnnouncementsFor(RELEASES, everyone, rx3Seen)[0]?.id).toBe('returns-close-rest-2026-10');
+    expect(legacyAnnouncementsFor(RELEASES, everyone, { ...rx3Seen, 'returns-close-rest-2026-10': true })[0]).toEqual({
       id: ID,
       date: '2026-10-11',
       title: release().title,
@@ -6790,14 +6982,20 @@ describe('exchanges on returns (returns RX-2) is published', () => {
   // top above RX-3's release and is the only draft. Claim kept: directly
   // below RX-3's release and above the public order link release, dated
   // after every release but RX-3's and RX-4's draft.
-  it('sits directly below returns RX-3\'s release (published later) and above the public order link release, dated after every release but RX-3\'s and the returns RX-4 draft at the top, the only draft', () => {
+  // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was: "... and
+  // the returns RX-4 draft at the top, the only draft"): RX-4's release is
+  // published, in the same place, so it is the newest release and no draft
+  // is left. Claim kept: directly below RX-3's release and above the public
+  // order link release, dated after every release but RX-3's and RX-4's.
+  it('sits directly below returns RX-3\'s release, with returns RX-4\'s above that (both published later), and above the public order link release, dated after every release but those two, and no draft is left', () => {
     expect(RELEASES[0]?.id).toBe('returns-close-rest-2026-10');
-    expect(RELEASES[0]?.status).toBe('draft');
+    expect(RELEASES[0]?.status).toBe('published');
     expect(RELEASES[1]?.id).toBe('returns-requester-exchange-2026-10');
     expect(RELEASES[1]?.status).toBe('published');
     expect(RELEASES[2]?.id).toBe(ID);
-    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual(['returns-close-rest-2026-10']);
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe('returns-requester-exchange-2026-10');
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([]);
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe('returns-close-rest-2026-10');
+    expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
     expect(Date.parse(RELEASES[1]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
     expect(RELEASES[3]?.id).toBe('public-link-sent-request-2026-10');
     expect(RELEASES[3]?.status).toBe('published');
@@ -6991,23 +7189,24 @@ describe('exchanges on returns (returns RX-2) is published', () => {
 });
 
 /**
- * Returns RX-3 (no migration: the requester's own exchange, Busy. Try again.
- * on order actions, the size S label and the PR-stage polish): held as a
- * DRAFT until its web deploy was live, the OTA with the phone's requester
- * sheet was published and launched, and the Demo Co walk passed (returns
- * plan 10.1 and 11). Pinned by id.
+ * Returns RX-4 (migrations 0397 and 0398: Close the rest of a replacement
+ * handed over in part, and no sizes on a used-up line): held as a DRAFT until
+ * both migrations and its web deploy were live, the OTA with the phone's Close
+ * the rest sheet was published and launched, and the Demo Co walk passed
+ * (returns plan 10.1 and 11). Pinned by id.
  *
- * Re-pinned by docs/whats-new-returns-requester (RX-5, 2026-10-12; was:
- * "requesters ask for an exchange themselves (returns RX-3) is held as a
- * draft"): #346 merged (bd37d5a30) and its web build 3dbc11a7ebb5 went live,
- * OTA group baf22731 (iOS 01a12d9b) was published and had launched on iOS (1
- * launch, 0 failed, read 01:47Z), and the Demo Co walk passed with its audit
- * CONFIRMED, so the release is published. The requester's own screens (the
- * web order page's entry, the phone's sheet and card) were not walked in
- * production (the demo account manages returns, so they are hidden from it
- * by design); their evidence is RX-3's test stage, recorded in the release.
+ * Re-pinned by docs/whats-new-returns-close-rest (RX-5, 2026-10-12; was:
+ * "Close the rest (returns RX-4) is held as a draft"): 0397 and 0398 were
+ * pushed (03:37Z), #348 merged (7143ec0f6) and its web build e8fc3d8bc491
+ * went live, OTA group 292dd2ec (iOS 01a12e36) was published and had launched
+ * on iOS (1 launch, 0 failed, read 04:58Z), and the Demo Co walk passed (its
+ * audit found production matching the walk in every respect and disputed the
+ * report only), so the release is published. The used-up line was not walked
+ * in production (the demo account manages returns, so the requester's Return
+ * or exchange is hidden from it by design); its evidence is the merged code
+ * and RX-4's test stage (browser case U), recorded in the release.
  */
-describe('Close the rest (returns RX-4) is held as a draft', () => {
+describe('Close the rest (returns RX-4) is published', () => {
   const ID = 'returns-close-rest-2026-10';
   const release = () => RELEASES.find((r) => r.id === ID)!;
   const everyone: ReleaseViewer = {
@@ -7016,14 +7215,59 @@ describe('Close the rest (returns RX-4) is held as a draft', () => {
     enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
   };
 
-  it('is a draft, so no feed carries it, and preparing it changes nothing a client can observe', () => {
+  // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was: "is a
+  // draft, so no feed carries it, and preparing it changes nothing a client
+  // can observe": a draft, in no feed, no legacy list and no fingerprint).
+  it('is published after 0397 and 0398, the web deploy, the phone update and the Demo Co walk, so every feed it reaches carries it', () => {
     expect(release()).toBeDefined();
-    expect(release().status).toBe('draft');
+    expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
-    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
-    expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).not.toContain(ID);
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
-    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(ID);
+    const list = buildReleaseList(RELEASES, everyone, [], null);
+    expect(list.releases.map((r) => r.id)).toContain(ID);
+    // The newest release, so it is the notice for whoever it reaches: an
+    // owner with every module, someone who can only open Returns, and a
+    // member who places orders with Returns on.
+    expect(list.latestUnread?.id).toBe(ID);
+    const returnsOnly: ReleaseViewer = { role: 'staff', permissions: ['returns:read'], enabledModules: ['returns'] };
+    expect(buildReleaseList(RELEASES, returnsOnly, [], null).latestUnread?.id).toBe(ID);
+    const requester: ReleaseViewer = { role: 'viewer', permissions: ['orders:request'], enabledModules: ['returns', 'orders'] };
+    expect(buildReleaseList(RELEASES, requester, [], null).latestUnread?.id).toBe(ID);
+    // Nobody else: an order approver with neither a returns permission nor
+    // Place orders, a member with no permission, a requester without Returns.
+    const approver: ReleaseViewer = { role: 'staff', permissions: ['orders:approve'], enabledModules: ['returns', 'orders'] };
+    const member: ReleaseViewer = { role: 'viewer', permissions: [], enabledModules: ['returns', 'orders'] };
+    const noReturns: ReleaseViewer = { role: 'viewer', permissions: ['orders:request'], enabledModules: ['orders'] };
+    for (const viewer of [approver, member, noReturns]) {
+      expect(visibleReleases(RELEASES, viewer).map((r) => r.id)).not.toContain(ID);
+    }
+    // An old phone build lists it first, with the Returns link for whoever
+    // can open Returns, and with no link for a requester, whose entry links
+    // nothing.
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {})[0]).toEqual({
+      id: ID,
+      date: '2026-10-12',
+      title: release().title,
+      body: release().summary,
+      cta: { href: '/dashboard/returns', label: 'Open Returns' },
+    });
+    expect(legacyAnnouncementsFor(RELEASES, requester, {})[0]).toEqual({
+      id: ID,
+      date: '2026-10-12',
+      title: release().title,
+      body: release().summary,
+    });
+    // Publishing it changes what clients observe.
+    expect(registryFingerprint(RELEASES)).toContain(`${ID}@1:published`);
+    expect(registryFingerprint(RELEASES)).not.toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
+    expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(ID);
+    // A real time on a whole minute, after the walk and its audit (the walk
+    // ended 2026-10-12 04:45Z, the audit read production 04:51-04:53Z) and
+    // after EAS showed the phone update launching on iOS (read 04:58Z): never
+    // the draft's placeholder date (2026-10-16T17:10Z).
+    expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
+    expect(Date.parse(release().publishedAt)).toBeGreaterThan(Date.parse('2026-10-12T04:58:00Z'));
+    expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-10-13T00:00:00Z'));
   });
 
   // Drafts sit above the newest published release, newest first. Re-pinned
@@ -7032,12 +7276,17 @@ describe('Close the rest (returns RX-4) is held as a draft', () => {
   // 2026-10-12T02:07Z), so RX-4's is the only draft, at the top directly
   // above RX-3's release, the newest published one, and dated after every
   // release.
-  it("is the only draft, at the top directly above returns RX-3's release (the newest published), dated after every release", () => {
+  // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was: "is the
+  // only draft, at the top directly above returns RX-3's release (the newest
+  // published), dated after every release"): published in the same place, it
+  // is the newest release, and no draft is left. Claim kept: at the top,
+  // directly above returns RX-3's release, dated after every release.
+  it("is the newest release, at the top directly above returns RX-3's release, dated after every release, and no draft is left", () => {
     expect(RELEASES[0]?.id).toBe(ID);
     expect(RELEASES[1]?.id).toBe('returns-requester-exchange-2026-10');
     expect(RELEASES[1]?.status).toBe('published');
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe('returns-requester-exchange-2026-10');
-    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([ID]);
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([]);
     for (const r of RELEASES.filter((x) => x.id !== ID)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
@@ -7047,19 +7296,29 @@ describe('Close the rest (returns RX-4) is held as a draft', () => {
     const r = release();
     expect(r.audience).toBeUndefined();
     expect(r.entries.map((e) => e.id)).toEqual(['returns-close-replacement-rest', 'returns-exchange-sizes-used-up']);
-    const published: Release = { ...r, status: 'published' };
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was: a copy
+    // forced to published): the release itself is published now.
+    expect(r.status).toBe('published');
     const entriesFor = (permissions: ReleaseViewer['permissions'], modules: ModuleId[] = ['returns', 'orders']) =>
-      visibleReleases([published], { role: 'staff', permissions, enabledModules: modules })[0]?.entries.map((e) => e.id) ?? [];
+      visibleReleases([r], { role: 'staff', permissions, enabledModules: modules })[0]?.entries.map((e) => e.id) ?? [];
     // Whoever can open Returns meets Close the rest (it links there).
     expect(entriesFor(['returns:read'], ['returns'])).toEqual(['returns-close-replacement-rest']);
     expect(entriesFor(['returns:manage', 'orders:approve'])).toEqual(['returns-close-replacement-rest']);
     // A member who places orders, with Returns on, meets the sizes fix.
     expect(entriesFor(['orders:request'])).toEqual(['returns-exchange-sizes-used-up']);
-    // Without Returns, nothing.
+    // Without Returns, nothing; nor for an order approver alone.
     expect(entriesFor(['orders:request', 'returns:read'], ['orders'])).toEqual([]);
+    expect(entriesFor(['orders:approve'])).toEqual([]);
     const close = r.entries[0]!;
     expect(close.link).toEqual({ href: '/dashboard/returns', label: 'Open Returns' });
     expect(close.audience).toEqual({ anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] });
+    // The Returns page's own gate: the module, then returns:read or manage.
+    const page = readFileSync(resolve(DASHBOARD_APP_DIR, 'dashboard/returns/page.tsx'), 'utf8');
+    expect(page).toContain("const moduleAccess = await checkModuleAccess('returns');");
+    expect(page).toContain("if (!can(ctx, 'returns:read') && !can(ctx, 'returns:manage')) {");
+    const usedUp = r.entries[1]!;
+    expect(usedUp.link).toBeUndefined();
+    expect(usedUp.audience).toEqual({ anyPermission: ['orders:request'], modules: ['returns'] });
   });
 
   it('says what the code does: order approval, nothing moved, the reason kept from the requester, the approved return unchanged', () => {
@@ -7088,9 +7347,203 @@ describe('Close the rest (returns RX-4) is held as a draft', () => {
     // Never "book" for a recorded quantity; no inspection claims; no emojis.
     expect(text).not.toMatch(/\bbooks?\b|verified|inspected|certif|guarantee/i);
     expect(text).not.toMatch(/\p{Extended_Pictographic}/u);
+    // Both phone-facing entries say what the phone needs: Close the rest came
+    // in the update; the used-up line is the database's answer, so no phone
+    // needs one.
+    expect(close.whatToDo).toBe(
+      'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
+    );
+    expect(usedUp.whatToDo).toBe('No action needed.');
+    expect(r.summary).toContain('on the web and in the mobile app after the latest update');
+  });
+
+  // Corrected at publish (docs/whats-new-returns-close-rest, 2026-10-12), each
+  // against 7143ec0f6, the Demo Co walk (walk-rx4) and RX-4's test stage.
+  it('says who can close the rest, what it changes and who hears, and where sizes leave, as the code does', () => {
+    const r = release();
+    const close = r.entries[0]!;
+    const usedUp = r.entries[1]!;
+    const all = readerText(r).join(' ');
+    const migrations = resolve(__dirname, '../../../../../supabase/migrations');
+    const sql0397 = readFileSync(resolve(migrations, '0397_returns_followups.sql'), 'utf8');
+    const sql0396 = readFileSync(resolve(migrations, '0396_returns_exchange_staff.sql'), 'utf8');
+    const sql0390 = readFileSync(resolve(migrations, '0390_approval_follows_permission.sql'), 'utf8');
+
+    // Offered on a received or closed return whose replacement was handed
+    // over in part with the rest on backorder; an approved return keeps
+    // Cancel return, whose own close ends the rest.
+    const facts = {
+      exchangeStatus: 'partly_handed_over' as const,
+      hasExchange: true,
+      replacementClass: 'handed_over' as const,
+      hasApprovedExchange: true,
+      viewerCanManageReturns: true,
+      viewerCanApproveOrders: true,
+    };
+    const offered = (status: string, replacementClass: 'handed_over' | 'undrawn' = 'handed_over') => {
+      const a = availableReturnActions({ ...facts, replacementClass, status });
+      return [a.primary, ...a.secondary];
+    };
+    expect(offered('received')).toContain('close_replacement_rest');
+    expect(offered('closed')).toContain('close_replacement_rest');
+    expect(offered('approved')).not.toContain('close_replacement_rest');
+    expect(offered('approved')).toContain('cancel');
+    expect(RETURN_ACTION_LABELS.close_replacement_rest).toBe('Close the rest');
+    // Nothing handed over yet: no rest to close.
+    expect(offered('closed', 'undrawn')).not.toContain('close_replacement_rest');
+    const cancelHook = "elsif v_ostatus = 'backordered' then\n        -- Handed over in part, the rest on backorder: closed as delivered-partial,";
+    expect(sql0396).toContain(cancelHook);
+    expect(close.howItAffectsYou).toContain(
+      'While the return still waits for the returned item, cancelling the return closes the rest, as before.',
+    );
+
+    // It needs order approval as well as managing returns, like every
+    // replacement action; without order approval the screen says why.
+    expect(REPLACEMENT_ACTIONS).toContain('close_replacement_rest');
+    const readOnly = availableReturnActions({ ...facts, status: 'closed', viewerCanApproveOrders: false });
+    expect([readOnly.primary, ...readOnly.secondary]).not.toContain('close_replacement_rest');
+    expect(readOnly.readOnlyReason).toBe(RETURNS_COPY.noOrdersApproveCloseRest);
+    expect(availableReturnActions({ ...facts, status: 'closed', viewerCanManageReturns: false }).readOnlyReason).toBe(
+      RETURNS_COPY.noManagePermission,
+    );
+    expect(sql0397).toContain("if not public.has_permission(v_org, 'returns:manage') then");
+    expect(sql0397).toContain("if not public.has_permission(v_org, 'orders:approve') then");
+    expect(sql0397).toContain("if v_status not in ('received', 'closed') then");
+    expect(sql0397).toContain("or public._return_replacement_class(v_live.id) <> 'handed_over' then");
+    // A reason is required (1 to 1,000 characters), kept on the return.
+    expect(sql0397).toContain('v_reason := public._return_exchange_reason(p_reason, 1000);');
+    expect(sql0397).toContain("values (v_org, p_return_id, 'replacement_closed', 'staff', v_live.id, v_reason, v_user, 'staff');");
+
+    // The rest is never sent, what was handed over stays, holds are freed,
+    // and nothing moves: close_partial (0390's body, pinned by 0397's
+    // preflight) releases the holds and completes the order, and neither
+    // function writes a movement.
+    expect(sql0390).toContain('md5(prosrc) 2d873a049a5584df7d3a168fb2b45e34 -> a519c3e58fb577c3ff1b30fb3a6cc0ad');
+    expect(sql0397).toContain("('public.close_partial(uuid)',                                         'a519c3e58fb577c3ff1b30fb3a6cc0ad', true)");
+    const closePartial = sql0390.slice(
+      sql0390.indexOf('CREATE OR REPLACE FUNCTION public.close_partial(p_id uuid)'),
+      sql0390.indexOf('-- hold_order_stock: restated'),
+    );
+    expect(closePartial).toContain("set released_at = now(), released_reason = 'closed_partial'");
+    expect(closePartial).toContain("set status       = 'completed',");
+    expect(closePartial).not.toMatch(/stock_movements|item_stock_levels/);
+    const closeFn = sql0397.slice(
+      sql0397.indexOf('create function public.close_return_replacement_rest('),
+      sql0397.indexOf('revoke all on function public._return_exchange_create'),
+    );
+    expect(closeFn).toContain('perform public._return_replacement_close_partial(v_live.id);');
+    expect(closeFn).not.toMatch(/stock_movements|item_stock_levels/);
+    expect(close.whatChanged).toContain(
+      'the rest of the replacement is never sent, what was already handed over stays handed over, and anything reserved for the rest is freed.',
+    );
+    expect(RETURNS_COPY.closeReplacementRestHelp).toBe(
+      'The rest of the replacement is never sent. What was already handed over stays handed over.',
+    );
+
+    // The return's history keeps the reason; nothing here says when the
+    // handed-over part went out (the audit's D-H1: the hand-over line takes
+    // the close time; a later fix and its own entry).
+    const history = readFileSync(resolve(__dirname, '../../server/services/return-history.ts'), 'utf8');
+    expect(history).toContain("const head = so ? `Rest of replacement ${so} closed` : 'Rest of the replacement closed';");
+    expect(history).toContain('return d.reason ? `${head}: ${d.reason}` : head;');
+    expect(close.whatChanged).toContain('The return keeps the reason in its history.');
+    for (const sentence of all.split(/(?<=\.)\s+/)) {
+      if (/histor/i.test(sentence)) expect(sentence, sentence).not.toMatch(/\b(when|time|date|went out|at the)\b/i);
+    }
+
+    // The replacement order's timeline names the close, on the web only (the
+    // phone shows no order timeline).
+    const timeline = readFileSync(resolve(__dirname, '../../components/orders/order-timeline.tsx'), 'utf8');
+    expect(timeline).toContain("if (event === 'order.closed_partial') return `Rest closed from ${rma ?? 'its RMA'}`;");
+    expect(timeline).toContain("lines.push('What was handed over stays. The rest will not be sent.');");
+    expect(close.whatChanged).toContain("On the web, the replacement order's timeline says the rest was closed from the return.");
+
+    // The requester hears it from the replacement's own notification
+    // (completed: ungated) and, with an address on file, the one-time
+    // replacement email; neither names the reason, and their own view of the
+    // return says the same.
+    expect(sql0396).toContain("v_title := 'Your replacement order was closed';");
+    expect(sql0396).toContain("v_body := 'Part of it was handed over. The rest will not be sent.';");
+    expect(sql0396).toContain('-- completed: ungated, as the original body');
+    const service = readFileSync(resolve(__dirname, '../../server/services/returns.ts'), 'utf8');
+    expect(service).toContain(
+      "await this.recordClosedPartial(id, facts, result.closedOrderId, num(answer.orderNumber), 'return.replacement_closed');",
+    );
+    const prompt = readFileSync(resolve(__dirname, '../../server/email/return-prompt.ts'), 'utf8');
+    expect(prompt).toContain("? 'replacement_closed_partial'");
+    expect(exchangeRequesterSentence('completed', { replacementStatus: 'completed', replacementOwed: 1 })).toBe(
+      'Part of your replacement was handed over. The rest will not be sent.',
+    );
+    expect(close.howItAffectsYou).toContain(
+      'The requester is told that part of the replacement was handed over and the rest will not be sent, never the reason.',
+    );
+
+    // A used-up line leaves the options every requester way reads (the token
+    // page, the portal and a member's own order on the web and the phone),
+    // and any exchange past the budget is refused, a note-only one too.
+    expect(sql0397).toContain(
+      "and public._return_exchange_line_budget('00000000-0000-0000-0000-000000000000'::uuid, l.id) > 0);  -- RX-4",
+    );
+    const requesterReads = readFileSync(resolve(__dirname, '../../server/services/returns-requester.ts'), 'utf8');
+    expect(requesterReads).toContain("await admin.rpc('return_exchange_options', { p_order_id: order.orderRequestId });");
+    for (const fn of ['exchangeOptionsForToken', 'exchangeOptionsForPortal', 'exchangeOptionsForMember']) {
+      expect(requesterReads, fn).toContain(`export async function ${fn}(`);
+    }
+    const create = sql0397.slice(
+      sql0397.indexOf('create or replace function public._return_exchange_create('),
+      sql0397.indexOf('-- ── 1b. Used-up lines'),
+    );
+    expect(create.indexOf("raise exception 'exchange_already_sent'")).toBeGreaterThan(0);
+    expect(create.indexOf("raise exception 'exchange_already_sent'")).toBeLessThan(
+      create.indexOf("raise exception 'exchange_item_not_eligible'"),
+    );
+    expect(RETURN_ERROR_WORDS.exchangeAlreadySent).toBe(
+      'This item already got a replacement on an earlier return, so it can only be returned now.',
+    );
+    expect(usedUp.whatChanged).toBe(
+      `${RETURNS_COPY.requesterReturnOrExchange} no longer offers other sizes for an item whose units all got a replacement on an earlier return. Choose ${RETURNS_COPY.returnOnly} for it: asking the warehouse for a different replacement there is refused too.`,
+    );
+    // The staff Create return picker ignores that budget, so the title names
+    // Return or exchange and a returns manager is told Create return is
+    // unchanged; and the fault was that the refusal came only after sending.
+    const candidatesAt = sql0396.indexOf('create function public.return_exchange_candidates(');
+    const candidates = sql0396.slice(candidatesAt, sql0396.indexOf('$$;', candidatesAt));
+    expect(candidates.length).toBeGreaterThan(0);
+    expect(candidates).not.toContain('_return_exchange_line_budget');
+    expect(usedUp.title).toBe('Return or exchange offers no sizes once every unit of an item got a replacement');
+    expect(usedUp.howItAffectsYou).toBe(
+      `Every other item offers its sizes as before. If you manage returns, your own orders keep ${RETURNS_COPY.createReturn}, which is unchanged.`,
+    );
+    expect(usedUp.whyItMatters).toBe('Sizes were offered there, but choosing one was refused only after the request was sent.');
+    expect(all).not.toMatch(/\balways\b/i);
+
+    // No line says how a part is handed over (a replacement approved on
+    // backorder offers Open replacement, not Get replacement ready).
+    expect(all).not.toContain(RETURNS_COPY.getReplacementReady);
   });
 });
 
+/**
+ * Returns RX-3 (no migration: the requester's own exchange, Busy. Try again.
+ * on order actions, the size S label and the PR-stage polish): held as a
+ * DRAFT until its web deploy was live, the OTA with the phone's requester
+ * sheet was published and launched, and the Demo Co walk passed (returns
+ * plan 10.1 and 11). Pinned by id.
+ *
+ * Re-pinned by docs/whats-new-returns-requester (RX-5, 2026-10-12; was:
+ * "requesters ask for an exchange themselves (returns RX-3) is held as a
+ * draft"): #346 merged (bd37d5a30) and its web build 3dbc11a7ebb5 went live,
+ * OTA group baf22731 (iOS 01a12d9b) was published and had launched on iOS (1
+ * launch, 0 failed, read 01:47Z), and the Demo Co walk passed with its audit
+ * CONFIRMED, so the release is published. The requester's own screens (the
+ * web order page's entry, the phone's sheet and card) were not walked in
+ * production (the demo account manages returns, so they are hidden from it
+ * by design); their evidence is RX-3's test stage, recorded in the release.
+ *
+ * Moved back above its own describe by docs/whats-new-returns-close-rest
+ * (2026-10-12): returns RX-4's describe had been added between this comment
+ * and the describe it belongs to.
+ */
 describe('requesters ask for an exchange themselves (returns RX-3) is published', () => {
   const ID = 'returns-requester-exchange-2026-10';
   const release = () => RELEASES.find((r) => r.id === ID)!;
@@ -7113,11 +7566,30 @@ describe('requesters ask for an exchange themselves (returns RX-3) is published'
     // The newest release, so it is the notice for whoever it reaches: an
     // owner with every module, a member who places orders, someone who can
     // only open Returns, and an order approver.
-    expect(list.latestUnread?.id).toBe(ID);
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was: ID
+    // for all four readers, with nothing read): returns RX-4's release,
+    // published later, reaches the owner, the member who places orders and
+    // whoever can open Returns, so it is their notice, and this one is once it
+    // is read. It reaches no order approver alone, whose notice this one
+    // stays. Claim kept: this one is the notice for whoever it reaches, after
+    // RX-4's.
+    const rx4Read = [
+      {
+        release_id: 'returns-close-rest-2026-10',
+        revision: 1,
+        dismissed_at: null,
+        opened_at: '2026-10-12T06:00:00Z',
+        read_at: '2026-10-12T06:00:00Z',
+      },
+    ];
+    expect(list.latestUnread?.id).toBe('returns-close-rest-2026-10');
+    expect(buildReleaseList(RELEASES, everyone, rx4Read, null).latestUnread?.id).toBe(ID);
     const requester: ReleaseViewer = { role: 'viewer', permissions: ['orders:request'], enabledModules: ['returns', 'orders'] };
-    expect(buildReleaseList(RELEASES, requester, [], null).latestUnread?.id).toBe(ID);
+    expect(buildReleaseList(RELEASES, requester, [], null).latestUnread?.id).toBe('returns-close-rest-2026-10');
+    expect(buildReleaseList(RELEASES, requester, rx4Read, null).latestUnread?.id).toBe(ID);
     const returnsOnly: ReleaseViewer = { role: 'staff', permissions: ['returns:read'], enabledModules: ['returns'] };
-    expect(buildReleaseList(RELEASES, returnsOnly, [], null).latestUnread?.id).toBe(ID);
+    expect(buildReleaseList(RELEASES, returnsOnly, [], null).latestUnread?.id).toBe('returns-close-rest-2026-10');
+    expect(buildReleaseList(RELEASES, returnsOnly, rx4Read, null).latestUnread?.id).toBe(ID);
     const approver: ReleaseViewer = { role: 'staff', permissions: ['orders:approve'], enabledModules: ['returns', 'orders'] };
     expect(buildReleaseList(RELEASES, approver, [], null).latestUnread?.id).toBe(ID);
     // A member with no permission is told nothing.
@@ -7126,14 +7598,21 @@ describe('requesters ask for an exchange themselves (returns RX-3) is published'
     // An old phone build lists it first, with the Returns link for whoever
     // can open Returns, and with no link for a requester, whose entries link
     // nothing (an order page is per order).
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {})[0]).toEqual({
+    // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was: first
+    // with nothing seen): returns RX-4's release is newer and reaches both
+    // readers, so the list is read with it seen. Claim kept: this one first,
+    // with or without the link.
+    const rx4Seen = { 'returns-close-rest-2026-10': true };
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {})[0]?.id).toBe('returns-close-rest-2026-10');
+    expect(legacyAnnouncementsFor(RELEASES, everyone, rx4Seen)[0]).toEqual({
       id: ID,
       date: '2026-10-12',
       title: release().title,
       body: release().summary,
       cta: { href: '/dashboard/returns', label: 'Open Returns' },
     });
-    expect(legacyAnnouncementsFor(RELEASES, requester, {})[0]).toEqual({
+    expect(legacyAnnouncementsFor(RELEASES, requester, {})[0]?.id).toBe('returns-close-rest-2026-10');
+    expect(legacyAnnouncementsFor(RELEASES, requester, rx4Seen)[0]).toEqual({
       id: ID,
       date: '2026-10-12',
       title: release().title,
@@ -7167,14 +7646,21 @@ describe('requesters ask for an exchange themselves (returns RX-3) is published'
   // still, sits at the top above it and is the only draft. Claim kept: the
   // newest published release, directly above returns RX-2's release, dated
   // after every release but RX-4's draft.
-  it("is the newest published release, directly below the returns RX-4 draft (the only draft) and directly above returns RX-2's release, dated after every release but that draft", () => {
+  // Re-pinned by docs/whats-new-returns-close-rest (2026-10-12; was: "is the
+  // newest published release, directly below the returns RX-4 draft (the
+  // only draft) ..."): RX-4's release is published, in the same place, so it
+  // is the newest release and no draft is left. Claim kept: directly below
+  // RX-4's release and directly above returns RX-2's release, dated after
+  // every release but RX-4's.
+  it("sits directly below returns RX-4's release (published later) and directly above returns RX-2's release, dated after every release but RX-4's, and no draft is left", () => {
     expect(RELEASES[0]?.id).toBe('returns-close-rest-2026-10');
-    expect(RELEASES[0]?.status).toBe('draft');
+    expect(RELEASES[0]?.status).toBe('published');
     expect(RELEASES[1]?.id).toBe(ID);
     expect(RELEASES[2]?.id).toBe('returns-exchange-2026-10');
     expect(RELEASES[2]?.status).toBe('published');
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
-    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual(['returns-close-rest-2026-10']);
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe('returns-close-rest-2026-10');
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([]);
+    expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
     for (const r of RELEASES.filter((x) => x.id !== ID && x.id !== 'returns-close-rest-2026-10')) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
