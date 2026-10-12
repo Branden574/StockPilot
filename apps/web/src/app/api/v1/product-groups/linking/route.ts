@@ -183,6 +183,11 @@ export async function DELETE(req: NextRequest) {
     revalidateInventoryList(ctx.organizationId);
     return NextResponse.json({ ok: true, ...result });
   } catch (e) {
+    // The item left but its SKU's record on another rack could not follow:
+    // the write happened, so the list is refreshed as on success.
+    if (e instanceof ServiceError && e.details?.reason === 'sku_siblings_unfinished') {
+      revalidateInventoryList(ctx.organizationId);
+    }
     return errorResponse(e);
   }
 }

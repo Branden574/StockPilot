@@ -83,6 +83,13 @@ export async function unlinkItemsAction(
     revalidatePath('/dashboard/inventory');
     return ok(result);
   } catch (e) {
+    // The item left but its SKU's record on another rack could not follow:
+    // the write happened, so the caches are refreshed as on success.
+    if (e instanceof ServiceError && e.details?.reason === 'sku_siblings_unfinished') {
+      await revalidateInventoryListForCurrentOrg();
+      revalidatePath('/dashboard/product-groups');
+      revalidatePath('/dashboard/inventory');
+    }
     return toResult(e);
   }
 }

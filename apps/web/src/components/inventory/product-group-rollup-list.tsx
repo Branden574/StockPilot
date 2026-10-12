@@ -202,6 +202,13 @@ function GroupRow({
       const res = await unlinkItemsAction({ itemIds: [itemId], reason });
       if (!res.ok) {
         toast.error(res.error.message);
+        // A conflict can follow a write (the item left, but its SKU's record
+        // on another rack could not follow): read the rows and header again.
+        if (res.error.code === 'conflict') {
+          setUnlinking(null);
+          load();
+          router.refresh();
+        }
         return;
       }
       // Drop the row locally so the expansion agrees with what just happened;
