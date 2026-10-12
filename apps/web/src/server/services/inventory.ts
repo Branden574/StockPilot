@@ -1374,7 +1374,8 @@ export class InventoryService {
    * warehouse scope and every one of its filters (applyContentFilters),
    * selecting only `columns`, ordered by id so the windows never overlap.
    * list() sums the value from it; listPlanRows plans a group-aware page from
-   * it. `narrow` adds a filter the caller needs (a viewer's category grants).
+   * it. `narrow` adds a filter the caller needs (a viewer's category grants);
+   * `count` asks for the view's size with the window.
    */
   private filteredScanPage(
     filters: ItemListFilters,
@@ -1382,11 +1383,11 @@ export class InventoryService {
     columns: string,
     from: number,
     to: number,
-    narrow?: (q: any) => any,
+    opts: { narrow?: (q: any) => any; count?: 'exact' } = {},
   ) {
     let sumQuery = this.ctx.supabase
       .from('inventory_items')
-      .select(columns)
+      .select(columns, ...(opts.count ? [{ count: opts.count }] : []))
       .eq('organization_id', this.ctx.organizationId)
       .is('deleted_at', null);
     if (!access.hasAllAccess) {
@@ -1402,7 +1403,7 @@ export class InventoryService {
       sumQuery = sumQuery.eq('warehouse_id', filters.warehouseId);
     }
     sumQuery = this.applyContentFilters(sumQuery, filters);
-    if (narrow) sumQuery = narrow(sumQuery);
+    if (opts.narrow) sumQuery = opts.narrow(sumQuery);
     // Stable sort keeps each row on exactly one page across the loop.
     return sumQuery.order('id', { ascending: true }).range(from, to);
   }
@@ -1414,9 +1415,11 @@ export class InventoryService {
    * records sort far apart is never split across their pages (the reported XS
    * alone on page 2). Same scope as list(): the caller's own client and RLS,
    * their warehouses, a viewer's category grants, list()'s own filters
-   * (applyContentFilters), the low-stock rule. Read in 1000-row windows; null
-   * when the view holds more than INSTANT_MODE_MAX_ROWS records (the caller
-   * keeps fixed pages, as managers' instant mode does past the same cap).
+   * (applyContentFilters), the low-stock rule. The first 1000-row window
+   * brings the view's size: past INSTANT_MODE_MAX_ROWS records it answers
+   * null after that one request (the caller keeps fixed pages, as managers'
+   * instant mode does past the same cap); the rest of the view is read in
+   * parallel windows.
    */
   async listPlanRows(filters: ItemListFilters = {}): Promise<{
     rows: PlanRow[];
@@ -1452,28 +1455,46 @@ export class InventoryService {
         // As list(): the DB RLS policy still enforces the same visibility.
       }
     }
-    const window = (from: number, to: number) =>
-      this.filteredScanPage(filters, access, PLAN_ROW_COLUMNS, from, to, (q) =>
-        grantsInUrl
-          ? // in-list-bound: grantsFitInUrl keeps this under GRANTS_IN_URL_MAX_CHARS
-            q.in('category_id', grantsInUrl)
-          : q,
+    const window = (from: number, to: number, count?: 'exact') =>
+      this.filteredScanPage(filters, access, PLAN_ROW_COLUMNS, from, to, {
+        narrow: (q) =>
+          grantsInUrl
+            ? // in-list-bound: grantsFitInUrl keeps this under GRANTS_IN_URL_MAX_CHARS
+              q.in('category_id', grantsInUrl)
+            : q,
+        count,
+      });
+    // The column list is a constant the builder cannot parse as a type.
+    type Window = { data: PlanRow[] | null; error: { message: string } | null };
+    const first = (await window(0, 999, 'exact')) as unknown as Window & { count: number | null };
+    if (first.error) throw new ServiceError('internal_error', first.error.message);
+    if (typeof first.count !== 'number') {
+      throw new ServiceError('internal_error', 'The filtered view came back without its size.');
+    }
+    // Bigger than a plan covers: give up before reading any more of it.
+    if (first.count > INSTANT_MODE_MAX_ROWS) return null;
+    const rest: Array<PromiseLike<Window>> = [];
+    for (let from = 1000; from < first.count; from += 1000) {
+      rest.push(
+        window(
+          from,
+          Math.min(from + 999, INSTANT_MODE_MAX_ROWS - 1),
+        ) as unknown as PromiseLike<Window>,
       );
-    let rows: PlanRow[] = [];
-    for (let from = 0; from < INSTANT_MODE_MAX_ROWS; from += 1000) {
-      const { data, error } = await window(from, Math.min(from + 999, INSTANT_MODE_MAX_ROWS - 1));
-      if (error) throw new ServiceError('internal_error', error.message);
-      // The column list is a constant the builder cannot parse as a type.
-      const got = (data ?? []) as unknown as PlanRow[];
-      rows.push(...got);
-      if (got.length < 1000) break;
     }
-    if (rows.length >= INSTANT_MODE_MAX_ROWS) {
-      // One row past the cap says the view is bigger than a plan covers.
-      const { data, error } = await window(INSTANT_MODE_MAX_ROWS, INSTANT_MODE_MAX_ROWS);
-      if (error) throw new ServiceError('internal_error', error.message);
-      if ((data ?? []).length > 0) return null;
+    let rows: PlanRow[] = [...(first.data ?? [])];
+    for (const w of await Promise.all(rest)) {
+      if (w.error) throw new ServiceError('internal_error', w.error.message);
+      rows.push(...(w.data ?? []));
     }
+    // A record written between two windows can shift one across the boundary
+    // and be read twice; a page must never show it twice.
+    const seen = new Set<string>();
+    rows = rows.filter((r) => {
+      if (seen.has(r.id)) return false;
+      seen.add(r.id);
+      return true;
+    });
     rows = keepGranted(rows, granted);
     if (filters.lowStock) {
       rows = rows.filter((r) => r.quantity_on_hand <= r.reorder_point || r.quantity_on_hand <= 0);
@@ -1625,7 +1646,9 @@ export class InventoryService {
     const [mainRes, sumRowsRaw] = await Promise.all([
       query,
       planned
-        ? Promise.resolve([] as Array<{ quantity_on_hand: number; unit_cost: number; reorder_point: number }>)
+        ? Promise.resolve(
+            [] as Array<{ quantity_on_hand: number; unit_cost: number; reorder_point: number }>,
+          )
         : fetchAllRows<{ quantity_on_hand: number; unit_cost: number; reorder_point: number }>(
             (from, to) => buildSumPage(from, to),
           ),

@@ -40,7 +40,10 @@ import { ChartersService } from '@/server/services/charters';
 import { InventoryService } from '@/server/services/inventory';
 import { createClient } from '@/lib/supabase/server';
 import { ItemImagesService } from '@/server/services/item-images';
-import { displayGroupFields } from '@/server/services/lib/display-groups';
+import {
+  displayGroupFields,
+  readDisplayGroupsByItemIds,
+} from '@/server/services/lib/display-groups';
 import { planLivePage, readPlannedPage } from '@/server/services/lib/planned-page';
 import { LocationsService } from '@/server/services/locations';
 import { getItemTrends } from '@/server/services/movements';
@@ -594,16 +597,24 @@ async function booksTableSection({
       id: i.id,
       quantityOnHand: i.quantity_on_hand,
     }));
-    const [trends, imagesById] = await Promise.all([
+    const [trends, imagesById, displayGroups] = await Promise.all([
       trendBuckets
         ? Promise.resolve(deriveInventoryTrends(trendInputs, trendBuckets))
         : getItemTrends(trendInputs),
       imagesSvc.primaryImagesWithThumbsForItems(inventory.items.map((i) => i.id)),
+      // Group selected (0400): the page's records' display groups, through
+      // the caller's own client (RLS): read above with the plan, or, in an
+      // organization with more memberships than one request carries and no
+      // plan, the page's own records' (100 ids per request). Never fails the
+      // page: a failed read renders the records ungrouped.
+      orgDisplayGroups
+        ? Promise.resolve(orgDisplayGroups)
+        : readDisplayGroupsByItemIds(
+            createClient(),
+            sessionCtx.organizationId,
+            inventory.items.map((i) => i.id),
+          ),
     ]);
-    // Group selected (0400): the page's records' display groups, from the
-    // organization's memberships read above through the caller's own client
-    // (RLS). A failed read renders the records ungrouped.
-    const displayGroups = orgDisplayGroups;
     const itemsWithImages = inventory.items.map((i) => {
       const cf = (i as { custom_fields?: Record<string, unknown> | null })
         .custom_fields;

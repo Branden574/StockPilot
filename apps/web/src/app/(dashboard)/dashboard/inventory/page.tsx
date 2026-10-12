@@ -38,7 +38,10 @@ import { CategoriesService } from '@/server/services/categories';
 import { ChartersService } from '@/server/services/charters';
 import { InventoryService } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
-import { displayGroupFields } from '@/server/services/lib/display-groups';
+import {
+  displayGroupFields,
+  readDisplayGroupsByItemIds,
+} from '@/server/services/lib/display-groups';
 import { planLivePage, readPlannedPage } from '@/server/services/lib/planned-page';
 import { LocationsService } from '@/server/services/locations';
 import { getItemTrends } from '@/server/services/movements';
@@ -834,7 +837,7 @@ async function inventoryTableSection({
       id: i.id,
       quantityOnHand: i.quantity_on_hand,
     }));
-    const [trends, imagesById, placementMap] = await Promise.all([
+    const [trends, imagesById, placementMap, displayGroups] = await Promise.all([
       trendBuckets
         ? Promise.resolve(deriveInventoryTrends(trendInputs, trendBuckets))
         : tagged('getItemTrends', getItemTrends(trendInputs)),
@@ -847,11 +850,18 @@ async function inventoryTableSection({
       ),
       // Per-(item, location) holdings so the list shows ONE LINE PER RACK.
       tagged('inventorySvc.placementBreakdown', inventorySvc.placementBreakdown(itemIdList)),
+      // Group selected (0400): the page's records' display groups, through
+      // the caller's own client (RLS): read above with the plan, or, in an
+      // organization with more memberships than one request carries and no
+      // plan, the page's own records' (100 ids per request). Never fails the
+      // page: a failed read renders the records ungrouped.
+      orgDisplayGroups
+        ? Promise.resolve(orgDisplayGroups)
+        : tagged(
+            'displayGroups.byItemIds',
+            readDisplayGroupsByItemIds(createClient(), sessionCtx.organizationId, itemIdList),
+          ),
     ]);
-    // Group selected (0400): the page's records' display groups, from the
-    // organization's memberships read above through the caller's own client
-    // (RLS). A failed read renders the records ungrouped.
-    const displayGroups = orgDisplayGroups;
     const itemsWithImages = inventory.items.map((i) => {
       const cf = (i as { custom_fields?: Record<string, unknown> | null }).custom_fields;
       const cfThumb =

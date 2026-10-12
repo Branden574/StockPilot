@@ -64,6 +64,8 @@ const m = vi.hoisted(() => ({
   resolveInventoryListImages: vi.fn(),
   inventoryList: vi.fn(),
   listPlanRows: vi.fn(),
+  forOrgAsMember: vi.fn(),
+  byItemIds: vi.fn(),
   getWarehouseAccess: vi.fn(),
   getWarehousesForRequest: vi.fn(),
   loadCountingUnitsForOrg: vi.fn(),
@@ -129,6 +131,18 @@ vi.mock('@/lib/dashboard/request-cache', () => ({
   getModulesForRequest: vi.fn(async () => new Set(['orders'])),
 }));
 vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn() }));
+vi.mock('@/server/services/lib/display-groups', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/services/lib/display-groups')>()),
+  // As the real readers do, the client (a promise) is awaited inside a try.
+  readDisplayGroupsForOrgAsMember: async (client: unknown, ...rest: unknown[]) => {
+    await Promise.resolve(client).catch(() => {});
+    return m.forOrgAsMember(client, ...rest);
+  },
+  readDisplayGroupsByItemIds: async (client: unknown, ...rest: unknown[]) => {
+    await Promise.resolve(client).catch(() => {});
+    return m.byItemIds(client, ...rest);
+  },
+}));
 
 vi.mock('@/server/loaders/inventory-list', async () => {
   const core = await import('@stockpilot/core');
@@ -279,6 +293,8 @@ beforeEach(() => {
   );
   h.planRows = null;
   m.listPlanRows.mockImplementation(() => logged('planRows', async () => h.planRows));
+  m.forOrgAsMember.mockResolvedValue(new Map());
+  m.byItemIds.mockResolvedValue(new Map());
   m.getWarehouseAccess.mockImplementation(() =>
     logged(
       'access',
@@ -711,6 +727,34 @@ describe('Items page: a staff page is planned group-aware', () => {
     expect(reads).toEqual([100, 50]);
     const props = m.tableProps.mock.calls[0]![0] as { items: Array<{ id: string }> };
     expect(new Set(props.items.map((r) => r.id)).size).toBe(150);
+  });
+
+  it("over the cap, in an organization with more memberships than one request, the page reads its own records' groups", async () => {
+    h.role = 'staff';
+    h.planRows = null;
+    m.forOrgAsMember.mockResolvedValue(null);
+    m.byItemIds.mockResolvedValue(new Map([[ROW.id, { id: 'grp-1', name: 'Pair', version: 2 }]]));
+    render(await callPage());
+    expect(m.byItemIds).toHaveBeenCalledTimes(1);
+    expect(m.byItemIds.mock.calls[0]!.slice(1)).toEqual(['org-1', [ROW.id]]);
+    const props = m.tableProps.mock.calls[0]![0] as {
+      items: Array<{ id: string; display_group_id: string | null }>;
+    };
+    expect(props.items.find((r) => r.id === ROW.id)!.display_group_id).toBe('grp-1');
+  });
+
+  it("with the organization's memberships in hand, the page reads no more of them", async () => {
+    h.role = 'staff';
+    h.planRows = null;
+    m.forOrgAsMember.mockResolvedValue(
+      new Map([[ROW.id, { id: 'grp-1', name: 'Pair', version: 2 }]]),
+    );
+    render(await callPage());
+    expect(m.byItemIds).not.toHaveBeenCalled();
+    const props = m.tableProps.mock.calls[0]![0] as {
+      items: Array<{ id: string; display_group_id: string | null }>;
+    };
+    expect(props.items.find((r) => r.id === ROW.id)!.display_group_id).toBe('grp-1');
   });
 
   it('an empty view reads no rows and shows the empty state', async () => {

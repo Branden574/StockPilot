@@ -11,7 +11,7 @@ import { IN_FILTER_MAX_VALUES } from '@/lib/supabase/in-filter';
 
 import type { InventoryService, ItemListFilters } from '../inventory';
 
-import { readDisplayGroupsForOrgAsMember } from './display-groups';
+import { readDisplayGroupsByItemIds, readDisplayGroupsForOrgAsMember } from './display-groups';
 
 /**
  * Phase 2 of the grouping brief (owner 2026-10-11, go to start 2026-10-12):
@@ -24,13 +24,15 @@ import { readDisplayGroupsForOrgAsMember } from './display-groups';
  *
  * planLivePage reads the WHOLE filtered view as light rows (listPlanRows,
  * through the caller's own client, capped at the instant-mode limit) and the
- * organization's display group memberships (through the caller's own client)
- * in parallel, and plans the page with the rule managers' instant mode pages
- * with (planGroupAwarePage), so a staff member's page holds the same units,
- * in the same order, as a manager's. readPlannedPage then reads exactly that
- * page in full. Over the cap, or when the scan fails, there is no plan and
- * the page keeps its fixed slices. The memberships serve the page's rows
- * either way.
+ * organization's display group memberships (through the caller's own client,
+ * one request) in parallel, and plans the page with the rule managers'
+ * instant mode pages with (planGroupAwarePage), so a staff member's page holds
+ * the same units, in the same order, as a manager's. readPlannedPage then
+ * reads exactly that page in full. Over the cap, or when the scan fails, there
+ * is no plan and the page keeps its fixed slices. The memberships serve the
+ * page's rows either way; an organization with more than one request's worth
+ * has its memberships read by ids instead: the view's records for a plan, the
+ * page's own records (by the page) without one.
  */
 
 type ListResult = Awaited<ReturnType<InventoryService['list']>>;
@@ -43,9 +45,11 @@ export interface LivePagePlan {
   plannedPage: PlannedServerPage | null;
   /** The whole view's totals the plan was made over (null with no plan). */
   totals: { total: number; valueOnHand: number } | null;
-  /** The organization's memberships the caller can read (empty when the read
-   *  failed: the records render ungrouped). */
-  displayGroups: Map<string, DisplayGroupRef>;
+  /** The memberships the caller can read: the organization's, or the planned
+   *  view's records' (empty when the read failed: the records render
+   *  ungrouped). Null: more than one request's worth and no plan, so the page
+   *  reads its own records' (readDisplayGroupsByItemIds). */
+  displayGroups: Map<string, DisplayGroupRef> | null;
 }
 
 export async function planLivePage(args: {
@@ -62,7 +66,7 @@ export async function planLivePage(args: {
   tag?: Tag;
 }): Promise<LivePagePlan> {
   const tag = args.tag ?? untagged;
-  const [planRows, displayGroups] = await Promise.all([
+  const [planRows, orgGroups] = await Promise.all([
     tag('inventorySvc.listPlanRows', args.inventorySvc.listPlanRows(args.viewFilters)).catch(
       (err: unknown) => {
         console.warn(`${args.logLabel} page plan unavailable, using fixed pages:`, err);
@@ -74,7 +78,18 @@ export async function planLivePage(args: {
       readDisplayGroupsForOrgAsMember(args.client, args.organizationId),
     ),
   ]);
-  if (!planRows) return { plannedPage: null, totals: null, displayGroups };
+  if (!planRows) return { plannedPage: null, totals: null, displayGroups: orgGroups };
+  // More memberships than one request carries: the plan needs only its view's.
+  const displayGroups =
+    orgGroups ??
+    (await tag(
+      'displayGroups.byItemIds',
+      readDisplayGroupsByItemIds(
+        args.client,
+        args.organizationId,
+        planRows.rows.map((r) => r.id),
+      ),
+    ));
   const plannedPage = planGroupAwarePage(
     planRows.rows.map((r) => ({
       ...r,

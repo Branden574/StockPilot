@@ -68,7 +68,8 @@ function lightRow(n: number, over: Record<string, unknown> = {}) {
   };
 }
 
-/** A view of `size` rows served in the windows the scan asks for. */
+/** A view of `size` rows served in the windows the scan asks for, with the
+ *  view's size when a window asks for it. */
 function viewStub(size: number, make = lightRow) {
   const windows: Array<[number, number]> = [];
   const stub = makeSupabaseStub({
@@ -78,7 +79,8 @@ function viewStub(size: number, make = lightRow) {
       windows.push([from, to]);
       const out = [];
       for (let i = from; i <= Math.min(to, size - 1); i++) out.push(make(i));
-      return { data: out, error: null };
+      const counted = JSON.stringify(arg(call, 'select')).includes('"count":"exact"');
+      return { data: out, error: null, ...(counted ? { count: size } : {}) };
     },
   });
   return { stub, windows };
@@ -134,9 +136,41 @@ describe('InventoryService.listPlanRows', () => {
     const at = viewStub(2000);
     const svcAt = new InventoryService(makeServiceContext(at.stub.client, { role: 'staff' }));
     expect((await svcAt.listPlanRows({}))!.rows).toHaveLength(2000);
+    expect(at.windows).toEqual([
+      [0, 999],
+      [1000, 1999],
+    ]);
     const over = viewStub(2001);
     const svcOver = new InventoryService(makeServiceContext(over.stub.client, { role: 'staff' }));
     expect(await svcOver.listPlanRows({})).toBeNull();
+  });
+
+  it('a view over the cap costs one request: its first window brings its size (PR #364 review)', async () => {
+    // Managers over the cap take this path on every navigation of a big
+    // organization: it used to read 2000 rows in three requests to give up.
+    const over = viewStub(50_000);
+    const svc = new InventoryService(makeServiceContext(over.stub.client, { role: 'manager' }));
+    expect(await svc.listPlanRows({})).toBeNull();
+    expect(over.windows).toEqual([[0, 999]]);
+    const small = viewStub(3);
+    const svcSmall = new InventoryService(makeServiceContext(small.stub.client, { role: 'staff' }));
+    expect((await svcSmall.listPlanRows({}))!.rows).toHaveLength(3);
+    expect(small.windows).toEqual([[0, 999]]);
+  });
+
+  it('never plans a record twice when a write shifts it across a window boundary', async () => {
+    const { stub } = viewStub(1500, (n) => lightRow(n === 1000 ? 999 : n));
+    const svc = new InventoryService(makeServiceContext(stub.client, { role: 'staff' }));
+    const out = await svc.listPlanRows({});
+    expect(out!.rows).toHaveLength(1499);
+    expect(new Set(out!.rows.map((r) => r.id)).size).toBe(1499);
+    expect(out!.total).toBe(1499);
+  });
+
+  it('a view that comes back without its size is no plan, not a guess', async () => {
+    const stub = makeSupabaseStub({ 'inventory_items.select': { data: [], error: null } });
+    const svc = new InventoryService(makeServiceContext(stub.client, { role: 'staff' }));
+    await expect(svc.listPlanRows({})).rejects.toMatchObject({ code: 'internal_error' });
   });
 
   it('applies the low-stock filter to the rows as list() does', async () => {
@@ -306,10 +340,9 @@ describe("list()'s page, its value scan and the plan scan take one set of filter
       await svc.listPlanRows(filters);
       const methods = stub.chainsAll.get('inventory_items.select')!;
       const args = stub.chainArgsAll.get('inventory_items.select')!;
+      // The page reads rows 0-29; each scan reads a 1000-row window.
       const isPage = (k: number) =>
-        args[k]!.some(
-          (a, i) => methods[k]![i] === 'select' && JSON.stringify(a).includes('"count":"exact"'),
-        );
+        args[k]!.some((a, i) => methods[k]![i] === 'range' && JSON.stringify(a) === '[0,29]');
       const page = methods.findIndex((_m, k) => isPage(k));
       const scans = methods.map((_m, k) => k).filter((k) => !isPage(k));
       // One value-scan window (an empty view) and one plan window.
@@ -330,7 +363,7 @@ describe("list()'s page, its value scan and the plan scan take one set of filter
           (m, k) => clause.kind === 'or' && m === 'or' && call.args[k]![0] === clause.expr,
         );
         const n = onRack ? 3 : 40;
-        return { data: Array.from({ length: n }, (_x, i) => lightRow(i)), error: null };
+        return { data: Array.from({ length: n }, (_x, i) => lightRow(i)), error: null, count: n };
       },
     });
     const svc = new InventoryService(makeServiceContext(stub.client, { role: 'staff' }));

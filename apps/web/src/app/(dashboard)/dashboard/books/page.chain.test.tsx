@@ -53,6 +53,8 @@ const m = vi.hoisted(() => ({
   resolveInventoryListImages: vi.fn(),
   inventoryList: vi.fn(),
   listPlanRows: vi.fn(),
+  forOrgAsMember: vi.fn(),
+  byItemIds: vi.fn(),
   tableProps: vi.fn(),
   notEnabledProps: vi.fn(),
   toggleProps: vi.fn(),
@@ -151,6 +153,18 @@ vi.mock('@/server/services/suppliers', () => ({
 }));
 vi.mock('@/server/services/tags', () => ({ TagsService: lookupSvc('list') }));
 vi.mock('@/server/services/charters', () => ({ ChartersService: lookupSvc('list') }));
+vi.mock('@/server/services/lib/display-groups', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/services/lib/display-groups')>()),
+  // As the real readers do, the client (a promise) is awaited inside a try.
+  readDisplayGroupsForOrgAsMember: async (client: unknown, ...rest: unknown[]) => {
+    await Promise.resolve(client).catch(() => {});
+    return m.forOrgAsMember(client, ...rest);
+  },
+  readDisplayGroupsByItemIds: async (client: unknown, ...rest: unknown[]) => {
+    await Promise.resolve(client).catch(() => {});
+    return m.byItemIds(client, ...rest);
+  },
+}));
 
 import { ELSEWHERE_UNAVAILABLE_NOTE } from '@stockpilot/core';
 
@@ -226,6 +240,8 @@ beforeEach(() => {
   );
   h.planRows = null;
   m.listPlanRows.mockImplementation(() => logged('planRows', async () => h.planRows));
+  m.forOrgAsMember.mockResolvedValue(new Map());
+  m.byItemIds.mockResolvedValue(new Map());
   m.inventoryList.mockImplementation(() =>
     logged('liveList', async () => ({
       items: [BOOK],
@@ -476,9 +492,40 @@ describe('Books page: a staff page is planned group-aware', () => {
       plannedTotals: { total: 54, valueOnHand: 54 },
       withElsewhere: true,
     });
-    const props = m.tableProps.mock.calls[0]![0] as { plannedPage: { page: number }; total: number };
+    const props = m.tableProps.mock.calls[0]![0] as {
+      plannedPage: { page: number };
+      total: number;
+    };
     expect(props.plannedPage.page).toBe(1);
     expect(props.total).toBe(54);
+  });
+
+  it("over the cap, in an organization with more memberships than one request, the page reads its own records' groups", async () => {
+    h.role = 'staff';
+    h.planRows = null;
+    m.forOrgAsMember.mockResolvedValue(null);
+    m.byItemIds.mockResolvedValue(new Map([[BOOK.id, { id: 'grp-1', name: 'Pair', version: 2 }]]));
+    render(await callPage());
+    expect(m.byItemIds).toHaveBeenCalledTimes(1);
+    expect(m.byItemIds.mock.calls[0]!.slice(1)).toEqual(['org-1', [BOOK.id]]);
+    const props = m.tableProps.mock.calls[0]![0] as {
+      items: Array<{ id: string; display_group_id: string | null }>;
+    };
+    expect(props.items.find((r) => r.id === BOOK.id)!.display_group_id).toBe('grp-1');
+  });
+
+  it("with the organization's memberships in hand, the page reads no more of them", async () => {
+    h.role = 'staff';
+    h.planRows = null;
+    m.forOrgAsMember.mockResolvedValue(
+      new Map([[BOOK.id, { id: 'grp-1', name: 'Pair', version: 2 }]]),
+    );
+    render(await callPage());
+    expect(m.byItemIds).not.toHaveBeenCalled();
+    const props = m.tableProps.mock.calls[0]![0] as {
+      items: Array<{ id: string; display_group_id: string | null }>;
+    };
+    expect(props.items.find((r) => r.id === BOOK.id)!.display_group_id).toBe('grp-1');
   });
 
   it('staff over the cap keeps fixed pages, as before', async () => {
@@ -486,6 +533,8 @@ describe('Books page: a staff page is planned group-aware', () => {
     h.planRows = null;
     render(await callPage({ page: '2' }));
     expect(m.inventoryList.mock.calls[0]![0]).toMatchObject({ limit: 30, offset: 30 });
-    expect((m.tableProps.mock.calls[0]![0] as { plannedPage?: unknown }).plannedPage ?? null).toBeNull();
+    expect(
+      (m.tableProps.mock.calls[0]![0] as { plannedPage?: unknown }).plannedPage ?? null,
+    ).toBeNull();
   });
 });
