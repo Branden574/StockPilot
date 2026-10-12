@@ -13,6 +13,7 @@ import {
   planUngroupSelected,
   ungroupableItemIds,
   ungroupChangeCount,
+  ungroupListMayBeStale,
   ungroupOutcomeWords,
   ungroupRecordOutcome,
   ungroupResultLines,
@@ -469,6 +470,101 @@ describe('the Ungroup answer', () => {
         ),
       ],
     });
+  });
+
+  // G2 security review LOW (2026-10-12): a keyed step whose answer was lost or
+  // unreadable may have committed, so its line never says "Not done".
+  it('a step whose answer was lost says Not confirmed, never Not done', () => {
+    const o = parseUngroupSelectedOutcome({
+      complete: false,
+      parts: [
+        {
+          kind: 'split',
+          status: 'refused',
+          changedItemIds: [],
+          notChangedItemIds: [id(1), id(2)],
+          message: UNGROUP_COPY.stepUnknown,
+          reason: 'unknown',
+          retryable: true,
+        },
+        {
+          kind: 'unlink',
+          status: 'refused',
+          changedItemIds: [],
+          notChangedItemIds: [id(3)],
+          message: UNGROUP_COPY.unlinkUnknown,
+          reason: 'unknown',
+          retryable: false,
+        },
+      ],
+    })!;
+    const lines = ungroupResultLines(o);
+    expect(lines).toEqual({
+      done: [],
+      notDone: [
+        UNGROUP_COPY.partUnknown(UNGROUP_COPY.partWhat('split', 2), UNGROUP_COPY.stepUnknown),
+        UNGROUP_COPY.partUnknown(UNGROUP_COPY.partWhat('unlink', 1), UNGROUP_COPY.unlinkUnknown),
+      ],
+    });
+    for (const l of lines.notDone) expect(l).not.toMatch(/^Not done/);
+    expect(UNGROUP_COPY.partUnknown('2 records getting their own SKU', 'Words.')).toBe(
+      'Not confirmed: 2 records getting their own SKU. Words.',
+    );
+  });
+
+  // G2 correctness review INFO (2026-10-12): records a remove found already
+  // out of any group are named as such, never counted as leaving.
+  it('records already out of their group are said to be, apart from the ones that left', () => {
+    const o = parseUngroupSelectedOutcome({
+      complete: true,
+      parts: [
+        {
+          kind: 'remove',
+          status: 'applied',
+          changedItemIds: [id(1)],
+          notChangedItemIds: [id(2), id(3)],
+          message: null,
+          reason: null,
+          retryable: false,
+        },
+      ],
+    })!;
+    expect(ungroupResultLines(o)).toEqual({
+      done: [UNGROUP_COPY.leftGroups(1), UNGROUP_COPY.alreadyOutOfGroup(2)],
+      notDone: [],
+    });
+    expect(UNGROUP_COPY.alreadyOutOfGroup(1)).toBe('1 record was already out of its group.');
+    expect(UNGROUP_COPY.alreadyOutOfGroup(2)).toBe('2 records were already out of their group.');
+  });
+
+  it('the list re-reads after any answer that may have changed something', () => {
+    const p = (over: Record<string, unknown>) => ({
+      kind: 'remove' as const,
+      status: 'applied' as const,
+      changedItemIds: [] as string[],
+      notChangedItemIds: [] as string[],
+      message: null,
+      reason: null,
+      retryable: false,
+      ...over,
+    });
+    const stale = (parts: Array<ReturnType<typeof p>>) =>
+      ungroupListMayBeStale({ complete: false, parts: parts as never });
+    // Something changed.
+    expect(stale([p({ changedItemIds: [id(1)] })])).toBe(true);
+    // Applied with nothing changed: the records were already out, the list is behind.
+    expect(stale([p({ notChangedItemIds: [id(1)] })])).toBe(true);
+    // A lost answer may have committed.
+    expect(stale([p({ status: 'refused', notChangedItemIds: [id(1)], reason: 'unknown' })])).toBe(
+      true,
+    );
+    // A refusal before any write, and the steps not tried after it: nothing changed.
+    expect(
+      stale([
+        p({ status: 'refused', notChangedItemIds: [id(1)], reason: 'busy', retryable: true }),
+        p({ kind: 'split', status: 'not_attempted', notChangedItemIds: [id(2)] }),
+      ]),
+    ).toBe(false);
   });
 
   it('refuses an answer that is not one', () => {

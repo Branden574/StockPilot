@@ -16,6 +16,7 @@ import {
   randomRequestUuid,
   ungroupAnchorFor,
   ungroupChangeCount,
+  ungroupListMayBeStale,
   UNGROUP_COPY,
   ungroupOutcomeWords,
   ungroupRecordOutcome,
@@ -258,7 +259,7 @@ export function UngroupSelectedDialog({
     setRetryBody(again ? body : null);
     setOutcome(o);
     setPhase('result');
-    if (o.parts.some((p) => p.changedItemIds.length > 0)) onDone(o);
+    if (ungroupListMayBeStale(o)) onDone(o);
   }
 
   function reviewAgain() {

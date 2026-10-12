@@ -659,6 +659,15 @@ export const UNGROUP_COPY = {
         : `${records} leaving ${n === 1 ? 'its' : 'their'} size family`;
   },
   partNotDone: (what: string, message: string) => `Not done: ${what}. ${message}`,
+  /** A step whose answer was lost or unreadable (reason 'unknown'): it may
+   *  have been done, so never "Not done" (G2 security review LOW). */
+  partUnknown: (what: string, message: string) => `Not confirmed: ${what}. ${message}`,
+  /** A keyed step's (remove, split) lost answer: the same keys replay safely. */
+  stepUnknown:
+    'The answer was lost, so this may already be done. Try again: it finishes without doing anything twice.',
+  /** Records a remove found already out of any group (it left them as they are). */
+  alreadyOutOfGroup: (n: number) =>
+    `${n} record${n === 1 ? ' was' : 's were'} already out of ${n === 1 ? 'its' : 'their'} group.`,
   partNotTried: (what: string) =>
     `Not tried: ${what}, because the step before it was not done. Review again to see where each record is now.`,
   /** The bulk Ungroup needs a connection (the web when offline, the phone). */
@@ -2533,12 +2542,30 @@ export function ungroupResultLines(outcome: UngroupSelectedOutcome): {
     }
     const m = p.notChangedItemIds.length;
     if (m === 0) continue;
+    // A remove that applied left the records already out of any group as
+    // they were: said as such, never as leaving.
+    if (p.status === 'applied' && p.kind === 'remove') {
+      done.push(UNGROUP_COPY.alreadyOutOfGroup(m));
+      continue;
+    }
     const what = UNGROUP_COPY.partWhat(p.kind, m);
+    const message = p.message ?? GROUPING_ERROR_WORDS.internal;
     if (p.status === 'not_attempted') notDone.push(UNGROUP_COPY.partNotTried(what));
+    else if (p.reason === 'unknown') notDone.push(UNGROUP_COPY.partUnknown(what, message));
     else if (p.status === 'refused' || p.status === 'partial')
-      notDone.push(UNGROUP_COPY.partNotDone(what, p.message ?? GROUPING_ERROR_WORDS.internal));
+      notDone.push(UNGROUP_COPY.partNotDone(what, message));
   }
   return { done, notDone };
+}
+
+/** The list may be behind after this answer, so the screen re-reads it:
+ *  a record changed, a step applied with nothing to change (the records were
+ *  already where asked), or a step's answer was lost (it may have applied).
+ *  A refusal before any write and the steps not tried after it change nothing. */
+export function ungroupListMayBeStale(outcome: UngroupSelectedOutcome): boolean {
+  return outcome.parts.some(
+    (p) => p.changedItemIds.length > 0 || p.status === 'applied' || p.reason === 'unknown',
+  );
 }
 
 /**
