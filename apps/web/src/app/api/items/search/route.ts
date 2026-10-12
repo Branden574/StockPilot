@@ -287,10 +287,16 @@ export async function GET(req: Request): Promise<Response> {
   // Group selected (0400): each hit's display group, through the caller's own
   // client (RLS: a membership only when its record is readable), so a search
   // hit on one member keeps its group context ("In group <name>"). In parallel
-  // with the images; never fails the search.
+  // with the images; never fails the search. Opt-in (`?groups=1`, recheck
+  // R2-6): only the Items and Books tables show groups, so the order Add items
+  // picker and the count picker, which use this same listing, neither pay for
+  // the read nor receive the fields.
+  const wantGroups = params.get('groups') === '1';
   const [imagesById, displayGroups] = await Promise.all([
     imagesSvc.primaryImagesForItems(hitIds),
-    readDisplayGroupsByItemIds(ctx.supabase, ctx.organizationId, hitIds),
+    wantGroups
+      ? readDisplayGroupsByItemIds(ctx.supabase, ctx.organizationId, hitIds)
+      : Promise.resolve(null),
   ]);
 
   const items = result.items.map((i) => {
@@ -330,7 +336,7 @@ export async function GET(req: Request): Promise<Response> {
       updated_at: i.updated_at as string,
       image_url:
         imagesById.get(i.id as string) ?? cfThumb ?? null,
-      ...displayGroupFields(displayGroups.get(i.id as string)),
+      ...(displayGroups ? displayGroupFields(displayGroups.get(i.id as string)) : {}),
     };
   });
 

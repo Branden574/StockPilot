@@ -11,6 +11,7 @@ import {
   groupBodyForPlan,
   groupingDecisionsFor,
   groupingPreviewKey,
+  groupingRecordLine,
   normalizeGroupName,
   planGrouping,
   planRemoval,
@@ -207,23 +208,11 @@ async function sendGrouping(
   return { ok: true, outcome: r.data.outcome };
 }
 
-/** One record line: picture, name, identifiers, size or edition, charter, rack, on hand. */
+/** One record line: picture, name, identifiers, size or edition, charter, rack,
+ *  on hand (core's line, the same on the phone; "No charter" only for a record
+ *  with none, recheck R2-6). */
 function RecordLine({ r, view }: { r: GroupingReviewRecord; view: 'items' | 'books' }) {
-  const isbn =
-    r.itemType === 'book'
-      ? (r.barcode ?? r.isbnFields?.isbn13 ?? r.isbnFields?.isbn ?? null)
-      : null;
-  const detail = [
-    r.sku ? `SKU ${r.sku}` : null,
-    isbn ? `ISBN ${isbn}` : null,
-    view === 'items' && r.variantSize ? `Size ${r.variantSize}` : null,
-    r.charterName ?? 'No charter',
-    r.placementLabel ?? 'No rack',
-    r.warehouseName,
-    `${r.quantityOnHand} on hand`,
-  ]
-    .filter(Boolean)
-    .join(' · ');
+  const detail = groupingRecordLine(r, view);
   return (
     <span className="flex min-w-0 items-start gap-2">
       {r.imageUrl ? (

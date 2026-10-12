@@ -4,6 +4,7 @@ import {
   GROUPING_ERROR_WORDS,
   GROUPING_MAX_ITEMS,
   groupingPreviewKey,
+  groupingRecordLine,
   indexDisplayGroupMemberships,
   randomRequestUuid,
   type DisplayGroupMembershipRow,
@@ -466,22 +467,9 @@ export function describeGroupingError(e: unknown): { message: string; retrySame:
 
 /**
  * One record's line in the review: its identifiers (a book's ISBN), size,
- * charter, rack, warehouse and on hand, as the web dialog says them.
+ * charter, rack, warehouse and on hand. Core's line, the one the web dialog
+ * says ("No charter" only for a record with none, recheck R2-6).
  */
 export function reviewRecordDetail(r: PhoneGroupingRecord, view: 'items' | 'books'): string {
-  const isbn =
-    r.itemType === 'book'
-      ? (r.barcode ?? r.isbnFields?.isbn13 ?? r.isbnFields?.isbn ?? null)
-      : null;
-  return [
-    r.sku ? `SKU ${r.sku}` : null,
-    isbn ? `ISBN ${isbn}` : null,
-    view === 'items' && r.variantSize ? `Size ${r.variantSize}` : null,
-    r.charterName ?? 'No charter',
-    r.placementLabel ?? 'No rack',
-    r.warehouseName,
-    `${r.quantityOnHand} on hand`,
-  ]
-    .filter(Boolean)
-    .join(' · ');
+  return groupingRecordLine(r, view);
 }

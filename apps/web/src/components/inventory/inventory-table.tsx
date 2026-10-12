@@ -1201,6 +1201,9 @@ export function InventoryTable({
           url.searchParams.set('type', 'book');
         }
         url.searchParams.set('limit', String(pageSize));
+        // Each hit's display group (0400): the route reads memberships only
+        // for a caller that shows them (recheck R2-6).
+        url.searchParams.set('groups', '1');
 
         const res = await fetch(url.toString(), { signal: ctrl.signal });
         if (!res.ok) throw new Error(`search failed: ${res.status}`);

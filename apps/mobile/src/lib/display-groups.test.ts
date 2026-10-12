@@ -475,6 +475,14 @@ describe('reviewRecordDetail', () => {
     );
   });
 
+  // Recheck R2-6: "No charter" only for a record with no charter; a charter
+  // whose name could not be read is left out (core's one record line).
+  it('says No charter only for a record with no charter (R2-6)', () => {
+    expect(reviewRecordDetail(rec({ charterId: 'ch-1', charterName: null }), 'items')).toBe(
+      'SKU POLO-1 · No rack · 4 on hand',
+    );
+  });
+
   it("shows a book's ISBN (its edition), and never a size", () => {
     expect(
       reviewRecordDetail(

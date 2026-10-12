@@ -1785,6 +1785,21 @@ describe('InventoryTable streamed instant adoption (use() handoff)', () => {
     expect(calledUrl).toContain('/api/items/search');
     expect(calledUrl).toContain('q=beta');
   });
+
+  // Recheck R2-6: the table asks the search route for each hit's display
+  // group; the route's other callers (the order and count pickers) do not.
+  it("a server-mode search asks for each hit's display group (?groups=1)", async () => {
+    const user = userEvent.setup();
+    renderStreaming(Promise.resolve(null));
+    expect(await screen.findByRole('link', { name: 'Alpha Widget' })).toBeInTheDocument();
+    await user.type(screen.getByRole('textbox', { name: /search items/i }), 'beta');
+    await vi.waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalled();
+    });
+    const calledUrl = new URL(String(fetchSpy.mock.calls[0]![0]));
+    expect(calledUrl.pathname).toBe('/api/items/search');
+    expect(calledUrl.searchParams.get('groups')).toBe('1');
+  });
 });
 
 // THE PLANNED FIRST PAGE (owner bug 2026-10-05). On the streamed default view

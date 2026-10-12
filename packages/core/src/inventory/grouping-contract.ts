@@ -1301,6 +1301,49 @@ export const GROUP_COPY = {
   itemPageInGroup: (name: string) => `In group ${name}`,
 } as const;
 
+/** What one record's line in a grouping review shows: the preview's facts
+ *  plus the names the screen read for it. */
+export interface GroupingRecordLineFacts {
+  sku: string;
+  barcode: string | null;
+  isbnFields: GroupingPreviewRecord['isbnFields'];
+  itemType: string;
+  variantSize: string | null;
+  charterId: string | null;
+  /** The charter's name, or null when the record has none or its name could
+   *  not be read. */
+  charterName: string | null;
+  placementLabel: string | null;
+  warehouseName: string | null;
+  quantityOnHand: number;
+}
+
+/**
+ * One record's line in a grouping review, the same on the web and the phone:
+ * its SKU, a book's ISBN (its edition), an item's size, its charter, rack,
+ * warehouse and on hand. A charter's name when it was read; "No charter"
+ * only for a record that has no charter. A charter whose name could not be
+ * read (the read degrades to no name) is left out of the line rather than
+ * said to be missing (recheck R2-6).
+ */
+export function groupingRecordLine(r: GroupingRecordLineFacts, view: 'items' | 'books'): string {
+  const isbn =
+    r.itemType === 'book'
+      ? (r.barcode ?? r.isbnFields?.isbn13 ?? r.isbnFields?.isbn ?? null)
+      : null;
+  return [
+    r.sku ? `SKU ${r.sku}` : null,
+    isbn ? `ISBN ${isbn}` : null,
+    view === 'items' && r.variantSize ? `Size ${r.variantSize}` : null,
+    r.charterName ?? (r.charterId === null ? 'No charter' : null),
+    r.placementLabel ?? 'No rack',
+    r.warehouseName,
+    `${r.quantityOnHand} on hand`,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
 /** Why a selected record is not sent: a kit, a rental, a record the caller
  *  cannot edit, or one already in another group that the person chose to
  *  leave out ('chosen', P10). */

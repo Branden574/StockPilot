@@ -148,6 +148,32 @@ describe('GroupSelectedDialog', () => {
     expect(h.preview).toHaveBeenCalledWith([A, B], null);
   });
 
+  // Recheck R2-6: a record with a charter whose name could not be read is
+  // never said to have "No charter".
+  it('says No charter only for a record with no charter (R2-6)', async () => {
+    h.preview.mockResolvedValueOnce(
+      review(
+        [A, B],
+        [rec(A, { charterId: 'ch-1', charterName: null }), rec(B, { charterName: null })],
+      ),
+    );
+    render(
+      <GroupSelectedDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[A, B]}
+        view="items"
+        onDone={() => {}}
+      />,
+    );
+    const rowA = await screen.findByTestId(`group-row-${A}`);
+    expect(within(rowA).getByText(/SKU SKU-A · 15-A · DC4 · 2 on hand/)).toBeInTheDocument();
+    expect(within(rowA).queryByText(/No charter/)).not.toBeInTheDocument();
+    expect(
+      within(screen.getByTestId(`group-row-${B}`)).getByText(/No charter/),
+    ).toBeInTheDocument();
+  });
+
   it('Cancel writes nothing', async () => {
     const onOpenChange = vi.fn();
     h.preview.mockResolvedValueOnce(review([A, B], [rec(A), rec(B)]));

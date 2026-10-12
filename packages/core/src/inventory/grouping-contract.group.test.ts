@@ -9,6 +9,7 @@ import {
   groupBodyForPlan,
   groupingDecisionsFor,
   groupingPreviewKey,
+  groupingRecordLine,
   groupingSelectionFacts,
   mapGroupingError,
   parseGroupingBody,
@@ -787,6 +788,55 @@ describe('remove', () => {
       expectedGroups: { [A]: G, [B]: G },
     });
     expect(parseGroupingBody(body).ok).toBe(true);
+  });
+});
+
+// Recheck R2-6: one record line for the web and the phone. "No charter" is
+// said only of a record that has no charter: a charter whose name could not
+// be read (a failed read degrades to no name) is left out of the line.
+describe("a record's line in the review (recheck R2-6)", () => {
+  const facts = {
+    sku: 'POLO-1',
+    barcode: null,
+    isbnFields: null,
+    itemType: 'product',
+    variantSize: null,
+    charterId: null,
+    charterName: null,
+    placementLabel: null,
+    warehouseName: null,
+    quantityOnHand: 4,
+  };
+
+  it('names what tells the records apart: SKU, size, charter, rack, warehouse and on hand', () => {
+    expect(
+      groupingRecordLine(
+        {
+          ...facts,
+          variantSize: 'XL',
+          charterId: 'ch-1',
+          charterName: 'North',
+          placementLabel: 'Rack 3-A',
+          warehouseName: 'DC4',
+        },
+        'items',
+      ),
+    ).toBe('SKU POLO-1 · Size XL · North · Rack 3-A · DC4 · 4 on hand');
+    expect(
+      groupingRecordLine(
+        { ...facts, itemType: 'book', barcode: '9780134685991', variantSize: 'M' },
+        'books',
+      ),
+    ).toBe('SKU POLO-1 · ISBN 9780134685991 · No charter · No rack · 4 on hand');
+  });
+
+  it('says No charter only for a record with no charter, and leaves out a charter whose name was not read', () => {
+    expect(groupingRecordLine(facts, 'items')).toBe(
+      'SKU POLO-1 · No charter · No rack · 4 on hand',
+    );
+    expect(groupingRecordLine({ ...facts, charterId: 'ch-1', charterName: null }, 'items')).toBe(
+      'SKU POLO-1 · No rack · 4 on hand',
+    );
   });
 });
 
