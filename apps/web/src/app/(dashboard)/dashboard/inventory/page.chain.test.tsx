@@ -49,6 +49,8 @@ const h = vi.hoisted(() => ({
   liveExtra: null as null | Record<string, unknown>,
   /** The live path's placementBreakdown answer. */
   placementMap: null as null | Map<string, unknown[]>,
+  /** listPlanRows' answer (null: the view is over the cap, fixed pages). */
+  planRows: null as null | { rows: unknown[]; total: number; valueOnHand: number },
 }));
 
 const m = vi.hoisted(() => ({
@@ -61,6 +63,7 @@ const m = vi.hoisted(() => ({
   loadInventoryTrendBuckets: vi.fn(),
   resolveInventoryListImages: vi.fn(),
   inventoryList: vi.fn(),
+  listPlanRows: vi.fn(),
   getWarehouseAccess: vi.fn(),
   getWarehousesForRequest: vi.fn(),
   loadCountingUnitsForOrg: vi.fn(),
@@ -151,6 +154,7 @@ vi.mock('@/server/services/inventory', () => ({
     forCurrentUser: vi.fn(async () => ({
       listDistinctRacks: m.listDistinctRacks,
       list: m.inventoryList,
+      listPlanRows: m.listPlanRows,
       countExpected: vi.fn(async () => 0),
       placementBreakdown: vi.fn(async () => h.placementMap ?? new Map()),
     })),
@@ -273,6 +277,8 @@ beforeEach(() => {
       ...(h.liveExtra ?? {}),
     })),
   );
+  h.planRows = null;
+  m.listPlanRows.mockImplementation(() => logged('planRows', async () => h.planRows));
   m.getWarehouseAccess.mockImplementation(() =>
     logged(
       'access',
@@ -610,4 +616,107 @@ describe('Items page: a zero Auto-archived only view', () => {
       expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ total: 0 });
     },
   );
+});
+
+// Phase 2 of the grouping brief (owner 2026-10-11, go to start 2026-10-12):
+// a staff member's or viewer's page is planned group-aware over the whole
+// filtered view (listPlanRows + planGroupAwarePage), so a size run is never
+// split across their pages (the reported XS alone on page 2). The page reads
+// exactly the planned page in full, in at most 100 ids per read, with the
+// planned totals, and hands the table the plan; over the cap it keeps the
+// fixed pages it always had.
+describe('Items page: a staff page is planned group-aware', () => {
+  const plain = (n: number) => ({
+    id: `r${String(n).padStart(3, '0')}`,
+    sku: `SKU-${n}`,
+    name: `Item ${n}`,
+    group_id: null,
+    quantity_on_hand: 1,
+    unit_cost: 1,
+    reorder_point: 0,
+    category_id: null,
+    status: 'active',
+    created_at: '2026-09-01T00:00:00Z',
+    updated_at: new Date(Date.UTC(2026, 9, 1) - n * 120_000).toISOString(),
+  });
+  const tee = (size: string, minutes: number) => ({
+    ...plain(0),
+    id: `tee-${size}`,
+    sku: `TEE-${size}`,
+    name: `Limits Tee - ${size}`,
+    updated_at: new Date(Date.UTC(2026, 9, 1) - minutes * 60_000).toISOString(),
+  });
+  const rowsFor = (filters: { ids?: string[] }) =>
+    logged('liveList', async () => ({
+      items: (filters.ids ?? []).map((id) => ({ ...ROW, id })),
+      total: 1,
+      valueOnHand: 0,
+    }));
+
+  it('staff: the reported XS is on page 1 with its sizes; the page reads exactly that page, with the planned totals', async () => {
+    h.role = 'staff';
+    const rows: unknown[] = [];
+    for (let i = 1; i <= 60; i++) rows.push(plain(i));
+    ['L', 'M', 'S', 'XL', 'XXL', 'XXXL', 'XXXXL'].forEach((s, i) => rows.push(tee(s, 12 + i * 2)));
+    rows.push(tee('XS', 106));
+    h.planRows = { rows, total: rows.length, valueOnHand: 68 };
+    m.inventoryList.mockImplementation(rowsFor);
+    render(await callPage());
+    expect(m.inventoryList).toHaveBeenCalledTimes(1);
+    const filters = m.inventoryList.mock.calls[0]![0] as {
+      ids: string[];
+      limit: number;
+      offset: number;
+      plannedTotals: unknown;
+      withElsewhere: boolean;
+    };
+    expect(filters.ids).toEqual(expect.arrayContaining(['tee-XS', 'tee-L', 'tee-XXXXL']));
+    expect(filters).toMatchObject({
+      limit: filters.ids.length,
+      offset: 0,
+      plannedTotals: { total: 68, valueOnHand: 68 },
+      withElsewhere: true,
+    });
+    const props = m.tableProps.mock.calls[0]![0] as {
+      plannedPage: { page: number; pageIds: string[] };
+      total: number;
+      items: Array<{ id: string }>;
+    };
+    expect(props.plannedPage.page).toBe(1);
+    expect(props.plannedPage.pageIds).toContain('tee-XS');
+    expect(props.total).toBe(68);
+    // The rows reach the table in the planned order.
+    expect([...new Set(props.items.map((r) => r.id))]).toEqual(props.plannedPage.pageIds);
+  });
+
+  it('staff over the cap keeps fixed pages, as before', async () => {
+    h.role = 'staff';
+    h.planRows = null;
+    render(await callPage({ page: '2' }));
+    expect(m.inventoryList.mock.calls[0]![0]).toMatchObject({ limit: 30, offset: 30 });
+    expect(m.inventoryList.mock.calls[0]![0]).not.toHaveProperty('plannedTotals');
+    expect((m.tableProps.mock.calls[0]![0] as { plannedPage?: unknown }).plannedPage ?? null).toBeNull();
+  });
+
+  it('a planned page that runs long to keep a group whole is read in at most 100 ids per read', async () => {
+    h.role = 'staff';
+    const rows: unknown[] = [];
+    for (let i = 1; i <= 150; i++) rows.push({ ...plain(i), sku: 'BIG-FAMILY' });
+    h.planRows = { rows, total: rows.length, valueOnHand: 150 };
+    m.inventoryList.mockImplementation(rowsFor);
+    render(await callPage());
+    const reads = m.inventoryList.mock.calls.map((c) => (c[0] as { ids: string[] }).ids.length);
+    expect(reads).toEqual([100, 50]);
+    const props = m.tableProps.mock.calls[0]![0] as { items: Array<{ id: string }> };
+    expect(new Set(props.items.map((r) => r.id)).size).toBe(150);
+  });
+
+  it('an empty view reads no rows and shows the empty state', async () => {
+    h.role = 'staff';
+    h.planRows = { rows: [], total: 0, valueOnHand: 0 };
+    render(await callPage());
+    expect(m.inventoryList).not.toHaveBeenCalled();
+    expect(m.tableProps).not.toHaveBeenCalled();
+    expect(m.emptyStateProps).toHaveBeenCalled();
+  });
 });

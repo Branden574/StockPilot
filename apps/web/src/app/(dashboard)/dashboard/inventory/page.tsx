@@ -17,8 +17,11 @@ import { ElsewhereUnavailableNotice } from '@/components/inventory/elsewhere-una
 import {
   deriveInstantView,
   instantStateFromPageParams,
+  planGroupAwarePage,
   type InstantFirstPage,
+  type PlannedServerPage,
 } from '@/lib/inventory/instant-mode';
+import { IN_FILTER_MAX_VALUES } from '@/lib/supabase/in-filter';
 import {
   ALL_WAREHOUSES_KEY,
   canUseSharedInventoryCaches,
@@ -39,7 +42,7 @@ import { InventoryService } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
 import {
   displayGroupFields,
-  readDisplayGroupsByItemIds,
+  readDisplayGroupsForOrgAsMember,
 } from '@/server/services/lib/display-groups';
 import { LocationsService } from '@/server/services/locations';
 import { getItemTrends } from '@/server/services/movements';
@@ -292,6 +295,10 @@ type SectionData = {
    *  the instant derivation and this is what the table prints for it until
    *  the streamed dataset lands. null/absent: server mode, fixed slices. */
   firstPage?: InstantFirstPage | null;
+  /** Live path (staff, viewers, anyone within the cap): this page planned
+   *  group-aware over the whole filtered view (Phase 2). null over the cap:
+   *  fixed server slices. */
+  plannedPage?: PlannedServerPage | null;
 };
 
 /**
@@ -722,35 +729,77 @@ async function inventoryTableSection({
       };
     };
 
-    const [inventory, expectedCountLive, lookups, trendBuckets] = await Promise.all([
-      tagged(
-        'inventorySvc.list',
-        inventorySvc.list({
-          q: params.q,
-          // The Expected view spans lifecycles (mirrors mobile's
-          // listStatusPredicate lifecycle:null) so a flagged item someone
-          // manually archived is still reachable there — it is excluded
-          // from the Archived view by the awaiting_first_receipt=false
-          // default, which would otherwise make it unreachable anywhere.
-          status: params.expected === '1' ? 'all' : lifecycleStatus,
-          lowStock: params.stock === 'low',
-          outOfStock: params.stock === 'out',
-          autoArchived: params.auto === '1',
-          expected: params.expected === '1',
-          itemType,
-          warehouseId: warehouseFilter,
-          categoryIds,
-          locationIds,
-          charterIds,
-          rack,
-          sort,
-          limit: PAGE_SIZE,
-          offset: (page - 1) * PAGE_SIZE,
-          // The placement columns add holdings up next to on hand, so they
-          // need the stock a staff member or viewer cannot see (0371).
-          withElsewhere: true,
-        }),
+    const viewFilters = {
+      q: params.q,
+      // The Expected view spans lifecycles (mirrors mobile's
+      // listStatusPredicate lifecycle:null) so a flagged item someone
+      // manually archived is still reachable there — it is excluded
+      // from the Archived view by the awaiting_first_receipt=false
+      // default, which would otherwise make it unreachable anywhere.
+      status: params.expected === '1' ? ('all' as const) : lifecycleStatus,
+      lowStock: params.stock === 'low',
+      outOfStock: params.stock === 'out',
+      autoArchived: params.auto === '1',
+      expected: params.expected === '1',
+      itemType,
+      warehouseId: warehouseFilter,
+      categoryIds,
+      locationIds,
+      charterIds,
+      rack,
+      sort,
+    };
+    // Phase 2 of the grouping brief (owner 2026-10-11): plan this page
+    // group-aware over the WHOLE filtered view, the rule managers' instant mode
+    // pages with, so a size run, a SKU family or a display group whose records
+    // sort far apart is never split across a staff member's pages (the
+    // reported XS alone on page 2). Both reads go through the caller's own
+    // client; the memberships also serve the page's rows below. Over the
+    // instant-mode cap (or if the scan fails) the page keeps its fixed slices.
+    const [planRows, orgDisplayGroups] = await Promise.all([
+      tagged('inventorySvc.listPlanRows', inventorySvc.listPlanRows(viewFilters)).catch(
+        (err: unknown) => {
+          console.warn('[inventory page] page plan unavailable, using fixed pages:', err);
+          return null;
+        },
       ),
+      tagged(
+        'displayGroups.forOrgAsMember',
+        readDisplayGroupsForOrgAsMember(createClient(), sessionCtx.organizationId),
+      ),
+    ]);
+    const plannedPage = planRows
+      ? planGroupAwarePage(
+          planRows.rows.map((r) => ({
+            ...r,
+            primary_location_id: null,
+            charter_id: null,
+            display_group_id: orgDisplayGroups.get(r.id)?.id ?? null,
+          })),
+          sort,
+          page,
+          PAGE_SIZE,
+          'items',
+        )
+      : null;
+
+    const [inventory, expectedCountLive, lookups, trendBuckets] = await Promise.all([
+      plannedPage && planRows
+        ? tagged(
+            'inventorySvc.list',
+            readPlannedPage(inventorySvc, viewFilters, plannedPage.pageIds, planRows),
+          )
+        : tagged(
+            'inventorySvc.list',
+            inventorySvc.list({
+              ...viewFilters,
+              limit: PAGE_SIZE,
+              offset: (page - 1) * PAGE_SIZE,
+              // The placement columns add holdings up next to on hand, so they
+              // need the stock a staff member or viewer cannot see (0371).
+              withElsewhere: true,
+            }),
+          ),
       // Expected-chip badge count (mig 0277) — one HEAD count on the
       // 0277 partial index, in parallel with the rows query. Carries the
       // page's active q/cat/loc/charter/rack filters so the badge N
@@ -799,7 +848,7 @@ async function inventoryTableSection({
       id: i.id,
       quantityOnHand: i.quantity_on_hand,
     }));
-    const [trends, imagesById, placementMap, displayGroups] = await Promise.all([
+    const [trends, imagesById, placementMap] = await Promise.all([
       trendBuckets
         ? Promise.resolve(deriveInventoryTrends(trendInputs, trendBuckets))
         : tagged('getItemTrends', getItemTrends(trendInputs)),
@@ -812,14 +861,11 @@ async function inventoryTableSection({
       ),
       // Per-(item, location) holdings so the list shows ONE LINE PER RACK.
       tagged('inventorySvc.placementBreakdown', inventorySvc.placementBreakdown(itemIdList)),
-      // Group selected (0400): the page's records' display groups, through
-      // the caller's own client (RLS), 100 ids per request. Never fails the
-      // page: a failed read renders the records ungrouped.
-      tagged(
-        'displayGroups.byItemIds',
-        readDisplayGroupsByItemIds(createClient(), sessionCtx.organizationId, itemIdList),
-      ),
     ]);
+    // Group selected (0400): the page's records' display groups, from the
+    // organization's memberships read above through the caller's own client
+    // (RLS). A failed read renders the records ungrouped.
+    const displayGroups = orgDisplayGroups;
     const itemsWithImages = inventory.items.map((i) => {
       const cf = (i as { custom_fields?: Record<string, unknown> | null }).custom_fields;
       const cfThumb =
@@ -849,6 +895,7 @@ async function inventoryTableSection({
       placementMap,
       expectedCount: expectedCountLive,
       elsewhereUnavailable: inventory.elsewhereUnavailable,
+      plannedPage,
     };
   }
 
@@ -944,6 +991,7 @@ async function inventoryTableSection({
       // that streams the dataset behind its first paint (the cached default
       // view; null over the instant cap). Everyone else: server mode as before.
       firstPage={instantPromise ? data.firstPage : undefined}
+      plannedPage={data.plannedPage ?? null}
       expectedCount={data.expectedCount}
       productGroupUnits={productGroupUnits}
     />
@@ -1161,4 +1209,50 @@ function inventoryEmptyState({
     );
   }
   return null;
+}
+
+/**
+ * Read a planned page (Phase 2) in full: exactly its records, in at most
+ * IN_FILTER_MAX_VALUES ids per read (a page runs long to keep a group whole,
+ * and a group holds up to 200 records), every read with the view's filters
+ * and the planned totals so none scans the view again. The rows come back in
+ * the planned order.
+ */
+async function readPlannedPage(
+  inventorySvc: InventoryService,
+  viewFilters: Parameters<InventoryService['list']>[0],
+  pageIds: readonly string[],
+  totals: { total: number; valueOnHand: number },
+): Promise<Awaited<ReturnType<InventoryService['list']>>> {
+  if (pageIds.length === 0) {
+    return { items: [], total: totals.total, valueOnHand: totals.valueOnHand, elsewhereUnavailable: false };
+  }
+  const reads: Array<Promise<Awaited<ReturnType<InventoryService['list']>>>> = [];
+  for (let i = 0; i < pageIds.length; i += IN_FILTER_MAX_VALUES) {
+    const ids = pageIds.slice(i, i + IN_FILTER_MAX_VALUES);
+    reads.push(
+      inventorySvc.list({
+        ...viewFilters,
+        ids,
+        limit: ids.length,
+        offset: 0,
+        plannedTotals: { total: totals.total, valueOnHand: totals.valueOnHand },
+        // The placement columns add holdings up next to on hand, so they
+        // need the stock a staff member or viewer cannot see (0371).
+        withElsewhere: true,
+      }),
+    );
+  }
+  const parts = await Promise.all(reads);
+  const byId = new Map(parts.flatMap((p) => p.items).map((it) => [it.id, it]));
+  const items = pageIds.flatMap((id) => {
+    const it = byId.get(id);
+    return it ? [it] : [];
+  });
+  return {
+    items,
+    total: totals.total,
+    valueOnHand: totals.valueOnHand,
+    elsewhereUnavailable: parts.some((p) => p.elsewhereUnavailable),
+  };
 }
