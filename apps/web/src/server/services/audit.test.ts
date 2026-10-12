@@ -17,8 +17,12 @@ const h = vi.hoisted(() => ({
   headersCalls: 0,
   reportError: vi.fn(),
   withContext: vi.fn(),
+  after: vi.fn(),
 }));
 
+// Next's after(), which lib/defer.ts keepAlive hands each write to. A mock
+// records what was registered; audit.keepalive.test.ts runs the real one.
+vi.mock('next/server', () => ({ after: h.after }));
 vi.mock('next/headers', () => ({
   headers: async () => {
     h.headersCalls += 1;
@@ -96,6 +100,7 @@ beforeEach(() => {
   h.insert.mockReset();
   h.reportError.mockReset();
   h.withContext.mockReset();
+  h.after.mockReset();
   h.headersCalls = 0;
   resetAuditLossReportsForTests();
 });
@@ -424,5 +429,140 @@ describe('an INSERT that never answers', () => {
     );
     await audit(payload(1), ctx);
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+/**
+ * 2026-09-24..10-12: 35 'Audit rows were not written' reports, each an
+ * AuditInsertTimeout with no status. Every one came from a `void audit(...)`
+ * whose INSERT was still in flight when the route returned. Nothing held the
+ * invocation, so Vercel suspended the instance, and the next request resumed
+ * it with the 5 s deadline long past: 33 rows had committed (the reply was
+ * never read) and 2 Learn4Life item-create rows were never sent. Each writer
+ * now hands its write to after() (lib/defer.ts keepAlive), so the platform
+ * keeps the invocation up until the INSERT answers. audit.keepalive.test.ts
+ * shows the same through Next's real App Route module.
+ */
+describe('the write outlives the response', () => {
+  const signIn = {
+    organization_id: null,
+    user_id: 'user-9',
+    event: 'user.sign_in_failed' as const,
+    metadata: { entity_type: 'user', entity_id: 'user-9' },
+  };
+  const writers: Array<[string, () => Promise<unknown>]> = [
+    ['audit()', () => audit(payload(1), ctx)],
+    ['insertAuditRowReported()', () => insertAuditRowReported(signIn)],
+    ['auditMany()', () => auditMany([payload(1), payload(2)], ctx)],
+  ];
+  /** Lets a write reach its INSERT (headers, context) before a check. */
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  // Mutation caught: a writer that does not hand its write to after() (the
+  // `void` shape), or hands it something other than the promise its caller
+  // gets (a callback started after the response, a copy that settles early).
+  it.each(writers)(
+    '%s registers its write with after() once, and it settles only when the INSERT answers',
+    async (_name, write) => {
+      let answer!: (v: typeof ok) => void;
+      h.insert.mockReturnValue(
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+      );
+      const returned = write();
+      try {
+        expect(h.after).toHaveBeenCalledTimes(1);
+        const registered = h.after.mock.calls[0]![0] as Promise<unknown>;
+        // The promise the caller gets: a caller that awaits it sees no change.
+        expect(registered).toBe(returned);
+        let settled = false;
+        void registered.then(() => {
+          settled = true;
+        });
+        await settle();
+        expect(h.insert).toHaveBeenCalledTimes(1);
+        expect(settled).toBe(false);
+
+        answer(ok);
+        await returned;
+        expect(settled).toBe(true);
+        expect(h.reportError).not.toHaveBeenCalled();
+      } finally {
+        answer(ok);
+        await returned;
+      }
+    },
+  );
+
+  // Mutation caught: letting after()'s "called outside a request scope" throw
+  // out of the writer (scripts, a cron service run as a plain function, tests).
+  it.each(writers)(
+    '%s outside a request (after() throws): the row is still written and nothing is reported',
+    async (_name, write) => {
+      h.after.mockImplementation(() => {
+        throw new Error('`after` was called outside a request scope.');
+      });
+      h.insert.mockResolvedValue(ok);
+
+      await write();
+
+      expect(h.insert).toHaveBeenCalledTimes(1);
+      expect(h.reportError).not.toHaveBeenCalled();
+    },
+  );
+
+  // Mutation caught: `void reportError(...)` in sendLossReport. The alert's
+  // own webhook POST was suspended with the instance too: 13 of the 35
+  // reports' alert POSTs failed with a TimeoutError on a later resume.
+  it('the loss report is kept alive too: the first one, and the count sent when the window closes', async () => {
+    vi.useFakeTimers();
+    const firstReport = Promise.resolve();
+    const countReport = Promise.resolve();
+    h.reportError.mockReturnValueOnce(firstReport).mockReturnValueOnce(countReport);
+    h.insert.mockResolvedValue(badGateway);
+    const registered = () => h.after.mock.calls.map(([p]) => p as unknown);
+
+    await audit(payload(1), ctx);
+    await audit(payload(2), ctx);
+    expect(h.reportError).toHaveBeenCalledTimes(1);
+    expect(registered()).toContain(firstReport);
+
+    await vi.advanceTimersByTimeAsync(AUDIT_LOSS_REPORT_WINDOW_MS);
+    expect(h.reportError).toHaveBeenCalledTimes(2);
+    expect(registered()).toContain(countReport);
+  });
+});
+
+/**
+ * The 35 reports all said AuditInsertTimeout and nothing else, so a 5 s
+ * deadline that fired on time and one that fired ten minutes late, when the
+ * next request resumed a suspended instance, looked the same.
+ */
+describe('how long a timed-out INSERT waited', () => {
+  it('a deadline that fires on time says 5 s', async () => {
+    vi.useFakeTimers();
+    h.insert.mockImplementation(() => new Promise(() => {}));
+    void audit(payload(1), ctx);
+    await vi.advanceTimersByTimeAsync(AUDIT_INSERT_TIMEOUT_MS);
+    expect(h.reportError.mock.calls[0]![1]).toMatchObject({
+      extra: { lost: 1, timedOut: true, elapsedMs: AUDIT_INSERT_TIMEOUT_MS },
+    });
+  });
+
+  it('a deadline that fires late (a suspended instance) says how long it really was', async () => {
+    vi.useFakeTimers();
+    h.insert.mockImplementation(() => new Promise(() => {}));
+    void audit(payload(1), ctx);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.insert).toHaveBeenCalledTimes(1);
+    // Suspended: the wall clock moves on for ten minutes, the process runs
+    // nothing, and the deadline fires when it runs again.
+    vi.setSystemTime(Date.now() + 600_000);
+    await vi.advanceTimersByTimeAsync(AUDIT_INSERT_TIMEOUT_MS);
+
+    const extra = h.reportError.mock.calls[0]![1].extra as Record<string, unknown>;
+    expect(extra).toMatchObject({ lost: 1, timedOut: true, elapsedMs: expect.any(Number) });
+    expect(extra.elapsedMs).toBeGreaterThanOrEqual(600_000);
   });
 });
