@@ -611,10 +611,17 @@ select pg_temp.part_handed_over(:oK3, :lK3, :pW) as "rK3" \gset
 select coalesce(pg_temp.live(:'rK3'), '00000000-0000-0000-0000-000000000000'::uuid) as "oK3R" \gset
 select pg_temp.call_as('authenticated', :mgr, format('select (public.receive_return(%L))->>''status''', :'rK3')) as "k3Recv" \gset
 select pg_temp.rpc('authenticated', :mgr, format('select public.close_return(%L)', :'rK3')) as "jK3Close" \gset
+-- The refusal is tried (and undone) and Close the rest runs in statements of
+-- their own: a statement never sees what a function it calls wrote, so the
+-- replacement's status is read in the assertion after them (test stage,
+-- 2026-10-12: read in the same statement it still showed backordered).
+select pg_temp.attempt('authenticated', :mgr, format('select (public.close_partial(%L)).status', :'oK3R')) as "k3Partial",
+       (select status from public.returns where id = :'rK3') as "k3RmaStatus" \gset
+select pg_temp.rpc('authenticated', :mgr, pg_temp.rest_sql(:'rK3', pg_temp.rev(:'rK3'), 'Rest cancelled by the customer')) as "jK3Rest" \gset
 select is(
-  pg_temp.attempt('authenticated', :mgr, format('select (public.close_partial(%L)).status', :'oK3R'))
-  || ' | ' || (select status from public.returns where id = :'rK3') || ':'
-  || pg_temp.err(pg_temp.rpc('authenticated', :mgr, pg_temp.rest_sql(:'rK3', pg_temp.rev(:'rK3'), 'Rest cancelled by the customer')))
+  :'k3Partial'
+  || ' | ' || :'k3RmaStatus' || ':'
+  || pg_temp.err(:'jK3Rest'::jsonb)
   || ':' || (select status from public.order_requests where id = :'oK3R') || ':' || pg_temp.xs(:'rK3', :mgr),
   '42501:replacement_cancel_via_return:replacement_cancel_via_return | closed:ok:completed:completed',
   'C6: close_partial from the order path is still refused without the flag; on a CLOSED RMA Close the rest completes the replacement and the exchange reads completed');

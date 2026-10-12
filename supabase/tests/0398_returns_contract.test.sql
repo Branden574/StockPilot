@@ -236,11 +236,17 @@ select pg_temp.rpc('authenticated', :mgr,
 select pg_temp.rpc('service_role', null,
          format($q$select public.create_requester_return_request(%L, %L::jsonb, gen_random_uuid(), '{"channel":"token"}'::jsonb)$q$,
                 :ord, pg_temp.body(1))) as "jQ" \gset
+-- Deny and cancel run in statements of their own: a statement never sees
+-- what a function it calls wrote, so the statuses are read in the assertion
+-- after them (test stage, 2026-10-12: read in the same statement they still
+-- showed requested).
+select pg_temp.rpc('authenticated', :mgr,
+         format($q$select public.deny_return(%L, 'Not ours')$q$, coalesce((:'jD'::jsonb)->>'returnId', '00000000-0000-0000-0000-000000000000'))) as "jDeny" \gset
+select pg_temp.rpc('authenticated', :mgr,
+         format($q$select public.cancel_return(%L, 0, null)$q$, coalesce((:'jE'::jsonb)->>'returnId', '00000000-0000-0000-0000-000000000000'))) as "jCancel" \gset
 select is(
-  pg_temp.err(pg_temp.rpc('authenticated', :mgr,
-    format($q$select public.deny_return(%L, 'Not ours')$q$, coalesce((:'jD'::jsonb)->>'returnId', '00000000-0000-0000-0000-000000000000'))))
-  || ':' || pg_temp.err(pg_temp.rpc('authenticated', :mgr,
-    format($q$select public.cancel_return(%L, 0, null)$q$, coalesce((:'jE'::jsonb)->>'returnId', '00000000-0000-0000-0000-000000000000'))))
+  pg_temp.err(:'jDeny'::jsonb)
+  || ':' || pg_temp.err(:'jCancel'::jsonb)
   || ':' || pg_temp.err(:'jQ'::jsonb)
   || ' | ' || (select string_agg(r.status || '/' || r.source, ',' order by r.status)
                 from public.returns r
