@@ -16,6 +16,7 @@ import {
   randomRequestUuid,
   ungroupAnchorFor,
   ungroupChangeCount,
+  ungroupListMayBeStale,
   UNGROUP_COPY,
   ungroupOutcomeWords,
   ungroupRecordOutcome,
@@ -258,7 +259,7 @@ export function UngroupSelectedDialog({
     setRetryBody(again ? body : null);
     setOutcome(o);
     setPhase('result');
-    if (o.parts.some((p) => p.changedItemIds.length > 0)) onDone(o);
+    if (ungroupListMayBeStale(o)) onDone(o);
   }
 
   function reviewAgain() {
@@ -450,15 +451,16 @@ export function UngroupSelectedDialog({
           {phase === 'result' ? (
             <>
               {outcome && !outcome.complete ? (
-                retryBody ? (
-                  <Button variant="outline" onClick={() => void send(retryBody)}>
-                    Try again
-                  </Button>
-                ) : (
+                <>
+                  {retryBody ? (
+                    <Button variant="outline" onClick={() => void send(retryBody)}>
+                      Try again
+                    </Button>
+                  ) : null}
                   <Button variant="outline" onClick={reviewAgain}>
                     Review again
                   </Button>
-                )
+                </>
               ) : null}
               <Button ref={doneRef} onClick={() => onOpenChange(false)}>
                 Done

@@ -21,6 +21,7 @@ import {
   randomRequestUuid,
   ungroupAnchorFor,
   ungroupChangeCount,
+  ungroupListMayBeStale,
   UNGROUP_COPY,
   ungroupOutcomeWords,
   ungroupRecordOutcome,
@@ -173,7 +174,7 @@ export default function UngroupSelectedScreen() {
       setRetryBody(again ? body : null);
       setOutcome(o);
       setPhase('done');
-      if (o.parts.some((p) => p.changedItemIds.length > 0)) {
+      if (ungroupListMayBeStale(o)) {
         notifyRecordsUngrouped();
         notifyDisplayGroupsChanged();
       }
@@ -416,15 +417,16 @@ export default function UngroupSelectedScreen() {
         {phase === 'done' ? (
           <View style={{ gap: 10 }}>
             {outcome && !outcome.complete ? (
-              retryBody ? (
-                <Button block variant="outline" onPress={() => void send(retryBody)}>
-                  Try again
-                </Button>
-              ) : (
+              <>
+                {retryBody ? (
+                  <Button block variant="outline" onPress={() => void send(retryBody)}>
+                    Try again
+                  </Button>
+                ) : null}
                 <Button block variant="outline" onPress={reviewAgain}>
                   Review again
                 </Button>
-              )
+              </>
             ) : null}
             <Button block onPress={close}>
               Done

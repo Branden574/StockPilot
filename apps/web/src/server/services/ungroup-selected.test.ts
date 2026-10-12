@@ -372,16 +372,86 @@ describe('UngroupSelectedService.apply', () => {
     expect(calls).toEqual([]);
   });
 
-  it('a step that fails with no words of its own says core generic sentence, never the raw error', async () => {
-    const { svc, grouping } = harness({ families: [inFam] });
+  // Re-pinned 2026-10-12 (G2 security review LOW): a keyed step that fails
+  // with no words of its own may have committed (a lost or unreadable
+  // answer), so it is "not confirmed" and retryable with the same keys,
+  // never "Not done" with no Try again. Never the raw error either way.
+  it('a keyed step that fails with no words of its own is not confirmed and retryable, never the raw error', async () => {
+    const { svc, grouping, unlink } = harness({ families: [inFam] });
     grouping.applyGrouping.mockRejectedValueOnce(new Error('connection reset by peer'));
     const r = await svc.apply(body(), 'web');
-    expect(r.outcome.parts[0]).toMatchObject({
+    expect(r.outcome.parts[0]).toEqual({
+      kind: 'remove',
       status: 'refused',
-      message: GROUPING_ERROR_WORDS.internal,
-      reason: 'internal_error',
+      changedItemIds: [],
+      notChangedItemIds: [id(1)],
+      message: UNGROUP_COPY.stepUnknown,
+      reason: 'unknown',
+      retryable: true,
     });
+    expect(r.outcome.parts.slice(1).map((p) => p.status)).toEqual([
+      'not_attempted',
+      'not_attempted',
+    ]);
+    expect(unlink).not.toHaveBeenCalled();
     expect(JSON.stringify(r)).not.toContain('connection reset');
+  });
+
+  it('a split whose answer was lost after it committed: Try again with the same body replays it and finishes', async () => {
+    const { svc, grouping } = harness({ families: [inFam, inFam] });
+    grouping.splitSku.mockRejectedValueOnce(
+      new ServiceError('internal_error', 'split_item_sku: unreadable answer'),
+    );
+    const first = await svc.apply(body(), 'app');
+    expect(first.outcome.parts[1]).toMatchObject({
+      kind: 'split',
+      status: 'refused',
+      notChangedItemIds: [id(2), id(3)],
+      message: UNGROUP_COPY.stepUnknown,
+      reason: 'unknown',
+      retryable: true,
+    });
+    expect(JSON.stringify(first)).not.toContain('unreadable answer');
+    const again = await svc.apply(body(), 'app');
+    expect(again.outcome.complete).toBe(true);
+    expect(
+      grouping.splitSku.mock.calls.map(
+        (c) => (c[0] as unknown as { idempotencyKey: string }).idempotencyKey,
+      ),
+    ).toEqual([K2, K2]);
+  });
+
+  // G2 correctness review INFO (2026-10-12): a no-op remove wrote nothing
+  // because every record was already out of any group; it never says they
+  // left their group.
+  it('a remove that finds every record already out of any group counts none as changed', async () => {
+    const { svc, grouping } = harness({ families: [inFam] });
+    grouping.applyGrouping.mockResolvedValueOnce({
+      organizationId: ORG,
+      outcome: {
+        action: 'remove',
+        outcome: 'noop',
+        replay: false,
+        created: false,
+        group: null,
+        changes: [],
+      },
+    } as never);
+    const r = await svc.apply(body({ split: null, unlink: null }), 'web');
+    expect(r.outcome).toEqual({
+      complete: true,
+      parts: [
+        {
+          kind: 'remove',
+          status: 'applied',
+          changedItemIds: [],
+          notChangedItemIds: [id(1)],
+          message: null,
+          reason: null,
+          retryable: false,
+        },
+      ],
+    });
   });
 });
 

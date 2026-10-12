@@ -91,14 +91,18 @@ export function canUnlinkFamilies(ctx: ServiceContext): boolean {
   return can(ctx, 'sports:manage') && isModuleEnabled(ctx, 'sports');
 }
 
-/** A step's refusal in core's words; never a raw message. */
+/** A keyed step's (remove, split) refusal in core's words; never a raw
+ *  message. One with no words of its own (a transport failure after the
+ *  database committed, or an answer that could not be read) may have
+ *  applied: it is 'unknown' and retryable, since the same keys replay
+ *  (G2 security review LOW). */
 function partWords(e: unknown): { message: string; reason: string; retryable: boolean } {
   if (e instanceof ServiceError && e.code !== 'internal_error') {
     const reason = typeof e.details?.reason === 'string' ? e.details.reason : e.code;
     return { message: e.message, reason, retryable: e.details?.retryable === true };
   }
   console.error('[ungroup-selected] step failed:', e instanceof Error ? e.message : String(e));
-  return { message: GROUPING_ERROR_WORDS.internal, reason: 'internal_error', retryable: false };
+  return { message: UNGROUP_COPY.stepUnknown, reason: 'unknown', retryable: true };
 }
 
 /** unlinkItems' refusals in core's words (its own sentences name its screen). */
@@ -276,12 +280,12 @@ export class UngroupSelectedService {
           },
           surface,
         );
-        // Applied (or a replay of it): the records it took out. A no-op wrote
-        // nothing because the records were already out: as asked.
-        const changed =
-          answer.outcome.outcome === 'applied'
-            ? ids.filter((id) => answer.outcome.changes.some((c) => c.itemId.toLowerCase() === id))
-            : ids;
+        // Applied (or a replay of it): the records it took out. The rest, and
+        // every record on a no-op, were already out of any group and were
+        // left as they are: named as not changed, never as leaving.
+        const changed = ids.filter((id) =>
+          answer.outcome.changes.some((c) => c.itemId.toLowerCase() === id),
+        );
         parts.push({
           kind: 'remove',
           status: 'applied',

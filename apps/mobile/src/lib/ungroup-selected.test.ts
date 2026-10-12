@@ -361,6 +361,15 @@ describe('screen pins', () => {
     expect(screen).toContain('lines.notDone');
     expect(screen).toContain('send(retryBody)');
     expect(screen).toContain('reviewAgain');
+    // G2 reviews (2026-10-12): the lists re-read after any answer that may
+    // have changed something (a lost answer, records already out), by core's
+    // rule, not only when a record is counted as changed.
+    expect(screen).toContain('if (ungroupListMayBeStale(o)) {');
+    expect(screen).not.toContain('if (o.parts.some((p) => p.changedItemIds.length > 0)) {');
+    // PR #358 review (2026-10-12): Review again sits beside Try again (never
+    // only in the else branch), as on the web.
+    expect(screen).toContain('{retryBody ? (');
+    expect(screen).not.toMatch(/\) : \(\s*<Button block variant="outline" onPress=\{reviewAgain\}>/);
     // UNGROUP_COPY words exist for every left-out reason the plan names.
     expect(Object.keys(UNGROUP_COPY.selectedLeftOutReason).sort()).toEqual(
       ['family_permission', 'family_sku', 'kit', 'not_writable', 'nothing'].sort(),

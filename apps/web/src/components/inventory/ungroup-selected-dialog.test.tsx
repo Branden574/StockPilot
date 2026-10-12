@@ -551,10 +551,74 @@ describe('UngroupSelectedDialog', () => {
     );
     await screen.findByTestId(`ungroup-selected-row-${id(1)}`);
     await userEvent.click(screen.getByRole('button', { name: UNGROUP_COPY.confirm(1) }));
+    // PR #358 review (2026-10-12): Review again sits beside Try again, so a
+    // refusal that keeps coming back never leaves Try again as the only way on.
+    expect(await screen.findByRole('button', { name: 'Review again' })).toBeInTheDocument();
     await userEvent.click(await screen.findByRole('button', { name: 'Try again' }));
     const [first, second] = vi.mocked(ungroupSelectedAction).mock.calls.map((c) => c[0]);
     expect(second).toEqual(first);
     expect(await screen.findByText(UNGROUP_COPY.done(1))).toBeInTheDocument();
+  });
+
+  // G2 security review LOW (2026-10-12): a keyed step whose answer was lost
+  // may have committed: it says so (never "Not done"), offers Try again with
+  // the same body, and the list re-reads in case it did.
+  it('a step whose answer was lost says Not confirmed, offers Try again and refreshes the list', async () => {
+    preview([id(1)], [record(1, { sku: 'PAIR' })], [cand(1, 'PAIR'), cand(9, 'PAIR')]);
+    vi.mocked(ungroupSelectedAction).mockResolvedValueOnce(
+      applied([
+        part('split', [], {
+          status: 'refused',
+          notChangedItemIds: [id(1)],
+          message: UNGROUP_COPY.stepUnknown,
+          reason: 'unknown',
+          retryable: true,
+        }),
+      ]),
+    );
+    const onDone = vi.fn();
+    render(
+      <UngroupSelectedDialog
+        open
+        itemIds={[id(1)]}
+        view="items"
+        onOpenChange={() => {}}
+        onDone={onDone}
+      />,
+    );
+    await screen.findByTestId(`ungroup-selected-row-${id(1)}`);
+    await userEvent.click(screen.getByRole('button', { name: UNGROUP_COPY.confirm(1) }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      UNGROUP_COPY.partUnknown(UNGROUP_COPY.partWhat('split', 1), UNGROUP_COPY.stepUnknown),
+    );
+    expect(screen.getByRole('alert')).not.toHaveTextContent('Not done');
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Review again' })).toBeInTheDocument();
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  // G2 correctness review INFO (2026-10-12): a remove that found the records
+  // already out of any group says so, and the list re-reads (it is behind).
+  it('records already out of their group are said to be, and the list refreshes', async () => {
+    preview([id(2)], [record(2, { displayGroup: { id: G, name: 'Tees', version: 1 } })]);
+    vi.mocked(ungroupSelectedAction).mockResolvedValueOnce(
+      applied([part('remove', [], { notChangedItemIds: [id(2)] })]),
+    );
+    const onDone = vi.fn();
+    render(
+      <UngroupSelectedDialog
+        open
+        itemIds={[id(2)]}
+        view="items"
+        onOpenChange={() => {}}
+        onDone={onDone}
+      />,
+    );
+    await screen.findByTestId(`ungroup-selected-row-${id(2)}`);
+    await userEvent.click(screen.getByRole('button', { name: UNGROUP_COPY.confirm(1) }));
+    expect(await screen.findByRole('status')).toHaveTextContent(UNGROUP_COPY.alreadyOutOfGroup(1));
+    expect(screen.getByRole('status')).not.toHaveTextContent(UNGROUP_COPY.leftGroups(1));
+    expect(onDone).toHaveBeenCalledTimes(1);
   });
 
   it('ignores an answer for another selection than the one it holds (a stale review)', async () => {
