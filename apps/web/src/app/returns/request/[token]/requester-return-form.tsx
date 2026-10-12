@@ -28,9 +28,9 @@ const JSON_HEADERS = { 'content-type': 'application/json' } as const;
  *   • The sizes: POST /api/v1/public/returns/options with the token in the
  *     BODY, never in the API's URL (it stays out of the API URLs, CDN keys
  *     and the app's own logs; this page's own path is the emailed link by
- *     design, and the server's token lookup still reaches the database
- *     gateway's log until a migration: SECURITY-INVARIANTS, RX-3 residuals),
- *     once, on the first Exchange.
+ *     design, and since returns RX-4 (0397) the server looks the token up by
+ *     a POST, so it stays out of the database gateway's query-string log:
+ *     SECURITY-INVARIANTS, the token lookup), once, on the first Exchange.
  *   • The request: POST /api/v1/public/returns with the token, the honeypot
  *     and the key minted when the form opened.
  *
