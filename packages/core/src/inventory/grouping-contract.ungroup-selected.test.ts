@@ -7,6 +7,7 @@ import {
   chooseUngroupKind,
   familyStaysListedByName,
   familyStaysListedByNameAfter,
+  familySkuTogether,
   keyedUngroupSelectedBody,
   parseUngroupSelectedBody,
   parseUngroupSelectedOutcome,
@@ -14,7 +15,9 @@ import {
   ungroupableItemIds,
   ungroupChangeCount,
   ungroupListMayBeStale,
+  ungroupOfferKind,
   ungroupOutcomeWords,
+  ungroupRackLine,
   ungroupRecordOutcome,
   ungroupResultLines,
   ungroupSelectedBodyForPlan,
@@ -179,17 +182,17 @@ describe('planUngroupSelected: what happens to each ticked record', () => {
     );
     expect(plan.split.splitIds).toEqual([split.id]);
     expect(plan.leaveGroup.map((r) => r.id)).toEqual([group.id]);
-    expect(plan.leaveFamily.map((r) => r.id)).toEqual([family.id]);
+    // Re-pinned 2026-10-12 (owner: "Move them together"): famSku shares its
+    // SKU and is in a family, so it leaves the family (never a split, which
+    // the database refuses) instead of being left out as family_sku.
+    expect(plan.leaveFamily.map((r) => r.id)).toEqual([family.id, famSku.id]);
     expect(plan.leftOut).toEqual([
       { id: kit.id, reason: 'kit' },
       { id: nothing.id, reason: 'nothing' },
       { id: locked.id, reason: 'not_writable' },
-      // Shares its SKU and is in a family: the SKU header wins on the list,
-      // and the database refuses that split, so it is left out (not unlinked).
-      { id: famSku.id, reason: 'family_sku' },
     ]);
     expect(plan.unavailableCount).toBe(1);
-    expect(ungroupChangeCount(plan, {})).toBe(3);
+    expect(ungroupChangeCount(plan, {})).toBe(4);
     expect(ungroupOutcomeWords(ungroupRecordOutcome(plan, kit.id, {})!)).toBe(
       `Left out: ${UNGROUP_COPY.selectedLeftOutReason.kit}`,
     );
@@ -204,7 +207,10 @@ describe('planUngroupSelected: what happens to each ticked record', () => {
       { canUnlinkFamilies: true, shownUnder: new Map([[famSku.id, 'sku' as const]]) },
     );
     expect(plan.split.splitIds).toEqual([]);
-    expect(plan.leftOut).toEqual([{ id: famSku.id, reason: 'family_sku' }]);
+    // Re-pinned 2026-10-12 (owner: "Move them together"): it leaves its size
+    // family instead of being left out.
+    expect(plan.leftOut).toEqual([]);
+    expect(plan.leaveFamily.map((r) => r.id)).toEqual([famSku.id]);
   });
 
   it('a size family needs permission to manage sports products: without it the record is left out', () => {
@@ -243,6 +249,108 @@ describe('planUngroupSelected: what happens to each ticked record', () => {
       { canUnlinkFamilies: false },
     );
     expect(plan.groups).toEqual([{ id: G, name: 'Tees', removing: 2, staying: 3 }]);
+  });
+});
+
+// Owner 2026-10-12 (asked, "Move them together (Recommended)"): one size of a
+// size family on more than one rack is one SKU with a record per rack. The
+// family link belongs to the SKU (InventoryService SHARED_ITEM_FIELDS), so
+// every rack's record leaves the family together, and the review lists them.
+describe('a size on more than one rack (one SKU in a size family) leaves its family with every rack', () => {
+  const m1 = rec(1, { sku: 'TEE-M', productGroupId: FAM, productGroupName: 'Tee' });
+  const m2 = rec(2, { sku: 'TEE-M', productGroupId: FAM, productGroupName: 'Tee' });
+  const racks = [
+    cand(1, 'TEE-M', { inFamily: true }),
+    cand(2, 'TEE-M', { inFamily: true }),
+    cand(3, 'TEE-M', { inFamily: true }),
+    cand(4, 'TEE-L', { inFamily: true }),
+  ];
+
+  it('shown under its SKU header: it leaves the family, and the other racks of its SKU are listed and counted', () => {
+    const plan = planUngroupSelected([m1.id], { records: [m1], unavailableCount: 0 }, racks, {
+      canUnlinkFamilies: true,
+      shownUnder: new Map([[m1.id, 'sku' as const]]),
+    });
+    expect(plan.leftOut).toEqual([]);
+    expect(plan.split.splitIds).toEqual([]);
+    expect(plan.leaveFamily.map((r) => r.id)).toEqual([m1.id]);
+    expect(plan.familySkuSiblings.get(m1.id)?.map((c) => c.id)).toEqual([id(2), id(3)]);
+    expect(ungroupChangeCount(plan, {})).toBe(3);
+    expect(ungroupOutcomeWords(ungroupRecordOutcome(plan, m1.id, {})!)).toBe(
+      'Leaves the Tee size family',
+    );
+    expect(familySkuTogether(plan)).toBe(true);
+  });
+
+  it('shown under its family run with the other racks off the list: they leave with it too', () => {
+    const plan = planUngroupSelected([m1.id], { records: [m1], unavailableCount: 0 }, racks, {
+      canUnlinkFamilies: true,
+      shownUnder: new Map([[m1.id, 'family' as const]]),
+    });
+    expect(plan.familySkuSiblings.get(m1.id)?.map((c) => c.id)).toEqual([id(2), id(3)]);
+    expect(ungroupChangeCount(plan, {})).toBe(3);
+  });
+
+  it('two racks ticked: each is its own line, and an unticked third rack is listed once', () => {
+    const plan = planUngroupSelected(
+      [m1.id, m2.id],
+      { records: [m1, m2], unavailableCount: 0 },
+      racks,
+      { canUnlinkFamilies: true },
+    );
+    expect(plan.leaveFamily.map((r) => r.id)).toEqual([m1.id, m2.id]);
+    expect(plan.familySkuSiblings.get(m1.id)?.map((c) => c.id)).toEqual([id(3)]);
+    expect(plan.familySkuSiblings.get(m2.id)).toBeUndefined();
+    expect(ungroupChangeCount(plan, {})).toBe(3);
+  });
+
+  it('without permission to manage sports products it is left out, never split', () => {
+    const plan = planUngroupSelected([m1.id], { records: [m1], unavailableCount: 0 }, racks, {
+      canUnlinkFamilies: false,
+      shownUnder: new Map([[m1.id, 'sku' as const]]),
+    });
+    expect(plan.split.splitIds).toEqual([]);
+    expect(plan.leftOut).toEqual([{ id: m1.id, reason: 'family_permission' }]);
+    expect(ungroupChangeCount(plan, {})).toBe(0);
+  });
+
+  it('a size on one rack has no other racks and no note', () => {
+    const l = rec(4, { sku: 'TEE-L', productGroupId: FAM, productGroupName: 'Tee' });
+    const plan = planUngroupSelected([l.id], { records: [l], unavailableCount: 0 }, racks, {
+      canUnlinkFamilies: true,
+    });
+    expect(plan.leaveFamily.map((r) => r.id)).toEqual([l.id]);
+    expect(plan.familySkuSiblings.size).toBe(0);
+    expect(familySkuTogether(plan)).toBe(false);
+  });
+
+  it('the bar offers Ungroup for it (it leaves the family), never a split', () => {
+    const facts = { inGroup: false, sharesSku: true, inFamily: true };
+    expect(ungroupOfferKind(facts, 'sku', true)).toBe('family');
+    expect(ungroupOfferKind(facts, null, true)).toBe('family');
+    expect(ungroupOfferKind(facts, 'sku', false)).toBeNull();
+    expect(
+      ungroupableItemIds([id(1)], [{ id: id(1), sku: 'TEE-M', group_id: FAM }], {
+        canEditItems: true,
+        canUnlinkFamilies: true,
+        fullSkuCounts: new Map([['TEE-M', 3]]),
+        shownUnder: new Map([[id(1), 'sku' as const]]),
+      }),
+    ).toEqual([id(1)]);
+  });
+
+  it("names each other rack's record by its rack, warehouse and on hand", () => {
+    expect(
+      ungroupRackLine({ placementLabel: '7-A', warehouseName: 'DC4', quantityOnHand: 3 }),
+    ).toBe('7-A · DC4 · 3 on hand');
+    expect(ungroupRackLine({ placementLabel: null, warehouseName: null })).toBe('No rack');
+  });
+
+  it('says which records go with it and that they still share the SKU', () => {
+    expect(UNGROUP_COPY.familySkuWith).toBe('Leaves with it (the same SKU on another rack):');
+    expect(UNGROUP_COPY.familySkuNote).toBe(
+      "Every rack's record of a SKU leaves its size family together. They still share the SKU, so the list still shows them together under it.",
+    );
   });
 });
 

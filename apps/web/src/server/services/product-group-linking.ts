@@ -11,6 +11,7 @@ import {
   type CreateProductGroupInput,
 } from '@stockpilot/core';
 
+import { createAdminClient } from '@/lib/supabase/admin';
 import { chunkInFilterValues } from '@/lib/supabase/in-filter';
 
 import { auditMany, type AuditPayload } from './audit';
@@ -619,6 +620,65 @@ async function assertNoVariantKeyCollision(args: {
   );
 }
 
+/**
+ * Model B (owner 2026-10-12, "Move them together"): the family link belongs
+ * to the SKU, not the rack (InventoryService SHARED_ITEM_FIELDS carries
+ * group_id and variant_key to every placement), so every OTHER live record of
+ * a written record's SKU in that family leaves it too. Through the
+ * service-role client, exactly as InventoryService.update's sibling fan-out:
+ * a person scoped to some warehouses would otherwise leave the SKU half
+ * linked. The organization filter is the tenant floor; the family filter
+ * means a record in another family, or none, is never touched. Matches the
+ * SKU exactly, as that fan-out does. Answers each record written, with the
+ * requested record whose SKU it shares.
+ */
+async function unlinkSkuSiblings(
+  ctx: ServiceContext,
+  family: string,
+  written: ReadonlyArray<{ id: string; sku: string | null }>,
+  requested: ReadonlySet<string>,
+): Promise<Array<{ id: string; variant_key: string | null; of: string }>> {
+  const ofSku = new Map<string, string>();
+  for (const r of written) {
+    if (r.sku && r.sku.trim().length > 0 && !ofSku.has(r.sku)) ofSku.set(r.sku, r.id);
+  }
+  if (ofSku.size === 0) return [];
+  const admin = createAdminClient();
+  const found: Array<{ id: string; sku: string; variant_key: string | null }> = [];
+  for (const batch of chunkInFilterValues([...ofSku.keys()])) {
+    const { data, error } = await admin
+      .from('inventory_items')
+      .select('id, sku, variant_key')
+      .eq('organization_id', ctx.organizationId)
+      .eq('group_id', family)
+      .in('sku', batch)
+      .is('deleted_at', null);
+    if (error) throw new ServiceError('internal_error', error.message);
+    found.push(...((data ?? []) as Array<{ id: string; sku: string; variant_key: string | null }>));
+  }
+  const targets = found.filter((r) => !requested.has(r.id.toLowerCase()));
+  const out: Array<{ id: string; variant_key: string | null; of: string }> = [];
+  for (const batch of chunkInFilterValues(targets.map((t) => t.id))) {
+    const { data, error } = await admin
+      .from('inventory_items')
+      .update({ group_id: null, variant_key: null, updated_by: ctx.userId })
+      .eq('organization_id', ctx.organizationId)
+      .eq('group_id', family)
+      .in('id', batch)
+      .is('deleted_at', null)
+      .select('id');
+    if (error) throw new ServiceError('internal_error', error.message);
+    const done = new Set(((data ?? []) as Array<{ id: string }>).map((r) => r.id.toLowerCase()));
+    for (const t of targets) {
+      if (batch.includes(t.id) && done.has(t.id.toLowerCase())) {
+        out.push({ id: t.id, variant_key: t.variant_key, of: ofSku.get(t.sku)! });
+      }
+    }
+  }
+  if (out.length > 0) invalidateInventoryListAfterWrite(ctx.organizationId, 'sports.unlink_items');
+  return out;
+}
+
 /** A record is no longer in the family the unlink was to take it out of. */
 function familyChanged(itemIds: string[]): ServiceError {
   return new ServiceError(
@@ -695,7 +755,7 @@ export async function unlinkItems(
      *  Without it, the family read here is the one the write must find. */
     expectedFamilies?: Readonly<Record<string, string>>;
   },
-): Promise<{ unlinked: number }> {
+): Promise<{ unlinked: number; skuSiblingIds: string[] }> {
   const { ctx, supabase } = deps;
   assertPermission(ctx, 'sports:manage');
   assertModuleEnabled(ctx, 'sports');
@@ -720,12 +780,13 @@ export async function unlinkItems(
     id: string;
     group_id: string | null;
     variant_key: string | null;
+    sku: string | null;
   }>(
     ids,
     (batch) => (from, to) =>
       supabase
         .from('inventory_items')
-        .select('id, group_id, variant_key')
+        .select('id, group_id, variant_key, sku')
         .eq('organization_id', ctx.organizationId)
         .in('id', batch)
         .is('deleted_at', null)
@@ -767,6 +828,12 @@ export async function unlinkItems(
   }
 
   let unlinked = 0;
+  const skuSiblingIds: string[] = [];
+  const requested = new Set(ids.map((id) => id.toLowerCase()));
+  const extra = {
+    source: input.source ?? 'group_linking_review',
+    ...(input.surface ? { surface: input.surface } : {}),
+  };
   // Same finally as linkFamily: the records written are audited even when a
   // later batch refuses.
   const auditRows: AuditPayload[] = [];
@@ -799,10 +866,26 @@ export async function unlinkItems(
             reason,
             before: { group_id: before.group_id, variant_key: before.variant_key },
             after: { group_id: null, variant_key: null },
-            extra: {
-              source: input.source ?? 'group_linking_review',
-              ...(input.surface ? { surface: input.surface } : {}),
-            },
+            extra,
+          });
+        }
+        // The other racks' records of the SKUs just written leave with them.
+        const siblings = await unlinkSkuSiblings(
+          ctx,
+          family,
+          batch.filter((id) => written.has(id.toLowerCase())).map((id) => byId.get(id)!),
+          requested,
+        );
+        for (const sib of siblings) {
+          skuSiblingIds.push(sib.id);
+          auditRows.push({
+            event: 'sports.item.group_unlinked',
+            entityType: 'inventory_item',
+            entityId: sib.id,
+            reason,
+            before: { group_id: family, variant_key: sib.variant_key },
+            after: { group_id: null, variant_key: null },
+            extra: { ...extra, sku_sibling_of: sib.of },
           });
         }
         const short = batch.filter((id) => !written.has(id.toLowerCase()));
@@ -813,5 +896,5 @@ export async function unlinkItems(
     await auditMany(auditRows, ctx);
   }
 
-  return { unlinked };
+  return { unlinked, skuSiblingIds };
 }

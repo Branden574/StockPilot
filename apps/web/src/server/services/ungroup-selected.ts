@@ -371,7 +371,7 @@ export class UngroupSelectedService {
         });
       } else {
         try {
-          await this.unlink(
+          const done = await this.unlink(
             { supabase: this.ctx.supabase, ctx: this.ctx },
             {
               itemIds: toUnlink,
@@ -385,7 +385,8 @@ export class UngroupSelectedService {
           parts.push({
             kind: 'unlink',
             status: 'applied',
-            changedItemIds: [...alreadyOut, ...toUnlink],
+            // The other racks' records of a SKU left the family with it.
+            changedItemIds: [...alreadyOut, ...toUnlink, ...done.skuSiblingIds],
             notChangedItemIds: [],
             message: null,
             reason: null,

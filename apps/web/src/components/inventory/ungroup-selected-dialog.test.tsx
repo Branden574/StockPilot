@@ -383,6 +383,45 @@ describe('UngroupSelectedDialog', () => {
     expect(await screen.findByText('Leaves group Tees')).toBeInTheDocument();
   });
 
+  // Owner 2026-10-12 ("Move them together"): one size on two racks is one
+  // SKU; ticking one rack's record takes every rack's record of that SKU out
+  // of the family, so the review lists the other racks, counts them and says
+  // they still share the SKU.
+  it("a size on two racks: the other rack's record is listed under it, counted, and the note says they still share the SKU", async () => {
+    preview(
+      [id(1)],
+      [record(1, { sku: 'TEE-M', productGroupId: FAM, productGroupName: 'Tee', variantSize: 'M' })],
+      [
+        cand(1, 'TEE-M', { inFamily: true }),
+        cand(2, 'TEE-M', {
+          inFamily: true,
+          name: 'Tee - M',
+          placementLabel: '7-A',
+          warehouseName: 'DC4',
+          quantityOnHand: 3,
+        }),
+      ],
+    );
+    render(
+      <UngroupSelectedDialog
+        open
+        itemIds={[id(1)]}
+        view="items"
+        shownUnder={new Map([[id(1), 'sku' as const]])}
+        onOpenChange={() => {}}
+        onDone={() => {}}
+      />,
+    );
+    const row = await screen.findByTestId(`ungroup-selected-row-${id(1)}`);
+    expect(row).toHaveTextContent('Leaves the Tee size family');
+    expect(row).toHaveTextContent(UNGROUP_COPY.familySkuWith);
+    const sib = within(row).getByTestId(`ungroup-selected-sibling-${id(2)}`);
+    expect(sib).toHaveTextContent('Tee - M');
+    expect(sib).toHaveTextContent('7-A · DC4 · 3 on hand');
+    expect(screen.getByText(UNGROUP_COPY.familySkuNote)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: UNGROUP_COPY.confirm(2) })).toBeInTheDocument();
+  });
+
   it('every record of a SKU ticked: a radio chooses the one that keeps it, and Save counts the one that changes', async () => {
     preview(
       [id(1), id(2)],

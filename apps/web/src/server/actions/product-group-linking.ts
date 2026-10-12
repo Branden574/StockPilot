@@ -70,7 +70,7 @@ export async function linkFamilyAction(
 /** Undo a link. Same gates, same invalidations. */
 export async function unlinkItemsAction(
   input: unknown,
-): Promise<ActionResult<{ unlinked: number }>> {
+): Promise<ActionResult<{ unlinked: number; skuSiblingIds: string[] }>> {
   const parsed = unlinkItemsSchema.safeParse(input);
   if (!parsed.success) {
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');

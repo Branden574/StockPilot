@@ -118,7 +118,7 @@ function harness(
   };
   const unlink = vi.fn(async (_deps: unknown, input: { itemIds: string[] }) => {
     calls.push('unlink');
-    return { unlinked: input.itemIds.length };
+    return { unlinked: input.itemIds.length, skuSiblingIds: [] as string[] };
   });
   const svc = new UngroupSelectedService(ctx, {
     grouping: grouping as never,
@@ -316,6 +316,19 @@ describe('UngroupSelectedService.apply', () => {
         (c) => (c[0] as unknown as { idempotencyKey: string }).idempotencyKey,
       ),
     ).toEqual([K2, K2]);
+  });
+
+  // Owner 2026-10-12 ("Move them together"): the other racks' records of a
+  // SKU leave its family with it; they changed, so the answer counts them.
+  it("the other racks' records of a SKU that left its family with a ticked one are counted as changed", async () => {
+    const { svc, unlink } = harness({ families: [inFam] });
+    unlink.mockResolvedValueOnce({ unlinked: 2, skuSiblingIds: [id(9)] });
+    const r = await svc.apply(body({ remove: null, split: null }), 'web');
+    expect(r.outcome.parts[0]).toMatchObject({
+      kind: 'unlink',
+      status: 'applied',
+      changedItemIds: [id(4), id(5), id(9)],
+    });
   });
 
   it('a record already out of its family is done; no unlink is sent for it', async () => {

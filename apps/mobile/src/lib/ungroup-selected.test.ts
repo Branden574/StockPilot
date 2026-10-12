@@ -346,6 +346,14 @@ describe('screen pins', () => {
       'familyStaysListedByNameAfter(outcome, (x) => reviewById.get(x)?.name, view)',
     );
     expect(screen.split('UNGROUP_COPY.familyNameNote').length - 1).toBe(2);
+    // Owner 2026-10-12 ("Move them together"): the other racks' records of a
+    // SKU leaving its family with a ticked one are listed under it, and the
+    // note says they still share the SKU.
+    expect(screen).toContain('plan.familySkuSiblings.get(rec.id)');
+    expect(screen).toContain('UNGROUP_COPY.familySkuWith');
+    expect(screen).toContain('ungroupRackLine(');
+    expect(screen).toContain('familySkuTogether(plan) ? (');
+    expect(screen).toContain('UNGROUP_COPY.familySkuNote');
     expect(screen).toContain('keyedUngroupSelectedBody(');
     expect(screen).toContain('ungroupResultLines(');
     expect(screen).toContain('notifyRecordsUngrouped()');

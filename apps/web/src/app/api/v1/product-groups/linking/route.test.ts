@@ -26,6 +26,7 @@ vi.mock('@/server/services/product-group-linking', () => ({
 }));
 
 const ITEM_A = '11111111-1111-1111-1111-111111111111';
+const ITEM_B = '11111111-1111-1111-1111-111111111112';
 const GROUP_A = '22222222-2222-2222-2222-222222222222';
 
 function buildCtx(over: Partial<{ role: 'owner' | 'manager' | 'staff'; modules: ModuleId[] }> = {}) {
@@ -158,9 +159,11 @@ describe('DELETE /api/v1/product-groups/linking', () => {
 
   it('unlinks and reports the count', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
-    vi.mocked(unlinkItems).mockResolvedValueOnce({ unlinked: 1 });
+    // 2026-10-12 (owner: "Move them together"): the answer also names the
+    // other racks' records of the SKU that left the family with it.
+    vi.mocked(unlinkItems).mockResolvedValueOnce({ unlinked: 1, skuSiblingIds: [ITEM_B] });
     const res = await DELETE(req('DELETE', { itemIds: [ITEM_A], reason: 'wrong family' }));
     expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toEqual({ ok: true, unlinked: 1 });
+    await expect(res.json()).resolves.toEqual({ ok: true, unlinked: 1, skuSiblingIds: [ITEM_B] });
   });
 });
