@@ -7,6 +7,7 @@ import {
   Download,
   FolderTree,
   Globe,
+  Group,
   Layers,
   Loader2,
   MapPin,
@@ -20,6 +21,8 @@ import {
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
+
+import { GROUP_COPY, UNGROUP_COPY, type UngroupKind } from '@stockpilot/core';
 
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
@@ -59,7 +62,8 @@ import {
   ExportBuilderDialog,
   type ExportBuilderDialogProps,
 } from './export-builder/export-builder-dialog';
-import { UngroupDialog } from './ungroup-dialog';
+import { GroupSelectedDialog } from './display-group-dialogs';
+import { UngroupSelectedDialog } from './ungroup-selected-dialog';
 
 export interface BulkActionsCategory {
   id: string;
@@ -128,10 +132,29 @@ interface BulkActionsProps {
       Grade/Rack/Crate fields, no catalog layout, "Name" instead of "Title",
       covers off, and an `inventory-` filename slug. */
   itemType?: ExportBuilderDialogProps['itemType'];
-  /** Ungroup (0399): the selected records that share their SKU with another
-      loaded record (core sharedSkuItemIds), already narrowed to viewers who
-      can edit items. Empty or absent: no Ungroup button. */
+  /** Ungroup (owner 2026-10-12, Ungroup anything): the selected records that
+      have something to leave this viewer may undo, from the loaded rows (core
+      ungroupableItemIds: a display group, a shared SKU, or a size family for
+      a viewer who may unlink one). Empty or absent: no Ungroup button. The
+      review takes EVERY selected record and says what happens to each,
+      including the ones left out and why. */
   ungroupItemIds?: string[];
+  /** The grouping each record is shown under on the list (core
+      shownUnderByRecord): a record with more than one leaves this one. */
+  ungroupShownUnder?: ReadonlyMap<string, UngroupKind>;
+  /** Group selected (0400): the selected records (distinct ids) when two or
+      more of one item type are selected by a viewer who can edit items (core
+      groupingSelectionFacts). Empty or absent: no Group selected button. The
+      server decides again on what the viewer can read and edit. */
+  groupItemIds?: string[];
+  /** Items or Books: the review shows a book's ISBN and never a size. */
+  groupingView?: 'items' | 'books';
+  /** Add records (same-SKU siblings the review found) to the selection. */
+  onAddToSelection?: (ids: string[]) => void;
+  /** Called when the review closes after a grouping applied, with the group
+   *  the records are in, so the list opens it (design 5; completeness review
+   *  C3). */
+  onGrouped?: (groupId: string) => void;
 }
 
 type ActiveDialog =
@@ -178,12 +201,28 @@ export function BulkActions({
   canSetPublicVisibility = false,
   itemType = 'all',
   ungroupItemIds = [],
+  ungroupShownUnder,
+  groupItemIds = [],
+  groupingView = 'items',
+  onAddToSelection,
+  onGrouped,
 }: BulkActionsProps) {
   const router = useRouter();
-  // Ungroup's dialog reviews the ids it was OPENED with: a refresh after the
-  // split can change the selection under it, and its result must stay on
+  // Group selected reviews the ids it was OPENED with (except when the review
+  // itself adds same-SKU records to the selection), and clears the selection
+  // on close after a change, like Ungroup.
+  const [groupIds, setGroupIds] = React.useState<string[] | null>(null);
+  const groupingDone = React.useRef(false);
+  // The group a grouping put the records in, opened on the list on close.
+  const groupedId = React.useRef<string | null>(null);
+  // Ungroup's dialog reviews the ids it was OPENED with (every selected
+  // record, and where each was shown on the list then): a refresh after a
+  // change can move the selection under it, and its result must stay on
   // screen until it is closed. The selection is cleared on that close.
-  const [ungroupIds, setUngroupIds] = React.useState<string[] | null>(null);
+  const [ungroupOpen, setUngroupOpen] = React.useState<{
+    ids: string[];
+    shownUnder: ReadonlyMap<string, UngroupKind>;
+  } | null>(null);
   const ungroupDone = React.useRef(false);
   const [dialog, setDialog] = React.useState<ActiveDialog>(null);
   const [busy, setBusy] = React.useState(false);
@@ -558,6 +597,24 @@ export function BulkActions({
           <ClipboardCheck className="h-3 w-3" /> Cycle count
         </button>
 
+        {groupItemIds.length > 0 ? (
+          <>
+            <span className="text-[var(--ed-ink-4)]">·</span>
+            <button
+              type="button"
+              onClick={() => {
+                groupingDone.current = false;
+                groupedId.current = null;
+                setGroupIds([...groupItemIds]);
+              }}
+              title="Show the selected records together as one group (stock, charters and SKUs stay as they are)"
+              className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
+            >
+              <Group className="h-3 w-3" /> {GROUP_COPY.bulkAction}
+            </button>
+          </>
+        ) : null}
+
         {ungroupItemIds.length > 0 ? (
           <>
             <span className="text-[var(--ed-ink-4)]">·</span>
@@ -565,12 +622,15 @@ export function BulkActions({
               type="button"
               onClick={() => {
                 ungroupDone.current = false;
-                setUngroupIds([...ungroupItemIds]);
+                setUngroupOpen({
+                  ids: [...new Set(selectedIds)],
+                  shownUnder: new Map(ungroupShownUnder ?? []),
+                });
               }}
-              title="Give the selected records that share a SKU a SKU of their own"
+              title="Take each selected record out of the grouping it shows under: its group, a shared SKU or its size family"
               className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
             >
-              <Ungroup className="h-3 w-3" /> Ungroup
+              <Ungroup className="h-3 w-3" /> {UNGROUP_COPY.bulkAction}
             </button>
           </>
         ) : null}
@@ -690,17 +750,52 @@ export function BulkActions({
         </button>
       </div>
 
-      {ungroupIds ? (
-        <UngroupDialog
+      {groupIds ? (
+        <GroupSelectedDialog
           open
-          itemIds={ungroupIds}
+          itemIds={groupIds}
+          view={groupingView}
+          onAddToSelection={
+            onAddToSelection
+              ? (ids) => {
+                  onAddToSelection(ids);
+                  setGroupIds((cur) => [...new Set([...(cur ?? []), ...ids])]);
+                }
+              : undefined
+          }
+          onDone={(o) => {
+            if (o.outcome === 'applied') {
+              groupingDone.current = true;
+              groupedId.current = o.group?.id ?? null;
+              router.refresh();
+            }
+          }}
+          onOpenChange={(v) => {
+            if (v) return;
+            setGroupIds(null);
+            if (groupingDone.current) {
+              groupingDone.current = false;
+              onClear();
+              if (groupedId.current) onGrouped?.(groupedId.current);
+              groupedId.current = null;
+            }
+          }}
+        />
+      ) : null}
+
+      {ungroupOpen ? (
+        <UngroupSelectedDialog
+          open
+          itemIds={ungroupOpen.ids}
+          view={groupingView}
+          shownUnder={ungroupOpen.shownUnder}
           onDone={() => {
             ungroupDone.current = true;
             router.refresh();
           }}
           onOpenChange={(v) => {
             if (v) return;
-            setUngroupIds(null);
+            setUngroupOpen(null);
             if (ungroupDone.current) {
               ungroupDone.current = false;
               onClear();

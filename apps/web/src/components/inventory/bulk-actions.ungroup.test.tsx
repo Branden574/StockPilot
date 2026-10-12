@@ -9,6 +9,8 @@ const h = vi.hoisted(() => ({
   dialogProps: [] as Array<{
     open: boolean;
     itemIds: readonly string[];
+    view: string;
+    shownUnder?: ReadonlyMap<string, string>;
     onDone: () => void;
     onOpenChange: (v: boolean) => void;
   }>,
@@ -22,8 +24,10 @@ vi.mock('next/navigation', () => ({
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn() } }));
 vi.mock('@/server/actions/inventory', () => ({ bulkUpdateInventoryAction: vi.fn() }));
 vi.mock('@/server/actions/purchase-orders', () => ({ createDraftPosFromItemsAction: vi.fn() }));
-vi.mock('./ungroup-dialog', () => ({
-  UngroupDialog: (props: (typeof h.dialogProps)[number]) => {
+// Ungroup anything (owner 2026-10-12): the bar's Ungroup opens the one review
+// for any ticked records (ungroup-selected-dialog.tsx).
+vi.mock('./ungroup-selected-dialog', () => ({
+  UngroupSelectedDialog: (props: (typeof h.dialogProps)[number]) => {
     h.dialogProps.push(props);
     return props.open ? <div data-testid="ungroup-dialog">{props.itemIds.join(',')}</div> : null;
   },
@@ -34,11 +38,18 @@ beforeEach(() => {
   h.dialogProps.length = 0;
 });
 
-function bar(props: { selectedIds: string[]; ungroupItemIds?: string[]; onClear?: () => void }) {
+function bar(props: {
+  selectedIds: string[];
+  ungroupItemIds?: string[];
+  ungroupShownUnder?: ReadonlyMap<string, 'group' | 'sku' | 'family'>;
+  onClear?: () => void;
+}) {
   return (
     <BulkActions
       selectedIds={props.selectedIds}
       ungroupItemIds={props.ungroupItemIds}
+      ungroupShownUnder={props.ungroupShownUnder}
+      groupingView="books"
       categories={[]}
       suppliers={[]}
       locations={[]}
@@ -57,13 +68,27 @@ describe('BulkActions: Ungroup', () => {
     expect(screen.queryByRole('button', { name: /Ungroup/ })).toBeNull();
   });
 
-  it('opens the review dialog for exactly the records that share a SKU, frozen while it is open', async () => {
-    const { rerender } = render(bar({ selectedIds: ['a', 'b', 'c'], ungroupItemIds: ['a', 'c'] }));
+  // Re-pinned by Ungroup anything (owner 2026-10-12; was: "opens the review
+  // dialog for exactly the records that share a SKU"): the review takes EVERY
+  // ticked record and says what happens to each, the ones left out with the
+  // reason. Claim kept: what it reviews is frozen while it is open.
+  it('opens the one review for every ticked record, with where each is shown on the list, frozen while it is open', async () => {
+    const shown = new Map([
+      ['a', 'sku' as const],
+      ['c', 'family' as const],
+    ]);
+    const { rerender } = render(
+      bar({ selectedIds: ['a', 'b', 'c'], ungroupItemIds: ['a', 'c'], ungroupShownUnder: shown }),
+    );
     await userEvent.click(screen.getByRole('button', { name: /Ungroup/ }));
-    expect(screen.getByTestId('ungroup-dialog')).toHaveTextContent('a,c');
+    expect(screen.getByTestId('ungroup-dialog')).toHaveTextContent('a,b,c');
+    const props = h.dialogProps.at(-1)!;
+    expect(props.view).toBe('books');
+    expect([...(props.shownUnder ?? [])]).toEqual([...shown]);
     // The selection changing under an open dialog does not change what it reviews.
-    rerender(bar({ selectedIds: [], ungroupItemIds: [] }));
-    expect(screen.getByTestId('ungroup-dialog')).toHaveTextContent('a,c');
+    rerender(bar({ selectedIds: [], ungroupItemIds: [], ungroupShownUnder: new Map() }));
+    expect(screen.getByTestId('ungroup-dialog')).toHaveTextContent('a,b,c');
+    expect([...(h.dialogProps.at(-1)!.shownUnder ?? [])]).toEqual([...shown]);
   });
 
   it('after a split it refreshes at once, and clears the selection when the dialog closes', async () => {

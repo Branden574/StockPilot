@@ -7,12 +7,14 @@ const {
   lineLabelsMock,
   primaryImagesMock,
   searchForPickerMock,
+  readGroupsMock,
 } = vi.hoisted(() => ({
   withApiContextMock: vi.fn(),
   inventoryListMock: vi.fn(),
   lineLabelsMock: vi.fn(),
   primaryImagesMock: vi.fn(),
   searchForPickerMock: vi.fn(),
+  readGroupsMock: vi.fn(async () => new Map()),
 }));
 
 vi.mock('@/lib/auth/api-context', () => ({
@@ -31,6 +33,11 @@ vi.mock('@/server/services/item-images', () => ({
     constructor() {}
     primaryImagesForItems = primaryImagesMock;
   },
+}));
+// Group selected (0400): the membership read, as the caller.
+vi.mock('@/server/services/lib/display-groups', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/services/lib/display-groups')>()),
+  readDisplayGroupsByItemIds: readGroupsMock,
 }));
 
 import { GET } from './route';
@@ -684,5 +691,60 @@ describe('GET /api/items/search — ?rank=relevance (best match first)', () => {
   it('a failed search is a server error, not an empty result', async () => {
     searchForPickerMock.mockRejectedValueOnce(new Error('boom'));
     await expect(GET(makeReq(COMPONENT_QS))).rejects.toThrow('boom');
+  });
+});
+
+// Recheck R2-6: each hit's display group is the Items and Books tables' own
+// (?groups=1). The order Add items picker and the count picker, which use
+// the same default listing, neither pay for the membership read nor receive
+// the group fields.
+describe('GET /api/items/search display groups (recheck R2-6)', () => {
+  const ROW = {
+    id: 'i1',
+    sku: 'SP-1',
+    barcode: null,
+    name: 'Black T-Shirt',
+    quantity_on_hand: 5,
+    reorder_point: 0,
+    unit_cost: 4,
+    retail_price: 12,
+    status: 'active',
+    category_id: null,
+    primary_location_id: null,
+    warehouse_id: 'w1',
+    item_type: 'product',
+    custom_fields: null,
+    updated_at: '2026-05-14T00:00:00Z',
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    withApiContextMock.mockResolvedValue({
+      supabase: {} as never,
+      organizationId: 'org-1',
+      userId: 'u-1',
+      email: 'a@b.c',
+      role: 'admin',
+    });
+    primaryImagesMock.mockResolvedValue(new Map());
+    inventoryListMock.mockResolvedValue({ items: [ROW], total: 1 });
+    readGroupsMock.mockResolvedValue(new Map([['i1', { id: 'g1', name: 'Polos', version: 2 }]]));
+  });
+
+  it('reads no membership and carries no group fields unless the table asks', async () => {
+    const body = await (await GET(makeReq('q=shir&type=product&wh=w1'))).json();
+    expect(readGroupsMock).not.toHaveBeenCalled();
+    expect(body.items[0]).not.toHaveProperty('display_group_id');
+    expect(body.items[0]).not.toHaveProperty('display_group_name');
+  });
+
+  it("attaches each hit's group, read as the caller, when the table asks (?groups=1)", async () => {
+    const body = await (await GET(makeReq('q=shir&groups=1'))).json();
+    expect(readGroupsMock).toHaveBeenCalledWith(expect.anything(), 'org-1', ['i1']);
+    expect(body.items[0]).toMatchObject({
+      display_group_id: 'g1',
+      display_group_name: 'Polos',
+      display_group_version: 2,
+    });
   });
 });

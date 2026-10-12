@@ -177,8 +177,10 @@ describe('item screen (app/item/[id].tsx)', () => {
     // Review finding: `elsewhere: { status: 'none' }` here made the ELSEWHERE
     // row and the failed-read note unreachable, and nothing failed.
     // Ungroup (0399) appended the SKU-sibling count to the same round trip.
+    // Re-pinned 2026-10-12: Group selected (0400) appended the record's
+    // display group (itemGroup) to the same round trip.
     expect(load).toContain(
-      'const [whResp, chResp, serialResp, holdingResp, elsewhere, skuSiblingCount] = await Promise.all([',
+      'const [whResp, chResp, serialResp, holdingResp, elsewhere, skuSiblingCount, itemGroup] = await Promise.all([',
     );
     const stored = between(load, 'setItem({', '});');
     expect(stored).toMatch(/^\s*elsewhere,\s*$/m);

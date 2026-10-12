@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -224,6 +224,24 @@ vi.mock('@/server/services/item-grouping', () => ({
     }
   },
 }));
+// Group selected (0400): the record's display group (read as the viewer) and
+// the group line's client island (it needs a router). No group unless a test
+// sets one.
+const displayGroupHolder = vi.hoisted(() => ({
+  map: new Map<string, { id: string; name: string | null; version: number | null }>(),
+}));
+vi.mock('@/server/services/lib/display-groups', () => ({
+  readDisplayGroupsByItemIds: async () => displayGroupHolder.map,
+}));
+vi.mock('@/components/inventory/group-membership-control', () => ({
+  GroupMembershipControl: ({ groupName, canEdit }: { groupName: string | null; canEdit: boolean }) =>
+    groupName ? (
+      <span data-testid="group-line">
+        In group {groupName}
+        {canEdit ? ' (remove offered)' : ''}
+      </span>
+    ) : null,
+}));
 // The host keeps state the way the real one keeps its open dialog: the page
 // re-renders after a split (the action refreshes it), and the host must
 // survive that render, not unmount or remount, or its open dialog, with the
@@ -311,6 +329,7 @@ async function renderItemDetail() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  displayGroupHolder.map = new Map();
   inventoryGet.mockResolvedValue(itemFixture());
   inventoryPlacements.mockResolvedValue([]);
   setPermissions(true);
@@ -518,6 +537,22 @@ describe('ItemDetail: a SKU other records share (Ungroup, 0399)', () => {
       ),
     ).toBeTruthy();
     expect(screen.getByRole('button', { name: `make-own:${ITEM_ID}` })).toBeTruthy();
+  });
+
+  it('Group selected: names the record\'s group, and offers Remove from group to an editor only', async () => {
+    displayGroupHolder.map = new Map([[ITEM_ID, { id: 'g1', name: 'Polo XXXL', version: 2 }]]);
+    ctxHolder.current = { ...ctxHolder.current, permissions: new Set(['items:update']) };
+    await renderItemDetail();
+    expect(screen.getByTestId('group-line')).toHaveTextContent('In group Polo XXXL (remove offered)');
+    cleanup();
+    ctxHolder.current = { ...ctxHolder.current, permissions: new Set<string>() };
+    await renderItemDetail();
+    expect(screen.getByTestId('group-line')).toHaveTextContent('In group Polo XXXL');
+    expect(screen.getByTestId('group-line')).not.toHaveTextContent('remove offered');
+    displayGroupHolder.map = new Map();
+    cleanup();
+    await renderItemDetail();
+    expect(screen.queryByTestId('group-line')).toBeNull();
   });
 
   it('a viewer who cannot edit items reads the note but gets no button', async () => {

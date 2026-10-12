@@ -24,7 +24,7 @@ const read = (rel: string): string => readFileSync(path.resolve(__dirname, rel),
 
 const books = read('../../app/(drawer)/(tabs)/books.tsx');
 const inventory = read('../../app/(drawer)/(tabs)/inventory.tsx');
-const screens: Array<[string, string]> = [
+const screens: [string, string][] = [
   ['books', books],
   ['inventory', inventory],
 ];
@@ -337,8 +337,12 @@ describe('books list — a failed read says so, never passes for an empty or cur
     const clears = body.slice(0, firstAwait);
     expect(clears).toContain('setLoadError(null);');
     expect(clears).toContain('setHoldingsError(null);');
-    // Two awaits (the list, the holdings), each followed by the token check.
-    expect(body.match(/if \(!isCurrent\(\)\) return;/g)?.length).toBe(2);
+    // Three awaits (the list, the display groups, the holdings), each followed
+    // by the token check. Re-pinned 2026-10-12 (Group selected, 0400): the
+    // memberships are read beside the rows and awaited after the list, with
+    // their own check; it was two awaits before.
+    expect(body.match(/if \(!isCurrent\(\)\) return;/g)?.length).toBe(3);
+    expect(body).toMatch(/const nextDisplayGroups = await groupsRead;\s*if \(!isCurrent\(\)\) return;/);
   });
 });
 

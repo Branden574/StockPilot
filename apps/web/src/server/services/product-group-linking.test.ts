@@ -629,6 +629,31 @@ describe('unlinkItems — the undo', () => {
     expect((payload.after as Record<string, unknown>).group_id).toBeNull();
   });
 
+  // Ungroup anything (owner 2026-10-12): the bulk bar's Ungroup takes a
+  // record out of its size family through this same write; its audit row says
+  // it came from Ungroup and from which app, not from the linking review.
+  it('records where an unlink came from: the linking review by default, Ungroup when it says so', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: [{ id: 'i-l', group_id: 'grp-1', variant_key: 'size=L' }],
+        error: null,
+      },
+      'inventory_items.update': { data: [{ id: 'i-l' }], error: null },
+    });
+    const deps = { supabase: stub.client, ctx: sportsCtx(stub.client) };
+    await unlinkItems(deps, { itemIds: ['i-l'], reason: 'Wrong family' });
+    await unlinkItems(deps, {
+      itemIds: ['i-l'],
+      reason: 'Taken out of its size family with Ungroup (web)',
+      source: 'ungroup',
+      surface: 'web',
+    });
+    const [review, ungroup] = auditedRows();
+    expect(review!.extra).toEqual({ source: 'group_linking_review' });
+    expect(ungroup!.extra).toEqual({ source: 'ungroup', surface: 'web' });
+    expect(ungroup!.event).toBe('sports.item.group_unlinked');
+  });
+
   it('still audits the items unlinked before a later item refuses', async () => {
     let n = 0;
     const stub = makeSupabaseStub({

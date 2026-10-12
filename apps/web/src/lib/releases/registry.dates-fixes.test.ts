@@ -137,21 +137,27 @@ describe('the dates fixes release is published', () => {
     // return history hand-over release at 0): Ungroup's draft, dated later
     // still, sits at the top above it. Claim kept: the public link release,
     // published a minute later, sits directly above.
+    // Re-pinned by Group selected G2 (2026-10-12, rebased onto #351; was: at
+    // 6, Ungroup's draft at 0): Group selected's draft, dated later still,
+    // sits at the top above Ungroup's draft. Claim kept: the public link
+    // release, published a minute later, sits directly above.
     const at = RELEASES.findIndex((r) => r.id === ID);
-    expect(at).toBe(6);
-    expect(RELEASES[0]?.id).toBe('ungroup-2026-10');
+    expect(at).toBe(7);
+    expect(RELEASES[0]?.id).toBe('group-selected-2026-10');
     expect(RELEASES[0]?.status).toBe('draft');
-    expect(RELEASES[1]?.id).toBe('returns-history-hand-over-2026-10');
-    expect(RELEASES[1]?.status).toBe('published');
-    expect(RELEASES[2]?.id).toBe('returns-close-rest-2026-10');
+    expect(RELEASES[1]?.id).toBe('ungroup-2026-10');
+    expect(RELEASES[1]?.status).toBe('draft');
+    expect(RELEASES[2]?.id).toBe('returns-history-hand-over-2026-10');
     expect(RELEASES[2]?.status).toBe('published');
-    expect(RELEASES[3]?.id).toBe('returns-requester-exchange-2026-10');
+    expect(RELEASES[3]?.id).toBe('returns-close-rest-2026-10');
     expect(RELEASES[3]?.status).toBe('published');
-    expect(RELEASES[4]?.id).toBe('returns-exchange-2026-10');
+    expect(RELEASES[4]?.id).toBe('returns-requester-exchange-2026-10');
     expect(RELEASES[4]?.status).toBe('published');
-    expect(RELEASES[5]?.id).toBe('public-link-sent-request-2026-10');
+    expect(RELEASES[5]?.id).toBe('returns-exchange-2026-10');
     expect(RELEASES[5]?.status).toBe('published');
-    expect(Date.parse(RELEASES[5]!.publishedAt) - Date.parse(release().publishedAt)).toBe(60_000);
+    expect(RELEASES[6]?.id).toBe('public-link-sent-request-2026-10');
+    expect(RELEASES[6]?.status).toBe('published');
+    expect(Date.parse(RELEASES[6]!.publishedAt) - Date.parse(release().publishedAt)).toBe(60_000);
     for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }

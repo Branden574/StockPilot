@@ -562,3 +562,40 @@ describe('ActivityFeed: Ungroup (0399)', () => {
     expect(screen.getAllByText(/SP-JAMFW-6XMMS9J/).length).toBeGreaterThan(0);
   });
 });
+
+describe('ActivityFeed: Group selected (0400)', () => {
+  it('labels a record joining and leaving a group plainly, with the group names', () => {
+    render(
+      <ActivityFeed
+        events={[
+          makeEvent({
+            id: 'g1',
+            kind: 'audit',
+            type: 'inventory.group.members_added',
+            metadata: {
+              entity_type: 'inventory_item',
+              before: { display_group_id: null, display_group_name: null },
+              after: { display_group_id: 'g', display_group_name: 'Polo XXXL' },
+              changed_keys: ['display_group'],
+            },
+          }),
+          makeEvent({
+            id: 'g2',
+            kind: 'audit',
+            type: 'inventory.group.members_removed',
+            metadata: {
+              entity_type: 'inventory_item',
+              before: { display_group_id: 'g', display_group_name: 'Old shirts' },
+              after: { display_group_id: null, display_group_name: null },
+              group_closed: true,
+            },
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getByText('Added to group')).toBeInTheDocument();
+    expect(screen.getByText('Removed from group')).toBeInTheDocument();
+    expect(screen.getAllByText(/Polo XXXL/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Old shirts/).length).toBeGreaterThan(0);
+  });
+});

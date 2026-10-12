@@ -15,7 +15,7 @@ import { BooksInventoryTable } from '@/components/books/books-inventory-table';
 import { PerfUseful } from '@/components/perf/perf-useful';
 import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown';
 import { Button } from '@/components/ui/button';
-import { can } from '@stockpilot/core';
+import { can, isManagerOrAbove, type Role } from '@stockpilot/core';
 import { ElsewhereUnavailableNotice } from '@/components/inventory/elsewhere-unavailable-notice';
 import {
   deriveInstantView,
@@ -37,7 +37,12 @@ import {
 import { CategoriesService } from '@/server/services/categories';
 import { ChartersService } from '@/server/services/charters';
 import { InventoryService } from '@/server/services/inventory';
+import { createClient } from '@/lib/supabase/server';
 import { ItemImagesService } from '@/server/services/item-images';
+import {
+  displayGroupFields,
+  readDisplayGroupsByItemIds,
+} from '@/server/services/lib/display-groups';
 import { LocationsService } from '@/server/services/locations';
 import { getItemTrends } from '@/server/services/movements';
 import { SavedViewsService } from '@/server/services/saved-views';
@@ -132,11 +137,15 @@ export default async function BooksPage({
   // because a gate that says no returns before anything awaits it.
   const contextStarted = withContext();
   contextStarted.catch(() => {});
-  const [moduleAccess, { enabled: priceTrackingEnabled }, params] = await Promise.all([
-    checkModuleAccess('books'),
-    checkModuleAccess('price_tracking'),
-    searchParams,
-  ]);
+  // Ungroup anything (owner 2026-10-12): the sports gate joins them, for
+  // Ungroup on a size family (request-cached, no round trip of its own).
+  const [moduleAccess, { enabled: priceTrackingEnabled }, { enabled: sportsEnabled }, params] =
+    await Promise.all([
+      checkModuleAccess('books'),
+      checkModuleAccess('price_tracking'),
+      checkModuleAccess('sports'),
+      searchParams,
+    ]);
   if (!moduleAccess.enabled) {
     return <ModuleNotEnabled moduleId="books" canManage={moduleAccess.canManage} />;
   }
@@ -170,7 +179,7 @@ export default async function BooksPage({
     InventoryService.forCurrentUser().then((svc) =>
       svc.listDistinctRacks({ scope: 'books' }),
     ),
-    booksTableSection({ params, lifecycleStatus }),
+    booksTableSection({ params, lifecycleStatus, sportsEnabled }),
   ]);
 
   const canCreate = can(sessionCtx, 'items:create');
@@ -263,9 +272,12 @@ type SectionData = {
 async function booksTableSection({
   params,
   lifecycleStatus,
+  sportsEnabled,
 }: {
   params: BooksSearchParams;
   lifecycleStatus: 'archived' | 'discontinued' | 'all' | 'active';
+  /** The sports module is on (Ungroup on a size family). */
+  sportsEnabled: boolean;
 }): Promise<ReactNode> {
   const page = Math.max(1, Number(params.page) || 1);
   // Saved views are strictly per-user — they never enter the shared
@@ -295,6 +307,14 @@ async function booksTableSection({
   const canSetPublicVisibility = can(sessionCtx, 'public_links:manage');
   // Ungroup (0399): the bulk bar offers it only to a viewer who can edit items.
   const canUngroup = can(sessionCtx, 'items:update');
+  // Group selected (0400): a group's header offers Rename to a manager only
+  // (apply_item_grouping refuses anyone else on the role alone, SEC-1).
+  const canRenameGroups = canUngroup && isManagerOrAbove(sessionCtx.role as Role);
+  // Ungroup anything (owner 2026-10-12): Ungroup also takes a record out of
+  // its size family for a viewer who may unlink one (unlinkItems' gate:
+  // sports:manage with the sports module on; the page asked the module gate
+  // with the others).
+  const canUnlinkFamilies = canUngroup && can(sessionCtx, 'sports:manage') && sportsEnabled;
 
   // INSTANT MODE — same contract as the Items page: manager+ orgs at or
   // under INSTANT_MODE_MAX_ROWS get the FULL Books dataset and the
@@ -376,6 +396,8 @@ async function booksTableSection({
         canCreate={canCreate}
         canSetPublicVisibility={canSetPublicVisibility}
         canUngroup={canUngroup}
+        canUnlinkFamilies={canUnlinkFamilies}
+        canRenameGroups={canRenameGroups}
         categories={lookups.categories.map((c) => ({ id: c.id, name: c.name }))}
         locations={lookups.locations}
         charters={lookups.charters}
@@ -544,11 +566,19 @@ async function booksTableSection({
       id: i.id,
       quantityOnHand: i.quantity_on_hand,
     }));
-    const [trends, imagesById] = await Promise.all([
+    const [trends, imagesById, displayGroups] = await Promise.all([
       trendBuckets
         ? Promise.resolve(deriveInventoryTrends(trendInputs, trendBuckets))
         : getItemTrends(trendInputs),
       imagesSvc.primaryImagesWithThumbsForItems(inventory.items.map((i) => i.id)),
+      // Group selected (0400): the page's records' display groups, through
+      // the caller's own client (RLS), 100 ids per request. Never fails the
+      // page: a failed read renders the records ungrouped.
+      readDisplayGroupsByItemIds(
+        createClient(),
+        sessionCtx.organizationId,
+        inventory.items.map((i) => i.id),
+      ),
     ]);
     const itemsWithImages = inventory.items.map((i) => {
       const cf = (i as { custom_fields?: Record<string, unknown> | null })
@@ -563,6 +593,7 @@ async function booksTableSection({
         image_url: img?.url ?? cfThumb ?? null,
         image_thumb_url: img?.thumbUrl ?? null,
         image_lqip: img?.lqip ?? null,
+        ...displayGroupFields(displayGroups.get(i.id)),
       };
     });
 
@@ -608,6 +639,8 @@ async function booksTableSection({
       canCreate={canCreate}
       canSetPublicVisibility={canSetPublicVisibility}
       canUngroup={canUngroup}
+      canUnlinkFamilies={canUnlinkFamilies}
+      canRenameGroups={canRenameGroups}
       categories={data.categories.map((c) => ({ id: c.id, name: c.name }))}
       locations={data.locations}
       charters={data.charters}

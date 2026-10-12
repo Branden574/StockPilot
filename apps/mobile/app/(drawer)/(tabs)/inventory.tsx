@@ -49,7 +49,18 @@ import { IconChip } from '@/components/ui/row';
 import { ItemListSkeleton } from '@/components/ui/skeleton';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { Thumb } from '@/components/ui/thumb';
+import { onRecordsUngrouped } from '@/lib/ungroup-selected';
 import { countSelection, useIsPicked } from '@/lib/use-count-selection';
+import { showWriteCtaForRole } from '@/lib/cta-gating';
+import {
+  attachDisplayGroups,
+  groupRowAccessibilityActions,
+  groupSelectedHref,
+  listIsNarrowed,
+  onDisplayGroupsChanged,
+  readDisplayGroups,
+  runGroupRowAccessibilityAction,
+} from '@/lib/display-groups';
 import { TRAILING_COLUMN_MAX_WIDTH, shouldStackRow } from '@/lib/dynamic-type-layout';
 import { listStatusPredicate, stockPill, stockPillFor } from '@/lib/expected-items';
 import { signListThumbnails } from '@/lib/image-cache';
@@ -60,6 +71,7 @@ import { itemListGlyph, type ItemListGlyph } from '@/lib/item-list-glyph';
 import {
   buildGroupUnits,
   buildGroupedRows,
+  ungroupFactsByItem,
   type GroupedRow as InventoryGroupedRow,
 } from '@/lib/inventory-grouping';
 import {
@@ -69,7 +81,15 @@ import {
   readIsComplete,
 } from '@/lib/inventory-paging';
 import { supabase } from '@/lib/supabase';
-import { countingUnitLabel, groupRollupLabel, type CountingUnit } from '@stockpilot/core';
+import { useEffectivePermissions } from '@/lib/use-effective-permissions';
+import { useRole } from '@/lib/use-role';
+import {
+  GROUP_COPY,
+  countingUnitLabel,
+  groupRollupLabel,
+  type CountingUnit,
+  type DisplayGroupRef,
+} from '@stockpilot/core';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { useWarehouseScope, warehouseScopeMessage } from '@/lib/warehouse-scope';
@@ -111,6 +131,12 @@ interface Item {
   variant_size: string | null;
   /** The group's counting unit, read from the embedded product_groups row. */
   counting_unit: string | null;
+  /** Group selected (0400): the record's explicit display group, read from
+   *  item_display_group_members next to the list and attached (never a column
+   *  of the item). Display only. */
+  display_group_id?: string | null;
+  display_group_name?: string | null;
+  display_group_version?: number | null;
 }
 
 /**
@@ -228,6 +254,20 @@ export default function Inventory() {
   // header row on this page, matching the web Items table. Tracks the expanded
   // SKUs; separate from the size-run set above so their keys never collide.
   const [expandedSkuGroups, setExpandedSkuGroups] = React.useState<Set<string>>(new Set());
+  // Group selected (0400): the organization's explicit display groups by
+  // record id, read under the member's RLS with every load (in parallel with
+  // the rows) and again after a Save elsewhere; and the groups expanded here.
+  const [displayGroups, setDisplayGroups] = React.useState<ReadonlyMap<string, DisplayGroupRef>>(
+    new Map(),
+  );
+  const [expandedExplicitGroups, setExpandedExplicitGroups] = React.useState<Set<string>>(
+    new Set(),
+  );
+  // "Add to group" is offered to someone who can edit items. Cosmetic only:
+  // the review screen and POST /api/v1/items/grouping decide.
+  const { role } = useRole();
+  const permissions = useEffectivePermissions();
+  const canEditItems = showWriteCtaForRole(role, permissions, 'items:update');
   // True ONLY when the read hit PostgREST's cap, i.e. the rows in hand are a
   // prefix of the filtered set. At current volumes (257 items on the largest
   // org, cap 1000) this never fires; when it does it is disclosed above the
@@ -449,10 +489,16 @@ export default function Inventory() {
           .order(ord.col, { ascending: ord.asc })
           .order('id', { ascending: true })
           .limit(POSTGREST_MAX_ROWS);
+      // Group selected (0400): the memberships, read beside the rows (never a
+      // column of them). It never fails the list: a failed read groups
+      // nothing, and the rows render as they always did.
+      const groupsRead = readDisplayGroups(supabase as never, orgIdParam);
       const { data, count, error, status: listStatus } =
         f.locationIds.length > 0
           ? await listRead(ITEM_COLUMNS_AT_LOCATIONS)
           : await listRead(ITEM_COLUMNS);
+      if (seq !== loadSeq.current) return;
+      const nextDisplayGroups = await groupsRead;
       if (seq !== loadSeq.current) return;
       // FAIL LOUD (release-order rule). A console.warn is invisible on a phone,
       // so a refused read rendered "No items match." — a claim about the org's
@@ -511,6 +557,7 @@ export default function Inventory() {
         !readIsComplete({ returned, serverCount: count ?? null, limit: POSTGREST_MAX_ROWS }),
       );
       setItems(rows);
+      setDisplayGroups(nextDisplayGroups);
       setServerRowCount(count ?? null);
       setLoadedRowCount(returned);
       // A load is the one moment the underlying data may have changed, so the
@@ -552,7 +599,25 @@ export default function Inventory() {
     setPage(1); // eslint-disable-line react-hooks/set-state-in-effect -- result-set reset: page/expansion are per-result-set display state and must drop when q/filter/workspace change; one-shot synchronous resets, no cascade (trailing form: inventory-list-wiring.test.ts pins `{ setPage(1);` verbatim)
     setExpandedGroups(new Set());
     setExpandedSkuGroups(new Set());
+    setExpandedExplicitGroups(new Set());
   }, [q, filter, activeWarehouseId]);
+
+  // A grouping saved elsewhere (the review screen, the item screen): re-read
+  // the memberships only. A display group changes nothing on a record, so the
+  // rows in hand stay right.
+  React.useEffect(() => {
+    if (!orgId) return;
+    let live = true;
+    const off = onDisplayGroupsChanged(() => {
+      void readDisplayGroups(supabase as never, orgId).then((next) => {
+        if (live) setDisplayGroups(next);
+      });
+    });
+    return () => {
+      live = false;
+      off();
+    };
+  }, [orgId]);
 
   // NOT keyed on `page` any more: a page flip is a client-side slice of the
   // set already in memory, so it costs no request and no skeleton.
@@ -560,6 +625,14 @@ export default function Inventory() {
     if (!orgId) return;
     const t = setTimeout(() => load(orgId, q, filter, activeWarehouseId), 250);
     return () => clearTimeout(t);
+  }, [q, filter, orgId, load, activeWarehouseId]);
+
+  // An Ungroup saved on the review screen (owner 2026-10-12) can change a
+  // record's SKU or size family as well as its group: re-read the rows (and
+  // their memberships with them), not the memberships alone.
+  React.useEffect(() => {
+    if (!orgId) return;
+    return onRecordsUngrouped(() => void load(orgId, q, filter, activeWarehouseId));
   }, [q, filter, orgId, load, activeWarehouseId]);
 
   async function onRefresh() {
@@ -575,6 +648,7 @@ export default function Inventory() {
     // reads as a glitch. Matches books.tsx.
     setExpandedGroups(new Set());
     setExpandedSkuGroups(new Set());
+    setExpandedExplicitGroups(new Set());
     listRef.current?.scrollToOffset({ offset: 0, animated: false });
   }, []);
 
@@ -596,10 +670,6 @@ export default function Inventory() {
     [router],
   );
 
-  const onToggleSelect = React.useCallback((it: Item) => {
-    countSelection.toggle({ id: it.id, sku: it.sku, name: it.name, itemType: 'product' });
-  }, []);
-
   const toggleGroup = React.useCallback((styleKey: string) => {
     setExpandedGroups((prev) => {
       const next = new Set(prev);
@@ -617,6 +687,24 @@ export default function Inventory() {
       return next;
     });
   }, []);
+
+  const toggleExplicitGroup = React.useCallback((groupId: string) => {
+    setExpandedExplicitGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
+  }, []);
+
+  // "Add to group" on a record that shares a SKU with a group here: the review
+  // opens on that group for this one record. Nothing joins a group by itself.
+  const onAddToGroup = React.useCallback(
+    (itemId: string, groupId: string) => {
+      router.push(groupSelectedHref({ itemIds: [itemId], view: 'items', groupId }));
+    },
+    [router],
+  );
 
   // Secondary line for an expanded SKU-group placement — a charter or location
   // label so same-SKU placements read distinctly (the SKU itself is shared and
@@ -637,7 +725,29 @@ export default function Inventory() {
   // a slice of units. That is the requirement: three placements of one SKU are
   // one header on ONE page, all three behind the chevron, whatever the sort or
   // page size. Identical to books.tsx except that size runs stay ON here.
-  const units = React.useMemo(() => buildGroupUnits(items), [items]);
+  // Each record wears its display group (0400) before grouping, so core's one
+  // rule (explicit group, then same SKU, then size run) decides the units.
+  const groupedItems = React.useMemo(
+    () => attachDisplayGroups(items, displayGroups),
+    [items, displayGroups],
+  );
+  const units = React.useMemo(() => buildGroupUnits(groupedItems), [groupedItems]);
+  // Ungroup anything (owner 2026-10-12): what each record would leave on
+  // Ungroup (its group, a shared SKU, its size family, and the one it is
+  // shown under in these units), kept with the pick when it is ticked.
+  const ungroupFacts = React.useMemo(() => ungroupFactsByItem(groupedItems), [groupedItems]);
+  const onToggleSelect = React.useCallback(
+    (it: Item) => {
+      countSelection.toggle({
+        id: it.id,
+        sku: it.sku,
+        name: it.name,
+        itemType: 'product',
+        grouping: ungroupFacts.get(it.id),
+      });
+    },
+    [ungroupFacts],
+  );
   const pageView = React.useMemo(
     () => paginateGroups(units, { page, groupsPerPage: GROUPS_PER_PAGE }),
     [units, page],
@@ -719,11 +829,15 @@ export default function Inventory() {
       buildGroupedRows<Item>(pageRows, {
         expandedSizeRuns: expandedGroups,
         expandedSkuGroups,
+        expandedExplicitGroups,
         placementLabelFor,
         datasetIsTruncated: truncated,
       }),
-    [pageRows, expandedGroups, expandedSkuGroups, placementLabelFor, truncated],
+    [pageRows, expandedGroups, expandedSkuGroups, expandedExplicitGroups, placementLabelFor, truncated],
   );
+
+  // P5: an explicit header says "N matching" under a search or a filter.
+  const narrowed = listIsNarrowed(q, filter);
 
   const renderItem = React.useCallback(
     ({ item: row, index }: { item: GroupedRow; index: number }) => {
@@ -739,6 +853,27 @@ export default function Inventory() {
             onToggle={() => toggleGroup(row.styleKey)}
             index={index}
             isLast={index === groupedRows.length - 1}
+          />
+        );
+      }
+      if (row.kind === 'explicit-header') {
+        // Group selected (0400): a group with two or more of its records
+        // here. Same card as a SKU group; it counts records, not placements.
+        return (
+          <SkuGroupHeaderRow
+            name={row.name}
+            total={row.total}
+            reorderPoint={row.reorderPoint}
+            placementCount={row.recordCount}
+            countLabel={GROUP_COPY.headerCount(row.recordCount, narrowed)}
+            partial={row.partial}
+            lifecycle={row.status}
+            expected={row.expected}
+            expanded={expandedExplicitGroups.has(row.groupId)}
+            onToggle={() => toggleExplicitGroup(row.groupId)}
+            index={index}
+            isLast={index === groupedRows.length - 1}
+            stacked={stackRows}
           />
         );
       }
@@ -769,6 +904,9 @@ export default function Inventory() {
         <ItemRow
           item={row.item}
           placementLabel={row.placementLabel}
+          groupChip={row.groupChip ?? null}
+          addToGroupId={canEditItems && !selectMode ? (row.addToGroupId ?? null) : null}
+          onAddToGroup={onAddToGroup}
           isLast={index === groupedRows.length - 1}
           index={index}
           onItemPress={onItemPress}
@@ -786,10 +924,15 @@ export default function Inventory() {
       toggleGroup,
       expandedSkuGroups,
       toggleSkuGroup,
+      expandedExplicitGroups,
+      toggleExplicitGroup,
+      canEditItems,
+      onAddToGroup,
       onItemPress,
       selectMode,
       onToggleSelect,
       stackRows,
+      narrowed,
     ],
   );
 
@@ -1098,6 +1241,7 @@ const SkuGroupHeaderRow = React.memo(function SkuGroupHeaderRow({
   total,
   reorderPoint,
   placementCount,
+  countLabel,
   partial,
   lifecycle,
   expected,
@@ -1111,6 +1255,9 @@ const SkuGroupHeaderRow = React.memo(function SkuGroupHeaderRow({
   total: number;
   reorderPoint: number;
   placementCount: number;
+  /** Group selected (0400): an explicit group's header counts RECORDS ("3
+   *  records"), not placements. Absent: "N placement(s)". */
+  countLabel?: string;
   /** True when these figures cover the LOADED rows only — the Items list is
    *  page-replace paginated and the 'low' view narrows client-side, so a
    *  header's sum can be short. Disclosed on its face ("≥N", "N placements
@@ -1137,8 +1284,8 @@ const SkuGroupHeaderRow = React.memo(function SkuGroupHeaderRow({
     <Pressable
       onPress={onToggle}
       accessibilityRole="button"
-      accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${name}, ${placementCount} placement${
-        placementCount === 1 ? '' : 's'
+      accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${name}, ${
+        countLabel ?? `${placementCount} placement${placementCount === 1 ? '' : 's'}`
       }${partial ? ` shown, at least ${total} on hand` : ''}`}
       style={({ pressed }) => ({
         backgroundColor: c.paper2,
@@ -1180,7 +1327,7 @@ const SkuGroupHeaderRow = React.memo(function SkuGroupHeaderRow({
             {name}
           </Mono>
           <Mono size={11} color={c.ink4} tracking={0.04} style={{ marginTop: 4 }}>
-            {placementCount} placement{placementCount === 1 ? '' : 's'}
+            {countLabel ?? `${placementCount} placement${placementCount === 1 ? '' : 's'}`}
             {partial ? ' shown' : ''}
           </Mono>
         </View>
@@ -1200,6 +1347,9 @@ const SkuGroupHeaderRow = React.memo(function SkuGroupHeaderRow({
 const ItemRow = React.memo(function ItemRow({
   item,
   placementLabel,
+  groupChip,
+  addToGroupId,
+  onAddToGroup,
   isLast,
   index,
   onItemPress,
@@ -1211,6 +1361,13 @@ const ItemRow = React.memo(function ItemRow({
   /** When set (an expanded SKU-group placement), replaces the SKU secondary
    *  line with a charter/location label so same-SKU placements read apart. */
   placementLabel?: string | null;
+  /** Group selected (0400): "In group <name>" (its group has only it here) or
+   *  "Same SKU as records in <name>"; null otherwise. */
+  groupChip?: string | null;
+  /** With the second chip, for an editor: the group "Add to group" opens the
+   *  review on. Null hides the button. */
+  addToGroupId?: string | null;
+  onAddToGroup?: (itemId: string, groupId: string) => void;
   isLast: boolean;
   index: number;
   onItemPress: (id: string) => void;
@@ -1245,6 +1402,18 @@ const ItemRow = React.memo(function ItemRow({
     >
       <Pressable
         onPress={() => (selectMode ? onToggleSelect(item) : onItemPress(item.id))}
+        // Add to group sits inside this Pressable, so VoiceOver cannot reach
+        // it as its own element (P4): the row carries it as an action, and
+        // 'activate' keeps a double tap doing what a tap does.
+        accessibilityActions={groupRowAccessibilityActions(!!(addToGroupId && onAddToGroup))}
+        onAccessibilityAction={(e) =>
+          runGroupRowAccessibilityAction(e.nativeEvent.actionName, {
+            activate: () => (selectMode ? onToggleSelect(item) : onItemPress(item.id)),
+            addToGroup: () => {
+              if (addToGroupId && onAddToGroup) onAddToGroup(item.id, addToGroupId);
+            },
+          })
+        }
         style={({ pressed }) => [rowStyles.row, { opacity: pressed ? 0.7 : 1 }]}
       >
         <Thumb
@@ -1273,6 +1442,30 @@ const ItemRow = React.memo(function ItemRow({
             >
               {placementLabel ?? item.sku}
             </Mono>
+            {groupChip ? (
+              // Content, so uncapped: it wraps under the name at any size.
+              <View style={rowStyles.chipLine}>
+                <Mono size={10.5} color={c.ink4} tracking={0.02}>
+                  {groupChip}
+                </Mono>
+                {addToGroupId && onAddToGroup ? (
+                  <Pressable
+                    onPress={() => onAddToGroup(item.id, addToGroupId)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${GROUP_COPY.addToGroup}: ${item.name}`}
+                    hitSlop={6}
+                    style={({ pressed }) => [
+                      rowStyles.addToGroup,
+                      { borderColor: c.hair, opacity: pressed ? 0.6 : 1 },
+                    ]}
+                  >
+                    <Mono size={10.5} color={c.ink} tracking={0.02}>
+                      {GROUP_COPY.addToGroup}
+                    </Mono>
+                  </Pressable>
+                ) : null}
+              </View>
+            ) : null}
           </View>
           <View style={[rowStyles.trailingCol, stacked && rowStyles.trailingColStacked]}>
             <Mono
@@ -1427,6 +1620,22 @@ const rowStyles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 10,
     maxWidth: '100%',
+  },
+  // Group selected (0400): the chip line under a record's SKU, wrapping.
+  chipLine: {
+    marginTop: 4,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 6,
+  },
+  // 32pt tall plus the 6pt hit slop each way: a 44pt target in a dense row.
+  addToGroup: {
+    minHeight: 32,
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderRadius: 999,
   },
 });
 

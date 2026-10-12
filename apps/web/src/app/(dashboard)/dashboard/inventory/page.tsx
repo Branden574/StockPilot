@@ -37,6 +37,10 @@ import { CategoriesService } from '@/server/services/categories';
 import { ChartersService } from '@/server/services/charters';
 import { InventoryService } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
+import {
+  displayGroupFields,
+  readDisplayGroupsByItemIds,
+} from '@/server/services/lib/display-groups';
 import { LocationsService } from '@/server/services/locations';
 import { getItemTrends } from '@/server/services/movements';
 import { SavedViewsService } from '@/server/services/saved-views';
@@ -428,6 +432,17 @@ async function inventoryTableSection({
   const canSetPublicVisibility = can(sessionCtx, 'public_links:manage');
   // Ungroup (0399): the bulk bar offers it only to a viewer who can edit items.
   const canUngroup = can(sessionCtx, 'items:update');
+  // Group selected (0400): a group's header offers Rename to a manager only
+  // (apply_item_grouping refuses anyone else on the role alone, SEC-1).
+  const canRenameGroups = canUngroup && isManagerOrAbove(sessionCtx.role as Role);
+  // Ungroup anything (owner 2026-10-12): Ungroup also takes a record out of
+  // its size family for a viewer who may unlink one (unlinkItems' gate:
+  // sports:manage with the sports module on). getModulesForRequest is
+  // request-cached, so this costs no extra round trip.
+  const canUnlinkFamilies =
+    canUngroup &&
+    can(sessionCtx, 'sports:manage') &&
+    (await getModulesForRequest(sessionCtx.organizationId)).has('sports');
   // "Start an order" bulk shortcut: viewer can place order requests AND the
   // (optional) orders module is on. getModulesForRequest is request-cached and
   // shared with the layout, so this costs no extra round trip.
@@ -593,6 +608,8 @@ async function inventoryTableSection({
         canCreate={canCreate}
         canSetPublicVisibility={canSetPublicVisibility}
         canUngroup={canUngroup}
+        canUnlinkFamilies={canUnlinkFamilies}
+        canRenameGroups={canRenameGroups}
         canStartOrder={canStartOrder}
         categories={lookups.categories.map((c) => ({ id: c.id, name: c.name }))}
         locations={lookups.locations}
@@ -782,7 +799,7 @@ async function inventoryTableSection({
       id: i.id,
       quantityOnHand: i.quantity_on_hand,
     }));
-    const [trends, imagesById, placementMap] = await Promise.all([
+    const [trends, imagesById, placementMap, displayGroups] = await Promise.all([
       trendBuckets
         ? Promise.resolve(deriveInventoryTrends(trendInputs, trendBuckets))
         : tagged('getItemTrends', getItemTrends(trendInputs)),
@@ -795,6 +812,13 @@ async function inventoryTableSection({
       ),
       // Per-(item, location) holdings so the list shows ONE LINE PER RACK.
       tagged('inventorySvc.placementBreakdown', inventorySvc.placementBreakdown(itemIdList)),
+      // Group selected (0400): the page's records' display groups, through
+      // the caller's own client (RLS), 100 ids per request. Never fails the
+      // page: a failed read renders the records ungrouped.
+      tagged(
+        'displayGroups.byItemIds',
+        readDisplayGroupsByItemIds(createClient(), sessionCtx.organizationId, itemIdList),
+      ),
     ]);
     const itemsWithImages = inventory.items.map((i) => {
       const cf = (i as { custom_fields?: Record<string, unknown> | null }).custom_fields;
@@ -812,6 +836,7 @@ async function inventoryTableSection({
         image_thumb_url: img?.thumbUrl ?? null,
         // base64 LQIP for next/image's blurDataURL; null pre-0122.
         image_lqip: img?.lqip ?? null,
+        ...displayGroupFields(displayGroups.get(i.id)),
       };
     });
 
@@ -898,6 +923,8 @@ async function inventoryTableSection({
       canCreate={canCreate}
       canSetPublicVisibility={canSetPublicVisibility}
       canUngroup={canUngroup}
+      canUnlinkFamilies={canUnlinkFamilies}
+      canRenameGroups={canRenameGroups}
       canStartOrder={canStartOrder}
       categories={data.categories.map((c) => ({ id: c.id, name: c.name }))}
       locations={data.locations}

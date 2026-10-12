@@ -108,6 +108,12 @@ describe('planInstantFirstPage', () => {
         ['PAIR', 2],
         ...Array.from({ length: 27 }, (_, i) => [`SKU-s${i}`, 1] as [string, number]),
       ],
+      // Group selected (2026-10-12): the header units on page 1, over the
+      // whole view. No explicit group here, so each is its SKU's count.
+      unitItemRowCounts: [
+        ['sku:PAIR', 2],
+        ...Array.from({ length: 27 }, (_, i) => [`sku:SKU-s${i}`, 1] as [string, number]),
+      ],
     });
     expect(view.total).toBe(33);
   });

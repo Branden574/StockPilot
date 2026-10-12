@@ -18,6 +18,11 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import * as React from 'react';
 
 import { BulkActions } from '@/components/inventory/bulk-actions';
+import {
+  GroupSelectedDialog,
+  RemoveFromGroupDialog,
+  RenameGroupDialog,
+} from '@/components/inventory/display-group-dialogs';
 import { StockStatusBadge } from '@/components/inventory/stock-status-badge';
 import { usePerfUseful } from '@/components/perf/perf-useful';
 import { ExportBuilderDialog } from './export-builder/export-builder-dialog';
@@ -26,21 +31,22 @@ import { useCountSelection } from '@/lib/cycle-counts/use-count-selection';
 import { ELSEWHERE_PLACEMENT_KIND, elsewhereSuffix } from '@/lib/placements';
 import {
   countingUnitLabel,
-  groupBySizeRun,
   groupRollupLabel,
   placementPhysicalNames,
   resolvePlacement,
-  sharedSkuItemIds,
+  composeDisplayList,
+  displayGroupChips,
+  shownUnderByRecord,
+  ungroupableItemIds,
+  DISPLAY_GROUP_FALLBACK_NAME,
+  GROUP_COPY,
+  groupingSelectionFacts,
   type CountingUnit,
+  type DisplayGroupChip,
   type RackHoldingLike,
   type SizeRunGroup,
 } from '@stockpilot/core';
-import {
-  groupPlacementsBySku,
-  rollupStatus,
-  type PlacementRow as SkuInputRow,
-  type SkuGroup,
-} from '@/lib/inventory/group-by-sku';
+import { rollupStatus, type SkuGroup } from '@/lib/inventory/group-by-sku';
 import {
   createSavedViewAction,
   deleteSavedViewAction,
@@ -66,6 +72,7 @@ import {
 } from '@/components/inventory/use-instant-filters';
 import {
   countDistinctSkuLines,
+  countItemRowsByHeaderUnit,
   countItemRowsBySku,
   countPlacementRows,
   deriveInstantView,
@@ -121,6 +128,15 @@ interface Item {
   /** Sports (0298). The stored size, used to order a grouped run's members
    *  ("10 after 9") instead of a token parsed out of the display name. */
   variant_size?: string | null;
+  /** Group selected (0400): the record's explicit display group, read next to
+   *  the rows (never a column of inventory_items). Display only. Optional so
+   *  older callers render as before (no explicit groups). */
+  display_group_id?: string | null;
+  display_group_name?: string | null;
+  display_group_version?: number | null;
+  /** The record's type (Items vs Books), for Group selected's "one type"
+   *  rule in the bulk bar. Shipped by the loaders. */
+  item_type?: string | null;
   /** Signed URL to the master (2048px) image. Used by hover-preview
    * prefetch + the lightbox. Falls back to a custom_fields.thumbnail_url
    * stash for legacy bulk-imported books. */
@@ -207,24 +223,34 @@ interface Lookups {
   charters?: Map<string, { name: string; code: string | null }>;
 }
 
-/**
- * Model B SKU grouping (see the `skuGroups` derivation below): the shape
- * fed into Task 1's groupPlacementsBySku. PlacementRow's index signature
- * (`[k: string]: unknown`) lets us ride the ORIGINAL Item along under
- * `__item` — groupPlacementsBySku only reads/sums the declared fields,
- * but the object it hands back is the exact same reference, so casting
- * back to `SkuGroupInputRow` recovers the full row for rendering.
- */
-type SkuGroupInputRow = SkuInputRow & { __item: Item };
-
 /** One row the table body actually renders: either a plain placement
  *  row (today's per-rack `<tr>`, unchanged) or a SKU-group header
  *  (collapsed by default; expanding reveals its `items` as the SAME
  *  per-row `<tr>`s beneath it). `rowIdx` is a running position used
  *  only for the "first ~12 rows load with priority" image hint. */
 type RenderEntry =
-  | { kind: 'row'; item: Item; rowIdx: number }
-  | { kind: 'header'; group: SkuGroup; items: Item[]; rowIdx: number };
+  | {
+      kind: 'row';
+      item: Item;
+      rowIdx: number;
+      /** Under an expanded header (core composeDisplayList). */
+      nested?: boolean;
+      /** "In group <name>" / "Same SKU as records in <name>" (Group selected). */
+      chip?: DisplayGroupChip | null;
+    }
+  | { kind: 'header'; group: SkuGroup; items: Item[]; rowIdx: number }
+  /** Group selected (0400): an explicit display group with two or more of its
+   *  records on screen. `partial`: other records of it may sit on another
+   *  page (server mode) or the never-split guarantee broke. */
+  | {
+      kind: 'explicit';
+      groupId: string;
+      name: string | null;
+      version: number | null;
+      items: Item[];
+      rowIdx: number;
+      partial: boolean;
+    };
 
 /** The size-run layer sits ON TOP of RenderEntry: a run of same-base sized
  *  items (Pink Shirt - L/XL/2XL) collapses into one `style` header whose
@@ -358,6 +384,16 @@ export interface InventoryTableProps {
    *  Ungroup for selected records that share a SKU with another loaded
    *  record. Default false: never offered. The server re-checks everything. */
   canUngroup?: boolean;
+  /** Ungroup anything (owner 2026-10-12): the viewer may also take records
+   *  out of a size family (sports:manage with the sports module on, the gate
+   *  of unlinkItems), so Ungroup is offered for a family member shown under
+   *  its family. Default false. The server re-checks everything. */
+  canUnlinkFamilies?: boolean;
+  /** Group selected (0400): the viewer is a manager (or above) who can edit
+   *  items, so an explicit group's header offers Rename. Only a manager may
+   *  rename a group (security review SEC-1: apply_item_grouping answers on the
+   *  role alone, never on which records the caller can see). Default false. */
+  canRenameGroups?: boolean;
   /**
    * When provided, renders a small camera button inside the search
    * input on the right edge. Click invokes the callback so the
@@ -664,6 +700,8 @@ export function InventoryTable({
   canSetPublicVisibility = false,
   canStartOrder = false,
   canUngroup = false,
+  canUnlinkFamilies = false,
+  canRenameGroups = false,
   onScanRequest,
   page = 1,
   pageSize = 50,
@@ -916,6 +954,17 @@ export function InventoryTable({
   // SKU is never grouped into a >1-placement header — see
   // lib/inventory/group-by-sku.ts). Collapsed (empty set) by default.
   const [expandedSkuGroups, setExpandedSkuGroups] = React.useState<Set<string>>(new Set());
+  // Group selected (0400): open explicit display groups, by group id.
+  const [expandedExplicitGroups, setExpandedExplicitGroups] = React.useState<Set<string>>(
+    new Set(),
+  );
+  // A group's Rename / Remove (its header) and Add to group (a row's chip).
+  const [groupAction, setGroupAction] = React.useState<
+    | { kind: 'rename'; groupId: string; memberIds: string[] }
+    | { kind: 'remove'; ids: string[] }
+    | { kind: 'add'; ids: string[]; groupId: string }
+    | null
+  >(null);
   // Size-run (apparel) grouping expand state — keyed by the derived style base.
   // Collapsed by default, like the SKU groups above.
   const [expandedStyleGroups, setExpandedStyleGroups] = React.useState<Set<string>>(new Set());
@@ -1019,6 +1068,19 @@ export function InventoryTable({
   }
 
   const activeFilterCount = categoryIds.size + locationIds.size + charterIds.size;
+  // People review P5: an explicit group's header says "N matching" whenever
+  // anything narrows the list (a search, a filter, a stock view, Expected, a
+  // rack, or a lifecycle view that shows fewer records than the default:
+  // Archived or Discontinued; Active is the default and All shows more), as
+  // the phone does: its count is then the records listed, not the group's.
+  const lifecycleParam = params.get('status');
+  const listNarrowed =
+    !!q.trim() ||
+    activeFilterCount > 0 ||
+    !!params.get('stock') ||
+    !!params.get('rack') ||
+    (!!lifecycleParam && lifecycleParam !== 'active' && lifecycleParam !== 'all') ||
+    params.get('expected') === '1';
   function clearAllFilters() {
     setQ('');
     // One navigation clears the three filter keys (the override) plus
@@ -1146,6 +1208,9 @@ export function InventoryTable({
           url.searchParams.set('type', 'book');
         }
         url.searchParams.set('limit', String(pageSize));
+        // Each hit's display group (0400): the route reads memberships only
+        // for a caller that shows them (recheck R2-6).
+        url.searchParams.set('groups', '1');
 
         const res = await fetch(url.toString(), { signal: ctrl.signal });
         if (!res.ok) throw new Error(`search failed: ${res.status}`);
@@ -1495,100 +1560,248 @@ export function InventoryTable({
     return null;
   }, [instantView, plannedFirstPage]);
 
-  // Ungroup (0399, design 5): the selected records that share their SKU with
-  // another LOADED record, from the rows on hand only (the full dataset in
-  // instant mode, else this page and any search hits) plus the full-set
-  // per-SKU counts when known. No per-row query and no stored preference, so
-  // the server-planned page 1 is untouched. The server decides on what the
-  // viewer can read; this only decides whether to offer the button.
+  // Group selected (0400): records per HEADER UNIT over the whole set, for
+  // the headers' split detectors: 'grp:<id>' for an explicit group that forms
+  // (two or more of its records present), 'sku:<raw>' for a SKU counted over
+  // the records no formed group claims (the raw per-SKU counts above would
+  // stamp a false "*" on every partly grouped SKU). Instant mode counts the
+  // full filtered set; the planned page 1 brings the server's counts for its
+  // units (a payload cached before Group selected carries only the raw
+  // per-SKU counts, used as they always were). Null in plain server mode.
+  // Group selected (0400, design 5): the bulk bar offers Group selected for
+  // two or more DISTINCT records of one type (two rack rows of one record are
+  // ONE record), from the loaded rows only (taking records out of a group is
+  // Ungroup's now: owner 2026-10-12): no per-row query, and select-all stays
+  // page-scoped, so hidden rows, off-page siblings and every search match are
+  // never added. Offered to viewers who can edit items (items:update, the
+  // same gate as Ungroup); the server decides again on what they can read and
+  // edit.
+  const groupFacts = React.useMemo(() => {
+    if (!canUngroup || selectedItemIds.length === 0) return null;
+    const pool = [...(effectiveInstant?.items ?? items), ...(serverHits ?? [])];
+    const viewType = showBookFields ? 'book' : 'product';
+    // A selected record not loaded here (another page, a cleared search) is
+    // of this view's type (P3): Books never read it as a product.
+    return groupingSelectionFacts(
+      selectedItemIds,
+      pool.map((r) => ({
+        id: r.id,
+        item_type: r.item_type ?? viewType,
+        display_group_id: r.display_group_id ?? null,
+      })),
+      viewType,
+    );
+  }, [canUngroup, selectedItemIds, effectiveInstant, items, serverHits, showBookFields]);
+
+  const headerUnitCountsFull = React.useMemo<Map<string, number> | null>(() => {
+    if (instantView) return countItemRowsByHeaderUnit(instantView.filteredRows);
+    if (plannedFirstPage) {
+      return new Map(
+        plannedFirstPage.unitItemRowCounts ??
+          plannedFirstPage.skuItemRowCounts.map(
+            ([sku, n]) => [`sku:${sku}`, n] as [string, number],
+          ),
+      );
+    }
+    return null;
+  }, [instantView, plannedFirstPage]);
+
+  // THE COMPOSITION (core composeDisplayList, the one rule the phone uses
+  // too): explicit display groups with two or more records on screen, then
+  // the same-SKU headers over the rows no group claims (a SKU with MORE than
+  // one placement row: one record on two racks keeps its "2 locations"
+  // header, as before), then size runs over the remaining single rows (Items
+  // only: Books are never sized), then single rows. Every row renders exactly
+  // once. Expanded rows are emitted AFTER the run pass and marked nested, so
+  // an expanded SKU header can no longer pull its rows into a run elsewhere
+  // (the V3 defect: the run header's total jumped by the family's stock and
+  // the SKU header lost its children).
+  const displayList = React.useMemo(
+    () =>
+      composeDisplayList<Item>(displayed, {
+        itemIdOf: (it) => it.id,
+        skuOf: (it) => it.sku,
+        displayGroupOf: (it) => it.display_group_id ?? null,
+        ...(showBookFields
+          ? {}
+          : {
+              runMetaOf: (it: Item) => ({
+                name: it.name,
+                // The ITEM is the run's unit, not the row: `quantity_on_hand`
+                // is the item TOTAL on every one of its placement rows, so the
+                // run counts it once per record (core passes the record id as
+                // the unitKey).
+                quantity: Number(it.quantity_on_hand) || 0,
+                // Stored identity when the item has one; null keeps the
+                // legacy name heuristic, which is every ungrouped row.
+                groupId: it.group_id ?? null,
+                variantSize: it.variant_size ?? null,
+                countingUnit: it.group_id ? (productGroupUnits?.[it.group_id] ?? null) : null,
+              }),
+              // An explicit group of sized records reads in size order.
+              sizeOf: (it: Item) => it.variant_size ?? null,
+            }),
+        expanded: {
+          explicit: expandedExplicitGroups,
+          skus: expandedSkuGroups,
+          runs: expandedStyleGroups,
+        },
+      }),
+    [
+      displayed,
+      showBookFields,
+      productGroupUnits,
+      expandedExplicitGroups,
+      expandedSkuGroups,
+      expandedStyleGroups,
+    ],
+  );
+
+  // Ungroup anything (owner 2026-10-12): the header each record is SHOWN
+  // under in this composition (an explicit group, a shared SKU, a stored size
+  // family's run). A ticked record with more than one grouping leaves this
+  // one; the review says so for each record.
+  const ungroupShownUnder = React.useMemo(
+    () => shownUnderByRecord(displayList, (it) => it.id),
+    [displayList],
+  );
+
+  // The bulk bar offers Ungroup when a ticked record has something to leave
+  // this viewer may undo (core ungroupableItemIds), from the rows on hand
+  // only (the full dataset in instant mode, else this page and any search
+  // hits) plus the full-set per-SKU counts when known: no per-row query, and
+  // the server-planned page 1 is untouched. The review reads every ticked
+  // record again and decides on what the viewer can read and edit.
   const ungroupItemIds = React.useMemo<string[]>(() => {
     if (!canUngroup || selectedItemIds.length === 0) return [];
     const pool = [...(effectiveInstant?.items ?? items), ...(serverHits ?? [])];
-    return sharedSkuItemIds(
+    return ungroupableItemIds(
       selectedItemIds,
-      pool.map((r) => ({ id: r.id, sku: r.sku ?? null })),
-      skuItemRowCountsFull,
+      pool.map((r) => ({
+        id: r.id,
+        sku: r.sku ?? null,
+        display_group_id: r.display_group_id ?? null,
+        group_id: r.group_id ?? null,
+      })),
+      {
+        canEditItems: canUngroup,
+        canUnlinkFamilies,
+        fullSkuCounts: skuItemRowCountsFull,
+        shownUnder: ungroupShownUnder,
+      },
     );
-  }, [canUngroup, selectedItemIds, effectiveInstant, items, serverHits, skuItemRowCountsFull]);
+  }, [
+    canUngroup,
+    canUnlinkFamilies,
+    selectedItemIds,
+    effectiveInstant,
+    items,
+    serverHits,
+    skuItemRowCountsFull,
+    ungroupShownUnder,
+  ]);
 
-  const skuGroups = React.useMemo<SkuGroup[] | null>(() => {
-    const rows: SkuGroupInputRow[] = displayed.map((it) => ({
-      id: it.rowKey ?? it.id,
-      sku: it.sku,
-      name: it.name,
-      charterId: it.charter_id,
-      placementLabel: it.placement_label ?? null,
-      lineQuantity: it.line_quantity ?? it.quantity_on_hand,
-      __item: it,
-    }));
-    const groups = groupPlacementsBySku(rows);
-    // DISTINCT ITEM ROWS in a group (count 1), not its placement rows
-    // (count 2) — the unit pagination slices is the item row.
-    const itemRowsIn = (g: SkuGroup): number =>
-      new Set(g.placements.map((p) => (p as unknown as SkuGroupInputRow).__item.id)).size;
-    if (!skuItemRowCountsFull) {
-      // Server mode: no full-dataset sum available. A single page (every
-      // row for this view is already on screen) is still exact even
-      // here; a multi-placement group on a multi-page result COULD be
-      // missing rows sitting on another page, so it's flagged rather
-      // than silently shown as if it were complete (recurring bug
-      // pattern #18 — disclose silent caps, never hide them).
-      // The question is whether the RESULT SET ON SCREEN is complete, not
-      // whether the view's unsearched total fits a page. With a search
-      // active the rows come from /api/items/search, which reports its own
-      // match count and returns at most `pageSize` of them; keying off
-      // `effectiveTotal` (the server `total` prop, which a search never
-      // updates) stamped a false asterisk and an "other pages may hold
-      // more" tooltip on groups that were entirely on screen. When the
-      // search fetch hasn't landed (or failed) the rows are a local filter
-      // over the current page, so completeness falls back to the view's
-      // own single-page test.
-      const resultSetTotal = q.trim() && serverHits ? (serverHitsTotal ?? total) : total;
-      const singlePage = resultSetTotal <= pageSize;
-      if (singlePage) return groups;
-      // A group can only straddle a page boundary if it holds more than
-      // one ITEM ROW — the server slices item rows and expands placements
-      // afterwards. Keying off `placements.length` counted PLACEMENT rows,
-      // so ONE item split across two racks (an everyday Items-list row,
-      // one paginated unit, uncuttable) got a false asterisk and a
-      // "other pages may hold more of this SKU" tooltip.
-      return groups.map((g) => (itemRowsIn(g) > 1 ? { ...g, totalIsPartial: true } : g));
-    }
-    // Instant mode (and the planned first page, which is instant mode's page
-    // 1): group-aware pagination guarantees every row of a SKU
-    // is on this page, so the group's own sum is already the full one.
-    // Verify rather than assume — compare the group's DISTINCT item ids
-    // against the full filtered set's row count for that SKU (ids, not a
-    // sum: placement expansion means one item can contribute several
-    // rows, so only ids are comparable). A shortfall means the guarantee
-    // broke; disclose it instead of showing a confident under-count.
-    return groups.map((g) => {
-      if (!g.sku.trim()) return g;
-      const full = skuItemRowCountsFull.get(g.sku);
-      if (full == null) return g;
-      return itemRowsIn(g) < full ? { ...g, totalIsPartial: true } : g;
-    });
-  }, [displayed, skuItemRowCountsFull, q, serverHits, serverHitsTotal, total, pageSize]);
-
-  const renderItems = React.useMemo<RenderEntry[]>(() => {
-    let idx = 0;
-    if (!skuGroups) {
-      return displayed.map((item) => ({ kind: 'row' as const, item, rowIdx: idx++ }));
-    }
-    const out: RenderEntry[] = [];
-    for (const g of skuGroups) {
-      const groupItems = g.placements.map((p) => (p as unknown as SkuGroupInputRow).__item);
-      if (groupItems.length <= 1) {
-        for (const it of groupItems) out.push({ kind: 'row', item: it, rowIdx: idx++ });
-        continue;
+  // Chips (Group selected): a record whose group has only it on screen ("In
+  // group <name>", so a search hit keeps its context) and a record in no group
+  // sharing a SKU with a group here ("Same SKU as records in <name>", with
+  // Add to group). From the rows on screen only.
+  const chips = React.useMemo(
+    () =>
+      displayGroupChips(displayed, {
+        itemIdOf: (it) => it.id,
+        skuOf: (it) => it.sku,
+        displayGroupOf: (it) => it.display_group_id ?? null,
+      }),
+    [displayed],
+  );
+  const groupNames = React.useMemo(() => {
+    const m = new Map<string, string>();
+    for (const it of [...(effectiveInstant?.items ?? items), ...(serverHits ?? [])]) {
+      if (it.display_group_id && it.display_group_name && !m.has(it.display_group_id)) {
+        m.set(it.display_group_id, it.display_group_name);
       }
-      out.push({ kind: 'header', group: g, items: groupItems, rowIdx: idx++ });
-      if (expandedSkuGroups.has(g.sku)) {
-        for (const it of groupItems) out.push({ kind: 'row', item: it, rowIdx: idx++ });
+    }
+    return m;
+  }, [effectiveInstant, items, serverHits]);
+
+  const styledRenderItems = React.useMemo<StyledEntry[]>(() => {
+    // Is the result set on screen complete? (server mode). With a search
+    // active the rows come from /api/items/search, which reports its own match
+    // count; otherwise the view's own total.
+    const resultSetTotal = q.trim() && serverHits ? (serverHitsTotal ?? total) : total;
+    const singlePage = resultSetTotal <= pageSize;
+    // A header may cover only some of its unit's records. Instant mode (and
+    // the planned page 1): group-aware pagination keeps a unit whole, so the
+    // header is exact unless the guarantee is observed to have BROKEN (fewer
+    // records here than the whole set has for that unit). Server mode cannot
+    // check: a header of more than one RECORD (never one record on two racks:
+    // one paginated unit) on a multi-page result is marked (pattern #18).
+    const partial = (unitKey: string, rows: Item[]): boolean => {
+      const records = new Set(rows.map((r) => r.id)).size;
+      if (!headerUnitCountsFull) return !singlePage && records > 1;
+      const full = headerUnitCountsFull.get(unitKey);
+      return full != null && records < full;
+    };
+    let idx = 0;
+    const out: StyledEntry[] = [];
+    for (const e of displayList) {
+      if (e.kind === 'explicit') {
+        out.push({
+          kind: 'passthrough',
+          entry: {
+            kind: 'explicit',
+            groupId: e.groupId,
+            name:
+              e.rows.find((r) => r.display_group_name)?.display_group_name ??
+              groupNames.get(e.groupId) ??
+              null,
+            version: e.rows.find((r) => r.display_group_version != null)?.display_group_version ?? null,
+            items: e.rows,
+            rowIdx: idx++,
+            partial: partial(`grp:${e.groupId}`, e.rows),
+          },
+        });
+      } else if (e.kind === 'sku') {
+        const group: SkuGroup = {
+          sku: e.sku,
+          name: e.rows[0]?.name ?? '',
+          total: e.rows.reduce((sum, it) => sum + (it.line_quantity ?? it.quantity_on_hand), 0),
+          placements: [],
+          ...(partial(`sku:${e.sku}`, e.rows) ? { totalIsPartial: true } : {}),
+        };
+        out.push({ kind: 'passthrough', entry: { kind: 'header', group, items: e.rows, rowIdx: idx++ } });
+      } else if (e.kind === 'run') {
+        const members: RenderEntry[] = e.run.members.map((item) => ({
+          kind: 'row',
+          item,
+          rowIdx: -1,
+        }));
+        out.push({ kind: 'style', group: { ...e.run, members }, items: e.run.members });
+      } else {
+        out.push({
+          kind: 'passthrough',
+          entry: {
+            kind: 'row',
+            item: e.row,
+            rowIdx: idx++,
+            nested: e.nested,
+            chip: e.nested ? null : (chips.get(e.row.id) ?? null),
+          },
+        });
       }
     }
     return out;
-  }, [skuGroups, displayed, expandedSkuGroups]);
+  }, [
+    displayList,
+    chips,
+    groupNames,
+    headerUnitCountsFull,
+    q,
+    serverHits,
+    serverHitsTotal,
+    total,
+    pageSize,
+  ]);
 
   function toggleSkuGroup(sku: string) {
     setExpandedSkuGroups((prev) => {
@@ -1599,55 +1812,19 @@ export function InventoryTable({
     });
   }
 
-  // Size-run (apparel) grouping: collapse a run of same-base sized items
-  // ("Pink Shirt - L / - XL / - 2XL") into ONE expandable header ON TOP of the
-  // SKU grouping above. Display-only — members keep their own SKU/count/rack. A
-  // multi-placement SKU header is never folded in (groupable: false). Off for
-  // Books (never sized, and their header layout differs). Collapsed by default;
-  // the chevron alone controls expansion — an earlier build force-expanded runs
-  // during a search, which made the collapse arrow do nothing while filtering
-  // (exactly when the collapsed view is most wanted).
-  const styledRenderItems = React.useMemo<StyledEntry[]>(() => {
-    if (showBookFields) {
-      return renderItems.map((entry) => ({ kind: 'passthrough', entry }));
-    }
-    const grouped = groupBySizeRun<RenderEntry>(renderItems, (entry) =>
-      entry.kind === 'row'
-        ? {
-            key: entry.item.rowKey ?? entry.item.id,
-            name: entry.item.name,
-            quantity: Number(entry.item.quantity_on_hand) || 0,
-            // The ITEM is the unit, not the row. `quantity_on_hand` is the
-            // item TOTAL on every one of its placement rows (the rack's own
-            // qty is `line_quantity`), so without this an expanded
-            // multi-placement SKU inside a run added its whole total once per
-            // rack — a header claiming 72 for two variants holding 52.
-            unitKey: entry.item.id,
-            groupable: true,
-            // Stored identity when the item has one; null keeps the legacy
-            // name heuristic, which is every ungrouped row in every org.
-            groupId: entry.item.group_id ?? null,
-            variantSize: entry.item.variant_size ?? null,
-            countingUnit: entry.item.group_id
-              ? (productGroupUnits?.[entry.item.group_id] ?? null)
-              : null,
-          }
-        : { key: `sku:${entry.group.sku}`, name: entry.group.name, quantity: 0, groupable: false },
-    );
-    const out: StyledEntry[] = [];
-    for (const ge of grouped) {
-      if (ge.kind === 'single') {
-        out.push({ kind: 'passthrough', entry: ge.entry });
-        continue;
-      }
-      const items = ge.group.members.map((m) => (m as Extract<RenderEntry, { kind: 'row' }>).item);
-      out.push({ kind: 'style', group: ge.group, items });
-      if (expandedStyleGroups.has(ge.group.styleKey)) {
-        for (const m of ge.group.members) out.push({ kind: 'passthrough', entry: m });
-      }
-    }
-    return out;
-  }, [renderItems, expandedStyleGroups, showBookFields, productGroupUnits]);
+  function toggleExplicitGroup(groupId: string) {
+    setExpandedExplicitGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
+  }
+
+  /** Opens an explicit group's header (after a grouping put records in it). */
+  function openExplicitGroup(groupId: string) {
+    setExpandedExplicitGroups((prev) => (prev.has(groupId) ? prev : new Set(prev).add(groupId)));
+  }
 
   function toggleStyleGroup(styleKey: string) {
     setExpandedStyleGroups((prev) => {
@@ -1660,6 +1837,42 @@ export function InventoryTable({
 
   return (
     <div className="space-y-4">
+      {/* Group selected (0400): a group header's Rename / Remove and a row
+          chip's Add to group. Each reviews first and writes only on Save; a
+          change refreshes the page (the server re-reads every row). */}
+      {groupAction?.kind === 'rename' ? (
+        <RenameGroupDialog
+          open
+          groupId={groupAction.groupId}
+          memberIds={groupAction.memberIds}
+          onDone={() => router.refresh()}
+          onOpenChange={(v) => (v ? null : setGroupAction(null))}
+        />
+      ) : null}
+      {groupAction?.kind === 'remove' ? (
+        <RemoveFromGroupDialog
+          open
+          itemIds={groupAction.ids}
+          view={showBookFields ? 'books' : 'items'}
+          onDone={(o) => (o.outcome === 'applied' ? router.refresh() : undefined)}
+          onOpenChange={(v) => (v ? null : setGroupAction(null))}
+        />
+      ) : null}
+      {groupAction?.kind === 'add' ? (
+        <GroupSelectedDialog
+          open
+          itemIds={groupAction.ids}
+          initialGroupId={groupAction.groupId}
+          view={showBookFields ? 'books' : 'items'}
+          onDone={(o) => {
+            if (o.outcome !== 'applied') return;
+            router.refresh();
+            // The record joined: show the group open (C3).
+            if (o.group?.id) openExplicitGroup(o.group.id);
+          }}
+          onOpenChange={(v) => (v ? null : setGroupAction(null))}
+        />
+      ) : null}
       {/* React 19 use() dataset handoff: an invisible leaf that suspends
           on `instantPromise` behind its OWN `fallback={null}` (so the
           table rows above stay painted) and adopts the full dataset into
@@ -1950,6 +2163,25 @@ export function InventoryTable({
             // rack rows of the same item are checked.
             selectedIds={selectedItemIds}
             ungroupItemIds={ungroupItemIds}
+            ungroupShownUnder={ungroupShownUnder}
+            groupItemIds={groupFacts?.canGroup ? selectedItemIds : []}
+            groupingView={showBookFields ? 'books' : 'items'}
+            // C3 (design 5): after a grouping the list opens the group.
+            onGrouped={openExplicitGroup}
+            onAddToSelection={(ids) =>
+              // An explicit choice in the review: add those records (their
+              // rows on screen when loaded, else the record itself).
+              setSelected((prev) => {
+                const next = new Set(prev);
+                const loaded = new Map<string, string[]>();
+                for (const r of displayed) {
+                  const k = r.rowKey ?? r.id;
+                  loaded.set(r.id, [...(loaded.get(r.id) ?? []), k]);
+                }
+                for (const id of ids) for (const k of loaded.get(id) ?? [id]) next.add(k);
+                return next;
+              })
+            }
             canStartOrder={canStartOrder}
             onStartOrder={() => {
               // Resolve ONE warehouse for the selection (an order is per
@@ -2171,6 +2403,53 @@ export function InventoryTable({
               // re-derives `renderItems` to splice the group's own
               // placement rows (the SAME `<tr>`s below, unchanged) in
               // right after it. Not selectable — no checkbox.
+              // Group selected (0400): an explicit display group's header,
+              // the SAME row markup as a SKU header, named for the group. Its
+              // chevron reveals the group's own rows (the SAME `<tr>`s below).
+              // Not selectable; Rename and Remove act on the group's records
+              // on screen only (the server decides on what the viewer can
+              // edit; a hidden record is never named or moved).
+              if (entry.kind === 'explicit') {
+                const groupName = entry.name ?? DISPLAY_GROUP_FALLBACK_NAME;
+                const memberIds = [...new Set(entry.items.map((it) => it.id))];
+                return (
+                  <SkuGroupHeaderRow
+                    key={`display-group:${entry.groupId}`}
+                    group={{
+                      sku: '',
+                      name: groupName,
+                      total: 0,
+                      placements: [],
+                      ...(entry.partial ? { totalIsPartial: true } : {}),
+                    }}
+                    explicit={{
+                      groupId: entry.groupId,
+                      name: groupName,
+                      matching: listNarrowed,
+                      onRename:
+                        canUngroup && canRenameGroups
+                          ? () =>
+                              setGroupAction({ kind: 'rename', groupId: entry.groupId, memberIds })
+                          : undefined,
+                      onRemove: canUngroup
+                        ? () => setGroupAction({ kind: 'remove', ids: memberIds })
+                        : undefined,
+                    }}
+                    items={entry.items}
+                    expanded={expandedExplicitGroups.has(entry.groupId)}
+                    onToggle={() => toggleExplicitGroup(entry.groupId)}
+                    lookups={lookups}
+                    sparkMode={sparkMode}
+                    trends={effectiveTrends}
+                    rowLinkPrefix={rowLinkPrefix}
+                    currentListUrl={currentListUrl}
+                    rowIdx={entry.rowIdx}
+                    showBookFields={showBookFields}
+                    stockView={stockView}
+                    reservedByItem={reservedByItem}
+                  />
+                );
+              }
               if (entry.kind === 'header') {
                 return (
                   <SkuGroupHeaderRow
@@ -2334,6 +2613,23 @@ export function InventoryTable({
                       >
                         {item.name}
                       </IntentLink>
+                      {entry.chip ? (
+                        <DisplayGroupChipView
+                          chip={entry.chip}
+                          name={groupNames.get(entry.chip.groupId) ?? DISPLAY_GROUP_FALLBACK_NAME}
+                          recordName={item.name}
+                          onAddToGroup={
+                            canUngroup && entry.chip.kind === 'same-sku'
+                              ? () =>
+                                  setGroupAction({
+                                    kind: 'add',
+                                    ids: [item.id],
+                                    groupId: entry.chip!.groupId,
+                                  })
+                              : undefined
+                          }
+                        />
+                      ) : null}
                     </div>
                   </td>
                   <td className="px-3 font-mono text-[11.5px] tracking-[-0.01em] text-[var(--ed-ink-3)]">
@@ -2983,6 +3279,7 @@ function SkuGroupHeaderRow({
   showBookFields,
   stockView,
   reservedByItem,
+  explicit,
 }: {
   group: SkuGroup;
   items: Item[];
@@ -3008,6 +3305,20 @@ function SkuGroupHeaderRow({
    *  a fully checked-out group cannot badge "In stock" while every row
    *  beneath it badges "Out of stock". */
   reservedByItem?: Map<string, number>;
+  /**
+   * Group selected (0400): render this header for an EXPLICIT display group
+   * instead of a SKU: its name and record count in the name cell, the SKUs
+   * rolled up (they differ by design), "N matching" under a search or filter,
+   * and Rename / Remove when the viewer can edit items. Every figure is still
+   * derived from `items`, the rows it expands to.
+   */
+  explicit?: {
+    groupId: string;
+    name: string;
+    matching: boolean;
+    onRename?: () => void;
+    onRemove?: () => void;
+  };
 }) {
   // Only IDENTITY fields come from the FIRST placement (first-seen order —
   // see group-by-sku.ts): a SKU is one product identity (mig 0234 makes
@@ -3128,7 +3439,11 @@ function SkuGroupHeaderRow({
             type="button"
             onClick={onToggle}
             aria-expanded={expanded}
-            aria-label={`${expanded ? 'Collapse' : 'Expand'} ${group.sku} (${items.length} placements)`}
+            aria-label={
+              explicit
+                ? `${expanded ? 'Collapse' : 'Expand'} group ${explicit.name} (${GROUP_COPY.headerCount(distinctItems.length, explicit.matching)})`
+                : `${expanded ? 'Collapse' : 'Expand'} ${group.sku} (${items.length} placements)`
+            }
             className="hover:bg-muted hover:text-foreground grid h-5 w-5 shrink-0 place-items-center rounded-sm text-[var(--ed-ink-3)] transition-colors"
           >
             <ChevronRight
@@ -3136,15 +3451,20 @@ function SkuGroupHeaderRow({
             />
           </button>
           <ImageHoverPreview
-            src={first.image_url ?? null}
+            // A group's header shows no cover (P5): its records can be
+            // different products or editions, so one record's picture would
+            // speak for the rest (the phone shows none either).
+            src={explicit ? null : (first.image_url ?? null)}
             srcLoader={
-              !first.image_url && first.image_thumb_url
+              !explicit && !first.image_url && first.image_thumb_url
                 ? () => loadMasterImageUrl(first.id)
                 : undefined
             }
-            alt={first.name}
-            title={first.name}
-            subtitle={group.sku}
+            alt={explicit ? explicit.name : first.name}
+            title={explicit ? explicit.name : first.name}
+            subtitle={
+              explicit ? GROUP_COPY.headerCount(distinctItems.length, explicit.matching) : group.sku
+            }
             meta={
               <span>
                 On hand{' '}
@@ -3152,7 +3472,9 @@ function SkuGroupHeaderRow({
                   className="text-foreground font-medium tabular-nums"
                   title={
                     group.totalIsPartial
-                      ? 'This total only counts placements on the current page — other pages may hold more of this SKU.'
+                      ? explicit
+                        ? 'This total only counts records on the current page — other pages may hold more of this group.'
+                        : 'This total only counts placements on the current page — other pages may hold more of this SKU.'
                       : undefined
                   }
                 >
@@ -3167,7 +3489,7 @@ function SkuGroupHeaderRow({
             }
             className="shrink-0"
           >
-            {rowThumbSrc ? (
+            {rowThumbSrc && !explicit ? (
               <Image
                 src={rowThumbSrc}
                 unoptimized={!!first.image_thumb_url}
@@ -3191,17 +3513,62 @@ function SkuGroupHeaderRow({
               />
             )}
           </ImageHoverPreview>
-          <Link
-            href={`${rowLinkPrefix}/${first.id}?return=${encodeURIComponent(currentListUrl)}`}
-            prefetch={false}
-            className="font-medium hover:underline"
-          >
-            {first.name}
-          </Link>
+          {explicit ? (
+            <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+              <span className="font-medium">{explicit.name}</span>
+              <span className="text-[11px] text-[var(--ed-ink-4)]">
+                {GROUP_COPY.headerCount(distinctItems.length, explicit.matching)}
+              </span>
+              {explicit.onRename ? (
+                <button
+                  type="button"
+                  onClick={explicit.onRename}
+                  aria-label={GROUP_COPY.renameFor(explicit.name)}
+                  className="text-[11px] text-[var(--ed-ink-3)] underline-offset-2 hover:underline"
+                >
+                  {GROUP_COPY.renameAction}
+                </button>
+              ) : null}
+              {explicit.onRemove ? (
+                <button
+                  type="button"
+                  onClick={explicit.onRemove}
+                  aria-label={GROUP_COPY.removeFor(explicit.name)}
+                  className="text-[11px] text-[var(--ed-ink-3)] underline-offset-2 hover:underline"
+                >
+                  {GROUP_COPY.removeAction}
+                </button>
+              ) : null}
+            </span>
+          ) : (
+            <Link
+              href={`${rowLinkPrefix}/${first.id}?return=${encodeURIComponent(currentListUrl)}`}
+              prefetch={false}
+              className="font-medium hover:underline"
+            >
+              {first.name}
+            </Link>
+          )}
         </div>
       </td>
       <td className="px-3 font-mono text-[11.5px] tracking-[-0.01em] text-[var(--ed-ink-3)]">
-        {group.sku}
+        {explicit
+          ? (() => {
+              // The records of a display group keep their own SKUs (that is
+              // the point: no identifier is rewritten to group them).
+              const skus = rollupText(items.map((it) => it.sku));
+              return skus.kind === 'same' ? (
+                skus.value
+              ) : (
+                <span
+                  className="font-sans text-[11px] italic text-[var(--ed-ink-4)]"
+                  title="These records keep their own SKUs — expand to see each"
+                >
+                  Multiple
+                </span>
+              );
+            })()
+          : group.sku}
       </td>
       <td className="px-3">
         {categoryRollup.kind === 'multiple' ? (
@@ -4379,5 +4746,43 @@ function SparkModeToggle({
         </div>
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * Group selected (0400): the chip on a record that is not under its group's
+ * header here. "In group <name>": its group has only it on screen (a search
+ * hit, a filter), so it keeps its context. "Same SKU as records in <name>":
+ * it is in no group and shares a SKU with a group here; Add to group opens the
+ * review to add it (nothing joins a group by itself).
+ */
+function DisplayGroupChipView({
+  chip,
+  name,
+  recordName,
+  onAddToGroup,
+}: {
+  chip: DisplayGroupChip;
+  name: string;
+  /** The row's record: each chip's button names it (P11). */
+  recordName: string;
+  onAddToGroup?: () => void;
+}) {
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1.5 text-[10.5px] text-[var(--ed-ink-3)]">
+      <span className="border-border rounded-full border px-1.5 py-px">
+        {chip.kind === 'in-group' ? GROUP_COPY.chipInGroup(name) : GROUP_COPY.chipSameSku(name)}
+      </span>
+      {onAddToGroup ? (
+        <button
+          type="button"
+          onClick={onAddToGroup}
+          aria-label={GROUP_COPY.addToGroupFor(name, recordName)}
+          className="text-[var(--ed-ink-2)] underline-offset-2 hover:underline"
+        >
+          {GROUP_COPY.addToGroup}
+        </button>
+      ) : null}
+    </span>
   );
 }

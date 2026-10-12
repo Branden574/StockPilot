@@ -9,6 +9,7 @@ import { isbnVariants } from '@/lib/books/isbn-variants';
 import { IN_FILTER_MAX_VALUES } from '@/lib/supabase/in-filter';
 import { InventoryService, type ItemListSort } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
+import { displayGroupFields, readDisplayGroupsByItemIds } from '@/server/services/lib/display-groups';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -282,9 +283,21 @@ export async function GET(req: Request): Promise<Response> {
   // Attach signed image URLs in batch. Mirrors what page.tsx does for
   // the SSR render so the client-side swap is visually consistent.
   const imagesSvc = new ItemImagesService(ctx);
-  const imagesById = await imagesSvc.primaryImagesForItems(
-    result.items.map((i) => i.id as string),
-  );
+  const hitIds = result.items.map((i) => i.id as string);
+  // Group selected (0400): each hit's display group, through the caller's own
+  // client (RLS: a membership only when its record is readable), so a search
+  // hit on one member keeps its group context ("In group <name>"). In parallel
+  // with the images; never fails the search. Opt-in (`?groups=1`, recheck
+  // R2-6): only the Items and Books tables show groups, so the order Add items
+  // picker and the count picker, which use this same listing, neither pay for
+  // the read nor receive the fields.
+  const wantGroups = params.get('groups') === '1';
+  const [imagesById, displayGroups] = await Promise.all([
+    imagesSvc.primaryImagesForItems(hitIds),
+    wantGroups
+      ? readDisplayGroupsByItemIds(ctx.supabase, ctx.organizationId, hitIds)
+      : Promise.resolve(null),
+  ]);
 
   const items = result.items.map((i) => {
     const cf = (i as { custom_fields?: Record<string, unknown> | null })
@@ -323,6 +336,7 @@ export async function GET(req: Request): Promise<Response> {
       updated_at: i.updated_at as string,
       image_url:
         imagesById.get(i.id as string) ?? cfThumb ?? null,
+      ...(displayGroups ? displayGroupFields(displayGroups.get(i.id as string)) : {}),
     };
   });
 

@@ -728,6 +728,17 @@ PGTAP_TESTS=(
   # scope move between the checks and the lock) are
   # scripts/db-concurrency/0399_split_sku_races.sh.
   supabase/tests/0399_ungroup_shared_sku.test.sql
+  # Group selected (0400, slice G2): explicit display groups. The two tables
+  # have RLS on with SELECT only (a membership is readable exactly when its
+  # record is; a group only through a readable live record) and no write
+  # privilege for any API role; apply_item_grouping is SECURITY DEFINER with
+  # EXECUTE to authenticated only, checks items:update and each record's read
+  # and write scope (again under the NOWAIT locks), refuses a hidden id like
+  # an unknown one, never moves a record out of another group without an
+  # explicit per-record decision, and writes no item row, stock or product
+  # family; the INVOKER preview never names item_stock_levels (INV-33). The
+  # two-session proofs are scripts/db-concurrency/0400_item_display_groups_races.sh.
+  supabase/tests/0400_item_display_groups.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -817,6 +828,26 @@ WEB_TESTS=(
   # read or call and refuses another organization or actor.
   src/app/api/v1/items/ungroup/route.test.ts
   src/server/services/item-grouping.test.ts
+  # Group selected (0400): the phone's bearer routes authenticate, then
+  # rate-limit, and map refusals by reason (a 403 keeps its MFA reason); the
+  # service checks items:update before any read or call, refuses another
+  # organization or actor, and never imports InventoryService (no fan-out);
+  # no consumer path (exchange, PO import, reports, exports, order catalog,
+  # kits, families, scan) reads a display group.
+  src/app/api/v1/items/grouping/route.test.ts
+  src/server/services/item-grouping.group.test.ts
+  src/server/services/display-groups-consumers.guard.test.ts
+  # Ungroup anything (owner 2026-10-12, with 0400): the phone's two bearer
+  # routes authenticate, then rate-limit, and map a refusal before any write
+  # by reason (a 403 keeps its MFA reason); the service runs the items:update
+  # gate first, refuses another organization or actor, asks sports:manage
+  # with the sports module on before a family step writes anything, reuses
+  # the existing writes in a fixed order, and names every step's records
+  # (never a half-applied Save without saying so); the web actions keep the
+  # same buckets and never send a raw message.
+  src/app/api/v1/items/ungroup-selected/route.test.ts
+  src/server/services/ungroup-selected.test.ts
+  src/server/actions/item-grouping.ungroup-selected.test.ts
   src/app/api/orders/[id]/signature/route.test.ts
   src/server/actions/po-imports.gates.test.ts
   src/server/actions/purchase-orders.gates.test.ts
@@ -1292,6 +1323,19 @@ MOBILE_TESTS=(
   src/lib/requester-returns.test.ts
   src/lib/requester-returns-api.test.ts
   src/lib/requester-returns-wiring.test.ts
+  # Group selected (0400): every grouping write (Group, Remove from group) is
+  # online only (no outbox kind) and sent under the record's organization and
+  # only the signed-in account; a review or an outcome for another
+  # organization, account or selection is refused, never shown; memberships
+  # are read as the member (RLS), and a failed read groups nothing.
+  src/lib/display-groups.test.ts
+  # Ungroup anything (owner 2026-10-12): the phone's Ungroup review and Save
+  # are online only, sent under the record's organization and only the
+  # signed-in account; a review for another organization, account or
+  # selection, or an answer for another organization, is refused, never
+  # shown; the select bar offers a size family only with sports:manage and
+  # the sports module on.
+  src/lib/ungroup-selected.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

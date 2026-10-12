@@ -42,6 +42,25 @@ export type AuditEvent =
    * request_hash, surface. No ip or user agent (a SQL-written row).
    */
   | 'inventory.item.ungrouped'
+  /**
+   * Group selected (0400): explicit display groups. Written by
+   * apply_item_grouping itself, in the same transaction as the change; no ip
+   * or user agent (SQL-written rows). A display group is display only: it
+   * never changes a record's SKU, charter, stock or product family.
+   *   created          the group (entity item_display_group): name, item type,
+   *                    the records it started with.
+   *   members_added    one per record that joined or moved (entity the
+   *                    record): before/after group id and name, the group it
+   *                    left (previous_group_id) and whether that closed.
+   *   members_removed  one per record that left (entity the record): the
+   *                    group it left and whether that closed.
+   *   renamed          the group: before/after name.
+   * Each carries request_key, request_hash and surface.
+   */
+  | 'inventory.group.created'
+  | 'inventory.group.members_added'
+  | 'inventory.group.members_removed'
+  | 'inventory.group.renamed'
   // Sports product-group identity + variant provenance. 'matched' is recorded
   // as well as 'created' because "this import joined an existing group" is the
   // event a reviewer needs when a grouping later looks wrong.

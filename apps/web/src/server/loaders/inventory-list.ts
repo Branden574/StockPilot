@@ -49,13 +49,13 @@ import 'server-only';
 // unstable_cache nested inside another is a footgun: Next bypasses the
 // nested READ but still writes the recompute back — recurring bug
 // pattern #13):
-//   • rows+placement   (org, warehouseKey, view)  'inventory-list-v6'
+//   • rows+placement   (org, warehouseKey, view)  'inventory-list-v7'
 //     (page 1 + its placement; on Items under the instant cap page 1 is
 //      PLANNED with the instant derivation, see loadInventoryRowsUncached)
 //   • lookup tables    (org)                      'inventory-lookups-v1'
 //   • valueOnHand      (org, warehouseKey, view)  'inventory-value-v1'
 //   • trend buckets    (org)                      'inventory-trend-buckets-v2'
-//   • INSTANT dataset  (org, warehouseKey, view)  'inventory-dataset-v2'
+//   • INSTANT dataset  (org, warehouseKey, view)  'inventory-dataset-v3'
 //     (full ≤INSTANT_MODE_MAX_ROWS row set for client-side instant mode;
 //      over-cap views THROW a sentinel → wrapper returns null, uncached)
 // The default view (loadInventoryList) consumes all four. FILTERED
@@ -80,7 +80,11 @@ import 'server-only';
 
 import { unstable_cache } from 'next/cache';
 
-import { inventoryDefaultLifecycle, inventoryViewPredicate } from '@stockpilot/core';
+import {
+  inventoryDefaultLifecycle,
+  inventoryViewPredicate,
+  type DisplayGroupRef,
+} from '@stockpilot/core';
 
 import {
   can,
@@ -112,6 +116,7 @@ import {
   inventoryListTag,
   revalidateInventoryList,
 } from '@/server/services/lib/inventory-list-cache';
+import { displayGroupFields, readDisplayGroupsForOrg } from '@/server/services/lib/display-groups';
 import { fetchAllRowsByIds } from '@/server/services/lib/fetch-by-ids';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 
@@ -330,6 +335,16 @@ interface InventoryListRowBase {
    *  (InventoryService) — the bulk Set-rack split warning must agree
    *  with this count exactly, not with placed_racks. */
   rackHoldingsCount: number;
+  /**
+   * Group selected (0400): the record's explicit display group, read from
+   * item_display_group_members next to the rows (never a column of
+   * inventory_items). Null when the record is in no group. The name and
+   * version are decoration (a header says "Group" without a name); the id
+   * alone decides the grouping (core display-units.ts).
+   */
+  display_group_id: string | null;
+  display_group_name: string | null;
+  display_group_version: number | null;
   /** The same holdings as `placed_racks`, but carrying QUANTITY and
    *  `locations.kind`, deduped by location_id like rackHoldingsCount. The
    *  input `resolvePlacement` needs — `placed_racks` is names only, so no
@@ -478,7 +493,10 @@ async function loadInventoryRows(
   //  awaiting first receipt (0277) + expectedCount. v3: rows+placement split
   //  out of the bundled v2 payload.) One-time cold recompute per org — the
   // */30 prewarm cron covers hot orgs.
-  const cached = unstable_cache(loadInventoryRowsUncached, ['inventory-list-v6'], {
+  // v7 (Group selected, 0400): rows carry display_group_id/name/version and
+  // page 1 is planned with explicit display groups as units (a stale v6 entry
+  // would plan page 1 without them and reshuffle under the dataset).
+  const cached = unstable_cache(loadInventoryRowsUncached, ['inventory-list-v7'], {
     revalidate: LIST_TTL_SEC,
     tags: [inventoryListTag(organizationId)],
   });
@@ -573,12 +591,17 @@ function holdingLinesOf(k: ViewKeyRow): number {
  * columns the narrow read carries (inventory-list.first-page.test.ts proves
  * page 1 does not move when every other column changes); the rest are neutral.
  */
-function toPlanRow(k: ViewKeyRow): InstantModeRow {
+function toPlanRow(
+  k: ViewKeyRow,
+  displayGroups: ReadonlyMap<string, DisplayGroupRef>,
+): InstantModeRow {
   return {
     id: k.id,
     sku: k.sku,
     name: k.name,
     group_id: k.group_id,
+    // Group selected (0400): explicit groups are units of the plan too.
+    display_group_id: displayGroups.get(k.id)?.id ?? null,
     status: k.status,
     awaiting_first_receipt: k.awaiting_first_receipt,
     updated_at: k.updated_at,
@@ -675,6 +698,7 @@ interface PageOnePlan {
 function planPageOne(
   view: InventoryListView,
   read: { keys: ViewKeyRow[]; complete: boolean },
+  displayGroups: ReadonlyMap<string, DisplayGroupRef> = new Map(),
 ): PageOnePlan {
   if (!read.complete) {
     // Over the instant cap: no dataset ever streams, the view stays in server
@@ -705,7 +729,7 @@ function planPageOne(
   // first paint is the page the table settles on once the dataset lands.
   const lines = new Map(read.keys.map((k) => [k.id, holdingLinesOf(k)]));
   const { view: derived, firstPage } = planInstantFirstPage(
-    read.keys.map(toPlanRow),
+    read.keys.map((k) => toPlanRow(k, displayGroups)),
     (id) => lines.get(id) ?? 0,
     DEFAULT_VIEW_PAGE_SIZE,
   );
@@ -789,9 +813,14 @@ async function loadInventoryRowsUncached(
   const scope: ViewScope = { admin, organizationId, itemType, isRental, warehouseId };
 
   // Wave 1, then the plan. Throw on ANY read error so a failed pass is never
-  // cached (the page falls back to the live path for this request).
-  const read = await readViewKeys(scope);
-  const plan = planPageOne(view, read);
+  // cached (the page falls back to the live path for this request). The
+  // organization's display group memberships (Group selected, 0400) are read
+  // in the same wave: the plan pages explicit groups as units.
+  const [read, displayGroups] = await Promise.all([
+    readViewKeys(scope),
+    readDisplayGroupsForOrg(admin, organizationId),
+  ]);
+  const plan = planPageOne(view, read, displayGroups);
   const ids =
     !read.complete && plan.ids.length < DEFAULT_VIEW_PAGE_SIZE
       ? await readFixedSliceIds(scope)
@@ -874,6 +903,7 @@ async function loadInventoryRowsUncached(
     pageRows,
     levels.filter((l) => onPage.has(l.item_id)),
     imageRows.filter((img) => onPage.has(img.item_id)),
+    displayGroups,
   );
 
   return {
@@ -897,6 +927,9 @@ type RawItemRow = Omit<
   | 'image_storage_path'
   | 'image_thumb_path'
   | 'image_lqip'
+  | 'display_group_id'
+  | 'display_group_name'
+  | 'display_group_version'
 >;
 
 interface HoldingLevelRow {
@@ -929,6 +962,7 @@ function assembleInventoryRows(
   rows: RawItemRow[],
   levels: HoldingLevelRow[],
   imageRows: PrimaryImageRow[],
+  displayGroups: ReadonlyMap<string, DisplayGroupRef> = new Map(),
 ): { items: InventoryListCachedRow[]; placement: Record<string, InventoryPlacementLine[]> } {
   // ONE holdings pass feeds both derivations the live path computes
   // separately (list()'s staged/unplaced/placed_racks scan and
@@ -1044,6 +1078,7 @@ function assembleInventoryRows(
       image_storage_path: img?.storage_path ?? null,
       image_thumb_path: img?.thumb_path ?? null,
       image_lqip: img?.lqip ?? null,
+      ...displayGroupFields(displayGroups.get(r.id)),
     };
   });
 
@@ -1104,7 +1139,9 @@ export async function loadInventoryDataset(
   // "Expected" chip view + count from them. Bumped so a stale v1 entry
   // (rows without the flag → phantoms would leak into the default view)
   // can't serve for a TTL post-deploy.
-  const cached = unstable_cache(loadInventoryDatasetUncached, ['inventory-dataset-v2'], {
+  // v3 (Group selected, 0400): rows carry display_group_id/name/version; a
+  // stale v2 entry would page and render without explicit groups.
+  const cached = unstable_cache(loadInventoryDatasetUncached, ['inventory-dataset-v3'], {
     revalidate: LIST_TTL_SEC,
     tags: [inventoryListTag(organizationId)],
   });
@@ -1195,7 +1232,7 @@ async function loadInventoryDatasetUncached(
   const idList = rows.map((r) => r.id);
   const ids = new Set(idList);
   const secondWave = { concurrency: DATASET_ID_BATCH_CONCURRENCY };
-  const [levelsAll, imagesAll] = await Promise.all([
+  const [levelsAll, imagesAll, displayGroups] = await Promise.all([
     fetchAllRowsByIds<HoldingLevelRow>(
       idList,
       (batch) => (from, to) =>
@@ -1235,12 +1272,17 @@ async function loadInventoryDatasetUncached(
         }>,
       secondWave,
     ),
+    // Group selected (0400): the organization's display group memberships,
+    // one read for the whole dataset (memberships are few; a manager reads
+    // every record, canUseSharedInventoryCaches).
+    readDisplayGroupsForOrg(admin, organizationId),
   ]);
 
   return assembleInventoryRows(
     rows,
     levelsAll.filter((l) => ids.has(l.item_id)),
     imagesAll.filter((img) => ids.has(img.item_id)),
+    displayGroups,
   );
 }
 

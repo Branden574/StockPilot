@@ -40,19 +40,23 @@ import {
   collectLegacyRefIdsByKind,
   COUNT_THIS_ITEM_LABEL,
   countStartAllowed,
+  DISPLAY_GROUP_FALLBACK_NAME,
   formatCycleCountNumber,
   isCountableItem,
   itemPhotoPath,
   formatOrderNumber,
+  GROUP_COPY,
   GROUPING_ERROR_WORDS,
   legacyOrderRefId,
   randomPhotoFileBase,
   randomRequestUuid,
   readDisplayStorage,
   reasonWithoutRefLabel,
+  removeBodyFor,
   resolveMovementRefReason,
   sharedSkuNoteCopy,
   UNGROUP_COPY,
+  type DisplayGroupRef,
   type ItemElsewhere,
   type RackHoldingLike,
   type Role,
@@ -85,6 +89,13 @@ import { cycleCountSync, useSyncStatus } from '@/lib/cycle-count-sync';
 import { submitItemAdjust, type ItemAdjustOutcome } from '@/lib/item-adjust';
 import { enqueue, pendingAdjustFor } from '@/lib/queue';
 import { isOnline, syncNow } from '@/lib/sync';
+import {
+  describeGroupingError,
+  notifyDisplayGroupsChanged,
+  onDisplayGroupsChanged,
+  postGrouping,
+  readItemDisplayGroup,
+} from '@/lib/display-groups';
 import {
   confirmOneMessage,
   describeUngroupError,
@@ -502,6 +513,10 @@ export default function ItemDetail() {
   // Ungroup (0399): other records this member can read with the same SKU.
   const [skuSiblings, setSkuSiblings] = React.useState<number | null>(null);
   const [ungroupBusy, setUngroupBusy] = React.useState(false);
+  // Group selected (0400): the record's display group (null: none, or the
+  // read failed, and the screen says nothing), and Remove from group in flight.
+  const [displayGroup, setDisplayGroup] = React.useState<DisplayGroupRef | null>(null);
+  const [groupBusy, setGroupBusy] = React.useState(false);
   const { user } = useAuth();
   const [movements, setMovements] = React.useState<MovementRow[]>([]);
   const [movementsTotal, setMovementsTotal] = React.useState(0);
@@ -742,7 +757,7 @@ export default function ItemDetail() {
     // Serial count rides the same round trip — a cheap head-only count so
     // the Serials card can show for items that hold registry rows even
     // when tracking_type isn't 'serial' (e.g. tracking switched off later).
-    const [whResp, chResp, serialResp, holdingResp, elsewhere, skuSiblingCount] = await Promise.all([
+    const [whResp, chResp, serialResp, holdingResp, elsewhere, skuSiblingCount, itemGroup] = await Promise.all([
       whId
         ? supabase.from('warehouses').select('name').eq('id', whId).maybeSingle()
         : Promise.resolve(null),
@@ -774,6 +789,9 @@ export default function ItemDetail() {
         r.id as string,
         (r.sku as string | null) ?? null,
       ).catch(() => null),
+      // Group selected (0400): the record's display group, read as the
+      // member (RLS). A failed read says nothing (null).
+      readItemDisplayGroup(supabase as never, r.organization_id as string, r.id as string),
     ]);
     if (seq !== loadSeq.current) return;
     const rackHoldings: RackHoldingLike[] = ((holdingResp?.data ?? []) as unknown as {
@@ -850,6 +868,7 @@ export default function ItemDetail() {
       elsewhere,
     });
     setSkuSiblings(skuSiblingCount);
+    setDisplayGroup(itemGroup);
   }, [id, router, role]);
 
   // ═══ MAKE THIS ITS OWN ITEM (Ungroup, 0399) ═══
@@ -907,6 +926,72 @@ export default function ItemDetail() {
       },
     ]);
   }
+
+  // ═══ REMOVE FROM GROUP (Group selected, 0400) ═══
+  // Deletes only the membership: the record, its SKU, stock, charter and rack
+  // stay, and records that share its SKU still show together automatically.
+  // ONLINE ONLY (never queued). One key per attempt, kept with its body for
+  // "Try again" after a busy or lost answer: the server replays the first
+  // outcome instead of applying twice.
+  async function sendRemoveFromGroup(body: ReturnType<typeof removeBodyFor>) {
+    setGroupBusy(true);
+    try {
+      const outcome = await postGrouping(body);
+      if (outcome.outcome === 'applied') {
+        notifyDisplayGroupsChanged();
+        Alert.alert(GROUP_COPY.removeAction, GROUP_COPY.removeDone(outcome.changes.length));
+      }
+      void load();
+    } catch (e) {
+      const { message, retrySame } = describeGroupingError(e);
+      if (retrySame) {
+        Alert.alert(GROUP_COPY.removeAction, message, [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Try again', onPress: () => void sendRemoveFromGroup(body) },
+        ]);
+      } else {
+        Alert.alert(GROUP_COPY.removeAction, message);
+        void load();
+      }
+    } finally {
+      setGroupBusy(false);
+    }
+  }
+
+  function onRemoveFromGroup() {
+    if (!item || !user?.id || !displayGroup) return;
+    if (offline) {
+      Alert.alert(GROUP_COPY.removeAction, GROUP_COPY.offline);
+      return;
+    }
+    const body = removeBodyFor([{ id: item.id, displayGroupId: displayGroup.id }], {
+      idempotencyKey: randomRequestUuid(),
+      organizationId: item.organization_id,
+      actorUserId: user.id,
+    });
+    Alert.alert(GROUP_COPY.removeTitle(1), GROUP_COPY.removeIntro, [
+      { text: GROUP_COPY.cancel, style: 'cancel' },
+      { text: GROUP_COPY.removeConfirm(1), onPress: () => void sendRemoveFromGroup(body) },
+    ]);
+  }
+
+  // A grouping saved elsewhere (the review screen, a list): re-read this
+  // record's group only.
+  React.useEffect(() => {
+    const itemId = item?.id;
+    const org = item?.organization_id;
+    if (!itemId || !org) return;
+    let live = true;
+    const off = onDisplayGroupsChanged(() => {
+      void readItemDisplayGroup(supabase as never, org, itemId).then((g) => {
+        if (live) setDisplayGroup(g);
+      });
+    });
+    return () => {
+      live = false;
+      off();
+    };
+  }, [item?.id, item?.organization_id]);
 
   // The outbox count this screen last saw for the item, so a DROP (a queued
   // adjustment was sent, or parked as refused or not confirmed) re-reads the
@@ -1998,6 +2083,27 @@ export default function ItemDetail() {
                 across every placement of this SKU (see InventoryService.update,
                 Task 3) — none of them are editable in-app, so this just tells
                 the user what "Edit on web" (below) will affect. */}
+            {displayGroup ? (
+              // Group selected (0400): the record's display group, and Remove
+              // from group for someone who can edit items (the permission alone
+              // decides, as for Ungroup; cosmetic, the route refuses on its own).
+              <View style={{ gap: 8, alignItems: 'center' }}>
+                <Body muted size={11} style={{ textAlign: 'center' }}>
+                  {GROUP_COPY.itemPageInGroup(displayGroup.name ?? DISPLAY_GROUP_FALLBACK_NAME)}
+                </Body>
+                {canMakeOwnItem ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onPress={onRemoveFromGroup}
+                    disabled={groupBusy}
+                    leading={groupBusy ? <ActivityIndicator size="small" color={c.ink} /> : undefined}
+                  >
+                    {GROUP_COPY.removeAction}
+                  </Button>
+                ) : null}
+              </View>
+            ) : null}
             {skuSiblings && skuSiblings > 0 ? (
               // Ungroup (0399): other records this member can read share the
               // SKU. Say how many, and offer the way to change this one alone.

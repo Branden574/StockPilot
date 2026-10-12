@@ -308,10 +308,7 @@ export async function linkFamily(
     throw new ServiceError('validation_error', 'Select at least one item to link.');
   }
   if (input.members.length > MAX_LINK_MEMBERS) {
-    throw new ServiceError(
-      'validation_error',
-      `Link at most ${MAX_LINK_MEMBERS} items at a time.`,
-    );
+    throw new ServiceError('validation_error', `Link at most ${MAX_LINK_MEMBERS} items at a time.`);
   }
   const ids = input.members.map((m) => m.itemId);
   if (new Set(ids).size !== ids.length) {
@@ -395,8 +392,7 @@ export async function linkFamily(
     // (requirements: "Keep original imported text + normalized form"). An
     // explicit original wins; otherwise the typed value IS the original.
     const size = normalizeSizeValue(member.variantSize, member.variantSizeSystem);
-    const sizeOriginal =
-      member.variantSizeOriginal?.trim() || member.variantSize?.trim() || null;
+    const sizeOriginal = member.variantSizeOriginal?.trim() || member.variantSize?.trim() || null;
     const sizeSystem = member.variantSizeSystem?.trim() || null;
     const jersey = normalizeJerseyNumber(member.jerseyNumber);
 
@@ -632,7 +628,17 @@ async function assertNoVariantKeyCollision(args: {
  */
 export async function unlinkItems(
   deps: { supabase: ServiceContext['supabase']; ctx: ServiceContext },
-  input: { itemIds: string[]; reason: string },
+  input: {
+    itemIds: string[];
+    reason: string;
+    /** Where the unlink came from, for its audit row: the linking review
+     *  (Product groups > Unlink, the default) or Ungroup on Items and Books
+     *  (owner 2026-10-12), which takes a record out of its size family
+     *  through this same write. */
+    source?: 'group_linking_review' | 'ungroup';
+    /** The app it came from, when the caller says (Ungroup). */
+    surface?: 'web' | 'app';
+  },
 ): Promise<{ unlinked: number }> {
   const { ctx, supabase } = deps;
   assertPermission(ctx, 'sports:manage');
@@ -713,7 +719,10 @@ export async function unlinkItems(
         reason,
         before: { group_id: before.group_id, variant_key: before.variant_key },
         after: { group_id: null, variant_key: null },
-        extra: { source: 'group_linking_review' },
+        extra: {
+          source: input.source ?? 'group_linking_review',
+          ...(input.surface ? { surface: input.surface } : {}),
+        },
       });
     }
   } finally {

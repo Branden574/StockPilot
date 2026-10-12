@@ -31,6 +31,7 @@ const IsbnScanner = dynamic(
     })),
   { ssr: false },
 );
+import { GroupSelectedDialog } from '@/components/inventory/display-group-dialogs';
 import { StockAdjustDialog } from '@/components/inventory/stock-adjust-dialog';
 import { composeBookCustomFields } from '@/components/inventory/book-custom-fields';
 import { Button } from '@/components/ui/button';
@@ -332,6 +333,9 @@ export function ItemForm({
   itemPageHref,
 }: ItemFormProps) {
   const router = useRouter();
+  // Group selected (0400): the two records a refused SKU copy may group
+  // instead (see reportSaveError), while their review is open.
+  const [groupIds, setGroupIds] = React.useState<string[] | null>(null);
   const isEdit = Boolean(defaults?.id);
   const [staged, setStaged] = React.useState<StagedImage[]>([]);
   const [uploadingImages, setUploadingImages] = React.useState(false);
@@ -821,8 +825,19 @@ export function ItemForm({
       setError(field, { type: 'server', message: error.message }, { shouldFocus: true });
     }
     // A SKU already used in the same charter and rack: the server names the
-    // record holding it when the editor can read it; offer to open it.
+    // record holding it when the editor can read it; offer to open it. When
+    // an EXISTING record was being given that SKU (to show the two together),
+    // also offer the honest way (Group selected, 0400): group the two records
+    // as they are, each keeping its own SKU, charter and rack.
     const openHref = skuTakenOpenHref(error, isBook);
+    const groupWith = skuTakenGroupIds(error, defaults?.id ?? null);
+    if (openHref && groupWith) {
+      toast.error(`${error.message} ${SKU_TAKEN_GROUP_HINT}`, {
+        action: { label: 'Group them', onClick: () => setGroupIds(groupWith) },
+        cancel: { label: 'Open it', onClick: () => router.push(openHref) },
+      });
+      return;
+    }
     if (openHref) {
       toast.error(error.message, {
         action: { label: 'Open it', onClick: () => router.push(openHref) },
@@ -1560,7 +1575,9 @@ export function ItemForm({
     }
   }, onInvalidSubmit);
 
-  return (
+  // The form, and beside it (outside the form, so the review's inputs never
+  // count as unsaved work here) the Group them review.
+  const formElement = (
     <form
       onSubmit={onSubmit}
       // Any edit in any control (native inputs bubble change; Radix selects
@@ -2584,6 +2601,20 @@ export function ItemForm({
       )}
     </form>
   );
+  return (
+    <>
+      {formElement}
+      {groupIds ? (
+        <GroupSelectedDialog
+          open
+          itemIds={groupIds}
+          view={isBook ? 'books' : 'items'}
+          onDone={(o) => (o.outcome === 'applied' ? router.refresh() : undefined)}
+          onOpenChange={(v) => (v ? null : setGroupIds(null))}
+        />
+      ) : null}
+    </>
+  );
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -2626,6 +2657,24 @@ function SharedFieldsNote({ others = 0 }: { others?: number }) {
     </p>
   );
 }
+
+/**
+ * Group selected (0400): when an EXISTING record could not take a SKU another
+ * record holds in the same charter and rack, the two records to group instead
+ * (this record, then the one holding the SKU, which the editor can read). Null
+ * when creating a record, or when the holder is hidden from the editor.
+ */
+export function skuTakenGroupIds(error: ActionError, editingId: string | null): string[] | null {
+  const other = error.details?.conflictItemId;
+  if (!editingId || error.details?.reason !== 'sku_taken' || typeof other !== 'string' || !other) {
+    return null;
+  }
+  return other === editingId ? null : [editingId, other];
+}
+
+/** The sentence a refused SKU copy gets when grouping is on offer. */
+export const SKU_TAKEN_GROUP_HINT =
+  'To show both records together without changing either SKU, charter or rack, use Group them.';
 
 /**
  * Where "Open it" goes after a refused save: the record that already holds
