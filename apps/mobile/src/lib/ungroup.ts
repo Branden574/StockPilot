@@ -2,6 +2,7 @@ import {
   GROUPING_ERROR_TABLE,
   GROUPING_ERROR_WORDS,
   sharedSkuKey,
+  UNGROUP_COPY,
   type SplitSkuBody,
 } from '@stockpilot/core';
 
@@ -80,6 +81,17 @@ export function singleUngroupBody(args: {
     expectedSkus: { [args.itemId]: args.sku },
     anchorItemIds: [],
   };
+}
+
+/**
+ * The confirmation before a one-record split: what changes, and what a scan
+ * of the record's label will do. A record without a barcode has a label that
+ * prints its SKU, so until it is reprinted a scan of it finds the records that
+ * keep the old SKU (fix round 1, D2); a record with one keeps it.
+ */
+export function confirmOneMessage(barcode: string | null | undefined): string {
+  const tail = (barcode ?? '').trim() ? UNGROUP_COPY.barcodeNote : UNGROUP_COPY.labelsBefore;
+  return `${UNGROUP_COPY.confirmOne} ${tail}`;
 }
 
 export interface UngroupAnswer {

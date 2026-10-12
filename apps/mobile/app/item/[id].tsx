@@ -86,6 +86,7 @@ import { submitItemAdjust, type ItemAdjustOutcome } from '@/lib/item-adjust';
 import { enqueue, pendingAdjustFor } from '@/lib/queue';
 import { isOnline, syncNow } from '@/lib/sync';
 import {
+  confirmOneMessage,
   describeUngroupError,
   postUngroup,
   readSkuSiblingCount,
@@ -884,7 +885,7 @@ export default function ItemDetail() {
     }
     const target = item;
     const actorUserId = user.id;
-    Alert.alert(UNGROUP_COPY.makeOwnItem, `${UNGROUP_COPY.confirmOne} ${UNGROUP_COPY.barcodeNote}`, [
+    Alert.alert(UNGROUP_COPY.makeOwnItem, confirmOneMessage(target.barcode), [
       { text: 'Cancel', style: 'cancel' },
       {
         text: UNGROUP_COPY.makeOwnItem,

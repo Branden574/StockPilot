@@ -7,6 +7,7 @@ import { GROUPING_ERROR_WORDS, UNGROUP_COPY } from '@stockpilot/core';
 
 // vi.mock below is hoisted above every import by vitest.
 import {
+  confirmOneMessage,
   describeUngroupError,
   postUngroup,
   readSkuSiblingCount,
@@ -154,6 +155,23 @@ describe('describeUngroupError', () => {
   });
 });
 
+// Fix round 1, D2: the confirmation says what a label scan will do. A record
+// without a barcode has a label that prints its SKU; after the split, scanning
+// that old label finds the records that keep the SKU until it is reprinted.
+describe('confirmOneMessage', () => {
+  it('a record without a barcode is told about its SKU label before it confirms', () => {
+    expect(confirmOneMessage(null)).toBe(`${UNGROUP_COPY.confirmOne} ${UNGROUP_COPY.labelsBefore}`);
+    expect(confirmOneMessage('   ')).toBe(
+      `${UNGROUP_COPY.confirmOne} ${UNGROUP_COPY.labelsBefore}`,
+    );
+  });
+  it('a record with a barcode is told the barcode stays (a shared one asks which record)', () => {
+    expect(confirmOneMessage('0012345678905')).toBe(
+      `${UNGROUP_COPY.confirmOne} ${UNGROUP_COPY.barcodeNote}`,
+    );
+  });
+});
+
 describe('readSkuSiblingCount', () => {
   it('counts the OTHER live records with the same raw SKU the member can read (head count)', async () => {
     const filters: [string, string, unknown][] = [];
@@ -197,6 +215,9 @@ describe('the item screen’s wiring (source pins: the screen is not rendered un
     expect(src).toMatch(/'items:update'/);
     expect(src).toMatch(/is_bundle/);
     expect(src).toMatch(/group_id/);
+  });
+  it('confirms with the label-aware words for this record', () => {
+    expect(src).toMatch(/confirmOneMessage\(target\.barcode\)/);
   });
   it('keeps one key per attempt and sends the same body again on a retry', () => {
     expect(src).toMatch(/randomRequestUuid\(\)/);

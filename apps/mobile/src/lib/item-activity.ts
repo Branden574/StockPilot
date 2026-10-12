@@ -249,12 +249,25 @@ function titleCase(s: string): string {
 }
 
 /**
+ * Whole-event labels the web item feed (activity-feed.tsx specFor) words
+ * itself, so the phone says the same thing.
+ */
+const EVENT_LABELS: Record<string, string> = {
+  // Ungroup (0399): this record got a SKU of its own.
+  'inventory.item.ungrouped': 'Made its own item',
+};
+
+/**
  * Turns `inventory.item.updated` into `Inventory Item · Updated`. Falls back
  * gracefully for unknown shapes (no dot -> title-cased whole string), same
  * contract as web's `formatAuditEvent`.
  */
 export function formatAuditEventLabel(event: string): string {
   if (!event) return '—';
+  const whole = Object.prototype.hasOwnProperty.call(EVENT_LABELS, event)
+    ? EVENT_LABELS[event]
+    : undefined;
+  if (whole) return whole;
   const parts = event.split('.');
   if (parts.length === 1) return titleCase(parts[0] ?? event);
   const action = parts[parts.length - 1] ?? '';
