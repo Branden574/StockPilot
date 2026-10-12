@@ -1036,6 +1036,9 @@ export interface GroupingPreviewRecord {
   charterId: string | null;
   warehouseId: string | null;
   binLocation: string | null;
+  /** The record's custom fields (a book's stored rack keys), for the rack
+   *  line; null when absent. */
+  customFields: Record<string, unknown> | null;
   quantityOnHand: number;
   createdAt: string | null;
   /** The group the record is in now, as the caller may see it. */
@@ -1106,6 +1109,7 @@ export function parseGroupingPreview(raw: unknown): GroupingPreview | null {
       charterId: str(r.charter_id),
       warehouseId: str(r.warehouse_id),
       binLocation: str(r.bin_location),
+      customFields: isRecord(r.custom_fields) ? r.custom_fields : null,
       quantityOnHand: num(r.quantity_on_hand),
       createdAt: str(r.created_at),
       displayGroup: dg
@@ -1157,6 +1161,21 @@ export function parseGroupingPreview(raw: unknown): GroupingPreview | null {
         }
       : null,
   };
+}
+
+/**
+ * What a review answer is for: the organization, the distinct selected ids
+ * (sorted, lower case) and the target group. The dialog compares it with its
+ * current selection and ignores a stale answer (a selection or workspace that
+ * changed while the preview was in flight).
+ */
+export function groupingPreviewKey(
+  organizationId: string,
+  itemIds: readonly string[],
+  groupId: string | null,
+): string {
+  const ids = [...new Set(itemIds.map((id) => id.toLowerCase()))].sort();
+  return `${organizationId.toLowerCase()}|${ids.join(',')}|${groupId?.toLowerCase() ?? ''}`;
 }
 
 // ── What the screens need ──────────────────────────────────────────────────

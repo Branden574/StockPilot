@@ -6,6 +6,7 @@ import {
   GROUPING_ERROR_WORDS,
   bookEditionCount,
   groupBodyForPlan,
+  groupingPreviewKey,
   groupingSelectionFacts,
   mapGroupingError,
   parseGroupingBody,
@@ -518,5 +519,22 @@ describe('the words', () => {
     );
     expect(GROUP_COPY.bulkAction).toBe('Group selected');
     expect(GROUP_COPY.skuNote).toBe('Records that share a SKU still show together automatically.');
+  });
+});
+
+describe('what a review answer is for', () => {
+  it('keys on the organization, the distinct sorted ids and the target, so a stale answer is recognized', () => {
+    expect(groupingPreviewKey(ORG, [B, A, A], null)).toBe(groupingPreviewKey(ORG, [A, B], null));
+    expect(groupingPreviewKey(ORG, [A, B], G)).not.toBe(groupingPreviewKey(ORG, [A, B], null));
+    expect(groupingPreviewKey(ORG, [A.toUpperCase()], null)).toBe(
+      groupingPreviewKey(ORG, [A], null),
+    );
+  });
+  it("the preview carries a record's stored rack keys for the rack line", () => {
+    const p = parseGroupingPreview({
+      records: [record(A, { custom_fields: { book_rack: '37', book_rack_section: 'B' } })],
+    });
+    expect(p?.records[0]?.customFields).toEqual({ book_rack: '37', book_rack_section: 'B' });
+    expect(parseGroupingPreview({ records: [record(B)] })?.records[0]?.customFields).toBeNull();
   });
 });
