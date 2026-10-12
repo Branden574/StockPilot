@@ -331,7 +331,10 @@ describe('UngroupSelectedService.apply', () => {
     });
   });
 
-  it('a record already out of its family is done; no unlink is sent for it', async () => {
+  // Re-pinned 2026-10-12 (PR #361 review): a record already out of its family
+  // is still sent, with the family it was reviewed in, so a retry after the
+  // other racks of its SKU could not follow takes them out too; it is done.
+  it('a record already out of its family is done, and is sent with its reviewed family so the other racks follow', async () => {
     const { svc, unlink } = harness({
       families: [
         [
@@ -341,8 +344,41 @@ describe('UngroupSelectedService.apply', () => {
       ],
     });
     const r = await svc.apply(body({ remove: null, split: null }), 'web');
-    expect(unlink).not.toHaveBeenCalled();
+    expect(unlink.mock.calls[0]![1]).toMatchObject({
+      itemIds: [id(4), id(5)],
+      expectedFamilies: { [id(4)]: FAM, [id(5)]: FAM },
+    });
     expect(r.outcome.parts[0]).toMatchObject({ status: 'applied', changedItemIds: [id(4), id(5)] });
+  });
+
+  it('when the other racks of a SKU could not follow, it says so and Try again finishes it', async () => {
+    const { svc, unlink } = harness({
+      families: [
+        inFam,
+        [
+          { id: id(4), group_id: null },
+          { id: id(5), group_id: null },
+        ],
+      ],
+    });
+    unlink.mockRejectedValueOnce(
+      new ServiceError('internal_error', 'The item left the product group.', {
+        reason: 'sku_siblings_unfinished',
+        skuSiblingIds: [id(9)],
+      }),
+    );
+    const r = await svc.apply(body({ remove: null, split: null }), 'web');
+    expect(r.outcome.parts).toEqual([
+      {
+        kind: 'unlink',
+        status: 'partial',
+        changedItemIds: [id(4), id(5), id(9)],
+        notChangedItemIds: [],
+        message: UNGROUP_COPY.familySkuUnfinished,
+        reason: 'sku_siblings_unfinished',
+        retryable: true,
+      },
+    ]);
   });
 
   it('writes nothing when a family record moved to another family or is gone since the review', async () => {

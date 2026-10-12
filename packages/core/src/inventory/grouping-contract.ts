@@ -640,6 +640,11 @@ export const UNGROUP_COPY = {
    *  records of its SKU (familySkuTogether). */
   familySkuNote:
     "Every rack's record of a SKU leaves its size family together. They still share the SKU, so the list still shows them together under it.",
+  /** The ticked records left their family but the other racks' records of
+   *  their SKU could not all follow (a lost connection): the same Save again
+   *  finishes it (unlinkItems takes them out with the reviewed family). */
+  familySkuUnfinished:
+    "These records left their size family, but some other racks' records of their SKU may still be in it. Try again to finish.",
   /** Why a ticked record is left out of an Ungroup. */
   selectedLeftOutReason: {
     kit: 'is a kit (kits keep their SKU and are never in a group)',
@@ -2161,6 +2166,11 @@ export function planUngroupSelected<T extends UngroupSelectedRecord, C extends S
     for (const c of with_) listed.add(c.id);
     if (with_.length > 0) familySkuSiblings.set(r.id, with_);
   }
+  // A ticked record listed there (one the person cannot edit) leaves with its
+  // SKU all the same, so it is never said to be left out.
+  for (let i = leftOut.length - 1; i >= 0; i--) {
+    if (listed.has(leftOut[i]!.id)) leftOut.splice(i, 1);
+  }
   const removal = planRemoval(
     leaveGroup.map((r) => r.id),
     {
@@ -2257,6 +2267,13 @@ export function ungroupRecordOutcome(
     return ungroupAnchorFor(g, anchorBySku) === id
       ? { kind: 'split', keeps: true, sku: g.sku }
       : { kind: 'split', keeps: false };
+  }
+  // A ticked record leaving its family with another rack's record of its SKU.
+  for (const [owner, list] of plan.familySkuSiblings) {
+    if (list.some((c) => c.id === id)) {
+      const r = plan.leaveFamily.find((x) => x.id === owner);
+      return { kind: 'family', familyName: r?.productGroupName ?? null };
+    }
   }
   return null;
 }
@@ -2609,7 +2626,12 @@ export function ungroupResultLines(outcome: UngroupSelectedOutcome): {
       );
     }
     const m = p.notChangedItemIds.length;
-    if (m === 0) continue;
+    if (m === 0) {
+      // Every record it named changed, yet it did not finish (the other racks
+      // of a SKU could not follow): its own words say what is left.
+      if ((p.status === 'partial' || p.status === 'refused') && p.message) notDone.push(p.message);
+      continue;
+    }
     // A remove that applied left the records already out of any group as
     // they were: said as such, never as leaving.
     if (p.status === 'applied' && p.kind === 'remove') {

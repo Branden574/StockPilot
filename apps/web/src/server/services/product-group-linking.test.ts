@@ -605,6 +605,11 @@ function familyDb(
     hidden?: string[];
     skus?: Record<string, string>;
     beforeWrite?: (rows: Map<string, string | null>) => void;
+    /** Rows the service-role read also answers whatever its sku filter says
+     *  (a SKU with a quote widening the in-list: the review's MEDIUM). */
+    adminReadExtra?: string[];
+    /** The service-role update answers an error (a lost connection). */
+    adminUpdateFails?: boolean;
   } = {},
 ) {
   const rows = new Map<string, string | null>(Object.entries(start));
@@ -626,7 +631,9 @@ function familyDb(
           (id) =>
             (admin || !(opts.hidden ?? []).includes(id)) &&
             (!byId || byId.includes(id)) &&
-            (!bySku || bySku.includes(sku(id) ?? '')) &&
+            (!bySku ||
+              bySku.includes(sku(id) ?? '') ||
+              (admin && (opts.adminReadExtra ?? []).includes(id))) &&
             (family === undefined || rows.get(id) === family),
         );
         return {
@@ -647,6 +654,9 @@ function familyDb(
         const ids = (arg(call, 'in', 'id') as string[] | undefined) ?? [];
         const family = arg(call, 'eq', 'group_id');
         (admin ? adminUpdates : updates).push({ family, ids });
+        if (admin && opts.adminUpdateFails) {
+          return { data: null, error: { message: 'connection reset', code: '08006' } };
+        }
         const hit = ids.filter(
           (id) =>
             rows.has(id) &&
@@ -868,6 +878,79 @@ describe('unlinkItems — the undo', () => {
       after: { group_id: null, variant_key: null },
       extra: { source: 'group_linking_review', sku_sibling_of: 'a' },
     });
+  });
+
+  // PR #361 review MEDIUM: postgrest-js quotes an in-list value but does not
+  // escape a quote inside it, so a SKU like X","Y can widen the read to SKU Y.
+  // Only rows whose SKU is exactly a written record's SKU are ever written.
+  it('a SKU with a quote in it never widens the fan-out to another SKU', async () => {
+    const db = familyDb(
+      { a: 'grp-1', y: 'grp-1' },
+      { skus: { a: 'X","Y', y: 'Y' }, adminReadExtra: ['y'] },
+    );
+    const out = await unlinkItems(
+      { supabase: db.stub.client, ctx: sportsCtx(db.stub.client) },
+      { itemIds: ['a'], reason: 'Wrong family' },
+    );
+    expect(out).toEqual({ unlinked: 1, skuSiblingIds: [] });
+    expect(db.rows.get('y')).toBe('grp-1');
+    expect(db.adminUpdates).toEqual([]);
+  });
+
+  // PR #361 review MEDIUM/LOW: when the other racks cannot follow, say so
+  // (never done); the record that left is still audited.
+  it('says so when the other racks could not follow, and still audits the record that left', async () => {
+    const db = familyDb(
+      { a: 'grp-1', b: 'grp-1' },
+      { skus: { a: 'TEE-M', b: 'TEE-M' }, adminUpdateFails: true },
+    );
+    await expect(
+      unlinkItems(
+        { supabase: db.stub.client, ctx: sportsCtx(db.stub.client) },
+        { itemIds: ['a'], reason: 'Wrong family' },
+      ),
+    ).rejects.toMatchObject({
+      code: 'internal_error',
+      details: { reason: 'sku_siblings_unfinished', skuSiblingIds: [] },
+    });
+    expect(db.rows.get('a')).toBeNull();
+    expect(db.rows.get('b')).toBe('grp-1');
+    expect(auditedRows().map((r) => r.entityId)).toEqual(['a']);
+  });
+
+  // A retry finishes it: Ungroup sends a record already out of its family with
+  // the family it was reviewed in, and the other racks of its SKU follow then.
+  it('a record already out, sent with the family it was reviewed in, takes the other racks out too', async () => {
+    const db = familyDb({ a: null, b: 'grp-1' }, { skus: { a: 'TEE-M', b: 'TEE-M' } });
+    const out = await unlinkItems(
+      { supabase: db.stub.client, ctx: sportsCtx(db.stub.client) },
+      {
+        itemIds: ['a'],
+        reason: 'Taken out of its size family with Ungroup (web)',
+        source: 'ungroup',
+        surface: 'web',
+        expectedFamilies: { a: 'grp-1' },
+      },
+    );
+    expect(out).toEqual({ unlinked: 0, skuSiblingIds: ['b'] });
+    expect(db.rows.get('b')).toBeNull();
+    expect(db.updates).toEqual([]);
+    expect(auditedRows()).toEqual([
+      expect.objectContaining({
+        entityId: 'b',
+        before: { group_id: 'grp-1', variant_key: 'size=L' },
+        extra: { source: 'ungroup', surface: 'web', sku_sibling_of: 'a' },
+      }),
+    ]);
+    // Without a reviewed family (Product groups), a record already out is
+    // nothing to undo, and nothing is guessed.
+    const plain = familyDb({ a: null, b: 'grp-1' }, { skus: { a: 'TEE-M', b: 'TEE-M' } });
+    const out2 = await unlinkItems(
+      { supabase: plain.stub.client, ctx: sportsCtx(plain.stub.client) },
+      { itemIds: ['a'], reason: 'Wrong family' },
+    );
+    expect(out2).toEqual({ unlinked: 0, skuSiblingIds: [] });
+    expect(plain.rows.get('b')).toBe('grp-1');
   });
 
   it('a record with no other rack in its family fans out to nothing', async () => {

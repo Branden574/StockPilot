@@ -314,6 +314,31 @@ describe('a size on more than one rack (one SKU in a size family) leaves its fam
     expect(ungroupChangeCount(plan, {})).toBe(0);
   });
 
+  // PR #361 review LOW: a ticked record the person cannot edit, of the same
+  // SKU as one that leaves, leaves with it (the family belongs to the SKU), so
+  // it is never said to be left out.
+  it('a ticked record of the same SKU the person cannot edit leaves with it, never "left out"', () => {
+    const locked = rec(2, {
+      sku: 'TEE-M',
+      productGroupId: FAM,
+      productGroupName: 'Tee',
+      writable: false,
+    });
+    const plan = planUngroupSelected(
+      [m1.id, locked.id],
+      { records: [m1, locked], unavailableCount: 0 },
+      racks,
+      { canUnlinkFamilies: true },
+    );
+    expect(plan.leftOut).toEqual([]);
+    expect(plan.leaveFamily.map((r) => r.id)).toEqual([m1.id]);
+    expect(plan.familySkuSiblings.get(m1.id)?.map((c) => c.id)).toEqual([id(2), id(3)]);
+    expect(ungroupOutcomeWords(ungroupRecordOutcome(plan, locked.id, {})!)).toBe(
+      'Leaves the Tee size family',
+    );
+    expect(ungroupChangeCount(plan, {})).toBe(3);
+  });
+
   it('a size on one rack has no other racks and no note', () => {
     const l = rec(4, { sku: 'TEE-L', productGroupId: FAM, productGroupName: 'Tee' });
     const plan = planUngroupSelected([l.id], { records: [l], unavailableCount: 0 }, racks, {
@@ -673,6 +698,32 @@ describe('the Ungroup answer', () => {
         p({ kind: 'split', status: 'not_attempted', notChangedItemIds: [id(2)] }),
       ]),
     ).toBe(false);
+  });
+
+  // PR #361 review: a step that changed every record it named but still has
+  // words to say (the other racks of a SKU could not follow) says them.
+  it('a step that applied in part with nothing left unchanged still says its words', () => {
+    const o = parseUngroupSelectedOutcome({
+      complete: false,
+      parts: [
+        {
+          kind: 'unlink',
+          status: 'partial',
+          changedItemIds: [id(1)],
+          notChangedItemIds: [],
+          message: UNGROUP_COPY.familySkuUnfinished,
+          reason: 'sku_siblings_unfinished',
+          retryable: true,
+        },
+      ],
+    })!;
+    expect(ungroupResultLines(o)).toEqual({
+      done: [UNGROUP_COPY.leftFamilies(1)],
+      notDone: [UNGROUP_COPY.familySkuUnfinished],
+    });
+    expect(UNGROUP_COPY.familySkuUnfinished).toBe(
+      "These records left their size family, but some other racks' records of their SKU may still be in it. Try again to finish.",
+    );
   });
 
   it('refuses an answer that is not one', () => {
