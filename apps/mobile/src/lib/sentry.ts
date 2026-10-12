@@ -1,5 +1,6 @@
 import * as Sentry from '@sentry/react-native';
 import Constants from 'expo-constants';
+import * as Device from 'expo-device';
 
 /**
  * Crash + error reporting.
@@ -19,6 +20,12 @@ const dsn = process.env.EXPO_PUBLIC_SENTRY_DSN;
 
 export function initSentry(): void {
   if (!dsn) return;
+  // Never from a simulator. !__DEV__ alone is not enough: a Release build made
+  // on a Mac for the iOS simulator inlines the DSN from apps/mobile/.env.local
+  // and reported as 'production', so a 2-second hang during a simulator test
+  // walk (2026-10-12) reached the owner as a new production issue. Push
+  // registration skips simulators the same way (use-push-notifications.ts).
+  if (!Device.isDevice) return;
   Sentry.init({
     dsn,
     // Report only from real builds, never the dev client / simulator.
