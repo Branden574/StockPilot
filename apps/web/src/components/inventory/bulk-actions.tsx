@@ -22,7 +22,13 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
-import { GROUP_COPY, UNGROUP_COPY, type UngroupKind } from '@stockpilot/core';
+import {
+  GROUP_COPY,
+  GROUPING_ERROR_WORDS,
+  GROUPING_MAX_ITEMS,
+  UNGROUP_COPY,
+  type UngroupKind,
+} from '@stockpilot/core';
 
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
@@ -621,11 +627,15 @@ export function BulkActions({
             <button
               type="button"
               onClick={() => {
+                const ids = [...new Set(selectedIds)];
+                // One review takes at most 100 records: said here, as on the
+                // phone, never by a review that opens only to refuse.
+                if (ids.length > GROUPING_MAX_ITEMS) {
+                  toast.error(GROUPING_ERROR_WORDS.tooMany);
+                  return;
+                }
                 ungroupDone.current = false;
-                setUngroupOpen({
-                  ids: [...new Set(selectedIds)],
-                  shownUnder: new Map(ungroupShownUnder ?? []),
-                });
+                setUngroupOpen({ ids, shownUnder: new Map(ungroupShownUnder ?? []) });
               }}
               title="Take each selected record out of the grouping it shows under: its group, a shared SKU or its size family"
               className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
