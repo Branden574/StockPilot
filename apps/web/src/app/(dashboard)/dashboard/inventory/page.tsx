@@ -17,11 +17,9 @@ import { ElsewhereUnavailableNotice } from '@/components/inventory/elsewhere-una
 import {
   deriveInstantView,
   instantStateFromPageParams,
-  planGroupAwarePage,
   type InstantFirstPage,
   type PlannedServerPage,
 } from '@/lib/inventory/instant-mode';
-import { IN_FILTER_MAX_VALUES } from '@/lib/supabase/in-filter';
 import {
   ALL_WAREHOUSES_KEY,
   canUseSharedInventoryCaches,
@@ -40,10 +38,8 @@ import { CategoriesService } from '@/server/services/categories';
 import { ChartersService } from '@/server/services/charters';
 import { InventoryService } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
-import {
-  displayGroupFields,
-  readDisplayGroupsForOrgAsMember,
-} from '@/server/services/lib/display-groups';
+import { displayGroupFields } from '@/server/services/lib/display-groups';
+import { planLivePage, readPlannedPage } from '@/server/services/lib/planned-page';
 import { LocationsService } from '@/server/services/locations';
 import { getItemTrends } from '@/server/services/movements';
 import { SavedViewsService } from '@/server/services/saved-views';
@@ -756,38 +752,28 @@ async function inventoryTableSection({
     // reported XS alone on page 2). Both reads go through the caller's own
     // client; the memberships also serve the page's rows below. Over the
     // instant-mode cap (or if the scan fails) the page keeps its fixed slices.
-    const [planRows, orgDisplayGroups] = await Promise.all([
-      tagged('inventorySvc.listPlanRows', inventorySvc.listPlanRows(viewFilters)).catch(
-        (err: unknown) => {
-          console.warn('[inventory page] page plan unavailable, using fixed pages:', err);
-          return null;
-        },
-      ),
-      tagged(
-        'displayGroups.forOrgAsMember',
-        readDisplayGroupsForOrgAsMember(createClient(), sessionCtx.organizationId),
-      ),
-    ]);
-    const plannedPage = planRows
-      ? planGroupAwarePage(
-          planRows.rows.map((r) => ({
-            ...r,
-            primary_location_id: null,
-            charter_id: null,
-            display_group_id: orgDisplayGroups.get(r.id)?.id ?? null,
-          })),
-          sort,
-          page,
-          PAGE_SIZE,
-          'items',
-        )
-      : null;
+    const {
+      plannedPage,
+      totals: planTotals,
+      displayGroups: orgDisplayGroups,
+    } = await planLivePage({
+      inventorySvc,
+      viewFilters,
+      sort,
+      page,
+      pageSize: PAGE_SIZE,
+      view: 'items',
+      client: createClient(),
+      organizationId: sessionCtx.organizationId,
+      logLabel: '[inventory page]',
+      tag: tagged,
+    });
 
     const [inventory, expectedCountLive, lookups, trendBuckets] = await Promise.all([
-      plannedPage && planRows
+      plannedPage && planTotals
         ? tagged(
             'inventorySvc.list',
-            readPlannedPage(inventorySvc, viewFilters, plannedPage.pageIds, planRows),
+            readPlannedPage(inventorySvc, viewFilters, plannedPage.pageIds, planTotals),
           )
         : tagged(
             'inventorySvc.list',
@@ -1209,50 +1195,4 @@ function inventoryEmptyState({
     );
   }
   return null;
-}
-
-/**
- * Read a planned page (Phase 2) in full: exactly its records, in at most
- * IN_FILTER_MAX_VALUES ids per read (a page runs long to keep a group whole,
- * and a group holds up to 200 records), every read with the view's filters
- * and the planned totals so none scans the view again. The rows come back in
- * the planned order.
- */
-async function readPlannedPage(
-  inventorySvc: InventoryService,
-  viewFilters: Parameters<InventoryService['list']>[0],
-  pageIds: readonly string[],
-  totals: { total: number; valueOnHand: number },
-): Promise<Awaited<ReturnType<InventoryService['list']>>> {
-  if (pageIds.length === 0) {
-    return { items: [], total: totals.total, valueOnHand: totals.valueOnHand, elsewhereUnavailable: false };
-  }
-  const reads: Array<Promise<Awaited<ReturnType<InventoryService['list']>>>> = [];
-  for (let i = 0; i < pageIds.length; i += IN_FILTER_MAX_VALUES) {
-    const ids = pageIds.slice(i, i + IN_FILTER_MAX_VALUES);
-    reads.push(
-      inventorySvc.list({
-        ...viewFilters,
-        ids,
-        limit: ids.length,
-        offset: 0,
-        plannedTotals: { total: totals.total, valueOnHand: totals.valueOnHand },
-        // The placement columns add holdings up next to on hand, so they
-        // need the stock a staff member or viewer cannot see (0371).
-        withElsewhere: true,
-      }),
-    );
-  }
-  const parts = await Promise.all(reads);
-  const byId = new Map(parts.flatMap((p) => p.items).map((it) => [it.id, it]));
-  const items = pageIds.flatMap((id) => {
-    const it = byId.get(id);
-    return it ? [it] : [];
-  });
-  return {
-    items,
-    total: totals.total,
-    valueOnHand: totals.valueOnHand,
-    elsewhereUnavailable: parts.some((p) => p.elsewhereUnavailable),
-  };
 }

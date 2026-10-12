@@ -20,6 +20,7 @@ import { ElsewhereUnavailableNotice } from '@/components/inventory/elsewhere-una
 import {
   deriveInstantView,
   instantStateFromPageParams,
+  type PlannedServerPage,
 } from '@/lib/inventory/instant-mode';
 import {
   ALL_WAREHOUSES_KEY,
@@ -39,10 +40,8 @@ import { ChartersService } from '@/server/services/charters';
 import { InventoryService } from '@/server/services/inventory';
 import { createClient } from '@/lib/supabase/server';
 import { ItemImagesService } from '@/server/services/item-images';
-import {
-  displayGroupFields,
-  readDisplayGroupsByItemIds,
-} from '@/server/services/lib/display-groups';
+import { displayGroupFields } from '@/server/services/lib/display-groups';
+import { planLivePage, readPlannedPage } from '@/server/services/lib/planned-page';
 import { LocationsService } from '@/server/services/locations';
 import { getItemTrends } from '@/server/services/movements';
 import { SavedViewsService } from '@/server/services/saved-views';
@@ -260,6 +259,10 @@ type SectionData = {
    *  (0371), so the rack figures cover the viewer's own warehouses only and
    *  the page says so. */
   elsewhereUnavailable?: boolean;
+  /** Live path (staff, viewers, anyone within the cap): this page planned
+   *  group-aware over the whole filtered view (Phase 2). null over the cap:
+   *  fixed server slices. */
+  plannedPage?: PlannedServerPage | null;
 };
 
 /**
@@ -500,31 +503,56 @@ async function booksTableSection({
       };
     };
 
+    const viewFilters = {
+      q: params.q,
+      // The Expected view spans lifecycles (mirrors mobile's
+      // listStatusPredicate lifecycle:null) so a flagged book someone
+      // manually archived is still reachable there — the Archived view
+      // keeps excluding flagged rows via the default predicate.
+      status: params.expected === '1' ? ('all' as const) : lifecycleStatus,
+      lowStock: params.stock === 'low',
+      outOfStock: params.stock === 'out',
+      autoArchived: params.auto === '1',
+      expected: params.expected === '1',
+      warehouseId: warehouseFilter,
+      itemType: 'book' as const,
+      categoryIds,
+      locationIds,
+      charterIds,
+      rack,
+      sort,
+    };
+    // Phase 2 of the grouping brief: plan this page group-aware over the
+    // whole filtered view (planned-page.ts), so a title on more than one rack
+    // or a display group is never split across a staff member's pages. Books
+    // build no size runs. Over the cap: fixed slices, as before.
+    const {
+      plannedPage,
+      totals: planTotals,
+      displayGroups: orgDisplayGroups,
+    } = await planLivePage({
+      inventorySvc,
+      viewFilters,
+      sort,
+      page,
+      pageSize: PAGE_SIZE,
+      view: 'books',
+      client: createClient(),
+      organizationId: sessionCtx.organizationId,
+      logLabel: '[books page]',
+    });
+
     const [inventory, expectedCountLive, lookups, trendBuckets] = await Promise.all([
-      inventorySvc.list({
-        q: params.q,
-        // The Expected view spans lifecycles (mirrors mobile's
-        // listStatusPredicate lifecycle:null) so a flagged book someone
-        // manually archived is still reachable there — the Archived view
-        // keeps excluding flagged rows via the default predicate.
-        status: params.expected === '1' ? 'all' : lifecycleStatus,
-        lowStock: params.stock === 'low',
-        outOfStock: params.stock === 'out',
-        autoArchived: params.auto === '1',
-        expected: params.expected === '1',
-        warehouseId: warehouseFilter,
-        itemType: 'book',
-        categoryIds,
-        locationIds,
-        charterIds,
-        rack,
-        sort,
-        limit: PAGE_SIZE,
-        offset: (page - 1) * PAGE_SIZE,
-        // The rack cell names where a book is and says "+N in other
-        // warehouses" for a staff member or viewer (0371).
-        withElsewhere: true,
-      }),
+      plannedPage && planTotals
+        ? readPlannedPage(inventorySvc, viewFilters, plannedPage.pageIds, planTotals)
+        : inventorySvc.list({
+            ...viewFilters,
+            limit: PAGE_SIZE,
+            offset: (page - 1) * PAGE_SIZE,
+            // The rack cell names where a book is and says "+N in other
+            // warehouses" for a staff member or viewer (0371).
+            withElsewhere: true,
+          }),
       // Expected-chip badge count (mig 0277) — one HEAD count on the
       // 0277 partial index, in parallel with the rows query. Carries the
       // page's active q/cat/loc/charter/rack filters so the badge N
@@ -566,20 +594,16 @@ async function booksTableSection({
       id: i.id,
       quantityOnHand: i.quantity_on_hand,
     }));
-    const [trends, imagesById, displayGroups] = await Promise.all([
+    const [trends, imagesById] = await Promise.all([
       trendBuckets
         ? Promise.resolve(deriveInventoryTrends(trendInputs, trendBuckets))
         : getItemTrends(trendInputs),
       imagesSvc.primaryImagesWithThumbsForItems(inventory.items.map((i) => i.id)),
-      // Group selected (0400): the page's records' display groups, through
-      // the caller's own client (RLS), 100 ids per request. Never fails the
-      // page: a failed read renders the records ungrouped.
-      readDisplayGroupsByItemIds(
-        createClient(),
-        sessionCtx.organizationId,
-        inventory.items.map((i) => i.id),
-      ),
     ]);
+    // Group selected (0400): the page's records' display groups, from the
+    // organization's memberships read above through the caller's own client
+    // (RLS). A failed read renders the records ungrouped.
+    const displayGroups = orgDisplayGroups;
     const itemsWithImages = inventory.items.map((i) => {
       const cf = (i as { custom_fields?: Record<string, unknown> | null })
         .custom_fields;
@@ -605,6 +629,7 @@ async function booksTableSection({
       trends,
       expectedCount: expectedCountLive,
       elsewhereUnavailable: inventory.elsewhereUnavailable,
+      plannedPage,
     };
   }
 
@@ -657,6 +682,7 @@ async function booksTableSection({
       savedViewScope="books"
       activeWarehouseId={warehouseFilter}
       currentUserId={sessionCtx.userId}
+      plannedPage={data.plannedPage ?? null}
       expectedCount={data.expectedCount}
     />
   );

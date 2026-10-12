@@ -78,6 +78,8 @@ const ALLOWED: Record<'web' | 'mobile' | 'core', Record<string, string>> = {
     'server/services/ungroup-selected.ts':
       'Ungroup anything: a record leaves its display group through apply_item_grouping',
     'server/services/lib/display-groups.ts': 'the membership readers',
+    'server/services/lib/planned-page.ts':
+      "the staff Items and Books pages' planned page keeps a display group whole (Phase 2)",
   },
   mobile: {
     'app/(drawer)/(tabs)/books.tsx': 'the Books list shows groups',
