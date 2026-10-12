@@ -1130,6 +1130,9 @@ begin
            'charter_id',         i.charter_id,
            'warehouse_id',       i.warehouse_id,
            'bin_location',       i.bin_location,
+           -- The stored rack keys a book carries (book_rack and its kin):
+           -- the review names a record's rack the way the lists do.
+           'custom_fields',      i.custom_fields,
            'quantity_on_hand',   i.quantity_on_hand,
            'created_at',         i.created_at,
            'display_group',      case when dg.id is null then null
