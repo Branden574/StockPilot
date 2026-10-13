@@ -48,9 +48,10 @@ import { embedItemsBatch, type EmbedBatchStop } from './embeddings';
  *     what the request paths missed, often nothing.
  *   Gemini failing: the run stops at Gemini's first 429 (the key's limit is
  *     reached; every further call would be refused, and the AI assistant's
- *     searches use the same key) or after GEMINI_FAILURES_IN_A_ROW (3)
- *     failed calls in a row, counted across organizations (Gemini down).
- *     The summary line says which (`stopped`).
+ *     searches use the same key), at its first refusal of the key itself
+ *     (400 API_KEY_INVALID: revoked, expired or mistyped), or after
+ *     GEMINI_FAILURES_IN_A_ROW (3) failed calls in a row, counted across
+ *     organizations (Gemini down). The summary line says which (`stopped`).
  *   perOrgCap 100 items: one organization's backlog (a 500-row books import)
  *     cannot take a whole run while another waits; it clears over a few runs.
  *   maxOrgs 50: finding the organizations costs one read of the AI switches,
@@ -92,8 +93,9 @@ export interface EmbeddingsSweepResult {
    *  database's words, never the item's id or text), or null. */
   firstError: string | null;
   /** Set when Gemini stopped the run early: its first 429 (the key's limit,
-   *  which the AI assistant's searches share), or GEMINI_FAILURES_IN_A_ROW
-   *  failed calls in a row. The rest waits for the next run. */
+   *  which the AI assistant's searches share), its first refusal of the key
+   *  itself, or GEMINI_FAILURES_IN_A_ROW failed calls in a row. The rest
+   *  waits for the next run. */
   stopped: EmbedBatchStop | null;
   /** Gemini calls failing in a row when the run ended (3 when it stopped
    *  for that reason). */
@@ -123,11 +125,14 @@ type AdminClient = ReturnType<typeof createAdminClient>;
  * Reuses embedItemsBatch's batching and pacing (the Settings > AI
  * backfill's), oldest items first.
  *
- * Fair over time: organizations are taken in id order, rotated by the UTC
- * hour, so when the run cap stops a run, a different organization goes first
- * in the next one. One organization's failure is reported (reportError, with
- * that organization's id: the only place a run names one) and the rest carry
- * on. Without a Gemini key it reads nothing.
+ * Fair over time: the organizations with AI on are taken in id order, turned
+ * by the hour (hours since 1970, so with n of them each goes first once every
+ * n hourly runs), and only then searched for missing items. So when the run
+ * cap stops a run, a different organization goes first in the next one, and
+ * the maxOrgs cutoff falls in a different place from hour to hour. One
+ * organization's failure is reported (reportError, with that organization's
+ * id: the only place a run names one) and the rest carry on. Without a
+ * Gemini key it reads nothing.
  */
 export async function sweepMissingEmbeddings(
   admin: AdminClient,
@@ -157,10 +162,17 @@ export async function sweepMissingEmbeddings(
 
   const aiOrgIds = await orgsWithAiOn(admin);
   result.aiOrgs = aiOrgIds.length;
-  const found = await orgsMissingEmbeddings(admin, aiOrgIds, limits.maxOrgs, deadline);
+  // Turned before the search, so the run works through what it finds in
+  // this hour's order and the maxOrgs cutoff moves with the turn.
+  const found = await orgsMissingEmbeddings(
+    admin,
+    rotateByHour(aiOrgIds, startedAt),
+    limits.maxOrgs,
+    deadline,
+  );
   result.orgs = found.orgIds.length;
   result.moreOrgs = found.more;
-  const order = rotateByHour(found.orgIds, startedAt);
+  const order = found.orgIds;
 
   let budget = limits.runCap;
   let reached = 0;
@@ -245,12 +257,12 @@ async function orgsWithAiOn(admin: AdminClient): Promise<string[]> {
 }
 
 /**
- * Of `candidates` (the organizations with AI on, in id order), the ones that
- * have a live item without an embedding, at most `maxOrgs`. One look per
- * organization, each naming that organization and asking for one item id, so
- * an organization missing thousands costs one small query; the indexes that
- * lead with organization_id serve it. No look starts after the deadline. A
- * failed look throws: the run cannot know where to go.
+ * Of `candidates` (the organizations with AI on, in this hour's order), the
+ * ones that have a live item without an embedding, at most `maxOrgs`. One
+ * look per organization, each naming that organization and asking for one
+ * item id, so an organization missing thousands costs one small query; the
+ * indexes that lead with organization_id serve it. No look starts after the
+ * deadline. A failed look throws: the run cannot know where to go.
  */
 async function orgsMissingEmbeddings(
   admin: AdminClient,
@@ -276,9 +288,13 @@ async function orgsMissingEmbeddings(
   return { orgIds, more: false };
 }
 
-/** `ids` starting at position (UTC hour % length), the rest after it in order. */
+/**
+ * `ids` starting at position (hours since 1970 % length), the rest after it in
+ * order. Hours since 1970, not the hour of the day: the hour of the day only
+ * reaches positions 0 to 23.
+ */
 function rotateByHour(ids: readonly string[], now: number): string[] {
   if (ids.length === 0) return [];
-  const shift = new Date(now).getUTCHours() % ids.length;
+  const shift = Math.floor(now / 3_600_000) % ids.length;
   return [...ids.slice(shift), ...ids.slice(0, shift)];
 }

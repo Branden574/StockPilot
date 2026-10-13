@@ -467,6 +467,43 @@ describe('the embeddings sweep', () => {
     expect(missing(rows)).toHaveLength(6);
   });
 
+  it('a refused key (400 API_KEY_INVALID) stops the whole run at its first call', async () => {
+    // GEMINI_API_KEY revoked or mistyped: every call gets the same 400.
+    const rows = [...[1, 2, 3].map(() => item('org-a')), ...[1, 2, 3].map(() => item('org-b'))];
+    const { client } = table(rows);
+    const fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              message: 'API key not valid. Please pass a valid API key.',
+              details: [
+                {
+                  '@type': 'type.googleapis.com/google.rpc.ErrorInfo',
+                  reason: 'API_KEY_INVALID',
+                  domain: 'googleapis.com',
+                },
+              ],
+            },
+          }),
+          { status: 400 },
+        ),
+    );
+    vi.stubGlobal('fetch', fetch);
+
+    const result = await sweepMissingEmbeddings(client);
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      stopped: 'gemini_key_invalid',
+      embedded: 0,
+      failed: 1,
+      orgsProcessed: 1,
+      orgsLeft: 1,
+    });
+    expect(missing(rows)).toHaveLength(6);
+  });
+
   it('three Gemini failures in a row stop the run, counted across organizations', async () => {
     // Gemini is down (every call a 500). Two items in each of three
     // organizations: the third failure, org-b's first, stops the run.
@@ -497,6 +534,43 @@ describe('the embeddings sweep', () => {
 
     // At 01:37 the run starts with the second organization.
     expect(missing(rows).map((r) => r.organization_id)).toEqual(['org-a', 'org-a']);
+  });
+
+  it('with more than 24 organizations, each goes first once in as many hourly runs as there are organizations', async () => {
+    // The turn counts hours, not the hour of the day, so the 25th
+    // organization and those after it go first too.
+    const orgs = Array.from({ length: 30 }, (_, i) => `org-${String(i).padStart(2, '0')}`);
+    const firsts: string[] = [];
+    for (let k = 0; k < orgs.length; k++) {
+      vi.mocked(Date.now).mockReturnValue(at(0) + k * 3_600_000);
+      const rows = orgs.map((o) => item(o));
+      const { client } = table(rows);
+      vi.stubGlobal('fetch', gemini());
+
+      await sweepMissingEmbeddings(client, { ...EMBEDDINGS_SWEEP, perOrgCap: 1, runCap: 1 });
+
+      const embedded = rows.filter((r) => r.embedding !== null).map((r) => r.organization_id);
+      expect(embedded).toHaveLength(1);
+      firsts.push(embedded[0]!);
+    }
+    expect(new Set(firsts).size).toBe(orgs.length);
+  });
+
+  it('the maxOrgs cutoff moves with the turn, so organizations late in id order are reached too', async () => {
+    const orgs = ['org-a', 'org-b', 'org-c', 'org-d', 'org-e'];
+    const reached = new Set<string>();
+    for (let k = 0; k < orgs.length; k++) {
+      vi.mocked(Date.now).mockReturnValue(at(0) + k * 3_600_000);
+      const rows = orgs.map((o) => item(o));
+      const { client } = table(rows);
+      vi.stubGlobal('fetch', gemini());
+
+      const result = await sweepMissingEmbeddings(client, { ...EMBEDDINGS_SWEEP, maxOrgs: 2 });
+
+      expect(result).toMatchObject({ orgs: 2, moreOrgs: true, embedded: 2 });
+      for (const r of rows) if (r.embedding !== null) reached.add(r.organization_id);
+    }
+    expect([...reached].sort()).toEqual(orgs);
   });
 
   it('an item Gemini fails is left for the next run, which embeds it', async () => {

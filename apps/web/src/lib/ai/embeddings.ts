@@ -277,17 +277,29 @@ const FIRST_ERROR_MAX_CHARS = 300;
 /**
  * Gemini calls failing in a row that stop a batch run with
  * stopWhenGeminiFails: Gemini is down (a 5xx, a timeout, no answer at all),
- * so the next call would most likely fail too. A 400 does not count: it is
- * Gemini answering about one item's own text, so it resets the count, as any
- * answer does.
+ * so the next call would most likely fail too. A 400 about one item's text
+ * does not count: Gemini answered, so it resets the count, as any answer
+ * does. A 400 that refuses the key itself (geminiRefusedKey) is not about the
+ * item and stops the batch at once.
  */
 export const GEMINI_FAILURES_IN_A_ROW = 3;
 
 /** Why a batch with stopWhenGeminiFails stopped before its limit: Gemini
  *  refused for rate (429: the key's per-minute or daily limit, shared by
- *  every organization and by the AI assistant's searches), or failed
+ *  every organization and by the AI assistant's searches), refused the key
+ *  itself (400 API_KEY_INVALID: revoked, expired or mistyped), or failed
  *  GEMINI_FAILURES_IN_A_ROW times in a row. */
-export type EmbedBatchStop = 'gemini_rate_limited' | 'gemini_failing';
+export type EmbedBatchStop = 'gemini_rate_limited' | 'gemini_key_invalid' | 'gemini_failing';
+
+/**
+ * Gemini refused the API key, not the item. It answers a revoked, expired or
+ * mistyped key with a 400 INVALID_ARGUMENT, as it answers a bad item, and
+ * names the reason in an ErrorInfo detail (API_KEY_INVALID), which the SDK
+ * hands on as errorDetails. Read from there, not from the message text.
+ */
+function geminiRefusedKey(e: GoogleGenerativeAIFetchError): boolean {
+  return (e.errorDetails ?? []).some((d) => d?.reason === 'API_KEY_INVALID');
+}
 
 /** What one embedItemsBatch run did. */
 export interface EmbedBatchResult {
@@ -318,13 +330,13 @@ export interface EmbedBatchResult {
  * message is returned in `firstError`.
  *
  * `stopWhenGeminiFails` (the sweep) stops the batch, starting no other item,
- * at Gemini's first 429 or after GEMINI_FAILURES_IN_A_ROW failed calls in a
- * row, and says why in `stopped`: calls that will fail anyway would only
- * spend the key the AI assistant's searches need. `geminiFailuresInARow`
- * starts the count where the batch before it left it, so a run that walks
- * several organizations stops after three failures in a row across them.
- * Without it (the Settings > AI backfill, the AI tool) every item is tried,
- * as before.
+ * at Gemini's first 429, at its first refusal of the key itself, or after
+ * GEMINI_FAILURES_IN_A_ROW failed calls in a row, and says why in `stopped`:
+ * calls that will fail anyway would only spend the key the AI assistant's
+ * searches need. `geminiFailuresInARow` starts the count where the batch
+ * before it left it, so a run that walks several organizations stops after
+ * three failures in a row across them. Without it (the Settings > AI
+ * backfill, the AI tool) every item is tried, as before.
  *
  * `deadline` (a Date.now() value) stops it STARTING another item once it
  * has passed; the item in flight finishes (at most EMBED_TIMEOUT_MS of
@@ -403,11 +415,15 @@ export async function embedItemsBatch(
       fail(errorText(e));
       if (logEachFailure) console.warn('[embedItemsBatch] embed failed:', row.id, e);
       if (!geminiAnswered) {
-        const status = e instanceof GoogleGenerativeAIFetchError ? e.status : undefined;
-        // A 400 is Gemini answering about this item's own text: it is up.
-        geminiFailuresInARow = status === 400 ? 0 : geminiFailuresInARow + 1;
+        const fetchError = e instanceof GoogleGenerativeAIFetchError ? e : undefined;
+        const status = fetchError?.status;
+        const keyRefused = fetchError !== undefined && geminiRefusedKey(fetchError);
+        // Any other 400 is Gemini answering about this item's own text: it
+        // is up, and the key works.
+        geminiFailuresInARow = status === 400 && !keyRefused ? 0 : geminiFailuresInARow + 1;
         if (opts.stopWhenGeminiFails) {
           if (status === 429) stopped = 'gemini_rate_limited';
+          else if (keyRefused) stopped = 'gemini_key_invalid';
           else if (geminiFailuresInARow >= GEMINI_FAILURES_IN_A_ROW) stopped = 'gemini_failing';
           if (stopped) break;
         }

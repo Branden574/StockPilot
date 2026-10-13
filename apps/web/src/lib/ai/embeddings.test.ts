@@ -408,16 +408,20 @@ function batchTable(count = 3) {
 
 /**
  * A Gemini fetch that answers a vector, or, for a text containing one of the
- * `failures` keys, that HTTP status with that error message.
+ * `failures` keys, that HTTP status with that error message (and that
+ * error.details, which the SDK hands on as errorDetails).
  */
-function failingFor(failures: Record<string, { status: number; message: string }>) {
+function failingFor(
+  failures: Record<string, { status: number; message: string; details?: unknown[] }>,
+) {
   return vi.fn(async (_url: unknown, init?: RequestInit) => {
     const text = (JSON.parse(String(init?.body)) as { content: { parts: Array<{ text: string }> } })
       .content.parts[0]!.text;
     const hit = Object.entries(failures).find(([needle]) => text.includes(needle));
     if (hit) {
-      return new Response(JSON.stringify({ error: { message: hit[1].message } }), {
-        status: hit[1].status,
+      const { status, message, details } = hit[1];
+      return new Response(JSON.stringify({ error: { message, ...(details ? { details } : {}) } }), {
+        status,
       });
     }
     return new Response(JSON.stringify({ embedding: { values: VECTOR } }), { status: 200 });
@@ -491,6 +495,40 @@ describe('embedItemsBatch with stopWhenGeminiFails (the hourly sweep)', () => {
       stopped: 'gemini_rate_limited',
       geminiFailuresInARow: 1,
       firstError: expect.stringContaining('429'),
+    });
+  });
+
+  it("stops at Gemini's first 400 that refuses the key itself (API_KEY_INVALID): every call would get it", async () => {
+    // A revoked, expired or mistyped GEMINI_API_KEY. Gemini answers it with a
+    // 400 INVALID_ARGUMENT, as it answers a bad item, but names the reason in
+    // an ErrorInfo.
+    const keyRefused = {
+      status: 400,
+      message: 'API key not valid. Please pass a valid API key.',
+      details: [
+        {
+          '@type': 'type.googleapis.com/google.rpc.ErrorInfo',
+          reason: 'API_KEY_INVALID',
+          domain: 'googleapis.com',
+          metadata: { service: 'generativelanguage.googleapis.com' },
+        },
+      ],
+    };
+    const fetch = failingFor({ Item: keyRefused });
+    vi.stubGlobal('fetch', fetch);
+    const { client, written } = batchTable(5);
+
+    const result = await batch(client, { limit: 5 });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(written).toEqual([]);
+    expect(result).toMatchObject({
+      embedded: 0,
+      failed: 1,
+      remaining: 5,
+      stopped: 'gemini_key_invalid',
+      geminiFailuresInARow: 1,
+      firstError: expect.stringContaining('API key not valid'),
     });
   });
 
