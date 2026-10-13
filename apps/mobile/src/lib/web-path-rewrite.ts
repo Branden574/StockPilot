@@ -1,7 +1,9 @@
 /**
  * SINGLE source of truth for web-path → native-route translation.
- * Used by BOTH deep-link entry points: app/+native-intent.ts (OS link opens)
- * and use-push-notifications.ts (in-app push tap handler). Notification
+ * Used by every way a web link reaches the router: app/+native-intent.ts (OS
+ * link opens), the in-app inbox (app/(drawer)/notifications.tsx) and
+ * notification-link.ts, which parses a tapped push's link for the
+ * notification coordinator (notification-intent.ts). Notification
  * `link` values are WEB paths; every mobile navigation of one MUST go
  * through here — never a hand-rolled per-path if/else (two tables drifted
  * once already and shipped an "Unmatched Route" dead end).
@@ -91,12 +93,15 @@ const REWRITES: { re: RegExp; to: (m: RegExpMatchArray) => string }[] = [
   // web detail page whose native twin already exists — app/cycle-count/[id].tsx
   // and app/bundles/[id].tsx. Without a rule the assigned counter tapped the
   // push and landed on Home instead of the count they were just given.
-  // NOTE (cold start): on a COLD start expo-router hands the router the raw
-  // web path WITHOUT calling +native-intent, so each needs an
-  // `app/dashboard/<x>/[id].tsx` Redirect shim too, like orders/inventory/
-  // purchase-orders. Cycle counts have one (app/dashboard/cycle-counts/[id].tsx);
-  // bundles still do not, so a killed-app tap on a bundle alert shows
-  // "Unmatched Route" (follow-up).
+  // NOTE (cold start): a push tap never reaches the router as a URL, cold
+  // start included: notification-link.ts parses it with this table and the
+  // notification host navigates inside the app. A raw web URL that does reach
+  // the router (a stockpilot:///dashboard/... link) goes through
+  // +native-intent on this expo-router, the initial URL included
+  // (web-path-rewrite.returns.test.ts pins it). The app/dashboard/** Redirect
+  // shims (orders, new orders, returns, inventory, purchase-orders, cycle
+  // counts, Book Order Totals; bundles has none) are a second door for such
+  // links only.
   { re: new RegExp(`/dashboard/cycle-counts/${UUID}`), to: (m) => `/cycle-count/${m[1]}` },
   { re: new RegExp(`/dashboard/bundles/${UUID}`), to: (m) => `/bundles/${m[1]}` },
   { re: /\/dashboard\/schedule(\/.*)?$/, to: () => '/schedule' },
