@@ -9,21 +9,23 @@
 -- THE GAP (review of the embeddings fix, 2026-10-13). An edited item kept its
 -- old vector until the app re-embedded it, and a re-embed can fail (a Gemini
 -- 429 or 5xx, the 10 s timeout, an instance cut off) or never start: Ungroup's
--- split_item_sku (0399) gives up to 100 records a new SKU and re-embeds none
--- of them, and the SKU fan-out in InventoryService.update() rewrites the other
--- records of a SKU but re-embeds them only when the edited record's own value
--- changed, although another record's value can differ. The hourly sweep
--- (cron/embeddings-sweep) embeds only items with no embedding, so a stale
--- vector stayed stale for good.
+-- split_item_sku (0399) gives up to 100 records a new SKU, and splitSku
+-- re-embedded none of them then, and the SKU fan-out in
+-- InventoryService.update() rewrites the other records of a SKU but re-embeds
+-- them only when the edited record's own value changed, although another
+-- record's value can differ. The hourly sweep (cron/embeddings-sweep) embeds
+-- only items with no embedding, so a stale vector stayed stale for good.
 --
 -- THE FIX. A BEFORE UPDATE trigger clears the embedding in the same statement
 -- that changes the text, judged row by row on each row's own old and new
 -- values. The request re-embeds what it saved within a second (update() and
--- its fan-out), and an item left without one is embedded by the next sweep
--- run that reaches it (at most 100 items per organization per run, so a
--- larger backlog clears over several runs). One rule covers every path that
--- changes a searched column today (InventoryService.update, its fan-out,
--- split_item_sku) and any path added later.
+-- its fan-out, and since this branch Ungroup's splitSku for the records it
+-- gave a new SKU), and an item left without one is embedded by the next
+-- sweep run that reaches it, in an organization that switched the AI module
+-- on (at most 100 items per organization per run, so a larger backlog clears
+-- over several runs). One rule covers every path that changes a searched
+-- column today (InventoryService.update, its fan-out, split_item_sku) and any
+-- path added later.
 --
 -- WHEN IT FIRES. BEFORE UPDATE OF name, sku, barcode, description,
 -- custom_fields, so a statement that sets none of them (a stock movement, a
