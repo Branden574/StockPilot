@@ -113,7 +113,6 @@ export const PUSH_OPEN_REASONS = [
   'open-inbox',
   'switched',
   'switch-failed',
-  'navigate-failed',
   'deliberate-sign-out',
   'evicted',
 ] as const;
@@ -178,15 +177,4 @@ export function pushOpenDiag(event: PushOpenEvent): void {
     // Diagnostics are best-effort.
   }
   if (typeof __DEV__ !== 'undefined' && __DEV__) console.info('[push.open]', data);
-}
-
-/** A thrown error on the tap path, reported with its message stripped. */
-export function reportPushOpenError(err: unknown): void {
-  const safe = new Error('Opening a notification failed');
-  safe.name = errorClassOf(err);
-  try {
-    Sentry.captureException(safe);
-  } catch {
-    // Diagnostics are best-effort.
-  }
 }

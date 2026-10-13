@@ -1,4 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import * as path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -236,6 +237,28 @@ describe('7. the host and the notice only read and navigate', () => {
     expect(code).toContain('setTourVisible(NOTICE_LOCK_ID, true);');
     expect(code).toContain('setTourVisible(NOTICE_LOCK_ID, false)');
     expect(code).toContain("const NOTICE_LOCK_ID = 'notification-notice';");
+  });
+
+  it('router.push only queues the move on this expo-router, so open() has nothing to catch', () => {
+    // expo-router 57.0.21: push() -> linkTo() -> routingQueue.add(), and the
+    // action is built (assertIsReady, getStateFromPath) only when the
+    // container's effect runs the queue. If an upgrade makes push build or
+    // dispatch at call time, this fails and open() must be looked at again.
+    const req = createRequire(__filename);
+    const router = readFileSync(req.resolve('expo-router/build/global-state/router.js'), 'utf8');
+    expect(router).toMatch(/function push\(url, options\) \{\s*return linkTo\(/);
+    expect(router).toContain('routingQueue_1.routingQueue.add(linkAction);');
+    const queue = readFileSync(
+      req.resolve('expo-router/build/global-state/routingQueue.js'),
+      'utf8',
+    );
+    expect(queue).toContain('(0, getNavigationAction_1.getNavigateAction)(href, options');
+    const code = codeOnly(host);
+    const start = code.indexOf('const open = React.useCallback(');
+    expect(start).toBeGreaterThan(-1);
+    const open = code.slice(start, code.indexOf('React.useEffect(', start));
+    expect(open).toContain('router.push(path as Href);');
+    expect(open).not.toMatch(/\b(try|catch)\b/);
   });
 
   it('a newer tap closes an open notice', () => {

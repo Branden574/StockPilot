@@ -6,7 +6,6 @@ import {
   PUSH_OPEN_STAGES,
   errorClassOf,
   pushOpenDiag,
-  reportPushOpenError,
   sanitizePushOpenEvent,
 } from './push-open-diagnostics';
 
@@ -139,14 +138,12 @@ describe('nothing private ever leaves the phone', () => {
     expect(errorClassOf(null)).toBe('Error');
   });
 
-  it('a thrown host error is reported with its message stripped', () => {
-    reportPushOpenError(new TypeError(`Cannot read ${DUAL} for ${USER}`));
-    expect(sentry.captureException).toHaveBeenCalledTimes(1);
-    const sent = sentry.captureException.mock.calls[0]?.[0] as Error;
-    expect(sent).toBeInstanceOf(Error);
-    expect(sent.name).toBe('TypeError');
-    expect(sent.message).toBe('Opening a notification failed');
-    expect(JSON.stringify({ name: sent.name, message: sent.message })).not.toMatch(UUID_ANYWHERE);
+  it('breadcrumbs only: no stage raises a Sentry event', () => {
+    for (const stage of PUSH_OPEN_STAGES) {
+      pushOpenDiag({ stage, reason: 'error', errorClass: 'TypeError' });
+    }
+    expect(breadcrumbs()).toHaveLength(PUSH_OPEN_STAGES.length);
+    expect(sentry.captureException).not.toHaveBeenCalled();
   });
 
   it('a failing Sentry call never breaks the tap', () => {
@@ -154,10 +151,6 @@ describe('nothing private ever leaves the phone', () => {
       throw new Error('sentry is down');
     });
     expect(() => pushOpenDiag({ stage: 'navigate', routeKind: 'order' })).not.toThrow();
-    sentry.captureException.mockImplementationOnce(() => {
-      throw new Error('sentry is down');
-    });
-    expect(() => reportPushOpenError(new Error('x'))).not.toThrow();
   });
 });
 

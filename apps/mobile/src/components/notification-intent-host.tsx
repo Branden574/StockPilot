@@ -28,12 +28,7 @@ import {
   type IntentNotice,
   type NoticeActionId,
 } from '@/lib/notification-open';
-import {
-  errorClassOf,
-  pushOpenDiag,
-  reportPushOpenError,
-  type PushOpenReason,
-} from '@/lib/push-open-diagnostics';
+import { errorClassOf, pushOpenDiag, type PushOpenReason } from '@/lib/push-open-diagnostics';
 import { supabase } from '@/lib/supabase';
 import { setTourVisible, useWhatsNewOpen } from '@/lib/tour-targets';
 import {
@@ -146,26 +141,26 @@ export function NotificationIntentHost() {
   const userId = user?.id ?? null;
   const userEmail = user?.email ?? null;
 
-  /** Open the page, unless it is already in front, and finish the tap. */
+  /**
+   * Open the page, unless it is already in front, and finish the tap.
+   *
+   * router.push only queues the move: on this expo-router (57.0.21) linkTo
+   * hands it to the routing queue, and the navigation container builds and
+   * dispatches it from its own effect, on the next commit. Nothing fails at
+   * call time, so there is nothing to catch here, and the tap is finished
+   * once the move is queued: the 'navigate' breadcrumb and the 'navigated'
+   * outcome record that. The queue always shows a screen: every path pushed
+   * is a native route from the shared table (notification-link.ts) or
+   * /notifications, and a path no screen matched would open expo-router's
+   * Unmatched Route, not nothing. Pinned in notification-intent-wiring.test.ts.
+   */
   const open = React.useCallback(
     (it: CapturedIntent, path: string, outcome: PushOpenReason) => {
       if (currentPath.current === path) {
         notificationIntents.finish(it, 'already-there');
         return;
       }
-      try {
-        router.push(path as Href);
-      } catch (err) {
-        reportPushOpenError(err);
-        pushOpenDiag({
-          stage: 'error',
-          source: it.source,
-          reason: 'navigate-failed',
-          errorClass: errorClassOf(err),
-        });
-        notificationIntents.finish(it, 'navigate-failed');
-        return;
-      }
+      router.push(path as Href);
       pushOpenDiag({ stage: 'navigate', source: it.source, routeKind: routeKindOf(path) });
       notificationIntents.finish(it, outcome);
     },
