@@ -23,8 +23,8 @@ import { makeServiceContext, makeSupabaseStub, type MockCall } from '@/test/supa
  * it. So a test can see what is still running after the method has returned,
  * and that the promise handed to keepAlive settles only after the last embed
  * does. A dropped `await` inside the loop, or a loop that is started but not
- * handed to keepAlive, fails these tests. That no call anywhere in the server
- * code is fired and forgotten is server/embedding-calls.guard.test.ts.
+ * handed to keepAlive, fails these tests. server/embedding-calls.guard.test.ts
+ * checks that no call anywhere in the server code is fired and forgotten.
  */
 
 const h = vi.hoisted(() => ({
