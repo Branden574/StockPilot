@@ -98,6 +98,11 @@ describe('nextOpenStep waits on real signals', () => {
       'auth-group',
     ],
     [
+      'on the sign-in group, live and published alike (a session, before the redirect)',
+      { stackRoute: '(auth)', segments: ['(auth)', 'sign-in'] },
+      'auth-group',
+    ],
+    [
       'whose tap it is is not known yet',
       {
         take: { kind: 'waiting', reason: 'binding', intent: intent(`/dashboard/orders/${ORDER}`) },
