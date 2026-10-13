@@ -51,9 +51,10 @@ export async function GET(req: Request) {
 
   try {
     const result = await sweepMissingEmbeddings(createAdminClient());
-    // One summary line per run, counts only: no item names, no organization
-    // ids. (An organization whose read fails is reported by the sweep, with
-    // its id, as every cron reports one.)
+    // One summary line per run: counts, and the first failed item's error
+    // message; no item names or ids, no organization ids. (An organization
+    // whose read fails is reported by the sweep, with its id, as every cron
+    // reports one.)
     console.info('[cron.embeddings-sweep]', JSON.stringify(result));
     return NextResponse.json(result);
   } catch (err) {

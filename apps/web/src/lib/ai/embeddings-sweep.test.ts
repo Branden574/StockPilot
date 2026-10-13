@@ -713,9 +713,12 @@ describe('the embeddings sweep', () => {
     expect(missing(rows)).toHaveLength(3);
   });
 
-  it('no log line or alert names an item, whatever fails; an organization is named only in the report of its own failed read', async () => {
+  it('no log line, alert or summary names an item, whatever fails; an organization is named only in the report of its own failed read', async () => {
     // org-a's item is refused by Gemini; org-b's read fails. The real
-    // reportError prints its payload and posts it to the alert webhook.
+    // reportError prints its payload and posts it to the alert webhook. A
+    // failed item is counted, never logged on its own line (that line would
+    // carry its id), and the run keeps only the first failure's message for
+    // its summary.
     vi.stubEnv('ERROR_WEBHOOK_URL', 'https://alerts.test.local/hook');
     const rows = [item('org-a', { name: 'Gemini refuses this one' }), item('org-b')];
     const { client } = table(rows, { failReadFor: 'org-b' });
@@ -732,16 +735,25 @@ describe('the embeddings sweep', () => {
       }),
     );
 
-    await sweepMissingEmbeddings(client);
+    const result = await sweepMissingEmbeddings(client);
 
     const lines = logged.map((args) =>
       JSON.stringify(args.map((a) => (a instanceof Error ? a.message : a))),
     );
-    const everything = [...lines, ...alerts];
-    // The report was seen (it is printed and posted): the checks below are not vacuous.
+    // The result is the route's one summary line.
+    const everything = [...lines, ...alerts, JSON.stringify(result)];
+    // The report was seen (it is printed and posted), and the failed item's
+    // error reached the summary: the checks below are not vacuous.
     expect(alerts).toHaveLength(1);
+    expect(result).toMatchObject({
+      failed: 1,
+      firstError: expect.stringContaining('backend error'),
+    });
     for (const r of rows) {
-      for (const text of everything) expect(text).not.toContain(r.name);
+      for (const text of everything) {
+        expect(text).not.toContain(r.name);
+        expect(text).not.toContain(r.id);
+      }
     }
     expect(everything.filter((t) => t.includes('org-a'))).toEqual([]);
     const namingB = everything.filter((t) => t.includes('org-b'));

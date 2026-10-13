@@ -62,9 +62,10 @@ export const EMBEDDINGS_SWEEP = {
 
 export type EmbeddingsSweepLimits = { [K in keyof typeof EMBEDDINGS_SWEEP]: number };
 
-/** Counts only: no item names, no organization ids. The route logs it as the
- *  run's one summary line; an organization whose read fails is reported on
- *  its own, by reportError, with its id. */
+/** Counts, and the first failure's message: no item names or ids, no
+ *  organization ids. The route logs it as the run's one summary line; an
+ *  organization whose read fails is reported on its own, by reportError, with
+ *  its id. */
 export interface EmbeddingsSweepResult {
   /** Set when the run did nothing on purpose. */
   skipped: 'no_gemini_key' | null;
@@ -82,6 +83,9 @@ export interface EmbeddingsSweepResult {
   embedded: number;
   /** Items whose embed or write failed: still missing, for the next run. */
   failed: number;
+  /** The run's first failed item's error message (Gemini's or the
+   *  database's words, never the item's id or text), or null. */
+  firstError: string | null;
   /** Items that changed while they were embedded (an edit, or a vector
    *  another path wrote): nothing was written over them. One still missing
    *  is embedded from its current text by the next run. */
@@ -129,6 +133,7 @@ export async function sweepMissingEmbeddings(
     orgsLeft: 0,
     embedded: 0,
     failed: 0,
+    firstError: null,
     changed: 0,
     remaining: 0,
     timeUp: false,
@@ -149,15 +154,19 @@ export async function sweepMissingEmbeddings(
     if (budget <= 0 || Date.now() >= deadline) break;
     reached += 1;
     try {
+      // logEachFailure false: a failed item is counted, never logged on a
+      // line of its own (which would carry its id); the run keeps the first
+      // failure's message for its summary.
       const batch = await embedItemsBatch(
         { supabase: admin, organizationId },
-        { limit: Math.min(limits.perOrgCap, budget), deadline },
+        { limit: Math.min(limits.perOrgCap, budget), deadline, logEachFailure: false },
       );
       result.orgsProcessed += 1;
       result.embedded += batch.embedded;
       result.failed += batch.failed;
       result.changed += batch.changed;
       result.remaining += batch.remaining;
+      result.firstError ??= batch.firstError;
       // Attempts, not successes: each of the three called Gemini once.
       budget -= batch.embedded + batch.failed + batch.changed;
     } catch (err) {

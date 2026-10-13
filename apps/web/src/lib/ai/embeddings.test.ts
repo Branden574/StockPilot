@@ -404,6 +404,63 @@ function batchTable() {
   return { client: stub.client, written };
 }
 
+/**
+ * A Gemini fetch that answers a vector, or, for a text containing one of the
+ * `failures` keys, that HTTP status with that error message.
+ */
+function failingFor(failures: Record<string, { status: number; message: string }>) {
+  return vi.fn(async (_url: unknown, init?: RequestInit) => {
+    const text = (JSON.parse(String(init?.body)) as { content: { parts: Array<{ text: string }> } })
+      .content.parts[0]!.text;
+    const hit = Object.entries(failures).find(([needle]) => text.includes(needle));
+    if (hit) {
+      return new Response(JSON.stringify({ error: { message: hit[1].message } }), {
+        status: hit[1].status,
+      });
+    }
+    return new Response(JSON.stringify({ embedding: { values: VECTOR } }), { status: 200 });
+  });
+}
+
+describe('embedItemsBatch: what a failed item leaves in the logs', () => {
+  it('by default (the Settings > AI backfill) each failed item keeps its own line, with its id', async () => {
+    vi.stubGlobal('fetch', failingFor({ 'Item 2': { status: 500, message: 'backend error' } }));
+    const { client } = batchTable();
+
+    const result = await embedItemsBatch(
+      { supabase: client, organizationId: 'org-1' },
+      { limit: 3 },
+    );
+
+    expect(result).toMatchObject({ embedded: 2, failed: 1, remaining: 1 });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.slice(0, 2)).toEqual(['[embedItemsBatch] embed failed:', 'itm-2']);
+  });
+
+  it("logEachFailure false (the hourly sweep): no line names a failed item, and the first failure's message is returned", async () => {
+    vi.stubGlobal(
+      'fetch',
+      failingFor({
+        'Item 2': { status: 500, message: 'backend error' },
+        'Item 3': { status: 503, message: 'model overloaded' },
+      }),
+    );
+    const { client } = batchTable();
+
+    const result = await embedItemsBatch(
+      { supabase: client, organizationId: 'org-1' },
+      { limit: 3, logEachFailure: false },
+    );
+
+    expect(result).toMatchObject({ embedded: 1, failed: 2, remaining: 2 });
+    expect(warn).not.toHaveBeenCalled();
+    expect(info).not.toHaveBeenCalled();
+    expect(result.firstError).toContain('backend error');
+    expect(result.firstError).not.toContain('itm-2');
+    expect(result.firstError).not.toContain('Item 2');
+  });
+});
+
 describe('embedItemsBatch stops at its deadline', () => {
   it('starts no item once the deadline has passed, and counts the rest as still missing', async () => {
     let now = 1_000;
@@ -425,7 +482,7 @@ describe('embedItemsBatch stops at its deadline', () => {
 
     expect(written).toEqual(['itm-1']);
     expect(fetch).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({ embedded: 1, failed: 0, changed: 0, remaining: 2 });
+    expect(result).toEqual({ embedded: 1, failed: 0, changed: 0, remaining: 2, firstError: null });
   });
 
   it('without a deadline, embeds every item up to the limit, as before', async () => {
@@ -438,6 +495,6 @@ describe('embedItemsBatch stops at its deadline', () => {
     );
 
     expect(written).toEqual(['itm-1', 'itm-2', 'itm-3']);
-    expect(result).toEqual({ embedded: 3, failed: 0, changed: 0, remaining: 0 });
+    expect(result).toEqual({ embedded: 3, failed: 0, changed: 0, remaining: 0, firstError: null });
   });
 });

@@ -12,7 +12,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * the cron's Bearer CRON_SECRET (constant-time compare) and FAILS CLOSED
  * when the secret is not set, as drain-outbox does; a failed run answers
  * with fixed words, once its error report is sent; its one summary line is
- * counts only.
+ * counts and the first failure's message (lib/ai/embeddings-sweep.test.ts
+ * proves no item is named in it).
  */
 
 const h = vi.hoisted(() => ({
@@ -48,6 +49,7 @@ const RESULT = {
   orgsLeft: 0,
   embedded: 5,
   failed: 1,
+  firstError: '[GoogleGenerativeAI Error]: Error fetching from ...: [503 ] model overloaded',
   changed: 0,
   remaining: 1,
   timeUp: false,

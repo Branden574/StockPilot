@@ -270,11 +270,32 @@ function errorText(e: unknown): string {
   return String(e);
 }
 
+/** The longest first-failure message a batch keeps (a Gemini error can carry
+ *  a page of quota details). */
+const FIRST_ERROR_MAX_CHARS = 300;
+
+/** What one embedItemsBatch run did. */
+export interface EmbedBatchResult {
+  embedded: number;
+  failed: number;
+  changed: number;
+  remaining: number;
+  /** The first failure's message (a Gemini or a database error, never an
+   *  item's id or text), or null when nothing failed. */
+  firstError: string | null;
+}
+
 /**
  * Embeds up to `limit` un-embedded items in the caller's org. Shared
  * by the admin-only server action, the AI tool and the hourly sweep
  * (lib/ai/embeddings-sweep.ts) so every path uses identical batching +
  * pacing.
+ *
+ * `logEachFailure` (default true) writes one line per failed item, with its
+ * id, as the Settings > AI backfill always did. The sweep sets it to false:
+ * a cron's log is counts only, and an afternoon of Gemini errors would
+ * otherwise write a line per item every hour. Either way the first failure's
+ * message is returned in `firstError`.
  *
  * `deadline` (a Date.now() value) stops it STARTING another item once it
  * has passed; the item in flight finishes (at most EMBED_TIMEOUT_MS of
@@ -296,9 +317,10 @@ export async function embedItemsBatch(
   // Keep the type loose so this stays compatible with both the
   // service-context shape and the cached withContext() result.
   ctx: EmbedCtx,
-  opts: { limit?: number; deadline?: number } = {},
-): Promise<{ embedded: number; failed: number; changed: number; remaining: number }> {
+  opts: { limit?: number; deadline?: number; logEachFailure?: boolean } = {},
+): Promise<EmbedBatchResult> {
   const limit = Math.min(200, Math.max(1, opts.limit ?? 50));
+  const logEachFailure = opts.logEachFailure ?? true;
 
   const { data: rows, error: loadErr } = await ctx.supabase
     .from('inventory_items')
@@ -313,27 +335,33 @@ export async function embedItemsBatch(
   let embedded = 0;
   let failed = 0;
   let changed = 0;
+  let firstError: string | null = null;
+  const fail = (message: string) => {
+    failed += 1;
+    firstError ??= message.slice(0, FIRST_ERROR_MAX_CHARS);
+  };
   for (const row of (rows ?? []) as EmbedSourceRow[]) {
     if (opts.deadline !== undefined && Date.now() >= opts.deadline) break;
     const source = itemEmbeddingSource(row);
     if (!source) {
-      failed += 1;
+      fail('an item has no text to embed');
       continue;
     }
     try {
       const vec = await embedText(source);
       const write = await writeIfStillCurrent(ctx, row.id, source, vec, { onlyIfMissing: true });
       if ('failed' in write) {
-        failed += 1;
-        console.warn(`[embedItemsBatch] ${write.failed} failed:`, row.id, write.message);
+        fail(`${write.failed} failed: ${write.message}`);
+        if (logEachFailure) {
+          console.warn(`[embedItemsBatch] ${write.failed} failed:`, row.id, write.message);
+        }
         continue;
       }
       if (write.written) embedded += 1;
       else changed += 1;
     } catch (e) {
-      failed += 1;
-       
-      console.warn('[embedItemsBatch] embed failed:', row.id, e);
+      fail(errorText(e));
+      if (logEachFailure) console.warn('[embedItemsBatch] embed failed:', row.id, e);
     }
     // Light pacing to stay below Gemini's burst limit on tier 0.
     await new Promise((r) => setTimeout(r, 50));
@@ -346,5 +374,5 @@ export async function embedItemsBatch(
     .is('deleted_at', null)
     .is('embedding', null);
 
-  return { embedded, failed, changed, remaining: totalRemaining ?? 0 };
+  return { embedded, failed, changed, remaining: totalRemaining ?? 0, firstError };
 }
