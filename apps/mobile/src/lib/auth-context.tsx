@@ -25,6 +25,7 @@ import {
 import { totalPendingCount } from './cycle-count-cache';
 import { cycleCountSync } from './cycle-count-sync';
 import { wipeForSignOut } from './db';
+import { notificationIntents } from './notification-intent';
 import { adoptLegacyRows, discardUnsyncedFor } from './queue';
 import {
   getRememberedIdentity,
@@ -72,6 +73,15 @@ interface AuthState {
    */
   mfaRequired: boolean;
   /**
+   * True from the start of a password sign-in until its MFA check has
+   * answered. The session exists from signInWithPassword on, but whether a
+   * code is owed is known only after checkMfa(): in between, RootGate shows
+   * the app, and a tapped notification opened in that window was lost when
+   * the MFA screen then replaced the navigator. NotificationIntentHost waits
+   * on it (Phase 3, iPhone push tap).
+   */
+  mfaPending: boolean;
+  /**
    * Submit a 6-digit TOTP code to complete the AAL1→AAL2 challenge.
    * Returns an error string on an invalid/expired code.
    */
@@ -111,6 +121,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [locked, setLocked] = React.useState(false);
   const [biometricEnabled, setBiometricEnabledState] = React.useState(false);
   const [mfaRequired, setMfaRequired] = React.useState(false);
+  const [mfaPending, setMfaPending] = React.useState(false);
   const mfaFactorId = React.useRef<string | null>(null);
 
   // Resolves whether the current session is stuck at AAL1 with a verified
@@ -340,78 +351,85 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signIn: AuthState['signIn'] = async (email, password) => {
-    const { data: signedIn, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) {
-      // GoTrue answers a disabled account with the STRUCTURED code
-      // `user_banned`. Never infer it from free text — GoTrue's own sentence
-      // is not ours, changes between releases, and would leak a reason we
-      // deliberately do not reveal. Raising the gate here is what makes the
-      // disabled screen reachable from a rejected sign-in, where there is no
-      // session for any other path to work from.
-      //
-      // ATTRIBUTED 'sign-in', and that is the whole point. This answer is about
-      // an EMAIL SOMEBODY TYPED, not about this device: GoTrue evaluates the
-      // ban before the password, so any passer-by who knows one disabled
-      // address gets it with any password at all. It may raise the screen; it
-      // may NOT drive the eviction, which terminally rejects the offline outbox
-      // — work that, after "Use password instead" on the biometric lock,
-      // routinely belongs to a different and perfectly healthy user.
-      if ((error as { code?: string }).code === 'user_banned') {
-        // WHOSE verdict this is. GoTrue evaluates the ban BEFORE the
-        // password, so this branch is reached by ANY typed password on a
-        // disabled address — a passer-by who merely knows a colleague's email
-        // gets here exactly as easily as the account's own owner. The
-        // remembered identity (remembered-identity.ts) is this device's own
-        // durable memory of who last held a session here, refreshed at every
-        // hydrate and sign-out — it is what lets a device converge on
-        // 'session' evidence HONESTLY instead of either extreme: trusting
-        // every typed email (the original data-loss bug) or trusting none of
-        // them (the over-correction this fix replaces). A relaunched device
-        // whose own owner is retyping their own now-disabled password is
-        // exactly the scenario use-account-gate.ts's design note describes as
-        // "the ONE path that can still confirm a disable outright" — this is
-        // what lets that path earn the eviction rather than only the screen.
-        const remembered = await getRememberedIdentity();
-        if (matchesRememberedIdentity(email, remembered)) {
-          // This device has held a session for this exact address before —
-          // the disable it is hearing about is its own. Full eviction:
-          // the outbox is terminally rejected and the cache is wiped
-          // (use-account-gate.ts).
-          setAccountDisabled(true, 'session');
-        } else {
-          // ATTRIBUTED 'sign-in', and that is the whole point. It may raise
-          // the screen; it may NOT drive the eviction, which terminally
-          // rejects the offline outbox — work that, after "Use password
-          // instead" on the biometric lock, routinely belongs to a different
-          // and perfectly healthy user.
-          setAccountDisabled(true, 'sign-in');
+    // From the password grant until the MFA check at the end has answered
+    // (AuthState.mfaPending): a tapped notification waits until then.
+    setMfaPending(true);
+    try {
+      const { data: signedIn, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) {
+        // GoTrue answers a disabled account with the STRUCTURED code
+        // `user_banned`. Never infer it from free text — GoTrue's own sentence
+        // is not ours, changes between releases, and would leak a reason we
+        // deliberately do not reveal. Raising the gate here is what makes the
+        // disabled screen reachable from a rejected sign-in, where there is no
+        // session for any other path to work from.
+        //
+        // ATTRIBUTED 'sign-in', and that is the whole point. This answer is about
+        // an EMAIL SOMEBODY TYPED, not about this device: GoTrue evaluates the
+        // ban before the password, so any passer-by who knows one disabled
+        // address gets it with any password at all. It may raise the screen; it
+        // may NOT drive the eviction, which terminally rejects the offline outbox
+        // — work that, after "Use password instead" on the biometric lock,
+        // routinely belongs to a different and perfectly healthy user.
+        if ((error as { code?: string }).code === 'user_banned') {
+          // WHOSE verdict this is. GoTrue evaluates the ban BEFORE the
+          // password, so this branch is reached by ANY typed password on a
+          // disabled address — a passer-by who merely knows a colleague's email
+          // gets here exactly as easily as the account's own owner. The
+          // remembered identity (remembered-identity.ts) is this device's own
+          // durable memory of who last held a session here, refreshed at every
+          // hydrate and sign-out — it is what lets a device converge on
+          // 'session' evidence HONESTLY instead of either extreme: trusting
+          // every typed email (the original data-loss bug) or trusting none of
+          // them (the over-correction this fix replaces). A relaunched device
+          // whose own owner is retyping their own now-disabled password is
+          // exactly the scenario use-account-gate.ts's design note describes as
+          // "the ONE path that can still confirm a disable outright" — this is
+          // what lets that path earn the eviction rather than only the screen.
+          const remembered = await getRememberedIdentity();
+          if (matchesRememberedIdentity(email, remembered)) {
+            // This device has held a session for this exact address before —
+            // the disable it is hearing about is its own. Full eviction:
+            // the outbox is terminally rejected and the cache is wiped
+            // (use-account-gate.ts).
+            setAccountDisabled(true, 'session');
+          } else {
+            // ATTRIBUTED 'sign-in', and that is the whole point. It may raise
+            // the screen; it may NOT drive the eviction, which terminally
+            // rejects the offline outbox — work that, after "Use password
+            // instead" on the biometric lock, routinely belongs to a different
+            // and perfectly healthy user.
+            setAccountDisabled(true, 'sign-in');
+          }
+          return { error: ACCOUNT_DISABLED_MESSAGE };
         }
-        return { error: ACCOUNT_DISABLED_MESSAGE };
+        return { error: error.message };
       }
-      return { error: error.message };
+      // A password grant that SUCCEEDED is proof the account is not banned —
+      // GoTrue refuses a banned user before it ever checks the password. So this
+      // is the moment a gate raised by someone else's rejected attempt (or by an
+      // identity-server blip) is demonstrably stale and must come down, or the
+      // healthy user who just signed in would meet the disabled screen.
+      resetAccountDisabled();
+      // Refresh this device's remembered identity. The email is the only field
+      // the match above ever reads (see remembered-identity.ts). The account id
+      // is recorded too when the grant returned it: a disable confirmed later
+      // from the sign-in screen evicts only THAT account's queued work, and after
+      // a relaunch this record is the one place its id is still known
+      // (use-account-gate.ts evictedAccountId).
+      await rememberIdentity({
+        userId: signedIn.user?.id ?? null,
+        email: normalizeIdentityEmail(email),
+      });
+      // Password got us to AAL1. If the account has a verified TOTP factor,
+      // raise the MFA gate so RootGate shows the code screen instead of the
+      // app. Without this a 2FA-enrolled user would be let in on password
+      // alone — the bug being fixed.
+      await checkMfa();
+      return {};
+    } finally {
+      setMfaPending(false);
     }
-    // A password grant that SUCCEEDED is proof the account is not banned —
-    // GoTrue refuses a banned user before it ever checks the password. So this
-    // is the moment a gate raised by someone else's rejected attempt (or by an
-    // identity-server blip) is demonstrably stale and must come down, or the
-    // healthy user who just signed in would meet the disabled screen.
-    resetAccountDisabled();
-    // Refresh this device's remembered identity. The email is the only field
-    // the match above ever reads (see remembered-identity.ts). The account id
-    // is recorded too when the grant returned it: a disable confirmed later
-    // from the sign-in screen evicts only THAT account's queued work, and after
-    // a relaunch this record is the one place its id is still known
-    // (use-account-gate.ts evictedAccountId).
-    await rememberIdentity({
-      userId: signedIn.user?.id ?? null,
-      email: normalizeIdentityEmail(email),
-    });
-    // Password got us to AAL1. If the account has a verified TOTP factor,
-    // raise the MFA gate so RootGate shows the code screen instead of the
-    // app. Without this a 2FA-enrolled user would be let in on password
-    // alone — the bug being fixed.
-    await checkMfa();
-    return {};
   };
 
   const verifyMfa: AuthState['verifyMfa'] = async (code) => {
@@ -493,6 +511,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         },
         { discardWithoutAsking: opts?.afterAccountDeleted === true },
       );
+      // A completed deliberate exit: a tapped notification still waiting to
+      // open belongs to this account, and so do its alerts in Notification
+      // Center (notification-intent.ts clears both).
+      if (outcome === 'signed-out') {
+        notificationIntents.clear('deliberate-sign-out');
+      }
       if (outcome === 'still-signed-in') {
         Alert.alert(STILL_SIGNED_IN_TITLE, STILL_SIGNED_IN_MESSAGE);
       }
@@ -571,6 +595,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         locked,
         biometricEnabled,
         mfaRequired,
+        mfaPending,
         verifyMfa,
         signIn,
         signOut,

@@ -30,7 +30,7 @@
  * returns_select are is_org_member. A switch is only ever offered, never made.
  */
 import type { TakeResult } from './notification-intent';
-import { errorClassOf } from './push-open-diagnostics';
+import { errorClassOf, type PushOpenReason } from './push-open-diagnostics';
 
 export type OpenWaitReason =
   | 'mfa-pending'
@@ -188,12 +188,13 @@ export interface ResolutionInput {
 export function stepAfterResolution(input: ResolutionInput): OpenStep {
   // A newer tap (or a sign-out) took the slot while the read was out.
   if (input.currentSeq === null || input.answerSeq !== input.currentSeq) return { kind: 'idle' };
-  const { resolution, workspace } = input;
+  const { resolution } = input;
+  const { activeOrgId, activeOrgName, orgs } = input.workspace;
   if (resolution.kind === 'error') return { kind: 'notice', notice: { kind: 'retry' } };
   // Missing and not shared look the same under RLS, and say the same.
   if (resolution.kind === 'none') return { kind: 'notice', notice: { kind: 'unavailable' } };
-  if (resolution.orgId === workspace.activeOrgId) return openOrStay(input.native, input.pathname);
-  const org = workspace.orgs.find((o) => o.id === resolution.orgId);
+  if (resolution.orgId === activeOrgId) return openOrStay(input.native, input.pathname);
+  const org = orgs.find((o) => o.id === resolution.orgId);
   if (!org) return { kind: 'notice', notice: { kind: 'unavailable' } };
   return {
     kind: 'notice',
@@ -201,11 +202,20 @@ export function stepAfterResolution(input: ResolutionInput): OpenStep {
       kind: 'switch',
       orgId: org.id,
       orgName: org.name,
-      activeOrgName: workspace.activeOrgName,
+      activeOrgName,
       noun: input.routeKind === 'returns' ? 'return' : 'order',
       native: input.native,
     },
   };
+}
+
+/** What the workspace read found, for the diagnostics (never an id). */
+export function resolutionReason(resolution: TargetResolution, next: OpenStep): PushOpenReason {
+  if (next.kind === 'idle') return 'superseded';
+  if (resolution.kind === 'error') return 'error';
+  if (resolution.kind === 'none') return 'none';
+  if (next.kind !== 'notice') return 'same-workspace';
+  return next.notice.kind === 'switch' ? 'other-workspace' : 'not-a-member';
 }
 
 /**

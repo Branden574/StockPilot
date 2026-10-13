@@ -9,12 +9,14 @@ import { BiometricLockScreen } from '@/components/biometric-lock-screen';
 import { ColdLaunchSplash } from '@/components/cold-launch-splash';
 import { AppErrorBoundary } from '@/components/error-boundary';
 import { MfaChallengeScreen } from '@/components/mfa-challenge-screen';
+import { NotificationIntentHost } from '@/components/notification-intent-host';
 import { WhatsNew } from '@/components/onboarding/whats-new';
 import { clearSessionEnded, signedOutRoute } from '@/lib/account-eviction';
 import { AuthProvider, useAuth } from '@/lib/auth-context';
 import { ColdLaunchGateProvider } from '@/lib/cold-launch-gate';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
 import { initDb } from '@/lib/db';
+import { notificationIntents } from '@/lib/notification-intent';
 import { pruneRejected } from '@/lib/queue';
 import { useHeldOrderSubmissions } from '@/lib/order-storefront/runtime';
 import { initSentry, Sentry } from '@/lib/sentry';
@@ -31,6 +33,12 @@ import { useTheme } from '@/lib/use-theme';
 // Initialise crash reporting as early as possible (module load = before the
 // first render). No-op until EXPO_PUBLIC_SENTRY_DSN is set; see src/lib/sentry.ts.
 initSentry();
+
+// Capture notification taps from the first moment of this JS runtime, before
+// the fonts load, the session is restored or any gate renders: the tap that
+// launched the app is read here or never (notification-intent.ts).
+// NotificationIntentHost, mounted with the Stack below, opens it.
+notificationIntents.start();
 
 // Flips true exactly once per JS runtime = once per COLD launch. A warm resume
 // from background does NOT reload this module, so the branded splash never
@@ -187,6 +195,9 @@ function RootGate() {
   // place the unauthenticated redirect below uses, so there is one exit for
   // both. signedOutRoute() picks between them — see the redirect effect.
   const onForcedSignOut = React.useCallback(() => {
+    // The account is gone from this phone (an eviction or a revoked session):
+    // a tapped notification still waiting to open goes with it.
+    notificationIntents.clear('evicted');
     router.replace(signedOutRoute() as Href);
   }, [router]);
 
@@ -297,6 +308,10 @@ function RootGate() {
           and cold deep-links into pushed card screens). MFA/lock states early-
           return above, so this only renders in the normal authed shell. */}
       {session && !loading && !mfaRequired && !locked ? <WhatsNew /> : null}
+      {/* Opens a tapped notification (notification-intent.ts) once this shell
+          is up, so never over MFA, the Face ID lock or a disabled account,
+          which all return above. */}
+      {session && !loading && !mfaRequired && !locked ? <NotificationIntentHost /> : null}
     </>
   );
 }

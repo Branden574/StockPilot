@@ -13,6 +13,7 @@ import {
   focusedStackRoute,
   nextOpenStep,
   noticeContent,
+  resolutionReason,
   resolveTargetWorkspace,
   stepAfterResolution,
   switchNoticeCopy,
@@ -383,6 +384,36 @@ describe('stepAfterResolution', () => {
     ).toEqual({
       kind: 'idle',
     });
+  });
+});
+
+describe('resolutionReason names what the workspace read found (diagnostics only)', () => {
+  it('each outcome', () => {
+    const sw: IntentNotice = {
+      kind: 'switch',
+      orgId: 'org-a',
+      orgName: 'Acme Demo Co',
+      activeOrgName: 'Ledger QA Co',
+      noun: 'order',
+      native: `/order/${ORDER}`,
+    };
+    const found = { kind: 'found', orgId: 'org-a' } as const;
+    expect(resolutionReason(found, { kind: 'navigate', path: '/x' })).toBe('same-workspace');
+    expect(resolutionReason(found, { kind: 'stay' })).toBe('same-workspace');
+    expect(resolutionReason(found, { kind: 'notice', notice: sw })).toBe('other-workspace');
+    expect(resolutionReason(found, { kind: 'notice', notice: { kind: 'unavailable' } })).toBe(
+      'not-a-member',
+    );
+    expect(
+      resolutionReason({ kind: 'none' }, { kind: 'notice', notice: { kind: 'unavailable' } }),
+    ).toBe('none');
+    expect(
+      resolutionReason(
+        { kind: 'error', errorClass: 'TypeError' },
+        { kind: 'notice', notice: { kind: 'retry' } },
+      ),
+    ).toBe('error');
+    expect(resolutionReason(found, { kind: 'idle' })).toBe('superseded');
   });
 });
 

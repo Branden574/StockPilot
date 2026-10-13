@@ -2,9 +2,8 @@ import Constants from 'expo-constants';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import { useEffect } from 'react';
-import { Linking, Platform } from 'react-native';
+import { Platform } from 'react-native';
 
-import { rewriteWebPath } from './web-path-rewrite';
 import { supabase } from './supabase';
 
 import type { User } from '@supabase/supabase-js';
@@ -28,14 +27,19 @@ Notifications.setNotificationHandler({
  * Registers an Expo push token for the signed-in user and persists it
  * into public.push_tokens. Re-runs on user change so tokens stay
  * scoped to the right account when an admin signs in/out on the same
- * device. Also installs a tap handler that opens the deep link sent
- * with the notification (e.g. /dashboard/inventory/{id}).
+ * device.
+ *
+ * Taps are NOT handled here any more (Phase 3, iPhone push tap). The tap
+ * listener lived in this effect, so it existed only once a user did: a tap
+ * that launched the app, or came in signed out, was lost, and the rest
+ * round-tripped through Linking.openURL with every failure swallowed.
+ * notification-intent.ts now captures every tap from module scope, and
+ * NotificationIntentHost opens it inside the app once the app is ready.
  */
 export function usePushNotifications(user: User | null) {
   useEffect(() => {
     if (!user) return;
     let cancelled = false;
-    let tapSubscription: Notifications.Subscription | null = null;
 
     (async () => {
       try {
@@ -95,43 +99,8 @@ export function usePushNotifications(user: User | null) {
       }
     })();
 
-    // Hosts we'll trust as targets of an https:// deep link in a push
-    // payload. An open-allowlist for any https:// URL would let a
-    // poisoned notifications row redirect users to phishing pages.
-    // Hard-pin to the known production hosts; localhost is allowed
-    // only in dev so engineers testing locally still get clicks.
-    const ALLOWED_HTTPS_HOSTS = ['stockpilotusa.com', 'www.stockpilotusa.com'];
-
-    // Tap handler: open the deep link if one was supplied.
-    tapSubscription = Notifications.addNotificationResponseReceivedListener((res) => {
-      const link = (res.notification.request.content.data as { link?: string })?.link;
-      if (link && typeof link === 'string') {
-        // Internal web paths go through the ONE shared rewriter (see
-        // web-path-rewrite.ts) — never a local mapping table.
-        if (link.startsWith('/')) {
-          const native = rewriteWebPath(link);
-          Linking.openURL(`stockpilot://${native.replace(/^\//, '')}`).catch(() => {});
-        } else if (link.startsWith('stockpilot://')) {
-          Linking.openURL(link).catch(() => {});
-        } else if (link.startsWith('https://')) {
-          // Only follow https:// URLs that point at our known hosts.
-          // Stops a poisoned `notifications.link` row from sending
-          // a phone user to attacker.com via the in-app browser.
-          try {
-            const u = new URL(link);
-            if (ALLOWED_HTTPS_HOSTS.includes(u.hostname.toLowerCase())) {
-              Linking.openURL(link).catch(() => {});
-            }
-          } catch {
-            // Malformed URL — drop silently.
-          }
-        }
-      }
-    });
-
     return () => {
       cancelled = true;
-      tapSubscription?.remove();
     };
   }, [user]);
 }
