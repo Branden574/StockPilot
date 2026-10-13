@@ -15,10 +15,12 @@
  *   4. a tap for another account: the neutral notice; expired or unbound:
  *      dropped silently;
  *   5. a link the app cannot open: the notice with the push's own words;
- *   6. wait while the workspace is loading;
- *   7. an order or a return, for a user in more than one workspace: read its
- *      organization first (resolveTargetWorkspace);
- *   8. otherwise open it, unless it is already the screen in front.
+ *   6. any page but an order or a return with an id: open it now, unless it
+ *      is already the screen in front (its screen loads its own workspace);
+ *   7. an order or a return with an id: wait while the workspace is loading;
+ *   8. then, for a user in more than one workspace, read its organization
+ *      first (resolveTargetWorkspace);
+ *   9. otherwise open it, unless it is already the screen in front.
  *
  * No timer decides readiness: every wait ends on a signal the host
  * re-renders on. The two timers here are the workspace read's network
@@ -145,7 +147,8 @@ export function focusedStackRoute(rootState: unknown): string | null {
   return focusedRoute(top.state)?.name ?? null;
 }
 
-/** The kinds whose organization is read for a multi-workspace user. */
+/** The kinds whose organization is read for a multi-workspace user, and so
+ *  the only ones that wait for the workspace to load (with an id). */
 const RESOLVED_KINDS: Record<string, ResolveTable> = {
   order: 'order_requests',
   returns: 'returns',
@@ -179,11 +182,15 @@ export function nextOpenStep(input: OpenStepInput): OpenStep {
   }
   const { target, title, body } = take.intent;
   if (!target.ok) return { kind: 'notice', notice: { kind: 'unsupported', title, body } };
-  if (input.workspace.loading) return { kind: 'wait', reason: 'workspace-loading' };
+  // Only an order or a return with an id reads the workspace, so only it
+  // waits for one (review round 2). Every screen that mounts useWorkspace or
+  // useOrg loads the workspace again, and the membership and
+  // default-organization reads have no deadline: any other page opens now, as
+  // on main, and its screen loads its own workspace under RLS.
   const table = RESOLVED_KINDS[target.routeKind];
-  if (table && target.resourceId && input.workspace.orgs.length > 1) {
-    return { kind: 'resolve', table, id: target.resourceId };
-  }
+  if (!table || !target.resourceId) return openOrStay(target.native, input.pathname);
+  if (input.workspace.loading) return { kind: 'wait', reason: 'workspace-loading' };
+  if (input.workspace.orgs.length > 1) return { kind: 'resolve', table, id: target.resourceId };
   return openOrStay(target.native, input.pathname);
 }
 

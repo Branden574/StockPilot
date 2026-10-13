@@ -42,7 +42,13 @@ vi.mock('./sentry', () => ({ Sentry: { addBreadcrumb: vi.fn(), captureException:
 
 const ORDER = '11111111-1111-4111-8111-111111111111';
 const RMA = '22222222-2222-4222-8222-222222222222';
+const REPLACEMENT = '33333333-3333-4333-8333-333333333333';
 const PO = '44444444-4444-4444-8444-444444444444';
+const ITEM = '55555555-5555-4555-8555-555555555555';
+const COUNT = '66666666-6666-4666-8666-666666666666';
+const BUNDLE = '77777777-7777-4777-8777-777777777777';
+const REQUEST = '88888888-8888-4888-8888-888888888888';
+const EVENT = '99999999-9999-4999-8999-999999999999';
 
 function intent(link: unknown, over: Partial<CapturedIntent> = {}): CapturedIntent {
   return {
@@ -117,7 +123,11 @@ describe('nextOpenStep waits on real signals', () => {
       },
       'binding',
     ],
-    ['the workspace is loading', { workspace: { ...ONE, loading: true } }, 'workspace-loading'],
+    [
+      'the workspace is loading, for an order with an id',
+      { workspace: { ...ONE, loading: true } },
+      'workspace-loading',
+    ],
   ])('%s', (_label, over, reason) => {
     expect(nextOpenStep(input(over))).toEqual({ kind: 'wait', reason });
   });
@@ -347,6 +357,71 @@ describe('nextOpenStep decides', () => {
     expect(nextOpenStep(input({ workspace: none }))).toEqual({
       kind: 'navigate',
       path: `/order/${ORDER}`,
+    });
+  });
+});
+
+/**
+ * Review round 2 (2026-10-13): only an order or a return with an id reads the
+ * workspace, so only those wait while it loads. Every screen that mounts
+ * useWorkspace or useOrg publishes loading:true and loads the workspace again,
+ * and its membership and default-organization reads have no deadline: a
+ * cycle count tapped during one of the 1-8 s stalls showed nothing until that
+ * reload ended, where main opened it at once. Every other page opens as on
+ * main, and its screen loads its own workspace, under RLS.
+ */
+describe('only an order or a return with an id waits for the workspace to load', () => {
+  const COLD: WorkspaceView = { loading: true, orgs: [], activeOrgId: null, activeOrgName: null };
+  const LOADING: [string, WorkspaceView][] = [
+    ['one workspace, loading again', { ...ONE, loading: true }],
+    ['two workspaces, loading again', { ...TWO, loading: true }],
+    ['a cold start, before the first load', COLD],
+  ];
+
+  it.each<[string, string, string]>([
+    ['a PO', `/dashboard/purchase-orders/${PO}`, `/po/${PO}`],
+    ['the PO list', '/dashboard/purchase-orders', '/purchase-orders'],
+    ['a cycle count', `/dashboard/cycle-counts/${COUNT}`, `/cycle-count/${COUNT}`],
+    ['an item', `/dashboard/inventory/${ITEM}`, `/item/${ITEM}`],
+    ['the low-stock list', '/dashboard/inventory?stock=low&type=all', '/inventory'],
+    ['a bundle', `/dashboard/bundles/${BUNDLE}`, `/bundles/${BUNDLE}`],
+    ['a maintenance request', `/dashboard/maintenance/${REQUEST}`, `/maintenance/${REQUEST}`],
+    ['the schedule', `/dashboard/schedule/${EVENT}`, '/schedule'],
+    ['a report', '/dashboard/reports/book-order-totals', '/reports/book-order-totals'],
+    ['the inbox', '/dashboard/insights', '/notifications'],
+    ['the orders list', '/dashboard/orders', '/orders'],
+    ['the returns list', '/dashboard/returns', '/returns'],
+    ['a new order', '/dashboard/orders/new', '/order/new'],
+  ])('%s opens at once', (_label, link, path) => {
+    for (const [view, workspace] of LOADING) {
+      expect(nextOpenStep(input({ workspace, take: ready(link) })), view).toEqual({
+        kind: 'navigate',
+        path,
+      });
+      // Already the screen in front: stay (no second card).
+      expect(nextOpenStep(input({ workspace, take: ready(link), pathname: path })), view).toEqual({
+        kind: 'stay',
+      });
+    }
+  });
+
+  it.each<[string, string]>([
+    ['an order', `/dashboard/orders/${ORDER}`],
+    ['a replacement order', `/dashboard/orders/${REPLACEMENT}`],
+    ['an order from the hand-over (https)', `https://stockpilotusa.com/dashboard/orders/${ORDER}`],
+    ['a return (the dual link)', `/dashboard/returns/${RMA}?order=/dashboard/orders/${ORDER}`],
+  ])('%s waits, then opens for one workspace and is checked for two', (_label, link) => {
+    for (const [view, workspace] of LOADING) {
+      expect(nextOpenStep(input({ workspace, take: ready(link) })), view).toEqual({
+        kind: 'wait',
+        reason: 'workspace-loading',
+      });
+    }
+    expect(nextOpenStep(input({ workspace: ONE, take: ready(link) }))).toMatchObject({
+      kind: 'navigate',
+    });
+    expect(nextOpenStep(input({ workspace: TWO, take: ready(link) }))).toMatchObject({
+      kind: 'resolve',
     });
   });
 });
