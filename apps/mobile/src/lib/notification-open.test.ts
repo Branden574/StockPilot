@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CapturedIntent, TakeResult } from './notification-intent';
 import { parseNotificationLink } from './notification-link';
@@ -10,6 +10,7 @@ import {
   NOTICE_OTHER_ACCOUNT_COPY,
   NOTICE_RETRY_COPY,
   NOTICE_UNAVAILABLE_COPY,
+  TARGET_READ_TIMEOUT_MS,
   focusedStackRoute,
   nextOpenStep,
   noticeContent,
@@ -19,6 +20,7 @@ import {
   switchNoticeCopy,
   type IntentNotice,
   type OpenStepInput,
+  type TargetResolution,
   type WorkspaceView,
 } from './notification-open';
 
@@ -130,9 +132,20 @@ describe('nextOpenStep waits on real signals', () => {
     });
   });
 
-  it('uses no timer', () => {
+  it('no timer decides readiness: the one timer is the workspace read deadline', () => {
     const src = readFileSync(path.join(__dirname, 'notification-open.ts'), 'utf8');
-    expect(src).not.toMatch(/setTimeout|setInterval|requestAnimationFrame/);
+    const fn = (name: string) => {
+      const start = src.indexOf(`function ${name}(`);
+      expect(start, name).toBeGreaterThan(-1);
+      return src.slice(start, src.indexOf('\n}\n', start));
+    };
+    expect(src).not.toMatch(/setInterval|requestAnimationFrame/);
+    for (const name of ['nextOpenStep', 'stepAfterResolution']) {
+      expect(fn(name)).not.toMatch(/setTimeout/);
+    }
+    // A network deadline (orchestrator decision (a)), not a readiness wait.
+    expect(src.match(/setTimeout\(/g)).toHaveLength(1);
+    expect(fn('resolveTargetWorkspace')).toContain('setTimeout(');
   });
 });
 
@@ -498,6 +511,91 @@ describe('resolveTargetWorkspace reads the organization under RLS, and nothing e
   it('writes nothing: the module has no insert, update, delete, upsert or rpc', () => {
     const src = readFileSync(path.join(__dirname, 'notification-open.ts'), 'utf8');
     expect(src).not.toMatch(/\.(insert|update|delete|upsert|rpc)\(/);
+  });
+});
+
+/**
+ * Orchestrator decision (a), 2026-10-13: the read is bounded the way
+ * use-workspace.ts bounds the warehouse read (loadWarehousesBounded). React
+ * Native's fetch has no timeout of its own, so a request that stalled (the
+ * 1-8 s IAD stalls, a captive portal that accepts the connection and never
+ * answers) left a multi-workspace tap with no page, no notice and no Try
+ * again. A network deadline, not a readiness wait.
+ */
+describe('resolveTargetWorkspace answers within its deadline', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A client whose read answers only when the test says so. */
+  function stalledClient() {
+    let settle: (answer: { data: unknown; error: unknown }) => void = () => {};
+    const chain = {
+      select: () => chain,
+      eq: () => chain,
+      maybeSingle: () =>
+        new Promise<{ data: unknown; error: unknown }>((resolve) => {
+          settle = resolve;
+        }),
+    };
+    return {
+      client: { from: () => chain },
+      answer: (answer: { data: unknown; error: unknown }) => settle(answer),
+    };
+  }
+
+  const afterRead = (resolution: TargetResolution) =>
+    stepAfterResolution({
+      answerSeq: 1,
+      currentSeq: 1,
+      resolution,
+      native: `/order/${ORDER}`,
+      routeKind: 'order',
+      workspace: TWO,
+      pathname: '/',
+    });
+
+  it('a read that never answers is a read error after 15 seconds, which offers Try again', async () => {
+    const stalled = stalledClient();
+    const answered = vi.fn();
+    void resolveTargetWorkspace(stalled.client, 'order_requests', ORDER).then(answered);
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(answered).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(answered).toHaveBeenCalledTimes(1);
+    expect(answered).toHaveBeenCalledWith({ kind: 'error', errorClass: 'TimeoutError' });
+    expect(afterRead(answered.mock.calls[0]?.[0] as TargetResolution)).toEqual({
+      kind: 'notice',
+      notice: { kind: 'retry' },
+    });
+    expect(TARGET_READ_TIMEOUT_MS).toBe(15_000);
+  });
+
+  it("a timed-out read's late answer changes nothing", async () => {
+    const stalled = stalledClient();
+    const answered = vi.fn();
+    void resolveTargetWorkspace(stalled.client, 'order_requests', ORDER).then(answered);
+    await vi.advanceTimersByTimeAsync(15_000);
+    stalled.answer({ data: { organization_id: 'org-b' }, error: null });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(answered).toHaveBeenCalledTimes(1);
+    expect(answered).toHaveBeenCalledWith({ kind: 'error', errorClass: 'TimeoutError' });
+  });
+
+  it('an answer in time is the answer, and the deadline is cleared', async () => {
+    const stalled = stalledClient();
+    const read = resolveTargetWorkspace(stalled.client, 'order_requests', ORDER);
+    expect(vi.getTimerCount()).toBe(1);
+    stalled.answer({ data: { organization_id: 'org-b' }, error: null });
+    await expect(read).resolves.toEqual({ kind: 'found', orgId: 'org-b' });
+    expect(vi.getTimerCount()).toBe(0);
+    expect(afterRead({ kind: 'found', orgId: 'org-b' })).toEqual({
+      kind: 'navigate',
+      path: `/order/${ORDER}`,
+    });
   });
 });
 

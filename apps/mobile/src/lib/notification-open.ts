@@ -19,7 +19,9 @@
  *      organization first (resolveTargetWorkspace);
  *   8. otherwise open it, unless it is already the screen in front.
  *
- * No timers anywhere: every wait ends on a signal the host re-renders on.
+ * No timer decides readiness: every wait ends on a signal the host
+ * re-renders on. The one timer here is the workspace read's network deadline
+ * (TARGET_READ_TIMEOUT_MS), which ends a stalled read as a read error.
  * Single-workspace users pay no extra read: the destination screen's own
  * RLS-scoped read is the re-authorisation, with its own non-disclosing
  * "not found" state.
@@ -237,10 +239,21 @@ interface OrganizationRead {
 }
 
 /**
- * The organization of one order or return, read under the user's own RLS by
- * id alone. Never rejects.
+ * How long the workspace read for a tapped order or return may take
+ * (orchestrator decision (a), 2026-10-13). React Native's fetch has no
+ * timeout of its own (use-workspace.ts WAREHOUSE_READ_TIMEOUT_MS), and the
+ * host waits for this answer, so a request that stalled (the 1-8 s IAD
+ * stalls, a captive portal that never answers) left the tap with no page, no
+ * notice and no Try again. A network deadline, not a readiness wait: it ends
+ * a read, and never decides when a tap may open.
  */
-export async function resolveTargetWorkspace(
+export const TARGET_READ_TIMEOUT_MS = 15_000;
+
+/** The class name a read past its deadline reports (errorClassOf's shape). */
+const TIMEOUT_ERROR_CLASS = 'TimeoutError';
+
+/** The read itself: under the user's own RLS, by id alone. Never rejects. */
+async function readTargetOrganization(
   client: WorkspaceResolverClient,
   table: ResolveTable,
   id: string,
@@ -254,6 +267,29 @@ export async function resolveTargetWorkspace(
   } catch (err) {
     return { kind: 'error', errorClass: errorClassOf(err) };
   }
+}
+
+/**
+ * The organization of one order or return, read under the user's own RLS by
+ * id alone, bounded as use-workspace.ts loadWarehousesBounded bounds the
+ * warehouse read: still out after TARGET_READ_TIMEOUT_MS, it answers as a
+ * read error (the Try again notice), and its late answer goes nowhere.
+ * Never rejects.
+ */
+export function resolveTargetWorkspace(
+  client: WorkspaceResolverClient,
+  table: ResolveTable,
+  id: string,
+): Promise<TargetResolution> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      resolve({ kind: 'error', errorClass: TIMEOUT_ERROR_CLASS });
+    }, TARGET_READ_TIMEOUT_MS);
+    void readTargetOrganization(client, table, id).then((resolution) => {
+      clearTimeout(timer);
+      resolve(resolution);
+    });
+  });
 }
 
 // ── The notice (notification-intent-notice.tsx renders this) ──────────────
