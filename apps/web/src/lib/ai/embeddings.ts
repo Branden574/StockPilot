@@ -45,10 +45,23 @@ export function itemEmbeddingSource(item: {
 }
 
 /**
+ * How long one embedding call to Gemini may take, in milliseconds, before the
+ * SDK aborts it. The SDK sets no deadline of its own, so a call that never
+ * answered held its invocation open for as long as the platform allowed: the
+ * whole keepAlive window after a create, or a cron run's whole budget. A call
+ * normally answers in well under a second. The SDK applies the `timeout`
+ * request option by aborting the fetch (GoogleGenerativeAIAbortError), which
+ * every caller already treats as one more failed embed: the item keeps
+ * `embedding IS NULL` for the next backfill.
+ */
+export const EMBED_TIMEOUT_MS = 10_000;
+
+/**
  * Embeds a single text into a 1536-dim vector via Gemini. Caller is
  * responsible for handling the throw — errors here usually mean the
  * upstream model is down or the API key is missing, both of which
- * are recoverable (skip this embed, try again later).
+ * are recoverable (skip this embed, try again later). A call that takes
+ * longer than EMBED_TIMEOUT_MS throws too.
  */
 export async function embedText(text: string): Promise<number[]> {
   if (!env.GEMINI_API_KEY) {
@@ -65,13 +78,14 @@ export async function embedText(text: string): Promise<number[]> {
   // us match the existing 1536-wide column. The SDK passes it through
   // verbatim. `taskType: RETRIEVAL_DOCUMENT` for the row side, callers
   // should use RETRIEVAL_QUERY when embedding the user's question.
-  const res = await model.embedContent({
-    content: { role: 'user', parts: [{ text }] },
-     
-    outputDimensionality: EMBEDDING_DIM,
-    taskType: 'RETRIEVAL_DOCUMENT',
-     
-  } as any);
+  const res = await model.embedContent(
+    {
+      content: { role: 'user', parts: [{ text }] },
+      outputDimensionality: EMBEDDING_DIM,
+      taskType: 'RETRIEVAL_DOCUMENT',
+    } as any,
+    { timeout: EMBED_TIMEOUT_MS },
+  );
   const vec = res.embedding?.values;
   if (!Array.isArray(vec) || vec.length !== EMBEDDING_DIM) {
     throw new Error(
@@ -155,12 +169,16 @@ export async function embedInventoryItem(
   },
 ): Promise<void> {
   try {
-    const { data: row } = await ctx.supabase
+    const { data: row, error: readErr } = await ctx.supabase
       .from('inventory_items')
       .select('id, name, sku, barcode, description, custom_fields')
       .eq('organization_id', ctx.organizationId)
       .eq('id', itemId)
       .maybeSingle();
+    if (readErr) {
+      console.warn('[embeddings] item embed read failed:', itemId, errorText(readErr));
+      return;
+    }
     if (!row) return;
     const source = itemEmbeddingSource(
       row as {
@@ -173,15 +191,27 @@ export async function embedInventoryItem(
     );
     if (!source) return;
     const vec = await embedText(source);
-    await ctx.supabase
+    // The UPDATE's own { error } is read, as embedItemsBatch does: ignored, a
+    // refused write was the one failure here that left no trace at all.
+    const { error: writeErr } = await ctx.supabase
       .from('inventory_items')
       .update({ embedding: vectorLiteral(vec) })
       .eq('organization_id', ctx.organizationId)
       .eq('id', itemId);
+    if (writeErr) {
+      console.warn('[embeddings] item embed write failed:', itemId, errorText(writeErr));
+    }
   } catch (err) {
-     
     console.warn('[embeddings] item embed failed:', err);
   }
+}
+
+/** A PostgREST error's message, or the value as text. */
+function errorText(e: unknown): string {
+  if (e && typeof e === 'object' && typeof (e as { message?: unknown }).message === 'string') {
+    return (e as { message: string }).message;
+  }
+  return String(e);
 }
 
 /**
