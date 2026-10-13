@@ -12,7 +12,7 @@
 import { bookReportNativePath } from './book-order-totals-link';
 
 const UUID = '([0-9a-fA-F-]{36})';
-const UUID_ONLY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const UUID_ONLY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * The native new-request form for a web /dashboard/maintenance/new link
