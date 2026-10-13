@@ -1,6 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeServiceContext, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
@@ -26,7 +23,8 @@ import { makeServiceContext, makeSupabaseStub, type MockCall } from '@/test/supa
  * it. So a test can see what is still running after the method has returned,
  * and that the promise handed to keepAlive settles only after the last embed
  * does. A dropped `await` inside the loop, or a loop that is started but not
- * handed to keepAlive, fails these tests.
+ * handed to keepAlive, fails these tests. That no call anywhere in the server
+ * code is fired and forgotten is server/embedding-calls.guard.test.ts.
  */
 
 const h = vi.hoisted(() => ({
@@ -562,16 +560,5 @@ describe("update(): the SKU's other records the fan-out rewrote are re-embedded 
 
     expect(keepAlive).toHaveBeenCalledTimes(1);
     await expectHeldUntilEveryEmbedSettles(h.kept[0]!, ['itm-1']);
-  });
-});
-
-describe('no embedding in the service is fired and forgotten', () => {
-  it('no embedding in the service is fired and forgotten', () => {
-    const code = readFileSync(resolve(__dirname, 'inventory.ts'), 'utf8');
-    // Every place that embeds an item goes through embedInBackground, whose
-    // one call hands the work to keepAlive.
-    const sites = code.split('embedInventoryItem(').length - 1;
-    expect(sites).toBeGreaterThanOrEqual(1);
-    expect(code).not.toMatch(/void \(async \(\) => \{[^}]*embedInventoryItem/);
   });
 });
