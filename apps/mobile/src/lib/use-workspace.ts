@@ -466,3 +466,29 @@ export function useWorkspace(): WorkspaceState {
 
   return state;
 }
+
+/** Subscribe to the published workspace (useWorkspaceSnapshot). */
+function subscribeWorkspace(onChange: () => void): () => void {
+  const fn = () => onChange();
+  listeners.add(fn);
+  return () => {
+    listeners.delete(fn);
+  };
+}
+
+/** The workspace as last published, read without loading it. */
+export function getWorkspaceSnapshot(): WorkspaceState {
+  return cached;
+}
+
+/**
+ * React hook. The published workspace WITHOUT loading it. useWorkspace()
+ * hydrates on every mount (three reads) and publishes loading:true to every
+ * screen while it does; a component that only needs to know which workspace
+ * is on screen (the notification host, deciding whether a tapped order needs
+ * a workspace check) must not set the app's lists spinning. The screens that
+ * show the workspace load it.
+ */
+export function useWorkspaceSnapshot(): WorkspaceState {
+  return React.useSyncExternalStore(subscribeWorkspace, getWorkspaceSnapshot);
+}
