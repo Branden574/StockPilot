@@ -52,6 +52,23 @@ interface ShownNotice {
   busy: boolean;
 }
 
+/**
+ * The root Stack's focused route from the LIVE navigation state
+ * (notification-open.ts focusedStackRoute), or null when it cannot be read:
+ * the effect then waits, as for a navigator that is not mounted.
+ */
+function liveStackRoute(navigation: {
+  isReady(): boolean;
+  getRootState(): unknown;
+}): string | null {
+  if (!navigation.isReady()) return null;
+  try {
+    return focusedStackRoute(navigation.getRootState());
+  } catch {
+    return null;
+  }
+}
+
 /** The native route's first segment, for the diagnostics' route kind. */
 function routeKindOf(path: string): string {
   return path.split('?')[0]?.split('/')[1] ?? '';
@@ -140,12 +157,11 @@ export function NotificationIntentHost() {
 
   React.useEffect(() => {
     if (!intent || notice || resolvingSeq.current === intent.seq) return;
-    const routerReady = navigation.isReady();
     const step = nextOpenStep({
       take: notificationIntents.take(userId ? { id: userId, email: userEmail } : null, Date.now()),
       mfaPending,
-      routerReady,
-      stackRoute: routerReady ? focusedStackRoute(navigation.getRootState()) : null,
+      routerReady: navigation.isReady(),
+      stackRoute: liveStackRoute(navigation),
       segments,
       pathname,
       workspace,
