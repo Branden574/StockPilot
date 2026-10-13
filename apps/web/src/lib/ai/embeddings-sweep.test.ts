@@ -11,8 +11,11 @@ import {
 /**
  * Security invariant: the hourly embeddings sweep (cron/embeddings-sweep)
  * reads and writes with the SERVICE ROLE, so RLS does not apply and the
- * organization filters are the only tenant boundary. Every read and write of
- * an item names one organization, every write names the item and that
+ * organization filters are the only tenant boundary. It works only for the
+ * organizations that switched the AI module on (their own organization_modules
+ * row; a comp does not count, as for every cron): any other organization's
+ * items are never read, sent to Gemini or written. Every read and write of an
+ * item names one organization, every write names the item and that
  * organization, and only the `embedding` column is ever written. No log line
  * or alert names an item, whatever fails, and an organization is named (by
  * id) only in the error report of its own failed read, as every cron reports
@@ -91,6 +94,12 @@ function item(org: string, over: Partial<Row> = {}): Row {
 /** A later updated_at: what any real change to a row writes (0242). */
 const LATER = '2026-10-13T00:37:20.123456+00:00';
 
+type ModuleRow = { organization_id: string; module_id: string; enabled: boolean };
+
+/** The 'ai' module switched on, by its own row, for each of `orgs`. */
+const aiOn = (...orgs: string[]): ModuleRow[] =>
+  orgs.map((organization_id) => ({ organization_id, module_id: 'ai', enabled: true }));
+
 /**
  * The items table behind a service-role stub, answering as PostgREST and
  * Postgres would. A read applies its own filters (count: 'exact', head: true
@@ -100,11 +109,27 @@ const LATER = '2026-10-13T00:37:20.123456+00:00';
  * updated_at or embedding IS NULL), answers them to .select('id'), and is
  * recorded either way. `afterReadAgain` runs right after a read of items with
  * no .limit(), which is the read of one item just before its write.
+ *
+ * `modules` is organization_modules, served the same way; by default the 'ai'
+ * module is switched on for every organization in `rows`. `orgs` is the
+ * organizations table (an all_modules_comp a test offers). `failReadFor`
+ * fails that organization's batch read (embedItemsBatch's read of the items
+ * to embed); `failModulesRead` fails the read of organization_modules.
+ * `afterLook` runs after the sweep's look at one organization for an item
+ * without an embedding (a read of `id` alone, with a .limit()).
  */
 function table(
   rows: Row[],
-  opts: { failReadFor?: string; afterReadAgain?: (row: Row) => void } = {},
+  opts: {
+    failReadFor?: string;
+    failModulesRead?: boolean;
+    afterReadAgain?: (row: Row) => void;
+    afterLook?: (org: string) => void;
+    modules?: ModuleRow[];
+    orgs?: Array<{ id: string; all_modules_comp: boolean }>;
+  } = {},
 ) {
+  const modules = opts.modules ?? aiOn(...new Set(rows.map((r) => r.organization_id)));
   const writes: Array<{
     keys: string[];
     org: string | undefined;
@@ -112,9 +137,17 @@ function table(
     written: number;
   }> = [];
   const stub = makeSupabaseStub({
+    'organization_modules.select': (call: MockCall) =>
+      opts.failModulesRead
+        ? { data: null, error: { message: 'canceling statement due to statement timeout' } }
+        : servedLikePostgrest(() => modules)(call),
+    'organizations.select': (call: MockCall) => servedLikePostgrest(() => opts.orgs ?? [])(call),
     'inventory_items.select': (call: MockCall) => {
       const org = call.args[call.methods.indexOf('eq')]?.[1];
-      if (opts.failReadFor && org === opts.failReadFor && call.methods.includes('limit')) {
+      const isBatchRead =
+        call.methods.includes('limit') &&
+        String(callArgs(call, 'select')?.[0] ?? '').startsWith('id, name');
+      if (opts.failReadFor && org === opts.failReadFor && isBatchRead) {
         return { data: null, error: { message: 'canceling statement due to statement timeout' } };
       }
       const served = servedLikePostgrest(() => rows)(call);
@@ -123,6 +156,9 @@ function table(
       const copies = (served.data as Row[]).map((r) => ({ ...r }));
       if (!call.methods.includes('limit')) {
         for (const r of served.data as Row[]) opts.afterReadAgain?.(r);
+      }
+      if (call.methods.includes('limit') && callArgs(call, 'select')?.[0] === 'id') {
+        opts.afterLook?.(String(org));
       }
       return { data: copies, error: null };
     },
@@ -209,8 +245,13 @@ afterEach(() => {
 });
 
 describe('the embeddings sweep', () => {
-  it('nothing missing: one look, no Gemini call, no write', async () => {
-    const rows = [item('org-a', { embedding: '[1]' }), item('org-b', { embedding: '[1]' })];
+  it('nothing missing: one look per organization with AI on, no Gemini call, no write', async () => {
+    const rows = [
+      item('org-a', { embedding: '[1]' }),
+      // A deleted item is never missing: it is not searched.
+      item('org-a', { deleted_at: '2026-10-01T00:00:00Z' }),
+      item('org-b', { embedding: '[1]' }),
+    ];
     const { client, stub, writes } = table(rows);
     const fetch = gemini();
     vi.stubGlobal('fetch', fetch);
@@ -219,8 +260,82 @@ describe('the embeddings sweep', () => {
 
     expect(fetch).not.toHaveBeenCalled();
     expect(writes).toEqual([]);
-    expect(stub.fromCalls).toEqual(['inventory_items']);
-    expect(result).toMatchObject({ orgs: 0, embedded: 0, failed: 0, remaining: 0 });
+    // The organizations with AI on, then one look at each for a missing item.
+    expect(stub.fromCalls).toEqual(['organization_modules', 'inventory_items', 'inventory_items']);
+    expect(result).toMatchObject({ aiOrgs: 2, orgs: 0, embedded: 0, failed: 0, remaining: 0 });
+  });
+
+  it('an organization without the AI module switched on is never read, sent to Gemini or written', async () => {
+    // Only the AI assistant's search reads an embedding, so the sweep works
+    // only for the organizations that switched AI on. org-b switched it off,
+    // org-c has other modules but no AI row, and org-d is comped (every
+    // module unlocked) with its AI switch off: a comp unlocks for members, it
+    // does not start a machine (lib/modules/effective-modules.ts), the same
+    // rule the daily briefing follows.
+    const rows = [item('org-a'), item('org-b'), item('org-c'), item('org-d'), item('org-a')];
+    const { client, stub, writes } = table(rows, {
+      modules: [
+        ...aiOn('org-a'),
+        { organization_id: 'org-b', module_id: 'ai', enabled: false },
+        { organization_id: 'org-c', module_id: 'schedule', enabled: true },
+        { organization_id: 'org-d', module_id: 'ai', enabled: false },
+        { organization_id: 'org-d', module_id: 'schedule', enabled: true },
+      ],
+      orgs: [{ id: 'org-d', all_modules_comp: true }],
+    });
+    const texts: string[] = [];
+    vi.stubGlobal('fetch', gemini({ onCall: (text) => texts.push(text) }));
+
+    const result = await sweepMissingEmbeddings(client);
+
+    expect(result).toMatchObject({ aiOrgs: 1, orgs: 1, embedded: 2, remaining: 0 });
+    // Every item read and every write named org-a, and only org-a.
+    const named = [
+      ...(stub.chainArgsAll.get('inventory_items.select') ?? []),
+      ...(stub.chainArgsAll.get('inventory_items.update') ?? []),
+    ].map((args) => args.find((a) => a[0] === 'organization_id')?.[1]);
+    expect(named.length).toBeGreaterThan(0);
+    expect(new Set(named)).toEqual(new Set(['org-a']));
+    // Gemini saw org-a's two items and nothing else.
+    expect(texts).toHaveLength(2);
+    for (const t of texts) expect(t).toContain('Private name org-a');
+    expect(writes.map((w) => w.org)).toEqual(['org-a', 'org-a']);
+    expect(missing(rows).map((r) => r.organization_id)).toEqual(['org-b', 'org-c', 'org-d']);
+    // The comp is never looked at.
+    expect(stub.fromCalls).not.toContain('organizations');
+  });
+
+  it('the AI switch is read from organization_modules: the AI module, switched on', async () => {
+    const { client, stub } = table([item('org-a')]);
+    vi.stubGlobal('fetch', gemini());
+
+    await sweepMissingEmbeddings(client);
+
+    const [methods] = stub.chainsAll.get('organization_modules.select') ?? [];
+    const [args] = stub.chainArgsAll.get('organization_modules.select') ?? [];
+    const filters = (methods ?? []).flatMap((m, i) =>
+      m === 'eq' || m === 'is' ? [[m, ...(args?.[i] ?? [])]] : [],
+    );
+    expect(filters).toEqual([
+      ['eq', 'module_id', 'ai'],
+      ['eq', 'enabled', true],
+    ]);
+  });
+
+  it('when the AI switches cannot be read, the run reads and writes no item, and throws for the route to report', async () => {
+    const rows = [item('org-a')];
+    const { client, stub } = table(rows, { failModulesRead: true });
+    const fetch = gemini();
+    vi.stubGlobal('fetch', fetch);
+
+    // In the database's words, for the route's report.
+    await expect(sweepMissingEmbeddings(client)).rejects.toThrow(
+      'embeddings sweep: could not read the AI switches: canceling statement due to statement timeout',
+    );
+
+    expect(stub.fromCalls).toEqual(['organization_modules']);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(missing(rows)).toHaveLength(1);
   });
 
   it("reads and writes each organization's items under that organization only", async () => {
@@ -571,8 +686,31 @@ describe('the embeddings sweep', () => {
 
     const result = await sweepMissingEmbeddings(client, { ...EMBEDDINGS_SWEEP, maxOrgs: 2 });
 
-    expect(result).toMatchObject({ orgs: 2, moreOrgs: true, embedded: 2 });
+    expect(result).toMatchObject({ aiOrgs: 3, orgs: 2, moreOrgs: true, embedded: 2 });
     expect(missing(rows).map((r) => r.organization_id)).toEqual(['org-c']);
+  });
+
+  it('stops looking for organizations at the deadline, and starts nothing after it', async () => {
+    let now = at(0);
+    vi.mocked(Date.now).mockImplementation(() => now);
+    const rows = [item('org-a'), item('org-b'), item('org-c')];
+    // The look at org-b takes the run past its deadline (a Supabase stall).
+    const looked: string[] = [];
+    const { client } = table(rows, {
+      afterLook: (org) => {
+        looked.push(org);
+        if (org === 'org-b') now += EMBEDDINGS_SWEEP.deadlineMs;
+      },
+    });
+    const fetch = gemini();
+    vi.stubGlobal('fetch', fetch);
+
+    const result = await sweepMissingEmbeddings(client);
+
+    expect(looked).toEqual(['org-a', 'org-b']);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ orgs: 2, moreOrgs: true, embedded: 0, timeUp: true });
+    expect(missing(rows)).toHaveLength(3);
   });
 
   it('no log line or alert names an item, whatever fails; an organization is named only in the report of its own failed read', async () => {

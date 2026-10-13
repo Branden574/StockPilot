@@ -20,12 +20,14 @@ export const maxDuration = 300;
 
 /**
  * EMBEDDINGS SWEEP, every hour at minute 37 (vercel.json): embeds the live
- * items that still have no search embedding, in every organization, within
- * the per-run budget in lib/ai/embeddings-sweep.ts (100 items per
- * organization, 150 per run, 150 s). It covers what the request paths do
- * not embed at once (the books import, bulkCreate), a Gemini failure, a call
- * cut off, an edit whose re-embed failed (trigger 0401 cleared its old
- * vector), and any path added later.
+ * items that still have no search embedding, in every organization that
+ * switched the AI module on (its organization_modules row, as the daily
+ * briefing reads it; nothing else reads an embedding), within the per-run
+ * budget in lib/ai/embeddings-sweep.ts (100 items per organization, 150 per
+ * run, 150 s). It covers what the request paths do not embed at once (the
+ * books import, bulkCreate), a Gemini failure, a call cut off, an edit whose
+ * re-embed failed (trigger 0401 cleared its old vector), and any path added
+ * later.
  *
  * MINUTE 37: no other cron fires on it. drain-outbox and schedule-reminders
  * run every 10 minutes, exception-occurrences every 15,

@@ -995,7 +995,10 @@ WEB_TESTS=(
   src/app/api/cron/weekly-digest/route.test.ts
   # The embeddings sweep (2026-10-13): the hourly cron embeds items left
   # without a search embedding, on the service role, so the organization
-  # filters are its only tenant boundary. Every item read and every write
+  # filters are its only tenant boundary. It works only for organizations
+  # whose own organization_modules row switches AI on (a comp does not
+  # count, as for every cron); any other organization's items are never
+  # read, sent to Gemini or written. Every item read and every write
   # names one organization (each write also the item), only the embedding
   # column is written, no log line or alert names an item, the run's summary
   # line is counts only, an organization is named (by id) only in the error

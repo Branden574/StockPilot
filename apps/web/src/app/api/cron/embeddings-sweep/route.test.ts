@@ -7,10 +7,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 /**
  * Security invariant: GET /api/cron/embeddings-sweep runs the hourly sweep
  * of items without a search embedding (lib/ai/embeddings-sweep.ts) on the
- * service role, across every organization. It runs only for the cron's
- * Bearer CRON_SECRET (constant-time compare) and FAILS CLOSED when the
- * secret is not set, as drain-outbox does; a failed run answers with fixed
- * words; its one summary line is counts only.
+ * service role, across every organization with the AI module switched on
+ * (lib/ai/embeddings-sweep.test.ts proves that filter). It runs only for
+ * the cron's Bearer CRON_SECRET (constant-time compare) and FAILS CLOSED
+ * when the secret is not set, as drain-outbox does; a failed run answers
+ * with fixed words, once its error report is sent; its one summary line is
+ * counts only.
  */
 
 const h = vi.hoisted(() => ({
@@ -38,6 +40,7 @@ import { GET, maxDuration } from './route';
 
 const RESULT = {
   skipped: null,
+  aiOrgs: 3,
   orgs: 2,
   moreOrgs: false,
   orgsProcessed: 2,

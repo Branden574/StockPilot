@@ -3,23 +3,34 @@ import 'server-only';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import type { createAdminClient } from '@/lib/supabase/admin';
+import { fetchAllRows } from '@/server/services/lib/paginate';
 
 import { embedItemsBatch } from './embeddings';
 
 /**
  * The hourly embeddings sweep (cron/embeddings-sweep, vercel.json
- * "37 * * * *"): any live item still without a search embedding is embedded
- * by the next run that reaches it, whatever left it so: at most 100 items per
- * organization and 150 per run (THE BUDGET below), so a larger backlog, a
- * 500-row books import for one, clears over several runs. The request paths
- * embed their own new rows (create, update, a size run, a duplicate); the
- * books import and bulkCreate (up to 500 rows each) do not, and a Gemini
+ * "37 * * * *"): in every organization that switched the AI module on, any
+ * live item still without a search embedding is embedded by the next run
+ * that reaches it, whatever left it so: at most 100 items per organization
+ * and 150 per run (THE BUDGET below), so a larger backlog, a 500-row books
+ * import for one, clears over several runs. The request paths embed their
+ * own new rows (create, update, a size run, a duplicate, Ungroup's split);
+ * the books import and bulkCreate (up to 500 rows each) do not, and a Gemini
  * failure, a call cut off or a path added later can leave a row behind. An
  * edit that changes an item's searched text clears its old embedding in the
- * same UPDATE (trigger 0401), so a re-embed that fails, or one that never
- * starts (Ungroup's split_item_sku), leaves the item here too, never with a
- * stale vector. Semantic search (the AI assistant's item search) cannot find
- * an item without one.
+ * same UPDATE (trigger 0401), so a re-embed that fails leaves the item here
+ * too, never with a stale vector. Semantic search (the AI assistant's item
+ * search) cannot find an item without one.
+ *
+ * ONLY ORGANIZATIONS WITH AI ON. The one reader of an embedding is the AI
+ * assistant's item search (searchInventorySemantic, behind /api/ai/chat,
+ * which asserts the 'ai' module), so an organization that never switched AI
+ * on would have its item text sent to Gemini every hour for vectors nothing
+ * in it can read. The sweep works only for the organizations whose
+ * organization_modules row for 'ai' is enabled, the rule every cron follows
+ * (the daily briefing reads the same rows): lib/modules/effective-modules.ts
+ * keeps automation on the explicit switch, and a comp (all_modules_comp)
+ * unlocks AI for members without starting this machine.
  *
  * THE BUDGET. Every number bounds time or Gemini calls:
  *   deadlineMs 150 s: no item STARTS after 150 s. The one in flight finishes
@@ -37,8 +48,10 @@ import { embedItemsBatch } from './embeddings';
  *     what the request paths missed, often nothing.
  *   perOrgCap 100 items: one organization's backlog (a 500-row books import)
  *     cannot take a whole run while another waits; it clears over a few runs.
- *   maxOrgs 50: finding the organizations costs one query each; far above
- *     the organizations that exist today.
+ *   maxOrgs 50: finding the organizations costs one read of the AI switches,
+ *     then one look per organization with AI on, until 50 with a missing
+ *     item are found or the deadline passes; far above the organizations
+ *     that exist today.
  */
 export const EMBEDDINGS_SWEEP = {
   perOrgCap: 100,
@@ -55,7 +68,9 @@ export type EmbeddingsSweepLimits = { [K in keyof typeof EMBEDDINGS_SWEEP]: numb
 export interface EmbeddingsSweepResult {
   /** Set when the run did nothing on purpose. */
   skipped: 'no_gemini_key' | null;
-  /** Organizations found with a live item that has no embedding. */
+  /** Organizations with the AI module switched on: the only ones looked at. */
+  aiOrgs: number;
+  /** Of those, the ones found with a live item that has no embedding. */
   orgs: number;
   /** The search for organizations stopped at maxOrgs or the deadline. */
   moreOrgs: boolean;
@@ -81,14 +96,16 @@ type AdminClient = ReturnType<typeof createAdminClient>;
 
 /**
  * One run of the sweep, on the SERVICE-ROLE client. RLS does not apply to it,
- * so the organization filters are the only tenant boundary: the search for
- * organizations reads only `organization_id`, and every item read and every
- * write goes through embedItemsBatch with ONE organization's id, which it
- * puts on its read, on each write (with the item's id) and on its count. Only
- * the `embedding` column is written, and tg_inventory_items_set_updated_at
- * (0242) keeps updated_at for an embedding-only write, so the Items lists
- * and their cache are untouched. Reuses embedItemsBatch's batching and
- * pacing (the Settings > AI backfill's), oldest items first.
+ * so the organization filters are the only tenant boundary: the AI switches
+ * are read from organization_modules (organization ids only), each look for
+ * a missing item names ONE organization with AI on and reads one item id,
+ * and every item read and every write goes through embedItemsBatch with ONE
+ * such organization's id, which it puts on its read, on each write (with the
+ * item's id) and on its count. Only the `embedding` column is written, and
+ * tg_inventory_items_set_updated_at (0242) keeps updated_at for an
+ * embedding-only write, so the Items lists and their cache are untouched.
+ * Reuses embedItemsBatch's batching and pacing (the Settings > AI
+ * backfill's), oldest items first.
  *
  * Fair over time: organizations are taken in id order, rotated by the UTC
  * hour, so when the run cap stops a run, a different organization goes first
@@ -104,6 +121,7 @@ export async function sweepMissingEmbeddings(
   const deadline = startedAt + limits.deadlineMs;
   const result: EmbeddingsSweepResult = {
     skipped: null,
+    aiOrgs: 0,
     orgs: 0,
     moreOrgs: false,
     orgsProcessed: 0,
@@ -118,7 +136,9 @@ export async function sweepMissingEmbeddings(
   };
   if (!env.GEMINI_API_KEY) return { ...result, skipped: 'no_gemini_key' };
 
-  const found = await orgsMissingEmbeddings(admin, limits.maxOrgs, deadline);
+  const aiOrgIds = await orgsWithAiOn(admin);
+  result.aiOrgs = aiOrgIds.length;
+  const found = await orgsMissingEmbeddings(admin, aiOrgIds, limits.maxOrgs, deadline);
   result.orgs = found.orgIds.length;
   result.moreOrgs = found.more;
   const order = rotateByHour(found.orgIds, startedAt);
@@ -159,36 +179,64 @@ export async function sweepMissingEmbeddings(
 }
 
 /**
- * The organizations that have a live item without an embedding, in id
- * order, at most `maxOrgs`. One query per organization found, each asking
- * for the first such item after the last organization found, so an
- * organization missing thousands costs one query, not a page of rows; the
- * indexes that lead with organization_id serve the order. A failed read
- * throws: the run cannot know where to go.
+ * The organizations whose 'ai' module is switched on by its own
+ * organization_modules row (enabled = true), in id order: the set the daily
+ * briefing reads. Never the comp (organizations.all_modules_comp): for a cron
+ * the explicit switch decides (lib/modules/effective-modules.ts, AUTOMATION).
+ * A failed read throws, so the run reads no item at all.
+ */
+async function orgsWithAiOn(admin: AdminClient): Promise<string[]> {
+  try {
+    const rows = await fetchAllRows<{ organization_id: string }>((from, to) =>
+      admin
+        .from('organization_modules')
+        .select('organization_id')
+        .eq('module_id', 'ai')
+        .eq('enabled', true)
+        .order('organization_id', { ascending: true })
+        .range(from, to),
+    );
+    return rows.map((r) => r.organization_id);
+  } catch (err) {
+    // fetchAllRows keeps the database's words in internalDetail, behind a
+    // generic message, and the route's report prints the message alone.
+    const detail =
+      (err as { internalDetail?: string }).internalDetail ??
+      (err instanceof Error ? err.message : String(err));
+    throw new Error(`embeddings sweep: could not read the AI switches: ${detail}`);
+  }
+}
+
+/**
+ * Of `candidates` (the organizations with AI on, in id order), the ones that
+ * have a live item without an embedding, at most `maxOrgs`. One look per
+ * organization, each naming that organization and asking for one item id, so
+ * an organization missing thousands costs one small query; the indexes that
+ * lead with organization_id serve it. No look starts after the deadline. A
+ * failed look throws: the run cannot know where to go.
  */
 async function orgsMissingEmbeddings(
   admin: AdminClient,
+  candidates: readonly string[],
   maxOrgs: number,
   deadline: number,
 ): Promise<{ orgIds: string[]; more: boolean }> {
   const orgIds: string[] = [];
-  let after: string | null = null;
-  while (Date.now() < deadline) {
-    let query = admin
+  for (const organizationId of candidates) {
+    if (Date.now() >= deadline) return { orgIds, more: true };
+    const { data, error } = await admin
       .from('inventory_items')
-      .select('organization_id')
+      .select('id')
+      .eq('organization_id', organizationId)
       .is('deleted_at', null)
-      .is('embedding', null);
-    if (after !== null) query = query.gt('organization_id', after);
-    const { data, error } = await query.order('organization_id', { ascending: true }).limit(1);
+      .is('embedding', null)
+      .limit(1);
     if (error) throw new Error(`embeddings sweep: could not find organizations: ${error.message}`);
-    const next = (data as Array<{ organization_id: string }> | null)?.[0]?.organization_id;
-    if (!next) return { orgIds, more: false };
+    if (((data as unknown[] | null) ?? []).length === 0) continue;
     if (orgIds.length >= maxOrgs) return { orgIds, more: true };
-    orgIds.push(next);
-    after = next;
+    orgIds.push(organizationId);
   }
-  return { orgIds, more: true };
+  return { orgIds, more: false };
 }
 
 /** `ids` starting at position (UTC hour % length), the rest after it in order. */
