@@ -121,6 +121,7 @@ import {
 import { LocationsService } from './locations';
 import { TagsService } from './tags';
 import { UserCategoriesService } from './user-categories';
+import { keepAlive } from './lib/defer';
 
 /**
  * Whole days between an ISO timestamp and `nowMs` (floor). Null if no timestamp.
@@ -3562,14 +3563,21 @@ export class InventoryService {
       );
     }
 
-    // Fire-and-forget embedding so the new row participates in semantic
-    // search. Failures are swallowed inside the helper — never block
-    // create on a Gemini hiccup.
-    void (async () => {
-      const { embedInventoryItem } = await import('@/lib/ai/embeddings');
-       
-      await embedInventoryItem(data.id as string, this.ctx as any);
-    })();
+    // Embed the new row so it takes part in semantic search, without making
+    // the create wait for Gemini. keepAlive (lib/defer.ts, the mechanism #352
+    // added for audit rows) holds the invocation until the write settles; a
+    // bare `void` held nothing, so a suspended instance could cut it off. This
+    // is hardening: every item created here since 2026-09-28 has its
+    // embedding. The 12 Learn4Life items found without one on 2026-10-13 were
+    // size runs (bulkCreateSizedVariants), a path that never embedded at all.
+    // Failures are swallowed inside the helper: a Gemini hiccup never fails
+    // the create.
+    keepAlive(
+      (async () => {
+        const { embedInventoryItem } = await import('@/lib/ai/embeddings');
+        await embedInventoryItem(data.id as string, this.ctx as any);
+      })().catch(() => {}),
+    );
 
     // The row, PLUS what the auto-place managed — on one object rather than a
     // wrapper, because every consumer reads `.id` off this and a reshape would
@@ -5153,11 +5161,13 @@ export class InventoryService {
       'custom_fields',
     ]);
     if (changedKeys.some((k) => EMBED_RELEVANT_KEYS.has(k))) {
-      void (async () => {
-        const { embedInventoryItem } = await import('@/lib/ai/embeddings');
-         
-        await embedInventoryItem(id, this.ctx as any);
-      })();
+      // Held by keepAlive like the create's (see there): never cut off by the response.
+      keepAlive(
+        (async () => {
+          const { embedInventoryItem } = await import('@/lib/ai/embeddings');
+          await embedInventoryItem(id, this.ctx as any);
+        })().catch(() => {}),
+      );
     }
 
     // ═══ SETTING A RACK ON THE EDIT FORM MOVES THE STOCK ═══

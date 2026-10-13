@@ -125,8 +125,9 @@ export function vectorLiteral(vec: number[]): string {
  * its `embedding` column. Failures are SWALLOWED — semantic search is
  * a nice-to-have, never block create/update on a Gemini hiccup.
  *
- * Designed to be called fire-and-forget from InventoryService.create
- * and update via `void embedInventoryItem(...)`.
+ * InventoryService.create and update start it without waiting and hand it
+ * to keepAlive (server/services/lib/defer.ts), so the response is not
+ * delayed and the write is not cut off when the instance is suspended.
  */
 export async function embedInventoryItem(
   itemId: string,
