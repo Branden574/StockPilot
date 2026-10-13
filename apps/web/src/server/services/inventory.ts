@@ -121,6 +121,7 @@ import {
 import { LocationsService } from './locations';
 import { TagsService } from './tags';
 import { UserCategoriesService } from './user-categories';
+import { embedInBackground } from './lib/embed-in-background';
 
 /**
  * Whole days between an ISO timestamp and `nowMs` (floor). Null if no timestamp.
@@ -3417,6 +3418,9 @@ export class InventoryService {
     // Right after the insert, before the opening movement and auto-place can
     // throw: the row exists from here on whatever happens next.
     invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.create');
+    // Same reason: the row takes part in semantic search whatever happens
+    // next. Held by keepAlive, never awaited (see embedInBackground).
+    embedInBackground([data.id as string], this.ctx);
 
     if (input.quantityOnHand && input.quantityOnHand > 0) {
       // The result USED TO BE DISCARDED — no destructuring at all — so an
@@ -3562,15 +3566,6 @@ export class InventoryService {
       );
     }
 
-    // Fire-and-forget embedding so the new row participates in semantic
-    // search. Failures are swallowed inside the helper — never block
-    // create on a Gemini hiccup.
-    void (async () => {
-      const { embedInventoryItem } = await import('@/lib/ai/embeddings');
-       
-      await embedInventoryItem(data.id as string, this.ctx as any);
-    })();
-
     // The row, PLUS what the auto-place managed — on one object rather than a
     // wrapper, because every consumer reads `.id` off this and a reshape would
     // ripple for no gain. `placementFailed` is a synthetic field and not a
@@ -3686,6 +3681,10 @@ export class InventoryService {
     }
     // duplicate_inventory_item inserted the copy (and its opening movement).
     invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.duplicate');
+    // 0299 copies no embedding ("derived, rebuilt by their own paths"), and
+    // until now no path rebuilt it: a duplicate was invisible to semantic
+    // search. Embedded now, held by keepAlive, never awaited.
+    embedInBackground([newId as string], this.ctx);
 
     // Recompute the identity 0299 cleared. `buildVariantKey` lives in
     // packages/core and is the ONE place a key is built, so the recompute reads
@@ -4249,6 +4248,16 @@ export class InventoryService {
       quantity_on_hand: number;
       primary_location_id: string | null;
     }>;
+
+    // Every size of the run takes part in semantic search. This path never
+    // embedded at all, which is why the 12 Learn4Life items found without an
+    // embedding on 2026-10-13 were all size runs. One loop for the whole run,
+    // held by keepAlive, never awaited, started before the opening movements
+    // can throw (see embedInBackground).
+    embedInBackground(
+      inserted.map((r) => r.id),
+      this.ctx,
+    );
 
     // Audited FIRST: the rows exist from here on whatever happens to the
     // movement write below, and an item that exists with no 'created' event is
@@ -5022,6 +5031,46 @@ export class InventoryService {
     // so a changed reorder point left the cached low-stock badge wrong.
     invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.update');
 
+    // before/after for the P1 diff drawer — restricted to the CHANGED keys
+    // on the TARGET row only (current = pre-patch, data = post-patch).
+    // Deliberately does NOT reach into the Model-B sibling fan-out below —
+    // that's a separate set of rows this audit event isn't about.
+    const beforeRow = current as Record<string, unknown>;
+    const afterRow = data as Record<string, unknown>;
+    // Record only keys whose VALUE actually changed. The edit form submits
+    // the full patch, so submitted keys alone made every save read as
+    // "Fields changed: <all 19 fields>" (owner report 2026-07-15). Both
+    // sides are DB rows (same type representation); jsonb columns compare
+    // via stringify (Postgres normalizes jsonb key order, so it's stable).
+    // `updated_by` stays excluded as cosmetic.
+    const jsonEq = (a: unknown, b: unknown) =>
+      a === b || JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+    const changedKeys = Object.keys(updates)
+      .filter((k) => k !== 'updated_by')
+      .filter((k) => !jsonEq(beforeRow[k], afterRow[k]));
+
+    // Re-embed only when a field the embedding is built from changed
+    // (itemEmbeddingSource: name, SKU, barcode, description, and the author
+    // in custom_fields) — saves a Gemini call when the user only edited
+    // price / reorder thresholds. Started HERE, right after this row's own
+    // UPDATE committed and before the SKU fan-out, which can still throw (a
+    // new SKU taken at another record's rack): the row keeps what it was
+    // saved with either way, so its search data must follow. The UPDATE
+    // already cleared the row's old vector when its text changed (trigger
+    // 0401), so an embed that fails leaves it for the next sweep. Held by
+    // keepAlive, never awaited (see embedInBackground).
+    const EMBED_RELEVANT_KEYS = new Set([
+      'name',
+      'sku',
+      'barcode',
+      'description',
+      'custom_fields',
+    ]);
+    const searchedKeysChanged = changedKeys.filter((k) => EMBED_RELEVANT_KEYS.has(k));
+    if (searchedKeysChanged.length > 0) {
+      embedInBackground([id], this.ctx);
+    }
+
     // Model B: fan out shared product fields to every OTHER placement of
     // this SKU. Keyed on the ORIGINAL sku (captured above, before the patch)
     // so that a sku edit re-keys the whole group together. Per-placement
@@ -5061,13 +5110,17 @@ export class InventoryService {
       // this.ctx.supabase (RLS-guarded) — only this sibling fan-out is
       // privileged, and the explicit organization_id filter below is the
       // mandatory tenant-isolation floor now that RLS is bypassed.
-      const { error: sibErr } = await createAdminClient()
+      // `.select('id')` returns the records it rewrote, for their search data
+      // (below).
+      const admin = createAdminClient();
+      const { data: siblings, error: sibErr } = await admin
         .from('inventory_items')
         .update({ ...sharedUpdates, updated_by: this.ctx.userId })
         .eq('organization_id', this.ctx.organizationId)
         .eq('sku', originalSku)
         .is('deleted_at', null)
-        .neq('id', id);
+        .neq('id', id)
+        .select('id');
       if (sibErr) {
         if (sibErr.code === '23505') {
           // Honest about the known limitation above: this record already has
@@ -5088,25 +5141,32 @@ export class InventoryService {
       // If sku itself changed, the group's new identity is the new sku;
       // otherwise it's unchanged (still originalSku).
       propagatedToSku = (sharedUpdates.sku as string | undefined) ?? originalSku;
+
+      // The other records now carry this record's new name, SKU, barcode or
+      // description, so their embeddings no longer match their text either:
+      // re-embed the ones this UPDATE returned, in one bounded loop held by
+      // keepAlive. Through the client that wrote them (the service role, for
+      // the reason above): the editor's own client could not read a record
+      // in a warehouse they cannot see. embedInventoryItem scopes its read
+      // and its write to this organization and to each id. The fan-out
+      // UPDATE itself cleared the embedding of every record whose own text it
+      // changed (trigger 0401, judged row by row), so a record whose value
+      // differed from this one's (a CSV import named it differently) and an
+      // embed here that fails are left for the next sweep, never as a stale
+      // vector. custom_fields is per record and never fanned out, so an
+      // author change re-embeds this record only.
+      const siblingIds = ((siblings ?? []) as Array<{ id: string }>).map((r) => r.id);
+      const sharedSearchedChanged = searchedKeysChanged.some((k) =>
+        (SHARED_ITEM_FIELDS as readonly string[]).includes(k),
+      );
+      if (sharedSearchedChanged && siblingIds.length > 0) {
+        embedInBackground(siblingIds, {
+          supabase: admin,
+          organizationId: this.ctx.organizationId,
+        });
+      }
     }
 
-    // before/after for the P1 diff drawer — restricted to the CHANGED keys
-    // on the TARGET row only (current = pre-patch, data = post-patch).
-    // Deliberately does NOT reach into the Model-B sibling fan-out above —
-    // that's a separate set of rows this audit event isn't about.
-    const beforeRow = current as Record<string, unknown>;
-    const afterRow = data as Record<string, unknown>;
-    // Record only keys whose VALUE actually changed. The edit form submits
-    // the full patch, so submitted keys alone made every save read as
-    // "Fields changed: <all 19 fields>" (owner report 2026-07-15). Both
-    // sides are DB rows (same type representation); jsonb columns compare
-    // via stringify (Postgres normalizes jsonb key order, so it's stable).
-    // `updated_by` stays excluded as cosmetic.
-    const jsonEq = (a: unknown, b: unknown) =>
-      a === b || JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
-    const changedKeys = Object.keys(updates)
-      .filter((k) => k !== 'updated_by')
-      .filter((k) => !jsonEq(beforeRow[k], afterRow[k]));
     void audit(
       {
         event: 'inventory.item.updated',
@@ -5141,23 +5201,6 @@ export class InventoryService {
         },
         this.ctx,
       );
-    }
-
-    // Re-embed only when an embedding-relevant field changed — saves a
-    // Gemini call when the user only edited price / reorder thresholds.
-    const EMBED_RELEVANT_KEYS = new Set([
-      'name',
-      'sku',
-      'barcode',
-      'description',
-      'custom_fields',
-    ]);
-    if (changedKeys.some((k) => EMBED_RELEVANT_KEYS.has(k))) {
-      void (async () => {
-        const { embedInventoryItem } = await import('@/lib/ai/embeddings');
-         
-        await embedInventoryItem(id, this.ctx as any);
-      })();
     }
 
     // ═══ SETTING A RACK ON THE EDIT FORM MOVES THE STOCK ═══

@@ -2979,7 +2979,10 @@ const backfillEmbeddingsTool: ToolExecutor = {
       const result = await embedItemsBatch(ctx, {
         limit: Math.min(200, Math.max(1, Number(args.limit) || 50)),
       });
-      return result;
+      // The counts only: the batch's first error (for the hourly sweep's
+      // summary) can carry the database's own words.
+      const { embedded, failed, changed, remaining } = result;
+      return { embedded, failed, changed, remaining };
     } catch (e) {
       return {
         error: 'backfill_failed',

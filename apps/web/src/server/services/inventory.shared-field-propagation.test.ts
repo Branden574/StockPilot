@@ -168,9 +168,9 @@ function harness(opts: { targetSku: string; siblingFails23505?: boolean }) {
   };
 
   // createAdminClient() — service-role, bypasses RLS. Only ever sees the
-  // sibling fan-out UPDATE. No .select()/.single() is chained on it in the
-  // production code (the result is awaited directly off the query builder),
-  // so this stub only needs to be thenable.
+  // sibling fan-out UPDATE. Its only trailing call is .select('id') (the ids
+  // it rewrote, for their search data); the result is awaited directly off
+  // the query builder, so this stub only needs that and to be thenable.
   const adminSupabase = {
     from: (table: string) => {
       if (table !== 'inventory_items') return emptyChain();
@@ -191,6 +191,7 @@ function harness(opts: { targetSku: string; siblingFails23505?: boolean }) {
       };
       p.is = () => p;
       p.neq = () => p;
+      p.select = () => p;
 
       const resolve = () => {
         adminUpdates.push({ scope: 'siblings', payload, filterSku, filterOrg });

@@ -758,10 +758,8 @@ const OUTSIDE_ALLOWLIST: Record<string, string> = {
     'edit_movement_note writes stock_movements.notes only (0307); the lists read movements only as quantity_change + created_at for the 14-day trend (services/lib/item-trends.ts)',
   'web/src/server/actions/movements.ts#editMovementNoteAction':
     'edit_movement_note writes stock_movements.notes only (0307); the lists never read movement notes',
-  'web/src/lib/ai/embeddings.ts#embedInventoryItem':
-    'writes inventory_items.embedding only; tg_inventory_items_set_updated_at (0242, restated 0303) keeps updated_at for an embedding-only change and no list column reads embedding',
-  'web/src/lib/ai/embeddings.ts#embedItemsBatch':
-    'writes inventory_items.embedding only; same trigger exemption as embedInventoryItem',
+  'web/src/lib/ai/embeddings.ts#writeIfStillCurrent':
+    'the one writer for embedInventoryItem and embedItemsBatch: writes inventory_items.embedding only; tg_inventory_items_set_updated_at (0242, restated 0303) keeps updated_at for an embedding-only change and no list column reads embedding',
 };
 
 /**
@@ -1155,7 +1153,7 @@ describe('stock writes outside services, and invalidations Next would drop', () 
     const keys = new Set(members.filter((m) => m.writes.length > 0).map((m) => m.key));
     for (const k of [
       'web/src/server/actions/item-visibility.ts#setItemPublicVisibilityAction',
-      'web/src/lib/ai/embeddings.ts#embedItemsBatch',
+      'web/src/lib/ai/embeddings.ts#writeIfStillCurrent',
     ]) {
       expect(keys, k).toContain(k);
     }

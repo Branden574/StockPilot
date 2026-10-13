@@ -124,7 +124,7 @@ function harness(opts: {
   const admin = {
     from: () => {
       const p: Record<string, unknown> = {};
-      for (const m of ['update', 'eq', 'neq', 'is']) p[m] = () => p;
+      for (const m of ['update', 'eq', 'neq', 'is', 'select']) p[m] = () => p;
       (p as { then: unknown }).then = (res: (v: unknown) => unknown) =>
         res(
           opts.siblingFails

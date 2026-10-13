@@ -993,6 +993,21 @@ WEB_TESTS=(
   # admin's "act as" grant are not recipients, and the CRON_SECRET gate.
   src/app/api/cron/weekly-digest/route.scope.test.ts
   src/app/api/cron/weekly-digest/route.test.ts
+  # The embeddings sweep (2026-10-13): the hourly cron embeds items left
+  # without a search embedding, on the service role, so the organization
+  # filters are its only tenant boundary. It works only for organizations
+  # whose own organization_modules row switches AI on (a comp does not
+  # count, as for every cron); any other organization's items are never
+  # read, sent to Gemini or written. Every item read and every write
+  # names one organization (each write also the item), only the embedding
+  # column is written, no log line, alert or summary names an item (by its
+  # text or its id; a failed item is counted, not logged), the run's summary
+  # line is counts and the first failure's message, an organization is
+  # named (by id) only in the error report of its own failed read, as
+  # every cron reports one, and the CRON_SECRET gate fails closed when the
+  # secret is unset. Both files carry the "Security invariant" marker.
+  src/app/api/cron/embeddings-sweep/route.test.ts
+  src/lib/ai/embeddings-sweep.test.ts
 
   # Order secrets (0389, and since 0392 no legacy branch). Who may complete a
   # hand-over through the sign route: a raw token whose sha256 is the order's
