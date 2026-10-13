@@ -242,6 +242,21 @@ describe('7. the host and the notice only read and navigate', () => {
     expect(codeOnly(host)).toContain('shown && intent && shown.seq === intent.seq ? shown : null');
   });
 
+  it('the open effect acts on the tap take() handed over, never on the render it ran for', () => {
+    const code = codeOnly(host);
+    const start = code.indexOf('const take = notificationIntents.take(');
+    expect(start).toBeGreaterThan(-1);
+    const effect = code.slice(start, code.indexOf('const onAction = ', start));
+    // nextOpenStep answers idle unless take() handed over this render's tap.
+    expect(effect).toContain('forSeq: intent.seq,');
+    const handedOver = effect.indexOf('const it = take.intent;');
+    expect(handedOver).toBeGreaterThan(-1);
+    // From there on, every branch (finish, open, the notice, the check) uses it.
+    const branches = effect.slice(handedOver, effect.indexOf('}, [', handedOver));
+    expect(branches).toContain('switch (step.kind) {');
+    expect(branches).not.toMatch(/(?<![.\w])intent\b/);
+  });
+
   it('a slow workspace check shows Checking; a newer tap, a sign-out or an unmount ends it (decision (b))', () => {
     const code = codeOnly(host);
     // One check at a time, per host instance (notification-open.test.ts runs it).

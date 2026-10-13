@@ -83,6 +83,7 @@ const TWO: WorkspaceView = {
 function input(over: Partial<OpenStepInput> = {}): OpenStepInput {
   return {
     take: ready(`/dashboard/orders/${ORDER}`),
+    forSeq: 1,
     mfaPending: false,
     routerReady: true,
     stackRoute: '(drawer)',
@@ -227,6 +228,38 @@ describe('a remounted navigator: the live route, not a stale one', () => {
 describe('nextOpenStep decides', () => {
   it('nothing pending: idle', () => {
     expect(nextOpenStep(input({ take: { kind: 'none' } }))).toEqual({ kind: 'idle' });
+  });
+
+  /**
+   * The host acts on the intent take() hands over, read when its effect
+   * runs; the render it runs for was for the tap pending then. A newer tap
+   * captured in between (tap X waiting on mfaPending, the flag clears in one
+   * render, tap Y lands before that render's effects run) must not be opened
+   * as X, finished as X and then pushed again as itself: two cards of one
+   * order. The step is idle, and the re-render for the newer tap opens it.
+   */
+  it('a newer tap than the render was for: idle, and the next render opens it', () => {
+    const newer = intent(`/dashboard/orders/${ORDER}`, { seq: 2 });
+    expect(nextOpenStep(input({ forSeq: 1, take: { kind: 'ready', intent: newer } }))).toEqual({
+      kind: 'idle',
+    });
+    expect(
+      nextOpenStep(
+        input({
+          forSeq: 1,
+          take: { kind: 'dropped', reason: 'account-mismatch', intent: newer },
+        }),
+      ),
+    ).toEqual({ kind: 'idle' });
+    expect(
+      nextOpenStep(
+        input({ forSeq: 1, take: { kind: 'waiting', reason: 'binding', intent: newer } }),
+      ),
+    ).toEqual({ kind: 'idle' });
+    expect(nextOpenStep(input({ forSeq: 2, take: { kind: 'ready', intent: newer } }))).toEqual({
+      kind: 'navigate',
+      path: `/order/${ORDER}`,
+    });
   });
 
   it('expired or unbound: dropped silently; another account: the neutral notice', () => {

@@ -174,8 +174,13 @@ export function NotificationIntentHost() {
 
   React.useEffect(() => {
     if (!intent || notice || checks.running(intent.seq)) return;
+    const take = notificationIntents.take(
+      userId ? { id: userId, email: userEmail } : null,
+      Date.now(),
+    );
     const step = nextOpenStep({
-      take: notificationIntents.take(userId ? { id: userId, email: userEmail } : null, Date.now()),
+      take,
+      forSeq: intent.seq,
       mfaPending,
       routerReady: navigation.isReady(),
       stackRoute: liveStackRoute(navigation),
@@ -183,32 +188,35 @@ export function NotificationIntentHost() {
       pathname,
       workspace,
     });
+    // Every branch acts on the tap take() handed over, which nextOpenStep
+    // has matched to this render's: a newer tap captured since is idle here
+    // and opened by the re-render it causes, never opened as this one.
+    if (step.kind === 'idle' || take.kind === 'none') return;
+    const it = take.intent;
     switch (step.kind) {
-      case 'idle':
-        return;
       case 'wait': {
-        const key = `${intent.seq}:${step.reason}`;
+        const key = `${it.seq}:${step.reason}`;
         if (lastWait.current === key) return;
         lastWait.current = key;
-        pushOpenDiag({ stage: 'wait', source: intent.source, reason: step.reason });
+        pushOpenDiag({ stage: 'wait', source: it.source, reason: step.reason });
         return;
       }
       case 'drop':
-        notificationIntents.finish(intent, step.reason);
+        notificationIntents.finish(it, step.reason);
         return;
       case 'stay':
-        notificationIntents.finish(intent, 'already-there');
+        notificationIntents.finish(it, 'already-there');
         return;
       case 'navigate':
-        open(intent, step.path, 'navigated');
+        open(it, step.path, 'navigated');
         return;
       case 'notice':
-        pushOpenDiag({ stage: 'notice', source: intent.source, reason: step.notice.kind });
+        pushOpenDiag({ stage: 'notice', source: it.source, reason: step.notice.kind });
         // eslint-disable-next-line react-hooks/set-state-in-effect -- the notice answers a tap the store has just handed over; take() reads the clock, so no render can derive it
-        setShown({ seq: intent.seq, notice: step.notice, busy: false });
+        setShown({ seq: it.seq, notice: step.notice, busy: false });
         return;
       case 'resolve': {
-        const { seq, source, target } = intent;
+        const { seq, source, target } = it;
         if (!target.ok) return;
         pushOpenDiag({ stage: 'resolve', source, routeKind: target.routeKind });
         // The read always answers (its 15 s deadline is an answer too), and

@@ -4,7 +4,8 @@
  * The steps are pure: NotificationIntentHost feeds nextOpenStep today's
  * signals and does what it answers. The order of the checks is the design:
  *
- *   1. nothing pending: idle;
+ *   1. nothing pending, or a newer tap than the host's render was for: idle
+ *      (the re-render for that tap opens it);
  *   2. wait while MFA is still being checked after a password sign-in
  *      (mfaPending), while the navigator is not mounted, while there is no
  *      route, while the sign-in group is still showing (the redirect to Home
@@ -90,6 +91,10 @@ export type OpenStep =
 
 export interface OpenStepInput {
   take: TakeResult;
+  /** The tap the host's render was for (usePendingNotificationIntent). The
+   *  host acts on take()'s intent, read when its effect runs: a newer tap
+   *  captured in between is not this render's to open, but the next one's. */
+  forSeq: number;
   /** auth-context: a password sign-in is still checking whether MFA is owed. */
   mfaPending: boolean;
   /** useNavigationContainerRef().isReady() */
@@ -152,7 +157,7 @@ function openOrStay(native: string, pathname: string): OpenStep {
 
 export function nextOpenStep(input: OpenStepInput): OpenStep {
   const { take } = input;
-  if (take.kind === 'none') return { kind: 'idle' };
+  if (take.kind === 'none' || take.intent.seq !== input.forSeq) return { kind: 'idle' };
   if (input.mfaPending) return { kind: 'wait', reason: 'mfa-pending' };
   if (!input.routerReady || input.stackRoute === null) {
     return { kind: 'wait', reason: 'router-not-ready' };
