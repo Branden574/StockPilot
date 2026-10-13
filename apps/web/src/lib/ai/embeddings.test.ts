@@ -32,6 +32,7 @@ import {
 import {
   EMBED_TIMEOUT_MS,
   EMBEDDING_DIM,
+  GEMINI_FAILURES_IN_A_ROW,
   embedInventoryItem,
   embedItemsBatch,
   embedQuery,
@@ -361,10 +362,11 @@ describe('embedInventoryItem', () => {
   });
 });
 
-/** Three items of one org with no embedding, as PostgREST would serve them;
- *  an UPDATE writes only the rows all of its own filters match. */
-function batchTable() {
-  const rows = [1, 2, 3].map((n) => ({
+/** `count` items of one org with no embedding (three by default), oldest
+ *  first, as PostgREST would serve them; an UPDATE writes only the rows all of
+ *  its own filters match. Item n's text is "Item n · SKU S-n". */
+function batchTable(count = 3) {
+  const rows = Array.from({ length: count }, (_, i) => i + 1).map((n) => ({
     id: `itm-${n}`,
     organization_id: 'org-1',
     name: `Item ${n}`,
@@ -374,8 +376,8 @@ function batchTable() {
     custom_fields: {},
     deleted_at: null as string | null,
     embedding: null as string | null,
-    created_at: `2026-10-0${n}T00:00:00Z`,
-    updated_at: `2026-10-0${n}T00:00:00.000001+00:00`,
+    created_at: `2026-10-${String(n).padStart(2, '0')}T00:00:00Z`,
+    updated_at: `2026-10-${String(n).padStart(2, '0')}T00:00:00.000001+00:00`,
   }));
   const written: string[] = [];
   const stub = makeSupabaseStub({
@@ -461,6 +463,107 @@ describe('embedItemsBatch: what a failed item leaves in the logs', () => {
   });
 });
 
+describe('embedItemsBatch with stopWhenGeminiFails (the hourly sweep)', () => {
+  const quota = { status: 429, message: 'Resource has been exhausted (e.g. check quota).' };
+  const down = { status: 503, message: 'The model is overloaded. Please try again later.' };
+  const batch = (
+    client: unknown,
+    over: { limit: number; geminiFailuresInARow?: number; stopWhenGeminiFails?: boolean },
+  ) =>
+    embedItemsBatch(
+      { supabase: client, organizationId: 'org-1' },
+      { logEachFailure: false, stopWhenGeminiFails: true, ...over },
+    );
+
+  it("stops at Gemini's first 429: the key's limit is reached, so no further call is made", async () => {
+    const fetch = failingFor({ Item: quota });
+    vi.stubGlobal('fetch', fetch);
+    const { client, written } = batchTable(5);
+
+    const result = await batch(client, { limit: 5 });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(written).toEqual([]);
+    expect(result).toMatchObject({
+      embedded: 0,
+      failed: 1,
+      remaining: 5,
+      stopped: 'gemini_rate_limited',
+      geminiFailuresInARow: 1,
+      firstError: expect.stringContaining('429'),
+    });
+  });
+
+  it('stops after three Gemini failures in a row (Gemini down: 5xx, timeouts)', async () => {
+    const fetch = failingFor({ Item: down });
+    vi.stubGlobal('fetch', fetch);
+    const { client } = batchTable(5);
+
+    const result = await batch(client, { limit: 5 });
+
+    expect(GEMINI_FAILURES_IN_A_ROW).toBe(3);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(result).toMatchObject({
+      failed: 3,
+      remaining: 5,
+      stopped: 'gemini_failing',
+      geminiFailuresInARow: 3,
+    });
+  });
+
+  it("an answer resets the count, and so does a 400 about one item's own text", async () => {
+    // Gemini fails, fails, answers, fails, refuses item 5's text, fails: never
+    // three in a row, so all six are tried.
+    const invalid = { status: 400, message: 'Request contains an invalid argument.' };
+    const fetch = failingFor({
+      'Item 1 ·': down,
+      'Item 2 ·': down,
+      'Item 4 ·': down,
+      'Item 5 ·': invalid,
+      'Item 6 ·': down,
+    });
+    vi.stubGlobal('fetch', fetch);
+    const { client, written } = batchTable(6);
+
+    const result = await batch(client, { limit: 6 });
+
+    expect(fetch).toHaveBeenCalledTimes(6);
+    expect(written).toEqual(['itm-3']);
+    expect(result).toMatchObject({
+      embedded: 1,
+      failed: 5,
+      stopped: null,
+      geminiFailuresInARow: 1,
+    });
+  });
+
+  it('carries the count in from the batch before it (the sweep, from one organization to the next)', async () => {
+    const fetch = failingFor({ Item: down });
+    vi.stubGlobal('fetch', fetch);
+    const { client } = batchTable(3);
+
+    const result = await batch(client, { limit: 3, geminiFailuresInARow: 2 });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ stopped: 'gemini_failing', geminiFailuresInARow: 3 });
+  });
+
+  it('without it (the Settings > AI backfill), every item is still tried, as before', async () => {
+    const fetch = failingFor({ Item: quota });
+    vi.stubGlobal('fetch', fetch);
+    const { client } = batchTable(4);
+
+    // As backfillItemEmbeddingsAction calls it: no option at all.
+    const result = await embedItemsBatch(
+      { supabase: client, organizationId: 'org-1' },
+      { limit: 4 },
+    );
+
+    expect(fetch).toHaveBeenCalledTimes(4);
+    expect(result).toMatchObject({ failed: 4, stopped: null });
+  });
+});
+
 describe('embedItemsBatch stops at its deadline', () => {
   it('starts no item once the deadline has passed, and counts the rest as still missing', async () => {
     let now = 1_000;
@@ -482,7 +585,15 @@ describe('embedItemsBatch stops at its deadline', () => {
 
     expect(written).toEqual(['itm-1']);
     expect(fetch).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({ embedded: 1, failed: 0, changed: 0, remaining: 2, firstError: null });
+    expect(result).toEqual({
+      embedded: 1,
+      failed: 0,
+      changed: 0,
+      remaining: 2,
+      firstError: null,
+      stopped: null,
+      geminiFailuresInARow: 0,
+    });
   });
 
   it('without a deadline, embeds every item up to the limit, as before', async () => {
@@ -495,6 +606,14 @@ describe('embedItemsBatch stops at its deadline', () => {
     );
 
     expect(written).toEqual(['itm-1', 'itm-2', 'itm-3']);
-    expect(result).toEqual({ embedded: 3, failed: 0, changed: 0, remaining: 0, firstError: null });
+    expect(result).toEqual({
+      embedded: 3,
+      failed: 0,
+      changed: 0,
+      remaining: 0,
+      firstError: null,
+      stopped: null,
+      geminiFailuresInARow: 0,
+    });
   });
 });

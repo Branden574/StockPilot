@@ -412,8 +412,12 @@ describe('the embeddings sweep', () => {
   });
 
   it('failed attempts count against the run cap: a failing Gemini is called at most runCap times', async () => {
+    // Two of org-a's three fail, never three in a row (that would stop the
+    // run on its own): the cap alone stops it.
     const rows = [
-      ...[1, 2, 3].map(() => item('org-a', { name: 'Gemini refuses this one' })),
+      item('org-a', { name: 'Gemini refuses this one' }),
+      item('org-a'),
+      item('org-a', { name: 'Gemini refuses this one' }),
       ...[1, 2, 3].map(() => item('org-b')),
     ];
     const { client } = table(rows);
@@ -427,7 +431,60 @@ describe('the embeddings sweep', () => {
     });
 
     expect(fetch).toHaveBeenCalledTimes(3);
-    expect(result).toMatchObject({ embedded: 0, failed: 3, orgsProcessed: 1, orgsLeft: 1 });
+    expect(result).toMatchObject({
+      embedded: 1,
+      failed: 2,
+      orgsProcessed: 1,
+      orgsLeft: 1,
+      stopped: null,
+    });
+  });
+
+  it("Gemini's first 429 stops the whole run: the key is shared, so no other organization is tried", async () => {
+    // The key has reached its per-minute or daily limit. Every call would
+    // be refused, and the AI assistant's own searches need the same key.
+    const rows = [...[1, 2, 3].map(() => item('org-a')), ...[1, 2, 3].map(() => item('org-b'))];
+    const { client } = table(rows);
+    const fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: { message: 'Resource has been exhausted' } }), {
+          status: 429,
+        }),
+    );
+    vi.stubGlobal('fetch', fetch);
+
+    const result = await sweepMissingEmbeddings(client);
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      stopped: 'gemini_rate_limited',
+      embedded: 0,
+      failed: 1,
+      orgsProcessed: 1,
+      orgsLeft: 1,
+      firstError: expect.stringContaining('429'),
+    });
+    expect(missing(rows)).toHaveLength(6);
+  });
+
+  it('three Gemini failures in a row stop the run, counted across organizations', async () => {
+    // Gemini is down (every call a 500). Two items in each of three
+    // organizations: the third failure, org-b's first, stops the run.
+    const rows = ['org-a', 'org-a', 'org-b', 'org-b', 'org-c', 'org-c'].map((o) => item(o));
+    const { client } = table(rows);
+    const fetch = gemini({ failFor: 'Private name' });
+    vi.stubGlobal('fetch', fetch);
+
+    const result = await sweepMissingEmbeddings(client);
+
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(result).toMatchObject({
+      stopped: 'gemini_failing',
+      geminiFailuresInARow: 3,
+      failed: 3,
+      orgsProcessed: 2,
+      orgsLeft: 1,
+    });
   });
 
   it('a different organization goes first each hour, so a capped run is fair over time', async () => {

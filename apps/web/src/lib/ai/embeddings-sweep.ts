@@ -5,7 +5,7 @@ import { reportError } from '@/lib/error-reporter';
 import type { createAdminClient } from '@/lib/supabase/admin';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 
-import { embedItemsBatch } from './embeddings';
+import { embedItemsBatch, type EmbedBatchStop } from './embeddings';
 
 /**
  * The hourly embeddings sweep (cron/embeddings-sweep, vercel.json
@@ -46,6 +46,11 @@ import { embedItemsBatch } from './embeddings';
  *     so neither can make a run call Gemini more often. At most 3,600 calls
  *     a day even if every run were full; in steady state a run embeds only
  *     what the request paths missed, often nothing.
+ *   Gemini failing: the run stops at Gemini's first 429 (the key's limit is
+ *     reached; every further call would be refused, and the AI assistant's
+ *     searches use the same key) or after GEMINI_FAILURES_IN_A_ROW (3)
+ *     failed calls in a row, counted across organizations (Gemini down).
+ *     The summary line says which (`stopped`).
  *   perOrgCap 100 items: one organization's backlog (a 500-row books import)
  *     cannot take a whole run while another waits; it clears over a few runs.
  *   maxOrgs 50: finding the organizations costs one read of the AI switches,
@@ -86,6 +91,13 @@ export interface EmbeddingsSweepResult {
   /** The run's first failed item's error message (Gemini's or the
    *  database's words, never the item's id or text), or null. */
   firstError: string | null;
+  /** Set when Gemini stopped the run early: its first 429 (the key's limit,
+   *  which the AI assistant's searches share), or GEMINI_FAILURES_IN_A_ROW
+   *  failed calls in a row. The rest waits for the next run. */
+  stopped: EmbedBatchStop | null;
+  /** Gemini calls failing in a row when the run ended (3 when it stopped
+   *  for that reason). */
+  geminiFailuresInARow: number;
   /** Items that changed while they were embedded (an edit, or a vector
    *  another path wrote): nothing was written over them. One still missing
    *  is embedded from its current text by the next run. */
@@ -134,6 +146,8 @@ export async function sweepMissingEmbeddings(
     embedded: 0,
     failed: 0,
     firstError: null,
+    stopped: null,
+    geminiFailuresInARow: 0,
     changed: 0,
     remaining: 0,
     timeUp: false,
@@ -156,10 +170,18 @@ export async function sweepMissingEmbeddings(
     try {
       // logEachFailure false: a failed item is counted, never logged on a
       // line of its own (which would carry its id); the run keeps the first
-      // failure's message for its summary.
+      // failure's message for its summary. stopWhenGeminiFails: a 429, or
+      // GEMINI_FAILURES_IN_A_ROW failures in a row counted across the
+      // organizations (carried from batch to batch), ends the whole run.
       const batch = await embedItemsBatch(
         { supabase: admin, organizationId },
-        { limit: Math.min(limits.perOrgCap, budget), deadline, logEachFailure: false },
+        {
+          limit: Math.min(limits.perOrgCap, budget),
+          deadline,
+          logEachFailure: false,
+          stopWhenGeminiFails: true,
+          geminiFailuresInARow: result.geminiFailuresInARow,
+        },
       );
       result.orgsProcessed += 1;
       result.embedded += batch.embedded;
@@ -167,8 +189,14 @@ export async function sweepMissingEmbeddings(
       result.changed += batch.changed;
       result.remaining += batch.remaining;
       result.firstError ??= batch.firstError;
+      result.geminiFailuresInARow = batch.geminiFailuresInARow;
       // Attempts, not successes: each of the three called Gemini once.
       budget -= batch.embedded + batch.failed + batch.changed;
+      if (batch.stopped) {
+        // The key is shared by every organization: the next would fail too.
+        result.stopped = batch.stopped;
+        break;
+      }
     } catch (err) {
       // embedItemsBatch throws only when its read of the items fails.
       // Awaited, so the alert POST is never left in flight when the run

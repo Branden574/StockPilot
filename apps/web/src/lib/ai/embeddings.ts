@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenerativeAI, GoogleGenerativeAIFetchError } from '@google/generative-ai';
 
 import { env } from '@/lib/env';
 
@@ -274,6 +274,21 @@ function errorText(e: unknown): string {
  *  a page of quota details). */
 const FIRST_ERROR_MAX_CHARS = 300;
 
+/**
+ * Gemini calls failing in a row that stop a batch run with
+ * stopWhenGeminiFails: Gemini is down (a 5xx, a timeout, no answer at all),
+ * so the next call would most likely fail too. A 400 does not count: it is
+ * Gemini answering about one item's own text, so it resets the count, as any
+ * answer does.
+ */
+export const GEMINI_FAILURES_IN_A_ROW = 3;
+
+/** Why a batch with stopWhenGeminiFails stopped before its limit: Gemini
+ *  refused for rate (429: the key's per-minute or daily limit, shared by
+ *  every organization and by the AI assistant's searches), or failed
+ *  GEMINI_FAILURES_IN_A_ROW times in a row. */
+export type EmbedBatchStop = 'gemini_rate_limited' | 'gemini_failing';
+
 /** What one embedItemsBatch run did. */
 export interface EmbedBatchResult {
   embedded: number;
@@ -283,6 +298,11 @@ export interface EmbedBatchResult {
   /** The first failure's message (a Gemini or a database error, never an
    *  item's id or text), or null when nothing failed. */
   firstError: string | null;
+  /** Set when stopWhenGeminiFails stopped the batch early; null otherwise. */
+  stopped: EmbedBatchStop | null;
+  /** Gemini calls failing in a row when the batch ended, counted on from
+   *  opts.geminiFailuresInARow: the sweep hands it to the next batch. */
+  geminiFailuresInARow: number;
 }
 
 /**
@@ -296,6 +316,15 @@ export interface EmbedBatchResult {
  * a cron's log is counts only, and an afternoon of Gemini errors would
  * otherwise write a line per item every hour. Either way the first failure's
  * message is returned in `firstError`.
+ *
+ * `stopWhenGeminiFails` (the sweep) stops the batch, starting no other item,
+ * at Gemini's first 429 or after GEMINI_FAILURES_IN_A_ROW failed calls in a
+ * row, and says why in `stopped`: calls that will fail anyway would only
+ * spend the key the AI assistant's searches need. `geminiFailuresInARow`
+ * starts the count where the batch before it left it, so a run that walks
+ * several organizations stops after three failures in a row across them.
+ * Without it (the Settings > AI backfill, the AI tool) every item is tried,
+ * as before.
  *
  * `deadline` (a Date.now() value) stops it STARTING another item once it
  * has passed; the item in flight finishes (at most EMBED_TIMEOUT_MS of
@@ -317,7 +346,13 @@ export async function embedItemsBatch(
   // Keep the type loose so this stays compatible with both the
   // service-context shape and the cached withContext() result.
   ctx: EmbedCtx,
-  opts: { limit?: number; deadline?: number; logEachFailure?: boolean } = {},
+  opts: {
+    limit?: number;
+    deadline?: number;
+    logEachFailure?: boolean;
+    stopWhenGeminiFails?: boolean;
+    geminiFailuresInARow?: number;
+  } = {},
 ): Promise<EmbedBatchResult> {
   const limit = Math.min(200, Math.max(1, opts.limit ?? 50));
   const logEachFailure = opts.logEachFailure ?? true;
@@ -336,6 +371,8 @@ export async function embedItemsBatch(
   let failed = 0;
   let changed = 0;
   let firstError: string | null = null;
+  let geminiFailuresInARow = opts.geminiFailuresInARow ?? 0;
+  let stopped: EmbedBatchStop | null = null;
   const fail = (message: string) => {
     failed += 1;
     firstError ??= message.slice(0, FIRST_ERROR_MAX_CHARS);
@@ -347,8 +384,11 @@ export async function embedItemsBatch(
       fail('an item has no text to embed');
       continue;
     }
+    let geminiAnswered = false;
     try {
       const vec = await embedText(source);
+      geminiAnswered = true;
+      geminiFailuresInARow = 0;
       const write = await writeIfStillCurrent(ctx, row.id, source, vec, { onlyIfMissing: true });
       if ('failed' in write) {
         fail(`${write.failed} failed: ${write.message}`);
@@ -362,6 +402,16 @@ export async function embedItemsBatch(
     } catch (e) {
       fail(errorText(e));
       if (logEachFailure) console.warn('[embedItemsBatch] embed failed:', row.id, e);
+      if (!geminiAnswered) {
+        const status = e instanceof GoogleGenerativeAIFetchError ? e.status : undefined;
+        // A 400 is Gemini answering about this item's own text: it is up.
+        geminiFailuresInARow = status === 400 ? 0 : geminiFailuresInARow + 1;
+        if (opts.stopWhenGeminiFails) {
+          if (status === 429) stopped = 'gemini_rate_limited';
+          else if (geminiFailuresInARow >= GEMINI_FAILURES_IN_A_ROW) stopped = 'gemini_failing';
+          if (stopped) break;
+        }
+      }
     }
     // Light pacing to stay below Gemini's burst limit on tier 0.
     await new Promise((r) => setTimeout(r, 50));
@@ -374,5 +424,13 @@ export async function embedItemsBatch(
     .is('deleted_at', null)
     .is('embedding', null);
 
-  return { embedded, failed, changed, remaining: totalRemaining ?? 0, firstError };
+  return {
+    embedded,
+    failed,
+    changed,
+    remaining: totalRemaining ?? 0,
+    firstError,
+    stopped,
+    geminiFailuresInARow,
+  };
 }

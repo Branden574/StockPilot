@@ -50,6 +50,8 @@ const RESULT = {
   embedded: 5,
   failed: 1,
   firstError: '[GoogleGenerativeAI Error]: Error fetching from ...: [503 ] model overloaded',
+  stopped: null,
+  geminiFailuresInARow: 0,
   changed: 0,
   remaining: 1,
   timeUp: false,
