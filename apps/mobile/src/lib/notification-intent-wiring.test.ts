@@ -265,3 +265,19 @@ describe('7. the host and the notice only read and navigate', () => {
     expect(notice).toContain('onAccessibilityEscape=');
   });
 });
+
+describe('8. the inbox opens a notification before its mark-read answers (brief §13)', () => {
+  it('open() never awaits the update, and still sends it before navigating', () => {
+    const inbox = codeOnly(read('app/(drawer)/notifications.tsx'));
+    const start = inbox.indexOf('function open(notif: NotificationRow)');
+    expect(start).toBeGreaterThan(-1);
+    const body = inbox.slice(start, inbox.indexOf('return (', start));
+    expect(inbox).not.toContain('async function open(');
+    expect(body).not.toContain('await');
+    // A supabase-js builder is lazy: `.then()` is what sends it.
+    expect(flat(body)).toMatch(
+      /supabase \.from\('notifications'\) \.update\(\{ read_at: readAt \}\) \.eq\('id', notif\.id\) \.then\(/,
+    );
+    expect(body.indexOf('.then(')).toBeLessThan(body.indexOf('router.push('));
+  });
+});
