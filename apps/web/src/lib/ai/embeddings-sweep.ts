@@ -9,11 +9,17 @@ import { embedItemsBatch } from './embeddings';
 /**
  * The hourly embeddings sweep (cron/embeddings-sweep, vercel.json
  * "37 * * * *"): any live item still without a search embedding is embedded
- * within the hour, whatever left it so. The request paths embed their own new
- * rows (create, update, a size run, a duplicate); the books import and
- * bulkCreate (up to 500 rows each) do not, and a Gemini failure, a call cut
- * off or a path added later can leave a row behind. Semantic search (the AI
- * assistant's item search) cannot find an item without one.
+ * by the next run that reaches it, whatever left it so: at most 100 items per
+ * organization and 150 per run (THE BUDGET below), so a larger backlog, a
+ * 500-row books import for one, clears over several runs. The request paths
+ * embed their own new rows (create, update, a size run, a duplicate); the
+ * books import and bulkCreate (up to 500 rows each) do not, and a Gemini
+ * failure, a call cut off or a path added later can leave a row behind. An
+ * edit that changes an item's searched text clears its old embedding in the
+ * same UPDATE (trigger 0401), so a re-embed that fails, or one that never
+ * starts (Ungroup's split_item_sku), leaves the item here too, never with a
+ * stale vector. Semantic search (the AI assistant's item search) cannot find
+ * an item without one.
  *
  * THE BUDGET. Every number bounds time or Gemini calls:
  *   deadlineMs 150 s: no item STARTS after 150 s. The one in flight finishes

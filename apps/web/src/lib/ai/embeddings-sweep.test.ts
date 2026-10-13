@@ -17,8 +17,10 @@ import {
  *
  * What the sweep is for: any item left with `embedding IS NULL`, whatever
  * left it (the books import and bulkCreate do not embed at once, a Gemini
- * failure, a call cut off, a path added later), is embedded within the hour,
- * within a strict budget per run.
+ * failure, a call cut off, an edit whose re-embed failed after trigger 0401
+ * cleared its old vector, a path added later), is embedded by the next run
+ * that reaches it, within a strict budget per run (100 items per
+ * organization, 150 per run, so a larger backlog clears over several runs).
  *
  * Driven through the REAL embedItemsBatch and the REAL Gemini SDK, with
  * `fetch` stubbed and the items table served the way PostgREST filters it

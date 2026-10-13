@@ -51,9 +51,11 @@ export function itemEmbeddingSource(item: {
  * whole keepAlive window after a create, or a cron run's whole budget. A call
  * normally answers in well under a second. The SDK applies the `timeout`
  * request option by aborting the fetch (GoogleGenerativeAIAbortError), which
- * every caller already treats as one more failed embed: the item keeps
- * `embedding IS NULL`, and the hourly sweep (cron/embeddings-sweep) embeds
- * it within the hour.
+ * every caller already treats as one more failed embed. The item is then left
+ * with no embedding: a new item never had one, and an edit that changed the
+ * text cleared the old one in the same UPDATE (trigger 0401). The next run of
+ * the hourly sweep (cron/embeddings-sweep) embeds it, at most 100 items per
+ * organization per run, so a larger backlog clears over several runs.
  */
 export const EMBED_TIMEOUT_MS = 10_000;
 

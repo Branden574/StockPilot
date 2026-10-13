@@ -174,10 +174,14 @@ function loadEmbeddings(): Promise<typeof Embeddings> {
  *
  * embedInventoryItem swallows and logs its own failures (Gemini, a refused
  * write); the catch here is for the loop itself (the lazy import) and logs
- * too. An item left without an embedding keeps `embedding IS NULL`, and the
- * hourly sweep (cron/embeddings-sweep) embeds it within the hour, as it does
- * the rows the books import and bulkCreate never embed at once. Writes only
- * `embedding`, which the list cache does not need to know about
+ * too. An item whose embed fails is left with no embedding: a new row never
+ * had one, and an edit that changed the text cleared the old one in the same
+ * UPDATE (trigger 0401, which does the same for each record the SKU fan-out
+ * rewrites and for the records Ungroup gives a new SKU). The next run of the
+ * hourly sweep (cron/embeddings-sweep) embeds it, as it does the rows the
+ * books import and bulkCreate never embed at once: at most 100 items per
+ * organization per run, so a larger backlog clears over several runs. Writes
+ * only `embedding`, which the list cache does not need to know about
  * (tg_inventory_items_set_updated_at keeps updated_at for an embedding-only
  * write, 0242).
  */
@@ -5130,7 +5134,9 @@ export class InventoryService {
     // price / reorder thresholds. Started HERE, right after this row's own
     // UPDATE committed and before the SKU fan-out, which can still throw (a
     // new SKU taken at another record's rack): the row keeps what it was
-    // saved with either way, so its search data must follow. Held by
+    // saved with either way, so its search data must follow. The UPDATE
+    // already cleared the row's old vector when its text changed (trigger
+    // 0401), so an embed that fails leaves it for the next sweep. Held by
     // keepAlive, never awaited (see embedInBackground).
     const EMBED_RELEVANT_KEYS = new Set([
       'name',
@@ -5216,14 +5222,18 @@ export class InventoryService {
       propagatedToSku = (sharedUpdates.sku as string | undefined) ?? originalSku;
 
       // The other records now carry this record's new name, SKU, barcode or
-      // description, so their embeddings are stale too: re-embed the ones
-      // this UPDATE returned, in one bounded loop held by keepAlive. Through
-      // the client that wrote them (the service role, for the reason above):
-      // the editor's own client could not read a record in a warehouse they
-      // cannot see, and a stale embedding is never swept (only a missing
-      // one is). embedInventoryItem scopes its read and its write to this
-      // organization and to each id. custom_fields is per record and never
-      // fanned out, so an author change re-embeds this record only.
+      // description, so their embeddings no longer match their text either:
+      // re-embed the ones this UPDATE returned, in one bounded loop held by
+      // keepAlive. Through the client that wrote them (the service role, for
+      // the reason above): the editor's own client could not read a record
+      // in a warehouse they cannot see. embedInventoryItem scopes its read
+      // and its write to this organization and to each id. The fan-out
+      // UPDATE itself cleared the embedding of every record whose own text it
+      // changed (trigger 0401, judged row by row), so a record whose value
+      // differed from this one's (a CSV import named it differently) and an
+      // embed here that fails are left for the next sweep, never as a stale
+      // vector. custom_fields is per record and never fanned out, so an
+      // author change re-embeds this record only.
       const siblingIds = ((siblings ?? []) as Array<{ id: string }>).map((r) => r.id);
       const sharedSearchedChanged = searchedKeysChanged.some((k) =>
         (SHARED_ITEM_FIELDS as readonly string[]).includes(k),

@@ -342,6 +342,10 @@ export class ItemGroupingService {
       const outcome = parseSplitSkuOutcome(data);
       if (!outcome)
         throw new ServiceError('internal_error', 'split_item_sku answered something unreadable');
+      // No re-embed here: a split record's search embedding still said its
+      // old SKU, and the UPDATE that gave it the new one cleared it (trigger
+      // 0401), so the next run of the hourly sweep (cron/embeddings-sweep)
+      // embeds it from its new text.
       invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.grouping');
       try {
         revalidateTag(ORDER_CATALOG_TAG, 'max');
