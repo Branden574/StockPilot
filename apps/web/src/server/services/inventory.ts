@@ -15,7 +15,12 @@ import { isRackShelfLocation, isSystemLocation } from '@/lib/locations/groups';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { INSTANT_MODE_MAX_ROWS } from '@/lib/inventory/instant-mode';
-import { encodedInValueLength, IN_FILTER_MAX_VALUES } from '@/lib/supabase/in-filter';
+import {
+  encodedInValueLength,
+  IN_FILTER_MAX_VALUES,
+  mapWithConcurrency,
+} from '@/lib/supabase/in-filter';
+import type * as Embeddings from '@/lib/ai/embeddings';
 
 import type {
   AdjustStockInput,
@@ -122,6 +127,58 @@ import { LocationsService } from './locations';
 import { TagsService } from './tags';
 import { UserCategoriesService } from './user-categories';
 import { keepAlive } from './lib/defer';
+
+/** Embeds in flight at once in one background loop (a size run has up to 60
+ *  sizes, a SKU's records a few). Gemini and the write each take a fraction
+ *  of a second, so four keep a run short without a burst of calls. */
+const BACKGROUND_EMBED_CONCURRENCY = 4;
+
+/** The client and organization embedInventoryItem reads and writes through. */
+type EmbedItemCtx = Parameters<typeof Embeddings.embedInventoryItem>[1];
+
+/**
+ * Embed `ids` for semantic search after the response: ONE loop over them, at
+ * most BACKGROUND_EMBED_CONCURRENCY at a time, each embedInventoryItem awaited
+ * inside it, the whole loop handed to keepAlive (lib/defer.ts, the mechanism
+ * #352 added for audit rows), which keeps the invocation alive until the last
+ * write settles. The caller never waits for Gemini. Call it right after the
+ * rows are saved, before anything that can still throw, so a later failure
+ * (a refused opening movement rolls the quantity back and throws, and the row
+ * stays) cannot skip it.
+ *
+ * WHY (2026-10-13): 12 Learn4Life items had no embedding, so semantic search
+ * never found them. They were size runs: bulkCreateSizedVariants never
+ * embedded at all, and neither did duplicateItem (0299 says the embedding is
+ * "rebuilt by their own paths"; there was none). Both call this now. create()
+ * and update() had started theirs as a bare `void (async () => ...)()`, which
+ * held nothing once the response was sent; handing them to keepAlive too is
+ * hardening, since every item created through create() since 2026-09-28 has
+ * its embedding.
+ *
+ * embedInventoryItem swallows and logs its own failures (Gemini, a refused
+ * write); the catch here is for the loop itself (the lazy import) and logs
+ * too. An item left without an embedding keeps `embedding IS NULL` for the
+ * next backfill. Writes only `embedding`, which the list cache does not need
+ * to know about (tg_inventory_items_set_updated_at keeps updated_at for an
+ * embedding-only write, 0242).
+ */
+function embedInBackground(
+  ids: readonly string[],
+  ctx: { supabase: unknown; organizationId: string },
+): void {
+  if (ids.length === 0) return;
+  keepAlive(
+    (async () => {
+      // Lazy, so the Gemini SDK loads only where an item is embedded.
+      const { embedInventoryItem } = await import('@/lib/ai/embeddings');
+      await mapWithConcurrency(ids, BACKGROUND_EMBED_CONCURRENCY, async (id) => {
+        await embedInventoryItem(id, ctx as EmbedItemCtx);
+      });
+    })().catch((err: unknown) => {
+      console.warn('[embeddings] background embed failed:', err);
+    }),
+  );
+}
 
 /**
  * Whole days between an ISO timestamp and `nowMs` (floor). Null if no timestamp.
@@ -3418,6 +3475,9 @@ export class InventoryService {
     // Right after the insert, before the opening movement and auto-place can
     // throw: the row exists from here on whatever happens next.
     invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.create');
+    // Same reason: the row takes part in semantic search whatever happens
+    // next. Held by keepAlive, never awaited (see embedInBackground).
+    embedInBackground([data.id as string], this.ctx);
 
     if (input.quantityOnHand && input.quantityOnHand > 0) {
       // The result USED TO BE DISCARDED — no destructuring at all — so an
@@ -3563,22 +3623,6 @@ export class InventoryService {
       );
     }
 
-    // Embed the new row so it takes part in semantic search, without making
-    // the create wait for Gemini. keepAlive (lib/defer.ts, the mechanism #352
-    // added for audit rows) holds the invocation until the write settles; a
-    // bare `void` held nothing, so a suspended instance could cut it off. This
-    // is hardening: every item created here since 2026-09-28 has its
-    // embedding. The 12 Learn4Life items found without one on 2026-10-13 were
-    // size runs (bulkCreateSizedVariants), a path that never embedded at all.
-    // Failures are swallowed inside the helper: a Gemini hiccup never fails
-    // the create.
-    keepAlive(
-      (async () => {
-        const { embedInventoryItem } = await import('@/lib/ai/embeddings');
-        await embedInventoryItem(data.id as string, this.ctx as any);
-      })().catch(() => {}),
-    );
-
     // The row, PLUS what the auto-place managed — on one object rather than a
     // wrapper, because every consumer reads `.id` off this and a reshape would
     // ripple for no gain. `placementFailed` is a synthetic field and not a
@@ -3694,6 +3738,10 @@ export class InventoryService {
     }
     // duplicate_inventory_item inserted the copy (and its opening movement).
     invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.duplicate');
+    // 0299 copies no embedding ("derived, rebuilt by their own paths"), and
+    // until now no path rebuilt it: a duplicate was invisible to semantic
+    // search. Embedded now, held by keepAlive, never awaited.
+    embedInBackground([newId as string], this.ctx);
 
     // Recompute the identity 0299 cleared. `buildVariantKey` lives in
     // packages/core and is the ONE place a key is built, so the recompute reads
@@ -4257,6 +4305,16 @@ export class InventoryService {
       quantity_on_hand: number;
       primary_location_id: string | null;
     }>;
+
+    // Every size of the run takes part in semantic search. This path never
+    // embedded at all, which is why the 12 Learn4Life items found without an
+    // embedding on 2026-10-13 were all size runs. One loop for the whole run,
+    // held by keepAlive, never awaited, started before the opening movements
+    // can throw (see embedInBackground).
+    embedInBackground(
+      inserted.map((r) => r.id),
+      this.ctx,
+    );
 
     // Audited FIRST: the rows exist from here on whatever happens to the
     // movement write below, and an item that exists with no 'created' event is
@@ -5161,13 +5219,8 @@ export class InventoryService {
       'custom_fields',
     ]);
     if (changedKeys.some((k) => EMBED_RELEVANT_KEYS.has(k))) {
-      // Held by keepAlive like the create's (see there): never cut off by the response.
-      keepAlive(
-        (async () => {
-          const { embedInventoryItem } = await import('@/lib/ai/embeddings');
-          await embedInventoryItem(id, this.ctx as any);
-        })().catch(() => {}),
-      );
+      // Held by keepAlive, never awaited (see embedInBackground).
+      embedInBackground([id], this.ctx);
     }
 
     // ═══ SETTING A RACK ON THE EDIT FORM MOVES THE STOCK ═══
