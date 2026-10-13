@@ -1,8 +1,8 @@
 /**
  * WHAT TO DO WITH A CAPTURED TAP, STEP BY STEP (Phase 3, iPhone push tap).
  *
- * Pure: NotificationIntentHost feeds it today's signals and does what it
- * answers. The order of the checks is the design:
+ * The steps are pure: NotificationIntentHost feeds nextOpenStep today's
+ * signals and does what it answers. The order of the checks is the design:
  *
  *   1. nothing pending: idle;
  *   2. wait while MFA is still being checked after a password sign-in
@@ -20,8 +20,10 @@
  *   8. otherwise open it, unless it is already the screen in front.
  *
  * No timer decides readiness: every wait ends on a signal the host
- * re-renders on. The one timer here is the workspace read's network deadline
- * (TARGET_READ_TIMEOUT_MS), which ends a stalled read as a read error.
+ * re-renders on. The two timers here are the workspace read's network
+ * deadline (TARGET_READ_TIMEOUT_MS), which ends a stalled read as a read
+ * error, and the Checking notice's UI delay (CHECKING_NOTICE_DELAY_MS), which
+ * only changes what the screen says while that read is out.
  * Single-workspace users pay no extra read: the destination screen's own
  * RLS-scoped read is the re-authorisation, with its own non-disclosing
  * "not found" state.
@@ -54,17 +56,26 @@ export interface WorkspaceView {
 
 export type ResolveTable = 'order_requests' | 'returns';
 
+/** What the notices call the tapped record. */
+export type TargetNoun = 'order' | 'return';
+
+export function targetNoun(routeKind: string): TargetNoun {
+  return routeKind === 'returns' ? 'return' : 'order';
+}
+
 export type IntentNotice =
   | { kind: 'account-mismatch' }
   | { kind: 'unsupported'; title: string | null; body: string | null }
   | { kind: 'unavailable' }
   | { kind: 'retry' }
+  /** The workspace read is taking a while (createWorkspaceChecks). */
+  | { kind: 'checking'; noun: TargetNoun }
   | {
       kind: 'switch';
       orgId: string;
       orgName: string;
       activeOrgName: string | null;
-      noun: 'order' | 'return';
+      noun: TargetNoun;
       native: string;
     };
 
@@ -205,7 +216,7 @@ export function stepAfterResolution(input: ResolutionInput): OpenStep {
       orgId: org.id,
       orgName: org.name,
       activeOrgName,
-      noun: input.routeKind === 'returns' ? 'return' : 'order',
+      noun: targetNoun(input.routeKind),
       native: input.native,
     },
   };
@@ -292,6 +303,86 @@ export function resolveTargetWorkspace(
   });
 }
 
+/**
+ * How long a workspace read may run before the notice says it is checking
+ * (orchestrator decision (b), 2026-10-13): a slow connection must never look
+ * like a dead tap, and a fast read shows nothing at all. A UI delay, not a
+ * readiness wait: it changes what the screen says, never when a tap opens.
+ */
+export const CHECKING_NOTICE_DELAY_MS = 400;
+
+export interface WorkspaceCheckHandlers {
+  /** The read is still out after CHECKING_NOTICE_DELAY_MS and its tap is
+   *  still the pending one: show the Checking notice. */
+  checking(): void;
+  /** The read answered (its deadline is an answer too). stepAfterResolution
+   *  decides what it means for the tap pending now. */
+  answer(resolution: TargetResolution): void;
+}
+
+export interface WorkspaceChecks {
+  /** Start the check for tap `seq`, ending any check still running. Every
+   *  start is its own attempt: Try again reuses the tap's seq, not this. */
+  start(seq: number, read: () => Promise<TargetResolution>, handlers: WorkspaceCheckHandlers): void;
+  /** True while the check for tap `seq` has not answered. */
+  running(seq: number): boolean;
+  /** End the running check unless it is for tap `seq`, the one pending now
+   *  (null: none). A newer tap or a sign-out ends it, timer and all. */
+  keepOnly(seq: number | null): void;
+  /** End the running check (an unmount): no handler runs after this. */
+  cancel(): void;
+}
+
+interface RunningCheck {
+  seq: number;
+  attempt: number;
+  /** The Checking notice's delay. */
+  timer: ReturnType<typeof setTimeout>;
+}
+
+/**
+ * The host's workspace checks, one at a time (orchestrator decisions (a) and
+ * (b)). Only the attempt still running may call a handler, so an attempt
+ * that was ended or replaced (by Try again, or a newer tap's check) leaves
+ * its late answer with nowhere to go. `pendingSeq` is the store's pending tap
+ * (notificationIntents.peek()): the Checking notice is asked for only while
+ * that is still the tap the read is for. Every read answers in the end
+ * (resolveTargetWorkspace's deadline), and the answer ends the check.
+ */
+export function createWorkspaceChecks(pendingSeq: () => number | null): WorkspaceChecks {
+  let current: RunningCheck | null = null;
+  let attempts = 0;
+  const end = () => {
+    if (current) clearTimeout(current.timer);
+    current = null;
+  };
+  return {
+    start(seq, read, handlers) {
+      end();
+      attempts += 1;
+      const attempt = attempts;
+      const isRunning = () => current?.attempt === attempt;
+      const settle = (resolution: TargetResolution) => {
+        if (!isRunning()) return;
+        end();
+        handlers.answer(resolution);
+      };
+      const timer = setTimeout(() => {
+        if (isRunning() && pendingSeq() === seq) handlers.checking();
+      }, CHECKING_NOTICE_DELAY_MS);
+      current = { seq, attempt, timer };
+      void read().then(settle, (err: unknown) =>
+        settle({ kind: 'error', errorClass: errorClassOf(err) }),
+      );
+    },
+    running: (seq) => current?.seq === seq,
+    keepOnly(seq) {
+      if (current && current.seq !== seq) end();
+    },
+    cancel: end,
+  };
+}
+
 // ── The notice (notification-intent-notice.tsx renders this) ──────────────
 
 export const NOTICE_UNAVAILABLE_COPY =
@@ -303,11 +394,16 @@ export const NOTICE_RETRY_COPY =
   'Could not open this notification. Check your connection and try again.';
 
 export function switchNoticeCopy(
-  noun: 'order' | 'return',
+  noun: TargetNoun,
   orgName: string,
   activeOrgName: string | null,
 ): string {
   return `This ${noun} is in ${orgName}. You are working in ${activeOrgName ?? 'another workspace'}.`;
+}
+
+/** While a slow workspace read is out (orchestrator decision (b)). */
+export function checkingNoticeCopy(noun: TargetNoun): string {
+  return `Checking which workspace this ${noun} is in.`;
 }
 
 export type NoticeActionId = 'switch' | 'not-now' | 'open-notifications' | 'close' | 'retry' | 'ok';
@@ -327,6 +423,8 @@ export interface NoticeContent {
   dismiss: NoticeActionId;
   /** Read out by VoiceOver when the notice appears. */
   announcement: string;
+  /** Something is under way (the workspace check): the notice shows a spinner. */
+  progress: boolean;
 }
 
 const action = (
@@ -346,6 +444,7 @@ function content(
   lines: string[],
   actions: NoticeAction[],
   dismiss: NoticeActionId,
+  progress = false,
 ): NoticeContent {
   return {
     heading,
@@ -353,6 +452,7 @@ function content(
     actions,
     dismiss,
     announcement: [heading, ...lines].filter(Boolean).join(' '),
+    progress,
   };
 }
 
@@ -382,6 +482,14 @@ export function noticeContent(notice: IntentNotice, opts: { offline: boolean }):
         [NOTICE_RETRY_COPY],
         [action('retry', 'Try again', true), action('close', 'Close', false)],
         'close',
+      );
+    case 'checking':
+      return content(
+        null,
+        [checkingNoticeCopy(notice.noun)],
+        [action('close', 'Close', false)],
+        'close',
+        true,
       );
     case 'switch':
       return content(

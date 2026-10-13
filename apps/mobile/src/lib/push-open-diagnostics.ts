@@ -103,6 +103,7 @@ export const PUSH_OPEN_REASONS = [
   // Notices.
   'switch',
   'retry',
+  'checking',
   // How a tap ended.
   'navigated',
   'already-there',

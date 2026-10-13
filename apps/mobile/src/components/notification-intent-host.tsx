@@ -18,11 +18,13 @@ import {
   type CapturedIntent,
 } from '@/lib/notification-intent';
 import {
+  createWorkspaceChecks,
   focusedStackRoute,
   nextOpenStep,
   resolutionReason,
   resolveTargetWorkspace,
   stepAfterResolution,
+  targetNoun,
   type IntentNotice,
   type NoticeActionId,
 } from '@/lib/notification-open';
@@ -90,8 +92,12 @@ function routeKindOf(path: string): string {
  * over the current screen otherwise; the order screen's own RLS-scoped read
  * is the re-authorisation. A user in more than one workspace has an order or
  * a return checked first, and is offered the switch, never switched
- * silently. A tap never approves, posts stock, opens Outlook or sends email:
- * this only reads and navigates (notification-intent-wiring.test.ts).
+ * silently. That read answers within 15 seconds (then Try again), and a read
+ * still out after about 400 ms puts up a Checking notice, so a slow
+ * connection never looks like a dead tap (notification-open.ts
+ * createWorkspaceChecks). A tap never approves, posts stock, opens Outlook or
+ * sends email: this only reads and navigates
+ * (notification-intent-wiring.test.ts).
  */
 export function NotificationIntentHost() {
   const { user, mfaPending } = useAuth();
@@ -108,10 +114,12 @@ export function NotificationIntentHost() {
   const [shown, setShown] = React.useState<ShownNotice | null>(null);
   // A notice belongs to one tap: a newer tap, or none, closes it.
   const notice = shown && intent && shown.seq === intent.seq ? shown : null;
+  /** This host's workspace reads, one at a time (notification-open.ts). */
+  const [checks] = React.useState(() =>
+    createWorkspaceChecks(() => notificationIntents.peek()?.seq ?? null),
+  );
 
   const mounted = React.useRef(false);
-  /** The tap whose workspace is being read. */
-  const resolvingSeq = React.useRef<number | null>(null);
   /** The last wait reported, so a wait leaves one breadcrumb. */
   const lastWait = React.useRef<string | null>(null);
   const currentPath = React.useRef(pathname);
@@ -125,6 +133,15 @@ export function NotificationIntentHost() {
   React.useEffect(() => {
     currentPath.current = pathname;
   }, [pathname]);
+
+  // A newer tap, or none (a sign-out, a Close that finished the tap), ends a
+  // workspace check still out for an older one, timer and all; an unmount
+  // ends any. Each answer, and a timed-out read too, ends its own.
+  const pendingSeq = intent?.seq ?? null;
+  React.useEffect(() => {
+    checks.keepOnly(pendingSeq);
+  }, [checks, pendingSeq]);
+  React.useEffect(() => () => checks.cancel(), [checks]);
 
   const userId = user?.id ?? null;
   const userEmail = user?.email ?? null;
@@ -156,7 +173,7 @@ export function NotificationIntentHost() {
   );
 
   React.useEffect(() => {
-    if (!intent || notice || resolvingSeq.current === intent.seq) return;
+    if (!intent || notice || checks.running(intent.seq)) return;
     const step = nextOpenStep({
       take: notificationIntents.take(userId ? { id: userId, email: userEmail } : null, Date.now()),
       mfaPending,
@@ -193,36 +210,48 @@ export function NotificationIntentHost() {
       case 'resolve': {
         const { seq, source, target } = intent;
         if (!target.ok) return;
-        resolvingSeq.current = seq;
         pushOpenDiag({ stage: 'resolve', source, routeKind: target.routeKind });
-        void resolveTargetWorkspace(supabase, step.table, step.id).then((resolution) => {
-          if (resolvingSeq.current === seq) resolvingSeq.current = null;
-          if (!mounted.current) return;
-          const current = notificationIntents.peek();
-          const next = stepAfterResolution({
-            answerSeq: seq,
-            currentSeq: current?.seq ?? null,
-            resolution,
-            native: target.native,
-            routeKind: target.routeKind,
-            workspace: getWorkspaceSnapshot(),
-            pathname: currentPath.current,
-          });
-          pushOpenDiag({
-            stage: 'resolve',
-            source,
-            reason: resolutionReason(resolution, next),
-            ...(resolution.kind === 'error' ? { errorClass: resolution.errorClass } : {}),
-          });
-          if (!current || next.kind === 'idle') return;
-          if (next.kind === 'navigate') {
-            open(current, next.path, 'navigated');
-          } else if (next.kind === 'stay') {
-            notificationIntents.finish(current, 'already-there');
-          } else if (next.kind === 'notice') {
-            pushOpenDiag({ stage: 'notice', source, reason: next.notice.kind });
-            setShown({ seq, notice: next.notice, busy: false });
-          }
+        // The read always answers (its 15 s deadline is an answer too), and
+        // only this attempt's answer counts: Try again starts another.
+        checks.start(seq, () => resolveTargetWorkspace(supabase, step.table, step.id), {
+          // Still reading after a moment: say so, so a slow connection never
+          // looks like a dead tap (orchestrator decision (b)).
+          checking: () => {
+            pushOpenDiag({ stage: 'notice', source, reason: 'checking' });
+            setShown({
+              seq,
+              notice: { kind: 'checking', noun: targetNoun(target.routeKind) },
+              busy: false,
+            });
+          },
+          answer: (resolution) => {
+            const current = notificationIntents.peek();
+            const next = stepAfterResolution({
+              answerSeq: seq,
+              currentSeq: current?.seq ?? null,
+              resolution,
+              native: target.native,
+              routeKind: target.routeKind,
+              workspace: getWorkspaceSnapshot(),
+              pathname: currentPath.current,
+            });
+            pushOpenDiag({
+              stage: 'resolve',
+              source,
+              reason: resolutionReason(resolution, next),
+              ...(resolution.kind === 'error' ? { errorClass: resolution.errorClass } : {}),
+            });
+            if (!current || next.kind === 'idle') return;
+            // The answer replaces the Checking notice, or ends it.
+            if (next.kind === 'notice') {
+              pushOpenDiag({ stage: 'notice', source, reason: next.notice.kind });
+              setShown({ seq, notice: next.notice, busy: false });
+              return;
+            }
+            setShown(null);
+            if (next.kind === 'navigate') open(current, next.path, 'navigated');
+            else if (next.kind === 'stay') notificationIntents.finish(current, 'already-there');
+          },
         });
         return;
       }
@@ -238,6 +267,7 @@ export function NotificationIntentHost() {
     pathname,
     workspace,
     open,
+    checks,
   ]);
 
   const onAction = (id: NoticeActionId) => {

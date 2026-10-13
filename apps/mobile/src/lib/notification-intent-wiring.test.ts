@@ -242,6 +242,31 @@ describe('7. the host and the notice only read and navigate', () => {
     expect(codeOnly(host)).toContain('shown && intent && shown.seq === intent.seq ? shown : null');
   });
 
+  it('a slow workspace check shows Checking; a newer tap, a sign-out or an unmount ends it (decision (b))', () => {
+    const code = codeOnly(host);
+    // One check at a time, per host instance (notification-open.test.ts runs it).
+    expect(code).toContain('createWorkspaceChecks(() => notificationIntents.peek()?.seq ?? null)');
+    expect(code).toContain(
+      'checks.start(seq, () => resolveTargetWorkspace(supabase, step.table, step.id), {',
+    );
+    expect(flat(host)).toMatch(
+      /setShown\(\{ seq, notice: \{ kind: 'checking', noun: targetNoun\(target\.routeKind\) \}, busy: false, \}\)/,
+    );
+    // The open effect waits on the running check, which always answers (the
+    // read's deadline), never on a ref that a stalled read would hold.
+    expect(code).toContain('checks.running(intent.seq)');
+    expect(code).not.toContain('resolvingSeq');
+    // A newer tap or a sign-out (no tap pending) ends it; so does an unmount.
+    expect(code).toContain('const pendingSeq = intent?.seq ?? null;');
+    expect(code).toContain('checks.keepOnly(pendingSeq);');
+    expect(code).toContain('React.useEffect(() => () => checks.cancel(), [checks]);');
+  });
+
+  it('the notice shows a spinner while something is under way', () => {
+    expect(codeOnly(notice)).toContain('{content.progress ? (');
+    expect(codeOnly(notice)).toContain('<ActivityIndicator');
+  });
+
   it('reads the live navigator route, not only the published one', () => {
     const code = codeOnly(host);
     expect(code).toContain('focusedStackRoute(navigation.getRootState())');

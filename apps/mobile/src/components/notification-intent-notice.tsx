@@ -1,5 +1,13 @@
 import * as React from 'react';
-import { AccessibilityInfo, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import {
+  AccessibilityInfo,
+  ActivityIndicator,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -14,9 +22,10 @@ import { useTheme } from '@/lib/use-theme';
  * (Phase 3, iPhone push tap): the order or return is in another workspace
  * (switch, or not now), it is not available to this user (one sentence for
  * missing and not shared alike), the push has no page in the app (its own
- * title and body), the workspace check failed (try again), or the tap was for
- * another account on this phone. The words and buttons come from
- * notification-open.ts noticeContent, where they are tested.
+ * title and body), the workspace check failed (try again) or is taking a
+ * while (checking, with a spinner), or the tap was for another account on
+ * this phone. The words and buttons come from notification-open.ts
+ * noticeContent, where they are tested.
  *
  * Built like the inbox's detail sheet (app/(drawer)/notifications.tsx): the
  * backdrop is a sibling behind a plain card, and closes. VoiceOver treats it
@@ -57,6 +66,12 @@ export function NotificationIntentNotice({
         />
         <View style={{ flex: 1, justifyContent: 'center', padding: 24 }} pointerEvents="box-none">
           <Card padding={18}>
+            {content.progress ? (
+              <ActivityIndicator
+                color={c.ink}
+                style={{ alignSelf: 'flex-start', marginBottom: 12 }}
+              />
+            ) : null}
             {content.heading ? (
               <Body
                 size={16}

@@ -6,11 +6,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CapturedIntent, TakeResult } from './notification-intent';
 import { parseNotificationLink } from './notification-link';
 import {
+  CHECKING_NOTICE_DELAY_MS,
   NOTICE_NO_PAGE_COPY,
   NOTICE_OTHER_ACCOUNT_COPY,
   NOTICE_RETRY_COPY,
   NOTICE_UNAVAILABLE_COPY,
   TARGET_READ_TIMEOUT_MS,
+  checkingNoticeCopy,
+  createWorkspaceChecks,
   focusedStackRoute,
   nextOpenStep,
   noticeContent,
@@ -23,6 +26,7 @@ import {
   type TargetResolution,
   type WorkspaceView,
 } from './notification-open';
+import { PUSH_OPEN_REASONS } from './push-open-diagnostics';
 
 // errorClassOf lives beside the Sentry breadcrumbs; Sentry cannot load here.
 vi.mock('./sentry', () => ({ Sentry: { addBreadcrumb: vi.fn(), captureException: vi.fn() } }));
@@ -132,7 +136,7 @@ describe('nextOpenStep waits on real signals', () => {
     });
   });
 
-  it('no timer decides readiness: the one timer is the workspace read deadline', () => {
+  it('no timer decides readiness: the timers are the read deadline and the Checking delay', () => {
     const src = readFileSync(path.join(__dirname, 'notification-open.ts'), 'utf8');
     const fn = (name: string) => {
       const start = src.indexOf(`function ${name}(`);
@@ -143,9 +147,11 @@ describe('nextOpenStep waits on real signals', () => {
     for (const name of ['nextOpenStep', 'stepAfterResolution']) {
       expect(fn(name)).not.toMatch(/setTimeout/);
     }
-    // A network deadline (orchestrator decision (a)), not a readiness wait.
-    expect(src.match(/setTimeout\(/g)).toHaveLength(1);
+    // A network deadline (orchestrator decision (a)) and a UI delay
+    // (decision (b)); neither is a readiness wait.
+    expect(src.match(/setTimeout\(/g)).toHaveLength(2);
     expect(fn('resolveTargetWorkspace')).toContain('setTimeout(');
+    expect(fn('createWorkspaceChecks')).toContain('setTimeout(');
   });
 });
 
@@ -599,6 +605,245 @@ describe('resolveTargetWorkspace answers within its deadline', () => {
   });
 });
 
+/**
+ * Orchestrator decision (b), 2026-10-13: while a multi-workspace tap's read
+ * is out, the notice says so once the read has taken longer than about
+ * 400 ms, so a slow connection never looks like a dead tap, and a fast read
+ * shows nothing at all. The answer, a newer tap, a sign-out, an unmount or
+ * Close ends it, timer and all. Each start is its own attempt: Try again
+ * reuses the tap's seq, so an older attempt's late answer must go nowhere
+ * (createWorkspaceChecks, which the host runs one at a time).
+ */
+describe('the workspace check: Checking after a moment, one attempt at a time', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const FOUND: TargetResolution = { kind: 'found', orgId: 'org-a' };
+
+  /** A read the test answers by hand. */
+  function manualRead() {
+    let settle: (resolution: TargetResolution) => void = () => {};
+    let fail: (err: unknown) => void = () => {};
+    const read = vi.fn(
+      () =>
+        new Promise<TargetResolution>((resolve, reject) => {
+          settle = resolve;
+          fail = reject;
+        }),
+    );
+    return {
+      read,
+      answer: (resolution: TargetResolution) => settle(resolution),
+      fail: (err: unknown) => fail(err),
+    };
+  }
+
+  /** The host's view: the store's pending tap, and the two handlers. */
+  function harness() {
+    const store = { pending: 1 as number | null };
+    const checks = createWorkspaceChecks(() => store.pending);
+    const handlers = { checking: vi.fn(), answer: vi.fn() };
+    return { store, checks, handlers };
+  }
+
+  it('a fast read shows nothing: the answer comes, the Checking notice never does', async () => {
+    const h = harness();
+    const r = manualRead();
+    h.checks.start(1, r.read, h.handlers);
+    expect(h.checks.running(1)).toBe(true);
+    await vi.advanceTimersByTimeAsync(100);
+    r.answer(FOUND);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.handlers.answer).toHaveBeenCalledTimes(1);
+    expect(h.handlers.answer).toHaveBeenCalledWith(FOUND);
+    expect(h.checks.running(1)).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.handlers.checking).not.toHaveBeenCalled();
+  });
+
+  it('a slow read shows the Checking notice after 400 ms, and then the answer', async () => {
+    const h = harness();
+    const r = manualRead();
+    h.checks.start(1, r.read, h.handlers);
+    await vi.advanceTimersByTimeAsync(399);
+    expect(h.handlers.checking).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.handlers.checking).toHaveBeenCalledTimes(1);
+    expect(h.handlers.answer).not.toHaveBeenCalled();
+    expect(h.checks.running(1)).toBe(true);
+    await vi.advanceTimersByTimeAsync(2_600);
+    r.answer(FOUND);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.handlers.answer).toHaveBeenCalledWith(FOUND);
+    expect(h.handlers.checking).toHaveBeenCalledTimes(1);
+    expect(h.checks.running(1)).toBe(false);
+    expect(CHECKING_NOTICE_DELAY_MS).toBe(400);
+  });
+
+  it('a newer tap ends it: nothing shows for the old tap, its timer is cleared, its answer goes nowhere', async () => {
+    const h = harness();
+    const r = manualRead();
+    h.checks.start(1, r.read, h.handlers);
+    await vi.advanceTimersByTimeAsync(200);
+    h.store.pending = 2;
+    h.checks.keepOnly(2); // the host, on the newer tap
+    expect(h.checks.running(1)).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    r.answer(FOUND);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.handlers.checking).not.toHaveBeenCalled();
+    expect(h.handlers.answer).not.toHaveBeenCalled();
+  });
+
+  it('a newer tap the host has not seen yet: no Checking notice for the old one, and its answer is ignored', async () => {
+    const h = harness();
+    const r = manualRead();
+    h.checks.start(1, r.read, h.handlers);
+    h.store.pending = 2; // captured; the host has not re-rendered yet
+    await vi.advanceTimersByTimeAsync(400);
+    expect(h.handlers.checking).not.toHaveBeenCalled();
+    r.answer(FOUND);
+    await vi.advanceTimersByTimeAsync(0);
+    const late = h.handlers.answer.mock.calls[0]?.[0] as TargetResolution;
+    expect(
+      stepAfterResolution({
+        answerSeq: 1,
+        currentSeq: 2,
+        resolution: late,
+        native: `/order/${ORDER}`,
+        routeKind: 'order',
+        workspace: TWO,
+        pathname: '/',
+      }),
+    ).toEqual({ kind: 'idle' });
+  });
+
+  it('a sign-out ends it the same way, even once the Checking notice shows', async () => {
+    const h = harness();
+    const r = manualRead();
+    h.checks.start(1, r.read, h.handlers);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.handlers.checking).toHaveBeenCalledTimes(1);
+    h.store.pending = null; // clear('deliberate-sign-out')
+    h.checks.keepOnly(null);
+    expect(h.checks.running(1)).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    r.answer(FOUND);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.handlers.answer).not.toHaveBeenCalled();
+  });
+
+  it('the tap it is for keeps it (a re-render, a binding update)', async () => {
+    const h = harness();
+    const r = manualRead();
+    h.checks.start(1, r.read, h.handlers);
+    h.checks.keepOnly(1);
+    expect(h.checks.running(1)).toBe(true);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(h.handlers.checking).toHaveBeenCalledTimes(1);
+    r.answer(FOUND);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.handlers.answer).toHaveBeenCalledWith(FOUND);
+  });
+
+  it('an unmount or Close ends it: no handler runs after cancel()', async () => {
+    const h = harness();
+    const r = manualRead();
+    h.checks.start(1, r.read, h.handlers);
+    await vi.advanceTimersByTimeAsync(100);
+    h.checks.cancel();
+    expect(h.checks.running(1)).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    r.answer(FOUND);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.handlers.checking).not.toHaveBeenCalled();
+    expect(h.handlers.answer).not.toHaveBeenCalled();
+  });
+
+  it("each start is its own attempt: a replaced attempt's late answer never reaches the next", async () => {
+    const h = harness();
+    const first = manualRead();
+    const second = manualRead();
+    h.checks.start(1, first.read, h.handlers);
+    h.checks.start(1, second.read, h.handlers); // the same tap, again
+    expect(vi.getTimerCount()).toBe(1);
+    first.answer({ kind: 'found', orgId: 'org-b' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.handlers.answer).not.toHaveBeenCalled();
+    expect(h.checks.running(1)).toBe(true);
+    second.answer(FOUND);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.handlers.answer).toHaveBeenCalledTimes(1);
+    expect(h.handlers.answer).toHaveBeenCalledWith(FOUND);
+  });
+
+  it('a stalled read: Checking at 400 ms, Try again at 15 s, and its late answer never reaches the retry', async () => {
+    const h = harness();
+    let settleFirst: (answer: { data: unknown; error: unknown }) => void = () => {};
+    let settleSecond: (answer: { data: unknown; error: unknown }) => void = () => {};
+    let reads = 0;
+    const chain = {
+      select: () => chain,
+      eq: () => chain,
+      maybeSingle: () =>
+        new Promise<{ data: unknown; error: unknown }>((resolve) => {
+          reads += 1;
+          if (reads === 1) settleFirst = resolve;
+          else settleSecond = resolve;
+        }),
+    };
+    const read = () => resolveTargetWorkspace({ from: () => chain }, 'order_requests', ORDER);
+    h.checks.start(1, read, h.handlers);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(h.handlers.checking).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(TARGET_READ_TIMEOUT_MS - 400);
+    expect(h.handlers.answer).toHaveBeenCalledTimes(1);
+    expect(h.handlers.answer).toHaveBeenLastCalledWith({
+      kind: 'error',
+      errorClass: 'TimeoutError',
+    });
+    expect(h.checks.running(1)).toBe(false);
+    // Try again: the same tap, a new attempt.
+    h.checks.start(1, read, h.handlers);
+    settleFirst({ data: { organization_id: 'org-b' }, error: null });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(h.handlers.answer).toHaveBeenCalledTimes(1);
+    settleSecond({ data: { organization_id: 'org-a' }, error: null });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.handlers.answer).toHaveBeenCalledTimes(2);
+    expect(h.handlers.answer).toHaveBeenLastCalledWith(FOUND);
+    expect(h.handlers.checking).toHaveBeenCalledTimes(1);
+  });
+
+  it('a read that rejects answers as a read error, with the class name only', async () => {
+    const h = harness();
+    const r = manualRead();
+    h.checks.start(1, r.read, h.handlers);
+    r.fail(new TypeError(`Network request failed for ${ORDER}`));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.handlers.answer).toHaveBeenCalledWith({ kind: 'error', errorClass: 'TypeError' });
+  });
+
+  it('the Checking notice says it in plain words, with Close and a spinner', () => {
+    expect(checkingNoticeCopy('order')).toBe('Checking which workspace this order is in.');
+    expect(checkingNoticeCopy('return')).toBe('Checking which workspace this return is in.');
+    expect(noticeContent({ kind: 'checking', noun: 'order' }, { offline: false })).toEqual({
+      heading: null,
+      lines: ['Checking which workspace this order is in.'],
+      actions: [{ id: 'close', label: 'Close', primary: false, disabled: false }],
+      dismiss: 'close',
+      announcement: 'Checking which workspace this order is in.',
+      progress: true,
+    });
+    expect(noticeContent({ kind: 'retry' }, { offline: false }).progress).toBe(false);
+  });
+});
+
 describe('the notices say plainly what happened', () => {
   it('another account', () => {
     expect(NOTICE_OTHER_ACCOUNT_COPY).toBe(
@@ -685,25 +930,33 @@ describe('the notices say plainly what happened', () => {
     });
   });
 
+  const ALL_NOTICES: IntentNotice[] = [
+    { kind: 'account-mismatch' },
+    { kind: 'unsupported', title: null, body: null },
+    { kind: 'unavailable' },
+    { kind: 'retry' },
+    { kind: 'checking', noun: 'return' },
+    {
+      kind: 'switch',
+      orgId: 'o',
+      orgName: 'A',
+      activeOrgName: 'B',
+      noun: 'return',
+      native: '/returns',
+    },
+  ];
+
   it('every line is plain: no exclamation marks, and never "book" for a recorded quantity', () => {
-    const all: IntentNotice[] = [
-      { kind: 'account-mismatch' },
-      { kind: 'unsupported', title: null, body: null },
-      { kind: 'unavailable' },
-      { kind: 'retry' },
-      {
-        kind: 'switch',
-        orgId: 'o',
-        orgName: 'A',
-        activeOrgName: 'B',
-        noun: 'return',
-        native: '/returns',
-      },
-    ];
-    for (const notice of all) {
+    for (const notice of ALL_NOTICES) {
       const text = JSON.stringify(noticeContent(notice, { offline: true }));
       expect(text).not.toContain('!');
       expect(text).not.toMatch(/\bbook\b/i);
+    }
+  });
+
+  it("each notice's kind is an allowed breadcrumb reason (the host sends it as one)", () => {
+    for (const notice of ALL_NOTICES) {
+      expect(PUSH_OPEN_REASONS as readonly string[]).toContain(notice.kind);
     }
   });
 });
