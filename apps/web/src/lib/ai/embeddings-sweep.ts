@@ -17,16 +17,17 @@ import { embedItemsBatch } from './embeddings';
  *
  * THE BUDGET. Every number bounds time or Gemini calls:
  *   deadlineMs 150 s: no item STARTS after 150 s. The one in flight finishes
- *     within EMBED_TIMEOUT_MS (10 s) of Gemini plus its write, and its
- *     organization ends with one count query, so a run ends well inside the
- *     route's maxDuration of 300 s even when every call times out and
- *     Supabase stalls for seconds.
- *   runCap 150 items: an embed is about 0.2 to 0.5 s of Gemini, a write and
- *     embedItemsBatch's 50 ms pacing, so a full run normally takes about a
- *     minute. Attempts count, not successes, so failures cannot make a run
- *     call Gemini more often. At most 3,600 calls a day even if every run
- *     were full; in steady state a run embeds only what the request paths
- *     missed, often nothing.
+ *     within EMBED_TIMEOUT_MS (10 s) of Gemini, then its read again and its
+ *     write, and its organization ends with one count query, so a run ends
+ *     well inside the route's maxDuration of 300 s even when every call times
+ *     out and Supabase stalls for seconds.
+ *   runCap 150 items: an embed is about 0.2 to 0.5 s of Gemini, a read
+ *     again, a write and embedItemsBatch's 50 ms pacing, so a full run
+ *     normally takes about a minute. Attempts count, not successes (a
+ *     failure, or an item that changed while it was embedded, counts too),
+ *     so neither can make a run call Gemini more often. At most 3,600 calls
+ *     a day even if every run were full; in steady state a run embeds only
+ *     what the request paths missed, often nothing.
  *   perOrgCap 100 items: one organization's backlog (a 500-row books import)
  *     cannot take a whole run while another waits; it clears over a few runs.
  *   maxOrgs 50: finding the organizations costs one query each; far above
@@ -57,6 +58,10 @@ export interface EmbeddingsSweepResult {
   embedded: number;
   /** Items whose embed or write failed: still missing, for the next run. */
   failed: number;
+  /** Items that changed while they were embedded (an edit, or a vector
+   *  another path wrote): nothing was written over them. One still missing
+   *  is embedded from its current text by the next run. */
+  changed: number;
   /** Items still missing, in the organizations processed. */
   remaining: number;
   timeUp: boolean;
@@ -96,6 +101,7 @@ export async function sweepMissingEmbeddings(
     orgsLeft: 0,
     embedded: 0,
     failed: 0,
+    changed: 0,
     remaining: 0,
     timeUp: false,
     ms: 0,
@@ -120,8 +126,10 @@ export async function sweepMissingEmbeddings(
       result.orgsProcessed += 1;
       result.embedded += batch.embedded;
       result.failed += batch.failed;
+      result.changed += batch.changed;
       result.remaining += batch.remaining;
-      budget -= batch.embedded + batch.failed;
+      // Attempts, not successes: each of the three called Gemini once.
+      budget -= batch.embedded + batch.failed + batch.changed;
     } catch (err) {
       // embedItemsBatch throws only when its read of the items fails.
       result.orgsFailed += 1;

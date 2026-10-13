@@ -53,11 +53,13 @@ type Row = {
   deleted_at: string | null;
   embedding: string | null;
   created_at: string;
+  updated_at: string;
 };
 
 let seq = 0;
 function item(org: string, over: Partial<Row> = {}): Row {
   seq += 1;
+  const created = new Date(Date.UTC(2026, 8, 1) + seq * 60_000).toISOString();
   return {
     id: `item-${seq}`,
     organization_id: org,
@@ -69,19 +71,35 @@ function item(org: string, over: Partial<Row> = {}): Row {
     custom_fields: {},
     deleted_at: null,
     embedding: null,
-    created_at: new Date(Date.UTC(2026, 8, 1) + seq * 60_000).toISOString(),
+    created_at: created,
+    updated_at: created,
     ...over,
   };
 }
 
+/** A later updated_at: what any real change to a row writes (0242). */
+const LATER = '2026-10-13T00:37:20.123456+00:00';
+
 /**
- * The items table behind a service-role stub. Reads are filtered like
- * PostgREST (count: 'exact', head: true answers a count); an UPDATE writes
- * only to the row its organization_id AND id filters both match, as Postgres
- * would, and is recorded either way.
+ * The items table behind a service-role stub, answering as PostgREST and
+ * Postgres would. A read applies its own filters (count: 'exact', head: true
+ * answers a count) and hands back copies, so a row changed after a read is
+ * not changed in what that read returned. An UPDATE writes only the rows ALL
+ * of its own filters match (organization_id and id, and any guard such as
+ * updated_at or embedding IS NULL), answers them to .select('id'), and is
+ * recorded either way. `afterReadAgain` runs right after a read of items with
+ * no .limit(), which is the read of one item just before its write.
  */
-function table(rows: Row[], opts: { failReadFor?: string } = {}) {
-  const writes: Array<{ keys: string[]; org: string | undefined; id: string | undefined }> = [];
+function table(
+  rows: Row[],
+  opts: { failReadFor?: string; afterReadAgain?: (row: Row) => void } = {},
+) {
+  const writes: Array<{
+    keys: string[];
+    org: string | undefined;
+    id: string | undefined;
+    written: number;
+  }> = [];
   const stub = makeSupabaseStub({
     'inventory_items.select': (call: MockCall) => {
       const org = call.args[call.methods.indexOf('eq')]?.[1];
@@ -90,20 +108,38 @@ function table(rows: Row[], opts: { failReadFor?: string } = {}) {
       }
       const served = servedLikePostgrest(() => rows)(call);
       const head = (callArgs(call, 'select')?.[1] as { head?: boolean } | undefined)?.head;
-      return head ? { data: null, error: null, count: (served.data as unknown[]).length } : served;
+      if (head) return { data: null, error: null, count: (served.data as unknown[]).length };
+      const copies = (served.data as Row[]).map((r) => ({ ...r }));
+      if (!call.methods.includes('limit')) {
+        for (const r of served.data as Row[]) opts.afterReadAgain?.(r);
+      }
+      return { data: copies, error: null };
     },
     'inventory_items.update': (call: MockCall) => {
       const patch = call.args[0]?.[0] as Record<string, unknown>;
-      const eqs = call.methods
-        .map((m, i) => [m, call.args[i]] as const)
-        .filter(([m]) => m === 'eq')
-        .map(([, a]) => a as [string, string]);
-      const org = eqs.find(([c]) => c === 'organization_id')?.[1];
-      const id = eqs.find(([c]) => c === 'id')?.[1];
-      writes.push({ keys: Object.keys(patch), org, id });
-      const row = rows.find((r) => r.id === id && r.organization_id === org);
-      if (row) row.embedding = String(patch.embedding);
-      return { data: null, error: null };
+      const eqOf = (col: string) =>
+        call.methods.flatMap((m, i) =>
+          m === 'eq' && call.args[i]?.[0] === col ? [call.args[i]?.[1] as string] : [],
+        )[0];
+      // The UPDATE's own filters, applied like PostgREST (.update and
+      // .select are not filters).
+      const filter = call.methods.map((m) => m !== 'update' && m !== 'select');
+      const matched = servedLikePostgrest(() => rows)({
+        ...call,
+        methods: call.methods.filter((_, i) => filter[i]),
+        args: call.args.filter((_, i) => filter[i]),
+      }).data as Row[];
+      for (const r of matched) r.embedding = String(patch.embedding);
+      writes.push({
+        keys: Object.keys(patch),
+        org: eqOf('organization_id'),
+        id: eqOf('id'),
+        written: matched.length,
+      });
+      return {
+        data: call.methods.includes('select') ? matched.map((r) => ({ id: r.id })) : null,
+        error: null,
+      };
     },
   });
   /** The embedItemsBatch reads (the ones that load rows to embed). */
@@ -116,14 +152,17 @@ function table(rows: Row[], opts: { failReadFor?: string } = {}) {
   return { client: stub.client, stub, writes, batchReads };
 }
 
-/** A Gemini fetch: answers a vector, or fails for a text containing `failFor`. */
-function gemini(opts: { failFor?: string; onCall?: () => void } = {}) {
+/**
+ * A Gemini fetch: answers a vector, or fails for a text containing `failFor`.
+ * `onCall` runs while the call is in flight, with the text being embedded.
+ */
+function gemini(opts: { failFor?: string; onCall?: (text: string) => void } = {}) {
   return vi.fn(async (_url: unknown, init?: RequestInit) => {
-    opts.onCall?.();
     const body = JSON.parse(String(init?.body ?? '{}')) as {
       content?: { parts?: Array<{ text?: string }> };
     };
     const text = body.content?.parts?.[0]?.text ?? '';
+    opts.onCall?.(text);
     if (opts.failFor && text.includes(opts.failFor)) {
       return new Response(JSON.stringify({ error: { message: 'backend error' } }), {
         status: 500,
@@ -291,6 +330,138 @@ describe('the embeddings sweep', () => {
     expect(second).toMatchObject({ embedded: 1, failed: 0, remaining: 0 });
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(missing(rows)).toEqual([]);
+  });
+
+  it("an item edited while the run embeds it keeps the edit's own newer embedding: nothing is written over it", async () => {
+    // A books import left a wrong title; the run read it. While Gemini embeds
+    // that text, a staff member fixes the title and update() re-embeds the
+    // record with the right one.
+    const rows = [item('org-a', { name: 'Wrong title' })];
+    const { client } = table(rows);
+    vi.stubGlobal(
+      'fetch',
+      gemini({
+        onCall: () => {
+          Object.assign(rows[0]!, {
+            name: 'Right title',
+            updated_at: LATER,
+            embedding: "[the edit's own vector]",
+          });
+        },
+      }),
+    );
+
+    const result = await sweepMissingEmbeddings(client);
+
+    // (A prefix: a full vector in a failure message is 20 KB of numbers.)
+    expect(rows[0]!.embedding?.slice(0, 40)).toBe("[the edit's own vector]");
+    expect(result).toMatchObject({ embedded: 0, changed: 1, failed: 0, remaining: 0 });
+  });
+
+  it('an item edited while the run embeds it, before its own embed lands, is left for the next run, which embeds its new text', async () => {
+    const rows = [item('org-a', { name: 'Wrong title' })];
+    const { client } = table(rows);
+    vi.stubGlobal(
+      'fetch',
+      gemini({
+        onCall: () => {
+          Object.assign(rows[0]!, { name: 'Right title', updated_at: LATER });
+        },
+      }),
+    );
+
+    const first = await sweepMissingEmbeddings(client);
+
+    // Nothing built from the old text was written.
+    expect(rows[0]!.embedding?.slice(0, 40) ?? null).toBeNull();
+    expect(first).toMatchObject({ embedded: 0, changed: 1, remaining: 1 });
+
+    const texts: string[] = [];
+    vi.stubGlobal('fetch', gemini({ onCall: (text) => texts.push(text) }));
+    const second = await sweepMissingEmbeddings(client);
+
+    expect(second).toMatchObject({ embedded: 1, changed: 0, remaining: 0 });
+    expect(texts).toHaveLength(1);
+    expect(texts[0]).toContain('Right title');
+    expect(texts[0]).not.toContain('Wrong title');
+  });
+
+  it('an edit that lands between the read just before the write and the write is not written over either', async () => {
+    const rows = [item('org-a', { name: 'Wrong title' })];
+    const { client, writes } = table(rows, {
+      afterReadAgain: (r) => Object.assign(r, { name: 'Right title', updated_at: LATER }),
+    });
+    vi.stubGlobal('fetch', gemini());
+
+    const result = await sweepMissingEmbeddings(client);
+
+    expect(rows[0]!.embedding?.slice(0, 40) ?? null).toBeNull();
+    expect(result).toMatchObject({ embedded: 0, changed: 1, remaining: 1 });
+    // The write was tried and matched no row: its updated_at no longer held.
+    expect(writes.map((w) => w.written)).toEqual([0]);
+  });
+
+  it('a stock movement while the run embeds an item does not stop its write: the text is the same', async () => {
+    // A movement moves updated_at too (any real change does), but the text
+    // the vector was built from is still the item's text.
+    const rows = [item('org-a')];
+    const { client } = table(rows);
+    vi.stubGlobal(
+      'fetch',
+      gemini({
+        onCall: () => {
+          rows[0]!.updated_at = LATER;
+        },
+      }),
+    );
+
+    const result = await sweepMissingEmbeddings(client);
+
+    expect(result).toMatchObject({ embedded: 1, changed: 0, remaining: 0 });
+    expect(missing(rows)).toEqual([]);
+  });
+
+  it('a vector another path wrote meanwhile (the Settings > AI backfill, an edit) is never replaced: the run fills only missing ones', async () => {
+    // An embedding-only write keeps updated_at (0242), so only the
+    // "still missing" guard on the write can see it.
+    const rows = [item('org-a')];
+    const { client } = table(rows);
+    vi.stubGlobal(
+      'fetch',
+      gemini({
+        onCall: () => {
+          rows[0]!.embedding = "[the backfill's vector]";
+        },
+      }),
+    );
+
+    const result = await sweepMissingEmbeddings(client);
+
+    expect(rows[0]!.embedding?.slice(0, 40)).toBe("[the backfill's vector]");
+    expect(result).toMatchObject({ embedded: 0, changed: 1 });
+  });
+
+  it('attempts on items that changed meanwhile count against the run cap too', async () => {
+    const rows = [item('org-a'), item('org-a'), item('org-b'), item('org-b'), item('org-b')];
+    const { client } = table(rows);
+    // Every org-a item is edited while Gemini embeds it.
+    const fetch = gemini({
+      onCall: (text) => {
+        const r = rows.find((x) => x.organization_id === 'org-a' && text.includes(x.name));
+        if (r) Object.assign(r, { name: `${r.name} (edited)`, updated_at: LATER });
+      },
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    const result = await sweepMissingEmbeddings(client, {
+      ...EMBEDDINGS_SWEEP,
+      perOrgCap: 3,
+      runCap: 3,
+    });
+
+    // Two attempts in org-a, so org-b gets one.
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(result).toMatchObject({ embedded: 1, changed: 2, failed: 0, orgsProcessed: 2 });
   });
 
   it('starts nothing once the deadline has passed; the rest waits for the next run', async () => {

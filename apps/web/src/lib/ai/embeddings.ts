@@ -136,6 +136,83 @@ export function vectorLiteral(vec: number[]): string {
 }
 
 /**
+ * The client and organization an item's embedding is read and written
+ * through. Typed loosely, as embedItemsBatch's always was: callers pass the
+ * service context's client, the service-role client or a cached
+ * withContext() result, and every chain below is PostgREST's own.
+ */
+type EmbedCtx = { supabase: any; organizationId: string };
+
+/** The columns an item's embedding text is built from (itemEmbeddingSource). */
+const EMBED_SOURCE_COLUMNS = 'id, name, sku, barcode, description, custom_fields';
+
+type EmbedSourceRow = {
+  id: string;
+  name: string | null;
+  sku?: string | null;
+  barcode?: string | null;
+  description?: string | null;
+  custom_fields?: Record<string, unknown> | null;
+};
+
+/** What writeIfStillCurrent did: wrote the vector, or wrote nothing because
+ *  the item changed meanwhile (`written: false`), or could not read or write. */
+type EmbedWrite = { written: boolean } | { failed: 'read' | 'write'; message: string };
+
+/**
+ * Writes `vec`, built from `source`, to the item only while the item still
+ * has that text. A Gemini call takes a moment and the item can be edited
+ * meanwhile; a vector written over the newer text would describe the old text
+ * from then on. So the item is read again right before the write, the write
+ * goes ahead only when that read builds the same text, and the UPDATE is
+ * guarded by that read's updated_at: tg_inventory_items_set_updated_at (0242,
+ * restated in 0303) moves updated_at with every real change to the row and
+ * keeps it for an embedding-only write, so an edit that lands between the
+ * read and the write leaves the UPDATE matching no row.
+ *
+ * Read again, rather than guarded by the first read's updated_at: a stock
+ * movement moves updated_at too, and the create paths write the opening
+ * movement right after starting the embed, so that guard would drop most of
+ * their embeds although the text never changed.
+ *
+ * `onlyIfMissing` (embedItemsBatch) also writes only while the item has no
+ * embedding, so a vector another path wrote meanwhile (an edit's own
+ * re-embed, the Settings > AI backfill) is never replaced.
+ *
+ * `{ written: false }` leaves the item to the path that changed it: an edit
+ * re-embeds what it saved, and an item still without an embedding waits for
+ * the next sweep.
+ */
+async function writeIfStillCurrent(
+  ctx: EmbedCtx,
+  itemId: string,
+  source: string,
+  vec: number[],
+  opts: { onlyIfMissing: boolean },
+): Promise<EmbedWrite> {
+  const { data: current, error: readErr } = await ctx.supabase
+    .from('inventory_items')
+    .select(`${EMBED_SOURCE_COLUMNS}, updated_at`)
+    .eq('organization_id', ctx.organizationId)
+    .eq('id', itemId)
+    .maybeSingle();
+  if (readErr) return { failed: 'read', message: errorText(readErr) };
+  if (!current || itemEmbeddingSource(current as EmbedSourceRow) !== source) {
+    return { written: false };
+  }
+  let write = ctx.supabase
+    .from('inventory_items')
+    .update({ embedding: vectorLiteral(vec) })
+    .eq('organization_id', ctx.organizationId)
+    .eq('id', itemId)
+    .eq('updated_at', (current as { updated_at: string }).updated_at);
+  if (opts.onlyIfMissing) write = write.is('embedding', null);
+  const { data: written, error: writeErr } = await write.select('id');
+  if (writeErr) return { failed: 'write', message: errorText(writeErr) };
+  return { written: Array.isArray(written) && written.length > 0 };
+}
+
+/**
  * Best-effort: embed an item's metadata and write the vector back to
  * its `embedding` column. Failures are SWALLOWED — semantic search is
  * a nice-to-have, never block create/update on a Gemini hiccup.
@@ -144,36 +221,17 @@ export function vectorLiteral(vec: number[]): string {
  * saved (create, update, a size run, a duplicate), in one bounded loop
  * handed to keepAlive (server/services/lib/defer.ts): the response is not
  * delayed and the write is not cut off when the instance is suspended.
+ *
+ * The vector is written only while the item still has the text it was built
+ * from (writeIfStillCurrent): of two quick edits, the first one's embed can
+ * finish last, and it must not put the first edit's text back in place of
+ * the second's.
  */
-export async function embedInventoryItem(
-  itemId: string,
-  ctx: {
-    supabase: {
-      from: (table: string) => {
-        select: (cols: string) => {
-          eq: (col: string, val: string) => {
-            eq: (col: string, val: string) => {
-              maybeSingle: () => Promise<{
-                data: Record<string, unknown> | null;
-                error: unknown;
-              }>;
-            };
-          };
-        };
-        update: (patch: Record<string, unknown>) => {
-          eq: (col: string, val: string) => {
-            eq: (col: string, val: string) => Promise<{ error: unknown }>;
-          };
-        };
-      };
-    };
-    organizationId: string;
-  },
-): Promise<void> {
+export async function embedInventoryItem(itemId: string, ctx: EmbedCtx): Promise<void> {
   try {
     const { data: row, error: readErr } = await ctx.supabase
       .from('inventory_items')
-      .select('id, name, sku, barcode, description, custom_fields')
+      .select(EMBED_SOURCE_COLUMNS)
       .eq('organization_id', ctx.organizationId)
       .eq('id', itemId)
       .maybeSingle();
@@ -182,26 +240,16 @@ export async function embedInventoryItem(
       return;
     }
     if (!row) return;
-    const source = itemEmbeddingSource(
-      row as {
-        name: string | null;
-        sku?: string | null;
-        barcode?: string | null;
-        description?: string | null;
-        custom_fields?: Record<string, unknown> | null;
-      },
-    );
+    const source = itemEmbeddingSource(row as EmbedSourceRow);
     if (!source) return;
     const vec = await embedText(source);
-    // The UPDATE's own { error } is read, as embedItemsBatch does: ignored, a
-    // refused write was the one failure here that left no trace at all.
-    const { error: writeErr } = await ctx.supabase
-      .from('inventory_items')
-      .update({ embedding: vectorLiteral(vec) })
-      .eq('organization_id', ctx.organizationId)
-      .eq('id', itemId);
-    if (writeErr) {
-      console.warn('[embeddings] item embed write failed:', itemId, errorText(writeErr));
+    // Every { error } is read, as embedItemsBatch does: a refused write was
+    // once the one failure here that left no trace at all.
+    const write = await writeIfStillCurrent(ctx, itemId, source, vec, { onlyIfMissing: false });
+    if ('failed' in write) {
+      console.warn(`[embeddings] item embed ${write.failed} failed:`, itemId, write.message);
+    } else if (!write.written) {
+      console.info('[embeddings] item changed while it was embedded; nothing written:', itemId);
     }
   } catch (err) {
     console.warn('[embeddings] item embed failed:', err);
@@ -224,9 +272,15 @@ function errorText(e: unknown): string {
  *
  * `deadline` (a Date.now() value) stops it STARTING another item once it
  * has passed; the item in flight finishes (at most EMBED_TIMEOUT_MS of
- * Gemini plus its write). The sweep uses it so one org's batch cannot run
- * a cron invocation past its budget. Items skipped for time stay missing
- * and are counted in `remaining`.
+ * Gemini, then its read again and its write). The sweep uses it so one
+ * org's batch cannot run a cron invocation past its budget. Items skipped
+ * for time stay missing and are counted in `remaining`.
+ *
+ * Each vector is written only while its item still has the text it was
+ * built from and still has no embedding (writeIfStillCurrent). `changed`
+ * counts the items that changed while they were embedded (an edit, or a
+ * vector another path wrote): nothing was written over them, and one still
+ * without an embedding is in `remaining` for the next batch.
  *
  * `remaining` is the count of items still without an embedding AFTER
  * this batch finishes, so a UI can show "X of Y done" by computing
@@ -235,14 +289,14 @@ function errorText(e: unknown): string {
 export async function embedItemsBatch(
   // Keep the type loose so this stays compatible with both the
   // service-context shape and the cached withContext() result.
-  ctx: { supabase: any; organizationId: string },
+  ctx: EmbedCtx,
   opts: { limit?: number; deadline?: number } = {},
-): Promise<{ embedded: number; failed: number; remaining: number }> {
+): Promise<{ embedded: number; failed: number; changed: number; remaining: number }> {
   const limit = Math.min(200, Math.max(1, opts.limit ?? 50));
 
   const { data: rows, error: loadErr } = await ctx.supabase
     .from('inventory_items')
-    .select('id, name, sku, barcode, description, custom_fields')
+    .select(EMBED_SOURCE_COLUMNS)
     .eq('organization_id', ctx.organizationId)
     .is('deleted_at', null)
     .is('embedding', null)
@@ -252,14 +306,8 @@ export async function embedItemsBatch(
 
   let embedded = 0;
   let failed = 0;
-  for (const row of (rows ?? []) as Array<{
-    id: string;
-    name: string | null;
-    sku?: string | null;
-    barcode?: string | null;
-    description?: string | null;
-    custom_fields?: Record<string, unknown> | null;
-  }>) {
+  let changed = 0;
+  for (const row of (rows ?? []) as EmbedSourceRow[]) {
     if (opts.deadline !== undefined && Date.now() >= opts.deadline) break;
     const source = itemEmbeddingSource(row);
     if (!source) {
@@ -268,18 +316,14 @@ export async function embedItemsBatch(
     }
     try {
       const vec = await embedText(source);
-      const { error: updateErr } = await ctx.supabase
-        .from('inventory_items')
-        .update({ embedding: vectorLiteral(vec) })
-        .eq('organization_id', ctx.organizationId)
-        .eq('id', row.id);
-      if (updateErr) {
+      const write = await writeIfStillCurrent(ctx, row.id, source, vec, { onlyIfMissing: true });
+      if ('failed' in write) {
         failed += 1;
-         
-        console.warn('[embedItemsBatch] write failed:', row.id, updateErr.message);
+        console.warn(`[embedItemsBatch] ${write.failed} failed:`, row.id, write.message);
         continue;
       }
-      embedded += 1;
+      if (write.written) embedded += 1;
+      else changed += 1;
     } catch (e) {
       failed += 1;
        
@@ -296,5 +340,5 @@ export async function embedItemsBatch(
     .is('deleted_at', null)
     .is('embedding', null);
 
-  return { embedded, failed, remaining: totalRemaining ?? 0 };
+  return { embedded, failed, changed, remaining: totalRemaining ?? 0 };
 }

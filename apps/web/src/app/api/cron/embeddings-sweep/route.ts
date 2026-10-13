@@ -11,10 +11,10 @@ export const dynamic = 'force-dynamic';
 /**
  * The hard limit, explicit. The sweep starts no item after
  * EMBEDDINGS_SWEEP.deadlineMs (150 s); the one in flight then has at most
- * EMBED_TIMEOUT_MS (10 s) of Gemini plus its write, and its organization one
- * count query, so a run ends well inside 300 s even when every Gemini call
- * times out and Supabase stalls. Same limit as daily-briefing and
- * exception-occurrences.
+ * EMBED_TIMEOUT_MS (10 s) of Gemini, then its read again and its write, and
+ * its organization one count query, so a run ends well inside 300 s even when
+ * every Gemini call times out and Supabase stalls. Same limit as
+ * daily-briefing and exception-occurrences.
  */
 export const maxDuration = 300;
 
