@@ -80,6 +80,10 @@
     {
       "path": "/api/cron/exception-occurrences",
       "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron/embeddings-sweep",
+      "schedule": "37 * * * *"
     }
   ],
   "functions": {

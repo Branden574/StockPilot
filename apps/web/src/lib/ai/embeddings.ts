@@ -52,7 +52,8 @@ export function itemEmbeddingSource(item: {
  * normally answers in well under a second. The SDK applies the `timeout`
  * request option by aborting the fetch (GoogleGenerativeAIAbortError), which
  * every caller already treats as one more failed embed: the item keeps
- * `embedding IS NULL` for the next backfill.
+ * `embedding IS NULL`, and the hourly sweep (cron/embeddings-sweep) embeds
+ * it within the hour.
  */
 export const EMBED_TIMEOUT_MS = 10_000;
 
@@ -217,8 +218,15 @@ function errorText(e: unknown): string {
 
 /**
  * Embeds up to `limit` un-embedded items in the caller's org. Shared
- * by the admin-only server action and the AI tool so both paths use
- * identical batching + pacing.
+ * by the admin-only server action, the AI tool and the hourly sweep
+ * (lib/ai/embeddings-sweep.ts) so every path uses identical batching +
+ * pacing.
+ *
+ * `deadline` (a Date.now() value) stops it STARTING another item once it
+ * has passed; the item in flight finishes (at most EMBED_TIMEOUT_MS of
+ * Gemini plus its write). The sweep uses it so one org's batch cannot run
+ * a cron invocation past its budget. Items skipped for time stay missing
+ * and are counted in `remaining`.
  *
  * `remaining` is the count of items still without an embedding AFTER
  * this batch finishes, so a UI can show "X of Y done" by computing
@@ -227,9 +235,8 @@ function errorText(e: unknown): string {
 export async function embedItemsBatch(
   // Keep the type loose so this stays compatible with both the
   // service-context shape and the cached withContext() result.
-   
   ctx: { supabase: any; organizationId: string },
-  opts: { limit?: number } = {},
+  opts: { limit?: number; deadline?: number } = {},
 ): Promise<{ embedded: number; failed: number; remaining: number }> {
   const limit = Math.min(200, Math.max(1, opts.limit ?? 50));
 
@@ -253,6 +260,7 @@ export async function embedItemsBatch(
     description?: string | null;
     custom_fields?: Record<string, unknown> | null;
   }>) {
+    if (opts.deadline !== undefined && Date.now() >= opts.deadline) break;
     const source = itemEmbeddingSource(row);
     if (!source) {
       failed += 1;

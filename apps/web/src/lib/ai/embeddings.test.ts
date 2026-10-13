@@ -20,7 +20,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/env', () => ({ env: { GEMINI_API_KEY: 'test-key' } }));
 
-import { EMBED_TIMEOUT_MS, EMBEDDING_DIM, embedInventoryItem, embedText } from './embeddings';
+import {
+  callArgs,
+  makeSupabaseStub,
+  type MockCall,
+  servedLikePostgrest,
+} from '@/test/supabase-mock';
+
+import {
+  EMBED_TIMEOUT_MS,
+  EMBEDDING_DIM,
+  embedInventoryItem,
+  embedItemsBatch,
+  embedText,
+} from './embeddings';
 
 const VECTOR = Array.from({ length: EMBEDDING_DIM }, (_, i) => i / EMBEDDING_DIM);
 
@@ -177,5 +190,82 @@ describe('embedInventoryItem', () => {
     expect(updates).toEqual([]);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]?.[0]).toBe('[embeddings] item embed failed:');
+  });
+});
+
+/** Three items of one org with no embedding, as PostgREST would serve them. */
+function batchTable() {
+  const rows = [1, 2, 3].map((n) => ({
+    id: `itm-${n}`,
+    organization_id: 'org-1',
+    name: `Item ${n}`,
+    sku: `S-${n}`,
+    barcode: null,
+    description: null,
+    custom_fields: {},
+    deleted_at: null as string | null,
+    embedding: null as string | null,
+    created_at: `2026-10-0${n}T00:00:00Z`,
+  }));
+  const written: string[] = [];
+  const stub = makeSupabaseStub({
+    'inventory_items.select': (call: MockCall) => {
+      const served = servedLikePostgrest(() => rows)(call);
+      const head = (callArgs(call, 'select')?.[1] as { head?: boolean } | undefined)?.head;
+      return head ? { data: null, error: null, count: (served.data as unknown[]).length } : served;
+    },
+    'inventory_items.update': (call: MockCall) => {
+      const eqs = call.methods
+        .map((m, i) => [m, call.args[i]] as const)
+        .filter(([m]) => m === 'eq')
+        .map(([, a]) => a as [string, string]);
+      const org = eqs.find(([c]) => c === 'organization_id')?.[1];
+      const id = eqs.find(([c]) => c === 'id')?.[1];
+      const row = rows.find((r) => r.id === id && r.organization_id === org);
+      if (row) {
+        row.embedding = String((call.args[0]?.[0] as { embedding: string }).embedding);
+        written.push(row.id);
+      }
+      return { data: null, error: null };
+    },
+  });
+  return { client: stub.client, written };
+}
+
+describe('embedItemsBatch stops at its deadline', () => {
+  it('starts no item once the deadline has passed, and counts the rest as still missing', async () => {
+    let now = 1_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    // Each Gemini call takes 10 s on this clock, so the deadline at 5 s passes
+    // while the first item is being embedded.
+    const fetch = answering();
+    fetch.mockImplementation(async () => {
+      now += 10_000;
+      return new Response(JSON.stringify({ embedding: { values: VECTOR } }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetch);
+    const { client, written } = batchTable();
+
+    const result = await embedItemsBatch(
+      { supabase: client, organizationId: 'org-1' },
+      { limit: 3, deadline: 5_000 },
+    );
+
+    expect(written).toEqual(['itm-1']);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ embedded: 1, failed: 0, remaining: 2 });
+  });
+
+  it('without a deadline, embeds every item up to the limit, as before', async () => {
+    vi.stubGlobal('fetch', answering());
+    const { client, written } = batchTable();
+
+    const result = await embedItemsBatch(
+      { supabase: client, organizationId: 'org-1' },
+      { limit: 3 },
+    );
+
+    expect(written).toEqual(['itm-1', 'itm-2', 'itm-3']);
+    expect(result).toEqual({ embedded: 3, failed: 0, remaining: 0 });
   });
 });

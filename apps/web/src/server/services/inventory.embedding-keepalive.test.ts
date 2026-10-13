@@ -18,7 +18,9 @@ import { makeServiceContext, makeSupabaseStub, type MockCall } from '@/test/supa
  * embedded at all, and neither did Duplicate. Both now embed their new rows the
  * moment they are saved. create() and update() had started theirs as a bare
  * `void (async () => ...)()`; holding them with keepAlive is hardening (every
- * item created through create() since 2026-09-28 has its embedding).
+ * item created through create() since 2026-09-28 has its embedding). Paths
+ * that still do not embed at once (bulkCreate, the books import) and any
+ * embed that fails are left to the hourly sweep, cron/embeddings-sweep.
  *
  * THE EMBED HERE IS DEFERRED: each call stays pending until the test settles
  * it. So a test can see what is still running after the method has returned,

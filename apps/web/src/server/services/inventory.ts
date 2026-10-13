@@ -174,8 +174,10 @@ function loadEmbeddings(): Promise<typeof Embeddings> {
  *
  * embedInventoryItem swallows and logs its own failures (Gemini, a refused
  * write); the catch here is for the loop itself (the lazy import) and logs
- * too. An item left without an embedding keeps `embedding IS NULL` for the
- * next backfill. Writes only `embedding`, which the list cache does not need
+ * too. An item left without an embedding keeps `embedding IS NULL`, and the
+ * hourly sweep (cron/embeddings-sweep) embeds it within the hour, as it does
+ * the rows the books import and bulkCreate never embed at once. Writes only
+ * `embedding`, which the list cache does not need
  * to know about (tg_inventory_items_set_updated_at keeps updated_at for an
  * embedding-only write, 0242).
  */
