@@ -13,9 +13,32 @@ const h = vi.hoisted(() => ({
   invalidate: vi.fn(),
   revalidateTag: vi.fn(),
   holdings: vi.fn(),
+  /** Every promise handed to keepAlive. */
+  kept: [] as Promise<unknown>[],
+  /** Every embed started, each pending until the test settles it. */
+  embeds: [] as Array<{
+    id: string;
+    organizationId: string;
+    supabase: unknown;
+    settle: () => void;
+  }>,
 }));
 
 vi.mock('server-only', () => ({}));
+vi.mock('./lib/defer', () => ({
+  keepAlive: vi.fn((work: Promise<unknown>) => {
+    h.kept.push(work);
+  }),
+  defer: vi.fn(),
+}));
+vi.mock('@/lib/ai/embeddings', () => ({
+  embedInventoryItem: vi.fn(
+    (id: string, ctx: { organizationId: string; supabase: unknown }) =>
+      new Promise<void>((settle) => {
+        h.embeds.push({ id, organizationId: ctx.organizationId, supabase: ctx.supabase, settle });
+      }),
+  ),
+}));
 vi.mock('./context', () => ({
   withContext: vi.fn(),
   assertPermission: h.assertPermission,
@@ -33,8 +56,11 @@ vi.mock('./lib/inventory-list-cache', () => ({ invalidateInventoryListAfterWrite
 vi.mock('next/cache', () => ({ revalidateTag: h.revalidateTag }));
 vi.mock('./rack-holdings', () => ({ fetchRackHoldingsByItem: h.holdings }));
 
+import { embedInventoryItem } from '@/lib/ai/embeddings';
+
 import { ServiceError } from './context';
 import { ItemGroupingService, UNGROUP_BUSY_RETRIES } from './item-grouping';
+import { keepAlive } from './lib/defer';
 
 const ORG = '11111111-1111-4111-8111-111111111111';
 const ME = '22222222-2222-4222-8222-222222222222';
@@ -106,7 +132,12 @@ function harness(rpcResults: RpcResult[], tables: Record<string, unknown[]> = {}
     mfaRequired: false,
     mfaSatisfied: true,
   } as never;
-  return { svc: new ItemGroupingService(ctx, { sleep: async () => undefined }), rpcCalls, reads };
+  return {
+    svc: new ItemGroupingService(ctx, { sleep: async () => undefined }),
+    rpcCalls,
+    reads,
+    supabase,
+  };
 }
 
 const body = (over: Record<string, unknown> = {}) => ({
@@ -124,6 +155,10 @@ beforeEach(() => {
   h.revalidateTag.mockReset();
   h.holdings.mockReset();
   h.holdings.mockResolvedValue(new Map());
+  h.kept = [];
+  h.embeds = [];
+  vi.mocked(keepAlive).mockClear();
+  vi.mocked(embedInventoryItem).mockClear();
 });
 
 // The MFA floor and the permission are checked by assertPermission, FIRST, in
@@ -321,6 +356,88 @@ describe('ItemGroupingService.splitSku', () => {
     });
     const odd = harness([{ data: null, error: { code: 'XX000', message: 'boom' } }]);
     await expect(odd.svc.splitSku(body(), 'web')).rejects.toMatchObject({ code: 'internal_error' });
+  });
+});
+
+describe("ItemGroupingService.splitSku: each record's search embedding follows its new SKU", () => {
+  // The UPDATE that gives a record its new SKU clears its old vector (trigger
+  // 0401), so a record left un-embedded drops out of the AI assistant's
+  // semantic search until the hourly sweep reaches it.
+  const C = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const SPLIT = {
+    action: 'split_sku',
+    replay: false,
+    items: [
+      {
+        id: A,
+        before_sku: 'SP-PAIR',
+        after_sku: 'SP-ABCDE-1111111',
+        kept: false,
+        anchor_item_id: B,
+      },
+      { id: B, before_sku: 'SP-PAIR', after_sku: 'SP-PAIR', kept: true, anchor_item_id: B },
+      {
+        id: C,
+        before_sku: 'SP-PAIR',
+        after_sku: 'SP-ABCDE-2222222',
+        kept: false,
+        anchor_item_id: B,
+      },
+    ],
+  };
+  const threeRecords = () =>
+    body({
+      itemIds: [A, B, C],
+      expectedSkus: { [A]: 'SP-PAIR', [B]: 'SP-PAIR', [C]: 'SP-PAIR' },
+    });
+  const tick = () => new Promise<void>((r) => setTimeout(r, 0));
+
+  it('re-embeds every record that got a new SKU, not the one that kept it, in one loop held by keepAlive', async () => {
+    const { svc, supabase } = harness([{ data: SPLIT, error: null }]);
+
+    await svc.splitSku(threeRecords(), 'web');
+
+    // Handed over, never awaited: splitSku has returned with both embeds
+    // still running, and the kept promise settles only after the last one.
+    expect(keepAlive).toHaveBeenCalledTimes(1);
+    let settled = false;
+    void h.kept[0]!.then(() => {
+      settled = true;
+    });
+    for (let i = 0; i < 20 && h.embeds.length < 2; i += 1) await tick();
+    expect(h.embeds.map((e) => e.id).sort()).toEqual([A, C].sort());
+    // Through the caller's own client (split_item_sku refuses a record the
+    // caller cannot write), scoped to the caller's organization.
+    for (const e of h.embeds) expect(e).toMatchObject({ organizationId: ORG, supabase });
+    h.embeds[0]!.settle();
+    await tick();
+    expect(settled).toBe(false);
+    h.embeds[1]!.settle();
+    await tick();
+    expect(settled).toBe(true);
+  });
+
+  it('a replay re-embeds nothing: the call that applied the split did', async () => {
+    const { svc } = harness([{ data: { ...SPLIT, replay: true }, error: null }]);
+
+    await svc.splitSku(threeRecords(), 'app');
+
+    expect(keepAlive).not.toHaveBeenCalled();
+    expect(embedInventoryItem).not.toHaveBeenCalled();
+  });
+
+  it('a refused split, or an answer it cannot read, embeds nothing', async () => {
+    const refused = harness([
+      { data: null, error: { code: 'P0001', hint: 'not_shared', message: 'not_shared' } },
+    ]);
+    await expect(refused.svc.splitSku(body(), 'web')).rejects.toMatchObject({ code: 'conflict' });
+    const unread = harness([{ data: { nope: true }, error: null }]);
+    await expect(unread.svc.splitSku(body(), 'web')).rejects.toMatchObject({
+      code: 'internal_error',
+    });
+
+    expect(keepAlive).not.toHaveBeenCalled();
+    expect(embedInventoryItem).not.toHaveBeenCalled();
   });
 });
 

@@ -19,6 +19,12 @@
  * variable, a forEach or setTimeout callback, after() / defer() (which start
  * the work only after the response), a dropped `await` inside the loop.
  *
+ * The request paths that embed the rows they saved (create, update and its
+ * SKU fan-out, a size run, a duplicate, Ungroup's split) do it through
+ * embedInBackground (services/lib/embed-in-background.ts), which holds its
+ * own loop. Its call sites are pinned too: a path that stops embedding what
+ * it saved is a reviewed change.
+ *
  * The AST is read, so comments and strings never count as calls, and an
  * aliased import or a destructured lazy import is followed. It reuses the
  * dropped-promise approach of services/inventory-list-invalidation.guard
@@ -607,7 +613,8 @@ describe('the scan machinery itself', () => {
 /* ───────────────────────────── the guard ───────────────────────────── */
 
 describe('every item embedding in the server code is held until it finishes', () => {
-  const report = analyze(realTree());
+  const tree = realTree();
+  const report = analyze(tree);
 
   it('finds every real call (and only real calls) of embedInventoryItem and embedItemsBatch', () => {
     // A new call site is a reviewed change: add it here, and it is checked
@@ -616,7 +623,35 @@ describe('every item embedding in the server code is held until it finishes', ()
       'lib/ai/embeddings-sweep.ts#sweepMissingEmbeddings: embedItemsBatch',
       'lib/ai/tools.ts#backfillEmbeddingsTool.execute: embedItemsBatch',
       'server/actions/embeddings.ts#backfillItemEmbeddingsAction: embedItemsBatch',
-      'server/services/inventory.ts#embedInBackground: embedInventoryItem',
+      'server/services/lib/embed-in-background.ts#embedInBackground: embedInventoryItem',
+    ]);
+  });
+
+  it('the request paths that embed the rows they saved, each a reviewed call of embedInBackground', () => {
+    // embedInBackground holds its own loop (keepAlive), so how it is called
+    // does not matter; THAT it is called does. Each of these paths writes a
+    // row's searched text, and the UPDATE that changes it clears the old
+    // vector (trigger 0401). Removing one leaves its rows to the hourly
+    // sweep, an hour or more out of semantic search.
+    const defined = 'server/services/lib/embed-in-background.ts';
+    const byRel = new Map(tree.map((f) => [f.rel, f]));
+    const wrapper: Wrapper = {
+      file: defined,
+      named: { kind: 'function', name: 'embedInBackground' },
+    };
+    const callers = tree
+      .flatMap((f) => wrapperCalls(f, wrapper, byRel).map((c) => `${f.rel}#${memberKey(c, f.sf)}`))
+      .sort();
+    expect(byRel.has(defined)).toBe(true);
+    expect(callers).toEqual([
+      'server/services/inventory.ts#InventoryService.bulkCreateSizedVariants',
+      'server/services/inventory.ts#InventoryService.create',
+      'server/services/inventory.ts#InventoryService.duplicateItem',
+      // The record, then the SKU's other records the fan-out rewrote.
+      'server/services/inventory.ts#InventoryService.update',
+      'server/services/inventory.ts#InventoryService.update',
+      // The records Ungroup gave a new SKU.
+      'server/services/item-grouping.ts#ItemGroupingService.splitSku',
     ]);
   });
 

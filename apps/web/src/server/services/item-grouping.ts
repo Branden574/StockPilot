@@ -28,6 +28,7 @@ import {
 } from '@stockpilot/core';
 
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { embedInBackground } from './lib/embed-in-background';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import { fetchRackHoldingsByItem } from './rack-holdings';
 
@@ -342,10 +343,20 @@ export class ItemGroupingService {
       const outcome = parseSplitSkuOutcome(data);
       if (!outcome)
         throw new ServiceError('internal_error', 'split_item_sku answered something unreadable');
-      // No re-embed here: a split record's search embedding still said its
-      // old SKU, and the UPDATE that gave it the new one cleared it (trigger
-      // 0401), so the next run of the hourly sweep (cron/embeddings-sweep)
-      // embeds it from its new text.
+      // Each record that got a new SKU: the UPDATE that gave it cleared its
+      // search embedding (trigger 0401), which would keep it out of the AI
+      // assistant's semantic search until the hourly sweep reached it. It is
+      // embedded again from its new text now, as an edit's would be: one
+      // bounded loop held by keepAlive, never awaited, through the caller's
+      // own client (split_item_sku refuses a record the caller cannot write).
+      // The record that kept the SKU did not change. Not on a replay: the
+      // call that applied the split started these.
+      if (!outcome.replay) {
+        embedInBackground(
+          outcome.items.filter((it) => !it.kept).map((it) => it.id),
+          this.ctx,
+        );
+      }
       invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.grouping');
       try {
         revalidateTag(ORDER_CATALOG_TAG, 'max');
