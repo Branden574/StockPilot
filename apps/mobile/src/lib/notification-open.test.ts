@@ -1,0 +1,504 @@
+import { readFileSync } from 'node:fs';
+import * as path from 'node:path';
+
+import { describe, expect, it, vi } from 'vitest';
+
+import type { CapturedIntent, TakeResult } from './notification-intent';
+import { parseNotificationLink } from './notification-link';
+import {
+  NOTICE_NO_PAGE_COPY,
+  NOTICE_OTHER_ACCOUNT_COPY,
+  NOTICE_RETRY_COPY,
+  NOTICE_UNAVAILABLE_COPY,
+  nextOpenStep,
+  noticeContent,
+  resolveTargetWorkspace,
+  stepAfterResolution,
+  switchNoticeCopy,
+  type IntentNotice,
+  type OpenStepInput,
+  type WorkspaceView,
+} from './notification-open';
+
+// errorClassOf lives beside the Sentry breadcrumbs; Sentry cannot load here.
+vi.mock('./sentry', () => ({ Sentry: { addBreadcrumb: vi.fn(), captureException: vi.fn() } }));
+
+/**
+ * What the host does with a captured tap, step by step (Phase 3). Readiness
+ * is read from real signals (MFA being checked, the navigator, the auth
+ * group, the binding, the workspace), never from a timer. A user in more than
+ * one workspace has an order or return checked first, under RLS, so a tap
+ * for the other workspace offers the switch instead of "Order not found."
+ */
+
+const ORDER = '11111111-1111-4111-8111-111111111111';
+const RMA = '22222222-2222-4222-8222-222222222222';
+const PO = '44444444-4444-4444-8444-444444444444';
+
+function intent(link: unknown, over: Partial<CapturedIntent> = {}): CapturedIntent {
+  return {
+    key: 'req-1|1',
+    identifier: 'req-1',
+    seq: 1,
+    source: 'listener',
+    capturedAt: 0,
+    deliveredAt: 1,
+    target: parseNotificationLink(link),
+    title: null,
+    body: null,
+    binding: { userId: 'u1', email: null },
+    ...over,
+  };
+}
+
+const ready = (link: unknown, over: Partial<CapturedIntent> = {}): TakeResult => ({
+  kind: 'ready',
+  intent: intent(link, over),
+});
+
+const ONE: WorkspaceView = {
+  loading: false,
+  orgs: [{ id: 'org-a', name: 'Acme Demo Co' }],
+  activeOrgId: 'org-a',
+  activeOrgName: 'Acme Demo Co',
+};
+const TWO: WorkspaceView = {
+  loading: false,
+  orgs: [
+    { id: 'org-a', name: 'Acme Demo Co' },
+    { id: 'org-b', name: 'Ledger QA Co' },
+  ],
+  activeOrgId: 'org-b',
+  activeOrgName: 'Ledger QA Co',
+};
+
+function input(over: Partial<OpenStepInput> = {}): OpenStepInput {
+  return {
+    take: ready(`/dashboard/orders/${ORDER}`),
+    mfaPending: false,
+    routerReady: true,
+    segments: ['(drawer)', '(tabs)'],
+    pathname: '/',
+    workspace: ONE,
+    ...over,
+  };
+}
+
+describe('nextOpenStep waits on real signals', () => {
+  it.each<[string, Partial<OpenStepInput>, string]>([
+    ['the sign-in to MFA window (mfaPending)', { mfaPending: true }, 'mfa-pending'],
+    ['the navigator is not mounted yet', { routerReady: false }, 'router-not-ready'],
+    ['no route yet', { segments: [] }, 'no-segments'],
+    [
+      'still on the sign-in group (the redirect has not run)',
+      { segments: ['(auth)', 'sign-in'] },
+      'auth-group',
+    ],
+    [
+      'whose tap it is is not known yet',
+      {
+        take: { kind: 'waiting', reason: 'binding', intent: intent(`/dashboard/orders/${ORDER}`) },
+      },
+      'binding',
+    ],
+    ['the workspace is loading', { workspace: { ...ONE, loading: true } }, 'workspace-loading'],
+  ])('%s', (_label, over, reason) => {
+    expect(nextOpenStep(input(over))).toEqual({ kind: 'wait', reason });
+  });
+
+  it('readiness comes before any decision: nothing is dropped or shown over MFA or sign-in', () => {
+    const mismatch: TakeResult = {
+      kind: 'dropped',
+      reason: 'account-mismatch',
+      intent: intent(`/dashboard/orders/${ORDER}`),
+    };
+    expect(nextOpenStep(input({ take: mismatch, mfaPending: true }))).toEqual({
+      kind: 'wait',
+      reason: 'mfa-pending',
+    });
+    expect(nextOpenStep(input({ take: mismatch, segments: ['(auth)'] }))).toEqual({
+      kind: 'wait',
+      reason: 'auth-group',
+    });
+  });
+
+  it('uses no timer', () => {
+    const src = readFileSync(path.join(__dirname, 'notification-open.ts'), 'utf8');
+    expect(src).not.toMatch(/setTimeout|setInterval|requestAnimationFrame/);
+  });
+});
+
+describe('nextOpenStep decides', () => {
+  it('nothing pending: idle', () => {
+    expect(nextOpenStep(input({ take: { kind: 'none' } }))).toEqual({ kind: 'idle' });
+  });
+
+  it('expired or unbound: dropped silently; another account: the neutral notice', () => {
+    const it1 = intent(`/dashboard/orders/${ORDER}`);
+    expect(
+      nextOpenStep(input({ take: { kind: 'dropped', reason: 'expired', intent: it1 } })),
+    ).toEqual({
+      kind: 'drop',
+      reason: 'expired',
+    });
+    expect(
+      nextOpenStep(input({ take: { kind: 'dropped', reason: 'unbound', intent: it1 } })),
+    ).toEqual({
+      kind: 'drop',
+      reason: 'unbound',
+    });
+    expect(
+      nextOpenStep(input({ take: { kind: 'dropped', reason: 'account-mismatch', intent: it1 } })),
+    ).toEqual({
+      kind: 'notice',
+      notice: { kind: 'account-mismatch' },
+    });
+  });
+
+  it("a link the app cannot open: the notice with the push's own words", () => {
+    expect(
+      nextOpenStep(
+        input({ take: ready(undefined, { title: 'Push test', body: 'Hello' }), workspace: TWO }),
+      ),
+    ).toEqual({
+      kind: 'notice',
+      notice: { kind: 'unsupported', title: 'Push test', body: 'Hello' },
+    });
+    expect(nextOpenStep(input({ take: ready('https://evil.example/x') }))).toMatchObject({
+      kind: 'notice',
+      notice: { kind: 'unsupported' },
+    });
+  });
+
+  it('a single-workspace user goes straight to the order, with no extra read', () => {
+    expect(nextOpenStep(input())).toEqual({ kind: 'navigate', path: `/order/${ORDER}` });
+  });
+
+  it('a user in more than one workspace has an order or a return checked first', () => {
+    expect(nextOpenStep(input({ workspace: TWO }))).toEqual({
+      kind: 'resolve',
+      table: 'order_requests',
+      id: ORDER,
+    });
+    expect(
+      nextOpenStep(
+        input({
+          workspace: TWO,
+          take: ready(`/dashboard/returns/${RMA}?order=/dashboard/orders/${ORDER}`),
+        }),
+      ),
+    ).toEqual({ kind: 'resolve', table: 'returns', id: RMA });
+  });
+
+  it('other kinds, and lists, open as today for everyone (no workspace check this phase)', () => {
+    expect(
+      nextOpenStep(input({ workspace: TWO, take: ready(`/dashboard/purchase-orders/${PO}`) })),
+    ).toEqual({
+      kind: 'navigate',
+      path: `/po/${PO}`,
+    });
+    expect(nextOpenStep(input({ workspace: TWO, take: ready('/dashboard/returns') }))).toEqual({
+      kind: 'navigate',
+      path: '/returns',
+    });
+  });
+
+  it('already on that order: stay (no second card)', () => {
+    expect(nextOpenStep(input({ pathname: `/order/${ORDER}` }))).toEqual({ kind: 'stay' });
+  });
+
+  it('a workspace that failed to load does not hold the tap: the screen shows its own state', () => {
+    const none: WorkspaceView = {
+      loading: false,
+      orgs: [],
+      activeOrgId: null,
+      activeOrgName: null,
+    };
+    expect(nextOpenStep(input({ workspace: none }))).toEqual({
+      kind: 'navigate',
+      path: `/order/${ORDER}`,
+    });
+  });
+});
+
+describe('stepAfterResolution', () => {
+  const base = {
+    answerSeq: 1,
+    currentSeq: 1,
+    native: `/order/${ORDER}`,
+    routeKind: 'order',
+    workspace: TWO,
+    pathname: '/',
+  };
+
+  it('the active workspace: open it', () => {
+    expect(stepAfterResolution({ ...base, resolution: { kind: 'found', orgId: 'org-b' } })).toEqual(
+      {
+        kind: 'navigate',
+        path: `/order/${ORDER}`,
+      },
+    );
+    expect(
+      stepAfterResolution({
+        ...base,
+        pathname: `/order/${ORDER}`,
+        resolution: { kind: 'found', orgId: 'org-b' },
+      }),
+    ).toEqual({ kind: 'stay' });
+  });
+
+  it('another workspace this user belongs to: the switch notice naming it (never a silent switch)', () => {
+    expect(stepAfterResolution({ ...base, resolution: { kind: 'found', orgId: 'org-a' } })).toEqual(
+      {
+        kind: 'notice',
+        notice: {
+          kind: 'switch',
+          orgId: 'org-a',
+          orgName: 'Acme Demo Co',
+          activeOrgName: 'Ledger QA Co',
+          noun: 'order',
+          native: `/order/${ORDER}`,
+        },
+      },
+    );
+    expect(
+      stepAfterResolution({
+        ...base,
+        native: `/returns/${RMA}`,
+        routeKind: 'returns',
+        resolution: { kind: 'found', orgId: 'org-a' },
+      }),
+    ).toMatchObject({
+      kind: 'notice',
+      notice: { kind: 'switch', noun: 'return', native: `/returns/${RMA}` },
+    });
+  });
+
+  it('a workspace this user is not in, or no row at all: unavailable, in the same words', () => {
+    const foreign = stepAfterResolution({ ...base, resolution: { kind: 'found', orgId: 'org-z' } });
+    const missing = stepAfterResolution({ ...base, resolution: { kind: 'none' } });
+    expect(foreign).toEqual({ kind: 'notice', notice: { kind: 'unavailable' } });
+    expect(missing).toEqual(foreign);
+    const words = (step: typeof foreign) =>
+      step.kind === 'notice' ? JSON.stringify(noticeContent(step.notice, { offline: false })) : '';
+    expect(words(foreign)).toBe(words(missing));
+  });
+
+  it('a read that failed: try again', () => {
+    expect(
+      stepAfterResolution({ ...base, resolution: { kind: 'error', errorClass: 'TypeError' } }),
+    ).toEqual({
+      kind: 'notice',
+      notice: { kind: 'retry' },
+    });
+  });
+
+  it('a late answer for a tap that was replaced is ignored', () => {
+    expect(
+      stepAfterResolution({
+        ...base,
+        currentSeq: 2,
+        resolution: { kind: 'found', orgId: 'org-b' },
+      }),
+    ).toEqual({
+      kind: 'idle',
+    });
+    expect(
+      stepAfterResolution({
+        ...base,
+        currentSeq: null,
+        resolution: { kind: 'found', orgId: 'org-b' },
+      }),
+    ).toEqual({
+      kind: 'idle',
+    });
+  });
+});
+
+describe('resolveTargetWorkspace reads the organization under RLS, and nothing else', () => {
+  function recordingClient(answer: { data: unknown; error: unknown } | Error) {
+    const calls: unknown[][] = [];
+    const chain = {
+      select: (...args: unknown[]) => {
+        calls.push(['select', ...args]);
+        return chain;
+      },
+      eq: (...args: unknown[]) => {
+        calls.push(['eq', ...args]);
+        return chain;
+      },
+      maybeSingle: async () => {
+        calls.push(['maybeSingle']);
+        if (answer instanceof Error) throw answer;
+        return answer;
+      },
+    };
+    return {
+      calls,
+      client: {
+        from: (table: string) => {
+          calls.push(['from', table]);
+          return chain;
+        },
+      },
+    };
+  }
+
+  it('one read by id, with NO organization filter (the active workspace is exactly what is unknown)', async () => {
+    const rec = recordingClient({ data: { organization_id: 'org-a' }, error: null });
+    await expect(resolveTargetWorkspace(rec.client, 'order_requests', ORDER)).resolves.toEqual({
+      kind: 'found',
+      orgId: 'org-a',
+    });
+    expect(rec.calls).toEqual([
+      ['from', 'order_requests'],
+      ['select', 'organization_id'],
+      ['eq', 'id', ORDER],
+      ['maybeSingle'],
+    ]);
+    expect(rec.calls.some(([op, col]) => op === 'eq' && col === 'organization_id')).toBe(false);
+  });
+
+  it('a return is read from returns', async () => {
+    const rec = recordingClient({ data: { organization_id: 'org-a' }, error: null });
+    await resolveTargetWorkspace(rec.client, 'returns', RMA);
+    expect(rec.calls[0]).toEqual(['from', 'returns']);
+  });
+
+  it('no row (missing, or not shared with this user): none', async () => {
+    const rec = recordingClient({ data: null, error: null });
+    await expect(resolveTargetWorkspace(rec.client, 'order_requests', ORDER)).resolves.toEqual({
+      kind: 'none',
+    });
+  });
+
+  it('a failed or thrown read: error, with the class name only', async () => {
+    const failed = recordingClient({
+      data: null,
+      error: { name: 'PostgrestError', message: `bad ${ORDER}` },
+    });
+    await expect(resolveTargetWorkspace(failed.client, 'order_requests', ORDER)).resolves.toEqual({
+      kind: 'error',
+      errorClass: 'PostgrestError',
+    });
+    const thrown = recordingClient(new TypeError('Network request failed'));
+    await expect(resolveTargetWorkspace(thrown.client, 'order_requests', ORDER)).resolves.toEqual({
+      kind: 'error',
+      errorClass: 'TypeError',
+    });
+  });
+
+  it('writes nothing: the module has no insert, update, delete, upsert or rpc', () => {
+    const src = readFileSync(path.join(__dirname, 'notification-open.ts'), 'utf8');
+    expect(src).not.toMatch(/\.(insert|update|delete|upsert|rpc)\(/);
+  });
+});
+
+describe('the notices say plainly what happened', () => {
+  it('another account', () => {
+    expect(NOTICE_OTHER_ACCOUNT_COPY).toBe(
+      'That notification was sent to a different account on this phone.',
+    );
+    expect(noticeContent({ kind: 'account-mismatch' }, { offline: false })).toMatchObject({
+      heading: null,
+      lines: [NOTICE_OTHER_ACCOUNT_COPY],
+      actions: [{ id: 'ok', label: 'OK', primary: true, disabled: false }],
+      dismiss: 'ok',
+    });
+  });
+
+  it("no page in the app: the push's title and body, then the line; no Open on the web", () => {
+    expect(NOTICE_NO_PAGE_COPY).toBe('This notification has no page in the app.');
+    const content = noticeContent(
+      { kind: 'unsupported', title: 'Push test', body: 'Hello' },
+      { offline: false },
+    );
+    expect(content).toMatchObject({
+      heading: 'Push test',
+      lines: ['Hello', NOTICE_NO_PAGE_COPY],
+      actions: [
+        { id: 'open-notifications', label: 'Open notifications', primary: true },
+        { id: 'close', label: 'Close', primary: false },
+      ],
+      dismiss: 'close',
+    });
+    expect(JSON.stringify(content)).not.toMatch(/web/i);
+    expect(
+      noticeContent({ kind: 'unsupported', title: null, body: null }, { offline: false }),
+    ).toMatchObject({
+      heading: null,
+      lines: [NOTICE_NO_PAGE_COPY],
+    });
+  });
+
+  it('unavailable', () => {
+    expect(NOTICE_UNAVAILABLE_COPY).toBe(
+      "This isn't available. It may have been removed, or it isn't shared with you.",
+    );
+    expect(noticeContent({ kind: 'unavailable' }, { offline: false })).toMatchObject({
+      lines: [NOTICE_UNAVAILABLE_COPY],
+      actions: [{ id: 'open-notifications' }, { id: 'close' }],
+    });
+  });
+
+  it('try again', () => {
+    expect(NOTICE_RETRY_COPY).toBe(
+      'Could not open this notification. Check your connection and try again.',
+    );
+    expect(noticeContent({ kind: 'retry' }, { offline: false })).toMatchObject({
+      lines: [NOTICE_RETRY_COPY],
+      actions: [{ id: 'retry', label: 'Try again', primary: true }, { id: 'close' }],
+    });
+  });
+
+  it('the switch names both workspaces, and is disabled offline', () => {
+    const notice: IntentNotice = {
+      kind: 'switch',
+      orgId: 'org-a',
+      orgName: 'Acme Demo Co',
+      activeOrgName: 'Ledger QA Co',
+      noun: 'order',
+      native: `/order/${ORDER}`,
+    };
+    expect(switchNoticeCopy('order', 'Acme Demo Co', 'Ledger QA Co')).toBe(
+      'This order is in Acme Demo Co. You are working in Ledger QA Co.',
+    );
+    expect(switchNoticeCopy('return', 'Acme Demo Co', null)).toBe(
+      'This return is in Acme Demo Co. You are working in another workspace.',
+    );
+    expect(noticeContent(notice, { offline: false })).toMatchObject({
+      lines: ['This order is in Acme Demo Co. You are working in Ledger QA Co.'],
+      actions: [
+        { id: 'switch', label: 'Switch to Acme Demo Co', primary: true, disabled: false },
+        { id: 'not-now', label: 'Not now', primary: false, disabled: false },
+      ],
+      dismiss: 'not-now',
+    });
+    expect(noticeContent(notice, { offline: true }).actions[0]).toMatchObject({
+      id: 'switch',
+      disabled: true,
+    });
+  });
+
+  it('every line is plain: no exclamation marks, and never "book" for a recorded quantity', () => {
+    const all: IntentNotice[] = [
+      { kind: 'account-mismatch' },
+      { kind: 'unsupported', title: null, body: null },
+      { kind: 'unavailable' },
+      { kind: 'retry' },
+      {
+        kind: 'switch',
+        orgId: 'o',
+        orgName: 'A',
+        activeOrgName: 'B',
+        noun: 'return',
+        native: '/returns',
+      },
+    ];
+    for (const notice of all) {
+      const text = JSON.stringify(noticeContent(notice, { offline: true }));
+      expect(text).not.toContain('!');
+      expect(text).not.toMatch(/\bbook\b/i);
+    }
+  });
+});
