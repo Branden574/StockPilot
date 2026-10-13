@@ -17,6 +17,7 @@ const getMock = vi.fn();
 const checkRateLimitMock = vi.fn();
 const safeFetchMock = vi.fn();
 const embedQueryMock = vi.fn();
+const embedItemsBatchMock = vi.fn();
 
 vi.mock('@/server/services/inventory', () => ({
   InventoryService: class {
@@ -64,6 +65,7 @@ vi.mock('@/lib/ssrf-guard', () => ({
 }));
 vi.mock('@/lib/ai/embeddings', () => ({
   embedQuery: (...args: unknown[]) => embedQueryMock(...args),
+  embedItemsBatch: (...args: unknown[]) => embedItemsBatchMock(...args),
   vectorLiteral: (v: number[]) => `[${v.join(',')}]`,
 }));
 // A model key must be present or identifyFromPhoto short-circuits on "not
@@ -452,5 +454,29 @@ describe('HI-5: write tools keep their authorization boundary', () => {
       error?: string;
     };
     expect(backfill.error).toBe('forbidden');
+  });
+
+  it("backfillEmbeddings answers an admin with counts only, never the batch's first error text", async () => {
+    // The batch's first failure's message is for the hourly sweep's summary
+    // line; it can carry the database's own words, which the model would
+    // then repeat to the user.
+    embedItemsBatchMock.mockResolvedValueOnce({
+      embedded: 2,
+      failed: 1,
+      changed: 0,
+      remaining: 4,
+      firstError: 'write failed: permission denied for table inventory_items',
+      stopped: null,
+      geminiFailuresInARow: 0,
+    });
+    const adminCtx = makeServiceContext(makeSupabaseStub({}).client, {
+      organizationId: ORG,
+      role: 'admin',
+    }) as unknown as ServiceContext;
+
+    const out = await TOOL_CATALOG.backfillEmbeddings!.execute({ limit: 3 }, adminCtx);
+
+    expect(embedItemsBatchMock).toHaveBeenCalledWith(adminCtx, { limit: 3 });
+    expect(out).toEqual({ embedded: 2, failed: 1, changed: 0, remaining: 4 });
   });
 });

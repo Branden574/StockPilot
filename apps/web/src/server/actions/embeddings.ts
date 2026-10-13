@@ -26,7 +26,9 @@ export async function backfillItemEmbeddingsAction(
   }
   try {
     const result = await embedItemsBatch(ctx, { limit: input.limit });
-    return ok(result);
+    // The counts only: the batch's first error (for the hourly sweep's
+    // summary) can carry the database's own words, never sent to a browser.
+    return ok({ embedded: result.embedded, failed: result.failed, remaining: result.remaining });
   } catch (e) {
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }
