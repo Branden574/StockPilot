@@ -35,6 +35,12 @@ const h = vi.hoisted(() => ({
     supabase: unknown;
     settle: () => void;
   }>,
+  /** Every service-role client update() created, in order. */
+  adminClients: [] as unknown[],
+  /** The SKU fan-out's chain: [method, ...args] per call, in order. */
+  fanOut: [] as unknown[][],
+  /** What the SKU fan-out answers. */
+  fanOutAnswer: { data: [], error: null } as { data: unknown; error: unknown },
 }));
 
 vi.mock('./lib/defer', async (importOriginal) => ({
@@ -62,17 +68,22 @@ vi.mock('@/lib/ai/embeddings', () => ({
   ),
 }));
 // update() copies product-level fields to the SKU's other rack records with the
-// server-key client (the edit fan-out); here it answers with no rows.
-vi.mock('@/lib/supabase/admin', () => {
-  const chain = () => {
+// server-key client (the edit fan-out). This one records the chain and answers
+// h.fanOutAnswer.
+vi.mock('@/lib/supabase/admin', () => ({
+  createAdminClient: () => {
     const p: Record<string, unknown> = {};
-    for (const m of ['from', 'update', 'select', 'eq', 'neq', 'is', 'in']) p[m] = () => p;
-    (p as { then: unknown }).then = (res: (v: unknown) => unknown) =>
-      res({ data: [], error: null });
+    for (const m of ['from', 'update', 'select', 'eq', 'neq', 'is', 'in']) {
+      p[m] = (...args: unknown[]) => {
+        h.fanOut.push([m, ...args]);
+        return p;
+      };
+    }
+    (p as { then: unknown }).then = (res: (v: unknown) => unknown) => res(h.fanOutAnswer);
+    h.adminClients.push(p);
     return p;
-  };
-  return { createAdminClient: () => chain() };
-});
+  },
+}));
 
 import { embedInventoryItem } from '@/lib/ai/embeddings';
 
@@ -83,6 +94,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.kept = [];
   h.embeds = [];
+  h.adminClients = [];
+  h.fanOut = [];
+  h.fanOutAnswer = { data: [], error: null };
 });
 
 const flush = () => new Promise<void>((r) => setTimeout(r, 0));
@@ -463,6 +477,89 @@ describe('update(): a changed searched field is re-embedded, held by keepAlive',
 
     expect(keepAlive).not.toHaveBeenCalled();
     expect(embedInventoryItem).not.toHaveBeenCalled();
+  });
+
+  it("is started before the SKU fan-out, so a fan-out that throws cannot skip this record's", async () => {
+    // The new SKU is taken at one of the other records' racks: this record
+    // already has it (its own UPDATE committed), the others cannot follow, and
+    // update() throws a conflict. Its search data must follow its new SKU.
+    h.fanOutAnswer = { data: null, error: { code: '23505', message: 'duplicate key' } };
+    const svc = new InventoryService(updateCtx({ ...ITEM, sku: 'NEW-SKU' }));
+
+    await expect(svc.update('itm-1', { sku: 'NEW-SKU' })).rejects.toMatchObject({
+      code: 'conflict',
+    });
+
+    expect(keepAlive).toHaveBeenCalledTimes(1);
+    await expectHeldUntilEveryEmbedSettles(h.kept[0]!, ['itm-1']);
+  });
+});
+
+const SIBLINGS = ['sib-1', 'sib-2', 'sib-3', 'sib-4', 'sib-5'];
+
+describe("update(): the SKU's other records the fan-out rewrote are re-embedded too", () => {
+  it('a changed name re-embeds every other record of the SKU, with the client that wrote them, in this organization', async () => {
+    h.fanOutAnswer = { data: SIBLINGS.map((id) => ({ id })), error: null };
+    const svc = new InventoryService(updateCtx({ ...ITEM, name: 'Widget Pro' }));
+
+    await svc.update('itm-1', { name: 'Widget Pro' });
+
+    // The fan-out returns the ids it wrote, scoped to this organization.
+    expect(h.fanOut).toEqual(
+      expect.arrayContaining([
+        ['eq', 'organization_id', 'org-1'],
+        ['eq', 'sku', 'OLD-SKU'],
+        ['neq', 'id', 'itm-1'],
+        ['select', 'id'],
+      ]),
+    );
+    expect(keepAlive).toHaveBeenCalledTimes(2);
+    await expectHeldUntilEveryEmbedSettles(h.kept[0]!, ['itm-1']);
+    await expectHeldUntilEveryEmbedSettles(h.kept[1]!, SIBLINGS);
+    const byId = new Map(h.embeds.map((e) => [e.id, e]));
+    // This record through the editor's own client...
+    expect(byId.get('itm-1')?.supabase).not.toBe(h.adminClients[0]);
+    // ...the others through the service-role client that wrote them, and
+    // every one scoped to the editor's organization.
+    for (const sib of SIBLINGS) {
+      expect(byId.get(sib)).toMatchObject({ organizationId: 'org-1', supabase: h.adminClients[0] });
+    }
+  });
+
+  it('a changed custom field re-embeds this record only: custom fields are not shared', async () => {
+    h.fanOutAnswer = { data: SIBLINGS.map((id) => ({ id })), error: null };
+    const svc = new InventoryService(
+      updateCtx({ ...ITEM, custom_fields: { author: 'Toni Morrison' } }),
+    );
+
+    // The edit form sends every field on every save, so the unchanged name
+    // still goes to the other records (the fan-out runs); only the author,
+    // which is per record, changed.
+    await svc.update('itm-1', { name: 'Widget', customFields: { author: 'Toni Morrison' } });
+
+    expect(h.fanOut).toEqual(expect.arrayContaining([['select', 'id']]));
+    expect(keepAlive).toHaveBeenCalledTimes(1);
+    await expectHeldUntilEveryEmbedSettles(h.kept[0]!, ['itm-1']);
+  });
+
+  it('a changed price rewrites the other records but embeds nothing', async () => {
+    h.fanOutAnswer = { data: SIBLINGS.map((id) => ({ id })), error: null };
+    const svc = new InventoryService(updateCtx({ ...ITEM, unit_cost: 5 }));
+
+    await svc.update('itm-1', { unitCost: 5 });
+
+    expect(h.fanOut.length).toBeGreaterThan(0);
+    expect(keepAlive).not.toHaveBeenCalled();
+    expect(embedInventoryItem).not.toHaveBeenCalled();
+  });
+
+  it('a SKU with no other records embeds this record only', async () => {
+    const svc = new InventoryService(updateCtx({ ...ITEM, name: 'Widget Pro' }));
+
+    await svc.update('itm-1', { name: 'Widget Pro' });
+
+    expect(keepAlive).toHaveBeenCalledTimes(1);
+    await expectHeldUntilEveryEmbedSettles(h.kept[0]!, ['itm-1']);
   });
 });
 

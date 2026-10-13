@@ -137,6 +137,23 @@ const BACKGROUND_EMBED_CONCURRENCY = 4;
 type EmbedItemCtx = Parameters<typeof Embeddings.embedInventoryItem>[1];
 
 /**
+ * The embeddings module, imported on first use (lazy, so the Gemini SDK loads
+ * only where an item is embedded) and shared by every loop after that: an
+ * edit starts two loops back to back (the record, then the SKU's other
+ * records). A failed import is forgotten, so the next loop tries again.
+ * Sharing it also keeps tests honest: vitest 4.1 answers two CONCURRENT
+ * dynamic imports of a vi.mock'ed module with the real module for one of them.
+ */
+let embeddingsModule: Promise<typeof Embeddings> | null = null;
+function loadEmbeddings(): Promise<typeof Embeddings> {
+  embeddingsModule ??= import('@/lib/ai/embeddings').catch((err: unknown) => {
+    embeddingsModule = null;
+    throw err;
+  });
+  return embeddingsModule;
+}
+
+/**
  * Embed `ids` for semantic search after the response: ONE loop over them, at
  * most BACKGROUND_EMBED_CONCURRENCY at a time, each embedInventoryItem awaited
  * inside it, the whole loop handed to keepAlive (lib/defer.ts, the mechanism
@@ -169,8 +186,7 @@ function embedInBackground(
   if (ids.length === 0) return;
   keepAlive(
     (async () => {
-      // Lazy, so the Gemini SDK loads only where an item is embedded.
-      const { embedInventoryItem } = await import('@/lib/ai/embeddings');
+      const { embedInventoryItem } = await loadEmbeddings();
       await mapWithConcurrency(ids, BACKGROUND_EMBED_CONCURRENCY, async (id) => {
         await embedInventoryItem(id, ctx as EmbedItemCtx);
       });
@@ -5088,6 +5104,44 @@ export class InventoryService {
     // so a changed reorder point left the cached low-stock badge wrong.
     invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.update');
 
+    // before/after for the P1 diff drawer — restricted to the CHANGED keys
+    // on the TARGET row only (current = pre-patch, data = post-patch).
+    // Deliberately does NOT reach into the Model-B sibling fan-out below —
+    // that's a separate set of rows this audit event isn't about.
+    const beforeRow = current as Record<string, unknown>;
+    const afterRow = data as Record<string, unknown>;
+    // Record only keys whose VALUE actually changed. The edit form submits
+    // the full patch, so submitted keys alone made every save read as
+    // "Fields changed: <all 19 fields>" (owner report 2026-07-15). Both
+    // sides are DB rows (same type representation); jsonb columns compare
+    // via stringify (Postgres normalizes jsonb key order, so it's stable).
+    // `updated_by` stays excluded as cosmetic.
+    const jsonEq = (a: unknown, b: unknown) =>
+      a === b || JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+    const changedKeys = Object.keys(updates)
+      .filter((k) => k !== 'updated_by')
+      .filter((k) => !jsonEq(beforeRow[k], afterRow[k]));
+
+    // Re-embed only when a field the embedding is built from changed
+    // (itemEmbeddingSource: name, SKU, barcode, description, and the author
+    // in custom_fields) — saves a Gemini call when the user only edited
+    // price / reorder thresholds. Started HERE, right after this row's own
+    // UPDATE committed and before the SKU fan-out, which can still throw (a
+    // new SKU taken at another record's rack): the row keeps what it was
+    // saved with either way, so its search data must follow. Held by
+    // keepAlive, never awaited (see embedInBackground).
+    const EMBED_RELEVANT_KEYS = new Set([
+      'name',
+      'sku',
+      'barcode',
+      'description',
+      'custom_fields',
+    ]);
+    const searchedKeysChanged = changedKeys.filter((k) => EMBED_RELEVANT_KEYS.has(k));
+    if (searchedKeysChanged.length > 0) {
+      embedInBackground([id], this.ctx);
+    }
+
     // Model B: fan out shared product fields to every OTHER placement of
     // this SKU. Keyed on the ORIGINAL sku (captured above, before the patch)
     // so that a sku edit re-keys the whole group together. Per-placement
@@ -5127,13 +5181,17 @@ export class InventoryService {
       // this.ctx.supabase (RLS-guarded) — only this sibling fan-out is
       // privileged, and the explicit organization_id filter below is the
       // mandatory tenant-isolation floor now that RLS is bypassed.
-      const { error: sibErr } = await createAdminClient()
+      // `.select('id')` returns the records it rewrote, for their search data
+      // (below).
+      const admin = createAdminClient();
+      const { data: siblings, error: sibErr } = await admin
         .from('inventory_items')
         .update({ ...sharedUpdates, updated_by: this.ctx.userId })
         .eq('organization_id', this.ctx.organizationId)
         .eq('sku', originalSku)
         .is('deleted_at', null)
-        .neq('id', id);
+        .neq('id', id)
+        .select('id');
       if (sibErr) {
         if (sibErr.code === '23505') {
           // Honest about the known limitation above: this record already has
@@ -5154,25 +5212,28 @@ export class InventoryService {
       // If sku itself changed, the group's new identity is the new sku;
       // otherwise it's unchanged (still originalSku).
       propagatedToSku = (sharedUpdates.sku as string | undefined) ?? originalSku;
+
+      // The other records now carry this record's new name, SKU, barcode or
+      // description, so their embeddings are stale too: re-embed the ones
+      // this UPDATE returned, in one bounded loop held by keepAlive. Through
+      // the client that wrote them (the service role, for the reason above):
+      // the editor's own client could not read a record in a warehouse they
+      // cannot see, and a stale embedding is never swept (only a missing
+      // one is). embedInventoryItem scopes its read and its write to this
+      // organization and to each id. custom_fields is per record and never
+      // fanned out, so an author change re-embeds this record only.
+      const siblingIds = ((siblings ?? []) as Array<{ id: string }>).map((r) => r.id);
+      const sharedSearchedChanged = searchedKeysChanged.some((k) =>
+        (SHARED_ITEM_FIELDS as readonly string[]).includes(k),
+      );
+      if (sharedSearchedChanged && siblingIds.length > 0) {
+        embedInBackground(siblingIds, {
+          supabase: admin,
+          organizationId: this.ctx.organizationId,
+        });
+      }
     }
 
-    // before/after for the P1 diff drawer — restricted to the CHANGED keys
-    // on the TARGET row only (current = pre-patch, data = post-patch).
-    // Deliberately does NOT reach into the Model-B sibling fan-out above —
-    // that's a separate set of rows this audit event isn't about.
-    const beforeRow = current as Record<string, unknown>;
-    const afterRow = data as Record<string, unknown>;
-    // Record only keys whose VALUE actually changed. The edit form submits
-    // the full patch, so submitted keys alone made every save read as
-    // "Fields changed: <all 19 fields>" (owner report 2026-07-15). Both
-    // sides are DB rows (same type representation); jsonb columns compare
-    // via stringify (Postgres normalizes jsonb key order, so it's stable).
-    // `updated_by` stays excluded as cosmetic.
-    const jsonEq = (a: unknown, b: unknown) =>
-      a === b || JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
-    const changedKeys = Object.keys(updates)
-      .filter((k) => k !== 'updated_by')
-      .filter((k) => !jsonEq(beforeRow[k], afterRow[k]));
     void audit(
       {
         event: 'inventory.item.updated',
@@ -5207,20 +5268,6 @@ export class InventoryService {
         },
         this.ctx,
       );
-    }
-
-    // Re-embed only when an embedding-relevant field changed — saves a
-    // Gemini call when the user only edited price / reorder thresholds.
-    const EMBED_RELEVANT_KEYS = new Set([
-      'name',
-      'sku',
-      'barcode',
-      'description',
-      'custom_fields',
-    ]);
-    if (changedKeys.some((k) => EMBED_RELEVANT_KEYS.has(k))) {
-      // Held by keepAlive, never awaited (see embedInBackground).
-      embedInBackground([id], this.ctx);
     }
 
     // ═══ SETTING A RACK ON THE EDIT FORM MOVES THE STOCK ═══
