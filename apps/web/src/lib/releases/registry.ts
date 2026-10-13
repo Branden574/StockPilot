@@ -28,6 +28,119 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'pages-keep-groups-whole-2026-10',
+    revision: 1,
+    // Phase 2 of the grouping brief (owner go 2026-10-12): #364 merged as
+    // 0694833cc, web build c5d1efe0c64e live at 2026-10-12T21:26:17Z. No
+    // database change and no phone change. The Demo Co production walk
+    // (walk-p2/WALK-P2.md, 21:33-21:36Z, 7 of 7 passed): ?type=all as an admin
+    // takes the planned live path; 59 records on 2 pages, none lost or
+    // repeated; Verify Pegasus 41 sizes 9, 10 and 11 together on page 1, where
+    // fixed pages would put size 9 on page 2; no 5xx and no plan fallback.
+    // Claims checked against 0694833cc:
+    // - who: staff and viewers never read the shared caches
+    //   (canUseSharedInventoryCaches: manager or above with items:read), so
+    //   their Items and Books lists always take the live branch, which now
+    //   plans the page over the whole filtered view (planned-page.ts
+    //   planLivePage: InventoryService.listPlanRows, then planGroupAwarePage =
+    //   sortInstantRows + runAwarePages, the rule managers' instant mode pages
+    //   with) and reads exactly that page (readPlannedPage). Managers, admins
+    //   and owners take the same branch on Items showing every item type: the
+    //   awaited instant branch needs itemType 'product' (inventory page.tsx
+    //   awaitsInstantDataset) and isDefaultInventoryView refuses any other
+    //   type. Every low stock link on the dashboard opens ?stock=low&type=all,
+    //   where 0694833cc^ called list() with a fixed limit and offset;
+    // - what stays together: core makeDisplayUnitKeyer's units, a group (a
+    //   formed display group), the records that share a raw SKU, and on Items
+    //   only a size run (stored group_id, else the name); Books pages with
+    //   sizeRuns: false, so the words promise no size run there;
+    // - a size with a record for each of several racks: the records share one
+    //   raw SKU and the keyer takes a shared SKU before a size run (inSku
+    //   before runKeyOf), so they are a unit of their own, kept together under
+    //   the SKU's header but apart from the run, and can land on another page
+    //   (S, M, L and XL on page 1, the XS's two records on page 2), as in
+    //   managers' instant mode; the words say so and do not promise that a
+    //   size never sits alone on another page. L4L had no such size on
+    //   2026-10-13 (26 shared SKUs, none in a family or with a size in its
+    //   name; counts only);
+    // - page size: runAwarePages closes a page before a unit that would not
+    //   fit, and a unit larger than 30 records fills a page of its own;
+    // - limits: past INSTANT_MODE_MAX_ROWS (2000) records in the filtered view
+    //   listPlanRows answers null and the page keeps fixed 30-record slices
+    //   (so does a failed scan); with stock=low the size it checks is the low
+    //   pre-filter's (a reorder point set, or no stock), counted before the
+    //   low rule, so the words say what the 2,000 counts there; a search in
+    //   the box shows /api/items/search's first pageSize (30) matches with no
+    //   pager (the table's planned is null while q is set);
+    // - the footer: a planned page prints "N SKUs" (distinctSkus) and, when it
+    //   differs, the records as items on Items and rows on Books (rowsLabel);
+    //   fixed pages print "N items" as before, which is what staff and viewers,
+    //   and everyone on ?type=all, saw until now. The count and the value sit
+    //   at the right end of the toolbar, above the top pager and the table
+    //   (inventory-table.tsx), so the words say "above the list";
+    // - the *: a fixed page of a list over one page marks the header of a SKU
+    //   or a group with two or more records on it (partial: !singlePage &&
+    //   records > 1), a * after On hand titled "other pages may hold more";
+    //   a planned page brings every unit's full count (unitItemRowCounts), so
+    //   a unit kept whole is not marked. Staff and viewers, and everyone on
+    //   ?type=all, saw it on such headers until now;
+    // - Low + critical: a fixed page is list()'s 30 records that pass the low
+    //   pre-filter (.range on the query), filtered again on the rows read,
+    //   while its count and pages come from the whole low set (totalCount =
+    //   sumRows.length), so a page could show few or none, and low records
+    //   past the last page offered were on no page; listPlanRows filters the
+    //   whole view first, so the plan pages every low record;
+    // - the rack view: list()'s page query, its value scan and the plan scan
+    //   take every filter from applyContentFilters; the value scan used to skip
+    //   the rack filter, so the value, and with stock=low the count and pages
+    //   (totalCount = sumRows.length), covered every rack. The chip reads
+    //   "Low + critical" (inventory-table.tsx VIEWS), the rack control "Rack:"
+    //   (RackFilterDropdown), the footer "on hand".
+    // Who is told: whoever can read items (items:read), on both entries, with
+    // no links; Items is a core page. The words say the change is for staff
+    // and viewers on every list, and for everyone on Items showing every item
+    // type (?type=all, where the dashboard's low stock links go):
+    // awaitsInstantDataset needs itemType 'product', so managers, admins and
+    // owners take the planned live branch there, as the walk's admin did. The
+    // summary says it in fewer words than entry 1: the schema caps a summary
+    // at 500 characters.
+    status: 'published',
+    title: 'Records shown under one header are no longer split across pages of Items and Books',
+    summary:
+      "On the web, staff and viewers now see Items and Books in pages that keep each header's records together: the records that share a SKU or a group, and on Items a size run. Managers, admins and owners already did on most lists, and now do on Items showing every item type, where the dashboard's low stock links go. With a rack chosen, the on hand value above these lists, and with Low + critical the number of records, now cover only that rack.",
+    publishedAt: '2026-10-12T21:40:00Z',
+    entries: [
+      {
+        id: 'pages-keep-size-families-whole',
+        category: 'fixed',
+        area: 'Inventory',
+        title: "Pages of Items and Books keep each header's records together",
+        whatChanged:
+          "On the web, staff and viewers now see Items and Books in pages that keep together the records the list shows under one header, as managers, admins and owners already did on most lists: the records that share a SKU, the records of a group, and on Items a size run (sizes shown together by name or by product family). Everyone now sees Items this way when it shows every item type, which is how the dashboard's low stock links open it. A size stocked on more than one rack, with a record for each rack, shows under its SKU's header, which can be on a different page from its other sizes.",
+        whyItMatters:
+          "Pages used to be cut every 30 records in the list's order, so a record that sorted far from the others under its header could sit alone on another page. A shirt's other sizes could show on page 1 while its XS sat alone on page 2, where it was easy to miss when ordering. On a list of more than one page, the header of a SKU or a group with two or more records also showed a * after its on hand figure, as other pages might hold more of it. With Low + critical chosen, a page used to show only the low or critical ones among 30 records, so it could show few or none, and some could be on no page.",
+        howItAffectsYou:
+          "A page can end before 30 records so that a header's records are not cut in two, and a header of more than 30 records gets a page of its own. With Low + critical chosen, every low or critical record is now on a page. The count above the list now starts with the number of SKUs, then gives the number of items (rows on Books) when some SKUs have more than one record. Lists of more than 2,000 records are still cut every 30 records, as before (for Low + critical, the 2,000 counts every record with a reorder point or no stock), and a search typed into the search box still shows its first 30 matches.",
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:read'] },
+      },
+      {
+        id: 'rack-view-totals-cover-the-rack',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'With a rack chosen, the totals above the list cover only that rack',
+        whatChanged:
+          "When staff and viewers choose a rack on the web Items or Books list, or anyone does on Items when it shows every item type, the on hand value above the list now adds up only that rack's records. With Low + critical chosen as well, the number of records and the pages also cover only that rack.",
+        whyItMatters:
+          'These totals used to add up every rack, so the value was too high and a Low + critical view of one rack could run into empty pages.',
+        howItAffectsYou:
+          "The value and the count above a rack's list now match the records it shows.",
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:read'] },
+      },
+    ],
+  },
+  {
     id: 'ungroup-follow-ups-2026-10',
     revision: 1,
     // The Group selected review follow-ups (2026-10-12), all merged and live:

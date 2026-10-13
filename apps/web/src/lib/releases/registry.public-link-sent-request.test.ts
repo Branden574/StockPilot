@@ -102,7 +102,8 @@ describe('the public order link release (a sent request leaves nothing behind)',
     // it first, and this one once it is read. Claim kept: it is the notice
     // for whoever manages public links, whom no returns release reaches.
     // Re-pinned by docs/whats-new-ungroup-follow-ups (2026-10-12; was: group-selected-2026-10): the Ungroup follow-ups release is published after it, at the top and reaches this reader.
-    expect(list.latestUnread?.id).toBe('ungroup-follow-ups-2026-10');
+    // Re-pinned by docs/whats-new-pages-keep-groups-whole (2026-10-12; was: ungroup-follow-ups-2026-10): the pages-keep-groups-whole release is published after it, at the top, and reaches this reader.
+    expect(list.latestUnread?.id).toBe('pages-keep-groups-whole-2026-10');
     const rx2Read = {
       release_id: 'returns-exchange-2026-10',
       revision: 1,
@@ -117,16 +118,27 @@ describe('the public order link release (a sent request leaves nothing behind)',
     const groupSelectedRead = { ...rx2Read, release_id: 'group-selected-2026-10' };
     // Re-pinned by docs/whats-new-ungroup-follow-ups (2026-10-12): the Ungroup follow-ups release is published at the top and reaches this reader, so it is read or seen here too and the order this test checks holds.
     const followUpsRead = { ...rx2Read, release_id: 'ungroup-follow-ups-2026-10' };
-    const newerRead = [followUpsRead, groupSelectedRead, ungroupRead];
+    // Re-pinned by docs/whats-new-pages-keep-groups-whole (2026-10-12; was: the newer reads without it): the pages-keep-groups-whole release is published at the top and reaches this reader, so it is read here too and the order this test checks holds.
+    const pagesRead = { ...rx2Read, release_id: 'pages-keep-groups-whole-2026-10' };
+    const newerRead = [pagesRead, followUpsRead, groupSelectedRead, ungroupRead];
     expect(buildReleaseList(RELEASES, everyone, [rx2Read], null).latestUnread?.id).toBe(
+      'pages-keep-groups-whole-2026-10',
+    );
+    expect(buildReleaseList(RELEASES, everyone, [rx2Read, pagesRead], null).latestUnread?.id).toBe(
       'ungroup-follow-ups-2026-10',
     );
-    expect(buildReleaseList(RELEASES, everyone, [rx2Read, followUpsRead], null).latestUnread?.id).toBe(
-      'group-selected-2026-10',
-    );
-    expect(buildReleaseList(RELEASES, everyone, [rx2Read, followUpsRead, groupSelectedRead], null).latestUnread?.id).toBe(
-      'ungroup-2026-10',
-    );
+    expect(
+      buildReleaseList(RELEASES, everyone, [rx2Read, pagesRead, followUpsRead], null).latestUnread
+        ?.id,
+    ).toBe('group-selected-2026-10');
+    expect(
+      buildReleaseList(
+        RELEASES,
+        everyone,
+        [rx2Read, pagesRead, followUpsRead, groupSelectedRead],
+        null,
+      ).latestUnread?.id,
+    ).toBe('ungroup-2026-10');
     expect(buildReleaseList(RELEASES, everyone, [rx2Read, ...newerRead], null).latestUnread?.id).toBe(
       'returns-history-hand-over-2026-10',
     );
@@ -238,26 +250,32 @@ describe('the public order link release (a sent request leaves nothing behind)',
   // selected's is the newest published release and no draft is left. Claim
   // kept: directly below RX-2's release, with RX-3's, RX-4's and the
   // hand-over release above that, dated after every release below it.
-  it('sits directly below returns RX-2\'s release, with returns RX-3\'s, RX-4\'s and the return history hand-over release above that, and the Ungroup and Group selected releases at the top (all published later), dated after every release below it, and no draft is left', () => {
+  // Renamed by docs/whats-new-pages-keep-groups-whole (2026-10-12; was: "... and the Ungroup and Group selected releases at the top ..."): the Ungroup follow-ups release (#362) and the pages-keep-groups-whole release are published above them, at the top. Claim kept: directly below RX-2's release, with RX-3's, RX-4's and the hand-over release above that, dated after every release below it.
+  it("sits directly below returns RX-2's release, with returns RX-3's, RX-4's and the return history hand-over release above that, and the Ungroup, Group selected, Ungroup follow-ups and pages-keep-groups-whole releases at the top (all published later), dated after every release below it, and no draft is left", () => {
     // Re-pinned by docs/whats-new-ungroup-follow-ups (2026-10-12): the Ungroup follow-ups release is published at the top, above Group selected's, so every position below it moves down by one.
-    expect(RELEASES[0]?.id).toBe('ungroup-follow-ups-2026-10');
+    // Re-pinned by docs/whats-new-pages-keep-groups-whole (2026-10-12; was: the Ungroup follow-ups release at 0 and this one at 7): the pages-keep-groups-whole release is published at the top, above the Ungroup follow-ups release, so every position below it moves down by one.
+    expect(RELEASES[0]?.id).toBe('pages-keep-groups-whole-2026-10');
     expect(RELEASES[0]?.status).toBe('published');
-    expect(RELEASES[1]?.id).toBe('group-selected-2026-10');
+    expect(RELEASES[1]?.id).toBe('ungroup-follow-ups-2026-10');
     expect(RELEASES[1]?.status).toBe('published');
-    expect(RELEASES[2]?.id).toBe('ungroup-2026-10');
+    expect(RELEASES[2]?.id).toBe('group-selected-2026-10');
     expect(RELEASES[2]?.status).toBe('published');
-    expect(RELEASES[3]?.id).toBe('returns-history-hand-over-2026-10');
+    expect(RELEASES[3]?.id).toBe('ungroup-2026-10');
     expect(RELEASES[3]?.status).toBe('published');
-    expect(RELEASES[4]?.id).toBe('returns-close-rest-2026-10');
+    expect(RELEASES[4]?.id).toBe('returns-history-hand-over-2026-10');
     expect(RELEASES[4]?.status).toBe('published');
-    expect(RELEASES[5]?.id).toBe('returns-requester-exchange-2026-10');
+    expect(RELEASES[5]?.id).toBe('returns-close-rest-2026-10');
     expect(RELEASES[5]?.status).toBe('published');
-    expect(RELEASES[6]?.id).toBe('returns-exchange-2026-10');
+    expect(RELEASES[6]?.id).toBe('returns-requester-exchange-2026-10');
     expect(RELEASES[6]?.status).toBe('published');
-    expect(RELEASES[7]?.id).toBe(ID);
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe('ungroup-follow-ups-2026-10');
+    expect(RELEASES[7]?.id).toBe('returns-exchange-2026-10');
+    expect(RELEASES[7]?.status).toBe('published');
+    expect(RELEASES[8]?.id).toBe(ID);
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(
+      'pages-keep-groups-whole-2026-10',
+    );
     expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([]);
-    for (const r of RELEASES.slice(8)) {
+    for (const r of RELEASES.slice(9)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
     expect(Date.parse(RELEASES[1]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
@@ -266,6 +284,7 @@ describe('the public order link release (a sent request leaves nothing behind)',
     expect(Date.parse(RELEASES[4]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
     expect(Date.parse(RELEASES[5]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
     expect(Date.parse(RELEASES[6]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
+    expect(Date.parse(RELEASES[7]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
   });
 
   it('is told to whoever can open the Public requests settings page, and links there', () => {
