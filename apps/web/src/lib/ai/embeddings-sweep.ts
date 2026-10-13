@@ -24,9 +24,10 @@ import { embedItemsBatch } from './embeddings';
  * THE BUDGET. Every number bounds time or Gemini calls:
  *   deadlineMs 150 s: no item STARTS after 150 s. The one in flight finishes
  *     within EMBED_TIMEOUT_MS (10 s) of Gemini, then its read again and its
- *     write, and its organization ends with one count query, so a run ends
- *     well inside the route's maxDuration of 300 s even when every call times
- *     out and Supabase stalls for seconds.
+ *     write, and its organization ends with one count query (or, when its
+ *     read failed, with its error report, whose POST is capped at 2 s), so a
+ *     run ends well inside the route's maxDuration of 300 s even when every
+ *     call times out and Supabase stalls for seconds.
  *   runCap 150 items: an embed is about 0.2 to 0.5 s of Gemini, a read
  *     again, a write and embedItemsBatch's 50 ms pacing, so a full run
  *     normally takes about a minute. Attempts count, not successes (a
@@ -141,8 +142,10 @@ export async function sweepMissingEmbeddings(
       budget -= batch.embedded + batch.failed + batch.changed;
     } catch (err) {
       // embedItemsBatch throws only when its read of the items fails.
+      // Awaited, so the alert POST is never left in flight when the run
+      // returns (reportError never throws and caps its POST at 2 s).
       result.orgsFailed += 1;
-      void reportError(err, {
+      await reportError(err, {
         tag: 'cron.embeddings-sweep.org',
         level: 'warning',
         organizationId,

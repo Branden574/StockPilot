@@ -528,6 +528,42 @@ describe('the embeddings sweep', () => {
     });
   });
 
+  it("returns only once an organization's failure report is sent: its alert POST is never left in flight", async () => {
+    // org-b, the last organization of the run, fails its read. The real
+    // reportError prints its line, then posts to the alert webhook; the run
+    // must not return (and the route must not answer) before that POST ends.
+    vi.stubEnv('ERROR_WEBHOOK_URL', 'https://alerts.test.local/hook');
+    const rows = [item('org-a'), item('org-b')];
+    const { client } = table(rows, { failReadFor: 'org-b' });
+    const geminiFetch = gemini();
+    let answerAlert: (() => void) | undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown, init?: RequestInit) => {
+        if (String(url) === 'https://alerts.test.local/hook') {
+          await new Promise<void>((resolve) => {
+            answerAlert = resolve;
+          });
+          return new Response('ok', { status: 200 });
+        }
+        return geminiFetch(url, init);
+      }),
+    );
+
+    let returned = false;
+    const run = sweepMissingEmbeddings(client).then((r) => {
+      returned = true;
+      return r;
+    });
+    for (let i = 0; i < 50 && !answerAlert; i += 1) await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(answerAlert).toBeTypeOf('function');
+    expect(returned).toBe(false);
+    answerAlert!();
+    await expect(run).resolves.toMatchObject({ orgsProcessed: 1, orgsFailed: 1, embedded: 1 });
+  });
+
   it('looks at no more than maxOrgs organizations in a run', async () => {
     const rows = [item('org-a'), item('org-b'), item('org-c')];
     const { client } = table(rows);

@@ -55,7 +55,10 @@ export async function GET(req: Request) {
     console.info('[cron.embeddings-sweep]', JSON.stringify(result));
     return NextResponse.json(result);
   } catch (err) {
-    void reportError(err, { tag: 'cron.embeddings-sweep' });
+    // Awaited: reportError posts to the alert webhook after printing its
+    // line, and an answer sent first could leave that POST in flight on a
+    // suspended instance. It never throws and caps the POST at 2 s.
+    await reportError(err, { tag: 'cron.embeddings-sweep' });
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });
   }
 }

@@ -116,6 +116,33 @@ describe('GET /api/cron/embeddings-sweep: the run', () => {
     expect(h.reportError).toHaveBeenCalledWith(expect.any(Error), { tag: 'cron.embeddings-sweep' });
   });
 
+  it('a failed run answers only once its error report is sent: the alert POST is never left in flight', async () => {
+    // reportError posts to the alert webhook after printing its line. Were the
+    // route to answer first, the instance could be suspended with that POST
+    // still pending, and the alert would be lost.
+    h.sweep.mockRejectedValue(new Error('could not find organizations'));
+    let sendReport: (() => void) | undefined;
+    h.reportError.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          sendReport = resolve;
+        }),
+    );
+
+    let answered = false;
+    const response = GET(req('Bearer test-cron-secret')).then((res) => {
+      answered = true;
+      return res;
+    });
+    for (let i = 0; i < 20 && !sendReport; i += 1) await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(sendReport).toBeTypeOf('function');
+    expect(answered).toBe(false);
+    sendReport!();
+    expect((await response).status).toBe(500);
+  });
+
   it('a run always ends well inside maxDuration', () => {
     // No item starts after the deadline; the one in flight has at most the
     // Gemini timeout, then its read again, its write and its organization's
