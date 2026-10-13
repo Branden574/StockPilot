@@ -997,9 +997,11 @@ WEB_TESTS=(
   # without a search embedding, on the service role, so the organization
   # filters are its only tenant boundary. Every item read and every write
   # names one organization (each write also the item), only the embedding
-  # column is written, its log is counts only (no item names, no
-  # organization ids), and the CRON_SECRET gate fails closed when the secret
-  # is unset. Both files carry the "Security invariant" marker.
+  # column is written, no log line or alert names an item, the run's summary
+  # line is counts only, an organization is named (by id) only in the error
+  # report of its own failed read, as every cron reports one, and the
+  # CRON_SECRET gate fails closed when the secret is unset. Both files carry
+  # the "Security invariant" marker.
   src/app/api/cron/embeddings-sweep/route.test.ts
   src/lib/ai/embeddings-sweep.test.ts
 

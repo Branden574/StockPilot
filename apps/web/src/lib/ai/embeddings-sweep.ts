@@ -48,7 +48,9 @@ export const EMBEDDINGS_SWEEP = {
 
 export type EmbeddingsSweepLimits = { [K in keyof typeof EMBEDDINGS_SWEEP]: number };
 
-/** Counts only: no item names, no organization ids. */
+/** Counts only: no item names, no organization ids. The route logs it as the
+ *  run's one summary line; an organization whose read fails is reported on
+ *  its own, by reportError, with its id. */
 export interface EmbeddingsSweepResult {
   /** Set when the run did nothing on purpose. */
   skipped: 'no_gemini_key' | null;
@@ -89,7 +91,8 @@ type AdminClient = ReturnType<typeof createAdminClient>;
  *
  * Fair over time: organizations are taken in id order, rotated by the UTC
  * hour, so when the run cap stops a run, a different organization goes first
- * in the next one. One organization's failure is reported and the rest carry
+ * in the next one. One organization's failure is reported (reportError, with
+ * that organization's id: the only place a run names one) and the rest carry
  * on. Without a Gemini key it reads nothing.
  */
 export async function sweepMissingEmbeddings(

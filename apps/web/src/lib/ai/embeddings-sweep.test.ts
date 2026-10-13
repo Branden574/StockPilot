@@ -13,7 +13,10 @@ import {
  * reads and writes with the SERVICE ROLE, so RLS does not apply and the
  * organization filters are the only tenant boundary. Every read and write of
  * an item names one organization, every write names the item and that
- * organization, and only the `embedding` column is ever written.
+ * organization, and only the `embedding` column is ever written. No log line
+ * or alert names an item, whatever fails, and an organization is named (by
+ * id) only in the error report of its own failed read, as every cron reports
+ * one: the real reportError runs here, so what it prints and posts is seen.
  *
  * What the sweep is for: any item left with `embedding IS NULL`, whatever
  * left it (the books import and bulkCreate do not embed at once, a Gemini
@@ -30,14 +33,20 @@ import {
 
 const h = vi.hoisted(() => ({
   env: { GEMINI_API_KEY: 'test-key' } as { GEMINI_API_KEY?: string },
-  reportError: vi.fn(),
 }));
 vi.mock('@/lib/env', () => ({
   get env() {
     return h.env;
   },
 }));
-vi.mock('@/lib/error-reporter', () => ({ reportError: h.reportError }));
+// The REAL reportError, watched: what it prints (console.error) and posts
+// (the webhook, through the stubbed fetch) is what a run would log.
+vi.mock('@/lib/error-reporter', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/error-reporter')>();
+  return { ...actual, reportError: vi.fn(actual.reportError) };
+});
+
+import { reportError } from '@/lib/error-reporter';
 
 import { EMBEDDING_DIM } from './embeddings';
 import { EMBEDDINGS_SWEEP, sweepMissingEmbeddings } from './embeddings-sweep';
@@ -183,7 +192,9 @@ let logged: unknown[][];
 beforeEach(() => {
   seq = 0;
   h.env = { GEMINI_API_KEY: 'test-key' };
-  h.reportError.mockReset();
+  vi.mocked(reportError).mockClear();
+  // No alert webhook unless a test sets one.
+  vi.stubEnv('ERROR_WEBHOOK_URL', '');
   vi.spyOn(Date, 'now').mockReturnValue(at(0));
   logged = [];
   for (const level of ['log', 'info', 'warn', 'error'] as const) {
@@ -194,6 +205,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe('the embeddings sweep', () => {
@@ -509,8 +521,8 @@ describe('the embeddings sweep', () => {
 
     expect(result).toMatchObject({ orgs: 3, orgsProcessed: 2, orgsFailed: 1, embedded: 2 });
     expect(missing(rows).map((r) => r.organization_id)).toEqual(['org-b']);
-    expect(h.reportError).toHaveBeenCalledTimes(1);
-    expect(h.reportError.mock.calls[0]?.[1]).toMatchObject({
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(reportError).mock.calls[0]?.[1]).toMatchObject({
       tag: 'cron.embeddings-sweep.org',
       organizationId: 'org-b',
     });
@@ -527,20 +539,40 @@ describe('the embeddings sweep', () => {
     expect(missing(rows).map((r) => r.organization_id)).toEqual(['org-c']);
   });
 
-  it('logs no item name and no organization id, whatever fails', async () => {
+  it('no log line or alert names an item, whatever fails; an organization is named only in the report of its own failed read', async () => {
+    // org-a's item is refused by Gemini; org-b's read fails. The real
+    // reportError prints its payload and posts it to the alert webhook.
+    vi.stubEnv('ERROR_WEBHOOK_URL', 'https://alerts.test.local/hook');
     const rows = [item('org-a', { name: 'Gemini refuses this one' }), item('org-b')];
     const { client } = table(rows, { failReadFor: 'org-b' });
-    vi.stubGlobal('fetch', gemini({ failFor: 'Gemini refuses this one' }));
+    const geminiFetch = gemini({ failFor: 'Gemini refuses this one' });
+    const alerts: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown, init?: RequestInit) => {
+        if (String(url) === 'https://alerts.test.local/hook') {
+          alerts.push(String(init?.body));
+          return new Response('ok', { status: 200 });
+        }
+        return geminiFetch(url, init);
+      }),
+    );
 
     await sweepMissingEmbeddings(client);
 
-    const text = JSON.stringify(
-      logged.map((args) => args.map((a) => (a instanceof Error ? a.message : a))),
+    const lines = logged.map((args) =>
+      JSON.stringify(args.map((a) => (a instanceof Error ? a.message : a))),
     );
+    const everything = [...lines, ...alerts];
+    // The report was seen (it is printed and posted): the checks below are not vacuous.
+    expect(alerts).toHaveLength(1);
     for (const r of rows) {
-      expect(text).not.toContain(r.name);
-      expect(text).not.toContain(r.organization_id);
+      for (const text of everything) expect(text).not.toContain(r.name);
     }
+    expect(everything.filter((t) => t.includes('org-a'))).toEqual([]);
+    const namingB = everything.filter((t) => t.includes('org-b'));
+    expect(namingB).toHaveLength(2);
+    for (const t of namingB) expect(t).toContain('cron.embeddings-sweep.org');
   });
 
   it('the budget: 100 items per organization, 150 per run, 50 organizations, 150 s', () => {

@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * service role, across every organization. It runs only for the cron's
  * Bearer CRON_SECRET (constant-time compare) and FAILS CLOSED when the
  * secret is not set, as drain-outbox does; a failed run answers with fixed
- * words; its one log line is counts only.
+ * words; its one summary line is counts only.
  */
 
 const h = vi.hoisted(() => ({
