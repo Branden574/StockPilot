@@ -7,8 +7,9 @@
  *   1. nothing pending: idle;
  *   2. wait while MFA is still being checked after a password sign-in
  *      (mfaPending), while the navigator is not mounted, while there is no
- *      route, or while the sign-in group is still showing (the redirect to
- *      Home has not run yet);
+ *      route, while the sign-in group is still showing (the redirect to Home
+ *      has not run yet), or while the published route has not caught up with
+ *      a navigator that just remounted (see focusedStackRoute);
  *   3. wait while whose tap it is is still being read;
  *   4. a tap for another account: the neutral notice; expired or unbound:
  *      dropped silently;
@@ -36,6 +37,7 @@ export type OpenWaitReason =
   | 'router-not-ready'
   | 'no-segments'
   | 'auth-group'
+  | 'route-settling'
   | 'binding'
   | 'signed-out'
   | 'workspace-loading';
@@ -79,9 +81,50 @@ export interface OpenStepInput {
   mfaPending: boolean;
   /** useNavigationContainerRef().isReady() */
   routerReady: boolean;
+  /** The root Stack's focused route in the LIVE navigation state
+   *  (focusedStackRoute), or null while the Stack has no state. */
+  stackRoute: string | null;
+  /** useSegments(): the route as expo-router last published it. */
   segments: readonly string[];
   pathname: string;
   workspace: WorkspaceView;
+}
+
+const AUTH_GROUP = '(auth)';
+
+/** expo-router's root slot, which holds the app's root Stack. */
+const ROOT_SLOT = '__root';
+
+interface NavStateLike {
+  index?: number;
+  routes?: readonly { name?: string; state?: unknown }[];
+}
+
+function focusedRoute(state: unknown): { name?: string; state?: unknown } | null {
+  const routes = (state as NavStateLike | null | undefined)?.routes;
+  if (!routes || routes.length === 0) return null;
+  const index = (state as NavStateLike).index ?? 0;
+  return routes[index] ?? null;
+}
+
+/**
+ * The root Stack's focused route name in a LIVE root state
+ * (useNavigationContainerRef().getRootState()), or null while the Stack has
+ * no state.
+ *
+ * Why not useSegments() alone: RootGate swaps the Stack for the MFA or Face
+ * ID screen, the navigator clears its state when it unmounts, and
+ * expo-router's store skips an undefined state, so the published route stays
+ * the one from before. When the Stack remounts, the navigator tells the
+ * container from an effect, AFTER the host's first look, so for that look
+ * useSegments() is stale (it may say Home while the Stack is on the sign-in
+ * group, its first declared screen). The live state is never stale.
+ */
+export function focusedStackRoute(rootState: unknown): string | null {
+  const top = focusedRoute(rootState);
+  if (!top?.name) return null;
+  if (top.name !== ROOT_SLOT) return top.name;
+  return focusedRoute(top.state)?.name ?? null;
 }
 
 /** The kinds whose organization is read for a multi-workspace user. */
@@ -98,9 +141,18 @@ export function nextOpenStep(input: OpenStepInput): OpenStep {
   const { take } = input;
   if (take.kind === 'none') return { kind: 'idle' };
   if (input.mfaPending) return { kind: 'wait', reason: 'mfa-pending' };
-  if (!input.routerReady) return { kind: 'wait', reason: 'router-not-ready' };
+  if (!input.routerReady || input.stackRoute === null) {
+    return { kind: 'wait', reason: 'router-not-ready' };
+  }
   if (input.segments.length === 0) return { kind: 'wait', reason: 'no-segments' };
-  if (input.segments[0] === '(auth)') return { kind: 'wait', reason: 'auth-group' };
+  if (input.stackRoute === AUTH_GROUP || input.segments[0] === AUTH_GROUP) {
+    return { kind: 'wait', reason: 'auth-group' };
+  }
+  // 'order/[id]' is published as ['order', '[id]']: the heads agree once the
+  // published route has caught up with the navigator.
+  if (input.stackRoute.split('/')[0] !== input.segments[0]) {
+    return { kind: 'wait', reason: 'route-settling' };
+  }
   if (take.kind === 'waiting') return { kind: 'wait', reason: take.reason };
   if (take.kind === 'dropped') {
     return take.reason === 'account-mismatch'

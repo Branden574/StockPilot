@@ -10,6 +10,7 @@ import {
   NOTICE_OTHER_ACCOUNT_COPY,
   NOTICE_RETRY_COPY,
   NOTICE_UNAVAILABLE_COPY,
+  focusedStackRoute,
   nextOpenStep,
   noticeContent,
   resolveTargetWorkspace,
@@ -77,6 +78,7 @@ function input(over: Partial<OpenStepInput> = {}): OpenStepInput {
     take: ready(`/dashboard/orders/${ORDER}`),
     mfaPending: false,
     routerReady: true,
+    stackRoute: '(drawer)',
     segments: ['(drawer)', '(tabs)'],
     pathname: '/',
     workspace: ONE,
@@ -125,6 +127,75 @@ describe('nextOpenStep waits on real signals', () => {
   it('uses no timer', () => {
     const src = readFileSync(path.join(__dirname, 'notification-open.ts'), 'utf8');
     expect(src).not.toMatch(/setTimeout|setInterval|requestAnimationFrame/);
+  });
+});
+
+/**
+ * The navigator, not the published route, decides. RootGate swaps the Stack
+ * for the MFA or Face ID screen; the navigator clears its state on unmount,
+ * and expo-router's store skips an undefined state, so useSegments() keeps
+ * the route from before. When the Stack remounts (on its first declared
+ * screen, the sign-in group, until the redirect sends it Home), the host's
+ * first look sees that stale route. The live root state is read instead.
+ */
+describe('a remounted navigator: the live route, not a stale one', () => {
+  it("focusedStackRoute reads the root Stack's focused route under expo-router's __root slot", () => {
+    expect(focusedStackRoute(undefined)).toBeNull();
+    expect(focusedStackRoute({ index: 0, routes: [{ name: '__root' }] })).toBeNull();
+    expect(
+      focusedStackRoute({
+        index: 0,
+        routes: [
+          {
+            name: '__root',
+            state: { index: 1, routes: [{ name: '(drawer)' }, { name: 'order/[id]' }] },
+          },
+        ],
+      }),
+    ).toBe('order/[id]');
+    expect(
+      focusedStackRoute({ routes: [{ name: '__root', state: { routes: [{ name: '(auth)' }] } }] }),
+    ).toBe('(auth)');
+    expect(focusedStackRoute({ index: 0, routes: [{ name: '+not-found' }] })).toBe('+not-found');
+    expect(focusedStackRoute({ routes: [] })).toBeNull();
+  });
+
+  it('no Stack state yet: wait', () => {
+    expect(nextOpenStep(input({ stackRoute: null }))).toEqual({
+      kind: 'wait',
+      reason: 'router-not-ready',
+    });
+  });
+
+  it('the Stack remounted on the sign-in group while the published route still says Home: wait', () => {
+    expect(nextOpenStep(input({ stackRoute: '(auth)', segments: ['(drawer)', '(tabs)'] }))).toEqual(
+      {
+        kind: 'wait',
+        reason: 'auth-group',
+      },
+    );
+  });
+
+  it('the published route has not caught up with the navigator: wait', () => {
+    expect(nextOpenStep(input({ stackRoute: '(drawer)', segments: ['order', '[id]'] }))).toEqual({
+      kind: 'wait',
+      reason: 'route-settling',
+    });
+  });
+
+  it('settled: a nested route name agrees with its first segment', () => {
+    expect(nextOpenStep(input({ stackRoute: 'order/[id]', segments: ['order', '[id]'] }))).toEqual({
+      kind: 'navigate',
+      path: `/order/${ORDER}`,
+    });
+    expect(
+      nextOpenStep(
+        input({
+          stackRoute: 'reports/book-order-totals/index',
+          segments: ['reports', 'book-order-totals'],
+        }),
+      ),
+    ).toEqual({ kind: 'navigate', path: `/order/${ORDER}` });
   });
 });
 

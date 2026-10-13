@@ -89,6 +89,7 @@ export const PUSH_OPEN_REASONS = [
   'router-not-ready',
   'no-segments',
   'auth-group',
+  'route-settling',
   'signed-out',
   'workspace-loading',
   // The workspace check.
