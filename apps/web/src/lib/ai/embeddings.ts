@@ -46,10 +46,11 @@ export function itemEmbeddingSource(item: {
 
 /**
  * How long one embedding call to Gemini may take, in milliseconds, before the
- * SDK aborts it. The SDK sets no deadline of its own, so a call that never
- * answered held its invocation open for as long as the platform allowed: the
- * whole keepAlive window after a create, or a cron run's whole budget. A call
- * normally answers in well under a second. The SDK applies the `timeout`
+ * SDK aborts it: an item's (embedText) and a search's (embedQuery). The SDK
+ * sets no deadline of its own, so a call that never answered held its
+ * invocation open for as long as the platform allowed: the whole keepAlive
+ * window after a create, a cron run's whole budget, or an AI assistant chat
+ * request. A call normally answers in well under a second. The SDK applies the `timeout`
  * request option by aborting the fetch (GoogleGenerativeAIAbortError), which
  * every caller already treats as one more failed embed. The item is then left
  * with no embedding: a new item never had one, and an edit that changed the
@@ -101,7 +102,9 @@ export async function embedText(text: string): Promise<number[]> {
 /**
  * Same as embedText but uses the query-side task type. Use this when
  * embedding the user's search input (the "?" side of a retrieval),
- * not the indexed documents.
+ * not the indexed documents. Bounded by EMBED_TIMEOUT_MS as well: the AI
+ * assistant's item search (searchInventorySemantic) waits for it inside the
+ * chat request, so a call that never answered held that request open.
  */
 export async function embedQuery(text: string): Promise<number[]> {
   if (!env.GEMINI_API_KEY) {
@@ -112,13 +115,14 @@ export async function embedQuery(text: string): Promise<number[]> {
   }
   const genAI = new GoogleGenerativeAI(env.GEMINI_API_KEY);
   const model = genAI.getGenerativeModel({ model: EMBEDDING_MODEL });
-  const res = await model.embedContent({
-    content: { role: 'user', parts: [{ text }] },
-     
-    outputDimensionality: EMBEDDING_DIM,
-    taskType: 'RETRIEVAL_QUERY',
-     
-  } as any);
+  const res = await model.embedContent(
+    {
+      content: { role: 'user', parts: [{ text }] },
+      outputDimensionality: EMBEDDING_DIM,
+      taskType: 'RETRIEVAL_QUERY',
+    } as any,
+    { timeout: EMBED_TIMEOUT_MS },
+  );
   const vec = res.embedding?.values;
   if (!Array.isArray(vec) || vec.length !== EMBEDDING_DIM) {
     throw new Error(

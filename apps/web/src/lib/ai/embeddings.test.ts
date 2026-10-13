@@ -12,7 +12,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * whole keepAlive window after a create, or a cron run's whole budget.
  * embedText now passes `timeout` in the SDK's request options; the SDK aborts
  * the fetch when it passes and throws GoogleGenerativeAIAbortError, which
- * every caller already treats as one more failed embed.
+ * every caller already treats as one more failed embed. embedQuery (the AI
+ * assistant's search) passes the same timeout, so a stalled search call
+ * cannot hold the chat request open either.
  *
  * WHY THE WRITE ERROR: embedInventoryItem ignored the { error } of its own
  * UPDATE, so a refused write was silent while embedItemsBatch's was logged.
@@ -32,6 +34,7 @@ import {
   EMBEDDING_DIM,
   embedInventoryItem,
   embedItemsBatch,
+  embedQuery,
   embedText,
 } from './embeddings';
 
@@ -203,6 +206,42 @@ describe('embedText bounds the Gemini call', () => {
 
   it('the bound is EMBED_TIMEOUT_MS, 10 s', () => {
     expect(EMBED_TIMEOUT_MS).toBe(10_000);
+  });
+});
+
+describe('embedQuery, the AI assistant search embedding, is bounded the same way', () => {
+  it('answers with the vector, through a request that carries the abort signal', async () => {
+    const fetch = answering();
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(embedQuery('something for cleaning up spills')).resolves.toHaveLength(
+      EMBEDDING_DIM,
+    );
+    const init = fetch.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+    // The query side of the retrieval, as before.
+    expect(JSON.parse(String(init?.body)).taskType).toBe('RETRIEVAL_QUERY');
+  });
+
+  it('a search whose call never answers is aborted after 10 s, not left open', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', neverAnswering());
+
+    let outcome: unknown = 'pending';
+    void embedQuery('something for cleaning up spills').then(
+      () => {
+        outcome = 'resolved';
+      },
+      (e: unknown) => {
+        outcome = e;
+      },
+    );
+
+    await vi.advanceTimersByTimeAsync(EMBED_TIMEOUT_MS - 1);
+    expect(outcome).toBe('pending');
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(outcome).toBeInstanceOf(GoogleGenerativeAIAbortError);
   });
 });
 
