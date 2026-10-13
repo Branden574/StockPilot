@@ -89,8 +89,9 @@ describe('the dates fixes release is published', () => {
     // a member the public link release does not reach is told this one once
     // the newer releases that reach them are read.
     // Re-pinned by docs/whats-new-ungroup-follow-ups (2026-10-12): the Ungroup follow-ups release is published at the top and reaches this reader, so it is read or seen here too and the order this test checks holds.
+    // Re-pinned by docs/whats-new-pages-keep-groups-whole (2026-10-12; was: ungroup-follow-ups-2026-10): the pages-keep-groups-whole release is published after it, at the top, and reaches this reader (items:read); it reaches no member without items:read, so the member's notices below are unchanged.
     expect(buildReleaseList(RELEASES, everyone, [], null).latestUnread?.id).toBe(
-      'ungroup-follow-ups-2026-10',
+      'pages-keep-groups-whole-2026-10',
     );
     expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(
       'group-selected-2026-10',
@@ -170,25 +171,29 @@ describe('the dates fixes release is published', () => {
     // release, published a minute later, sits directly above.
     const at = RELEASES.findIndex((r) => r.id === ID);
     // Re-pinned by docs/whats-new-ungroup-follow-ups (2026-10-12; was: 7): the Ungroup follow-ups release is published after it, at the top.
-    expect(at).toBe(8);
+    // Re-pinned by docs/whats-new-pages-keep-groups-whole (2026-10-12; was: 8): the pages-keep-groups-whole release is published after it, at the top.
+    expect(at).toBe(9);
     // Re-pinned by docs/whats-new-ungroup-follow-ups (2026-10-12): the Ungroup follow-ups release is published at the top, above Group selected's, so every position below it moves down by one.
-    expect(RELEASES[0]?.id).toBe('ungroup-follow-ups-2026-10');
+    // Re-pinned by docs/whats-new-pages-keep-groups-whole (2026-10-12; was: the Ungroup follow-ups release at 0, the public link release at 7): the pages-keep-groups-whole release is published at the top, above the Ungroup follow-ups release, so every position below it moves down by one.
+    expect(RELEASES[0]?.id).toBe('pages-keep-groups-whole-2026-10');
     expect(RELEASES[0]?.status).toBe('published');
-    expect(RELEASES[1]?.id).toBe('group-selected-2026-10');
+    expect(RELEASES[1]?.id).toBe('ungroup-follow-ups-2026-10');
     expect(RELEASES[1]?.status).toBe('published');
-    expect(RELEASES[2]?.id).toBe('ungroup-2026-10');
+    expect(RELEASES[2]?.id).toBe('group-selected-2026-10');
     expect(RELEASES[2]?.status).toBe('published');
-    expect(RELEASES[3]?.id).toBe('returns-history-hand-over-2026-10');
+    expect(RELEASES[3]?.id).toBe('ungroup-2026-10');
     expect(RELEASES[3]?.status).toBe('published');
-    expect(RELEASES[4]?.id).toBe('returns-close-rest-2026-10');
+    expect(RELEASES[4]?.id).toBe('returns-history-hand-over-2026-10');
     expect(RELEASES[4]?.status).toBe('published');
-    expect(RELEASES[5]?.id).toBe('returns-requester-exchange-2026-10');
+    expect(RELEASES[5]?.id).toBe('returns-close-rest-2026-10');
     expect(RELEASES[5]?.status).toBe('published');
-    expect(RELEASES[6]?.id).toBe('returns-exchange-2026-10');
+    expect(RELEASES[6]?.id).toBe('returns-requester-exchange-2026-10');
     expect(RELEASES[6]?.status).toBe('published');
-    expect(RELEASES[7]?.id).toBe('public-link-sent-request-2026-10');
+    expect(RELEASES[7]?.id).toBe('returns-exchange-2026-10');
     expect(RELEASES[7]?.status).toBe('published');
-    expect(Date.parse(RELEASES[7]!.publishedAt) - Date.parse(release().publishedAt)).toBe(60_000);
+    expect(RELEASES[8]?.id).toBe('public-link-sent-request-2026-10');
+    expect(RELEASES[8]?.status).toBe('published');
+    expect(Date.parse(RELEASES[8]!.publishedAt) - Date.parse(release().publishedAt)).toBe(60_000);
     for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
