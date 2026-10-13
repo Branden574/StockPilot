@@ -86,13 +86,14 @@ function routeKindOf(path: string): string {
  * It opens with router.push, over Home on a cold start (Back goes Home) and
  * over the current screen otherwise; the order screen's own RLS-scoped read
  * is the re-authorisation. A user in more than one workspace has an order or
- * a return checked first, and is offered the switch, never switched
- * silently. That read answers within 15 seconds (then Try again), and a read
- * still out after about 400 ms puts up a Checking notice, so a slow
- * connection never looks like a dead tap (notification-open.ts
- * createWorkspaceChecks). A tap never approves, posts stock, opens Outlook or
- * sends email: this only reads and navigates
- * (notification-intent-wiring.test.ts).
+ * a return checked first: that read answers within 15 seconds (then Try
+ * again), and one still out after about 400 ms puts up a Checking notice, so
+ * a slow connection never looks like a dead tap (notification-open.ts
+ * createWorkspaceChecks). Another workspace is offered as a switch, never
+ * made silently; while the switch runs the notice says so, and the
+ * destination opens once the new workspace is published. A tap never
+ * approves, posts stock, opens Outlook or sends email: this only reads and
+ * navigates (notification-intent-wiring.test.ts).
  */
 export function NotificationIntentHost() {
   const { user, mfaPending } = useAuth();
@@ -102,6 +103,7 @@ export function NotificationIntentHost() {
   const navigation = useNavigationContainerRef();
   const router = useRouter();
   const workspace = useWorkspaceSnapshot();
+  const { activeOrgId } = workspace;
   const { splashActive } = useColdLaunchGate();
   const whatsNewOpen = useWhatsNewOpen();
   const offline = isOfflineState(useNetworkState());
@@ -273,6 +275,17 @@ export function NotificationIntentHost() {
     checks,
   ]);
 
+  // A switch from the notice opens the destination as soon as the new
+  // workspace is published: switchActiveOrg publishes it before its warehouse
+  // read (up to 15 s), which an order or a return does not need. Finishing
+  // the tap closes the notice (it belongs to a pending tap).
+  React.useEffect(() => {
+    if (!notice?.busy || notice.notice.kind !== 'switch') return;
+    if (activeOrgId !== notice.notice.orgId) return;
+    const it = notificationIntents.peek();
+    if (it?.seq === notice.seq) open(it, notice.notice.native, 'switched');
+  }, [notice, activeOrgId, open]);
+
   const onAction = (id: NoticeActionId) => {
     if (!notice) return;
     const pending = notificationIntents.peek();
@@ -286,17 +299,27 @@ export function NotificationIntentHost() {
         if (notice.notice.kind !== 'switch' || notice.busy || offline) return;
         const { orgId, native } = notice.notice;
         const { seq } = notice;
+        // The sheet now says "Switching to <Org>." until the destination
+        // opens, which the effect above does as soon as the new workspace is
+        // published.
         setShown({ ...notice, busy: true });
         // The drawer's own switch: it replaces this phone's offline copy of
         // the old workspace and loads the new one.
+        const again = () => setShown((s) => (s && s.seq === seq ? { ...s, busy: false } : s));
         setActiveOrg(orgId).then(
           () => {
             if (!mounted.current) return;
             const now = notificationIntents.peek();
-            if (!now || now.seq !== seq) return; // a newer tap took over
-            setShown(null);
-            if (getWorkspaceSnapshot().activeOrgId === orgId) open(now, native, 'switched');
-            else notificationIntents.finish(now, 'switch-failed');
+            // Opened on the publish already, or a newer tap took over.
+            if (!now || now.seq !== seq) return;
+            if (getWorkspaceSnapshot().activeOrgId === orgId) {
+              setShown(null);
+              open(now, native, 'switched');
+              return;
+            }
+            // The switch did not take: offer it again, never end the tap unseen.
+            pushOpenDiag({ stage: 'error', source: now.source, reason: 'switch-failed' });
+            again();
           },
           (err: unknown) => {
             pushOpenDiag({
@@ -305,7 +328,7 @@ export function NotificationIntentHost() {
               reason: 'switch-failed',
               errorClass: errorClassOf(err),
             });
-            if (mounted.current) setShown((s) => (s && s.seq === seq ? { ...s, busy: false } : s));
+            if (mounted.current) again();
           },
         );
         return;

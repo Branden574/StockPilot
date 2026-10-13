@@ -31,7 +31,9 @@ import { useTheme } from '@/lib/use-theme';
  * backdrop is a sibling behind a plain card, and closes. VoiceOver treats it
  * as a modal, can dismiss it with the escape gesture, and hears it announced.
  * Offline the switch is disabled with the drawer switcher's own line, the
- * same rule its sheet applies.
+ * same rule its sheet applies. While the switch it started runs, the sheet
+ * says "Switching to <Org>." with a spinner and nothing to press: a switch
+ * cannot be stopped half-way.
  */
 export function NotificationIntentNotice({
   notice,
@@ -40,20 +42,20 @@ export function NotificationIntentNotice({
   onAction,
 }: {
   notice: IntentNotice;
-  /** A workspace switch is under way: the buttons wait for it. */
+  /** A workspace switch is under way: the sheet says so (noticeContent). */
   busy: boolean;
   offline: boolean;
   onAction: (id: NoticeActionId) => void;
 }) {
   const { c } = useTheme();
-  const content = noticeContent(notice, { offline });
+  const content = noticeContent(notice, { offline, busy });
   const { announcement } = content;
   React.useEffect(() => {
     AccessibilityInfo.announceForAccessibility(announcement);
   }, [announcement]);
   const dismissAction = content.actions.find((a) => a.id === content.dismiss);
   const dismiss = () => {
-    if (!busy) onAction(content.dismiss);
+    if (content.dismiss) onAction(content.dismiss);
   };
   return (
     <Modal transparent animationType="fade" onRequestClose={dismiss}>
@@ -61,6 +63,8 @@ export function NotificationIntentNotice({
         <Pressable
           style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.55)' }]}
           onPress={dismiss}
+          disabled={content.dismiss === null}
+          accessible={content.dismiss !== null}
           accessibilityRole="button"
           accessibilityLabel={dismissAction?.label ?? 'Close'}
         />
@@ -93,25 +97,27 @@ export function NotificationIntentNotice({
                   {line}
                 </Body>
               ))}
-              {notice.kind === 'switch' && offline ? (
+              {notice.kind === 'switch' && offline && !busy ? (
                 <Body size={12.5} muted style={{ marginTop: 8 }}>
                   {WORKSPACE_SWITCH_OFFLINE_COPY}
                 </Body>
               ) : null}
             </ScrollView>
-            <View style={{ marginTop: 16, gap: 8 }}>
-              {content.actions.map((a) => (
-                <Button
-                  key={a.id}
-                  variant={a.primary ? 'primary' : 'ghost'}
-                  block
-                  disabled={busy || a.disabled}
-                  onPress={() => onAction(a.id)}
-                >
-                  {a.label}
-                </Button>
-              ))}
-            </View>
+            {content.actions.length > 0 ? (
+              <View style={{ marginTop: 16, gap: 8 }}>
+                {content.actions.map((a) => (
+                  <Button
+                    key={a.id}
+                    variant={a.primary ? 'primary' : 'ghost'}
+                    block
+                    disabled={a.disabled}
+                    onPress={() => onAction(a.id)}
+                  >
+                    {a.label}
+                  </Button>
+                ))}
+              </View>
+            ) : null}
           </Card>
         </View>
       </View>

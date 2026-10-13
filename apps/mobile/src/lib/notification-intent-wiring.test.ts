@@ -305,6 +305,27 @@ describe('7. the host and the notice only read and navigate', () => {
     expect(codeOnly(notice)).toContain('<ActivityIndicator');
   });
 
+  it('a switch from the notice says so, and opens the destination once the workspace is published', () => {
+    const code = codeOnly(host);
+    // The notice is told a switch is under way (noticeContent words it).
+    expect(code).toContain('busy={notice.busy}');
+    expect(codeOnly(notice)).toContain('noticeContent(notice, { offline, busy })');
+    // switchActiveOrg publishes the workspace before its warehouse read (up
+    // to 15 s), which an order or a return does not need: open on publish.
+    const start = code.indexOf("if (!notice?.busy || notice.notice.kind !== 'switch') return;");
+    expect(start).toBeGreaterThan(-1);
+    const effect = code.slice(start, code.indexOf('}, [', start));
+    expect(code).toContain('const { activeOrgId } = workspace;');
+    expect(effect).toContain('if (activeOrgId !== notice.notice.orgId) return;');
+    expect(effect).toContain("open(it, notice.notice.native, 'switched');");
+    // A switch that did not take is offered again, never ended unseen.
+    expect(code).not.toContain("finish(now, 'switch-failed')");
+    // Nothing on the sheet can be pressed half-way through, and the offline
+    // line, which says a switch cannot start, is not shown while one runs.
+    expect(codeOnly(notice)).toContain('if (content.dismiss) onAction(content.dismiss);');
+    expect(codeOnly(notice)).toContain("notice.kind === 'switch' && offline && !busy ? (");
+  });
+
   it('reads the live navigator route, not only the published one', () => {
     const code = codeOnly(host);
     expect(code).toContain('focusedStackRoute(navigation.getRootState())');

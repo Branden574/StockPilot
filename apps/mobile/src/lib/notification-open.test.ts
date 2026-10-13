@@ -21,6 +21,7 @@ import {
   resolveTargetWorkspace,
   stepAfterResolution,
   switchNoticeCopy,
+  switchingNoticeCopy,
   type IntentNotice,
   type OpenStepInput,
   type TargetResolution,
@@ -963,6 +964,44 @@ describe('the notices say plainly what happened', () => {
     });
   });
 
+  /**
+   * Review finding 6: while the switch ran, every button was disabled and
+   * the sheet ignored the backdrop, Escape and back, with nothing saying a
+   * switch was under way, for as long as setActiveOrg took (the SQLite wipe,
+   * then the warehouse read of up to 15 s). It now says so, with a spinner,
+   * until the destination opens (the host opens it once the new workspace is
+   * published, before the warehouse read).
+   */
+  it('while the switch runs: "Switching to <Org>." with a spinner, and nothing to press half-way', () => {
+    const notice: IntentNotice = {
+      kind: 'switch',
+      orgId: 'org-a',
+      orgName: 'Acme Demo Co',
+      activeOrgName: 'Ledger QA Co',
+      noun: 'order',
+      native: `/order/${ORDER}`,
+    };
+    expect(switchingNoticeCopy('Acme Demo Co')).toBe('Switching to Acme Demo Co.');
+    expect(noticeContent(notice, { offline: false, busy: true })).toEqual({
+      heading: null,
+      lines: ['Switching to Acme Demo Co.'],
+      actions: [],
+      dismiss: null,
+      announcement: 'Switching to Acme Demo Co.',
+      progress: true,
+    });
+    // A connection lost mid-switch says the same: the switch is under way.
+    expect(noticeContent(notice, { offline: true, busy: true }).lines).toEqual([
+      'Switching to Acme Demo Co.',
+    ]);
+    // Before Switch is pressed: the question and its two buttons, as before.
+    expect(noticeContent(notice, { offline: false, busy: false })).toMatchObject({
+      actions: [{ id: 'switch' }, { id: 'not-now' }],
+      dismiss: 'not-now',
+      progress: false,
+    });
+  });
+
   const ALL_NOTICES: IntentNotice[] = [
     { kind: 'account-mismatch' },
     { kind: 'unsupported', title: null, body: null },
@@ -981,9 +1020,11 @@ describe('the notices say plainly what happened', () => {
 
   it('every line is plain: no exclamation marks, and never "book" for a recorded quantity', () => {
     for (const notice of ALL_NOTICES) {
-      const text = JSON.stringify(noticeContent(notice, { offline: true }));
-      expect(text).not.toContain('!');
-      expect(text).not.toMatch(/\bbook\b/i);
+      for (const busy of [false, true]) {
+        const text = JSON.stringify(noticeContent(notice, { offline: true, busy }));
+        expect(text).not.toContain('!');
+        expect(text).not.toMatch(/\bbook\b/i);
+      }
     }
   });
 

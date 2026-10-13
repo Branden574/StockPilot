@@ -411,6 +411,11 @@ export function checkingNoticeCopy(noun: TargetNoun): string {
   return `Checking which workspace this ${noun} is in.`;
 }
 
+/** While the switch the notice started runs. */
+export function switchingNoticeCopy(orgName: string): string {
+  return `Switching to ${orgName}.`;
+}
+
 export type NoticeActionId = 'switch' | 'not-now' | 'open-notifications' | 'close' | 'retry' | 'ok';
 
 export interface NoticeAction {
@@ -424,11 +429,13 @@ export interface NoticeContent {
   heading: string | null;
   lines: string[];
   actions: NoticeAction[];
-  /** What the backdrop, Escape and the Android back button do. */
-  dismiss: NoticeActionId;
+  /** What the backdrop, Escape and the Android back button do; null while a
+   *  switch runs, which cannot be stopped half-way. */
+  dismiss: NoticeActionId | null;
   /** Read out by VoiceOver when the notice appears. */
   announcement: string;
-  /** Something is under way (the workspace check): the notice shows a spinner. */
+  /** Something is under way (the workspace check, a switch): the notice
+   *  shows a spinner. */
   progress: boolean;
 }
 
@@ -448,7 +455,7 @@ function content(
   heading: string | null,
   lines: string[],
   actions: NoticeAction[],
-  dismiss: NoticeActionId,
+  dismiss: NoticeActionId | null,
   progress = false,
 ): NoticeContent {
   return {
@@ -462,8 +469,12 @@ function content(
 }
 
 /** The words and buttons of a notice. Offline, the switch is disabled (the
- *  notice adds the drawer's WORKSPACE_SWITCH_OFFLINE_COPY beneath). */
-export function noticeContent(notice: IntentNotice, opts: { offline: boolean }): NoticeContent {
+ *  notice adds the drawer's WORKSPACE_SWITCH_OFFLINE_COPY beneath). `busy`:
+ *  the switch the notice started is running, and the sheet says only that. */
+export function noticeContent(
+  notice: IntentNotice,
+  opts: { offline: boolean; busy?: boolean },
+): NoticeContent {
   switch (notice.kind) {
     case 'account-mismatch':
       return content(null, [NOTICE_OTHER_ACCOUNT_COPY], [action('ok', 'OK', true)], 'ok');
@@ -497,6 +508,11 @@ export function noticeContent(notice: IntentNotice, opts: { offline: boolean }):
         true,
       );
     case 'switch':
+      // A switch cannot be stopped half-way: no buttons and no dismiss until
+      // the destination opens or the switch fails (the question comes back).
+      if (opts.busy) {
+        return content(null, [switchingNoticeCopy(notice.orgName)], [], null, true);
+      }
       return content(
         null,
         [switchNoticeCopy(notice.noun, notice.orgName, notice.activeOrgName)],
