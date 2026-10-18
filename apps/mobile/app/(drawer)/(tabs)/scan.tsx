@@ -1237,21 +1237,21 @@ export default function Scan() {
                 </View>
               )}
 
-              <View style={[styles.secondaryActions, stacked && styles.secondaryActionsStacked]}>
+              {/* One full-width button under the other at every text size: a
+                  button's words stay on one line, and two side by side (about
+                  161pt each on a 6.1in phone) cut "Take photo" short from the
+                  largest standard text size, and at the default size under
+                  Display Zoom. */}
+              <View style={styles.secondaryActions}>
                 <Button
                   variant="outline"
                   onPress={capturePhoto}
                   disabled={busy}
                   leading={<Camera size={18} color={colors.ink} strokeWidth={1.8} />}
-                  style={stacked ? undefined : styles.secondaryBtn}
                 >
                   Take photo
                 </Button>
-                <Button
-                  variant="ghost"
-                  onPress={reset}
-                  style={stacked ? undefined : styles.secondaryBtn}
-                >
+                <Button variant="ghost" onPress={reset}>
                   Scan another
                 </Button>
               </View>
@@ -1818,9 +1818,7 @@ function makeStyles(c: Palette) {
     actionLabel: { color: c.ink, fontFamily: FONT.display, fontWeight: '500', fontSize: 18 },
     pressed: { opacity: 0.7 },
     disabled: { opacity: 0.4 },
-    secondaryActions: { flexDirection: 'row', gap: space.sm, marginTop: space.md },
-    secondaryActionsStacked: { flexDirection: 'column' },
-    secondaryBtn: { flex: 1 },
+    secondaryActions: { flexDirection: 'column', gap: space.sm, marginTop: space.md },
     reportProblemBtn: { marginTop: space.sm },
     pickerTitle: { color: c.ink, fontFamily: FONT.displaySemi, fontWeight: '600', fontSize: 17 },
     pickerSubtitle: {

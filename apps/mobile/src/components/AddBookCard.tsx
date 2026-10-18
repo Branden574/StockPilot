@@ -229,13 +229,12 @@ export function AddBookCard({ user, result, onCancel, onCreated }: Props) {
         </View>
       </FieldBlock>
 
-      <View style={[styles.actions, stacked && styles.actionsStacked]}>
-        <Button
-          variant="outline"
-          onPress={onCancel}
-          disabled={busy}
-          style={stacked ? undefined : styles.cancelBtn}
-        >
+      {/* One full-width button under the other at every text size: a
+          button's words stay on one line, and side by side "Cancel" was cut
+          short from the largest standard text size, as was "Add to inventory"
+          beside its spinner while it saves. */}
+      <View style={styles.actions}>
+        <Button variant="outline" onPress={onCancel} disabled={busy}>
           Cancel
         </Button>
         {/* Adding commits the card: the ink button (redesign button rule). */}
@@ -243,7 +242,6 @@ export function AddBookCard({ user, result, onCancel, onCreated }: Props) {
           onPress={create}
           disabled={busy || !warehouseId}
           leading={busy ? <ActivityIndicator color={c.paper} /> : undefined}
-          style={stacked ? undefined : styles.addBtn}
         >
           Add to inventory
         </Button>
@@ -343,10 +341,7 @@ function makeStyles(c: Palette) {
     row: { flexDirection: 'row', gap: space.md },
     rowStacked: { flexDirection: 'column', gap: 0 },
     warehouseRow: { flexDirection: 'row', gap: space.sm, flexWrap: 'wrap' },
-    actions: { flexDirection: 'row', gap: space.md, marginTop: space.lg },
-    actionsStacked: { flexDirection: 'column', gap: space.sm },
-    cancelBtn: { flex: 1 },
-    addBtn: { flex: 2 },
+    actions: { flexDirection: 'column', gap: space.sm, marginTop: space.lg },
     closeBtn: { marginTop: space.md },
   });
 }

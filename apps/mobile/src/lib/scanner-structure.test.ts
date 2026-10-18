@@ -96,6 +96,18 @@ function textOf(el: JsxNode, sf: ts.SourceFile): string {
   return parts.filter(Boolean).join(' ');
 }
 
+/** The Buttons inside the element styled `style`, in order, as [words, their own style]. */
+function buttonsIn(file: string, style: string): [string, string | undefined][] {
+  const sf = treeOf(file);
+  const out: [string, string | undefined][] = [];
+  walkJsx(sf, (el, ancestors) => {
+    if (tagOf(el, sf) !== 'Button') return;
+    if (!ancestors.some((a) => attrText(a, 'style', sf) === style)) return;
+    out.push([textOf(el, sf), attrText(el, 'style', sf)]);
+  });
+  return out;
+}
+
 /**
  * Everything a person can read or hear in a file: JSX text and every string
  * and template literal (comments are not literals, so they never count).
@@ -1185,12 +1197,27 @@ describe('Scan tab: Dynamic Type caps only the chrome', () => {
     }
   });
 
-  it('rows stack past the stacking scale', () => {
+  it('the stat row stacks past the stacking scale', () => {
     expect(src).toContain('const stacked = shouldStackRow(useWindowDimensions().fontScale);');
     expect(src).toContain('<View style={[styles.statRow, stacked && styles.statRowStacked]}>');
-    expect(src).toContain(
-      '<View style={[styles.secondaryActions, stacked && styles.secondaryActionsStacked]}>',
-    );
+  });
+
+  // Take photo and Scan another sat side by side below the stacking scale,
+  // about 161pt each on a 6.1in phone, and a Button keeps its words on one
+  // line: from xxxLarge (1.353x, the largest standard size) "Take photo" with
+  // its icon needs 169pt and read "Take ph…" (Inter Tight 500 measured at
+  // 15.5 x 1.353pt), and at the default size under Display Zoom (320pt) both
+  // were cut. Before the restyle the two words wrapped instead. Updated
+  // expectation (review): one full-width button under the other at every
+  // size, in the same order. Mutation caught: the side-by-side row back.
+  it('Take photo and Scan another are one full-width button under the other at every size', () => {
+    expect(src).toContain('<View style={styles.secondaryActions}>');
+    expect(styleBlock(src, 'secondaryActions')).toMatch(/^ flexDirection: 'column',/);
+    expect(buttonsIn(SCAN_TAB, 'styles.secondaryActions')).toEqual([
+      ['Take photo', undefined],
+      ['Scan another', undefined],
+    ]);
+    expect(codeOnly(src)).not.toMatch(/secondaryActionsStacked|secondaryBtn/);
   });
 });
 
@@ -1662,10 +1689,26 @@ describe.each(CARDS)('%s: the device mode and Dynamic Type', (_name, file) => {
     expect(contrast(p.card, p.ink)).toBeGreaterThanOrEqual(AA_TEXT);
   });
 
-  it('SKU and Initial qty stack past the stacking scale, as do the two buttons', () => {
+  it('SKU and Initial qty stack past the stacking scale', () => {
     expect(src).toContain('const stacked = shouldStackRow(useWindowDimensions().fontScale);');
     expect(src).toContain('<View style={[styles.row, stacked && styles.rowStacked]}>');
-    expect(src).toContain('<View style={[styles.actions, stacked && styles.actionsStacked]}>');
+  });
+
+  // Cancel and Add to inventory sat side by side below the stacking scale
+  // (105pt and 210pt on a 6.1in phone) and a Button keeps its words on one
+  // line: "Cancel" needs 105.2pt at xxxLarge (from xxLarge on a 375pt phone)
+  // and "Add to inventory" beside its spinner needs 219.5pt while it saves,
+  // so both were cut short. Before the restyle the words wrapped instead.
+  // Updated expectation (review): one full-width button under the other at
+  // every size, Cancel first as before. Mutation caught: the side-by-side row.
+  it('Cancel and Add to inventory are one full-width button under the other at every size', () => {
+    expect(src).toContain('<View style={styles.actions}>');
+    expect(styleBlock(src, 'actions')).toMatch(/^ flexDirection: 'column',/);
+    expect(buttonsIn(file, 'styles.actions')).toEqual([
+      ['Cancel', undefined],
+      ['Add to inventory', undefined],
+    ]);
+    expect(codeOnly(src)).not.toMatch(/actionsStacked|cancelBtn|addBtn/);
   });
 
   it('only the placeholder in its fixed frame is capped; the boxes cap themselves', () => {
