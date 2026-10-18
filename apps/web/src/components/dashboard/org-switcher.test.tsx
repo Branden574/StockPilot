@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { OrgSwitcher } from './org-switcher';
+import { membershipRoleLabel, OrgSwitcher } from './org-switcher';
 
 import { switchOrganizationAction } from '@/server/actions/org-switcher';
 
@@ -97,5 +97,37 @@ describe('OrgSwitcher', () => {
     await waitFor(() => {
       expect(replaceMock).toHaveBeenCalledWith('/dashboard');
     });
+  });
+});
+
+// CONFLICTS D19: the menu printed the raw role token ("owner", "staff") where
+// the sidebar foot and the account menu say "Super Admin (Owner)" and
+// "Warehouse User".
+describe('OrgSwitcher role words', () => {
+  it('names each membership role the way the rest of the app does', async () => {
+    const user = userEvent.setup();
+    render(
+      <OrgSwitcher
+        orgs={[
+          { id: 'o1', name: 'Acme Co', logoUrl: null, role: 'owner' },
+          { id: 'o2', name: 'Beta LLC', logoUrl: null, role: 'staff' },
+          { id: 'o3', name: 'Gamma Inc', logoUrl: null, role: 'viewer' },
+        ]}
+        activeId="o1"
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: /Switch organization/i }));
+    const menu = await screen.findByRole('menu');
+    expect(within(menu).getByText('Super Admin (Owner)')).toBeInTheDocument();
+    expect(within(menu).getByText('Warehouse User')).toBeInTheDocument();
+    expect(within(menu).getByText('Read-Only Auditor')).toBeInTheDocument();
+    expect(within(menu).queryByText(/^(owner|staff|viewer)$/i)).toBeNull();
+  });
+
+  it('shows a role token this build does not know as it is', () => {
+    expect(membershipRoleLabel('admin')).toBe('Super Admin');
+    expect(membershipRoleLabel('manager')).toBe('Manager');
+    expect(membershipRoleLabel('contractor')).toBe('contractor');
+    expect(membershipRoleLabel('toString')).toBe('toString');
   });
 });

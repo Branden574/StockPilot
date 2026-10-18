@@ -153,17 +153,29 @@ describe('Sidebar — navigation callback', () => {
   });
 });
 
-describe('Sidebar — accent edge bar', () => {
-  it('renders an aria-hidden left-edge accent span on the active link only', () => {
+describe('Sidebar — active row look', () => {
+  // VISUAL EXPECTATION UPDATED for the redesign (DESIGN-SPEC 5.1, CONFLICTS
+  // N5): the active row is the neutral hover fill at weight 500, and the old
+  // 2px accent edge (an aria-hidden span) is gone. What this test guarded
+  // stays: the active look is on the active link only, never on a sibling.
+  it('gives the active link the hover fill and weight 500, and no other link', () => {
     currentPathname = '/dashboard/inventory';
     render(<Sidebar {...baseProps} />);
+    const classesOf = (el: Element) => (el.getAttribute('class') ?? '').split(/\s+/);
 
     const items = screen.getByRole('link', { name: /^Items$/i });
-    // Active link contains the decorative left-edge accent bar.
-    expect(items.querySelector('span[aria-hidden="true"]')).not.toBeNull();
+    expect(classesOf(items)).toEqual(expect.arrayContaining(['bg-muted', 'font-medium']));
 
-    // A sibling inactive link should NOT have the accent bar span.
+    // A sibling inactive link only fills on hover.
     const categories = screen.getByRole('link', { name: /Categories/i });
-    expect(categories.querySelector('span[aria-hidden="true"]')).toBeNull();
+    expect(classesOf(categories)).not.toContain('bg-muted');
+    expect(classesOf(categories)).not.toContain('font-medium');
+    expect(classesOf(categories)).toContain('hover:bg-muted');
+
+    // Exactly the links aria-current marks carry the fill.
+    const links = screen.getAllByRole('link');
+    expect(links.filter((a) => classesOf(a).includes('bg-muted'))).toEqual(
+      links.filter((a) => a.getAttribute('aria-current') === 'page'),
+    );
   });
 });

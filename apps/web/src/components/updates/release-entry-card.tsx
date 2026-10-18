@@ -12,12 +12,16 @@ import { TOUCH_TARGET } from './constants';
 
 const LABEL = 'text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--ed-ink-3)]';
 
-/** Text label always; the tint is decoration, never the only signal. */
+/**
+ * Text label always; the tint is decoration, never the only signal. The
+ * redesign's tones (DESIGN-SPEC 6.10): New on the accent wash, Action on the
+ * caution wash, Improved as the outlined neutral, Fixed as the quiet neutral.
+ */
 const CATEGORY_TONE: Record<ClientReleaseEntry['category'], string> = {
-  new: 'border-emerald-600/30 text-emerald-700 dark:text-emerald-400',
-  improved: 'border-sky-600/30 text-sky-700 dark:text-sky-400',
-  fixed: 'border-border text-[var(--ed-ink-3)]',
-  action: 'border-amber-600/40 text-amber-700 dark:text-amber-400',
+  new: 'border-transparent bg-success-wash text-success',
+  improved: 'border-[var(--ed-line-strong)] text-[var(--ed-ink-2)]',
+  fixed: 'border-transparent bg-sunk text-[var(--ed-ink-3)]',
+  action: 'border-transparent bg-warning-wash text-warning',
 };
 
 /**
@@ -45,11 +49,11 @@ export function ReleaseEntryCard({
   const detailsId = React.useId();
 
   return (
-    <article className="bg-card rounded-xl border p-4">
+    <article className="bg-card rounded-lg border p-4">
       <div className="flex flex-wrap items-center gap-2">
         <span
           className={cn(
-            'rounded-full border px-2 py-0.5 text-[11px] font-medium',
+            'whitespace-nowrap rounded-full border px-2 py-px text-[12px] font-medium',
             CATEGORY_TONE[entry.category],
           )}
         >

@@ -33,13 +33,17 @@ export default function GlobalError({ error, reset }: { error: Error & { digest?
     }
   }, [error]);
 
+  // A full-screen state (this boundary sits outside every shell): the page
+  // colour, a 28px Inter Tight heading, the explanation in ink-3, one action.
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background px-6 text-center">
-      <h1 className="text-2xl font-semibold tracking-tight">Something went wrong</h1>
-      <p className="max-w-md text-sm text-muted-foreground">
+    <div className="bg-background flex min-h-screen flex-col items-center justify-center gap-3 px-6 text-center">
+      <h1 className="font-display text-[28px] font-medium leading-tight tracking-[-0.025em]">
+        Something went wrong
+      </h1>
+      <p className="text-muted-foreground max-w-md text-[13.5px] leading-relaxed">
         We hit an unexpected error. Try again, or refresh the page. If it keeps happening, contact support.
       </p>
-      <Button onClick={reset} variant="gradient">
+      <Button onClick={reset} className="mt-2">
         Try again
       </Button>
     </div>

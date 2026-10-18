@@ -22,7 +22,7 @@ export function MarkAllReadButton({ unreadCount }: { unreadCount: number }) {
   return (
     <div className="flex items-center gap-3">
       {failed ? (
-        <p role="status" className="text-[12.5px] text-amber-700 dark:text-amber-400">
+        <p role="status" className="text-warning text-[12.5px]">
           That could not be saved. Try again.
         </p>
       ) : null}
@@ -91,7 +91,7 @@ export function MarkReleaseRead({
   return (
     <p
       role="status"
-      className="mt-4 rounded-lg border border-amber-600/40 px-3 py-2 text-[12.5px] text-amber-700 dark:text-amber-400"
+      className="border-warning/30 bg-warning-wash text-warning mt-4 rounded-md border px-3 py-2 text-[12.5px]"
     >
       We could not save that you read this, so it may show as unread again.
     </p>

@@ -1,14 +1,27 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { setTheme } = vi.hoisted(() => ({ setTheme: vi.fn() }));
+const { setTheme, nav } = vi.hoisted(() => ({
+  setTheme: vi.fn(),
+  nav: { pathname: '/dashboard/inventory/new', prefetch: vi.fn() },
+}));
 
 vi.mock('next/navigation', () => ({
-  usePathname: () => '/dashboard/inventory/new',
+  usePathname: () => nav.pathname,
   useSearchParams: () => new URLSearchParams(),
-  useRouter: () => ({ push: vi.fn(), prefetch: vi.fn(), refresh: vi.fn() }),
+  useRouter: () => ({ push: vi.fn(), prefetch: nav.prefetch, refresh: vi.fn() }),
 }));
+// The real Link, with the prefetch it was given written on its anchor
+// (data-prefetch), so a test can read what each link in the bar asks for.
+vi.mock('next/link', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('next/link')>();
+  const RealLink = actual.default;
+  function Link(props: React.ComponentProps<typeof RealLink>) {
+    return <RealLink {...props} data-prefetch={String(props.prefetch)} />;
+  }
+  return { ...actual, default: Link };
+});
 vi.mock('next-themes', () => ({ useTheme: () => ({ setTheme, theme: 'light' }) }));
 vi.mock('@/lib/supabase/client', () => ({ createClient: () => ({}) }));
 vi.mock('@/lib/supabase/realtime-auth', () => ({ ensureRealtimeAuth: vi.fn() }));
@@ -57,6 +70,11 @@ function renderBar() {
 
 const classesOf = (el: Element) => (el.getAttribute('class') ?? '').split(/\s+/);
 
+beforeEach(() => {
+  nav.pathname = '/dashboard/inventory/new';
+  nav.prefetch.mockReset();
+});
+
 describe('the top bar decides what fits from its own width', () => {
   it('is a size container, so the sidebar beside it is taken into account', () => {
     expect(classesOf(renderBar())).toContain('@container');
@@ -70,9 +88,12 @@ describe('the top bar decides what fits from its own width', () => {
       const c = classesOf(el);
       return c.includes('hidden') ? c.filter((x) => x.startsWith('@min-')) : 'always';
     };
-    expect(at(within(bar).getByRole('navigation', { name: 'Breadcrumb' }))).toEqual(['@min-[520px]:flex']);
+    expect(at(within(bar).getByRole('navigation', { name: 'Breadcrumb' }))).toEqual([
+      '@min-[520px]:flex',
+    ]);
     for (const name of ['Keyboard shortcuts (?)', 'Help & Learning', 'Support & feedback']) {
-      const el = within(bar).queryByRole('button', { name }) ?? within(bar).getByRole('link', { name });
+      const el =
+        within(bar).queryByRole('button', { name }) ?? within(bar).getByRole('link', { name });
       expect(at(el), name).toEqual(['@min-[680px]:grid']);
     }
     // The theme switch sits in a wrapper that carries the rule.
@@ -114,7 +135,9 @@ describe('the top bar decides what fits from its own width', () => {
     ];
     for (const b of buttons) expect(classesOf(b), b.outerHTML.slice(0, 80)).toContain('shrink-0');
 
-    expect(classesOf(within(bar).getByRole('navigation', { name: 'Breadcrumb' }))).toContain('min-w-0');
+    expect(classesOf(within(bar).getByRole('navigation', { name: 'Breadcrumb' }))).toContain(
+      'min-w-0',
+    );
     const picker = within(bar).getByRole('button', { name: /^Filter by/ });
     expect(classesOf(picker)).toEqual(expect.arrayContaining(['min-w-0', 'max-w-full']));
     expect(classesOf(picker.parentElement!)).toContain('min-w-0');
@@ -144,7 +167,14 @@ describe('what a narrow bar leaves out can still be reached', () => {
   // opens would be unreachable), or pointed somewhere else.
   it('Help & Learning, Support & feedback and the theme are in the account menu at every width', async () => {
     const user = userEvent.setup();
-    render(<UserMenu email="demo@example.com" fullName="Demo User" avatarUrl={null} organizationName="Demo Co" />);
+    render(
+      <UserMenu
+        email="demo@example.com"
+        fullName="Demo User"
+        avatarUrl={null}
+        organizationName="Demo Co"
+      />,
+    );
     await user.click(screen.getByRole('button', { name: /^Account menu/ }));
 
     const help = await screen.findByRole('menuitem', { name: 'Help & Learning' });
@@ -153,7 +183,10 @@ describe('what a narrow bar leaves out can still be reached', () => {
       '/dashboard/support',
     );
     // The menu's items are not hidden at any width (only the bar's are).
-    for (const item of [...screen.getAllByRole('menuitem'), ...screen.getAllByRole('menuitemradio')]) {
+    for (const item of [
+      ...screen.getAllByRole('menuitem'),
+      ...screen.getAllByRole('menuitemradio'),
+    ]) {
       expect(classesOf(item).some((c) => c === 'hidden' || c.includes('hidden'))).toBe(false);
     }
 
@@ -181,7 +214,9 @@ describe('what a narrow bar leaves out can still be reached', () => {
     const crumbs = within(bar).getByRole('navigation', { name: 'Breadcrumb' });
     const optional = [...within(bar).getAllByRole('button'), ...within(bar).getAllByRole('link')]
       .filter((el) => !crumbs.contains(el))
-      .filter((el) => classesOf(el).includes('hidden') || classesOf(el.parentElement!).includes('hidden'))
+      .filter(
+        (el) => classesOf(el).includes('hidden') || classesOf(el.parentElement!).includes('hidden'),
+      )
       .map((el) => el.getAttribute('aria-label'));
     expect(optional.sort()).toEqual(
       [
@@ -224,11 +259,21 @@ describe('the account menu fits a short screen, and shows the theme in use', () 
   // Mutation caught: the height cap or the scroll dropped.
   it('is never taller than the room Radix measures below the button, and scrolls inside', async () => {
     const user = userEvent.setup();
-    render(<UserMenu email="demo@example.com" fullName="Demo User" avatarUrl={null} organizationName="Demo Co" />);
+    render(
+      <UserMenu
+        email="demo@example.com"
+        fullName="Demo User"
+        avatarUrl={null}
+        organizationName="Demo Co"
+      />,
+    );
     await user.click(screen.getByRole('button', { name: /^Account menu/ }));
     const menu = await screen.findByRole('menu');
     expect(classesOf(menu)).toEqual(
-      expect.arrayContaining(['max-h-[var(--radix-dropdown-menu-content-available-height)]', 'overflow-y-auto']),
+      expect.arrayContaining([
+        'max-h-[var(--radix-dropdown-menu-content-available-height)]',
+        'overflow-y-auto',
+      ]),
     );
     // The shared menu's overflow-hidden stays in the list; Tailwind writes
     // overflow-y after overflow, so auto wins (computed overflow-y measured in
@@ -239,7 +284,14 @@ describe('the account menu fits a short screen, and shows the theme in use', () 
   // which one is in use.
   it('marks the theme in use, and switches with one tap', async () => {
     const user = userEvent.setup();
-    render(<UserMenu email="demo@example.com" fullName="Demo User" avatarUrl={null} organizationName="Demo Co" />);
+    render(
+      <UserMenu
+        email="demo@example.com"
+        fullName="Demo User"
+        avatarUrl={null}
+        organizationName="Demo Co"
+      />,
+    );
     await user.click(screen.getByRole('button', { name: /^Account menu/ }));
     const themes = await screen.findAllByRole('menuitemradio');
     expect(themes.map((t) => [t.textContent, t.getAttribute('aria-checked')])).toEqual([
@@ -249,5 +301,186 @@ describe('the account menu fits a short screen, and shows the theme in use', () 
     ]);
     await user.click(screen.getByRole('menuitemradio', { name: 'System' }));
     expect(setTheme).toHaveBeenCalledWith('system');
+  });
+});
+
+describe('the redesigned bar (DESIGN-SPEC 5.2)', () => {
+  // Mutation caught: the old translucent bar back (blur costs a repaint per
+  // scroll frame), or a height change the storefront's --sf-topbar-h: 56px
+  // would not follow.
+  it('is a solid 56px bar on the page colour, with no blur', () => {
+    const bar = renderBar();
+    expect(bar.style.height).toBe('56px');
+    expect(classesOf(bar)).toContain('bg-background');
+    expect(classesOf(bar).some((c) => c.includes('backdrop-blur') || c.includes('color-mix'))).toBe(
+      false,
+    );
+  });
+
+  it('the breadcrumb is a list whose last crumb is the current page; the slashes are not read out', () => {
+    const bar = renderBar();
+    const crumbs = within(bar).getByRole('navigation', { name: 'Breadcrumb' });
+    const items = within(crumbs).getAllByRole('listitem');
+    // /dashboard/inventory/new: Inventory / Items / New.
+    expect(items.map((li) => li.textContent?.replace('/', '').trim())).toEqual([
+      'Inventory',
+      'Items',
+      'New',
+    ]);
+    expect(within(crumbs).getByText('New')).toHaveAttribute('aria-current', 'page');
+    expect(within(crumbs).getByRole('link', { name: 'Items' })).toHaveAttribute(
+      'href',
+      '/dashboard/inventory',
+    );
+    for (const slash of within(crumbs).getAllByText('/')) {
+      expect(slash).toHaveAttribute('aria-hidden');
+    }
+  });
+
+  it('every icon button is the 32px size', () => {
+    const bar = renderBar();
+    for (const name of [/sidebar/, 'Keyboard shortcuts (?)', 'Toggle theme']) {
+      expect(classesOf(within(bar).getByRole('button', { name })), String(name)).toContain(
+        'size-8',
+      );
+    }
+    for (const name of [/^Notifications/, 'Help & Learning', 'Support & feedback']) {
+      expect(classesOf(within(bar).getByRole('link', { name })), String(name)).toContain('size-8');
+    }
+  });
+
+  it('the warehouse picker says the org\'s own plural for "All"', () => {
+    render(
+      <Topbar
+        email="demo@example.com"
+        fullName="Demo User"
+        avatarUrl={null}
+        organizationName="Demo Co"
+        userId="u1"
+        organizationId="o1"
+        warehouseFilter={{
+          warehouses: [{ id: 'w1', name: 'North campus' }],
+          activeId: null,
+          warehouseLabel: 'Campus',
+          warehousePluralLabel: 'Campuses',
+        }}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Filter by campus' })).toHaveTextContent(
+      'All campuses',
+    );
+  });
+});
+
+describe('Density in the account menu', () => {
+  // A new per-viewer choice beside Theme (PLAN P2.3): Comfortable or Compact,
+  // the one in use marked, one tap to switch.
+  it('offers Comfortable and Compact, marks the one in use, and reports a change', async () => {
+    const onDensityChange = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <UserMenu
+        email="demo@example.com"
+        fullName="Demo User"
+        avatarUrl={null}
+        organizationName="Demo Co"
+        density="comfortable"
+        onDensityChange={onDensityChange}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: /^Account menu/ }));
+    const density = await screen.findByRole('group', { name: 'Density' });
+    const radios = within(density).getAllByRole('menuitemradio');
+    expect(radios.map((r) => [r.textContent, r.getAttribute('aria-checked')])).toEqual([
+      ['Comfortable', 'true'],
+      ['Compact', 'false'],
+    ]);
+    await user.click(screen.getByRole('menuitemradio', { name: 'Compact' }));
+    expect(onDensityChange).toHaveBeenCalledWith('compact');
+  });
+
+  it('the theme choice is still there, beside it', async () => {
+    const user = userEvent.setup();
+    render(
+      <UserMenu
+        email="demo@example.com"
+        fullName="Demo User"
+        avatarUrl={null}
+        organizationName="Demo Co"
+        density="compact"
+        onDensityChange={() => {}}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: /^Account menu/ }));
+    const radios = await screen.findAllByRole('menuitemradio');
+    expect(radios.map((r) => r.textContent)).toEqual([
+      'Light',
+      'Dark',
+      'System',
+      'Comfortable',
+      'Compact',
+    ]);
+    expect(screen.getByRole('menuitemradio', { name: 'Compact' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+  });
+});
+
+/**
+ * NO LINK IN THE BAR PREFETCHES ITS PAGE ON SIGHT (PLAN 0.6; review of
+ * 2026-10-18). The bar is on every dashboard page, and in a production build
+ * a default <Link> prefetches its page as soon as it is in view: two requests,
+ * each a full dynamic render of the dashboard layout, on every page view.
+ * Measured on the frozen 36cb9b619 build: every page fired them for
+ * Notifications, Help and Support, and /dashboard/settings/billing fired them
+ * for /dashboard/settings from the Settings crumb alone. Each link is warmed
+ * when a person comes to it instead, as the sidebar's links are.
+ */
+describe('the bar warms its pages when a person comes to a link, never on sight', () => {
+  // A trail with two parent links: Inventory / Purchase orders / PO imports / New.
+  const PATH = '/dashboard/purchase-orders/imports/new';
+  const LINKS = [
+    '/dashboard/purchase-orders',
+    '/dashboard/purchase-orders/imports',
+    '/dashboard/notifications',
+    '/dashboard/help',
+    '/dashboard/support',
+  ];
+
+  /** A spy's calls with every non-string reduced to its type, safe to print. */
+  const callsOf = (spy: { mock: { calls: unknown[][] } }) =>
+    spy.mock.calls.map((args) => args.map((a) => (typeof a === 'string' ? a : `<${typeof a}>`)));
+
+  // Mutation caught: prefetch={false} dropped from any crumb, the bell, Help
+  // or Support, or a new link added to the bar without it.
+  it('every link in the bar is rendered with prefetch={false}', () => {
+    nav.pathname = PATH;
+    const bar = renderBar();
+    const links = within(bar).getAllByRole('link');
+    expect(links.map((a) => a.getAttribute('href')).sort()).toEqual([...LINKS].sort());
+    for (const a of links) {
+      expect(a, a.getAttribute('href') ?? '').toHaveAttribute('data-prefetch', 'false');
+    }
+    expect(callsOf(nav.prefetch)).toEqual([]);
+  });
+
+  // Mutation caught: a link left with no warm-up (its click then waits for the
+  // whole page), or a handler that hands the warm-up the event, not the href.
+  it.each([
+    ['hover', (el: Element) => fireEvent.pointerEnter(el)],
+    ['keyboard focus', (el: Element) => fireEvent.focus(el)],
+    ['pointer-down', (el: Element) => fireEvent.pointerDown(el)],
+  ])('%s on a crumb, the bell, Help or Support warms that page', (_label, approach) => {
+    nav.pathname = PATH;
+    const bar = renderBar();
+    for (const href of LINKS) {
+      nav.prefetch.mockClear();
+      const link = within(bar)
+        .getAllByRole('link')
+        .find((a) => a.getAttribute('href') === href)!;
+      approach(link);
+      expect(callsOf(nav.prefetch), href).toEqual([[href]]);
+    }
   });
 });

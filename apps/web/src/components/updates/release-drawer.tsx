@@ -134,14 +134,14 @@ export function ReleaseDrawer({
             <div role="status" aria-label="Loading release details" className="space-y-4">
               <div className="bg-muted h-6 w-2/3 animate-pulse rounded" />
               <div className="bg-muted h-4 w-1/3 animate-pulse rounded" />
-              <div className="bg-muted h-24 w-full animate-pulse rounded-xl" />
-              <div className="bg-muted h-40 w-full animate-pulse rounded-xl" />
-              <div className="bg-muted h-40 w-full animate-pulse rounded-xl" />
+              <div className="bg-muted h-24 w-full animate-pulse rounded-lg" />
+              <div className="bg-muted h-40 w-full animate-pulse rounded-lg" />
+              <div className="bg-muted h-40 w-full animate-pulse rounded-lg" />
             </div>
           ) : null}
 
           {detail.phase === 'error' ? (
-            <div role="alert" className="rounded-xl border p-5">
+            <div role="alert" className="rounded-lg border p-5">
               <div className="flex items-start gap-3">
                 {detail.offline ? (
                   <WifiOff className="text-muted-foreground mt-0.5 size-4 shrink-0" aria-hidden />
@@ -193,14 +193,16 @@ export function ReleaseDrawer({
                   />
                 </p>
                 <p className="mt-3">
+                  {/* A status pill in the redesign's tones (DESIGN-SPEC 6.10):
+                      the words carry the meaning, the tint only repeats it. */}
                   <span
                     className={
-                      'inline-flex rounded-full border px-2.5 py-0.5 text-[11.5px] font-medium ' +
+                      'inline-flex whitespace-nowrap rounded-full px-2 py-px text-[12px] font-medium ' +
                       (withdrawn
-                        ? 'border-border text-[var(--ed-ink-3)]'
+                        ? 'bg-sunk text-[var(--ed-ink-2)]'
                         : refreshRequired && !rolledBack
-                          ? 'border-amber-600/40 text-amber-700 dark:text-amber-400'
-                          : 'border-emerald-600/30 text-emerald-700 dark:text-emerald-400')
+                          ? 'bg-warning-wash text-warning'
+                          : 'bg-success-wash text-success')
                     }
                   >
                     {withdrawn
@@ -215,14 +217,14 @@ export function ReleaseDrawer({
               {saveFailed ? (
                 <p
                   role="status"
-                  className="rounded-lg border border-amber-600/40 px-3 py-2 text-[12.5px] text-amber-700 dark:text-amber-400"
+                  className="border-warning/30 bg-warning-wash text-warning rounded-md border px-3 py-2 text-[12.5px]"
                 >
                   We could not save that you read this, so it may show as unread again.
                 </p>
               ) : null}
 
               {withdrawn ? (
-                <div className="rounded-xl border p-4">
+                <div className="rounded-lg border p-4">
                   <p className={LABEL}>This release was withdrawn</p>
                   <p className="mt-1.5 text-sm leading-relaxed">
                     {release.withdrawnNote ?? 'These changes are not available at the moment.'}
