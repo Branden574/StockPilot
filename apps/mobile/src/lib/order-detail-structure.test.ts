@@ -538,9 +538,14 @@ describe('order screen: the driver and create-return sheets are the shared sheet
     const [first, card] = kids(container);
     expect(first).toBe(scrim);
     expect(tagOf(card!, sf)).toBe('View');
-    for (const prop of ['onPress', 'accessible', 'onStartShouldSetResponder']) {
+    for (const prop of ['onPress', 'accessible']) {
       expect(attrText(card!, prop, sf)).toBeUndefined();
     }
+    // The only touch a card takes is the keyboard helper's, while the
+    // keyboard is up, to put it away (the create-return sheet's note).
+    expect(attrText(card!, 'onStartShouldSetResponder', sf)).toBe(
+      press === CLOSE_RETURN ? 'returnKb.claimTapOutside' : undefined,
+    );
   });
 
   it('the X on both sheets is a named 44pt button', () => {
@@ -582,6 +587,46 @@ describe('order screen: the driver and create-return sheets are the shared sheet
     const code = flat(codeOnly(sourceOf(FILES.order)));
     expect(code).toContain(
       'const returnSheetLayout = exceptionSheetLayout({ windowHeight, availableHeight: returnAvailableHeight, topInset: sheetInsets.top, });',
+    );
+  });
+
+  // Above the keyboard is not enough: the body shrinks with the sheet and the
+  // note, last in it, scrolled out of view as it was typed. The body now
+  // keeps it in view through the keyboard helper the needed-by and exception
+  // sheets use, and a note left focused when the sheet closed is not revealed
+  // on the next opening. Mutation caught: any handler left unwired.
+  it('the note being typed stays in view; a tap on the card or a drag puts the keyboard away', () => {
+    const code = flat(codeOnly(sourceOf(FILES.order)));
+    expect(code).toContain('const [attachReturnBody, returnKb] = useSheetKeyboard();');
+    const bodies = all.filter(
+      (n) => tagOf(n.el, sf) === 'ScrollView' && attrText(n.el, 'ref', sf) === 'attachReturnBody',
+    );
+    expect(bodies).toHaveLength(1);
+    const body = bodies[0]!.el;
+    expect(attrText(body, 'onScroll', sf)).toBe('returnKb.onBodyScroll');
+    expect(attrText(body, 'scrollEventThrottle', sf)).toBe('16');
+    expect(attrText(body, 'onLayout', sf)).toBe('returnKb.onBodyLayout');
+    expect(attrText(body, 'onContentSizeChange', sf)).toBe('returnKb.onBodyContentSizeChange');
+    expect(attrText(body, 'keyboardShouldPersistTaps', sf)).toBe('handled');
+    expect(attrText(body, 'keyboardDismissMode', sf)).toBe('on-drag');
+    const notes = all.filter(
+      (n) => tagOf(n.el, sf) === 'TextInput' && attrText(n.el, 'value', sf) === 'returnNotes',
+    );
+    expect(notes).toHaveLength(1);
+    const note = notes[0]!;
+    expect(attrText(note.el, 'onFocus', sf)).toBe('returnKb.onNoteFocus');
+    expect(attrText(note.el, 'onBlur', sf)).toBe('returnKb.onNoteBlur');
+    expect(attrText(note.el, 'onLayout', sf)).toBe('returnKb.onNoteLayout');
+    // Its block sits directly in the body, so its place is its place there.
+    const block = note.ancestors[note.ancestors.length - 1]!;
+    expect(attrText(block, 'onLayout', sf)).toBe('returnKb.onNoteBlockLayout');
+    expect(note.ancestors[note.ancestors.length - 2]).toBe(body);
+    const card = all.find(
+      (n) => attrText(n.el, 'onStartShouldSetResponder', sf) === 'returnKb.claimTapOutside',
+    );
+    expect(card && attrText(card.el, 'onResponderRelease', sf)).toBe('returnKb.onTapOutside');
+    expect(code).toMatch(
+      /setReturnItemIsHere\(false\); returnKb\.onNoteBlur\(\); setReturnOpen\(true\);/,
     );
   });
 

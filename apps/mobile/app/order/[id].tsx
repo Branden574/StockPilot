@@ -264,6 +264,7 @@ import { capTo, FONT, TYPE_CEILING } from '@/lib/theme';
 import { MIN_TAP } from '@/components/item-verification-card';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';
+import { useSheetKeyboard } from '@/lib/use-sheet-keyboard';
 import { useTheme } from '@/lib/use-theme';
 
 const BUCKET = 'order-attachments';
@@ -552,6 +553,10 @@ export default function OrderDetail() {
     availableHeight: returnAvailableHeight,
     topInset: sheetInsets.top,
   });
+  // The note being typed stays in view above the keyboard (the helper the
+  // needed-by and exception sheets use): the body scrolls it back whenever
+  // the keyboard or the sheet's size moves it.
+  const [attachReturnBody, returnKb] = useSheetKeyboard();
   const returnRowsStacked = shouldStackRow(fontScale);
   const [returnDraft, setReturnDraft] = React.useState<Record<string, ReturnDraftLine>>({});
   const [returnReason, setReturnReason] = React.useState<ReturnReasonCode | null>(null);
@@ -1221,6 +1226,9 @@ export default function OrderDetail() {
     setReturnError(null);
     setReturnKey(sheetKey);
     setReturnItemIsHere(false);
+    // The keyboard helper lives with the screen, not the sheet: a note that
+    // still had focus when the sheet last closed is not revealed again.
+    returnKb.onNoteBlur();
     setReturnOpen(true);
   }
 
@@ -4059,6 +4067,8 @@ export default function OrderDetail() {
               ]}
             />
             <View
+              onStartShouldSetResponder={returnKb.claimTapOutside}
+              onResponderRelease={returnKb.onTapOutside}
               style={{
                 backgroundColor: c.card,
                 borderTopLeftRadius: 18,
@@ -4093,10 +4103,19 @@ export default function OrderDetail() {
               </View>
 
               <ScrollView
+                ref={attachReturnBody}
                 // At large text the body takes all the room the bounded sheet
                 // leaves (it shrinks to fit between the header and Submit).
                 style={{ maxHeight: returnRowsStacked ? undefined : Math.max(returnSheetLayout.bodyMaxHeight, 380), flexShrink: 1 }}
                 contentContainerStyle={{ gap: 12 }}
+                // The first tap after typing reaches a stepper or a chip (it
+                // only put the keyboard away), and a drag puts it away.
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="on-drag"
+                scrollEventThrottle={16}
+                onScroll={returnKb.onBodyScroll}
+                onLayout={returnKb.onBodyLayout}
+                onContentSizeChange={returnKb.onBodyContentSizeChange}
               >
                 <Body size={12.5} color={c.ink3}>
                   {RETURNS_COPY.createReturnHelp}
@@ -4320,11 +4339,14 @@ export default function OrderDetail() {
                   />
                 </View>
 
-                <View style={{ gap: 8 }}>
+                <View style={{ gap: 8 }} onLayout={returnKb.onNoteBlockLayout}>
                   <Eyebrow>NOTES</Eyebrow>
                   <TextInput
                     value={returnNotes}
                     onChangeText={setReturnNotes}
+                    onFocus={returnKb.onNoteFocus}
+                    onBlur={returnKb.onNoteBlur}
+                    onLayout={returnKb.onNoteLayout}
                     placeholder="Optional notes for the approver"
                     placeholderTextColor={c.ink3}
                     multiline
