@@ -1,9 +1,14 @@
-import { type DrawerContentComponentProps } from 'expo-router/drawer';
+import { useDrawerStatus, type DrawerContentComponentProps } from 'expo-router/drawer';
 import { useRouter, useSegments } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 import { LogOut } from 'lucide-react-native';
 import * as React from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import {
+  SafeAreaView,
+  initialWindowMetrics,
+  useSafeAreaInsets,
+} from 'react-native-safe-area-context';
 
 import { BrandLockup } from '@/components/brand/mark';
 import { Avatar } from '@/components/ui/avatar';
@@ -22,8 +27,38 @@ import { useProfile } from '@/lib/use-profile';
 import { usePermissionsRealtime } from '@/lib/use-permissions-realtime';
 import { useRole } from '@/lib/use-role';
 import { useWorkspace } from '@/lib/use-workspace';
-import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo, type ThemeMode } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
+
+/**
+ * A top inset deeper than a status bar alone makes (20pt on an iPhone with a
+ * Home button, 24pt on an iPad) is a sensor housing, which keeps its inset
+ * when the status bar hides. Read once, at launch, so hiding the bar can
+ * never feed back into the answer.
+ */
+const SENSOR_HOUSING = Platform.OS === 'ios' && (initialWindowMetrics?.insets.top ?? 0) > 24;
+
+/**
+ * Whether the drawer hides the status bar: only while it is open over the
+ * Scan tab in light mode. Past the 320pt panel the battery sits on the Scan
+ * tab's camera bar, which is dark in both modes, so the root's dark glyphs
+ * read at about 1.08:1 there (the clock over the panel reads at 20:1). Only
+ * on an iPhone with a sensor housing, where hiding moves nothing: on an
+ * iPhone with a Home button or an iPad the top inset is the status bar's own,
+ * so hiding it would drop the panel and the screen by 20-24pt on every open,
+ * and those keep the status bar as before. It follows the drawer's state,
+ * not the navigator's drawerHideStatusBarOnOpen, which hides the bar as a
+ * swipe starts and shows it again only when the drawer's state changes, so a
+ * swipe that never opened the drawer would leave it hidden on every screen.
+ */
+function hidesStatusBar(
+  open: boolean,
+  mode: ThemeMode,
+  activeHref: string,
+  sensorHousing: boolean,
+): boolean {
+  return open && mode === 'light' && activeHref === '/scan' && sensorHousing;
+}
 
 /**
  * Side drawer — full web nav parity (Overview, Items, Books, Categories,
@@ -39,8 +74,9 @@ import { useTheme } from '@/lib/use-theme';
  * their order, gates and words are the registry's, exactly as before.
  */
 export function DrawerContent(props: DrawerContentComponentProps) {
-  const { c } = useTheme();
+  const { c, mode } = useTheme();
   const insets = useSafeAreaInsets();
+  const drawerOpen = useDrawerStatus() === 'open';
   const { signOut, user } = useAuth();
   const profile = useProfile();
   const { role } = useRole();
@@ -83,6 +119,11 @@ export function DrawerContent(props: DrawerContentComponentProps) {
 
   return (
     <View style={[styles.root, { backgroundColor: c.paper }]}>
+      {/* Mounted only while it applies: when the drawer closes it unmounts and
+          the status bar of the root (or of the Scan tab) shows again. */}
+      {hidesStatusBar(drawerOpen, mode, activeHref, SENSOR_HOUSING) ? (
+        <StatusBar hidden animated hideTransitionAnimation="fade" style="dark" />
+      ) : null}
       <SafeAreaView edges={['top']} style={{ paddingHorizontal: 16, paddingTop: 8 }}>
         <BrandLockup size={26} />
         <View style={{ marginTop: 12 }}>

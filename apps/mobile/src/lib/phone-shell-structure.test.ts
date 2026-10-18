@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
 
@@ -575,6 +576,19 @@ describe('drawer layout: every screen registered, the panel on the palette', () 
     );
     expect(code).toContain('sceneStyle: { backgroundColor: c.paper }');
   });
+
+  // The navigator's own switch (react-native-drawer-layout 4.2.10) hides the
+  // status bar as a swipe starts and shows it again only when the drawer's
+  // state changes, so a swipe that never opened the drawer left the bar
+  // hidden on every screen (and on an iPhone with a Home button or an iPad
+  // each open dropped the screen by the bar's 20-24pt). The drawer content
+  // hides it instead, from the drawer's state, only where it misreads.
+  it('leaves the status bar to the drawer content: the navigator never hides it', () => {
+    const code = flat(codeOnly(src));
+    expect(code).not.toContain('drawerHideStatusBarOnOpen');
+    expect(code).not.toContain('drawerStatusBarAnimation');
+    expect(code).not.toContain('StatusBar');
+  });
 });
 
 describe('drawer content: the registry, as the reference sidebar', () => {
@@ -684,6 +698,61 @@ describe('drawer content: the registry, as the reference sidebar', () => {
     expect(code).toContain("{profile.fullName ?? profile.email ?? 'Account'}");
     expect(code).toContain("{profile.email ?? ''}");
     expect(src).toContain('Force-logout lives in RootGate now');
+  });
+
+  // The P3.8 hand-off: in light mode, with the drawer open over the Scan tab,
+  // the battery past the 320pt panel sat on the camera bar (dark in both
+  // modes, dimmed by the scrim) in the root's dark glyphs, about 1.08:1.
+  it('hides the status bar only while it is open over the Scan tab in light mode, where hiding moves nothing', () => {
+    const { hidesStatusBar } = compileTopLevel(DRAWER, ['hidesStatusBar'], {}) as {
+      hidesStatusBar: (
+        open: boolean,
+        mode: 'light' | 'dark',
+        activeHref: string,
+        sensorHousing: boolean,
+      ) => boolean;
+    };
+    for (const open of [true, false]) {
+      for (const mode of ['light', 'dark'] as const) {
+        for (const href of ['/scan', '/', '/inventory', '/books', '/receive', '/orders']) {
+          for (const housing of [true, false]) {
+            expect(
+              hidesStatusBar(open, mode, href, housing),
+              `${open} ${mode} ${href} ${housing}`,
+            ).toBe(open && mode === 'light' && href === '/scan' && housing);
+          }
+        }
+      }
+    }
+    // The Scan tab (app/(drawer)/(tabs)/scan.tsx) is the page /scan on screen,
+    // by the same path the active row uses.
+    expect(existsSync(path.join(MOBILE_ROOT, 'app/(drawer)/(tabs)/scan.tsx'))).toBe(true);
+    expect(code).toContain(
+      "const path = '/' + segments.filter((s) => !s.startsWith('(')).join('/'); return path === '/' || path === '/index' ? '/' : path;",
+    );
+    // From the drawer's state, never from a gesture: mounted while it applies
+    // (a fade out), unmounted as the drawer closes, when the bar shows again.
+    expect(code).toContain("const drawerOpen = useDrawerStatus() === 'open';");
+    expect(code).toContain(
+      '{hidesStatusBar(drawerOpen, mode, activeHref, SENSOR_HOUSING) ? ( <StatusBar hidden animated hideTransitionAnimation="fade" style="dark" /> ) : null}',
+    );
+    expect((code.match(/<StatusBar\b/g) ?? []).length).toBe(1);
+  });
+
+  it('where hiding moves nothing: an iPhone whose top inset at launch is deeper than a status bar alone makes', () => {
+    const housing = (os: string, metrics: unknown) =>
+      compileTopLevel(DRAWER, ['SENSOR_HOUSING'], {
+        Platform: { OS: os },
+        initialWindowMetrics: metrics,
+      }).SENSOR_HOUSING;
+    expect(housing('ios', { insets: { top: 62 } })).toBe(true); // iPhone 17 Pro
+    expect(housing('ios', { insets: { top: 59 } })).toBe(true); // Dynamic Island
+    expect(housing('ios', { insets: { top: 47 } })).toBe(true); // notch
+    expect(housing('ios', { insets: { top: 24 } })).toBe(false); // iPad
+    expect(housing('ios', { insets: { top: 20 } })).toBe(false); // Home button
+    expect(housing('ios', { insets: { top: 0 } })).toBe(false); // launched in landscape
+    expect(housing('ios', null)).toBe(false);
+    expect(housing('android', { insets: { top: 48 } })).toBe(false);
   });
 });
 
@@ -1227,5 +1296,12 @@ describe('contrast (WCAG 2.x): every word at 4.5:1, every mark at 3:1, in both m
     expect(contrast('#b03a3a', DARK.paper)).toBeLessThan(AA_TEXT);
     expect(contrast(LIGHT.hair, LIGHT.card)).toBeLessThan(AA_UI);
     expect(contrast('#111111', DARK.paper)).toBeLessThan(AA_UI);
+    // The P3.8 hand-off, which the drawer now hides the status bar for: in
+    // light mode the root's black status bar glyphs past the drawer sit on
+    // the Scan tab's camera bar (#0a0b09) under the light scrim
+    // (rgba(14, 15, 13, 0.4)), which composite to #0c0d0b. Over the panel
+    // they read at 20:1.
+    expect(contrast('#000000', '#0c0d0b')).toBeLessThan(AA_UI);
+    expect(contrast('#000000', LIGHT.paper)).toBeGreaterThanOrEqual(AA_TEXT);
   });
 });
