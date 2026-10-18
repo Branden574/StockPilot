@@ -563,7 +563,7 @@ describe('both tabs keep every word, label and tour target', () => {
     }
   });
 
-  it('the search fields are named with their own placeholder words, and Open scanner is a named button in a 44pt frame on both tabs (D29: Books had none)', () => {
+  it('the search fields are named with their own placeholder words only while they hold text, and Open scanner is a named button in a 44pt frame on both tabs (D29: Books had none)', () => {
     for (const [file, placeholder] of [
       [ITEMS, 'Search SKU, name, or scan…'],
       [BOOKS, 'Search title, ISBN, SKU…'],
@@ -572,7 +572,14 @@ describe('both tabs keep every word, label and tour target', () => {
       const src = sourceOf(file);
       const input = nodesIn(sf).find((n) => tagOf(n.el, sf) === 'TextInput')!;
       expect(attrText(input.el, 'placeholder', sf)).toBe(placeholder);
-      expect(attrText(input.el, 'accessibilityLabel', sf)).toBe(placeholder);
+      expect(attrText(input.el, 'value', sf), file).toBe('q');
+      // iOS already reads an empty field's placeholder, so a name there too
+      // would say the same words twice; once text is typed, the placeholder
+      // is gone and the name says what the field is.
+      const label = attrText(input.el, 'accessibilityLabel', sf)!;
+      expect(label, file).toBe(`q.length > 0 ? '${placeholder}' : undefined`);
+      expect(run(label, { q: '' }), file).toBeUndefined();
+      expect(run(label, { q: 'abc' }), file).toBe(placeholder);
       const scan = nodesIn(sf).find(
         (n) =>
           tagOf(n.el, sf) === 'Pressable' &&

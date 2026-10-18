@@ -1009,9 +1009,11 @@ export default function Inventory() {
               onChangeText={setQ}
               placeholder="Search SKU, name, or scan…"
               placeholderTextColor={c.ink3}
-              // The placeholder's words as the field's name, so VoiceOver
-              // still says what the field is once something is typed in it.
-              accessibilityLabel="Search SKU, name, or scan…"
+              // The placeholder's words name the field only while it holds
+              // text, so VoiceOver still says what the field is once something
+              // is typed in it. An empty field takes no name: iOS reads its
+              // placeholder there, and a name as well would say it twice.
+              accessibilityLabel={q.length > 0 ? 'Search SKU, name, or scan…' : undefined}
               autoCapitalize="none"
               autoCorrect={false}
               autoFocus={false}
