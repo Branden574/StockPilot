@@ -6,6 +6,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { useIsFocused, useRouter, type Href } from 'expo-router';
+import { useDrawerStatus } from 'expo-router/drawer';
 import { StatusBar } from 'expo-status-bar';
 import { Camera, X } from 'lucide-react-native';
 import * as React from 'react';
@@ -198,8 +199,12 @@ export default function Scan() {
   const { mode: themeMode, c: colors } = useTheme();
   const styles = SCAN_STYLES[themeMode];
   // The light status bar goes with the dark camera bar, and only while this
-  // tab is the one on screen (tabs stay mounted behind each other).
+  // tab is the one on screen (tabs stay mounted behind each other) with
+  // nothing over the bar. The drawer and the packing-slip signature pad cover
+  // it without taking this tab's focus, and both are near white in light
+  // mode, so the root's own status bar takes over while either is up.
   const focused = useIsFocused();
+  const drawerOpen = useDrawerStatus() === 'open';
   const stacked = shouldStackRow(useWindowDimensions().fontScale);
   const [scanning, setScanning] = React.useState(true);
   const [mode, setMode] = React.useState<'lookup' | 'cover'>('lookup');
@@ -1006,8 +1011,9 @@ export default function Scan() {
   return (
     <View style={styles.container}>
       {/* The camera bar is dark in both modes, so the clock and battery over
-          it are light while this tab is the one on screen. */}
-      {focused ? <StatusBar style="light" /> : null}
+          it are light while this tab is the one on screen and neither the
+          drawer nor the signature pad covers the bar. */}
+      {focused && !drawerOpen && !signatureModalVisible ? <StatusBar style="light" /> : null}
 
       {/* THE CAMERA BAR: solid, and dark in both modes, so the close button
           and the mode switch read the same over any scene. */}

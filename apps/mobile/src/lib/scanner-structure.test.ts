@@ -1247,9 +1247,13 @@ describe('Scan tab: the camera chrome is dark in both modes and reads at AA', ()
     }
   });
 
-  it('the light clock and battery go with the dark bar, only while the tab is on screen', () => {
+  it('the light clock and battery go with the dark bar, only while the tab is on screen and uncovered', () => {
+    expect(src).toContain("import { useDrawerStatus } from 'expo-router/drawer';");
     expect(src).toContain('const focused = useIsFocused();');
-    expect(src).toContain('{focused ? <StatusBar style="light" /> : null}');
+    expect(src).toContain("const drawerOpen = useDrawerStatus() === 'open';");
+    expect(src).toContain(
+      '{focused && !drawerOpen && !signatureModalVisible ? <StatusBar style="light" /> : null}',
+    );
   });
 });
 
@@ -1413,6 +1417,21 @@ describe('Scan tab: defects fixed in this package', () => {
         expect(camera({ ...idle, ...up, mode }), mode).toBe(false);
       }
     }
+  });
+
+  // The light status bar stayed on while the drawer (320pt of paper, opened
+  // by a 32pt edge swipe) or the packing-slip signature pad (a full-screen
+  // modal on #f8f9fa) covered the camera bar: neither takes this tab's focus,
+  // so in light mode the white clock sat on near white, about 1.05:1. The
+  // root's status bar (dark in light mode, as before the restyle) now takes
+  // over while either is up. Mutation caught: either test dropped.
+  it('the light status bar steps aside while the drawer or the signature pad is up', () => {
+    const lightBar = shows(renderCondition(SCAN_TAB, (el, s) => tagOf(el, s) === 'StatusBar'));
+    const onScreen = { ...idle, focused: true, drawerOpen: false, signatureModalVisible: false };
+    expect(lightBar(onScreen)).toBe(true);
+    expect(lightBar({ ...onScreen, drawerOpen: true })).toBe(false);
+    expect(lightBar({ ...onScreen, signatureModalVisible: true })).toBe(false);
+    expect(lightBar({ ...onScreen, focused: false })).toBe(false);
   });
 
   // An add card fills the viewfinder from under the camera bar to above the
