@@ -18,7 +18,17 @@ import {
   Wrench,
 } from 'lucide-react-native';
 import * as React from 'react';
-import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  TextInput,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
@@ -38,7 +48,9 @@ import { Card, Hair } from '@/components/ui/card';
 import { IconChip } from '@/components/ui/row';
 import { Pill } from '@/components/ui/pill';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
+import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { useAuth } from '@/lib/auth-context';
+import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import { formatRelativeTime } from '@/lib/item-activity';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
@@ -145,7 +157,7 @@ import {
   createPhotoAttemptGuard,
   uploadMaintenancePhoto,
 } from '@/lib/maintenance-upload';
-import { ACCENT, FONT } from '@/lib/theme';
+import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -208,7 +220,11 @@ function PhotoQueueRow({
   return (
     <Card padding={10} style={{ marginTop: 8 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-        <Image source={{ uri: entry.uri }} style={styles.resolvePhotoThumb} contentFit="cover" />
+        <Image
+          source={{ uri: entry.uri }}
+          style={[styles.resolvePhotoThumb, { borderColor: c.hair }]}
+          contentFit="cover"
+        />
         <View style={{ flex: 1, minWidth: 0 }}>
           {entry.status === 'uploading' ? (
             <>
@@ -233,15 +249,16 @@ function PhotoQueueRow({
               {/* The failure reason is rendered IN PLACE, next to the photo it
                   belongs to — never only as a transient toast, which would
                   leave a failed photo on screen with nothing saying why. */}
-              <Body size={12.5} color={ACCENT.crit}>
+              <Body size={12.5} color={c.critText}>
                 {entry.message ?? PHOTO_UPLOAD_GENERIC_ERROR}
               </Body>
+              {/* A 44pt frame around the same word (it took hitSlop); the
+                  negative margin gives the extra height back. */}
               <Pressable
                 onPress={onRetry}
-                hitSlop={8}
                 accessibilityRole="button"
                 accessibilityLabel={`Retry ${label}`}
-                style={{ marginTop: 6 }}
+                style={styles.retryFrame}
               >
                 <Mono size={10.5} tracking={0.04} upper color={c.ink}>
                   RETRY
@@ -276,7 +293,8 @@ function PhotoSourceButton({
       accessibilityLabel={accessibilityLabel}
       style={({ pressed }) => [
         styles.addPhotoBtn,
-        { borderColor: c.hair, opacity: pressed ? 0.7 : 1 },
+        // A control: the stronger border and the card fill (the outline button's recipe).
+        { borderColor: c.hair2, backgroundColor: c.card, opacity: pressed ? 0.7 : 1 },
       ]}
     >
       <Icon size={16} color={c.ink} strokeWidth={1.5} />
@@ -302,6 +320,7 @@ function RelatedRow({
   onOpen: (href: string) => void;
 }) {
   const { c } = useTheme();
+  const stacked = shouldStackRow(useWindowDimensions().fontScale);
   if (!row) return null;
   if (!row.href) return <DetailRow label={label} value={row.value} />;
   const href = row.href;
@@ -311,28 +330,49 @@ function RelatedRow({
       accessibilityRole="link"
       accessibilityLabel={`${label.toLowerCase()}: ${row.value}`}
       accessibilityHint="Opens it in StockPilot"
-      style={({ pressed }) => [styles.detailRow, { minHeight: 44, opacity: pressed ? 0.7 : 1 }]}
+      style={({ pressed }) => [
+        styles.detailRow,
+        stacked && styles.detailRowStacked,
+        { minHeight: 44, opacity: pressed ? 0.7 : 1 },
+      ]}
     >
-      <Mono size={11} tracking={0.04} upper color={c.ink4}>
+      <Mono size={11} tracking={0.04} upper color={c.ink3}>
         {label}
       </Mono>
-      <Body size={13} color={c.ink} style={{ flexShrink: 1, textAlign: 'right', textDecorationLine: 'underline' }}>
+      <Body
+        size={13}
+        color={c.ink}
+        style={[
+          { flexShrink: 1, textAlign: 'right', textDecorationLine: 'underline' },
+          stacked && styles.detailValueStacked,
+        ]}
+      >
         {row.value}
       </Body>
     </Pressable>
   );
 }
 
+/**
+ * A fact and its label. Past the stacking scale the label sits over the
+ * value (the item screen's MetaRow reflow, not a cap), so a long value such
+ * as the access instructions is never squeezed beside its label.
+ */
 function DetailRow({ label, value }: { label: string; value: string | null | undefined }) {
   const { c } = useTheme();
+  const stacked = shouldStackRow(useWindowDimensions().fontScale);
   const v = typeof value === 'string' ? value.trim() : '';
   if (!v) return null;
   return (
-    <View style={styles.detailRow}>
-      <Mono size={11} tracking={0.04} upper color={c.ink4}>
+    <View style={[styles.detailRow, stacked && styles.detailRowStacked]}>
+      <Mono size={11} tracking={0.04} upper color={c.ink3}>
         {label}
       </Mono>
-      <Body size={13} color={c.ink} style={{ flexShrink: 1, textAlign: 'right' }}>
+      <Body
+        size={13}
+        color={c.ink}
+        style={[{ flexShrink: 1, textAlign: 'right' }, stacked && styles.detailValueStacked]}
+      >
         {v}
       </Body>
     </View>
@@ -964,7 +1004,7 @@ export default function MaintenanceRequestDetailScreen() {
             <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
           </View>
         </SafeAreaView>
-        <ActivityIndicator color={c.ink4} style={{ marginTop: 37 }} />
+        <ActivityIndicator color={c.ink} style={{ marginTop: 37 }} />
       </View>
     );
   }
@@ -1043,7 +1083,7 @@ export default function MaintenanceRequestDetailScreen() {
           <Display size={26} style={{ marginTop: 8 }}>
             {detail.subject}
           </Display>
-          <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
             <Pill status={pillStatus} dot={false}>
               {MAINTENANCE_STATUS_LABELS[detail.status]}
             </Pill>
@@ -1116,7 +1156,7 @@ export default function MaintenanceRequestDetailScreen() {
                 <Image
                   key={p.id}
                   source={{ uri: p.thumbUrl ?? p.url }}
-                  style={styles.photoThumb}
+                  style={[styles.photoThumb, { borderColor: c.hair }]}
                   contentFit="cover"
                 />
               ))}
@@ -1131,7 +1171,7 @@ export default function MaintenanceRequestDetailScreen() {
 
           {photosEditability.canAdd ? (
             <>
-              <Mono size={11} tracking={0.04} upper color={c.ink4} style={{ marginTop: 14 }}>
+              <Mono size={11} tracking={0.04} upper color={c.ink3} style={{ marginTop: 14 }}>
                 {REQUEST_PHOTOS_ADD_LABEL}
               </Mono>
               <View style={{ flexDirection: 'row', gap: 10, marginTop: 8 }}>
@@ -1162,7 +1202,7 @@ export default function MaintenanceRequestDetailScreen() {
           {/* Upload succeeded, list did not refresh. Says exactly that — the
               finished row above stays put, so the photo is accounted for. */}
           {photosRefreshError ? (
-            <Body size={12.5} color={ACCENT.crit} style={{ marginTop: 10 }}>
+            <Body size={12.5} color={c.critText} style={{ marginTop: 10 }}>
               {photosRefreshError}
             </Body>
           ) : null}
@@ -1191,7 +1231,7 @@ export default function MaintenanceRequestDetailScreen() {
                 <Image
                   key={p.id}
                   source={{ uri: p.thumbUrl ?? p.url }}
-                  style={styles.photoThumb}
+                  style={[styles.photoThumb, { borderColor: c.hair }]}
                   contentFit="cover"
                 />
               ))}
@@ -1218,7 +1258,7 @@ export default function MaintenanceRequestDetailScreen() {
             <>
               <View style={{ marginTop: 10, gap: 4 }}>
                 <View style={{ flexDirection: 'row', gap: 6 }}>
-                  <Mono size={11} tracking={0.04} upper color={c.ink4}>
+                  <Mono size={11} tracking={0.04} upper color={c.ink3}>
                     To
                   </Mono>
                   <Body size={13} color={c.ink}>
@@ -1226,7 +1266,7 @@ export default function MaintenanceRequestDetailScreen() {
                   </Body>
                 </View>
                 <View style={{ flexDirection: 'row', gap: 6 }}>
-                  <Mono size={11} tracking={0.04} upper color={c.ink4}>
+                  <Mono size={11} tracking={0.04} upper color={c.ink3}>
                     CC
                   </Mono>
                   <Body size={13} color={c.ink}>
@@ -1330,7 +1370,7 @@ export default function MaintenanceRequestDetailScreen() {
                 editable={false}
                 selectTextOnFocus
                 value={generatedShareUrl}
-                style={[styles.copyBox, { color: c.ink, borderColor: c.hair, minHeight: 44, marginTop: 6 }]}
+                style={[styles.copyBox, { color: c.ink, borderColor: c.hair2, minHeight: 44, marginTop: 6 }]}
                 accessibilityLabel="Photo share link to copy manually"
               />
               <Body size={11.5} muted style={{ marginTop: 6 }}>
@@ -1371,7 +1411,7 @@ export default function MaintenanceRequestDetailScreen() {
                 editable={false}
                 selectTextOnFocus
                 value={prepared.clipboardText}
-                style={[styles.copyBox, { color: c.ink, borderColor: c.hair }]}
+                style={[styles.copyBox, { color: c.ink, borderColor: c.hair2 }]}
                 accessibilityLabel="Maintenance request text to copy manually"
               />
               <Body size={11.5} muted style={{ marginTop: 6 }}>
@@ -1408,15 +1448,15 @@ export default function MaintenanceRequestDetailScreen() {
                       onChangeText={setResolveNote}
                       maxLength={MAINTENANCE_RESOLUTION_NOTE_MAX}
                       placeholder={RESOLVE_NOTE_PLACEHOLDER}
-                      placeholderTextColor={c.ink4}
+                      placeholderTextColor={c.ink3}
                       editable={!resolvePending}
-                      style={[styles.textarea, { color: c.ink, borderColor: c.hair }]}
+                      style={[styles.textarea, { color: c.ink, borderColor: c.hair2 }]}
                     />
                     <Body size={11} muted>
                       {resolveNoteHelperText()}
                     </Body>
 
-                    <Mono size={11} tracking={0.04} upper color={c.ink4}>
+                    <Mono size={11} tracking={0.04} upper color={c.ink3}>
                       {RESOLVE_ADD_PHOTO_LABEL}
                     </Mono>
                     <View style={{ flexDirection: 'row', gap: 10 }}>
@@ -1443,7 +1483,7 @@ export default function MaintenanceRequestDetailScreen() {
                     ))}
 
                     {resolveError ? (
-                      <Body size={13} color={ACCENT.crit}>
+                      <Body size={13} color={c.critText} accessibilityRole="alert">
                         {resolveError}
                       </Body>
                     ) : null}
@@ -1467,7 +1507,7 @@ export default function MaintenanceRequestDetailScreen() {
                 style={{ marginTop: 12 }}
                 disabled={archivePending}
                 onPress={confirmArchive}
-                leading={<Trash2 size={16} color={ACCENT.crit} strokeWidth={1.5} />}
+                leading={<Trash2 size={16} color={c.critText} strokeWidth={1.5} />}
               >
                 {ARCHIVE_BUTTON_LABEL}
               </Button>
@@ -1485,21 +1525,25 @@ export default function MaintenanceRequestDetailScreen() {
                 </Button>
                 {assignOpen ? (
                   <View style={{ marginTop: 12, gap: 8 }}>
-                    <Mono size={11} tracking={0.04} upper color={c.ink4}>
+                    <Mono size={11} tracking={0.04} upper color={c.ink3}>
                       {ASSIGN_OWNER_SECTION_LABEL}
                     </Mono>
                     <Body size={11.5} muted>
                       {ASSIGN_OWNER_HELPER}
                     </Body>
-                    {membersLoading ? <ActivityIndicator color={c.ink4} /> : null}
+                    {membersLoading ? <ActivityIndicator color={c.ink} /> : null}
                     {membersError ? (
-                      <Body size={13} color={ACCENT.crit}>
+                      <Body size={13} color={c.critText} accessibilityRole="alert">
                         {membersError}
                       </Body>
                     ) : null}
+                    {/* Each owner is a button that says whether it is the
+                        current one (the check mark shows it), 44pt tall. */}
                     <Pressable
                       onPress={() => void doAssign(null)}
                       disabled={assignPending}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: !detail.localOwnerUserId, disabled: assignPending }}
                       style={styles.pickerRow}
                     >
                       <Body size={14} color={c.ink}>
@@ -1514,6 +1558,11 @@ export default function MaintenanceRequestDetailScreen() {
                         key={member.userId}
                         onPress={() => void doAssign(member.userId)}
                         disabled={assignPending}
+                        accessibilityRole="button"
+                        accessibilityState={{
+                          selected: detail.localOwnerUserId === member.userId,
+                          disabled: assignPending,
+                        }}
                         style={styles.pickerRow}
                       >
                         <Body size={14} color={c.ink}>
@@ -1541,15 +1590,15 @@ export default function MaintenanceRequestDetailScreen() {
                 </Button>
                 {notesOpen ? (
                   <View style={{ marginTop: 12, gap: 8 }}>
-                    <Mono size={11} tracking={0.04} upper color={c.ink4}>
+                    <Mono size={11} tracking={0.04} upper color={c.ink3}>
                       {NOTES_SECTION_LABEL}
                     </Mono>
                     <Body size={11.5} muted>
                       {NOTES_HELPER}
                     </Body>
-                    {notesLoading ? <ActivityIndicator color={c.ink4} /> : null}
+                    {notesLoading ? <ActivityIndicator color={c.ink} /> : null}
                     {notesError ? (
-                      <Body size={13} color={ACCENT.crit}>
+                      <Body size={13} color={c.critText} accessibilityRole="alert">
                         {notesError}
                       </Body>
                     ) : null}
@@ -1580,9 +1629,9 @@ export default function MaintenanceRequestDetailScreen() {
                       onChangeText={setNoteBody}
                       maxLength={4000}
                       placeholder={NOTES_PLACEHOLDER}
-                      placeholderTextColor={c.ink4}
+                      placeholderTextColor={c.ink3}
                       editable={!notePending}
-                      style={[styles.textarea, { color: c.ink, borderColor: c.hair }]}
+                      style={[styles.textarea, { color: c.ink, borderColor: c.hair2 }]}
                     />
                     <Button
                       block
@@ -1661,17 +1710,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
+  detailRowStacked: { flexDirection: 'column', alignItems: 'flex-start', gap: 4 },
+  detailValueStacked: { textAlign: 'left' },
   photoGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
     marginTop: 10,
   },
+  // The photo ground (tones.ts PHOTO_BACKGROUND): white with a hairline in
+  // both modes, so a photo shot on white reads the same in light and dark.
   photoThumb: {
     width: 72,
     height: 72,
     borderRadius: 10,
-    backgroundColor: '#e5e5e5',
+    borderWidth: 1,
+    backgroundColor: PHOTO_BACKGROUND,
   },
   copyBox: {
     borderWidth: 1,
@@ -1688,6 +1742,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 10,
+    fontFamily: FONT.displayRegular,
     fontSize: 13.5,
     minHeight: 90,
     textAlignVertical: 'top',
@@ -1696,6 +1751,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    minHeight: 44,
     paddingVertical: 10,
   },
   addPhotoBtn: {
@@ -1705,14 +1761,27 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 1,
     borderRadius: 10,
+    minHeight: 44,
     paddingVertical: 10,
     paddingHorizontal: 14,
+  },
+  // A 44pt frame centred on the word where it was (6pt under the message):
+  // the margins take back the frame's 30pt beyond the word's ~14pt line, so
+  // the row keeps its height.
+  retryFrame: {
+    alignSelf: 'flex-start',
+    minHeight: 44,
+    minWidth: 44,
+    justifyContent: 'center',
+    marginTop: -9,
+    marginBottom: -15,
   },
   resolvePhotoThumb: {
     width: 48,
     height: 48,
     borderRadius: 8,
-    backgroundColor: '#e5e5e5',
+    borderWidth: 1,
+    backgroundColor: PHOTO_BACKGROUND,
   },
   progressTrack: {
     height: 4,

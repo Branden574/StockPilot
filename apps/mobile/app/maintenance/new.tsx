@@ -40,6 +40,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, FieldLabel, Mono } from '@/components/ui/text';
+import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { useAuth } from '@/lib/auth-context';
 import { showWriteCta } from '@/lib/cta-gating';
 import { footerReservation, shouldStackRow } from '@/lib/dynamic-type-layout';
@@ -76,7 +77,7 @@ import {
   UploadError,
 } from '@/lib/maintenance-upload';
 import { supabase } from '@/lib/supabase';
-import { ACCENT, FONT } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useTheme } from '@/lib/use-theme';
 import { retryWorkspace, useWorkspace } from '@/lib/use-workspace';
@@ -871,6 +872,9 @@ function FormStep({
   const { c } = useTheme();
   const [footerHeight, setFooterHeight] = React.useState<number | null>(null);
   const saveDisabled = saving || (escalation !== null && !escalation.state.saveEnabled);
+  // Every box: typed words in ink on the card, with the stronger border a
+  // control takes (the shared Field's recipe). What is typed stays uncapped.
+  const box = { color: c.ink, borderColor: c.hair2, backgroundColor: c.card };
 
   return (
     <>
@@ -889,20 +893,22 @@ function FormStep({
             <TextInput
               value={subject}
               onChangeText={setSubject}
+              accessibilityLabel="Subject"
               placeholder="Example: Air conditioner is not working in Room 204"
-              placeholderTextColor={c.ink4}
-              style={[styles.input, { color: c.ink, borderColor: c.hair }]}
+              placeholderTextColor={c.ink3}
+              style={[styles.input, box]}
             />
           </Field>
           <Field label="DESCRIBE THE ISSUE">
             <TextInput
               value={description}
               onChangeText={setDescription}
+              accessibilityLabel="Describe the issue"
               placeholder="Explain what is happening, when it started, and anything the maintenance team should know before arriving."
-              placeholderTextColor={c.ink4}
+              placeholderTextColor={c.ink3}
               multiline
               numberOfLines={5}
-              style={[styles.input, styles.multiline, { color: c.ink, borderColor: c.hair }]}
+              style={[styles.input, styles.multiline, box]}
             />
           </Field>
 
@@ -918,30 +924,14 @@ function FormStep({
           />
           <Field label="PRIORITY">
             <View style={styles.chipRow}>
-              {MAINTENANCE_PRIORITIES.map((p) => {
-                const selected = priority === p;
-                return (
-                  <Pressable
-                    key={p}
-                    onPress={() => setPriority(p)}
-                    style={({ pressed }) => [
-                      styles.chip,
-                      {
-                        borderColor: selected ? c.ink : c.hair,
-                        backgroundColor: selected ? c.card : 'transparent',
-                        opacity: pressed ? 0.8 : 1,
-                      },
-                    ]}
-                  >
-                    <Body size={13} color={c.ink} style={{ fontFamily: FONT.display }}>
-                      {PRIORITY_LABELS[p]}
-                    </Body>
-                    {selected ? (
-                      <Check size={13} color={c.ink} strokeWidth={2} style={{ marginLeft: 6 }} />
-                    ) : null}
-                  </Pressable>
-                );
-              })}
+              {MAINTENANCE_PRIORITIES.map((p) => (
+                <ChoiceChip
+                  key={p}
+                  label={PRIORITY_LABELS[p]}
+                  selected={priority === p}
+                  onPress={() => setPriority(p)}
+                />
+              ))}
             </View>
           </Field>
           {priority === 'urgent' ? (
@@ -959,10 +949,11 @@ function FormStep({
                 <TextInput
                   value={requesterPhone}
                   onChangeText={setRequesterPhone}
+                  accessibilityLabel="Contact phone (optional)"
                   placeholder="(555) 555-0100"
-                  placeholderTextColor={c.ink4}
+                  placeholderTextColor={c.ink3}
                   keyboardType="phone-pad"
-                  style={[styles.input, { color: c.ink, borderColor: c.hair }]}
+                  style={[styles.input, box]}
                 />
               </Field>
 
@@ -972,18 +963,20 @@ function FormStep({
                   <TextInput
                     value={building}
                     onChangeText={setBuilding}
+                    accessibilityLabel="Building"
                     placeholder="Main building"
-                    placeholderTextColor={c.ink4}
-                    style={[styles.input, { color: c.ink, borderColor: c.hair }]}
+                    placeholderTextColor={c.ink3}
+                    style={[styles.input, box]}
                   />
                 </Field>
                 <Field flex label="ROOM OR AREA">
                   <TextInput
                     value={roomOrArea}
                     onChangeText={setRoomOrArea}
+                    accessibilityLabel="Room or area"
                     placeholder="Room 204"
-                    placeholderTextColor={c.ink4}
-                    style={[styles.input, { color: c.ink, borderColor: c.hair }]}
+                    placeholderTextColor={c.ink3}
+                    style={[styles.input, box]}
                   />
                 </Field>
               </Row>
@@ -991,18 +984,20 @@ function FormStep({
                 <TextInput
                   value={department}
                   onChangeText={setDepartment}
-                  placeholderTextColor={c.ink4}
-                  style={[styles.input, { color: c.ink, borderColor: c.hair }]}
+                  accessibilityLabel="Department"
+                  placeholderTextColor={c.ink3}
+                  style={[styles.input, box]}
                 />
               </Field>
               <Field label="ADDITIONAL ACCESS INSTRUCTIONS">
                 <TextInput
                   value={accessInstructions}
                   onChangeText={setAccessInstructions}
+                  accessibilityLabel="Additional access instructions"
                   multiline
                   numberOfLines={2}
-                  placeholderTextColor={c.ink4}
-                  style={[styles.input, styles.multiline, { color: c.ink, borderColor: c.hair }]}
+                  placeholderTextColor={c.ink3}
+                  style={[styles.input, styles.multiline, box]}
                 />
               </Field>
             </>
@@ -1071,7 +1066,7 @@ function EscalationSourceCard({ view }: { view: EscalationFormView }) {
       {load.kind === 'loading' ? (
         view.online ? (
           <ActivityIndicator
-            color={c.ink4}
+            color={c.ink}
             style={{ alignSelf: 'flex-start' }}
             accessibilityLabel="Loading the exception"
           />
@@ -1162,16 +1157,20 @@ function PhotosStep({
         <Body muted size={13} style={{ marginBottom: 14 }}>
           Your request was saved. Photos are optional — add them now, or skip this and continue.
         </Body>
-        <Mono size={11} tracking={0.04} upper color={c.ink4} style={{ marginBottom: 10 }}>
+        <Mono size={11} tracking={0.04} upper color={c.ink3} style={{ marginBottom: 10 }}>
           {doneCount}/{MAINTENANCE_MAX_PHOTOS} PHOTOS
         </Mono>
 
+        {/* Buttons with the request screen's names for the same two
+            sources (they had no role), 44pt tall, the outline recipe. */}
         <View style={{ flexDirection: 'row', gap: 10, marginBottom: 14 }}>
           <Pressable
             onPress={onCamera}
+            accessibilityRole="button"
+            accessibilityLabel="Take a photo for this request"
             style={({ pressed }) => [
               photoStyles.addBtn,
-              { borderColor: c.hair, opacity: pressed ? 0.7 : 1 },
+              { borderColor: c.hair2, backgroundColor: c.card, opacity: pressed ? 0.7 : 1 },
             ]}
           >
             <Camera size={18} color={c.ink} strokeWidth={1.5} />
@@ -1181,9 +1180,11 @@ function PhotosStep({
           </Pressable>
           <Pressable
             onPress={onLibrary}
+            accessibilityRole="button"
+            accessibilityLabel="Choose a photo from your library for this request"
             style={({ pressed }) => [
               photoStyles.addBtn,
-              { borderColor: c.hair, opacity: pressed ? 0.7 : 1 },
+              { borderColor: c.hair2, backgroundColor: c.card, opacity: pressed ? 0.7 : 1 },
             ]}
           >
             <ImageIcon size={18} color={c.ink} strokeWidth={1.5} />
@@ -1204,6 +1205,7 @@ function PhotosStep({
       >
         <Pressable
           onPress={onFinish}
+          accessibilityRole="button"
           style={({ pressed }) => [styles.saveBtn, { backgroundColor: c.ink, opacity: pressed ? 0.7 : 1 }]}
         >
           <Body size={15} color={c.paper} style={{ fontFamily: FONT.display }}>
@@ -1220,7 +1222,7 @@ function PhotoRow({ entry, onRetry }: { entry: PhotoEntry; onRetry: () => void }
   return (
     <Card padding={10} style={{ marginBottom: 10 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-        <View style={photoStyles.thumb}>
+        <View style={[photoStyles.thumb, { borderColor: c.hair }]}>
           <Image source={{ uri: entry.uri }} style={StyleSheet.absoluteFill} resizeMode="cover" />
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
@@ -1248,23 +1250,27 @@ function PhotoRow({ entry, onRetry }: { entry: PhotoEntry; onRetry: () => void }
           ) : (
             <View style={{ gap: 6 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                <AlertCircle size={14} color={ACCENT.crit} strokeWidth={2} />
-                <Body size={13} color={ACCENT.crit} numberOfLines={2}>
+                <AlertCircle size={14} color={c.critText} strokeWidth={2} />
+                <Body size={13} color={c.critText} numberOfLines={2}>
                   {entry.message ?? 'Photo upload failed.'}
                 </Body>
               </View>
+              {/* A named button in a 44pt frame around the same pill (it was
+                  hitSlop with no role or name). */}
               <Pressable
                 onPress={onRetry}
-                hitSlop={8}
-                style={({ pressed }) => [
-                  photoStyles.retryBtn,
-                  { borderColor: c.hair, opacity: pressed ? 0.7 : 1 },
-                ]}
+                accessibilityRole="button"
+                accessibilityLabel={`Retry ${entry.fileName ?? 'photo'}`}
+                style={({ pressed }) => [photoStyles.retryFrame, { opacity: pressed ? 0.7 : 1 }]}
               >
-                <RefreshCw size={12} color={c.ink} strokeWidth={1.8} />
-                <Mono size={11} tracking={0.04} color={c.ink} style={{ marginLeft: 6 }}>
-                  Retry
-                </Mono>
+                <View
+                  style={[photoStyles.retryBtn, { borderColor: c.hair2, backgroundColor: c.card }]}
+                >
+                  <RefreshCw size={12} color={c.ink} strokeWidth={1.8} />
+                  <Mono size={11} tracking={0.04} color={c.ink} style={{ marginLeft: 6 }}>
+                    Retry
+                  </Mono>
+                </View>
               </Pressable>
             </View>
           )}
@@ -1327,7 +1333,7 @@ function ChipPickerField({
   return (
     <Field label={label}>
       {options.length === 0 ? (
-        <Mono size={11} tracking={0.04} color={c.ink4}>
+        <Mono size={11} tracking={0.04} color={c.ink3}>
           {emptyText ?? 'None available.'}
         </Mono>
       ) : (
@@ -1335,25 +1341,12 @@ function ChipPickerField({
           {options.map((opt) => {
             const selected = valueId === opt.id;
             return (
-              <Pressable
+              <ChoiceChip
                 key={opt.id}
+                label={opt.name}
+                selected={selected}
                 onPress={() => onChange(selected ? null : opt.id)}
-                style={({ pressed }) => [
-                  styles.chip,
-                  {
-                    borderColor: selected ? c.ink : c.hair,
-                    backgroundColor: selected ? c.card : 'transparent',
-                    opacity: pressed ? 0.8 : 1,
-                  },
-                ]}
-              >
-                <Body size={13} color={c.ink} style={{ fontFamily: FONT.display }}>
-                  {opt.name}
-                </Body>
-                {selected ? (
-                  <Check size={13} color={c.ink} strokeWidth={2} style={{ marginLeft: 6 }} />
-                ) : null}
-              </Pressable>
+              />
             );
           })}
         </View>
@@ -1373,38 +1366,74 @@ function ChipTextPickerField({
   value: string | null;
   onChange: (v: string | null) => void;
 }) {
-  const { c } = useTheme();
   return (
     <Field label={label}>
       <View style={styles.chipRow}>
         {options.map((opt) => {
           const selected = value === opt;
           return (
-            <Pressable
+            <ChoiceChip
               key={opt}
+              label={opt}
+              selected={selected}
               onPress={() => onChange(selected ? null : opt)}
-              style={({ pressed }) => [
-                styles.chip,
-                {
-                  borderColor: selected ? c.ink : c.hair,
-                  backgroundColor: selected ? c.card : 'transparent',
-                  opacity: pressed ? 0.8 : 1,
-                },
-              ]}
-            >
-              <Body size={13} color={c.ink} style={{ fontFamily: FONT.display }}>
-                {opt}
-              </Body>
-              {selected ? (
-                <Check size={13} color={c.ink} strokeWidth={2} style={{ marginLeft: 6 }} />
-              ) : null}
-            </Pressable>
+            />
           );
         })}
       </View>
     </Field>
   );
 }
+
+/**
+ * A choice (site, category, priority): a button that says whether it is
+ * chosen, in a 44pt frame. Chosen is the ink fill with the check mark the
+ * chips always carried; otherwise the outline on the page. The label wraps
+ * inside the chip for a long name, and grows to the control ceiling.
+ */
+function ChoiceChip({
+  label,
+  selected,
+  onPress,
+}: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  const { c } = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      style={({ pressed }) => [styles.chipFrame, { opacity: pressed ? 0.8 : 1 }]}
+    >
+      <View
+        style={[
+          styles.chip,
+          selected
+            ? { backgroundColor: c.ink, borderColor: c.ink }
+            : { backgroundColor: 'transparent', borderColor: c.hair2 },
+        ]}
+      >
+        <Body
+          size={13}
+          color={selected ? c.paper : c.ink}
+          style={{ fontFamily: FONT.display, flexShrink: 1 }}
+          maxFontSizeMultiplier={CHIP_CAP}
+        >
+          {label}
+        </Body>
+        {selected ? (
+          <Check size={13} color={c.paper} strokeWidth={2} style={{ marginLeft: 6 }} />
+        ) : null}
+      </View>
+    </Pressable>
+  );
+}
+
+/** A choice chip's label is a control's: the control ceiling. */
+const CHIP_CAP = capTo(13, TYPE_CEILING.control);
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
@@ -1436,20 +1465,27 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
     paddingTop: 12,
   },
+  // Rows of 44pt frames abut; the 34pt chips inside them sit 10pt apart.
   chipRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
+    columnGap: 8,
+  },
+  chipFrame: {
+    minHeight: 44,
+    minWidth: 44,
+    justifyContent: 'center',
+    maxWidth: '100%',
+    flexShrink: 1,
   },
   chip: {
     flexDirection: 'row',
     alignItems: 'center',
+    minHeight: 34,
     paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingVertical: 6,
     borderWidth: 1,
     borderRadius: 999,
-    maxWidth: '100%',
-    flexShrink: 1,
   },
   footer: {
     position: 'absolute',
@@ -1472,17 +1508,21 @@ const photoStyles = StyleSheet.create({
   addBtn: {
     flexDirection: 'row',
     alignItems: 'center',
+    minHeight: 44,
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderWidth: 1,
     borderRadius: 999,
   },
+  // The photo ground (tones.ts PHOTO_BACKGROUND): white with a hairline in
+  // both modes.
   thumb: {
     width: 56,
     height: 56,
     borderRadius: 10,
+    borderWidth: 1,
     overflow: 'hidden',
-    backgroundColor: '#e5e5e5',
+    backgroundColor: PHOTO_BACKGROUND,
   },
   progressTrack: {
     marginTop: 6,
@@ -1493,6 +1533,14 @@ const photoStyles = StyleSheet.create({
   progressFill: {
     height: 4,
     borderRadius: 2,
+  },
+  // The 44pt target around the ~28pt pill; the margins give back its extra
+  // height so the row keeps its size.
+  retryFrame: {
+    alignSelf: 'flex-start',
+    minHeight: 44,
+    justifyContent: 'center',
+    marginVertical: -8,
   },
   retryBtn: {
     flexDirection: 'row',
