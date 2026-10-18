@@ -89,6 +89,13 @@ try {
  * remaining allowed candidates with add. Min 2 / max 5 chosen — controls
  * disable at the bounds with a hint line. Only candidates the drawer/module
  * gating allows can be ADDED, so customization can never widen access.
+ *
+ * The look (redesign P5.10): the device mode's palette; every word (the
+ * hints, the unavailable note, a greyed choice, the preview's other tabs) is
+ * the muted ink or stronger, so it reads at AA (the faint ink4 held them near
+ * 3:1). Each reorder / add / remove chip is the same 30pt chip inside a real
+ * 44pt frame (it was the chip plus hitSlop, a 42pt target whose neighbours'
+ * slop overlapped); the frames stand side by side, so a touch has one owner.
  */
 export default function CustomizeTabsScreen() {
   const { c } = useTheme();
@@ -237,7 +244,7 @@ export default function CustomizeTabsScreen() {
           </View>
         </Card>
         <View style={{ paddingHorizontal: 4, paddingTop: 10 }}>
-          <Mono size={10} tracking={0.1} color={c.ink4}>
+          <Mono size={10} tracking={0.1} color={c.ink3}>
             HOME IS ALWAYS FIRST · {slots.length} OF {MAX_TAB_SLOTS} SLOTS USED
           </Mono>
         </View>
@@ -260,7 +267,7 @@ export default function CustomizeTabsScreen() {
                   <View style={{ flex: 1, minWidth: 0 }}>
                     <Body
                       size={15.5}
-                      color={unavailable ? c.ink4 : undefined}
+                      color={unavailable ? c.ink3 : undefined}
                       style={{ fontFamily: FONT.display }}
                     >
                       {cand.settingsLabel}
@@ -269,16 +276,17 @@ export default function CustomizeTabsScreen() {
                       <Mono
                         size={10}
                         tracking={0.06}
-                        color={c.ink4}
+                        color={c.ink3}
                         style={{ marginTop: 3 }}
                       >
                         UNAVAILABLE RIGHT NOW — HIDDEN FROM THE BAR
                       </Mono>
                     ) : null}
                   </View>
-                  {/* Three 30pt chips plus the icon well leave the label ~200pt
-                      of a 393pt screen. Past the shared threshold the chips
-                      take their own line and the label takes the width. */}
+                  {/* Three 44pt chip frames plus the icon well leave the label
+                      about 130pt of a 393pt screen. Past the shared threshold
+                      the chips take their own line and the label takes the
+                      width. */}
                   <View style={[styles.controls, stackControls && styles.controlsStacked]}>
                     <ControlChip
                       icon={ChevronUp}
@@ -344,6 +352,7 @@ export default function CustomizeTabsScreen() {
         <Section label="RESET">
           <Pressable
             onPress={reset}
+            accessibilityRole="button"
             android_ripple={{ color: c.hair }}
             style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
           >
@@ -355,7 +364,7 @@ export default function CustomizeTabsScreen() {
                 <Body size={15.5} style={{ fontFamily: FONT.display }}>
                   Reset to default
                 </Body>
-                <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 3 }}>
+                <Mono size={10.5} tracking={0.04} color={c.ink3} style={{ marginTop: 3 }}>
                   Home · Items · Books · POs · Scan
                 </Mono>
               </View>
@@ -384,7 +393,9 @@ function PreviewTab({
   active?: boolean;
 }) {
   const { c } = useTheme();
-  const tint = active ? c.ink : c.ink4;
+  // The other tabs' words read at AA in the muted ink (the reference's idle
+  // tab, DESIGN-SPEC 6.20); Home, the active one, in full ink.
+  const tint = active ? c.ink : c.ink3;
   // Raw Text, not <Mono>: the bar's letterSpacing is ABSOLUTE pt while
   // Mono's `tracking` prop is an em ratio — feeding 0.6 into Mono produced
   // 9 × 0.6 = 5.4pt of tracking, the "O r d e r s" bug this replaces. One
@@ -406,7 +417,12 @@ function PreviewTab({
   );
 }
 
-/** 30pt bordered icon button for reorder/add/remove — disabled at bounds. */
+/**
+ * 30pt bordered icon button for reorder/add/remove — disabled at bounds. The
+ * press target is a real 44pt frame around the chip (not hitSlop), so the
+ * target VoiceOver outlines is the one a finger can hit; the frame takes 7pt
+ * of the row's padding above and below, so the row keeps its height.
+ */
 function ControlChip({
   icon: Icon,
   label,
@@ -426,15 +442,15 @@ function ControlChip({
       accessibilityState={{ disabled }}
       disabled={disabled}
       onPress={onPress}
-      hitSlop={6}
       style={({ pressed }) => [
-        styles.control,
-        { borderColor: c.hair },
+        styles.controlFrame,
         disabled && { opacity: 0.3 },
         pressed && !disabled && { opacity: 0.6 },
       ]}
     >
-      <Icon size={15} color={c.ink} strokeWidth={1.6} />
+      <View style={[styles.control, { borderColor: c.hair2 }]}>
+        <Icon size={15} color={c.ink} strokeWidth={1.6} />
+      </View>
     </Pressable>
   );
 }
@@ -454,7 +470,7 @@ function Hint({ text }: { text: string }) {
   const { c } = useTheme();
   return (
     <View style={{ paddingHorizontal: 4, paddingTop: 8 }}>
-      <Mono size={10} tracking={0.1} color={c.ink4}>
+      <Mono size={10} tracking={0.1} color={c.ink3}>
         {text}
       </Mono>
     </View>
@@ -499,7 +515,8 @@ const styles = StyleSheet.create({
     minHeight: 52,
   },
   rowStacked: { flexWrap: 'wrap' },
-  controls: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  // The 44pt frames stand side by side (no gap), so no two targets overlap.
+  controls: { flexDirection: 'row', alignItems: 'center' },
   controlsStacked: { width: '100%', justifyContent: 'flex-end' },
   iconWell: {
     width: 32,
@@ -511,6 +528,14 @@ const styles = StyleSheet.create({
     flexShrink: 0,
     marginRight: 6,
   },
+  controlFrame: {
+    minWidth: 44,
+    minHeight: 44,
+    marginVertical: -7,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // A fixed size: the chip holds an icon, never text.
   control: {
     width: 30,
     height: 30,

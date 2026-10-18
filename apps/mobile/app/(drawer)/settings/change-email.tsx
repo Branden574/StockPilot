@@ -36,6 +36,11 @@ import { useTheme } from '@/lib/use-theme';
  * are no universal links), so this screen's job is to request, show pending,
  * resend, cancel — and, when it notices the change has completed, to refresh
  * the session so the drawer, lock screen and avatar pick up the new address.
+ *
+ * The look (redesign P5.10): the device mode's palette; the card labels are
+ * the muted ink, a refused request is said in the per-mode refusal red (it
+ * was a fixed red) and announced, and the password's show / hide eye is a
+ * named button in a 44pt frame (VoiceOver found an unnamed element).
  */
 
 interface Status {
@@ -234,7 +239,7 @@ export default function ChangeEmailScreen() {
         >
           {!status && !loadError ? (
             <View style={{ paddingVertical: 40, alignItems: 'center' }}>
-              <ActivityIndicator />
+              <ActivityIndicator color={c.ink} />
             </View>
           ) : null}
 
@@ -249,7 +254,7 @@ export default function ChangeEmailScreen() {
 
           {status ? (
             <Card padding={16} style={{ gap: 10 }}>
-              <Mono size={10} tracking={0.12} upper color={c.ink4}>
+              <Mono size={10} tracking={0.12} upper color={c.ink3}>
                 SIGN-IN EMAIL
               </Mono>
               <View style={styles.row}>
@@ -266,7 +271,7 @@ export default function ChangeEmailScreen() {
 
           {status && pending ? (
             <Card padding={16} style={{ gap: 10 }}>
-              <Mono size={10} tracking={0.12} upper color={c.ink4}>
+              <Mono size={10} tracking={0.12} upper color={c.ink3}>
                 PENDING CHANGE
               </Mono>
               <View style={styles.row}>
@@ -297,7 +302,7 @@ export default function ChangeEmailScreen() {
 
           {status && (!pending || showForm) ? (
             <Card padding={16} style={{ gap: 14 }}>
-              <Mono size={10} tracking={0.12} upper color={c.ink4}>
+              <Mono size={10} tracking={0.12} upper color={c.ink3}>
                 {pending ? 'CHANGE TO A DIFFERENT ADDRESS' : 'CHANGE EMAIL'}
               </Mono>
               <Body muted size={13}>
@@ -325,17 +330,22 @@ export default function ChangeEmailScreen() {
                 value={password}
                 onChangeText={setPassword}
                 trailing={
-                  <Pressable hitSlop={10} onPress={() => setShowPw((p) => !p)}>
+                  <Pressable
+                    onPress={() => setShowPw((p) => !p)}
+                    accessibilityRole="button"
+                    accessibilityLabel={showPw ? 'Hide password' : 'Show password'}
+                    style={({ pressed }) => [styles.eye, { opacity: pressed ? 0.6 : 1 }]}
+                  >
                     {showPw ? (
-                      <EyeOff size={18} color={c.ink4} strokeWidth={1.4} />
+                      <EyeOff size={18} color={c.ink3} strokeWidth={1.4} />
                     ) : (
-                      <Eye size={18} color={c.ink4} strokeWidth={1.4} />
+                      <Eye size={18} color={c.ink3} strokeWidth={1.4} />
                     )}
                   </Pressable>
                 }
               />
               {formError ? (
-                <Body size={13} style={{ color: '#b42318' }}>
+                <Body size={13} color={c.critText} accessibilityRole="alert">
                   {formError}
                 </Body>
               ) : null}
@@ -369,4 +379,13 @@ const styles = StyleSheet.create({
   },
   head: { paddingHorizontal: 20, paddingTop: 15, paddingBottom: 18 },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  // A real 44pt frame around the 18pt eye (not hitSlop), its right margin
+  // giving back the frame's extra width so the eye sits where it did.
+  eye: {
+    minWidth: 44,
+    minHeight: 44,
+    marginRight: -13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });

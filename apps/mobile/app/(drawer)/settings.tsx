@@ -58,7 +58,7 @@ import { settingsRolePill } from '@/lib/role-pill';
 import { refreshEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useProfile } from '@/lib/use-profile';
 import { useRole } from '@/lib/use-role';
-import { ACCENT, FONT } from '@/lib/theme';
+import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { refreshWarehouseScope } from '@/lib/warehouse-scope';
 
@@ -85,6 +85,14 @@ const OTA_ID = Updates.updateId ? Updates.updateId.slice(0, 8) : null;
  * by section (Account / Security / App / About) with mono eyebrows above
  * each card group. Sign-out is a destructive inline button at the bottom,
  * NOT a full-width red CTA.
+ *
+ * The look (redesign P5.10): the device mode's palette throughout; a row's
+ * detail, the email under the name and the version footer are the muted ink
+ * (information, so AA; the faint ink they had was about 3.3:1); Sign out is
+ * the per-mode refusal red. Every row is announced as a button. The Face ID
+ * switch is reachable on its own: while it can be turned on it is no longer
+ * inside an outer touchable, which VoiceOver read as one element whose double
+ * tap did nothing, so the switch could not be flipped without sight.
  */
 export default function Settings() {
   const { signOut, biometricEnabled, enableBiometric, disableBiometric } = useAuth();
@@ -258,7 +266,7 @@ export default function Settings() {
             <Body size={16} style={{ fontFamily: FONT.display }}>
               {fullName}
             </Body>
-            <Mono size={11.5} tracking={0.04} color={c.ink4} style={{ marginTop: 3 }}>
+            <Mono size={11.5} tracking={0.04} color={c.ink3} style={{ marginTop: 3 }}>
               {profile.email ?? ''}
             </Mono>
           </View>
@@ -351,28 +359,42 @@ export default function Settings() {
         ) : null}
 
         <Section label="SECURITY">
-          <Pressable
-            onPress={biometricSupported ? undefined : () => toggleBiometric(true)}
-            style={({ pressed }) => ({ opacity: pressed && !biometricSupported ? 0.7 : 1 })}
-          >
+          {/* Supported: the switch is its own VoiceOver element, named for
+              what it turns on (an outer touchable folded it into one element
+              whose double tap did nothing). Not supported yet: the whole row
+              is the button that says why (no hardware, or enrol first). */}
+          {biometricSupported ? (
             <SettingRow
               icon={Fingerprint}
               title={`${biometricLabel} unlock`}
-              detail={
-                biometricSupported
-                  ? undefined
-                  : cap && !cap.hasHardware
-                    ? 'No hardware'
-                    : 'Tap to enrol'
-              }
               trailing={
                 <Toggle
                   value={biometricEnabled && biometricSupported}
                   onValueChange={toggleBiometric}
+                  accessibilityLabel={`${biometricLabel} unlock`}
                 />
               }
             />
-          </Pressable>
+          ) : (
+            <Pressable
+              onPress={() => toggleBiometric(true)}
+              accessibilityRole="button"
+              style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
+            >
+              <SettingRow
+                icon={Fingerprint}
+                title={`${biometricLabel} unlock`}
+                detail={cap && !cap.hasHardware ? 'No hardware' : 'Tap to enrol'}
+                trailing={
+                  <Toggle
+                    value={biometricEnabled && biometricSupported}
+                    onValueChange={toggleBiometric}
+                    accessibilityLabel={`${biometricLabel} unlock`}
+                  />
+                }
+              />
+            </Pressable>
+          )}
           <Hair inset={70} />
           <SettingRow
             icon={Lock}
@@ -556,25 +578,27 @@ export default function Settings() {
           <Pressable
             onPress={() => void signOut()}
             hitSlop={10}
+            accessibilityRole="button"
             style={({ pressed }) => ({
               flexDirection: 'row',
               alignItems: 'center',
               gap: 10,
               paddingVertical: 10,
+              minHeight: MIN_TAP,
               flexShrink: 1,
               opacity: pressed ? 0.7 : 1,
             })}
           >
-            <LogOut size={16} color={ACCENT.crit} strokeWidth={1.5} />
+            <LogOut size={16} color={c.critText} strokeWidth={1.5} />
             <Body
               size={14.5}
-              color={ACCENT.crit}
+              color={c.critText}
               style={{ fontFamily: FONT.display, flexShrink: 1 }}
             >
               Sign out
             </Body>
           </Pressable>
-          <Mono size={10} tracking={0.1} color={c.ink4} style={{ flexShrink: 1, minWidth: 0 }}>
+          <Mono size={10} tracking={0.1} color={c.ink3} style={{ flexShrink: 1, minWidth: 0 }}>
             {OTA_DATE ? `v${APP_VERSION} · ${OTA_DATE}${OTA_ID ? ` · #${OTA_ID}` : ''}` : `v${APP_VERSION}`}
           </Mono>
         </View>
@@ -619,7 +643,7 @@ function SettingRow({
   const detailNode = detail ? (
     <Body
       size={13.5}
-      color={c.ink4}
+      color={c.ink3}
       style={
         stacked
           ? { marginTop: 3 }
@@ -656,6 +680,7 @@ function SettingRow({
   return (
     <Pressable
       onPress={onPress}
+      accessibilityRole="button"
       android_ripple={{ color: c.hair }}
       style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
     >
@@ -760,6 +785,9 @@ function promptDeleteConfirmation(signOut: SignOutFn): void {
     );
   }
 }
+
+/** The iOS minimum tap target, in points. */
+const MIN_TAP = 44;
 
 const styles = StyleSheet.create({
   root: { flex: 1 },

@@ -583,3 +583,441 @@ describe('the report files: words never take a faint ink', () => {
     expect(wordColours(file).filter((x) => /\bc\.ink[45]\b/.test(x))).toEqual([]);
   });
 });
+
+// ── Settings ─────────────────────────────────────────────────────────────
+
+const SETTINGS = 'app/(drawer)/settings.tsx';
+const CHANGE_EMAIL = 'app/(drawer)/settings/change-email.tsx';
+const CUSTOMIZE_TABS = 'app/(drawer)/settings/customize-tabs.tsx';
+const INTEGRATIONS = 'app/(drawer)/settings/integrations.tsx';
+const UNSENT_WORK = 'app/(drawer)/settings/rejected-work.tsx';
+
+const SETTINGS_FILES = [SETTINGS, CHANGE_EMAIL, CUSTOMIZE_TABS, INTEGRATIONS, UNSENT_WORK];
+
+/** Evaluates a condition the screen wrote, as written, with the names given. */
+function runCondition(expression: string, names: Record<string, unknown>): unknown {
+  const keys = Object.keys(names);
+  const fn = new Function(...keys, `return (${expression});`) as (...args: unknown[]) => unknown;
+  return fn(...keys.map((k) => names[k]));
+}
+
+describe('Settings pages: the per-mode palette', () => {
+  it.each(SETTINGS_FILES)(
+    '%s takes no single-mode accent and gives no word a faint ink',
+    (file) => {
+      expect(themeImports(file)).not.toContain('ACCENT');
+      expect(themeImports(file)).not.toContain('theme');
+      expect(wordColours(file).filter((x) => FAINT_OR_SINGLE_MODE.test(x))).toEqual([]);
+      // No fixed hex or translucent colour anywhere in the file.
+      expect(codeOnly(sourceOf(file))).not.toMatch(/'#[0-9a-f]{3,8}'|rgba\(/i);
+    },
+  );
+
+  // What ink4 may still draw in these files: glyphs beside words, never the
+  // words (the chevrons, the mail glyph in its field, the plug, an
+  // unavailable tab's icon).
+  it('the faint ink4 is left only on glyphs', () => {
+    expect(tokenSites(SETTINGS, 'ink4')).toEqual(['ChevronLeft.color']);
+    expect(tokenSites(CHANGE_EMAIL, 'ink4')).toEqual(['Mail.color']);
+    expect(tokenSites(CUSTOMIZE_TABS, 'ink4')).toEqual(['SlotIcon.color']);
+    expect(tokenSites(INTEGRATIONS, 'ink4')).toEqual(['Plug.color', 'Plug.color']);
+    expect(tokenSites(UNSENT_WORK, 'ink4')).toEqual([]);
+    for (const file of SETTINGS_FILES) expect(tokenSites(file, 'ink5')).toEqual([]);
+  });
+
+  it.each(MODES)('%s: every word reads at AA on the card and the page; glyphs at 3:1', (_m, p) => {
+    for (const ground of [p.card, p.paper]) {
+      for (const t of [p.ink, p.ink3, p.critText, p.warnText])
+        expect(contrast(t, ground)).toBeGreaterThanOrEqual(AA_TEXT);
+      expect(contrast(p.ink4, ground)).toBeGreaterThanOrEqual(AA_UI);
+    }
+    // The integrations error: the refusal words on the refusal wash.
+    expect(contrast(p.critText, p.critWash)).toBeGreaterThanOrEqual(AA_TEXT);
+    // The sync row icons beside their pills, on the card.
+    for (const t of [p.accent, p.warnText, p.critText])
+      expect(contrast(t, p.card)).toBeGreaterThanOrEqual(AA_UI);
+  });
+});
+
+describe('Settings: the account screen', () => {
+  const settings = flatCode(SETTINGS);
+
+  it("a row's detail, the email and the version footer are the muted ink; Sign out the per-mode red", () => {
+    expect(settings).toContain(
+      "<Mono size={11.5} tracking={0.04} color={c.ink3} style={{ marginTop: 3 }}> {profile.email ?? ''} </Mono>",
+    );
+    expect(settings).toContain('<Body size={13.5} color={c.ink3}');
+    expect(settings).toContain('<LogOut size={16} color={c.critText} strokeWidth={1.5} />');
+    expect(settings).toMatch(/<Body size=\{14\.5\} color=\{c\.critText\}[^>]*> Sign out <\/Body>/);
+    expect(settings).toContain(
+      "<Mono size={10} tracking={0.1} color={c.ink3} style={{ flexShrink: 1, minWidth: 0 }}> {OTA_DATE ? `v${APP_VERSION} · ${OTA_DATE}${OTA_ID ? ` · #${OTA_ID}` : ''}` : `v${APP_VERSION}`} </Mono>",
+    );
+  });
+
+  it('every row and Sign out are named buttons; Sign out is a 44pt frame and keeps its tap', () => {
+    const { sf, fn } = functionNamed(SETTINGS, 'SettingRow');
+    const rowTouch = elementsIn(fn).filter((n) => TOUCHABLE_TAG.test(tagOf(n.el, sf)));
+    expect(rowTouch).toHaveLength(1);
+    expect(attrText(rowTouch[0]!.el, 'accessibilityRole', sf)).toBe('button');
+    expect(attrText(rowTouch[0]!.el, 'onPress', sf)).toBe('onPress');
+    expect(settings).toMatch(
+      /<Pressable onPress=\{\(\) => void signOut\(\)\} hitSlop=\{10\} accessibilityRole="button" style=\{\(\{ pressed \}\) => \(\{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, minHeight: MIN_TAP,/,
+    );
+    expect(settings).toContain('const MIN_TAP = 44;');
+  });
+
+  // The defect: the Face ID switch sat inside an outer Pressable that iOS
+  // made one VoiceOver element; its double tap landed on the outer, which had
+  // no handler while the switch could be turned on, so it could not be
+  // flipped without sight. Mutation caught: the switch wrapped again, or its
+  // name dropped.
+  it('the Face ID switch is its own VoiceOver element while it can be turned on, named for what it does', () => {
+    const sf = treeOf(SETTINGS);
+    const toggles = elementsIn(sf).filter((n) => tagOf(n.el, sf) === 'Toggle');
+    expect(toggles).toHaveLength(2);
+    for (const t of toggles) {
+      expect(attrText(t.el, 'accessibilityLabel', sf)).toBe('`${biometricLabel} unlock`');
+      expect(attrText(t.el, 'onValueChange', sf)).toBe('toggleBiometric');
+      expect(attrText(t.el, 'value', sf)).toBe('biometricEnabled && biometricSupported');
+    }
+    // The two branches of the row, by the screen's own condition.
+    let branch: ts.ConditionalExpression | null = null;
+    const visit = (n: ts.Node) => {
+      if (
+        ts.isConditionalExpression(n) &&
+        n.condition.getText(sf) === 'biometricSupported' &&
+        n.whenTrue.getText(sf).includes('<SettingRow')
+      ) {
+        branch = n;
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+    expect(branch).not.toBeNull();
+    const supported = elementsIn(branch!.whenTrue);
+    const notYet = elementsIn(branch!.whenFalse);
+    // Supported: no touchable above the switch.
+    const onSwitch = supported.find((n) => tagOf(n.el, sf) === 'Toggle')!;
+    expect(onSwitch.ancestors.filter((a) => TOUCHABLE_TAG.test(tagOf(a, sf)))).toEqual([]);
+    expect(supported.filter((n) => TOUCHABLE_TAG.test(tagOf(n.el, sf)))).toEqual([]);
+    // Not supported yet: the whole row is one button that says why.
+    const outer = notYet.find((n) => TOUCHABLE_TAG.test(tagOf(n.el, sf)))!;
+    expect(attrText(outer.el, 'onPress', sf)).toBe('() => toggleBiometric(true)');
+    expect(attrText(outer.el, 'accessibilityRole', sf)).toBe('button');
+    expect(flatCode(SETTINGS)).toContain(
+      "detail={cap && !cap.hasHardware ? 'No hardware' : 'Tap to enrol'}",
+    );
+  });
+
+  it('keeps every row, web page, confirmation and the account deletion with the typed DELETE', () => {
+    for (const words of [
+      '<Eyebrow>SETTINGS</Eyebrow>',
+      'Account<Em>.</Em>',
+      'title="Workspaces" detail="View sites"',
+      "router.push('/locations?return=/settings')",
+      "Linking.openURL('https://stockpilotusa.com/dashboard/settings/profile')",
+      "router.push('/settings/change-email' as never)",
+      "router.push('/notifications?return=/settings')",
+      'title="Send test push" detail="To this device"',
+      "'/api/v1/push/test'",
+      "router.push('/settings/integrations' as never)",
+      "Linking.openURL('https://stockpilotusa.com/dashboard/settings/security')",
+      'title="Customize tab bar" detail="Home + up to 5"',
+      "router.push('/settings/customize-tabs' as never)",
+      'title="Theme" detail="Auto"',
+      'title="Sync" detail="Wi-Fi + cellular"',
+      "router.push('/settings/rejected-work' as never)",
+      'title="Offline cache" detail="Tap to clear"',
+      'title="Delete my account" detail="Permanent"',
+      'onPress={() => confirmDeleteAccount(signOut)}',
+      "Linking.openURL('mailto:hello@stockpilot.app?subject=StockPilot%20mobile%20support')",
+      "Linking.openURL('https://stockpilotusa.com/privacy')",
+      "Linking.openURL('https://stockpilotusa.com/terms')",
+      'title="What\'s new" detail={`v${APP_VERSION}`}',
+      "'Type DELETE to confirm'",
+      "if ((input ?? '').trim() !== 'DELETE') {",
+      "body: { confirm: 'DELETE' },",
+      "'Delete forever'",
+      'DELETE_ACCOUNT_CONFIRM_COPY',
+      "const showIntegrations = enabledModules.has('integrations') && isAdmin;",
+    ]) {
+      expect(settings).toContain(words);
+    }
+  });
+});
+
+describe('Settings: Change email', () => {
+  const email = flatCode(CHANGE_EMAIL);
+
+  it('a refused request is said in the per-mode red, as an alert (it was a fixed red, read as plain text)', () => {
+    expect(email).toContain(
+      '<Body size={13} color={c.critText} accessibilityRole="alert"> {formError} </Body>',
+    );
+    expect(email).not.toContain('#b42318');
+  });
+
+  it('the card labels are the muted ink', () => {
+    for (const label of ['SIGN-IN EMAIL', 'PENDING CHANGE']) {
+      expect(email).toContain(
+        `<Mono size={10} tracking={0.12} upper color={c.ink3}> ${label} </Mono>`,
+      );
+    }
+    expect(email).toContain(
+      "<Mono size={10} tracking={0.12} upper color={c.ink3}> {pending ? 'CHANGE TO A DIFFERENT ADDRESS' : 'CHANGE EMAIL'} </Mono>",
+    );
+  });
+
+  // The defect: the eye was an unnamed, roleless Pressable with hitSlop, so
+  // VoiceOver found an element with no words. Mutation caught: the name, the
+  // role or the frame dropped, or hitSlop back.
+  it("the password's eye is a named button in a 44pt frame that shows or hides it", () => {
+    const sf = treeOf(CHANGE_EMAIL);
+    const eyes = elementsIn(sf).filter(
+      (n) =>
+        TOUCHABLE_TAG.test(tagOf(n.el, sf)) &&
+        attrText(n.el, 'onPress', sf) === '() => setShowPw((p) => !p)',
+    );
+    expect(eyes).toHaveLength(1);
+    const eye = eyes[0]!.el;
+    expect(attrText(eye, 'accessibilityRole', sf)).toBe('button');
+    expect(attrText(eye, 'accessibilityLabel', sf)).toBe(
+      "showPw ? 'Hide password' : 'Show password'",
+    );
+    expect(attr(eye, 'hitSlop', sf)).toBeUndefined();
+    const frame = styleBlock(CHANGE_EMAIL, 'eye');
+    expect(frame).toMatch(/minWidth: 44,\s*minHeight: 44,\s*marginRight: -13,/);
+    // The eye is a control: its glyph in the muted ink (3:1 and more).
+    expect(email).toContain('<EyeOff size={18} color={c.ink3} strokeWidth={1.4} />');
+    expect(email).toContain('<Eye size={18} color={c.ink3} strokeWidth={1.4} />');
+    expect(email).toContain('secureTextEntry={!showPw}');
+  });
+
+  it('keeps every state, word and request', () => {
+    for (const words of [
+      "api<Status>('/api/v1/account/email')",
+      "'/api/v1/account/email/request'",
+      "'/api/v1/account/email/resend'",
+      "'/api/v1/account/email/cancel'",
+      "'Re-authentication needed'",
+      "{busy === 'resend' ? 'Sending…' : 'Resend links'}",
+      'Use a different address',
+      "{busy === 'cancel' ? 'Cancelling…' : 'Cancel change'}",
+      'label="NEW EMAIL"',
+      'label="CURRENT PASSWORD"',
+      "{busy === 'request' ? 'Sending…' : 'Send verification'}",
+      'Keep the pending address',
+      "'Check both inboxes'",
+      "'Cancel this email change?'",
+      "<Pill status=\"ok\">{pending ? 'CURRENT' : 'VERIFIED'}</Pill>",
+      "<Pill status={expired ? 'crit' : 'warn'}>{expired ? 'EXPIRED' : 'PENDING'}</Pill>",
+    ]) {
+      expect(email).toContain(words);
+    }
+  });
+});
+
+describe('Settings: Customize tab bar', () => {
+  const tabs = flatCode(CUSTOMIZE_TABS);
+
+  it('every word reads in the muted ink or stronger: the hints, the note, a greyed choice, the preview', () => {
+    expect(tabs).toContain(
+      '<Mono size={10} tracking={0.1} color={c.ink3}> HOME IS ALWAYS FIRST · {slots.length} OF {MAX_TAB_SLOTS} SLOTS USED </Mono>',
+    );
+    expect(tabs).toContain('color={unavailable ? c.ink3 : undefined}');
+    expect(tabs).toContain('UNAVAILABLE RIGHT NOW — HIDDEN FROM THE BAR');
+    expect(tabs).toContain('const tint = active ? c.ink : c.ink3;');
+    expect(tabs).toContain(
+      '<Mono size={10.5} tracking={0.04} color={c.ink3} style={{ marginTop: 3 }}> Home · Items · Books · POs · Scan </Mono>',
+    );
+    expect(tabs).toContain('<Mono size={10} tracking={0.1} color={c.ink3}> {text} </Mono>');
+  });
+
+  // Each chip was a 30pt box plus hitSlop 6 (a 42pt target), 8pt apart, so
+  // two neighbours' slop overlapped. Mutation caught: hitSlop back, the frame
+  // under 44pt or given a fixed size, or a gap that lets frames overlap.
+  it('each reorder, add and remove chip is the same 30pt chip in a real 44pt frame, side by side', () => {
+    const { sf, fn } = functionNamed(CUSTOMIZE_TABS, 'ControlChip');
+    const els = elementsIn(fn);
+    const touch = els.filter((n) => TOUCHABLE_TAG.test(tagOf(n.el, sf)));
+    expect(touch).toHaveLength(1);
+    const frame = touch[0]!.el;
+    expect(attr(frame, 'hitSlop', sf)).toBeUndefined();
+    expect(attrText(frame, 'accessibilityRole', sf)).toBe('button');
+    expect(attrText(frame, 'accessibilityLabel', sf)).toBe('label');
+    expect(attrText(frame, 'accessibilityState', sf)).toBe('{ disabled }');
+    expect(attrText(frame, 'disabled', sf)).toBe('disabled');
+    expect(styleBlock(CUSTOMIZE_TABS, 'controlFrame')).toMatch(
+      /minWidth: 44,\s*minHeight: 44,\s*marginVertical: -7,/,
+    );
+    expect(styleBlock(CUSTOMIZE_TABS, 'control')).toMatch(/width: 30,\s*height: 30,/);
+    expect(styleBlock(CUSTOMIZE_TABS, 'controls')).not.toMatch(/gap/);
+    expect(tabs).toContain('<View style={[styles.control, { borderColor: c.hair2 }]}>');
+    // The frame's 7pt above and below fits in the row's 12pt padding.
+    expect(styleBlock(CUSTOMIZE_TABS, 'row')).toMatch(/paddingVertical: 12,/);
+  });
+
+  it('keeps the bounds, the words, the persistence, Reset and the preview', () => {
+    for (const words of [
+      '<Eyebrow>SETTINGS · TAB BAR</Eyebrow>',
+      'Bottom <Em>tabs.</Em>',
+      'label={`Move ${cand.settingsLabel} up`}',
+      'label={`Move ${cand.settingsLabel} down`}',
+      'label={`Remove ${cand.settingsLabel} from the bar`}',
+      'label={`Add ${cand.settingsLabel} to the bar`}',
+      'disabled={idx === 0}',
+      'disabled={idx === slots.length - 1}',
+      'disabled={atMin}',
+      'disabled={atMax}',
+      'text={`MINIMUM ${MIN_TAB_SLOTS} TABS — ADD ANOTHER BEFORE REMOVING ONE.`}',
+      'text={`MAXIMUM ${MAX_TAB_SLOTS} TABS — REMOVE ONE TO ADD ANOTHER.`}',
+      'Everything available to you is already in your bar.',
+      'void saveTabSlots(userId, next);',
+      'void resetTabSlots(userId);',
+      'Reset to default',
+      'adjustsFontSizeToFit minimumFontScale={PREVIEW_MIN_FONT_SCALE} allowFontScaling={false}',
+      'previewLabelStyleForCount( 1 + previewSlots.length,',
+      'if (reduceMotion) return;',
+    ]) {
+      expect(tabs).toContain(words);
+    }
+    expect(tabs).toMatch(/<Pressable onPress=\{reset\} accessibilityRole="button"/);
+  });
+});
+
+describe('Settings: Integrations', () => {
+  const qbo = flatCode(INTEGRATIONS);
+
+  it('a failed read is the refusal tone: the per-mode red on its wash (it was a fixed red over a translucent edge)', () => {
+    expect(qbo).toContain(
+      '<Card padding={14} style={{ marginTop: 14, backgroundColor: c.critWash, borderColor: c.critWash }} > <Body size={13.5} color={c.critText}> {error} </Body>',
+    );
+    expect(qbo).toContain('<Body size={13} color={c.critText} style={{ marginTop: 4 }}>');
+  });
+
+  it("each sync row's status word is a status pill in its tone, beside the same icon in that tone", () => {
+    expect(qbo).toContain(
+      "const HEALTH_ICON: Record<SyncHealthStatus, { Icon: typeof CheckCircle2; status: 'ok' | 'warn' | 'crit' }> = { success: { Icon: CheckCircle2, status: 'ok' }, pending: { Icon: CircleDashed, status: 'warn' }, error: { Icon: XCircle, status: 'crit' }, dead: { Icon: XCircle, status: 'crit' }, };",
+    );
+    expect(qbo).toContain(
+      "function healthColor(status: 'ok' | 'warn' | 'crit', c: Palette): string { if (status === 'ok') return c.accent; if (status === 'warn') return c.warnText; return c.critText; }",
+    );
+    expect(qbo).toContain('<Pill status={status} dot={false}> {row.status.toUpperCase()} </Pill>');
+    expect(qbo).toContain(
+      'const { Icon, status } = HEALTH_ICON[row.status] ?? HEALTH_ICON.pending;',
+    );
+  });
+
+  it('keeps the gates, the states, the mapping and the destructive confirm', () => {
+    for (const words of [
+      "const allowed = enabled.has('integrations') && isAdmin;",
+      "'Integrations isn’t enabled.'",
+      "'Admins only.'",
+      'title="Access denied."',
+      'NOT CONNECTED',
+      'QuickBooks Online',
+      'label="REALM"',
+      'label="LAST SYNCED"',
+      'LAST ERROR',
+      'label="Bill expense account id"',
+      'label="Inventory asset account id"',
+      'label="Valuation offset account id"',
+      "{saving ? 'Saving…' : 'Save mapping'}",
+      "'Disconnect QuickBooks?'",
+      'Disconnect QuickBooks',
+      'No sync activity yet. Exported documents and their status will appear here.',
+      '<Eyebrow>SETTINGS · INTEGRATIONS</Eyebrow>',
+      "{ label: 'CONNECTED', status: 'ok' }",
+    ]) {
+      expect(qbo).toContain(words);
+    }
+  });
+});
+
+describe('Settings: Unsent work', () => {
+  const unsent = flatCode(UNSENT_WORK);
+
+  // The defect (the failed-read class of D25): a local read that threw left
+  // both lists empty, and the screen said "Nothing was left unsent." over
+  // work it could not read. The condition the screen renders is run here.
+  it('"Nothing was left unsent." only after both reads answered; a failed read is said with Try again', () => {
+    const m = /const nothing = ([^;]+);/.exec(unsent);
+    expect(m).not.toBeNull();
+    const nothing = (state: {
+      readFailed: boolean;
+      rows: unknown[] | null;
+      held: unknown[] | null;
+    }) => runCondition(m![1]!, state);
+    expect(nothing({ readFailed: false, rows: [], held: [] })).toBe(true);
+    expect(nothing({ readFailed: true, rows: [], held: [] })).toBe(false);
+    expect(nothing({ readFailed: false, rows: [{}], held: [] })).toBe(false);
+    expect(nothing({ readFailed: false, rows: null, held: [] })).toBe(false);
+    // Both catches set the flag; a read that answers clears it.
+    expect(unsent).toMatch(
+      /setRows\(\[\]\); failed = true; \} try \{ setHeld\(await listHeld\(REJECTED_KEEP_MAX\)\); \} catch \(e\) \{ console\.warn\('\[rejected-work\] could not read the held work', e\); setHeld\(\[\]\); failed = true; \} setReadFailed\(failed\);/,
+    );
+    expect(unsent).toContain(
+      '{readFailed ? ( <Card padding={16} style={{ marginTop: 18, gap: 12 }}> <Body size={14.5} color={c.critText} accessibilityRole="alert"> Could not read the unsent work saved on this device. </Body>',
+    );
+    expect(unsent).toMatch(/onPress=\{\(\) => void load\(\)\}[^>]*> Try again <\/Button>/);
+  });
+
+  it('the times, keys and retention line are the muted ink; a not-confirmed message amber; refusals red', () => {
+    expect(unsent).toContain(
+      '<Mono size={11} color={c.ink3}> {rejectedWhen(row.createdAt, now)} </Mono>',
+    );
+    expect(unsent).toContain(
+      '<Body size={13.5} color={c.warnText} style={{ marginTop: 4 }}> {row.lastError} </Body>',
+    );
+    expect(unsent).toContain(
+      '<Body size={13.5} color={c.critText} style={{ marginTop: 4 }}> {row.lastError} </Body>',
+    );
+    expect(unsent).toContain(
+      '<Mono size={10} tracking={0.1} color={c.ink3} style={{ marginTop: 6 }}> {row.idempotencyKey.slice(0, 8).toUpperCase()} </Mono>',
+    );
+    expect(unsent).toContain(
+      '{`THESE RECORDS ARE KEPT FOR ${REJECTED_RETENTION_DAYS} DAYS, THEN REMOVED AUTOMATICALLY`}',
+    );
+  });
+
+  it('Discard and Clear this list are named buttons in 44pt frames, in the per-mode red', () => {
+    const sf = treeOf(UNSENT_WORK);
+    const touch = elementsIn(sf).filter((n) => TOUCHABLE_TAG.test(tagOf(n.el, sf)));
+    const discard = touch.find(
+      (n) => attrText(n.el, 'onPress', sf) === '() => confirmDiscard(row)',
+    )!;
+    const clear = touch.find((n) => attrText(n.el, 'onPress', sf) === 'confirmClear')!;
+    expect(attrText(discard.el, 'accessibilityRole', sf)).toBe('button');
+    expect(attrText(discard.el, 'accessibilityLabel', sf)).toBe(
+      '`Discard ${pendingActionLabel(row.kind)} queued by another account`',
+    );
+    expect(attrText(clear.el, 'accessibilityRole', sf)).toBe('button');
+    expect(textOf(clear.el, sf)).toBe('Clear this list');
+    expect(styleBlock(UNSENT_WORK, 'discard')).toMatch(/minHeight: MIN_TAP,/);
+    expect(styleBlock(UNSENT_WORK, 'clear')).toMatch(/minHeight: MIN_TAP,/);
+    expect(unsent).toContain('const MIN_TAP = 44;');
+    expect(unsent).toContain(
+      '<Body size={14} color={c.critText} style={{ fontFamily: FONT.display }}> Discard </Body>',
+    );
+    expect(unsent).toContain(
+      '<Body size={14.5} color={c.critText} style={{ fontFamily: FONT.display }}> Clear this list </Body>',
+    );
+  });
+
+  it('keeps the three groups apart, every confirmation and no per-row retry', () => {
+    for (const words of [
+      '<Eyebrow>SETTINGS · OFFLINE WORK</Eyebrow>',
+      'Unsent <Em>work.</Em>',
+      '{`QUEUED BY ANOTHER ACCOUNT · ${held.length}`}',
+      '{`NOT CONFIRMED · ${unconfirmedRows.length}`}',
+      '{`NEVER SENT · ${neverSentRows.length}`}',
+      "'Clear this list?'",
+      "'Discard this change?'",
+      'Nothing was left unsent.',
+      'Checking…',
+      'Queued by another account. It sends when that account signs in on this device.',
+    ]) {
+      expect(unsent).toContain(words);
+    }
+    expect(unsent).not.toMatch(/\bRetry\b|retry\(/);
+  });
+});
