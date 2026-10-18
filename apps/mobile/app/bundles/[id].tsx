@@ -1,4 +1,5 @@
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { TriangleAlert } from 'lucide-react-native';
 import * as React from 'react';
 import {
   ActivityIndicator,
@@ -7,11 +8,15 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { Button } from '@/components/ui/button';
+import { Card, Hair } from '@/components/ui/card';
+import { Field } from '@/components/ui/field';
+import { Pill } from '@/components/ui/pill';
+import { Body, Display, Mono } from '@/components/ui/text';
 import { api, ApiError } from '@/lib/api';
 import {
   computeDistributionPreview,
@@ -33,9 +38,38 @@ import {
 } from '@/lib/db-reads';
 import { enqueue, newIdempotencyKey } from '@/lib/queue';
 import { syncNow } from '@/lib/sync';
-import { radius, space, theme } from '@/lib/theme';
+import { FONT, space } from '@/lib/theme';
+import { useTheme } from '@/lib/use-theme';
 
+/**
+ * Where the screen is before the distribute form: still reading the cache
+ * ('loading'), done reading with no such bundle on this phone ('missing': a
+ * link to a bundle that has not synced yet, or one taken off the cache), or
+ * the bundle ('ready'). It used to spin for good when the bundle was not
+ * cached, with no way back on screen.
+ */
+function bundleScreenState(
+  bundle: CachedBundle | null,
+  looked: boolean,
+): 'loading' | 'missing' | 'ready' {
+  if (bundle) return 'ready';
+  return looked ? 'missing' : 'loading';
+}
+
+/**
+ * One bundle: its components and, for a manager who may, distributing kits
+ * from one warehouse, offline-capable through the outbox with the same
+ * idempotency key.
+ *
+ * Look (redesign P5.9): the device's mode on the per-mode palette (it was
+ * drawn from the light-only legacy theme and stayed light in dark mode), the
+ * reference's cards and chips, Distribute as the ink button that commits the
+ * work (keeping its words beside the spinner while it sends), and a warning
+ * icon in place of the warning-sign glyph. Every word, gate, preview rule,
+ * confirm and the queue path are unchanged.
+ */
 export default function BundleDetail() {
+  const { c } = useTheme();
   const router = useRouter();
   // Distribute is a WRITE the server accepts from managers and above holding
   // bundles:distribute (0101). Staff hold the permission by default and were
@@ -47,6 +81,8 @@ export default function BundleDetail() {
   const canDistribute = showDistributeCta(role, perms);
   const { id } = useLocalSearchParams<{ id: string }>();
   const [bundle, setBundle] = React.useState<CachedBundle | null>(null);
+  // The cache has been read for this bundle (found or not).
+  const [looked, setLooked] = React.useState(false);
   const [components, setComponents] = React.useState<CachedBundleComponent[]>([]);
   const [items, setItems] = React.useState<Map<string, CachedItem>>(new Map());
   const [warehouses, setWarehouses] = React.useState<CachedWarehouse[]>([]);
@@ -58,30 +94,36 @@ export default function BundleDetail() {
   React.useEffect(() => {
     void (async () => {
       if (!id) return;
-      const all = await listBundles();
-      const b = all.find((x) => x.id === id) ?? null;
-      setBundle(b);
-      if (!b) return;
-      const comps = await getBundleComponents(b.id);
-      setComponents(comps);
-      const itemMap = new Map<string, CachedItem>();
-      for (const c of comps) {
-        const item = await getItemById(c.itemId);
-        if (item) itemMap.set(c.itemId, item);
+      try {
+        const all = await listBundles();
+        const b = all.find((x) => x.id === id) ?? null;
+        setBundle(b);
+        if (!b) return;
+        const comps = await getBundleComponents(b.id);
+        setComponents(comps);
+        const itemMap = new Map<string, CachedItem>();
+        for (const c of comps) {
+          const item = await getItemById(c.itemId);
+          if (item) itemMap.set(c.itemId, item);
+        }
+        setItems(itemMap);
+        const whs = await listWarehouses();
+        setWarehouses(whs);
+        // Start on the warehouse the kit can actually be handed out from: the
+        // pre-assembled kits' warehouse, else the one warehouse every component
+        // sits in, else the first listed (0365 draws only from the chosen one).
+        setWarehouseId(
+          defaultDistributeWarehouseId({
+            phantomWarehouseId: b.phantomWarehouseId,
+            componentWarehouseIds: comps.map((c) => itemMap.get(c.itemId)?.warehouseId),
+            warehouseIds: whs.map((w) => w.id),
+          }),
+        );
+      } catch (e) {
+        console.warn('[bundle] cache read failed:', e instanceof Error ? e.message : e);
+      } finally {
+        setLooked(true);
       }
-      setItems(itemMap);
-      const whs = await listWarehouses();
-      setWarehouses(whs);
-      // Start on the warehouse the kit can actually be handed out from: the
-      // pre-assembled kits' warehouse, else the one warehouse every component
-      // sits in, else the first listed (0365 draws only from the chosen one).
-      setWarehouseId(
-        defaultDistributeWarehouseId({
-          phantomWarehouseId: b.phantomWarehouseId,
-          componentWarehouseIds: comps.map((c) => itemMap.get(c.itemId)?.warehouseId),
-          warehouseIds: whs.map((w) => w.id),
-        }),
-      );
     })();
   }, [id]);
 
@@ -197,150 +239,224 @@ export default function BundleDetail() {
   }
 
   if (!bundle) {
+    // No id at all is a bundle this phone cannot hold either.
+    const state = bundleScreenState(bundle, looked || !id);
     return (
-      <SafeAreaView style={styles.root} edges={['top']}>
+      <SafeAreaView style={[styles.root, { backgroundColor: c.paper }]} edges={['top']}>
         <Stack.Screen options={{ headerShown: false }} />
-        <View style={styles.center}>
-          <ActivityIndicator color={theme.primary} />
+        <View style={[styles.header, { borderBottomColor: c.hair }]}>
+          <BackLink onPress={() => router.back()} />
         </View>
+        {state === 'missing' ? (
+          <View style={styles.body}>
+            <Card padding={16}>
+              <Body size={14.5} accessibilityRole="alert">
+                This bundle is not on this phone. Go back to Bundles and tap Refresh, or check back
+                after the next sync.
+              </Body>
+            </Card>
+          </View>
+        ) : (
+          <View style={styles.center}>
+            <ActivityIndicator color={c.ink} />
+          </View>
+        )}
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={styles.root} edges={['top']}>
+    <SafeAreaView style={[styles.root, { backgroundColor: c.paper }]} edges={['top']}>
       <Stack.Screen options={{ headerShown: false }} />
-      <View style={styles.header}>
-        <Pressable
-          onPress={() => router.back()}
-          style={styles.backBtn}
-          accessibilityRole="button"
-          accessibilityLabel="Back"
-        >
-          <Text style={styles.backText}>← Back</Text>
-        </Pressable>
-        <Text style={styles.title}>{bundle.name}</Text>
-        {bundle.sku ? <Text style={styles.sku}>{bundle.sku}</Text> : null}
+      <View style={[styles.header, { borderBottomColor: c.hair }]}>
+        <BackLink onPress={() => router.back()} />
+        {/* The bundle's name is content: no Dynamic Type cap, as before. */}
+        <Display size={26} maxFontSizeMultiplier={0} style={{ marginTop: 4 }}>
+          {bundle.name}
+        </Display>
+        {bundle.sku ? (
+          <Mono size={12} color={c.ink3} style={{ marginTop: 4 }}>
+            {bundle.sku}
+          </Mono>
+        ) : null}
       </View>
 
-      <ScrollView contentContainerStyle={{ padding: space.md, paddingBottom: 120 }}>
+      <ScrollView contentContainerStyle={[styles.body, { paddingBottom: 120 }]}>
         {bundle.preassemblyEnabled && (
-          <View style={styles.statBox}>
-            <Text style={styles.statLabel}>Pre-assembled kits</Text>
-            <Text style={styles.statValue}>{bundle.phantomQty}</Text>
-          </View>
+          <Card padding={16} style={{ marginBottom: space.md }}>
+            <Mono size={10.5} tracking={0.12} upper color={c.ink3}>
+              Pre-assembled kits
+            </Mono>
+            <Display size={28} maxFontSizeMultiplier={0} style={{ marginTop: 6 }}>
+              {bundle.phantomQty}
+            </Display>
+          </Card>
         )}
 
-        <Text style={styles.section}>Components</Text>
-        {components.map((c) => {
-          const item = items.get(c.itemId);
-          return (
-            <View key={c.itemId} style={styles.compRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.compName}>{item?.name ?? '(deleted)'}</Text>
-                <Text style={styles.compSku}>{item?.sku ?? '—'}</Text>
-              </View>
-              <Text style={styles.compQty}>×{c.quantity}</Text>
-              {c.isOptional ? (
-                <Text style={styles.optionalTag}>opt</Text>
-              ) : null}
-            </View>
-          );
-        })}
+        <SectionLabel>Components</SectionLabel>
+        {/* One card, a hairline between components (the reference's list). */}
+        {components.length > 0 ? (
+          <Card>
+            {components.map((comp, i) => {
+              const item = items.get(comp.itemId);
+              return (
+                <View key={comp.itemId}>
+                  {i > 0 ? <Hair /> : null}
+                  <View style={styles.compRow}>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Body size={14} color={c.ink} style={{ fontFamily: FONT.display }}>
+                        {item?.name ?? '(deleted)'}
+                      </Body>
+                      <Mono size={11.5} color={c.ink3} style={{ marginTop: 2 }}>
+                        {item?.sku ?? '—'}
+                      </Mono>
+                    </View>
+                    <Mono size={14} color={c.ink}>
+                      ×{comp.quantity}
+                    </Mono>
+                    {comp.isOptional ? <Pill dot={false}>opt</Pill> : null}
+                  </View>
+                </View>
+              );
+            })}
+          </Card>
+        ) : null}
 
         {canDistribute ? (
-        <>
-        <Text style={styles.section}>Distribute</Text>
-        <View style={styles.distBox}>
-          <Text style={styles.label}>Quantity</Text>
-          <TextInput
-            style={styles.input}
-            keyboardType="numeric"
-            value={qty}
-            onChangeText={setQty}
-          />
+          <>
+            <SectionLabel>Distribute</SectionLabel>
+            <Card padding={16}>
+              {/* What is typed is content, so it grows with the text size as
+                  this box always did: 0 lifts the shared Field's 24pt cap. */}
+              <Field
+                label="Quantity"
+                accessibilityLabel="Quantity"
+                keyboardType="numeric"
+                value={qty}
+                onChangeText={setQty}
+                maxFontSizeMultiplier={0}
+              />
 
-          <Text style={[styles.label, { marginTop: space.md }]}>Warehouse</Text>
-          <View style={styles.whRow}>
-            {warehouses.map((w) => (
-              <Pressable
-                key={w.id}
-                onPress={() => setWarehouseId(w.id)}
-                style={[
-                  styles.whBtn,
-                  w.id === warehouseId && { backgroundColor: theme.primary },
-                ]}
-              >
-                <Text
+              <Mono size={10} tracking={0.12} upper color={c.ink3} style={{ marginTop: space.md }}>
+                Warehouse
+              </Mono>
+              <View style={styles.whRow}>
+                {warehouses.map((w) => {
+                  const active = w.id === warehouseId;
+                  return (
+                    <Pressable
+                      key={w.id}
+                      onPress={() => setWarehouseId(w.id)}
+                      // A choice: VoiceOver hears its name and whether it is
+                      // the one chosen (it heard neither).
+                      accessibilityRole="button"
+                      accessibilityLabel={w.name}
+                      accessibilityState={{ selected: active }}
+                      style={({ pressed }) => [
+                        styles.whBtn,
+                        {
+                          borderColor: active ? c.ink : c.hair2,
+                          backgroundColor: active ? c.ink : c.sunk,
+                          opacity: pressed ? 0.85 : 1,
+                        },
+                      ]}
+                    >
+                      <Text style={[styles.whLabel, { color: active ? c.paper : c.ink }]}>
+                        {w.name}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              {preview && (
+                <View
                   style={[
-                    styles.whLabel,
-                    w.id === warehouseId && { color: '#fff' },
+                    styles.preview,
+                    preview.hasShortage
+                      ? { backgroundColor: c.warnWash, borderColor: c.warnWash }
+                      : { backgroundColor: c.sunk, borderColor: c.hair },
                   ]}
                 >
-                  {w.name}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
+                  {preview.fromPhantom > 0 && (
+                    <Body size={13} color={c.ink}>
+                      {preview.fromPhantom} kit{preview.fromPhantom === 1 ? '' : 's'} from
+                      pre-assembled stock
+                    </Body>
+                  )}
+                  {preview.fromComponents > 0 && (
+                    <Body size={13} color={c.ink}>
+                      {preview.fromComponents} kit{preview.fromComponents === 1 ? '' : 's'} from
+                      individual components
+                    </Body>
+                  )}
+                  {preview.hasShortage && (
+                    <View style={styles.shortRow}>
+                      <TriangleAlert size={14} color={c.warnText} strokeWidth={2} />
+                      <Body size={13} color={c.warnText} style={styles.shortText}>
+                        {preview.totalShortageUnits} unit
+                        {preview.totalShortageUnits === 1 ? '' : 's'} short
+                      </Body>
+                    </View>
+                  )}
+                </View>
+              )}
 
-          {preview && (
-            <View style={[styles.preview, preview.hasShortage && styles.previewWarn]}>
-              {preview.fromPhantom > 0 && (
-                <Text style={styles.previewLine}>
-                  {preview.fromPhantom} kit
-                  {preview.fromPhantom === 1 ? '' : 's'} from pre-assembled stock
-                </Text>
-              )}
-              {preview.fromComponents > 0 && (
-                <Text style={styles.previewLine}>
-                  {preview.fromComponents} kit
-                  {preview.fromComponents === 1 ? '' : 's'} from individual
-                  components
-                </Text>
-              )}
-              {preview.hasShortage && (
-                <Text style={styles.previewWarnText}>
-                  ⚠ {preview.totalShortageUnits} unit
-                  {preview.totalShortageUnits === 1 ? '' : 's'} short
-                </Text>
-              )}
-            </View>
-          )}
-
-          <Pressable
-            style={[
-              styles.distBtn,
-              preview?.hasShortage && { backgroundColor: theme.warning },
-              busy && { opacity: 0.5 },
-            ]}
-            onPress={distribute}
-            disabled={busy || !warehouseId}
-          >
-            {busy ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.distBtnLabel}>
+              {/* Distributing commits the work: the ink button (the
+                  redesign's button rule). Its words stay beside the spinner
+                  while it sends, so VoiceOver still hears what it is. */}
+              <Button
+                block
+                onPress={distribute}
+                disabled={busy || !warehouseId}
+                leading={busy ? <ActivityIndicator color={c.paper} /> : undefined}
+                style={{ marginTop: space.md }}
+              >
                 {preview?.hasShortage ? 'Distribute with shortage' : 'Distribute'}
-              </Text>
-            )}
-          </Pressable>
-        </View>
-        </>
+              </Button>
+            </Card>
+          </>
         ) : null}
       </ScrollView>
     </SafeAreaView>
   );
 }
 
+/** "← Back": a button named Back in a frame at least 44pt tall, the one Back
+ *  every state of this screen draws (it used to show only a spinner while the
+ *  cache was read). */
+function BackLink({ onPress }: { onPress: () => void }) {
+  const { c } = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      style={styles.backBtn}
+      accessibilityRole="button"
+      accessibilityLabel="Back"
+    >
+      <Text style={[styles.backText, { color: c.ink }]}>← Back</Text>
+    </Pressable>
+  );
+}
+
+/** A section's label: the reference's muted uppercase line. */
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  const { c } = useTheme();
+  return (
+    <Mono size={11} tracking={0.12} upper color={c.ink3} style={styles.section}>
+      {children}
+    </Mono>
+  );
+}
+
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: theme.bg },
+  root: { flex: 1 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   header: {
     paddingHorizontal: space.md,
     paddingTop: space.sm,
     paddingBottom: space.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: theme.border,
   },
   // "← Back" is a button in a frame at least 44pt tall (it was the 25pt
   // text). The frame takes the header's 8pt top padding and the title's 4pt
@@ -353,80 +469,35 @@ const styles = StyleSheet.create({
     marginTop: -space.sm,
     marginBottom: -4,
   },
-  backText: { color: theme.primary, fontSize: 14 },
-  title: { color: theme.text, fontSize: 22, fontWeight: '700', marginTop: 4 },
-  sku: { color: theme.textMuted, fontFamily: 'Menlo', fontSize: 12, marginTop: 2 },
-  statBox: {
-    backgroundColor: theme.card,
-    borderRadius: radius.md,
-    padding: space.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-    marginBottom: space.md,
-  },
-  statLabel: { color: theme.textMuted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 },
-  statValue: { color: theme.text, fontSize: 28, fontWeight: '700', marginTop: 4 },
-  section: { color: theme.textMuted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, marginTop: space.md, marginBottom: space.sm },
+  backText: { fontFamily: FONT.display, fontSize: 14 },
+  body: { padding: space.md },
+  section: { marginTop: space.md, marginBottom: space.sm },
   compRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: theme.card,
-    borderRadius: radius.sm,
-    padding: space.md,
-    marginBottom: space.xs,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
+    gap: space.md,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
   },
-  compName: { color: theme.text, fontSize: 13, fontWeight: '600' },
-  compSku: { color: theme.textMuted, fontSize: 11, fontFamily: 'Menlo', marginTop: 2 },
-  compQty: { color: theme.text, fontSize: 14, fontWeight: '700', marginLeft: space.md },
-  optionalTag: { color: theme.textMuted, fontSize: 10, marginLeft: 6, fontStyle: 'italic' },
-  distBox: {
-    backgroundColor: theme.card,
-    borderRadius: radius.md,
-    padding: space.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-  },
-  label: { color: theme.textMuted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 },
-  input: {
-    backgroundColor: theme.bgElevated,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: theme.border,
-    color: theme.text,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    fontSize: 16,
-    marginTop: 4,
-  },
-  whRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm, marginTop: 4 },
+  whRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm, marginTop: 6 },
+  // A warehouse choice: the reference's chip (radius 8), at least the 44pt
+  // iOS minimum and growing with its words (minHeight, never height).
   whBtn: {
+    minHeight: 44,
     paddingVertical: 8,
     paddingHorizontal: 12,
-    borderRadius: radius.md,
-    backgroundColor: theme.bgElevated,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: theme.border,
+    justifyContent: 'center',
   },
-  whLabel: { color: theme.text, fontSize: 12, fontWeight: '600' },
+  whLabel: { fontFamily: FONT.display, fontSize: 13 },
   preview: {
     marginTop: space.md,
     padding: space.md,
-    borderRadius: radius.md,
-    backgroundColor: theme.bgElevated,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: theme.border,
+    gap: 2,
   },
-  previewWarn: { backgroundColor: 'rgba(255, 159, 0, 0.10)', borderColor: theme.warning },
-  previewLine: { color: theme.text, fontSize: 13, marginBottom: 2 },
-  previewWarnText: { color: theme.warning, fontSize: 12, fontWeight: '700', marginTop: 4 },
-  distBtn: {
-    backgroundColor: theme.primary,
-    paddingVertical: 14,
-    borderRadius: radius.md,
-    alignItems: 'center',
-    marginTop: space.md,
-  },
-  distBtnLabel: { color: '#fff', fontSize: 15, fontWeight: '700' },
+  shortRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
+  shortText: { flexShrink: 1, fontFamily: FONT.displaySemi },
 });
