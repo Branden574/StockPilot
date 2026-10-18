@@ -12,6 +12,7 @@ import { ChevronRight, type LucideIcon } from 'lucide-react-native';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
+import { COUNT_BADGE } from './tones';
 
 /**
  * Generic list row (settings, inventory, drawer). Hairline divider is
@@ -30,6 +31,10 @@ import { useTheme } from '@/lib/use-theme';
  * "Distribute" needs, so iOS breaks the glyph run ("Distribu / te kits…").
  * Past the shared `shouldStackRow` threshold the badge moves under the
  * subtitle and the body reclaims it. No cap: the subtitle is body copy.
+ *
+ * The subtitle is muted ink (ink3): it is information (a SKU, a count, a
+ * date), and ink4 held it under AA. The chevron stays ink4, a decorative
+ * arrow, as in the reference.
  */
 export function Row({
   leading,
@@ -63,7 +68,7 @@ export function Row({
         </Text>
         {subtitle ? (
           <Text
-            style={[styles.subtitle, { color: c.ink4 }]}
+            style={[styles.subtitle, { color: c.ink3 }]}
             numberOfLines={numberOfLines}
           >
             {subtitle}
@@ -95,7 +100,8 @@ const MIN_TAP = 44;
 
 /**
  * IconChip — 38pt round/squircle button-like icon container used in
- * top-bar slots (notifications, refresh, profile, filters, etc.).
+ * top-bar slots (notifications, refresh, profile, filters, etc.). Its edge is
+ * the stronger border (hair2): it is a control, not a card.
  */
 export function IconChip({
   icon: Icon,
@@ -131,7 +137,7 @@ export function IconChip({
     styles.chip,
     {
       backgroundColor: c.card,
-      borderColor: c.hair,
+      borderColor: c.hair2,
       borderRadius: shape === 'circle' ? 19 : 10,
     },
   ];
@@ -231,12 +237,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
     borderRadius: 9,
     borderWidth: 1.5,
-    backgroundColor: '#e5484d',
+    // White digits at AA in both modes (tones.ts COUNT_BADGE).
+    backgroundColor: COUNT_BADGE.bg,
     alignItems: 'center',
     justifyContent: 'center',
   },
   badgeText: {
-    color: '#fff',
+    color: COUNT_BADGE.fg,
     fontSize: 10,
     lineHeight: 13,
     fontWeight: '700',

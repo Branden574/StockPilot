@@ -44,6 +44,10 @@ function pageNumbers(current: number, total: number): (number | 'ellipsis')[] {
  * family whole. Everything printed here therefore describes what the page
  * ACTUALLY renders. Mirrors the web table's footer, which prints the same range
  * from `pageStartIndex` (apps/web/src/lib/inventory/instant-mode.ts).
+ *
+ * Look (the reference pager): page buttons and arrows sit on the card colour
+ * with the stronger border, the current page is the ink fill, and the range
+ * line is muted ink (information, so ink3, not ink4).
  */
 export function Paginator({
   page,
@@ -82,7 +86,7 @@ export function Paginator({
           size={10.5}
           tracking={0.12}
           upper
-          color={c.ink4}
+          color={c.ink3}
           maxFontSizeMultiplier={capTo(10.5, TYPE_CEILING.chrome)}
         >
           SHOWING {start.toLocaleString()}–{end.toLocaleString()} OF {total.toLocaleString()}
@@ -171,9 +175,9 @@ function PageButton({
         paddingHorizontal: 9,
         paddingVertical: 6,
         borderRadius: 8,
-        backgroundColor: active ? c.ink : 'transparent',
+        backgroundColor: active ? c.ink : c.card,
         borderWidth: active ? 0 : 1,
-        borderColor: c.hair,
+        borderColor: c.hair2,
         alignItems: 'center',
         justifyContent: 'center',
         opacity: pressed && !active ? 0.7 : 1,
@@ -217,7 +221,8 @@ function PaginatorArrow({
         height: 36,
         borderRadius: 8,
         borderWidth: 1,
-        borderColor: c.hair,
+        borderColor: c.hair2,
+        backgroundColor: c.card,
         alignItems: 'center',
         justifyContent: 'center',
         opacity: disabled ? 0.3 : pressed ? 0.7 : 1,

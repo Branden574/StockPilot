@@ -1,15 +1,19 @@
 import * as React from 'react';
 import { StyleSheet, Text, View, type ViewStyle } from 'react-native';
 
-import { ACCENT, FONT, RADIUS, TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT, RADIUS, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
+import { pillTone, type PillStatus } from './tones';
 
-type Status = 'default' | 'ok' | 'warn' | 'crit';
+type Status = PillStatus;
 
 /**
  * Pill — small status indicator with optional dot. Mono-font, uppercase
  * tracking. Use status='ok' for success/synced, 'warn' for pending/low,
- * 'crit' for out-of-stock/failed.
+ * 'crit' for out-of-stock/failed. The colours per mode are tones.ts
+ * `pillTone` (the reference's tinted washes, each measured at AA); the box
+ * and the type are unchanged, so dynamic-type-layout.ts `pillWidth` still
+ * describes it exactly.
  */
 export function Pill({
   children,
@@ -30,30 +34,10 @@ export function Pill({
    */
   tone?: { fg: string; bg: string; border: string };
 }) {
-  const { c, mode } = useTheme();
+  const { c } = useTheme();
 
-  let fg = c.ink3;
-  let bg = c.card;
-  let border = c.hair;
-
-  if (tone) {
-    // Caller supplied the palette outright — `status` is not consulted.
-    fg = tone.fg;
-    bg = tone.bg;
-    border = tone.border;
-  } else if (status === 'ok') {
-    fg = mode === 'dark' ? ACCENT.mintInkDark : ACCENT.mintInk;
-    bg = ACCENT.mintSoft;
-    border = 'hsla(165, 38%, 56%, 0.4)';
-  } else if (status === 'warn') {
-    fg = ACCENT.warn;
-    bg = 'rgba(245,176,66,0.10)';
-    border = 'rgba(185,122,29,0.3)';
-  } else if (status === 'crit') {
-    fg = ACCENT.crit;
-    bg = 'rgba(176,58,58,0.08)';
-    border = 'rgba(176,58,58,0.3)';
-  }
+  // Caller supplied the palette outright — `status` is not consulted.
+  const { fg, bg, border } = tone ?? pillTone(status, c);
 
   return (
     <View

@@ -1,12 +1,13 @@
 import * as React from 'react';
 import { StyleSheet, View, type ViewStyle } from 'react-native';
 
-import { RADIUS, SHADOW } from '@/lib/theme';
+import { RADIUS } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
- * Card surface — 1px hairline border, near-zero shadow. The brand
- * uses border deepening on hover/press, never elevation lift.
+ * Card surface — 1px hairline border, flat: the reference draws cards with a
+ * hairline and no shadow (only floating layers, sheets and toasts, cast
+ * one). The brand uses border deepening on press, never elevation lift.
  */
 export function Card({
   children,
@@ -30,7 +31,6 @@ export function Card({
           borderRadius: hero ? RADIUS.cardHero : RADIUS.card,
           padding,
         },
-        SHADOW.card,
         style,
       ]}
     >
