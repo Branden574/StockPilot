@@ -71,8 +71,9 @@ export function DataListScreen<T>({
   emptyAction?: React.ReactNode;
   /** The last read failed: with no rows, its words replace the empty state
    *  (with a warning glyph, or a no-connection one when `offline`); with
-   *  rows from an earlier read, they stay and `reloadNote` is said above
-   *  them. Null or absent: the read succeeded. */
+   *  rows from an earlier read, the rows stay and the failure is always said
+   *  above them (`reloadNote`, or `title` when there is none), so they never
+   *  look current. Null or absent: the read succeeded. */
   failed?: DataListFailure | null;
   ItemSeparator?: React.ComponentType<unknown>;
 }) {
