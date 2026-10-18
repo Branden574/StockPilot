@@ -551,10 +551,13 @@
 }
 
 /* ── Authentication ground ────────────────────────────────────────────────────
- * `bg-mesh` was referenced by three surfaces — (auth)/layout.tsx, invite/[token]
- * and onboarding — but was never defined anywhere in the stylesheet or the
- * Tailwind config, so all three rendered a flat `--background`. This authors the
- * utility those files have always asked for.
+ * `bg-mesh` is the ground of two screens outside the (auth) group:
+ * app/invite/[token]/page.tsx and app/onboarding/page.tsx, which is why it lives
+ * here and not in app/(auth)/auth.css. It was referenced by three surfaces,
+ * those two and (auth)/layout.tsx, but was never defined anywhere in the
+ * stylesheet or the Tailwind config, so all three rendered a flat
+ * `--background`. #151 authored it, and in the same change the (auth) layout
+ * moved to its own shell, so the auth pages have not used it since.
  *
  * Design constraint: the decoration must cost the FORM nothing. The washes are
  * anchored to opposite corners and fall to zero well before the central band
