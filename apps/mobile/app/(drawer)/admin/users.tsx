@@ -329,6 +329,10 @@ function UserCard({
   // Owner role and self both block role editing — owner needs the
   // transferOwnership flow, self-edit is blocked to avoid lockout.
   const canEdit = canChangeRoles && user.role !== 'owner' && !isSelf;
+  // The email link under the name is a real 44pt frame (it was its 15pt line
+  // alone), the line centred in it by the row's alignItems; the frame's own
+  // space stands in for the 3pt gap under the name, so the card grows about
+  // 27pt and the frame lies over neither the name nor the card's padding.
   const openEmail = () => {
     if (email) Linking.openURL(`mailto:${email}`).catch(() => undefined);
   };
@@ -376,7 +380,7 @@ function UserCard({
             <Pressable
               onPress={openEmail}
               style={({ pressed }) => ({
-                marginTop: 3,
+                minHeight: 44,
                 flexDirection: 'row',
                 alignItems: 'center',
                 gap: 4,

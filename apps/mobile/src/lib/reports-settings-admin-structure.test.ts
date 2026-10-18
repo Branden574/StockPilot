@@ -1401,6 +1401,31 @@ describe('Admin · Users', () => {
     expect(users).toContain("const canEdit = canChangeRoles && user.role !== 'owner' && !isSelf;");
   });
 
+  // For a finger, the link was its 15pt line alone (an 11pt line and glyph,
+  // 3pt under the name). Mutation caught: the frame under 44pt or gone, a
+  // hitSlop in its place, or a main-axis centring that would move the line
+  // off the card's left edge (the frame is a row: alignItems centres it
+  // vertically, justifyContent would centre it across).
+  it("a member's email link is a real 44pt frame that keeps its tap, its line at the left", () => {
+    const { sf, fn } = functionNamed(ADMIN_USERS, 'UserCard');
+    const links = elementsIn(fn).filter(
+      (n) => TOUCHABLE_TAG.test(tagOf(n.el, sf)) && attrText(n.el, 'onPress', sf) === 'openEmail',
+    );
+    expect(links).toHaveLength(1);
+    const link = links[0]!;
+    expect(attr(link.el, 'hitSlop', sf)).toBeUndefined();
+    const style = (attrText(link.el, 'style', sf) ?? '').replace(/\s+/g, ' ');
+    expect(style).toContain(
+      "({ minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 4, opacity: pressed ? 0.7 : 1, })",
+    );
+    expect(style).not.toMatch(/justifyContent|marginTop|height: \d/);
+    // Still inside the card, which keeps its own press and VoiceOver actions.
+    expect(link.ancestors.filter((a) => TOUCHABLE_TAG.test(tagOf(a, sf)))).toHaveLength(1);
+    expect(users).toContain(
+      '<Mail size={11} color={c.ink4} strokeWidth={1.5} /> <Mono size={11} tracking={0.04} color={c.ink3}> {email} </Mono>',
+    );
+  });
+
   it('the role picker is a standard sheet: VoiceOver kept inside, a "Close" scrim beside the card', () => {
     const { sf, fn } = functionNamed(ADMIN_USERS, 'RolePickerSheet');
     const els = elementsIn(fn);
