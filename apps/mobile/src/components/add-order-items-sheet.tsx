@@ -422,7 +422,8 @@ export function AddOrderItemsSheet({
 
                 {/* The shared text box's recipe: the card fill in the stronger
                     border. A minimum height, never a fixed one: the typed words
-                    stop at the input ceiling and the box grows with them. */}
+                    grow with the text size (content, never capped) and the box
+                    grows with them. */}
                 <View style={[styles.searchBox, { backgroundColor: c.card, borderColor: c.hair2 }]}>
                   <Search size={16} color={c.ink3} strokeWidth={1.8} />
                   <TextInput
@@ -435,7 +436,6 @@ export function AddOrderItemsSheet({
                     returnKeyType="search"
                     editable={!submitting}
                     accessibilityLabel="Search items to add to this order"
-                    maxFontSizeMultiplier={INPUT_CAP}
                     style={[styles.searchInput, { color: c.ink, fontFamily: FONT.displayRegular }]}
                   />
                   {q.length > 0 ? (
@@ -594,8 +594,6 @@ export function AddOrderItemsSheet({
 
 /** The title stops at the display ceiling, like every sheet's title. */
 const TITLE_CAP = capTo(15, TYPE_CEILING.display);
-/** Typed words stop at the input ceiling (a bordered box). */
-const INPUT_CAP = capTo(14, TYPE_CEILING.input);
 /** Add to order's words are chrome: the control ceiling, the button grows. */
 const ACTION_CAP = capTo(13, TYPE_CEILING.control);
 

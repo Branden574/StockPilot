@@ -660,14 +660,17 @@ describe('add items sheet: the shared sheet shape and 44pt targets (defects fixe
 
   // The search box and Add to order had a fixed 44pt height around words that
   // grow with the text size, so at the largest sizes the typed words and the
-  // button's label were cut. Mutation caught: a fixed height back.
+  // button's label were cut. Mutation caught: a fixed height back. The typed
+  // words stay uncapped, as before (content is never capped).
   it('the search box and Add to order grow with the text (minHeight, never a fixed height)', () => {
     const src = sourceOf(FILES.addItems);
     expect(src).not.toMatch(/[^A-Za-z]height: 44\b/);
     expect(src).toMatch(/\n {2}searchBox: \{[^}]*minHeight: MIN_TAP,/);
     expect(src).toMatch(/\n {2}submit: \{[^}]*minHeight: MIN_TAP,/);
-    expect(code).toContain('maxFontSizeMultiplier={INPUT_CAP}');
-    expect(code).toContain('const INPUT_CAP = capTo(14, TYPE_CEILING.input);');
+    const { sf, all } = treeOf(FILES.addItems);
+    const inputs = all.filter((n) => tagOf(n.el, sf) === 'TextInput');
+    expect(inputs).toHaveLength(1);
+    expect(attrText(inputs[0]!.el, 'maxFontSizeMultiplier', sf)).toBeUndefined();
   });
 
   it('Add to order is the ink button and keeps its words beside the spinner; the refusal is an alert', () => {
@@ -714,7 +717,11 @@ describe('edit line sheet: buttons, steppers and the quantity box grow with the 
     expect(code).toMatch(
       /minWidth: MIN_TAP,\s*minHeight: MIN_TAP,\s*borderRadius: 10,\s*borderWidth: 1,\s*borderColor: c\.hair2,/,
     );
-    expect(code).toContain('maxFontSizeMultiplier={INPUT_CAP}');
+    // The typed quantity stays uncapped, as before; the box grows with it.
+    const { sf, all } = treeOf(FILES.editLine);
+    const inputs = all.filter((n) => tagOf(n.el, sf) === 'TextInput');
+    expect(inputs).toHaveLength(1);
+    expect(attrText(inputs[0]!.el, 'maxFontSizeMultiplier', sf)).toBeUndefined();
   });
 
   it("Save quantity is the ink button; Remove and a short line's remove say so in the refusal ink", () => {
@@ -832,14 +839,20 @@ describe('DigitalPick: one ink button, the line saves as outlines (M-OR-02a)', (
 });
 
 describe("readiness: the state chip is the reference's status label, per mode, run from its own source", () => {
-  const chipTone = runFunction<
-    (tone: string, c: Palette) => { fg: string; bg: string; border: string }
-  >(FILES.lineReadiness, 'readinessChipTone', { pillTone });
-  const toneColor = runFunction<(tone: string, c: Palette) => string>(
-    FILES.lineReadiness,
-    'readinessToneColor',
-    {},
-  );
+  // Compiled inside each test (never at collection), so a missing or broken
+  // rule fails its own test instead of the whole file.
+  const chipTone = (tone: string, c: Palette) =>
+    runFunction<(tone: string, c: Palette) => { fg: string; bg: string; border: string }>(
+      FILES.lineReadiness,
+      'readinessChipTone',
+      { pillTone },
+    )(tone, c);
+  const toneColor = (tone: string, c: Palette) =>
+    runFunction<(tone: string, c: Palette) => string>(
+      FILES.lineReadiness,
+      'readinessToneColor',
+      {},
+    )(tone, c);
 
   it('each tone takes its wash, its words at AA on it, in both modes', () => {
     for (const [mode, c] of MODES) {

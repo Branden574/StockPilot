@@ -497,7 +497,6 @@ export function EditOrderLineSheet({
                       returnKeyType="done"
                       editable={busy === null}
                       accessibilityLabel="Quantity ordered"
-                      maxFontSizeMultiplier={INPUT_CAP}
                       style={[
                         styles.qtyInput,
                         { borderColor: c.hair2, backgroundColor: c.sunk, color: c.ink },
@@ -601,8 +600,6 @@ const ACTION_CAP = capTo(13, TYPE_CEILING.control);
 const TITLE_CAP = capTo(15, TYPE_CEILING.display);
 /** The steppers' glyphs are control chrome. */
 const STEP_CAP = capTo(17, TYPE_CEILING.control);
-/** The typed quantity stops at the input ceiling (a bordered box). */
-const INPUT_CAP = capTo(15, TYPE_CEILING.input);
 
 const styles = StyleSheet.create({
   qtyInput: {
