@@ -1240,3 +1240,105 @@ describe('Scan tab: none of the reference sample content was added', () => {
     expect(codeOnly(sourceOf(SCAN_TAB))).not.toMatch(/burst|batch/i);
   });
 });
+
+/**
+ * The conditions a JSX element renders under, read from the screen: every
+ * `cond ? <el> : ...`, `cond ? ... : <el>` and `cond && <el>` between it and
+ * the component's return, joined with &&.
+ */
+function renderCondition(file: string, match: (el: JsxNode, sf: ts.SourceFile) => boolean): string {
+  const sf = treeOf(file);
+  let found: ts.Node | null = null;
+  walkJsx(sf, (el) => {
+    if (!found && match(el, sf)) found = el;
+  });
+  expect(found, `no element matched in ${file}`).not.toBeNull();
+  const parts: string[] = [];
+  let node: ts.Node = found!;
+  while (node.parent && !ts.isReturnStatement(node.parent) && !ts.isSourceFile(node.parent)) {
+    const p: ts.Node = node.parent;
+    if (ts.isConditionalExpression(p)) {
+      if (node === p.whenTrue) parts.push(`(${p.condition.getText(sf)})`);
+      else if (node === p.whenFalse) parts.push(`!(${p.condition.getText(sf)})`);
+    } else if (
+      ts.isBinaryExpression(p) &&
+      p.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken &&
+      node === p.right
+    ) {
+      parts.push(`(${p.left.getText(sf)})`);
+    }
+    node = p;
+  }
+  return parts.length ? parts.join(' && ') : 'true';
+}
+
+describe('Scan tab: defects fixed in this package', () => {
+  // The screen's own conditions (read from the repository's source, never
+  // from input), run over its own state. `cardUp`, where the screen declares
+  // it, is the screen's own line too.
+  const src = sourceOf(SCAN_TAB);
+  const cardUpLine = /\n {2}const cardUp = [^\n]*;/.exec(src)?.[0] ?? '';
+  const shows = (cond: string) => (state: Record<string, unknown>) =>
+    new vm.Script(`${cardUpLine}\n${cond};`).runInNewContext({ ...state }) as boolean;
+  const camera = shows(renderCondition(SCAN_TAB, (el, s) => tagOf(el, s) === 'CameraView'));
+  const modeSwitch = shows(
+    renderCondition(SCAN_TAB, (el, s) => attrText(el, 'style', s) === 'styles.modeTrack'),
+  );
+  const photoIdCard = shows(
+    renderCondition(SCAN_TAB, (el, s) => attrText(el, 'style', s) === 'styles.coverCta'),
+  );
+  const idle = {
+    item: null,
+    addBook: null,
+    addItem: null,
+    placementChoices: null,
+    scanning: true,
+    busy: false,
+  };
+
+  it('with nothing on screen: the camera in Scan, the Photo ID card in Photo ID, the switch in both', () => {
+    expect(camera({ ...idle, mode: 'lookup' })).toBe(true);
+    expect(modeSwitch({ ...idle, mode: 'lookup' })).toBe(true);
+    expect(photoIdCard({ ...idle, mode: 'lookup' })).toBe(false);
+    expect(camera({ ...idle, mode: 'cover' })).toBe(false);
+    expect(modeSwitch({ ...idle, mode: 'cover' })).toBe(true);
+    expect(photoIdCard({ ...idle, mode: 'cover' })).toBe(true);
+  });
+
+  // A Photo ID that finds a product opens the Add item card with `scanning`
+  // still true (only a barcode read turns it off). The Add item card was
+  // missing from the tests its twin, the Add book card, was in: the Photo ID
+  // card stayed under it, the switch stayed up, and a tap on Scan started the
+  // camera under the card, where a scan opened the result sheet over it.
+  // Mutation caught: any of the three tests without the Add item card.
+  it('the Add item card hides the switch, the Photo ID card and the camera', () => {
+    const product = { ...idle, addItem: { upc: '', source: 'ai-fallback' } };
+    for (const mode of ['cover', 'lookup']) {
+      expect(modeSwitch({ ...product, mode }), mode).toBe(false);
+      expect(photoIdCard({ ...product, mode }), mode).toBe(false);
+      expect(camera({ ...product, mode }), mode).toBe(false);
+    }
+  });
+
+  // The placement picker left the switch up, and with it a way to open the
+  // Photo ID card under the picker. Mutation caught: the switch or the Photo
+  // ID card shown with the picker up.
+  it('the placement picker hides the switch and the Photo ID card as well as the camera', () => {
+    const picking = { ...idle, scanning: false, placementChoices: [{ id: 'a' }, { id: 'b' }] };
+    for (const mode of ['cover', 'lookup']) {
+      expect(modeSwitch({ ...picking, mode }), mode).toBe(false);
+      expect(photoIdCard({ ...picking, mode }), mode).toBe(false);
+      expect(camera({ ...picking, mode }), mode).toBe(false);
+    }
+  });
+
+  it('the result sheet and the Add book card hide them as before', () => {
+    for (const up of [{ item: { id: 'i' } }, { addBook: { isbn: '9780743273565' } }]) {
+      for (const mode of ['cover', 'lookup']) {
+        expect(modeSwitch({ ...idle, ...up, mode }), mode).toBe(false);
+        expect(photoIdCard({ ...idle, ...up, mode }), mode).toBe(false);
+        expect(camera({ ...idle, ...up, mode }), mode).toBe(false);
+      }
+    }
+  });
+});

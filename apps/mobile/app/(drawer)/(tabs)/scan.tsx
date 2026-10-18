@@ -991,6 +991,17 @@ export default function Scan() {
    */
   const canQuickAdjust =
     showWriteCta(permissions, 'stock:adjust') && item?.status !== 'archived';
+  /**
+   * ONE CARD AT A TIME. While the result sheet, an add card or the placement
+   * picker is up, the mode switch, the Photo ID card and the camera stay away.
+   * The Add item card was missing from those tests, where the Add book card
+   * (its twin) was in them: after a Photo ID found a product, the Photo ID
+   * card stayed under the new card, the switch stayed on the bar, and a tap on
+   * Scan started the camera under the card, where a scan opened the result
+   * sheet on top of it. The placement picker left the switch and the Photo ID
+   * card up the same way.
+   */
+  const cardUp = Boolean(item || addBook || addItem || placementChoices);
 
   return (
     <View style={styles.container}>
@@ -1017,7 +1028,7 @@ export default function Scan() {
 
           {/* The reference's mode switch, carrying the two modes this tab has.
               Each 36pt segment reaches the track's 44pt edge for a finger. */}
-          {!item && !addBook ? (
+          {!cardUp ? (
             <View style={styles.modeTrack}>
               <Pressable
                 onPress={() => setMode('lookup')}
@@ -1056,7 +1067,7 @@ export default function Scan() {
       </SafeAreaView>
 
       <View style={styles.viewfinder}>
-        {scanning && !item && !addBook && !placementChoices && mode === 'lookup' ? (
+        {scanning && !cardUp && mode === 'lookup' ? (
           <CameraView
             style={StyleSheet.absoluteFill}
             facing="back"
@@ -1080,7 +1091,7 @@ export default function Scan() {
                 ) : null}
               </View>
             </View>
-          ) : !item && !addBook ? (
+          ) : !cardUp ? (
             <View style={styles.coverCta} pointerEvents="auto">
               <Text style={styles.coverHint}>
                 Snap a clear photo of the front cover. Vision will read the
@@ -1345,7 +1356,7 @@ export default function Scan() {
           </View>
         )}
 
-        {busy && !item && !addBook && !addItem && !placementChoices && (
+        {busy && !cardUp && (
           <View style={styles.spinnerWrap} pointerEvents="none">
             <ActivityIndicator color={CAMERA.ink} size="large" />
           </View>
