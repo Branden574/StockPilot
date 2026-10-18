@@ -1,6 +1,5 @@
 'use client';
 
-import { Package } from 'lucide-react';
 import * as React from 'react';
 
 import { ImageHoverPreview } from '@/components/ui/image-hover-preview';
@@ -8,14 +7,12 @@ import { cn } from '@/lib/utils';
 
 /**
  * Renders a thumbnail when the item has a primary image, falling back to
- * the brand-styled Package icon otherwise. We swap to the icon on
- * `onError` too, since signed URLs can race expiry or the underlying
- * file can have been deleted between the API response and the <img>
- * fetch — better a placeholder than a broken-image glyph.
+ * the missing-photo hatch otherwise. We swap to the hatch on `onError` too,
+ * since signed URLs can race expiry or the underlying file can have been
+ * deleted between the API response and the <img> fetch — better a
+ * placeholder than a broken-image glyph.
  *
  * Single source of truth for item thumbnails across the app:
- *   • order line pickers (md)
- *   • packing slip line table (md)
  *   • PO detail line table (sm)
  *   • ⌘K command palette item rows (sm)
  *
@@ -23,6 +20,14 @@ import { cn } from '@/lib/utils';
  * thumbnail surfaces a 280px floating preview of the actual image — the
  * signed URL serves the original upload, not a crop, so the preview is
  * genuinely sharp rather than a stretched 28px frame.
+ *
+ * Look (DESIGN-SPEC 4 and 6.14): a hairline (--line) box, the photo cropped to
+ * fill it on a white tile in both themes (a cut-out photo shot on white reads
+ * the same in either theme, and a dark one does not vanish into a dark tile);
+ * no photo is the hatch in the line colour on sunk, the same placeholder the
+ * Items table draws. When this branch rebases onto P2.6, the tile and the
+ * hatch render through patterns/thumb.tsx and patterns/missing-photo.tsx and
+ * the local HATCH goes (PLAN P2.4).
  */
 interface Props {
   /** Small tile source (a ~200px thumb where available) — kept lightweight so
@@ -46,6 +51,10 @@ interface Props {
   previewMeta?: React.ReactNode;
 }
 
+/** The missing-photo hatch: 1px lines in the line colour every 6px (drawn
+ *  over the tile's sunk fill). */
+const HATCH = 'repeating-linear-gradient(45deg, var(--ed-line) 0 1px, transparent 1px 6px)';
+
 export function ItemThumb({
   imageUrl,
   previewUrl,
@@ -66,33 +75,45 @@ export function ItemThumb({
     setFailed(false);
   }, [imageUrl, itemId]);
 
-  const sizeClass = size === 'sm' ? 'h-7 w-7' : 'h-10 w-10';
-  const iconClass = size === 'sm' ? 'h-3.5 w-3.5' : 'h-4 w-4';
+  // A server-rendered thumbnail whose file is gone can fail before hydration:
+  // its error fired before React was listening, so onError never ran and the
+  // broken-image glyph stayed (the alt text in a torn frame). An image that
+  // finished with no pixels is asked for once more; that error reaches
+  // onError, and the hatch replaces it. A lazy image not fetched yet is not
+  // complete, so it is left alone.
+  const imgRef = React.useRef<HTMLImageElement | null>(null);
+  React.useEffect(() => {
+    const img = imgRef.current;
+    if (!img || !img.complete || img.naturalWidth > 0) return;
+    const src = img.getAttribute('src');
+    if (src) img.src = src;
+  }, [imageUrl, itemId]);
+
+  // 28px tiles take the 5px radius of the other 28px thumbnails; 40px the 6px.
+  const boxClass = cn(
+    'shrink-0 border border-border',
+    size === 'sm' ? 'size-7 rounded-[5px]' : 'size-10 rounded-md',
+  );
 
   const inner =
     imageUrl && !failed ? (
       // eslint-disable-next-line @next/next/no-img-element
       <img
+        ref={imgRef}
         src={imageUrl}
         alt={alt}
         loading="lazy"
         decoding="async"
         onError={() => setFailed(true)}
-        className={cn(
-          'bg-muted flex-shrink-0 rounded-md object-cover',
-          sizeClass,
-        )}
+        className={cn(boxClass, 'bg-white object-cover')}
       />
     ) : (
       <div
-        className={cn(
-          'bg-muted text-muted-foreground/70 flex flex-shrink-0 items-center justify-center rounded-md',
-          sizeClass,
-        )}
+        className={cn(boxClass, 'bg-sunk')}
+        style={{ backgroundImage: HATCH }}
         aria-hidden="true"
-      >
-        <Package className={iconClass} />
-      </div>
+        data-testid="item-thumb-placeholder"
+      />
     );
 
   return (

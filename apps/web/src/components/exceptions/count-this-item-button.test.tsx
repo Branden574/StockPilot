@@ -86,3 +86,18 @@ describe('CountThisItemButton', () => {
     );
   });
 });
+
+// Mutation caught: `sm:size-auto` (there so the item page's flex row can
+// stretch the button to its neighbours) also set height:auto inside the order
+// page's line readiness, a plain block, where the button collapsed to its
+// 16px text from sm up. A minimum height now keeps the small button's 32px.
+describe('CountThisItemButton size', () => {
+  it('never collapses below the small button height where nothing stretches it', async () => {
+    await act(async () => {
+      render(<CountThisItemButton itemId={ITEM} />);
+    });
+    const button = screen.getByTestId('count-this-item');
+    expect(button).toHaveClass('sm:size-auto');
+    expect(button).toHaveClass('sm:min-h-8');
+  });
+});

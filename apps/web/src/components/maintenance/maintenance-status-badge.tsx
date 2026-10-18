@@ -1,17 +1,30 @@
-import { Badge } from '@/components/ui/badge';
+import { Badge, type BadgeProps } from '@/components/ui/badge';
 import { MAINTENANCE_STATUS_LABELS, type MaintenanceStatus } from '@stockpilot/core';
 
-const VARIANTS: Record<MaintenanceStatus, string> = {
-  saved: 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200',
-  draft_opened: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200',
-  resolved: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200',
-  archived: 'bg-muted text-muted-foreground',
-  cancelled: 'bg-muted text-muted-foreground line-through',
+/**
+ * Each status on one of the six status tones (DESIGN-SPEC 6.10), in place of
+ * hand-picked palette colours laid over the ink badge (whose hover then turned
+ * the pill ink): Saved neutral, the opened draft warning, Resolved success,
+ * Archived outline, Cancelled outline and struck through.
+ */
+const TONES: Record<MaintenanceStatus, NonNullable<BadgeProps['variant']>> = {
+  saved: 'secondary',
+  draft_opened: 'warning',
+  resolved: 'success',
+  archived: 'outline',
+  cancelled: 'outline',
 };
 
 /** Renders the ONLY sanctioned status vocabulary (brief section 20, mirrored
  *  in MAINTENANCE_STATUS_LABELS) — never "sent", "ticket created", or
  *  anything implying a Zendesk-observed outcome StockPilot cannot see. */
 export function MaintenanceStatusBadge({ status }: { status: MaintenanceStatus }) {
-  return <Badge className={VARIANTS[status]}>{MAINTENANCE_STATUS_LABELS[status]}</Badge>;
+  return (
+    <Badge
+      variant={TONES[status] ?? 'outline'}
+      className={status === 'cancelled' ? 'line-through' : undefined}
+    >
+      {MAINTENANCE_STATUS_LABELS[status]}
+    </Badge>
+  );
 }

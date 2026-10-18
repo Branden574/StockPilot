@@ -303,7 +303,9 @@ function RecountDialogBody({
           Cancel
         </Button>
         {blocked ? null : (
-          <Button onClick={() => void submit()} disabled={!canSubmit} variant="gradient">
+          // Starting the count commits the work in front of you, so it is the
+          // ink primary (DESIGN-SPEC 6.2), not the accent of a page-level create.
+          <Button onClick={() => void submit()} disabled={!canSubmit} variant="default">
             {pending ? (
               <Loader2 className="size-4 animate-spin" aria-label="Starting" />
             ) : error?.retryable ? (
@@ -328,7 +330,7 @@ export function RecountResultPanel({ summary }: { summary: RecountResultSummary 
           {summary.assignment ? <p className="text-muted-foreground">{summary.assignment}</p> : null}
           <Link
             href={`/dashboard/cycle-counts/${summary.started.cycleCountId}`}
-            className="text-primary text-sm hover:underline"
+            className="text-accent hover:text-foreground text-sm underline-offset-2 hover:underline"
           >
             Open the count
           </Link>

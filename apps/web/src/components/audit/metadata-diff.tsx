@@ -97,10 +97,7 @@ export function diffMetadataFields(before: unknown, after: unknown): MetadataDif
     return b === a ? [] : [{ field: 'value', before: b, after: a }];
   }
 
-  const keys = new Set<string>([
-    ...Object.keys(beforeObj ?? {}),
-    ...Object.keys(afterObj ?? {}),
-  ]);
+  const keys = new Set<string>([...Object.keys(beforeObj ?? {}), ...Object.keys(afterObj ?? {})]);
 
   const rows: MetadataDiffField[] = [];
   for (const key of keys) {
@@ -146,9 +143,7 @@ export function humanizeFieldName(key: string): string {
     .toLowerCase()
     .trim();
   if (spaced.length === 0) return key;
-  const words = spaced
-    .split(' ')
-    .map((word) => (ACRONYMS.has(word) ? word.toUpperCase() : word));
+  const words = spaced.split(' ').map((word) => (ACRONYMS.has(word) ? word.toUpperCase() : word));
   const result = words.join(' ');
   return result.charAt(0).toUpperCase() + result.slice(1);
 }
@@ -179,18 +174,22 @@ export function MetadataDiff({
   const meta = metadata ?? {};
   const rows = diffMetadataFields(meta.before, meta.after);
 
+  // The redesign's meta size (12px) and quiet surfaces: the toggle is a text
+  // button (ink3, ink with an underline on hover), the changes sit on the
+  // inset (sunk) surface behind a hairline. The old value is struck through at
+  // full ink3 strength (it used to fade to 70% as well, under 4.5:1).
   if (rows.length > 0) {
     return (
       <details className="mt-1.5">
-        <summary className="cursor-pointer select-none text-[11px] text-muted-foreground hover:text-foreground">
+        <summary className="text-muted-foreground hover:text-foreground w-fit cursor-pointer select-none text-xs underline-offset-2 hover:underline">
           {rows.length === 1 ? 'Show 1 field change' : `Show ${rows.length} field changes`}
         </summary>
-        <dl className="mt-1.5 space-y-1 rounded-md border border-border bg-muted/30 p-2">
+        <dl className="border-border bg-sunk mt-1.5 space-y-1 rounded-md border px-2.5 py-2">
           {rows.map((r) => (
-            <div key={r.field} className="flex flex-wrap items-baseline gap-x-1.5 text-[11px]">
-              <dt className="font-medium text-foreground">{humanizeFieldName(r.field)}:</dt>
-              <dd className="min-w-0 break-words text-muted-foreground">
-                <span className="line-through opacity-70">{r.before}</span>
+            <div key={r.field} className="flex flex-wrap items-baseline gap-x-1.5 text-xs">
+              <dt className="text-foreground font-medium">{humanizeFieldName(r.field)}:</dt>
+              <dd className="text-muted-foreground min-w-0 break-words">
+                <span className="line-through">{r.before}</span>
                 <span className="mx-1">→</span>
                 <span className="text-foreground">{r.after}</span>
               </dd>
@@ -210,7 +209,7 @@ export function MetadataDiff({
   const changedKeys = isStringArray(meta.changed_keys) ? meta.changed_keys : null;
   if (changedKeys && changedKeys.length > 0) {
     return (
-      <p className="mt-1.5 text-[11px] text-muted-foreground">
+      <p className="text-muted-foreground mt-1.5 text-xs">
         Fields on the edit (exact changes not recorded for this entry):{' '}
         {changedKeys.map(humanizeFieldName).join(', ')}
       </p>
