@@ -54,6 +54,7 @@ import {
 import { NeededByPicker } from '@/components/needed-by-picker';
 import { CachedImage } from '@/components/ui/cached-image';
 import { Body, FieldLabel, Mono } from '@/components/ui/text';
+import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import {
   initialNeededByDraft,
   neededByDraftView,
@@ -131,7 +132,14 @@ export function QuantitySheet({
         maxFontSizeMultiplier={PICK_QTY_MAX_FONT_SIZE_MULTIPLIER}
         style={[
           styles.input,
-          { width: pickQtyFieldWidthFor(digits), borderColor: c.hair, backgroundColor: c.paper2, color: c.ink },
+          // The reference's count input: the recessed fill (sunk) in the
+          // stronger border (DESIGN-SPEC 6.3).
+          {
+            width: pickQtyFieldWidthFor(digits),
+            borderColor: c.hair2,
+            backgroundColor: c.sunk,
+            color: c.ink,
+          },
         ]}
       />
       <Body size={12.5} color={c.ink3}>
@@ -177,7 +185,13 @@ export function QuickViewSheet({
           recyclingKey={item.id}
           onError={onPhotoError}
           contentFit="contain"
-          style={{ alignSelf: 'stretch', height: 200, borderRadius: 10, backgroundColor: c.paper2 }}
+          // The photo on white in both modes (DESIGN-SPEC 6.14).
+          style={{
+            alignSelf: 'stretch',
+            height: 200,
+            borderRadius: 10,
+            backgroundColor: PHOTO_BACKGROUND,
+          }}
         />
       ) : null}
       {facts.map(([label, value]) => (
@@ -388,7 +402,9 @@ export function RequesterSheet({
   const nameSpan = React.useRef<{ top: number; height: number } | null>(null);
   const emailSpan = React.useRef<{ top: number; height: number } | null>(null);
   const spanOf = (e: LayoutChangeEvent) => ({ top: e.nativeEvent.layout.y, height: e.nativeEvent.layout.height });
-  const inputStyle = [styles.input, { borderColor: c.hair, backgroundColor: c.paper2, color: c.ink }];
+  // The shared text box's recipe (components/ui/field.tsx): the card fill in
+  // the stronger border, the placeholder in muted ink (ink3, AA).
+  const inputStyle = [styles.input, { borderColor: c.hair2, backgroundColor: c.card, color: c.ink }];
   return (
     <StorefrontSheet
       visible
@@ -429,7 +445,7 @@ export function RequesterSheet({
             value={query}
             onChangeText={setQuery}
             placeholder={CHECKOUT_REQUESTER_SEARCH_COPY}
-            placeholderTextColor={c.ink4}
+            placeholderTextColor={c.ink3}
             autoCapitalize="none"
             autoCorrect={false}
             accessibilityLabel={CHECKOUT_REQUESTER_SEARCH_COPY}
@@ -470,7 +486,7 @@ export function RequesterSheet({
           submitBehavior="submit"
           onSubmitEditing={() => emailRef.current?.focus()}
           placeholder={STOREFRONT_ON_BEHALF_NAME_PLACEHOLDER_COPY}
-          placeholderTextColor={c.ink4}
+          placeholderTextColor={c.ink3}
           autoCapitalize="words"
           accessibilityLabel={CHECKOUT_NAME_LABEL_COPY}
           maxFontSizeMultiplier={INPUT_CAP}
@@ -488,7 +504,7 @@ export function RequesterSheet({
           onBlur={kb.onNoteBlur}
           returnKeyType="done"
           placeholder={STOREFRONT_ON_BEHALF_EMAIL_PLACEHOLDER_COPY}
-          placeholderTextColor={c.ink4}
+          placeholderTextColor={c.ink3}
           autoCapitalize="none"
           autoCorrect={false}
           keyboardType="email-address"

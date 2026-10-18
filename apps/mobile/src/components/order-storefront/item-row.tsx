@@ -14,6 +14,7 @@ import {
 
 import { CachedImage } from '@/components/ui/cached-image';
 import { Body, Mono } from '@/components/ui/text';
+import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import {
   ITEM_ROW_HINT,
   addBlockedHint,
@@ -27,7 +28,7 @@ import {
 } from '@/lib/order-storefront/a11y';
 import { itemRowStacked } from '@/lib/order-storefront/layout';
 import { earmarkLabel } from '@/lib/order-storefront/setup';
-import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT, RADIUS, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 import { SmallAction, Stepper } from './controls';
@@ -43,6 +44,11 @@ import { SmallAction, Stepper } from './controls';
  * with the name, availability and quantity in the cart; each stepper button
  * is its own and names the item. Past the 1.4 text size the control drops
  * under the text, so a long name keeps the full width.
+ *
+ * The redesign look: the reference's card row (DESIGN-SPEC 6.7) with a photo
+ * on white in both modes (6.14, so a photo shot on white reads the same in
+ * light and dark) or its letter on the recessed fill, the SKU and
+ * availability in mono, the earmark as an outline chip.
  */
 export const ItemRow = React.memo(function ItemRow({
   item,
@@ -110,7 +116,9 @@ export const ItemRow = React.memo(function ItemRow({
     );
 
   return (
-    <View style={[styles.row, { borderColor: c.hair, backgroundColor: c.card }, stacked && styles.rowStacked]}>
+    <View
+      style={[styles.row, { borderColor: c.hair, backgroundColor: c.card }, stacked && styles.rowStacked]}
+    >
       <Pressable
         onPress={() => onOpen(item.id)}
         accessibilityRole="button"
@@ -121,7 +129,12 @@ export const ItemRow = React.memo(function ItemRow({
         // mid-word (simulator walk D7).
         style={({ pressed }) => [styles.main, stacked && styles.mainStacked, { opacity: pressed ? 0.8 : 1 }]}
       >
-        <View style={[styles.photo, { backgroundColor: c.paper2, borderColor: c.hair }]}>
+        <View
+          style={[
+            styles.photo,
+            { backgroundColor: photoUrl ? PHOTO_BACKGROUND : c.sunk, borderColor: c.hair },
+          ]}
+        >
           {photoUrl ? (
             <CachedImage uri={photoUrl} style={styles.photoImage} recyclingKey={item.id} onError={onPhotoError} />
           ) : (
@@ -143,7 +156,7 @@ export const ItemRow = React.memo(function ItemRow({
             </Mono>
           ) : null}
           {earmark ? (
-            <View style={[styles.chip, { borderColor: c.hair }]}>
+            <View style={[styles.chip, { borderColor: c.hair2 }]}>
               <Mono size={10.5} color={c.ink3} maxFontSizeMultiplier={CHIP_CAP}>
                 {earmark}
               </Mono>
@@ -170,7 +183,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     borderWidth: 1,
-    borderRadius: 12,
+    borderRadius: RADIUS.card,
     padding: 10,
   },
   rowStacked: { flexDirection: 'column', alignItems: 'stretch' },

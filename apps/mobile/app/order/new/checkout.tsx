@@ -64,6 +64,7 @@ import { createNotesDraft, type NotesDraft } from '@/lib/order-storefront/notes-
 import { storefrontOutcome, storefrontStateMessage } from '@/lib/order-storefront/outcome';
 import { storefrontSession, useOffline, useStorefront, useStorefrontScope } from '@/lib/order-storefront/runtime';
 import { requesterRowValue, siteAddressLines, siteLabel } from '@/lib/order-storefront/setup';
+import { BUTTON_RADIUS } from '@/components/ui/tones';
 import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useSheetKeyboard } from '@/lib/use-sheet-keyboard';
 import { useTheme } from '@/lib/use-theme';
@@ -543,11 +544,12 @@ function NotesField({
         maxLength={ORDER_NOTES_MAX}
         editable={!locked}
         placeholder={CART_MANAGER_NOTES_PLACEHOLDER_COPY}
-        placeholderTextColor={c.ink4}
+        placeholderTextColor={c.ink3}
         accessibilityLabel={CART_MANAGER_NOTES_LABEL_COPY}
         accessibilityHint={lockHint}
         maxFontSizeMultiplier={INPUT_CAP}
-        style={[styles.notes, { borderColor: c.hair, backgroundColor: c.paper2, color: c.ink }]}
+        // The shared text box's recipe: the card fill in the stronger border.
+        style={[styles.notes, { borderColor: c.hair2, backgroundColor: c.card, color: c.ink }]}
       />
       {/* The counter's line is kept from the start (blank, and hidden from
           VoiceOver, until 1,800), so the block shown above the keyboard
@@ -580,9 +582,11 @@ const styles = StyleSheet.create({
     fontSize: 15,
     textAlignVertical: 'top',
   },
+  // The shared Button's 52pt ink button and its corner (the pill shape is
+  // retired for buttons; status pills keep it).
   submit: {
     minHeight: Math.max(MIN_TAP, 52),
-    borderRadius: 999,
+    borderRadius: BUTTON_RADIUS.md,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 20,

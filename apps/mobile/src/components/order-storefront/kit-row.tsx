@@ -25,7 +25,7 @@ import {
   kitRowLabel,
 } from '@/lib/order-storefront/a11y';
 import { STOREFRONT_GUTTER, kitRowStacked, storefrontLayout } from '@/lib/order-storefront/layout';
-import { FONT } from '@/lib/theme';
+import { FONT, RADIUS } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 import { SmallAction, Stepper } from './controls';
@@ -73,7 +73,9 @@ export const KitRow = React.memo(function KitRow({
   const full = inCart === 0 && !out && maxInCart < 1;
 
   return (
-    <View style={[styles.row, { borderColor: c.hair, backgroundColor: c.card }, stacked && styles.rowStacked]}>
+    <View
+      style={[styles.row, { borderColor: c.hair, backgroundColor: c.card }, stacked && styles.rowStacked]}
+    >
       <View
         accessible
         accessibilityLabel={kitRowLabel(kit, itemMap, inCart)}
@@ -138,7 +140,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     borderWidth: 1,
-    borderRadius: 12,
+    borderRadius: RADIUS.card,
     padding: 10,
   },
   rowStacked: { flexDirection: 'column', alignItems: 'stretch' },

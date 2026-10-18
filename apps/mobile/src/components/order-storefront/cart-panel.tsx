@@ -204,7 +204,8 @@ export function CartPanel({
   );
 }
 
-/** The phone's bottom bar: "3 items · 12 units" and Check out. */
+/** The phone's bottom bar: "3 items · 12 units" and Check out, the ink
+ *  button with its words in the display face (the shared Button's). */
 export function CartBar({
   cart,
   onOpenCart,
@@ -235,9 +236,14 @@ export function CartBar({
         accessibilityLabel={cartBarLabel(totals.lines, totals.units)}
         style={({ pressed }) => [styles.barCheckout, { backgroundColor: c.ink, opacity: pressed ? 0.85 : 1 }]}
       >
-        <Mono size={13.5} color={c.paper} maxFontSizeMultiplier={BAR_CAP}>
+        <Body
+          size={13.5}
+          color={c.paper}
+          maxFontSizeMultiplier={BAR_CAP}
+          style={{ fontFamily: FONT.display, textAlign: 'center' }}
+        >
           {CART_CHECK_OUT_COPY}
-        </Mono>
+        </Body>
       </Pressable>
     </View>
   );

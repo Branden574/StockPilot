@@ -36,6 +36,7 @@ import {
 } from '@stockpilot/core';
 
 import { SmallAction } from '@/components/order-storefront/controls';
+import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Mono } from '@/components/ui/text';
 import {
@@ -66,7 +67,9 @@ import {
   successReference,
   successSentences,
 } from '@/lib/order-storefront/success';
+import { orderStatusPill } from '@/lib/orders-list';
 import { nativeOutlookAvailable, type OutlookPlatform } from '@/lib/outlook-transport';
+import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -228,9 +231,11 @@ export default function OrderPlaced() {
           <Mono size={13} color={c.ink}>
             {successReference(placed, warehouseName)}
           </Mono>
-          <Mono size={11.5} color={c.ink3} upper tracking={0.12}>
-            {orderStatusLabel(order.status)}
-          </Mono>
+          {/* The status on its tone's pill (the Orders list's own rule,
+              orders-list.ts orderStatusPill), in the same upper-case words. */}
+          <Pill status={orderStatusPill(order.status).status}>
+            {orderStatusLabel(order.status).toUpperCase()}
+          </Pill>
           {successSentences(placed).map((line) => (
             <Body key={line} size={14.5} color={c.ink}>
               {line}
@@ -268,26 +273,27 @@ export default function OrderPlaced() {
                 variant="ghost"
                 onPress={() => setPreviewOpen((v) => !v)}
               />
-              <Mono size={10.5} color={c.ink3}>
+              {/* Sentences in the body face (mono is for codes and figures). */}
+              <Body size={12.5} color={c.ink3}>
                 {recipientsHelperText(prepared.draft)}
-              </Mono>
-              <Mono size={10.5} color={c.ink3}>
+              </Body>
+              <Body size={12.5} color={c.ink3}>
                 {HONESTY_NOTICE}
-              </Mono>
+              </Body>
               {shouldShowCondensedNotice(prepared) ? (
-                <Mono size={10.5} color={c.ink3}>
+                <Body size={12.5} color={c.ink3}>
                   {condensedNoticeText(prepared.draft)}
-                </Mono>
+                </Body>
               ) : null}
               {!prepared.linkFits ? (
-                <Mono size={10.5} color={c.ink3}>
+                <Body size={12.5} color={c.ink3}>
                   {OVERSIZED_MESSAGE}
-                </Mono>
+                </Body>
               ) : null}
               {shouldWarnDuplicateDrafts(draftCount) ? (
-                <Mono size={10.5} color={c.ink3}>
+                <Body size={12.5} color={c.ink3}>
                   {DUPLICATE_WARNING}
-                </Mono>
+                </Body>
               ) : null}
               {openResult?.outcome === 'opened' ? (
                 <Body size={13} color={c.ink} accessibilityRole="alert">
@@ -319,7 +325,10 @@ export default function OrderPlaced() {
                     editable={false}
                     selectTextOnFocus
                     value={prepared.clipboardText}
-                    style={[styles.copyBox, { color: c.ink, borderColor: c.hair }]}
+                    style={[
+                      styles.copyBox,
+                      { color: c.ink, borderColor: c.hair2, backgroundColor: c.card },
+                    ]}
                     accessibilityLabel={SUCCESS_EMAIL_COPY_FIELD_LABEL_COPY}
                   />
                   <Body size={11.5} muted>
@@ -340,5 +349,12 @@ export default function OrderPlaced() {
 const styles = StyleSheet.create({
   topbar: { paddingHorizontal: 9, paddingTop: 5, flexDirection: 'row', alignItems: 'center' },
   preview: { borderWidth: 1, borderRadius: 10, padding: 12, gap: 6 },
-  copyBox: { minHeight: 140, borderWidth: 1, borderRadius: 10, padding: 10, fontSize: 13 },
+  copyBox: {
+    minHeight: 140,
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 10,
+    fontFamily: FONT.displayRegular,
+    fontSize: 13,
+  },
 });

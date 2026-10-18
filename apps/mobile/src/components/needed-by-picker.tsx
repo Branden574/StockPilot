@@ -23,7 +23,7 @@ import {
   type NeededByDraft,
   type NeededByDraftView,
 } from '@/lib/order-needed-by';
-import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -44,6 +44,12 @@ import { useTheme } from '@/lib/use-theme';
  * the control ceiling and its selected state announced; the Other time field
  * stops growing at the input ceiling; the sentences (preview, problems) are
  * content and grow with Dynamic Type.
+ *
+ * The redesign look (DESIGN-SPEC 6.6, 6.3): a chip is edged in the stronger
+ * border and the chosen one is the ink fill with paper words; the Other time
+ * box is the shared text box's recipe; a time that cannot be used is said in
+ * the per-mode warning ink (warnText, AA in both modes; the single-mode
+ * amber read 3.4:1 on the light page).
  */
 export function NeededByPicker({
   view,
@@ -91,7 +97,7 @@ export function NeededByPicker({
       style={[
         styles.chip,
         {
-          borderColor: selected ? c.ink : c.hair,
+          borderColor: selected ? c.ink : c.hair2,
           backgroundColor: selected ? c.ink : 'transparent',
           opacity: busy ? 0.5 : 1,
         },
@@ -170,7 +176,7 @@ export function NeededByPicker({
               value={draft.otherText}
               onChangeText={onOtherText}
               placeholder={NEEDED_BY_OTHER_PLACEHOLDER}
-              placeholderTextColor={c.ink4}
+              placeholderTextColor={c.ink3}
               autoFocus={focusOther}
               autoCapitalize="none"
               autoCorrect={false}
@@ -181,7 +187,7 @@ export function NeededByPicker({
               maxFontSizeMultiplier={INPUT_CAP}
               style={[
                 styles.input,
-                { borderColor: c.hair, backgroundColor: c.paper2, color: c.ink },
+                { borderColor: c.hair2, backgroundColor: c.card, color: c.ink },
               ]}
             />
           </View>
@@ -199,7 +205,7 @@ export function NeededByPicker({
           size={12.5}
           color={
             (draft.slot && !draft.other) || (draft.other && draft.otherText.trim() !== '')
-              ? ACCENT.warn
+              ? c.warnText
               : c.ink3
           }
         >
