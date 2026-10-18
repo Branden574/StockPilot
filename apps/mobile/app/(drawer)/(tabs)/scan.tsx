@@ -1285,9 +1285,14 @@ export default function Scan() {
           </View>
         )}
 
+        {/* The add cards are forms. While the keyboard is up it covers the
+            card's lower half, where the Warehouse chips and Add to inventory
+            are, and the number pad of Initial qty has no key that puts it
+            away; insetting the scroll by the keyboard (iOS) lets the form
+            scroll clear of it and brings the focused box into view. */}
         {addBook && (
           <View style={styles.addWrap}>
-            <ScrollView contentContainerStyle={styles.addContent}>
+            <ScrollView contentContainerStyle={styles.addContent} automaticallyAdjustKeyboardInsets>
               <AddBookCard
                 user={user}
                 result={addBook}
@@ -1307,7 +1312,7 @@ export default function Scan() {
 
         {addItem && (
           <View style={styles.addWrap}>
-            <ScrollView contentContainerStyle={styles.addContent}>
+            <ScrollView contentContainerStyle={styles.addContent} automaticallyAdjustKeyboardInsets>
               <AddItemCard
                 user={user}
                 result={addItem}

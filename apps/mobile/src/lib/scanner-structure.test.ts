@@ -1380,4 +1380,26 @@ describe('Scan tab: defects fixed in this package', () => {
       }
     }
   });
+
+  // An add card fills the viewfinder from under the camera bar to above the
+  // tab bar, about 630pt on a 6.1in phone; the keyboard covers its lower 250
+  // to 300pt, where the Warehouse chips and Add to inventory are, and the
+  // Initial qty number pad has no key that puts it away. The scroll view now
+  // insets itself by the keyboard (iOS measures it against the scroll's real
+  // place on screen), so the form scrolls clear and the focused box shows.
+  // Mutation caught: either card's scroll without the inset.
+  it('an add card scrolls clear of the keyboard', () => {
+    for (const card of ['AddBookCard', 'AddItemCard']) {
+      const sf = treeOf(SCAN_TAB);
+      const scrolls: string[] = [];
+      walkJsx(sf, (el, ancestors) => {
+        if (tagOf(el, sf) !== card) return;
+        const scroll = [...ancestors].reverse().find((a) => tagOf(a, sf) === 'ScrollView');
+        scrolls.push(
+          scroll ? (attrText(scroll, 'automaticallyAdjustKeyboardInsets', sf) ?? '') : '',
+        );
+      });
+      expect(scrolls, card).toEqual(['true']);
+    }
+  });
 });
