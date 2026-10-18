@@ -59,22 +59,18 @@ describe('dashboard navigation', () => {
 
   it('applies an override that REORDERS items within a section', () => {
     // Find a base section with >= 2 items so a reorder is observable, then pull
-    // its last item to the front. We don't have the section key on NavSection,
-    // so we request the same front-href across every section key —
-    // applyNavOverrides ignores hrefs that don't match a section's items.
+    // its last item to the front of that section, asked for by the section's
+    // own key (NavSection carries the registry key).
     const base = navForRole('admin', ALL);
     const multi = base.find((s) => s.items.length >= 2)!;
     const last = multi.items[multi.items.length - 1]!.href;
-    const order = {
-      overview: [last],
-      inventory: [last],
-      workspace: [last],
-      tools: [last],
-      admin: [last],
-    };
-    const after = navForRole('admin', ALL, { v: 1, order });
-    const afterMulti = after.find((s) => s.items.some((i) => i.href === last))!;
+    const after = navForRole('admin', ALL, { v: 1, order: { [multi.key]: [last] } });
+    const afterMulti = after.find((s) => s.key === multi.key)!;
     expect(afterMulti.items[0]!.href).toBe(last);
+    // Only the order changed: the section holds the same links.
+    expect(afterMulti.items.map((i) => i.href).sort()).toEqual(
+      multi.items.map((i) => i.href).sort(),
+    );
   });
 
   it('appends a valid custom link and resolves its icon', () => {
@@ -105,7 +101,6 @@ describe('dashboard navigation', () => {
         {
           id: 'evil',
           label: 'Evil',
-          // eslint-disable-next-line no-script-url
           href: 'javascript:alert(1)',
           section: 'tools',
           iconName: 'BookOpen',
