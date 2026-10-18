@@ -183,7 +183,12 @@ function CycleCountScanScreenInner() {
 
   async function confirmSheet() {
     if (!sheet) return;
-    const num = Number(sheet.qty);
+    // An emptied box is not a count of 0. Number('') is 0, so a box cleared to
+    // type a new number and saved before the typing recorded zero stock for
+    // the line; the count screen records nothing from an empty box either. A
+    // typed 0 is still a count of 0.
+    const raw = sheet.qty.trim();
+    const num = raw === '' ? Number.NaN : Number(raw);
     if (!Number.isFinite(num) || num < 0) {
       Alert.alert('Invalid count', 'Enter a non-negative number.');
       return;

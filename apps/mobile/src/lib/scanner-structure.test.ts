@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import * as vm from 'node:vm';
 
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
@@ -436,6 +437,38 @@ describe('count scanner: defects fixed in this package', () => {
     // positioned, which the view's padding would not move).
     expect(sourceOf(COUNT_SCANNER)).toMatch(/\n {2}sheetWrap: \{[^}]*justifyContent: 'flex-end'/);
     expect(sourceOf(COUNT_SCANNER)).not.toMatch(/\n {2}sheet: \{[^}]*position: 'absolute'/);
+  });
+
+  // Number('') is 0: a Counted box cleared to type a new number and saved
+  // before the typing recorded a count of zero for the line, where the count
+  // screen (app/cycle-count/[id].tsx) records nothing from an empty box. This
+  // runs the screen's own lines that turn the box into a number, then its own
+  // check. Mutation caught: the old `Number(sheet.qty)` (it accepts '' and
+  // '   ' as 0), or a check that refuses a typed 0.
+  it('an emptied Counted box is refused, never saved as 0; a typed 0 still counts', () => {
+    const body = functionBody(sourceOf(COUNT_SCANNER), COUNT_SCANNER, 'confirmSheet');
+    const from = body.indexOf('if (!sheet) return;') + 'if (!sheet) return;'.length;
+    const to = body.indexOf('if (!Number.isFinite(num) || num < 0)');
+    expect(from).toBeGreaterThan('if (!sheet) return;'.length - 1);
+    expect(to).toBeGreaterThan(from);
+    // The screen's own statements (read from the repository's source, never
+    // from input), run in an empty context that holds only the sheet.
+    const parse = new vm.Script(`${body.slice(from, to)}\n!(!Number.isFinite(num) || num < 0);`);
+    const accepts = (qty: string): boolean => parse.runInNewContext({ sheet: { qty } }) as boolean;
+    const verdicts = Object.fromEntries(
+      ['', '   ', '0', ' 0 ', '12', '2.5', '-1', 'abc', '1,5'].map((qty) => [qty, accepts(qty)]),
+    );
+    expect(verdicts).toEqual({
+      '': false,
+      '   ': false,
+      '0': true,
+      ' 0 ': true,
+      '12': true,
+      '2.5': true,
+      '-1': false,
+      abc: false,
+      '1,5': false,
+    });
   });
 });
 
