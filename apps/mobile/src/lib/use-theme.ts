@@ -3,11 +3,11 @@ import { useColorScheme } from 'react-native';
 import { palette, type ThemeMode } from './theme';
 
 /**
- * Returns the current theme mode + its color palette. Defaults to
- * light (the brand's primary mode); dark mirror follows system theme.
- * Settings will later expose a user override that wins over the
- * system value — wired through here so every primitive picks it up
- * without prop drilling.
+ * Returns the current theme mode + its color palette. The mode follows the
+ * device appearance only (`userInterfaceStyle: 'automatic'`); there is no
+ * in-app override, and Settings > Theme says so. Light when the system
+ * reports nothing. The palette object is the same reference for a given
+ * mode, so memoised rows and style arrays stay stable across renders.
  */
 export function useTheme(): { mode: ThemeMode; c: ReturnType<typeof palette> } {
   const scheme = useColorScheme();
