@@ -876,8 +876,12 @@ describe('Team and Accounts (M-WS-07, 08)', () => {
     expect(attrText(els[0]!.el, 'onPress', sf)).toBe(
       '() => Linking.openURL(`mailto:${email}`).catch(() => undefined)',
     );
+    // Padding, not a fixed box the email is centred in: a wrapped or larger
+    // address grows the frame and stays 3pt under the name (-11.5 + 14.5)
+    // with the card's padding kept (14.5 - 14.5), where a centred email
+    // climbed into the name and sank into the card's padding.
     expect(attrText(els[0]!.el, 'style', sf)).toMatch(
-      /minHeight: 44,\s*marginTop: -11\.5,\s*marginBottom: -14\.5,/,
+      /minHeight: 44,\s*paddingVertical: 14\.5,\s*marginTop: -11\.5,\s*marginBottom: -14\.5,/,
     );
   });
 

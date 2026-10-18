@@ -174,13 +174,19 @@ function MemberCard({ member }: { member: MemberRow }) {
             {name}
           </Body>
           {email ? (
-            // A link (it opens Mail) in a 44pt frame; the negative margins
-            // give the frame's extra height back, so the card keeps its size.
+            // A link (it opens Mail) in a 44pt frame. The frame is padding
+            // around the email, so it grows with the email (a wrapped or
+            // larger address) instead of centring it in a fixed box, and the
+            // negative margins give the padding back: the email sits 3pt
+            // under the name and the card keeps its padding at every text
+            // size. One line at the default size is 15.2 + 29 = 44.2pt;
+            // minHeight keeps 44 at the sizes below the default.
             <Pressable
               onPress={() => Linking.openURL(`mailto:${email}`).catch(() => undefined)}
               accessibilityRole="link"
               style={({ pressed }) => ({
                 minHeight: 44,
+                paddingVertical: 14.5,
                 marginTop: -11.5,
                 marginBottom: -14.5,
                 flexDirection: 'row',
