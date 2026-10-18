@@ -33,7 +33,7 @@ import {
   statusGroupLabel,
   toggleStatusGroup,
 } from '@/lib/book-order-totals-view';
-import { ACCENT, FONT, SHADOW, TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT, SHADOW, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -192,7 +192,7 @@ function FiltersContent({
               />
             ))}
             {problems.status ? (
-              <Body size={13} color={ACCENT.crit} accessibilityRole="alert">
+              <Body size={13} color={c.critText} accessibilityRole="alert">
                 {problems.status}
               </Body>
             ) : null}

@@ -5,6 +5,7 @@ import { Pressable, View } from 'react-native';
 import { bookCoverAlt } from '@stockpilot/core';
 
 import { CachedImage } from '@/components/ui/cached-image';
+import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { bookCoverCacheKey, bookCoverPlaceholderLabel } from '@/lib/book-order-totals-view';
 import { useTheme } from '@/lib/use-theme';
 
@@ -12,7 +13,11 @@ import { useTheme } from '@/lib/use-theme';
  * A book's cover in a portrait box (Book Order Totals, plan 9.4).
  *
  *   - `contain`, never `cover`: the whole jacket shows, title included, on a
- *     neutral backing (CachedImage defaults to cover, which crops).
+ *     neutral backing (CachedImage defaults to cover, which crops). The
+ *     backing is the photo ground (white in both modes, the reference's
+ *     thumbnail ground, DESIGN-SPEC 6.14), so a jacket shot on white reads
+ *     the same in light and dark; the placeholder is the recessed fill
+ *     with its glyph in the muted ink, inside the same hairline.
  *   - The disk cache key is the storage path without the signed token, so a
  *     rotated URL is still the same picture; an external cover keeps its
  *     whole URL as the key (bookCoverCacheKey).
@@ -53,7 +58,7 @@ export function BookCover({
     borderRadius: 6,
     borderWidth: 1,
     borderColor: c.hair,
-    backgroundColor: c.paper2,
+    backgroundColor: showImage ? PHOTO_BACKGROUND : c.sunk,
     overflow: 'hidden' as const,
     alignItems: 'center' as const,
     justifyContent: 'center' as const,
@@ -67,7 +72,7 @@ export function BookCover({
         accessibilityRole="image"
         accessibilityLabel={bookCoverPlaceholderLabel({ uri, failedUri, failed })}
       >
-        <BookOpen size={Math.round(width * 0.42)} color={c.ink4} strokeWidth={1.4} />
+        <BookOpen size={Math.round(width * 0.42)} color={c.ink3} strokeWidth={1.4} />
       </View>
     );
   }
