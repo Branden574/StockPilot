@@ -1403,3 +1403,224 @@ describe('Scan tab: defects fixed in this package', () => {
     }
   });
 });
+
+// ── The Add book and Add item cards (shown on the Scan tab) ──────────────
+
+const ADD_BOOK = 'src/components/AddBookCard.tsx';
+const ADD_ITEM = 'src/components/AddItemCard.tsx';
+const CARDS: [string, string][] = [
+  ['AddBookCard', ADD_BOOK],
+  ['AddItemCard', ADD_ITEM],
+];
+
+/** Every word each card shows or says, as before the restyle. */
+const CARD_WORDS: Record<string, string[]> = {
+  [ADD_BOOK]: [
+    'Already in inventory',
+    '— currently',
+    'on hand.',
+    'Close',
+    'Title required',
+    'Type a title before saving.',
+    'Check the form',
+    'Could not add',
+    'Unknown error',
+    'No cover',
+    'ISBN',
+    'No metadata found — add the title and author manually.',
+    'Title',
+    'The Great Gatsby',
+    'Author',
+    'F. Scott Fitzgerald',
+    'SKU',
+    'Initial qty',
+    'Warehouse',
+    'No warehouses cached. Refresh and try again.',
+    'Cancel',
+    'Add to inventory',
+  ],
+  [ADD_ITEM]: [
+    'Already in inventory',
+    '— open it in the app to adjust stock.',
+    'Close',
+    'Name required',
+    'Type a product name before saving.',
+    'Check the form',
+    'Could not add',
+    'Unknown error',
+    'No image',
+    'UPC',
+    'Description was AI-generated — review before saving.',
+    'No external match. Fill in the details by hand.',
+    'Name',
+    'Wireless mouse',
+    'Model #',
+    'e.g. MX432LL/A',
+    'SKU',
+    'Initial qty',
+    'Description preview',
+    'Warehouse',
+    'No warehouses cached. Refresh and try again.',
+    'Cancel',
+    'Add to inventory',
+  ],
+};
+
+/** Each card's text boxes: label, value, setter and the box's own options. */
+const CARD_FIELDS: Record<string, string[][]> = {
+  [ADD_BOOK]: [
+    ['Title', 'title', 'setTitle', 'The Great Gatsby', '', ''],
+    ['Author', 'author', 'setAuthor', 'F. Scott Fitzgerald', '', ''],
+    ['SKU', 'sku', 'setSku', '', '', 'characters'],
+    ['Initial qty', 'qty', 'setQty', '', 'numeric', ''],
+  ],
+  [ADD_ITEM]: [
+    ['Name', 'name', 'setName', 'Wireless mouse', '', ''],
+    ['Model #', 'modelNumber', 'setModelNumber', 'e.g. MX432LL/A', '', ''],
+    ['SKU', 'sku', 'setSku', '', '', 'characters'],
+    ['Initial qty', 'qty', 'setQty', '', 'numeric', ''],
+  ],
+};
+
+describe.each(CARDS)('%s: every word, field and rule survives the restyle', (_name, file) => {
+  const src = sourceOf(file);
+  const code = codeOnly(src);
+
+  it.each(CARD_WORDS[file]!)('says "%s"', (word) => {
+    expect(wordsOf(file)).toContain(word);
+  });
+
+  it('has no emoji', () => {
+    expect(wordsOf(file).filter((w) => /\p{Extended_Pictographic}/u.test(w))).toEqual([]);
+  });
+
+  it('keeps every text box, with its words and options, named for VoiceOver', () => {
+    const { sf, els } = elements(file, (el, s) => tagOf(el, s) === 'Field');
+    expect(
+      els.map((el) => [
+        attrText(el, 'label', sf),
+        attrText(el, 'value', sf),
+        attrText(el, 'onChangeText', sf),
+        attrText(el, 'placeholder', sf) ?? '',
+        attrText(el, 'keyboardType', sf) ?? '',
+        attrText(el, 'autoCapitalize', sf) ?? '',
+      ]),
+    ).toEqual(CARD_FIELDS[file]);
+    for (const el of els) {
+      expect(attrText(el, 'accessibilityLabel', sf)).toBe(attrText(el, 'label', sf));
+    }
+  });
+
+  it('refuses an empty title or name before it sends anything', () => {
+    const body = functionBody(src, file, 'create');
+    const guard = (
+      file === ADD_BOOK
+        ? /if \(!title\.trim\(\)\) \{\s*Alert\.alert\('Title required', 'Type a title before saving\.'\);\s*return;\s*\}/
+        : /if \(!name\.trim\(\)\) \{\s*Alert\.alert\('Name required', 'Type a product name before saving\.'\);\s*return;\s*\}/
+    ).exec(body);
+    expect(guard).not.toBeNull();
+    expect(body.indexOf('buildQuickAddInput(')).toBeGreaterThan(guard!.index);
+    expect(body.indexOf('await submitCreateItem(built.input)')).toBeGreaterThan(guard!.index);
+  });
+
+  it('the warehouse chips pick one warehouse, the first by default', () => {
+    const { sf, els } = elements(file, (el, s) => tagOf(el, s) === 'Chip');
+    expect(els).toHaveLength(1);
+    const chip = els[0]!;
+    expect(attrText(chip, 'label', sf)).toBe('w.name');
+    expect(attrText(chip, 'active', sf)).toBe('w.id === warehouseId');
+    expect(attrText(chip, 'onPress', sf)).toBe('() => setWarehouseId(w.id)');
+    expect(code).toContain('const list = await listWarehouses();');
+    expect(code).toContain(
+      'if (list.length > 0) setWarehouseId((current) => current ?? list[0]?.id ?? null);',
+    );
+    expect(code).toMatch(
+      /\{warehouses\.length === 0 \? \(\s*<Text style=\{styles\.body\}>No warehouses cached\. Refresh and try again\.<\/Text>\s*\) : \(\s*warehouses\.map\(/,
+    );
+  });
+
+  // Add to inventory commits the card: the one ink button. It waits for a
+  // warehouse and for a save in flight, as before, and keeps its words while
+  // it saves (before, a spinner replaced them and VoiceOver heard nothing).
+  it('Add to inventory is the ink button, off without a warehouse or while it saves; Cancel its outline', () => {
+    const { sf, els } = elements(file, (el, s) => tagOf(el, s) === 'Button');
+    const add = els.filter((el) => textOf(el, sf) === 'Add to inventory');
+    expect(add).toHaveLength(1);
+    expect(attrText(add[0]!, 'variant', sf)).toBeUndefined();
+    expect(attrText(add[0]!, 'onPress', sf)).toBe('create');
+    expect(attrText(add[0]!, 'disabled', sf)).toBe('busy || !warehouseId');
+    expect(attrText(add[0]!, 'leading', sf)).toBe(
+      'busy ? <ActivityIndicator color={c.paper} /> : undefined',
+    );
+    const cancel = els.filter((el) => textOf(el, sf) === 'Cancel');
+    expect(
+      cancel.map((el) => [
+        attrText(el, 'variant', sf),
+        attrText(el, 'onPress', sf),
+        attrText(el, 'disabled', sf),
+      ]),
+    ).toEqual([['outline', 'onCancel', 'busy']]);
+    const close = els.filter((el) => textOf(el, sf) === 'Close');
+    expect(close.map((el) => attrText(el, 'onPress', sf))).toEqual(['onCancel']);
+    // At most one ink button on the card.
+    const ink = els.filter((el) => attrText(el, 'variant', sf) === undefined);
+    expect(ink).toHaveLength(1);
+  });
+
+  it('still creates through the shared path, online only', () => {
+    expect(code).toContain('const { id } = await submitCreateItem(built.input);');
+    expect(code).toContain('onCreated(id);');
+    expect(code).not.toMatch(/enqueue\(|from '@\/lib\/queue'/);
+  });
+});
+
+describe.each(CARDS)('%s: the device mode and Dynamic Type', (_name, file) => {
+  const src = sourceOf(file);
+
+  it('is off the light-only legacy alias and the single-mode accents', () => {
+    expect(themeImports(file)).not.toContain('theme');
+    expect(themeImports(file)).not.toContain('ACCENT');
+    expect(src).toContain('const { mode, c } = useTheme();');
+    expect(src).toContain(
+      "const CARD_STYLES = { light: makeStyles(palette('light')), dark: makeStyles(palette('dark')) };",
+    );
+    expect(wordsOf(file)).not.toContain('Menlo');
+    expect(wordsOf(file)).not.toContain('#fff');
+  });
+
+  it('words take ink or ink3; the warnings the warning ink of the mode', () => {
+    const reads = paletteReads(file);
+    expect(reads.filter((t) => t === 'ink4' || t === 'ink5')).toEqual([]);
+    expect(styleBlock(src, 'warn')).toMatch(/color: c\.warnText,/);
+    expect(styleBlock(src, 'card')).toMatch(
+      /backgroundColor: c\.card,[\s\S]*borderColor: c\.hair,/,
+    );
+    expect(styleBlock(src, 'coverPlaceholder')).toMatch(/backgroundColor: c\.sunk,/);
+    expect(styleBlock(src, 'cover')).toMatch(/backgroundColor: PHOTO_BACKGROUND,/);
+  });
+
+  it.each(MODES)('%s: every pair the card draws reads at AA', (_mode, p) => {
+    for (const t of [p.ink, p.ink3, p.warnText])
+      expect(contrast(t, p.card)).toBeGreaterThanOrEqual(AA_TEXT);
+    // The "No cover" / "No image" square.
+    expect(contrast(p.ink3, p.sunk)).toBeGreaterThanOrEqual(AA_TEXT);
+    // The warehouse chips (components/ui/chip.tsx): ink on sunk, card on ink.
+    expect(contrast(p.ink, p.sunk)).toBeGreaterThanOrEqual(AA_TEXT);
+    expect(contrast(p.card, p.ink)).toBeGreaterThanOrEqual(AA_TEXT);
+  });
+
+  it('SKU and Initial qty stack past the stacking scale, as do the two buttons', () => {
+    expect(src).toContain('const stacked = shouldStackRow(useWindowDimensions().fontScale);');
+    expect(src).toContain('<View style={[styles.row, stacked && styles.rowStacked]}>');
+    expect(src).toContain('<View style={[styles.actions, stacked && styles.actionsStacked]}>');
+  });
+
+  it('only the placeholder in its fixed frame is capped; the boxes cap themselves', () => {
+    expect(src).toContain('const PLACEHOLDER_CAP = capTo(10, TYPE_CEILING.chrome);');
+    const { sf, els } = elements(file, (el, s) => tagOf(el, s) === 'Text');
+    const capped = els
+      .filter((el) => attrText(el, 'maxFontSizeMultiplier', sf) !== undefined)
+      .map((el) => attrText(el, 'style', sf));
+    expect(capped).toEqual(['styles.coverPlaceholderText']);
+  });
+});
