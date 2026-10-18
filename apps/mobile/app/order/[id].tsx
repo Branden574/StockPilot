@@ -3415,7 +3415,7 @@ export default function OrderDetail() {
                     {/* The RMA's status on its tone's pill (the returns list's
                         own tone rule, returns-view.ts returnStatusTone), in
                         the same upper-case words as before. */}
-                    <Pill status={returnStatusTone(r.status)} dot={false}>
+                    <Pill status={returnStatusTone(r.status)} dot={false} style={{ alignSelf: 'center' }}>
                       {returnStatusLabel(r.status).toUpperCase()}
                     </Pill>
                   </View>

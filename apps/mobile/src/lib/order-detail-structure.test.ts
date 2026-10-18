@@ -463,7 +463,7 @@ describe('order screen: words, roles and states survive the restyle', () => {
   it("an RMA's status is its tone's pill, in the same words", () => {
     const code = codeOnly(sourceOf(FILES.order));
     expect(code).toMatch(
-      /<Pill status=\{returnStatusTone\(r\.status\)\} dot=\{false\}>\s*\{returnStatusLabel\(r\.status\)\.toUpperCase\(\)\}\s*<\/Pill>/,
+      /<Pill status=\{returnStatusTone\(r\.status\)\} dot=\{false\} style=\{\{ alignSelf: 'center' \}\}>\s*\{returnStatusLabel\(r\.status\)\.toUpperCase\(\)\}\s*<\/Pill>/,
     );
     for (const status of ['requested', 'approved', 'received', 'closed', 'denied', 'cancelled']) {
       for (const [mode, c] of MODES) {
