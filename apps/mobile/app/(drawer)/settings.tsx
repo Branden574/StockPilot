@@ -385,11 +385,12 @@ export default function Settings() {
                 icon={Fingerprint}
                 title={`${biometricLabel} unlock`}
                 detail={cap && !cap.hasHardware ? 'No hardware' : 'Tap to enrol'}
+                // Folded into the row's button, which reads the title and the
+                // reason; a name here would only be said twice.
                 trailing={
                   <Toggle
                     value={biometricEnabled && biometricSupported}
                     onValueChange={toggleBiometric}
-                    accessibilityLabel={`${biometricLabel} unlock`}
                   />
                 }
               />

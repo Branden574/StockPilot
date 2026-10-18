@@ -676,7 +676,6 @@ describe('Settings: the account screen', () => {
     const toggles = elementsIn(sf).filter((n) => tagOf(n.el, sf) === 'Toggle');
     expect(toggles).toHaveLength(2);
     for (const t of toggles) {
-      expect(attrText(t.el, 'accessibilityLabel', sf)).toBe('`${biometricLabel} unlock`');
       expect(attrText(t.el, 'onValueChange', sf)).toBe('toggleBiometric');
       expect(attrText(t.el, 'value', sf)).toBe('biometricEnabled && biometricSupported');
     }
@@ -696,14 +695,19 @@ describe('Settings: the account screen', () => {
     expect(branch).not.toBeNull();
     const supported = elementsIn(branch!.whenTrue);
     const notYet = elementsIn(branch!.whenFalse);
-    // Supported: no touchable above the switch.
+    // Supported: no touchable above the switch, and the switch says what it
+    // turns on.
     const onSwitch = supported.find((n) => tagOf(n.el, sf) === 'Toggle')!;
     expect(onSwitch.ancestors.filter((a) => TOUCHABLE_TAG.test(tagOf(a, sf)))).toEqual([]);
+    expect(attrText(onSwitch.el, 'accessibilityLabel', sf)).toBe('`${biometricLabel} unlock`');
     expect(supported.filter((n) => TOUCHABLE_TAG.test(tagOf(n.el, sf)))).toEqual([]);
     // Not supported yet: the whole row is one button that says why.
     const outer = notYet.find((n) => TOUCHABLE_TAG.test(tagOf(n.el, sf)))!;
     expect(attrText(outer.el, 'onPress', sf)).toBe('() => toggleBiometric(true)');
     expect(attrText(outer.el, 'accessibilityRole', sf)).toBe('button');
+    // The folded switch takes no name of its own (the row says it once).
+    const folded = notYet.find((n) => tagOf(n.el, sf) === 'Toggle')!;
+    expect(attr(folded.el, 'accessibilityLabel', sf)).toBeUndefined();
     expect(flatCode(SETTINGS)).toContain(
       "detail={cap && !cap.hasHardware ? 'No hardware' : 'Tap to enrol'}",
     );
