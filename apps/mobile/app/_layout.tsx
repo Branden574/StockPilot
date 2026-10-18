@@ -37,6 +37,35 @@ initSentry();
 // re-shows on resume — only on a true hard relaunch.
 let coldLaunchHandled = false;
 
+/**
+ * How long the first paint waits for the brand fonts (CONFLICTS D24). They are
+ * bundled assets and resolve in well under a second, but useBrandFonts() only
+ * reports a successful load: a font that fails, or never answers, kept the
+ * whole app on a blank background with no way forward. Past this the app goes
+ * on in the system fonts (iOS draws an unregistered family in the system face),
+ * and the brand fonts take over if they arrive later.
+ */
+const FONT_GATE_TIMEOUT_MS = 4000;
+
+/**
+ * True once the brand fonts are ready, or once FONT_GATE_TIMEOUT_MS has passed
+ * without them, whichever comes first. The timer starts only while the fonts
+ * are missing and is cleared the moment they arrive.
+ */
+function useFontGate(): boolean {
+  const fontsReady = useBrandFonts();
+  const [waitedOut, setWaitedOut] = React.useState(false);
+  React.useEffect(() => {
+    if (fontsReady || waitedOut) return;
+    const timer = setTimeout(() => setWaitedOut(true), FONT_GATE_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [fontsReady, waitedOut]);
+  return fontsReady || waitedOut;
+}
+
+/** The splash's always-dark ground: the dark palette's page, in either mode. */
+const SPLASH_GROUND = palette('dark').paper;
+
 function RootLayout() {
   // Apply a freshly-published OTA on this launch (auto check + reload)
   // instead of the default "applies next launch" — so a published update
@@ -78,7 +107,7 @@ function RootLayout() {
     };
   }, []);
 
-  const fontsReady = useBrandFonts();
+  const fontsReady = useFontGate();
   const { mode, c } = useTheme();
 
   // Cold-launch branded splash (fire-once). `isCold` is computed once; the
@@ -94,17 +123,17 @@ function RootLayout() {
 
   if (!fontsReady) {
     // Hold splash-style background until the three brand fonts are
-    // resolved — avoids a flash of system fallback type which would
-    // shift every line of copy. On a cold launch use the splash's dark
-    // paper so there's no light flash before the (dark) branded splash.
-    return (
-      <View style={{ flex: 1, backgroundColor: isCold ? '#0c0d0a' : palette('light').paper }} />
-    );
+    // resolved (or the font gate gives up on them) — avoids a flash of
+    // system fallback type which would shift every line of copy. On a cold
+    // launch use the splash's dark paper so there's no light flash before
+    // the (dark) branded splash; otherwise the page of the device's mode, so
+    // a dark-mode reload is not lit up by a light frame.
+    return <View style={{ flex: 1, backgroundColor: isCold ? SPLASH_GROUND : c.paper }} />;
   }
 
   return (
     <GestureHandlerRootView
-      style={{ flex: 1, backgroundColor: splashVisible ? '#0c0d0a' : c.paper }}
+      style={{ flex: 1, backgroundColor: splashVisible ? SPLASH_GROUND : c.paper }}
     >
       <AuthProvider>
         <StatusBar style={splashVisible || mode === 'dark' ? 'light' : 'dark'} />
