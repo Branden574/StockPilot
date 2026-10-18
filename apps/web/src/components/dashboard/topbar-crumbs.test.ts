@@ -3,7 +3,7 @@ import * as path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { DEFAULT_MODULE_IDS } from '@stockpilot/core';
+import { DEFAULT_MODULE_IDS, MODULE_REGISTRY } from '@stockpilot/core';
 
 import { navForRole } from './nav';
 import { applyNavLabelsToCrumbs, crumbsForPathname, navLabelMap } from './topbar-crumbs';
@@ -173,6 +173,125 @@ describe('fixed pages have their own crumb, never a catch-all Detail', () => {
       'Inventory',
       'Items',
       'Detail',
+    ]);
+  });
+});
+
+/**
+ * Every dashboard route has a trail (redesign P2.3, CONFLICTS N10): 66 routes
+ * used to show a bare em dash. This walks every page folder, dynamic segments
+ * included, so a new page without a crumb fails here.
+ */
+describe('every dashboard route has a breadcrumb trail', () => {
+  const ROOT = path.resolve(__dirname, '../../app/(dashboard)/dashboard');
+  const routes: string[] = ['/dashboard'];
+  const walk = (dir: string, url: string) => {
+    for (const name of readdirSync(dir)) {
+      const abs = path.join(dir, name);
+      if (!statSync(abs).isDirectory()) continue;
+      if (name.startsWith('(')) {
+        walk(abs, url);
+        continue;
+      }
+      const next = `${url}/${name.startsWith('[') ? 'abc-123' : name}`;
+      if (existsSync(path.join(abs, 'page.tsx'))) routes.push(next);
+      walk(abs, next);
+    }
+  };
+  walk(ROOT, '/dashboard');
+
+  it('finds every page (the walk is not vacuous)', () => {
+    expect(routes.length).toBeGreaterThanOrEqual(124);
+  });
+
+  it('no route falls back to the em dash', () => {
+    const bare = routes.filter((p) => crumbsForPathname(p).some((c) => c.label === '—'));
+    expect(bare).toEqual([]);
+  });
+
+  // With every module on and no overrides, the nav labels ARE the static
+  // labels: a crumb whose href is a nav item must carry that item's label, or
+  // the overlay would rename it for everyone.
+  it('every crumb that is a sidebar item carries its default nav label', () => {
+    const all = new Set(Object.keys(MODULE_REGISTRY)) as Set<never>;
+    const map = navLabelMap(navForRole('owner', all));
+    const renamed = routes.filter(
+      (p) =>
+        JSON.stringify(applyNavLabelsToCrumbs(crumbsForPathname(p), map)) !==
+        JSON.stringify(crumbsForPathname(p)),
+    );
+    expect(renamed).toEqual([]);
+  });
+
+  // The section crumb names the sidebar section the page's item sits in, so
+  // the trail and the sidebar never disagree about where a page lives.
+  it('the section crumb is the sidebar section of the item after it', () => {
+    const all = new Set(Object.keys(MODULE_REGISTRY)) as Set<never>;
+    const sectionOf = new Map<string, string | undefined>();
+    for (const section of navForRole('owner', all)) {
+      for (const item of section.items) sectionOf.set(item.href, section.label);
+    }
+    const wrong: string[] = [];
+    for (const p of routes) {
+      const crumbs = crumbsForPathname(p);
+      const [first, second] = crumbs;
+      if (!first || !second || first.href !== null || !second.href) continue;
+      if (!sectionOf.has(second.href)) continue;
+      if (sectionOf.get(second.href) !== first.label) wrong.push(`${p}: ${first.label}`);
+    }
+    expect(wrong).toEqual([]);
+  });
+
+  it('the new trails follow an org rename like the old ones', () => {
+    const map = navLabelMap(
+      navForRole('owner', new Set(Object.keys(MODULE_REGISTRY)) as Set<never>, {
+        v: 1,
+        labels: { '/dashboard/returns': 'RMAs', '/dashboard/reports': 'Analytics' },
+      }),
+    );
+    expect(
+      applyNavLabelsToCrumbs(crumbsForPathname('/dashboard/returns/abc-123'), map).map(
+        (c) => c.label,
+      ),
+    ).toEqual(['Inventory', 'RMAs', 'Detail']);
+    expect(
+      applyNavLabelsToCrumbs(crumbsForPathname('/dashboard/reports/dead-stock'), map).map(
+        (c) => c.label,
+      ),
+    ).toEqual(['Inventory', 'Analytics', 'Dead stock']);
+  });
+
+  it.each([
+    ['/dashboard/help', ['Help & Learning']],
+    ['/dashboard/support', ['Workspace', 'Support']],
+    ['/dashboard/insights', ['Workspace', 'Briefing']],
+    ['/dashboard/customers', ['Workspace', 'Accounts']],
+    ['/dashboard/maintenance/new', ['Workspace', 'Maintenance', 'New']],
+    ['/dashboard/exceptions/abc-123', ['Inventory', 'Exceptions', 'Detail']],
+    ['/dashboard/product-groups/link', ['Inventory', 'Product groups', 'Review product families']],
+    ['/dashboard/rentals/items/abc-123', ['Inventory', 'Rentals', 'Items', 'Detail']],
+    ['/dashboard/orders/abc-123/pick', ['Inventory', 'Orders', 'Pick']],
+    ['/dashboard/purchase-orders/abc-123/edit', ['Inventory', 'Purchase orders', 'Edit']],
+    ['/dashboard/settings/roles', ['Workspace', 'Settings', 'Roles & permissions']],
+    ['/dashboard/settings/migrate/sage50', ['Workspace', 'Settings', 'Migrate from Sage 50']],
+    [
+      '/dashboard/settings/public-requests/abc-123',
+      ['Workspace', 'Settings', 'Public requests', 'Detail'],
+    ],
+    ['/dashboard/reports/book-order-totals', ['Inventory', 'Reports', 'Book Order Totals']],
+    ['/dashboard/warehouses/abc-123', ['Admin', 'Warehouses', 'Detail']],
+    ['/dashboard/admin/support', ['Admin', 'Admin overview', 'Support tickets']],
+  ])('%s reads %j', (pathname, labels) => {
+    expect(crumbsForPathname(pathname).map((c) => c.label)).toEqual(labels);
+  });
+
+  it('a parent crumb links to the page it names', () => {
+    const crumbs = crumbsForPathname('/dashboard/rentals/items/abc-123');
+    expect(crumbs.map((c) => c.href)).toEqual([
+      null,
+      '/dashboard/rentals',
+      '/dashboard/rentals/items',
+      null,
     ]);
   });
 });
