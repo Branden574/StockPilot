@@ -159,10 +159,13 @@ function EventCard({ event }: { event: ScheduleRow }) {
       <Card padding={14}>
         <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 14 }}>
           {/* minWidth, not width: the date and time are uncapped content and
-              grow with the text size instead of being cut at 56pt. */}
+              grow with the text size instead of being cut. 65 holds the
+              widest time at the default size ("10:30 AM": 8 mono characters
+              at 6.4pt = 51.2, plus the 12pt padding and the 1pt divider =
+              64.2), so every card's divider lines up down the list. */}
           <View
             style={{
-              minWidth: 56,
+              minWidth: 65,
               alignItems: 'center',
               borderRightWidth: 1,
               borderRightColor: c.hair,

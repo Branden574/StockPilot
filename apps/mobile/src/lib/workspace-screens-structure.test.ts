@@ -714,6 +714,20 @@ describe('Schedule (M-WS-04)', () => {
     const { sf, els } = elements(SCHEDULE, (el, s) => attrText(el, 'onPress', s) === 'openOnWeb');
     expect(els.map(({ el }) => attrText(el, 'accessibilityRole', sf))).toEqual(['link']);
   });
+
+  // The date column grows with the text size (minWidth, not width), and at
+  // the default size every card's divider lines up: the floor holds the
+  // widest time, "10:30 AM" (8 mono characters at 10pt, 0.6em plus 0.4pt
+  // tracking each = 51.2pt) with the 12pt padding and the 1pt divider.
+  it('the date column: one divider line down the list at the default size', () => {
+    const widest = 8 * (10 * 0.6 + 10 * 0.04) + 12 + 1;
+    const floor = Number(
+      /minWidth: (\d+),\s*alignItems: 'center',\s*borderRightWidth: 1,/.exec(code)?.[1],
+    );
+    expect(floor).toBeGreaterThanOrEqual(widest);
+    expect(floor - widest).toBeLessThan(1);
+    expect(code).not.toMatch(/\bwidth: 56\b/);
+  });
   it('keeps every word', () => {
     const words = wordsOf(SCHEDULE);
     for (const w of [
