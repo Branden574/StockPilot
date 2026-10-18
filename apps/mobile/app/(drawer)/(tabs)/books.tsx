@@ -4,9 +4,7 @@ import {
   Barcode,
   BookMarked,
   Check,
-  CheckCircle2,
   ChevronRight,
-  Circle,
   ListChecks,
   Menu,
   Plus,
@@ -47,6 +45,7 @@ import {
 } from '@/components/filter-sheet';
 import { CountSelectBar } from '@/components/count-select-bar';
 import { Card } from '@/components/ui/card';
+import { CheckboxMark } from '@/components/ui/checkbox';
 import { Paginator } from '@/components/ui/paginator';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
@@ -90,7 +89,7 @@ import {
   readIsComplete,
 } from '@/lib/inventory-paging';
 import { supabase } from '@/lib/supabase';
-import { ACCENT, FONT } from '@/lib/theme';
+import { FONT, RADIUS } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useRole } from '@/lib/use-role';
 import { useTheme } from '@/lib/use-theme';
@@ -281,6 +280,10 @@ export default function BooksScreen() {
   // Cycle-count select mode: tapping a card toggles it into the shared
   // count-selection store instead of opening the book.
   const [selectMode, setSelectMode] = React.useState(false);
+  // The select bar's measured height (it grows when its actions wrap at large
+  // text sizes). While it shows, the list's end clears it too, so the last
+  // cards and the pager are never left under the bar. Identical to Items.
+  const [selectBarHeight, setSelectBarHeight] = React.useState(0);
 
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
 
@@ -923,13 +926,20 @@ export default function BooksScreen() {
         </View>
 
         <View style={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: 8 }}>
-          <View style={[styles.searchBox, { backgroundColor: c.card, borderColor: c.hair }]}>
-            <Search size={16} color={c.ink4} strokeWidth={1.4} />
+          {/* The Items twin's search box: the stronger border, the muted-ink
+              icon and placeholder (the faint ink4 held it under AA). */}
+          <View style={[styles.searchBox, { backgroundColor: c.card, borderColor: c.hair2 }]}>
+            <Search size={16} color={c.ink3} strokeWidth={1.4} />
             <TextInput
               value={q}
               onChangeText={setQ}
               placeholder="Search title, ISBN, SKU…"
-              placeholderTextColor={c.ink4}
+              placeholderTextColor={c.ink3}
+              // The placeholder's words name the field only while it holds
+              // text, so VoiceOver still says what the field is once something
+              // is typed in it. An empty field takes no name: iOS reads its
+              // placeholder there, and a name as well would say it twice.
+              accessibilityLabel={q.length > 0 ? 'Search title, ISBN, SKU…' : undefined}
               autoCapitalize="none"
               autoCorrect={false}
               autoFocus={false}
@@ -938,10 +948,14 @@ export default function BooksScreen() {
               style={[styles.searchInput, { color: c.ink, fontFamily: FONT.displayRegular }]}
             />
             <FilterButton onPress={() => setSheetOpen(true)} count={filterCount} />
+            {/* D29: the scan button had no name and no role, so VoiceOver
+                found an unlabelled element. It takes the Items tab's words,
+                and a 44pt frame for its 34pt target. */}
             <Pressable
-              hitSlop={8}
               onPress={() => router.push('/scan')}
-              style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
+              style={({ pressed }) => [styles.scanFrame, { opacity: pressed ? 0.7 : 1 }]}
+              accessibilityRole="button"
+              accessibilityLabel="Open scanner"
             >
               <Barcode size={18} color={c.ink} strokeWidth={1.6} />
             </Pressable>
@@ -966,7 +980,7 @@ export default function BooksScreen() {
 
           {/* A READ that failed is not an empty shelf. */}
           {loadError !== null ? (
-            <Body size={11.5} color={ACCENT.warn} style={{ marginTop: 8 }}>
+            <Body size={11.5} color={c.warnText} style={{ marginTop: 8 }}>
               {`Could not load books: ${loadError}. Pull to retry.`}
             </Body>
           ) : null}
@@ -975,7 +989,7 @@ export default function BooksScreen() {
               which can be out of date. Say so rather than pass it off as
               where the book is now. */}
           {holdingsError ? (
-            <Body size={11.5} color={ACCENT.warn} style={{ marginTop: 8 }}>
+            <Body size={11.5} color={c.warnText} style={{ marginTop: 8 }}>
               {"Rack locations did not load, so a book's rack label may be out of date. Pull down to try again."}
             </Body>
           ) : null}
@@ -991,7 +1005,9 @@ export default function BooksScreen() {
           keyExtractor={groupedKeyExtractor}
           contentContainerStyle={{
             paddingHorizontal: 20,
-            paddingBottom: tabBarHeight + 24,
+            // In select mode the list ends 12pt above the floating bar, so
+            // the pager under the last card is never hidden behind it.
+            paddingBottom: tabBarHeight + 24 + (selectMode ? selectBarHeight : 0),
             gap: 10,
           }}
           refreshControl={
@@ -1050,7 +1066,11 @@ export default function BooksScreen() {
         charters={charters}
       />
 
-      <CountSelectBar visible={selectMode} bottomInset={tabBarHeight} />
+      <CountSelectBar
+        visible={selectMode}
+        bottomInset={tabBarHeight}
+        onHeight={setSelectBarHeight}
+      />
     </View>
   );
 }
@@ -1099,6 +1119,12 @@ const BookCard = React.memo(function BookCard({
   return (
     <Pressable
       onPress={() => (selectMode ? onToggleSelect(book) : onBookPress(book.id))}
+      // In select mode the whole card is the checkbox (D29): VoiceOver says
+      // "checkbox" and whether it is ticked, from the same per-row
+      // subscription that draws the box. Outside it the card opens the book,
+      // so it is announced as a button (it had no role at all).
+      accessibilityRole={selectMode ? 'checkbox' : 'button'}
+      accessibilityState={selectMode ? { checked: picked } : undefined}
       // Add to group sits inside this Pressable, so VoiceOver cannot reach it
       // as its own element (P4): the card carries it as an action, and
       // 'activate' keeps a double tap doing what a tap does.
@@ -1113,7 +1139,10 @@ const BookCard = React.memo(function BookCard({
       }
       style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
     >
-      <Card padding={14}>
+      {/* A picked card takes the accent wash, as an Items row does (the
+          web's selected row, DESIGN-SPEC 6.21); the ticked box is its cue
+          beyond colour. Books cards had no picked fill at all. */}
+      <Card padding={14} style={picked ? { backgroundColor: c.accentWash } : undefined}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
           <Thumb size={56} icon={BookMarked} imageUrl={book.imageUrl} />
           <View style={stacked ? styles.bodyStacked : styles.bodyRow}>
@@ -1125,11 +1154,13 @@ const BookCard = React.memo(function BookCard({
               <Body size={15.5} color={c.ink} style={{ fontFamily: FONT.display }}>
                 {book.name}
               </Body>
+              {/* Author, ISBN and grade, and the placement: information, so
+                  the muted ink (the faint ink4 held them under AA). */}
               {author ? (
                 <Mono
                   size={11.5}
                   tracking={0.04}
-                  color={c.ink4}
+                  color={c.ink3}
                   numberOfLines={1}
                   style={{ marginTop: 4 }}
                 >
@@ -1138,9 +1169,9 @@ const BookCard = React.memo(function BookCard({
               ) : null}
               {isbn ? (
                 <Mono
-                  size={11}
+                  size={11.5}
                   tracking={0.04}
-                  color={c.ink4}
+                  color={c.ink3}
                   numberOfLines={1}
                   style={{ marginTop: 2 }}
                 >
@@ -1150,9 +1181,9 @@ const BookCard = React.memo(function BookCard({
               ) : null}
               {placementLabel ? (
                 <Mono
-                  size={11}
+                  size={11.5}
                   tracking={0.04}
-                  color={c.ink4}
+                  color={c.ink3}
                   numberOfLines={1}
                   style={{ marginTop: 2 }}
                 >
@@ -1162,7 +1193,7 @@ const BookCard = React.memo(function BookCard({
               {groupChip ? (
                 // Content, so uncapped: it wraps under the title at any size.
                 <View style={styles.chipLine}>
-                  <Mono size={10.5} color={c.ink4} tracking={0.02}>
+                  <Mono size={10.5} color={c.ink3} tracking={0.02}>
                     {groupChip}
                   </Mono>
                   {addToGroupId && onAddToGroup ? (
@@ -1170,22 +1201,23 @@ const BookCard = React.memo(function BookCard({
                       onPress={() => onAddToGroup(book.id, addToGroupId)}
                       accessibilityRole="button"
                       accessibilityLabel={`${GROUP_COPY.addToGroup}: ${book.name}`}
-                      hitSlop={6}
                       style={({ pressed }) => [
-                        styles.addToGroup,
-                        { borderColor: c.hair, opacity: pressed ? 0.6 : 1 },
+                        styles.addToGroupFrame,
+                        { opacity: pressed ? 0.6 : 1 },
                       ]}
                     >
-                      <Mono size={10.5} color={c.ink} tracking={0.02}>
-                        {GROUP_COPY.addToGroup}
-                      </Mono>
+                      <View style={[styles.addToGroup, { borderColor: c.hair2 }]}>
+                        <Mono size={10.5} color={c.ink} tracking={0.02}>
+                          {GROUP_COPY.addToGroup}
+                        </Mono>
+                      </View>
                     </Pressable>
                   ) : null}
                 </View>
               ) : null}
             </View>
             <View style={[styles.trailingCol, stacked && styles.trailingColStacked]}>
-              <Mono size={17} tracking={-0.018} color={c.ink} style={{ fontFamily: FONT.display }}>
+              <Mono size={15} color={c.ink} style={styles.quantity}>
                 {book.quantity_on_hand}
               </Mono>
               <Pill status={pill.status}>{pill.label}</Pill>
@@ -1193,15 +1225,12 @@ const BookCard = React.memo(function BookCard({
           </View>
           {/* Trailing slot, ALWAYS reserved — the collapsed header spends the
               same width on its chevron, and a column that only exists on one
-              of the two shifts the quantities being compared out of line. */}
+              of the two shifts the quantities being compared out of line. The
+              shared box (P2.5b) is 22pt, the slot's width, so it still lines
+              up with the header's chevron. A mark, not a Checkbox: the card
+              above is the one control. */}
           <View style={{ width: TRAILING_SLOT, alignItems: 'center' }}>
-            {selectMode ? (
-              picked ? (
-                <CheckCircle2 size={22} color={c.ink} strokeWidth={2} />
-              ) : (
-                <Circle size={22} color={c.ink4} strokeWidth={1.6} />
-              )
-            ) : null}
+            {selectMode ? <CheckboxMark checked={picked} /> : null}
           </View>
         </View>
       </Card>
@@ -1281,7 +1310,10 @@ const BookGroupHeaderCard = React.memo(function BookGroupHeaderCard({
       }`}
       style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
     >
-      <Card padding={14}>
+      {/* The header recipe, as on the Items tab: the recessed fill (sunk)
+          marks the card as a group over the white placement cards it opens
+          to (DESIGN-SPEC 6.21). */}
+      <Card padding={14} style={{ backgroundColor: c.sunk }}>
         {/* Same padding + gap + 56px thumb as BookCard so the header's thumb
             and title share the exact left edge with the placement rows it
             expands to. The disclosure chevron therefore sits at the TRAILING
@@ -1299,9 +1331,9 @@ const BookGroupHeaderCard = React.memo(function BookGroupHeaderCard({
                 {name}
               </Body>
               <Mono
-                size={11}
+                size={11.5}
                 tracking={0.04}
-                color={c.ink4}
+                color={c.ink3}
                 numberOfLines={1}
                 style={{ marginTop: 4 }}
               >
@@ -1309,7 +1341,7 @@ const BookGroupHeaderCard = React.memo(function BookGroupHeaderCard({
               </Mono>
             </View>
             <View style={[styles.trailingCol, stacked && styles.trailingColStacked]}>
-              <Mono size={17} tracking={-0.018} color={c.ink} style={{ fontFamily: FONT.display }}>
+              <Mono size={15} color={c.ink} style={styles.quantity}>
                 {/* A page-only sum is marked with a leading ≥ rather than
                     presented as the title's stock. */}
                 {partial ? `≥${total}` : total}
@@ -1317,11 +1349,13 @@ const BookGroupHeaderCard = React.memo(function BookGroupHeaderCard({
               <Pill status={badge.status}>{badge.label}</Pill>
             </View>
           </View>
+          {/* Muted ink: the chevron says open or closed (ink4 is under 3:1 on
+              the recessed fill in light mode). */}
           <View style={{ width: TRAILING_SLOT, alignItems: 'center' }}>
             <ChevronRight
               size={18}
-              color={c.ink4}
-              strokeWidth={2}
+              color={c.ink3}
+              strokeWidth={1.8}
               style={{ transform: [{ rotate: expanded ? '90deg' : '0deg' }] }}
             />
           </View>
@@ -1354,7 +1388,8 @@ const styles = StyleSheet.create({
     minHeight: 44,
     paddingHorizontal: 14,
     paddingVertical: 4,
-    borderRadius: 10,
+    // The shared Field's corner (RADIUS.tile), so the phone's inputs match.
+    borderRadius: RADIUS.tile,
     borderWidth: 1,
     flexDirection: 'row',
     alignItems: 'center',
@@ -1367,7 +1402,27 @@ const styles = StyleSheet.create({
     minHeight: 36,
     letterSpacing: -0.17,
   },
+  // Open scanner's target: a real 44pt frame around the 18pt icon (it was the
+  // icon plus an 8pt slop, 34pt) — the twin of inventory.tsx `scanFrame`. The
+  // frame takes the box's 4pt top and bottom padding and 13pt of its right
+  // padding, so the icon stays where it was, and only 4pt of the gap before
+  // it, which keeps it clear of the filter button's own 6pt slop.
+  scanFrame: {
+    minWidth: 44,
+    minHeight: 44,
+    marginVertical: -4,
+    marginLeft: -4,
+    marginRight: -13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   empty: { padding: 32, alignItems: 'center' },
+  // The on-hand figure: mono with tabular numerals, as on the Items tab, so
+  // the figures line up down the list. Content, so uncapped.
+  quantity: {
+    letterSpacing: 0,
+    fontVariant: ['tabular-nums'],
+  },
   /**
    * Dynamic Type: trailing quantity + status-pill column. RN's default
    * `flexShrink: 0` lets it claim full intrinsic width, collapsing the
@@ -1445,7 +1500,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
   },
-  // 32pt tall plus the 6pt hit slop each way: a 44pt target in a dense card.
+  // Add to group's target: a 44pt frame around the 32pt pill (the Items
+  // twin's addToGroupFrame). It was the pill plus a 6pt hitSlop, and a slop
+  // never reaches past the chip line it sits in, so the target was 32pt.
+  addToGroupFrame: {
+    minHeight: 44,
+    justifyContent: 'center',
+  },
+  // The pill: the stronger border, as for the app's other secondary controls.
   addToGroup: {
     minHeight: 32,
     justifyContent: 'center',

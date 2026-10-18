@@ -5,9 +5,7 @@ import {
   BookMarked,
   Box,
   Check,
-  CheckCircle2,
   ChevronRight,
-  Circle,
   Layers,
   ListChecks,
   Menu,
@@ -43,6 +41,7 @@ import {
 } from '@/components/filter-sheet';
 import { CountSelectBar } from '@/components/count-select-bar';
 import { Hair } from '@/components/ui/card';
+import { CheckboxMark } from '@/components/ui/checkbox';
 import { Paginator } from '@/components/ui/paginator';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
@@ -90,7 +89,7 @@ import {
   type CountingUnit,
   type DisplayGroupRef,
 } from '@stockpilot/core';
-import { ACCENT, FONT } from '@/lib/theme';
+import { FONT, RADIUS } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { useWarehouseScope, warehouseScopeMessage } from '@/lib/warehouse-scope';
 import { useWorkspace } from '@/lib/use-workspace';
@@ -151,8 +150,6 @@ function readCountingUnit(embed: unknown): string | null {
     ?.default_counting_unit;
   return typeof unit === 'string' ? unit : null;
 }
-
-const PIPS = [ACCENT.pipOrange, ACCENT.pipAmber, ACCENT.pipTeal, undefined, undefined, undefined];
 
 /** One FlatList entry: a size-run header, a same-SKU collapse header (Model B),
  *  or a plain item row (a standalone item, an expanded size-run member, or an
@@ -308,6 +305,10 @@ export default function Inventory() {
   // Cycle-count select mode: tapping a row toggles it into the shared
   // count-selection store instead of opening the item.
   const [selectMode, setSelectMode] = React.useState(false);
+  // The select bar's measured height (it grows when its actions wrap at large
+  // text sizes). While it shows, the list's end clears it too, so the last
+  // rows and the pager are never left under the bar.
+  const [selectBarHeight, setSelectBarHeight] = React.useState(0);
   // Warehouse-scoped users (staff/viewer): the loaded snapshot's scope drives
   // the same banner the web Items list shows, so a narrowed list reads as
   // intentional. undefined (not synced yet) renders nothing.
@@ -994,17 +995,25 @@ export default function Inventory() {
         </View>
 
         <View style={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: 8 }}>
+          {/* The shared input look: the card fill and the stronger border (a
+              control must not rely on a hairline alone), the muted-ink icon
+              and placeholder (the faint ink4 held the placeholder under AA). */}
           <View
             ref={searchTargetRef}
             collapsable={false}
-            style={[styles.searchBox, { backgroundColor: c.card, borderColor: c.hair }]}
+            style={[styles.searchBox, { backgroundColor: c.card, borderColor: c.hair2 }]}
           >
-            <Search size={16} color={c.ink4} strokeWidth={1.4} />
+            <Search size={16} color={c.ink3} strokeWidth={1.4} />
             <TextInput
               value={q}
               onChangeText={setQ}
               placeholder="Search SKU, name, or scan…"
-              placeholderTextColor={c.ink4}
+              placeholderTextColor={c.ink3}
+              // The placeholder's words name the field only while it holds
+              // text, so VoiceOver still says what the field is once something
+              // is typed in it. An empty field takes no name: iOS reads its
+              // placeholder there, and a name as well would say it twice.
+              accessibilityLabel={q.length > 0 ? 'Search SKU, name, or scan…' : undefined}
               autoCapitalize="none"
               autoCorrect={false}
               autoFocus={false}
@@ -1015,8 +1024,7 @@ export default function Inventory() {
             <FilterButton onPress={() => setSheetOpen(true)} count={filterCount} />
             <Pressable
               onPress={() => router.push('/scan')}
-              hitSlop={8}
-              style={({ pressed }) => ({ opacity: pressed ? 0.5 : 1 })}
+              style={({ pressed }) => [styles.scanFrame, { opacity: pressed ? 0.5 : 1 }]}
               accessibilityRole="button"
               accessibilityLabel="Open scanner"
             >
@@ -1058,7 +1066,7 @@ export default function Inventory() {
               select — the shape a mobile build takes when it is ahead of the
               database — is visible instead of looking like a clean org. */}
           {loadError !== null ? (
-            <Body size={11.5} color={ACCENT.warn} style={{ marginTop: 8 }}>
+            <Body size={11.5} color={c.warnText} style={{ marginTop: 8 }}>
               {`Could not load items: ${loadError}. Pull to retry — if the app was just updated, the server may still be catching up.`}
             </Body>
           ) : null}
@@ -1072,7 +1080,13 @@ export default function Inventory() {
           ref={listRef}
           data={groupedRows}
           keyExtractor={keyExtractor}
-          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: tabBarHeight + 24 }}
+          contentContainerStyle={{
+            paddingHorizontal: 20,
+            // In select mode the bar floats 12pt above the tab bar: the list
+            // ends 12pt above the bar, so the pager under the last row is
+            // never hidden behind it (it was: the bar covered about 45pt).
+            paddingBottom: tabBarHeight + 24 + (selectMode ? selectBarHeight : 0),
+          }}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.ink} />
           }
@@ -1080,11 +1094,12 @@ export default function Inventory() {
             /* A failed read leaves no rows: neither "No items match." (it
                would contradict the banner above) nor the tour's ghost row.
                Ghost only for a genuinely empty org — an empty SEARCH result
-               must not claim the org has no items yet. */
+               must not claim the org has no items yet. Both states take the
+               Books tab's look (its twin), the words unchanged. */
             loadError !== null ? (
               <View style={styles.empty}>
-                <Body color={c.ink}>Items did not load.</Body>
-                <Body muted style={{ marginTop: 4, textAlign: 'center' }}>
+                <Display size={18}>Items did not load.</Display>
+                <Body muted style={{ marginTop: 6, textAlign: 'center' }}>
                   Pull down to try again.
                 </Body>
               </View>
@@ -1092,8 +1107,8 @@ export default function Inventory() {
               <SampleItemRow />
             ) : (
               <View style={styles.empty}>
-                <Body color={c.ink}>No items match.</Body>
-                <Body muted style={{ marginTop: 4, textAlign: 'center' }}>
+                <Display size={18}>No items match.</Display>
+                <Body muted style={{ marginTop: 6, textAlign: 'center' }}>
                   Adjust filters or add items from the web app.
                 </Body>
               </View>
@@ -1134,7 +1149,11 @@ export default function Inventory() {
         charters={charters}
       />
 
-      <CountSelectBar visible={selectMode} bottomInset={tabBarHeight} />
+      <CountSelectBar
+        visible={selectMode}
+        bottomInset={tabBarHeight}
+        onHeight={setSelectBarHeight}
+      />
     </View>
   );
 }
@@ -1189,8 +1208,10 @@ const GroupHeaderRow = React.memo(function GroupHeaderRow({
       accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${baseName}, ${subtitle}`}
       style={({ pressed }) => ({
         // Same continuous-card border model as ItemRow so headers sit flush in
-        // the list (a distinct paper2 fill + chevron mark them as a group).
-        backgroundColor: c.paper2,
+        // the list. The recessed fill (sunk) and the chevron mark them as a
+        // group (DESIGN-SPEC 6.21); paper2 is the card colour in dark mode, so
+        // the header did not show there.
+        backgroundColor: c.sunk,
         borderTopWidth: index === 0 ? 1 : 0,
         borderBottomWidth: 1,
         borderLeftWidth: 1,
@@ -1208,10 +1229,12 @@ const GroupHeaderRow = React.memo(function GroupHeaderRow({
         opacity: pressed ? 0.7 : 1,
       })}
     >
+      {/* Muted ink, not ink4: the chevron says open or closed, and ink4 is
+          under 3:1 on the recessed fill in light mode. */}
       <ChevronRight
         size={18}
-        color={c.ink4}
-        strokeWidth={2}
+        color={c.ink3}
+        strokeWidth={1.8}
         style={{ transform: [{ rotate: expanded ? '90deg' : '0deg' }] }}
       />
       <View style={{ flex: 1, minWidth: 0 }}>
@@ -1221,11 +1244,11 @@ const GroupHeaderRow = React.memo(function GroupHeaderRow({
         <Mono color={c.ink} size={15.5} style={{ fontFamily: FONT.display, letterSpacing: -0.19 }}>
           {baseName}
         </Mono>
-        <Mono size={11} color={c.ink4} tracking={0.04} style={{ marginTop: 4 }}>
+        <Mono size={11.5} color={c.ink3} tracking={0.04} style={{ marginTop: 4 }}>
           {subtitle}
         </Mono>
       </View>
-      <Mono size={17} color={c.ink} style={{ fontFamily: FONT.display }}>
+      <Mono size={15} color={c.ink} style={rowStyles.quantity}>
         {total}
       </Mono>
     </Pressable>
@@ -1298,7 +1321,8 @@ const SkuGroupHeaderRow = React.memo(function SkuGroupHeaderRow({
         countLabel ?? `${placementCount} placement${placementCount === 1 ? '' : 's'}`
       }${partial ? ` shown, at least ${total} on hand` : ''}`}
       style={({ pressed }) => ({
-        backgroundColor: c.paper2,
+        // The header recipe: the recessed fill (see GroupHeaderRow).
+        backgroundColor: c.sunk,
         borderTopWidth: index === 0 ? 1 : 0,
         borderBottomWidth: 1,
         borderLeftWidth: 1,
@@ -1318,8 +1342,8 @@ const SkuGroupHeaderRow = React.memo(function SkuGroupHeaderRow({
     >
       <ChevronRight
         size={18}
-        color={c.ink4}
-        strokeWidth={2}
+        color={c.ink3}
+        strokeWidth={1.8}
         style={{ transform: [{ rotate: expanded ? '90deg' : '0deg' }] }}
       />
       {imageUrl !== undefined ? <Thumb size={56} imageUrl={imageUrl} /> : null}
@@ -1337,13 +1361,13 @@ const SkuGroupHeaderRow = React.memo(function SkuGroupHeaderRow({
           >
             {name}
           </Mono>
-          <Mono size={11} color={c.ink4} tracking={0.04} style={{ marginTop: 4 }}>
+          <Mono size={11.5} color={c.ink3} tracking={0.04} style={{ marginTop: 4 }}>
             {countLabel ?? `${placementCount} placement${placementCount === 1 ? '' : 's'}`}
             {partial ? ' shown' : ''}
           </Mono>
         </View>
         <View style={[rowStyles.trailingCol, stacked && rowStyles.trailingColStacked]}>
-          <Mono size={17} color={c.ink} style={{ fontFamily: FONT.display, letterSpacing: -0.31 }}>
+          <Mono size={15} color={c.ink} style={rowStyles.quantity}>
             {/* A sum over the loaded rows only is marked with a leading ≥
                 rather than presented as the SKU's stock. */}
             {partial ? `≥${total}` : total}
@@ -1395,11 +1419,13 @@ const ItemRow = React.memo(function ItemRow({
   // feature exists to prevent. Pure + tested in lib/expected-items.ts.
   const pill = stockPillFor(item);
   const Icon = LIST_GLYPH_ICON[itemListGlyph(item)];
-  const pip = PIPS[index % PIPS.length];
   return (
     <View
       style={{
-        backgroundColor: picked ? c.paper2 : c.card,
+        // A picked row takes the accent wash, the web's selected row
+        // (DESIGN-SPEC 6.21); the ticked box is its cue beyond colour. It was
+        // paper2, which is the card colour in dark mode.
+        backgroundColor: picked ? c.accentWash : c.card,
         borderTopWidth: index === 0 ? 1 : 0,
         borderBottomWidth: 1,
         borderLeftWidth: 1,
@@ -1413,6 +1439,12 @@ const ItemRow = React.memo(function ItemRow({
     >
       <Pressable
         onPress={() => (selectMode ? onToggleSelect(item) : onItemPress(item.id))}
+        // In select mode the whole row is the checkbox (D29): VoiceOver says
+        // "checkbox" and whether it is ticked, from the same per-row
+        // subscription that draws the box. Outside it the row opens the item,
+        // so it is announced as a button (it had no role at all).
+        accessibilityRole={selectMode ? 'checkbox' : 'button'}
+        accessibilityState={selectMode ? { checked: picked } : undefined}
         // Add to group sits inside this Pressable, so VoiceOver cannot reach
         // it as its own element (P4): the row carries it as an action, and
         // 'activate' keeps a double tap doing what a tap does.
@@ -1427,13 +1459,7 @@ const ItemRow = React.memo(function ItemRow({
         }
         style={({ pressed }) => [rowStyles.row, { opacity: pressed ? 0.7 : 1 }]}
       >
-        <Thumb
-          size={56}
-          icon={Icon}
-          pip={pip}
-          imageUrl={item.imageUrl ?? null}
-          recyclingKey={item.id}
-        />
+        <Thumb size={56} icon={Icon} imageUrl={item.imageUrl ?? null} recyclingKey={item.id} />
         <View style={stacked ? rowStyles.bodyStacked : rowStyles.bodyRow}>
           <View style={stacked ? rowStyles.nameColStacked : rowStyles.nameCol}>
             <Mono
@@ -1445,8 +1471,8 @@ const ItemRow = React.memo(function ItemRow({
               {item.name}
             </Mono>
             <Mono
-              size={11}
-              color={c.ink4}
+              size={11.5}
+              color={c.ink3}
               tracking={0.04}
               numberOfLines={1}
               style={{ marginTop: 4 }}
@@ -1456,7 +1482,7 @@ const ItemRow = React.memo(function ItemRow({
             {groupChip ? (
               // Content, so uncapped: it wraps under the name at any size.
               <View style={rowStyles.chipLine}>
-                <Mono size={10.5} color={c.ink4} tracking={0.02}>
+                <Mono size={10.5} color={c.ink3} tracking={0.02}>
                   {groupChip}
                 </Mono>
                 {addToGroupId && onAddToGroup ? (
@@ -1464,38 +1490,34 @@ const ItemRow = React.memo(function ItemRow({
                     onPress={() => onAddToGroup(item.id, addToGroupId)}
                     accessibilityRole="button"
                     accessibilityLabel={`${GROUP_COPY.addToGroup}: ${item.name}`}
-                    hitSlop={6}
                     style={({ pressed }) => [
-                      rowStyles.addToGroup,
-                      { borderColor: c.hair, opacity: pressed ? 0.6 : 1 },
+                      rowStyles.addToGroupFrame,
+                      { opacity: pressed ? 0.6 : 1 },
                     ]}
                   >
-                    <Mono size={10.5} color={c.ink} tracking={0.02}>
-                      {GROUP_COPY.addToGroup}
-                    </Mono>
+                    <View style={[rowStyles.addToGroup, { borderColor: c.hair2 }]}>
+                      <Mono size={10.5} color={c.ink} tracking={0.02}>
+                        {GROUP_COPY.addToGroup}
+                      </Mono>
+                    </View>
                   </Pressable>
                 ) : null}
               </View>
             ) : null}
           </View>
           <View style={[rowStyles.trailingCol, stacked && rowStyles.trailingColStacked]}>
-            <Mono
-              size={17}
-              tracking={0}
-              style={{ fontFamily: FONT.display, letterSpacing: -0.31, color: c.ink }}
-            >
+            <Mono size={15} color={c.ink} style={rowStyles.quantity}>
               {item.quantity_on_hand}
             </Mono>
             <Pill status={pill.status}>{pill.label}</Pill>
           </View>
         </View>
+        {/* The shared box (P2.5b), 22pt as the circle it replaces, so the
+            select-mode width TRAILING_COLUMN_MAX_WIDTH assumes still holds. A
+            mark, not a Checkbox: the row above is the one control. */}
         {selectMode ? (
           <View style={{ marginLeft: 2 }}>
-            {picked ? (
-              <CheckCircle2 size={22} color={c.ink} strokeWidth={2} />
-            ) : (
-              <Circle size={22} color={c.ink4} strokeWidth={1.6} />
-            )}
+            <CheckboxMark checked={picked} />
           </View>
         ) : null}
       </Pressable>
@@ -1529,7 +1551,8 @@ const styles = StyleSheet.create({
     minHeight: 44,
     paddingHorizontal: 14,
     paddingVertical: 4,
-    borderRadius: 10,
+    // The shared Field's corner (RADIUS.tile), so the phone's inputs match.
+    borderRadius: RADIUS.tile,
     borderWidth: 1,
     flexDirection: 'row',
     alignItems: 'center',
@@ -1541,6 +1564,20 @@ const styles = StyleSheet.create({
     fontSize: 14.5,
     minHeight: 36,
     letterSpacing: -0.17,
+  },
+  // Open scanner's target: a real 44pt frame around the 18pt icon (it was the
+  // icon plus an 8pt slop, 34pt). The frame takes the box's 4pt top and bottom
+  // padding and 13pt of its right padding, so the icon stays where it was, and
+  // only 4pt of the gap before it, which keeps it clear of the filter
+  // button's own 6pt slop.
+  scanFrame: {
+    minWidth: 44,
+    minHeight: 44,
+    marginVertical: -4,
+    marginLeft: -4,
+    marginRight: -13,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   empty: {
     padding: 32,
@@ -1632,6 +1669,12 @@ const rowStyles = StyleSheet.create({
     gap: 10,
     maxWidth: '100%',
   },
+  // The on-hand figure: mono with tabular numerals (the reference's quantity
+  // face), so the figures line up down the list. Content, so uncapped.
+  quantity: {
+    letterSpacing: 0,
+    fontVariant: ['tabular-nums'],
+  },
   // Group selected (0400): the chip line under a record's SKU, wrapping.
   chipLine: {
     marginTop: 4,
@@ -1640,7 +1683,16 @@ const rowStyles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
   },
-  // 32pt tall plus the 6pt hit slop each way: a 44pt target in a dense row.
+  // Add to group's target: a 44pt frame around the 32pt pill. It was the pill
+  // plus a 6pt hitSlop, and a slop never reaches past the chip line it sits
+  // in, so the target was 32pt. A row with the pill grows by the frame's
+  // 12pt rather than borrow it from its neighbours with negative margins,
+  // which would put the pill over the SKU line once large text grows it.
+  addToGroupFrame: {
+    minHeight: 44,
+    justifyContent: 'center',
+  },
+  // The pill: the stronger border, as for the app's other secondary controls.
   addToGroup: {
     minHeight: 32,
     justifyContent: 'center',
@@ -1689,7 +1741,7 @@ function SampleItemRow() {
         }}
       >
         <View style={rowStyles.row}>
-          <Thumb size={56} icon={Box} pip={ACCENT.pipTeal} imageUrl={null} recyclingKey="sample" />
+          <Thumb size={56} icon={Box} imageUrl={null} recyclingKey="sample" />
           <View style={stacked ? rowStyles.bodyStacked : rowStyles.bodyRow}>
             <View style={stacked ? rowStyles.nameColStacked : rowStyles.nameCol}>
               <Mono
@@ -1701,8 +1753,8 @@ function SampleItemRow() {
                 Acer Chromebook 511
               </Mono>
               <Mono
-                size={11}
-                color={c.ink4}
+                size={11.5}
+                color={c.ink3}
                 tracking={0.04}
                 numberOfLines={1}
                 style={{ marginTop: 4 }}
@@ -1711,11 +1763,7 @@ function SampleItemRow() {
               </Mono>
             </View>
             <View style={[rowStyles.trailingCol, stacked && rowStyles.trailingColStacked]}>
-              <Mono
-                size={17}
-                tracking={0}
-                style={{ fontFamily: FONT.display, letterSpacing: -0.31, color: c.ink }}
-              >
+              <Mono size={15} color={c.ink} style={rowStyles.quantity}>
                 25
               </Mono>
               <Pill status="ok">SAMPLE</Pill>
