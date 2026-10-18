@@ -89,19 +89,25 @@ export default function ZendeskWebScreen() {
           {/* Loading overlay */}
           {loading && !hasError ? (
             <View style={[styles.overlay, { backgroundColor: c.paper }]}>
-              <ActivityIndicator color={c.ink4} />
+              <ActivityIndicator color={c.ink} />
             </View>
           ) : null}
 
           {/* Error state */}
           {hasError ? (
             <View style={[styles.center, { backgroundColor: c.paper }]}>
-              <Body muted size={14} style={styles.errorText}>
+              <Body muted size={14} style={styles.errorText} accessibilityRole="alert">
                 Couldn&apos;t load Zendesk. Check your connection and try again.
               </Body>
               <View style={{ marginTop: 16, alignSelf: 'center' }}>
-                <Button variant="outline" size="sm" onPress={handleRetry}>
-                  <RefreshCw size={14} color={c.ink} style={{ marginRight: 6 }} />
+                {/* The icon in the button's own leading slot: inside the label
+                    it sat in a Text, where a View does not belong. */}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onPress={handleRetry}
+                  leading={<RefreshCw size={14} color={c.ink} />}
+                >
                   Retry
                 </Button>
               </View>
