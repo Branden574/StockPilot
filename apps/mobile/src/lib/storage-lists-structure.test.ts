@@ -14,7 +14,7 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
-import { palette, type Palette } from './theme';
+import { RADIUS, palette, type Palette } from './theme';
 
 /**
  * THE STORAGE LISTS AND THE LOCATION SCREEN, READ AS SOURCE (redesign
@@ -32,7 +32,9 @@ import { palette, type Palette } from './theme';
  *     failed refresh keeps the rows and says so above them, a workspace
  *     switch never shows another workspace's rows, and with no workspace a
  *     pull loads it again (each screen's own `settleList` is run below);
- *   - rows that open something are buttons to VoiceOver.
+ *   - rows that open something are buttons to VoiceOver;
+ *   - the Movements ledger is one surface of hairline rows (the reference's
+ *     phone list), never a card per movement.
  *
  * The Staging worklist, in the same package, is read by
  * staging-structure.test.ts.
@@ -92,6 +94,13 @@ function elements(file: string, match: (el: JsxNode, sf: ts.SourceFile) => boole
 function where(file: string, el: JsxNode, sf: ts.SourceFile): string {
   const { line } = sf.getLineAndCharacterOfPosition(el.getStart(sf));
   return `${file}:${line + 1} <${tagOf(el, sf)}>`;
+}
+
+/** A StyleSheet entry `  name: { ... }` of a source, as source text. */
+function styleBlockOf(src: string, name: string, where: string): string {
+  const m = new RegExp(`\\n {2}${name}: \\{([^}]*)\\}`).exec(src);
+  expect(m, `styles.${name} in ${where}`).not.toBeNull();
+  return m![1]!;
 }
 
 /** A string as a regular expression that matches it literally. */
@@ -381,6 +390,56 @@ describe('Procedures and Movements keep every word', () => {
   });
 });
 
+describe('Movements: the ledger is one surface of hairline rows (M-SG-08)', () => {
+  const code = flatCode(MOVEMENTS);
+
+  // Mutation caught: a card per movement again (the layout before this
+  // package's review), or the whole ledger folded into one list item, which
+  // would no longer be virtualised.
+  it('one row per movement, never a card per movement', () => {
+    expect(code).not.toMatch(/<Card\b/);
+    expect(code).not.toContain("from '@/components/ui/card'");
+    expect(code).toContain('data={rows}');
+    expect(code).toContain(
+      "renderItem={(m, i) => ( <LedgerRow m={m} first={i === 0} last={i === rows.length - 1} onPress={() => router.push({ pathname: '/item/[id]', params: { id: m.item_id } })} /> )}",
+    );
+  });
+
+  // Mutation caught: a row that is its own box again (every edge and corner
+  // on every row), the separator or a side dropped, a fixed height, or the
+  // pressed row no longer recessed.
+  it('a row: the card fill, hairline sides and separator, 10 x 12 padding, 44pt or more', () => {
+    const row = styleBlockOf(sourceOf(MOVEMENTS), 'row', MOVEMENTS);
+    for (const decl of [
+      'minHeight: 44,',
+      'paddingVertical: 10,',
+      'paddingHorizontal: 12,',
+      'gap: 10,',
+      'borderLeftWidth: 1,',
+      'borderRightWidth: 1,',
+      'borderBottomWidth: 1,',
+    ]) {
+      expect(row, decl).toContain(decl);
+    }
+    expect(row).not.toMatch(/\bheight:/);
+    expect(code).toContain(
+      'style={({ pressed }) => [ styles.row, { backgroundColor: pressed ? c.sunk : c.card, borderColor: c.hair, borderTopWidth: first ? 1 : 0, borderTopLeftRadius: first ? LIST_RADIUS : 0, borderTopRightRadius: first ? LIST_RADIUS : 0, borderBottomLeftRadius: last ? LIST_RADIUS : 0, borderBottomRightRadius: last ? LIST_RADIUS : 0, marginBottom: last ? 0 : -LIST_GAP, }, ]}',
+    );
+    // The surface's corners: 14, the reference's phone list.
+    expect(code).toContain('const LIST_RADIUS = RADIUS.cardHero;');
+    expect(RADIUS.cardHero).toBe(14);
+  });
+
+  // The rows meet only while LIST_GAP is the gap DataListScreen sets between
+  // a list's rows. Mutation caught: either number changed alone (rows drawn
+  // over each other, or apart again with open edges).
+  it("the rows meet: each but the last takes back DataListScreen's list gap", () => {
+    expect(code).toContain('const LIST_GAP = 10;');
+    const shared = 'src/components/data-list-screen.tsx';
+    expect(styleBlockOf(sourceOf(shared), 'list', shared)).toMatch(/\bgap: 10,/);
+  });
+});
+
 describe('Location screen', () => {
   const code = flatCode(LOCATION);
 
@@ -420,6 +479,10 @@ describe('contrast, both modes', () => {
     ['warnText', 'card', 'location truncation, unavailable count and issue lines'],
     ['critText', 'card', 'the gather failure, a stock-out quantity'],
     ['accent', 'card', 'a stock-in quantity'],
+    ['ink', 'sunk', "a pressed movement row's item name"],
+    ['ink3', 'sunk', "a pressed movement row's meta line and day"],
+    ['accent', 'sunk', "a pressed movement row's stock-in quantity"],
+    ['critText', 'sunk', "a pressed movement row's stock-out quantity"],
   ];
   const MARKS: [keyof Palette, keyof Palette, string][] = [
     ['ink3', 'sunk', 'a colourless category swatch'],

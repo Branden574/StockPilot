@@ -7,16 +7,15 @@ import {
 import { useRouter } from 'expo-router';
 import { ArrowLeftRight, Minus, Plus, RotateCcw } from 'lucide-react-native';
 import * as React from 'react';
-import { Pressable, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 
-import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Body, Mono } from '@/components/ui/text';
 import { actorText, isRowPersonDeleted } from '@/lib/deleted-user-labels';
 import { useOrg } from '@/lib/use-org';
 import { retryWorkspace } from '@/lib/use-workspace';
 import { supabase } from '@/lib/supabase';
-import { FONT } from '@/lib/theme';
+import { FONT, RADIUS } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 interface MovementRow {
@@ -46,6 +45,19 @@ const TYPE_LABEL: Record<string, string> = {
   correction: 'Corrected',
   initial: 'Initialized',
 };
+
+/**
+ * DataListScreen's list gap (`styles.list` in components/data-list-screen.tsx),
+ * which sets every row of a list 10pt apart. The ledger is one surface of
+ * hairline rows, so each row but the last takes the gap back with a negative
+ * bottom margin and the rows meet; storage-lists-structure.test.ts fails if
+ * the shared gap changes. Once DataListScreen can lay a list out with no gap,
+ * pass that and drop this.
+ */
+const LIST_GAP = 10;
+
+/** The ledger surface's corners: 14, the reference's phone list. */
+const LIST_RADIUS = RADIUS.cardHero;
 
 /** What the list shows, and the workspace it was read for. */
 interface ListState<Row> {
@@ -225,9 +237,13 @@ export default function MovementsScreen() {
       refreshing={refreshing}
       onRefresh={() => void refresh()}
       keyExtractor={(m) => m.id}
-      renderItem={(m) => (
-        <MovementCard
+      // One row per movement, so the list stays virtualised; the first and
+      // the last carry the surface's edges.
+      renderItem={(m, i) => (
+        <LedgerRow
           m={m}
+          first={i === 0}
+          last={i === rows.length - 1}
           onPress={() => router.push({ pathname: '/item/[id]', params: { id: m.item_id } })}
         />
       )}
@@ -240,8 +256,24 @@ export default function MovementsScreen() {
  * who), the signed change and the day. The sign is in the words ("+3", "-2")
  * and the glyph (+, -, rotate); the colours repeat it: accent for stock in,
  * the refusal red for stock out, the warning tone for a change of 0.
+ *
+ * The rows are one surface, the reference's phone list (DESIGN-SPEC 6.7 and
+ * 6.20), never a card per movement: the card fill and the hairline sides run
+ * down the list, the first row carries the top edge and corners, the last the
+ * bottom corners, and each row's bottom hairline parts it from the next. A
+ * pressed row is recessed (sunk).
  */
-function MovementCard({ m, onPress }: { m: MovementRow; onPress: () => void }) {
+function LedgerRow({
+  m,
+  first,
+  last,
+  onPress,
+}: {
+  m: MovementRow;
+  first: boolean;
+  last: boolean;
+  onPress: () => void;
+}) {
   const { c } = useTheme();
   const isAdd = m.quantity_change > 0;
   const Icon = isAdd ? Plus : m.quantity_change < 0 ? Minus : RotateCcw;
@@ -254,65 +286,90 @@ function MovementCard({ m, onPress }: { m: MovementRow; onPress: () => void }) {
       // A button to VoiceOver (it read the row's words with no trait).
       accessibilityRole="button"
       accessibilityHint="Opens the item"
-      style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
+      style={({ pressed }) => [
+        styles.row,
+        {
+          backgroundColor: pressed ? c.sunk : c.card,
+          borderColor: c.hair,
+          borderTopWidth: first ? 1 : 0,
+          borderTopLeftRadius: first ? LIST_RADIUS : 0,
+          borderTopRightRadius: first ? LIST_RADIUS : 0,
+          borderBottomLeftRadius: last ? LIST_RADIUS : 0,
+          borderBottomRightRadius: last ? LIST_RADIUS : 0,
+          marginBottom: last ? 0 : -LIST_GAP,
+        },
+      ]}
     >
-      <Card padding={14}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-          <View
-            style={{
-              width: 32,
-              height: 32,
-              borderRadius: 8,
-              borderWidth: 1,
-              borderColor: c.hair,
-              alignItems: 'center',
-              justifyContent: 'center',
-              position: 'relative',
-              backgroundColor: c.sunk,
-            }}
-          >
-            <Icon size={14} color={c.ink} strokeWidth={1.6} />
-            <View
-              style={{
-                position: 'absolute',
-                top: 4,
-                right: 4,
-                width: 5,
-                height: 5,
-                borderRadius: 3,
-                backgroundColor: pipColor,
-              }}
-            />
-          </View>
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
-              {m.item?.name ?? 'Unknown item'}
-            </Body>
-            <Mono size={11.5} tracking={0.04} color={c.ink3} style={{ marginTop: 3 }}>
-              {verb}
-              {m.reason ? ` · ${m.reason}` : ''}
-              {' · '}
-              {actor}
-            </Mono>
-          </View>
-          <View style={{ alignItems: 'flex-end' }}>
-            <Mono
-              size={15}
-              tracking={0}
-              color={isAdd ? c.accent : m.quantity_change < 0 ? c.critText : c.ink}
-            >
-              {isAdd ? '+' : ''}
-              {m.quantity_change}
-            </Mono>
-            <Mono size={11} color={c.ink3} tracking={0.04} style={{ marginTop: 2 }}>
-              {new Date(m.created_at).toLocaleDateString(undefined, {
-                month: 'short',
-                day: 'numeric',
-              })}
-            </Mono>
-          </View>
-        </View>
-      </Card>
+      <View
+        style={{
+          width: 32,
+          height: 32,
+          borderRadius: 8,
+          borderWidth: 1,
+          borderColor: c.hair,
+          alignItems: 'center',
+          justifyContent: 'center',
+          position: 'relative',
+          backgroundColor: c.sunk,
+        }}
+      >
+        <Icon size={14} color={c.ink} strokeWidth={1.6} />
+        <View
+          style={{
+            position: 'absolute',
+            top: 4,
+            right: 4,
+            width: 5,
+            height: 5,
+            borderRadius: 3,
+            backgroundColor: pipColor,
+          }}
+        />
+      </View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
+          {m.item?.name ?? 'Unknown item'}
+        </Body>
+        <Mono size={11.5} tracking={0.04} color={c.ink3} style={{ marginTop: 3 }}>
+          {verb}
+          {m.reason ? ` · ${m.reason}` : ''}
+          {' · '}
+          {actor}
+        </Mono>
+      </View>
+      <View style={{ alignItems: 'flex-end' }}>
+        <Mono
+          size={15}
+          tracking={0}
+          color={isAdd ? c.accent : m.quantity_change < 0 ? c.critText : c.ink}
+        >
+          {isAdd ? '+' : ''}
+          {m.quantity_change}
+        </Mono>
+        <Mono size={11} color={c.ink3} tracking={0.04} style={{ marginTop: 2 }}>
+          {new Date(m.created_at).toLocaleDateString(undefined, {
+            month: 'short',
+            day: 'numeric',
+          })}
+        </Mono>
+      </View>
     </Pressable>
   );
 }
+
+const styles = StyleSheet.create({
+  // A ledger row: the reference's phone list row (10 x 12 padding, 10 between
+  // its parts), at least 44pt tall and growing with its words (minHeight,
+  // never height). The top edge and the corners are the first and last rows'.
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    minHeight: 44,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderBottomWidth: 1,
+  },
+});
