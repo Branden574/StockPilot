@@ -290,7 +290,9 @@ describe('status filter', () => {
     const table = screen.getByRole('table');
     const badge = within(table).getByText('Resolved');
     expect(badge).toBeInTheDocument();
-    expect(badge.className).toContain('emerald');
+    // Visual-only expectation updated by P2.4 (test owner P4.F3): the badge
+    // moved off the emerald palette classes onto the Badge's success tone.
+    expect(badge.className).toContain('success');
   });
 });
 
