@@ -3,6 +3,9 @@
 import * as React from 'react';
 import { isSharePath } from '@/lib/share-paths';
 
+/** lib/auth/session-ended.ts SESSION_ENDED_PATH, written out (no import, see below). */
+const SIGN_OUT_PATH = '/auth/session-ended';
+
 /**
  * Last-resort error boundary. Triggers when even the root layout itself
  * fails to render — in that case Next.js can't reuse <html>/<body> from
@@ -12,7 +15,15 @@ import { isSharePath } from '@/lib/share-paths';
  * cached client JS recovered, Chrome did not).
  *
  * Pure inline styles only — Tailwind / global CSS may not have loaded
- * yet when this renders.
+ * yet when this renders. The colours are the redesign's dark palette as
+ * plain hex (page #0c0d0a, ink #f0efe8, ink-3 #9a9b91, hairlines #1f201b /
+ * #2a2b25, danger #e87a5e): the theme tokens may not exist here either.
+ *
+ * "Sign out and back in" goes to the cookie-clearing sign-out route
+ * (app/auth/session-ended), which ends this device's session and lands on
+ * sign-in. It used to point at /signin, which the proxy bounces a signed-in
+ * visitor straight back from, so nothing happened. A plain <a> (a full page
+ * load), and no new import: this file must not depend on anything that broke.
  */
 export default function GlobalError({
   error,
@@ -54,8 +65,8 @@ export default function GlobalError({
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          background: '#0a0a0b',
-          color: '#fafafa',
+          background: '#0c0d0a',
+          color: '#f0efe8',
           fontFamily:
             "system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
           padding: '24px',
@@ -64,11 +75,11 @@ export default function GlobalError({
         <div style={{ maxWidth: 480, width: '100%', textAlign: 'center' }}>
           <div
             style={{
-              fontSize: 14,
-              fontWeight: 600,
-              letterSpacing: '0.08em',
+              fontSize: 11,
+              fontWeight: 500,
+              letterSpacing: '0.1em',
               textTransform: 'uppercase',
-              color: '#ef4444',
+              color: '#e87a5e',
               marginBottom: 12,
             }}
           >
@@ -76,10 +87,11 @@ export default function GlobalError({
           </div>
           <h1
             style={{
-              fontSize: 24,
-              fontWeight: 600,
+              fontSize: 26,
+              fontWeight: 500,
+              letterSpacing: '-0.025em',
               margin: 0,
-              lineHeight: 1.3,
+              lineHeight: 1.25,
             }}
           >
             We hit a problem loading the page
@@ -87,8 +99,8 @@ export default function GlobalError({
           <p
             style={{
               marginTop: 12,
-              color: '#a1a1aa',
-              fontSize: 14,
+              color: '#9a9b91',
+              fontSize: 13.5,
               lineHeight: 1.6,
             }}
           >
@@ -100,9 +112,9 @@ export default function GlobalError({
             <p
               style={{
                 marginTop: 12,
-                color: '#71717a',
+                color: '#9a9b91',
                 fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                fontSize: 11,
+                fontSize: 11.5,
               }}
             >
               Error id: {error.digest}
@@ -121,12 +133,12 @@ export default function GlobalError({
               type="button"
               onClick={reset}
               style={{
-                background: '#fafafa',
-                color: '#0a0a0b',
-                border: '1px solid #fafafa',
+                background: '#f0efe8',
+                color: '#0c0d0a',
+                border: '1px solid #f0efe8',
                 borderRadius: 6,
-                padding: '8px 16px',
-                fontSize: 14,
+                padding: '7px 14px',
+                fontSize: 13,
                 fontWeight: 500,
                 cursor: 'pointer',
               }}
@@ -136,12 +148,12 @@ export default function GlobalError({
             <a
               href="/dashboard"
               style={{
-                background: 'transparent',
-                color: '#fafafa',
-                border: '1px solid #3f3f46',
+                background: '#131410',
+                color: '#f0efe8',
+                border: '1px solid #2a2b25',
                 borderRadius: 6,
-                padding: '8px 16px',
-                fontSize: 14,
+                padding: '7px 12px',
+                fontSize: 13,
                 fontWeight: 500,
                 textDecoration: 'none',
               }}
@@ -149,14 +161,14 @@ export default function GlobalError({
               Go to dashboard
             </a>
             <a
-              href="/signin"
+              href={SIGN_OUT_PATH}
               style={{
                 background: 'transparent',
-                color: '#a1a1aa',
-                border: '1px solid #27272a',
+                color: '#d8d6cc',
+                border: '1px solid #1f201b',
                 borderRadius: 6,
-                padding: '8px 16px',
-                fontSize: 14,
+                padding: '7px 12px',
+                fontSize: 13,
                 fontWeight: 500,
                 textDecoration: 'none',
               }}
