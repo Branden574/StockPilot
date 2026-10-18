@@ -1707,3 +1707,30 @@ describe('scanner tip: the device mode', () => {
     expect(contrast(p.ink, p.card)).toBeGreaterThanOrEqual(AA_TEXT);
   });
 });
+
+describe('scanner tip: defects fixed in this package', () => {
+  // On iOS the tip's button is its only way out (Android also has back), and
+  // the card is centred over the screen. At the largest text sizes (AX3 and
+  // up) the card is taller than the screen, so its button sat below the
+  // bottom edge and the tip could not be left; the document scan it guards
+  // waits on it. In a scroll view the card is still centred while it fits and
+  // scrolls to its button when it does not. Mutation caught: the card centred
+  // in a plain view again, or a scroll view whose content cannot fill it.
+  it('the card scrolls to its button when it is taller than the screen, and is centred when it fits', () => {
+    const sf = treeOf(SCANNER_TIP);
+    const chains: string[][] = [];
+    walkJsx(sf, (el, ancestors) => {
+      if (attrText(el, 'accessibilityViewIsModal', sf) !== 'true') return;
+      chains.push(
+        ancestors.map((a) => {
+          const content = attrText(a, 'contentContainerStyle', sf);
+          return content ? `${tagOf(a, sf)} ${content}` : tagOf(a, sf);
+        }),
+      );
+    });
+    expect(chains).toEqual([['Modal', 'ScrollView styles.centerWrap']]);
+    const src = sourceOf(SCANNER_TIP);
+    expect(styleBlock(src, 'centerWrap')).toMatch(/flexGrow: 1,[\s\S]*justifyContent: 'center',/);
+    expect(styleBlock(src, 'centerWrap')).not.toMatch(/\bflex: 1/);
+  });
+});

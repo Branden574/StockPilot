@@ -4,6 +4,7 @@ import {
   Animated,
   Easing,
   Modal,
+  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -141,7 +142,16 @@ export function ScannerTip({
       onRequestClose={onRequestClose}
     >
       <Animated.View style={[styles.backdrop, { opacity: backdrop }]} />
-      <View style={styles.centerWrap}>
+      {/* The card's button is the only way out on iOS, and at the largest
+          text sizes the card is taller than the screen: centred in a plain
+          view, the button sat below the bottom edge and the tip could not be
+          left. In a scroll view the card is still centred while it fits, and
+          scrolls to its button when it does not. */}
+      <ScrollView
+        contentContainerStyle={styles.centerWrap}
+        contentInsetAdjustmentBehavior="automatic"
+        alwaysBounceVertical={false}
+      >
         <Animated.View
           accessibilityViewIsModal
           style={[
@@ -213,7 +223,7 @@ export function ScannerTip({
             Got it — start scanning
           </Button>
         </Animated.View>
-      </View>
+      </ScrollView>
     </Modal>
   );
 }
@@ -226,7 +236,7 @@ function makeStyles(c: Palette, scrim: string) {
       backgroundColor: scrim,
     },
     centerWrap: {
-      flex: 1,
+      flexGrow: 1,
       alignItems: 'center',
       justifyContent: 'center',
       padding: space.xl,
