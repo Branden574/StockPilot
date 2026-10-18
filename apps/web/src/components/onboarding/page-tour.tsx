@@ -76,6 +76,20 @@ function cardPosition(rect: Rect | null, placement?: 'top' | 'bottom'): React.CS
 }
 
 /**
+ * A step's target: its first match inside the page (`main`), else its first
+ * match anywhere. A tour explains the page it runs on, but the shell's sidebar
+ * and top bar come before `main` in the document, so the first match alone
+ * can be a shell control: the Navigation tour's "eye toggle" step
+ * (`button[aria-label^="Hide "]`) used to spotlight the top bar's "Hide
+ * sidebar" instead of the editor's eye toggles. A selector that matches only
+ * outside the page (`#dashboard-sidebar …`) still finds its one match.
+ */
+function findTarget(selector: string): Element | null {
+  const all = document.querySelectorAll(selector);
+  return Array.from(all).find((el) => el.closest('main') !== null) ?? all[0] ?? null;
+}
+
+/**
  * Wait briefly for a step's target (streamed/dynamic content). Kept SHORT
  * on purpose: a permanently-absent optional target (e.g. the dismissed
  * Getting-started panel) is skipped in under a second — the owner hit a
@@ -83,11 +97,11 @@ function cardPosition(rect: Rect | null, placement?: 'top' | 'bottom'): React.CS
  */
 async function waitForTarget(selector: string): Promise<Element | null> {
   for (let i = 0; i < 3; i++) {
-    const el = document.querySelector(selector);
+    const el = findTarget(selector);
     if (el) return el;
     await new Promise((r) => setTimeout(r, 250));
   }
-  return document.querySelector(selector);
+  return findTarget(selector);
 }
 
 export function PageTour({ tour }: { tour: TourDefinition }) {
