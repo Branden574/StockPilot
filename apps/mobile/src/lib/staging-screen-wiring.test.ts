@@ -98,7 +98,11 @@ describe('staging screen wiring', () => {
 
   it('shows web\'s disabled Place + reason for a row with no warehouse', () => {
     expect(screen).toContain('disabledReason={stagingPlaceDisabledReason(item, canPlace)}');
-    expect(screen).toContain('<Button size="sm" variant="outline" disabled>');
+    // Redesign P5.9: the disabled Place takes the 44pt minimum (style={TAP})
+    // like History and the enabled Place; still the disabled outline Place.
+    expect(screen).toMatch(
+      /<Button size="sm" variant="outline" disabled style=\{TAP\}>\s*Place\s*<\/Button>/,
+    );
     // The words themselves come from the shared constant, never re-typed here.
     expect(screen).toContain('{disabledReason}');
     expect(screenCode).not.toContain("'No warehouse");
