@@ -487,7 +487,7 @@ function HealthList({ health }: { health: SyncHealthRow[] }) {
                       the only non-shrinking sibling of the flex: 1 column:
                       a status pill (capped at the chrome ceiling by the
                       primitive), so the topic and its meta keep their width. */}
-                  <Pill status={status} dot={false}>
+                  <Pill status={status} dot={false} style={{ alignSelf: 'center' }}>
                     {row.status.toUpperCase()}
                   </Pill>
                 </View>

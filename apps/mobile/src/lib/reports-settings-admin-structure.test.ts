@@ -917,7 +917,9 @@ describe('Settings: Integrations', () => {
     expect(qbo).toContain(
       "function healthColor(status: 'ok' | 'warn' | 'crit', c: Palette): string { if (status === 'ok') return c.accent; if (status === 'warn') return c.warnText; return c.critText; }",
     );
-    expect(qbo).toContain('<Pill status={status} dot={false}> {row.status.toUpperCase()} </Pill>');
+    expect(qbo).toContain(
+      "<Pill status={status} dot={false} style={{ alignSelf: 'center' }}> {row.status.toUpperCase()} </Pill>",
+    );
     expect(qbo).toContain(
       'const { Icon, status } = HEALTH_ICON[row.status] ?? HEALTH_ICON.pending;',
     );
