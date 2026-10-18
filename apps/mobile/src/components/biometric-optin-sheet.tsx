@@ -9,17 +9,19 @@ import {
 } from 'react-native';
 
 import { Button } from '@/components/ui/button';
-import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { Body, Display, Em, Eyebrow } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import { getBiometricCapability, type BiometricCapability } from '@/lib/biometric';
-import { ACCENT, FONT, SHADOW } from '@/lib/theme';
+import { FONT, SHADOW } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
  * Post-sign-in opt-in sheet. Renders as a native iOS-style bottom sheet
  * with a grabber on iOS, or a Material 3 bottom sheet on Android.
  * Eyebrow + display title with a serif-italic emphasis on the biometric
- * name (Face ID / Touch ID / Fingerprint).
+ * name (Face ID / Touch ID / Fingerprint). Drawn on the per-mode palette: the
+ * card, a grabber in the faint ink, an accent pip, the shared ink and
+ * borderless buttons.
  */
 export function BiometricOptInSheet({
   visible,
@@ -108,17 +110,7 @@ export function BiometricOptInSheet({
         >
           {Platform.OS === 'ios' ? (
             <View style={styles.grabberRow}>
-              <View
-                style={[
-                  styles.grabber,
-                  {
-                    backgroundColor:
-                      mode === 'dark'
-                        ? 'rgba(250,250,247,0.22)'
-                        : 'rgba(14,15,13,0.18)',
-                  },
-                ]}
-              />
+              <View style={[styles.grabber, { backgroundColor: c.ink5 }]} />
             </View>
           ) : null}
 
@@ -127,13 +119,17 @@ export function BiometricOptInSheet({
             Use <Em>{labelText}</Em> next time?
           </Display>
           <Body muted style={{ marginTop: 12 }}>
-            Unlock StockPilot faster and skip typing your password on this device. You can turn it off any time in{' '}
-            <Mono size={12.5} color={c.ink}>Settings · Security</Mono>.
+            Unlock StockPilot faster and skip typing your password on this device. You can turn it
+            off any time in{' '}
+            <Body color={c.ink} style={{ fontFamily: FONT.display }}>
+              Settings · Security
+            </Body>
+            .
           </Body>
 
           <View style={styles.iconWrap}>
             <Icon size={64} color={c.ink} strokeWidth={1.3} />
-            <View style={[styles.pip, { backgroundColor: ACCENT.pipAmber }]} />
+            <View style={[styles.pip, { backgroundColor: c.accent }]} />
           </View>
 
           <View style={{ gap: 10 }}>
