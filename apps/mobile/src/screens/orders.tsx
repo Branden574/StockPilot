@@ -12,6 +12,7 @@ import * as React from 'react';
 import { Pressable, useWindowDimensions, View } from 'react-native';
 
 import { SmallAction } from '@/components/order-storefront/controls';
+import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Pill } from '@/components/ui/pill';
@@ -61,7 +62,6 @@ interface OrderRow {
  * navigator — the drawer rendering is unchanged.
  */
 export default function OrdersScreen() {
-  const { c } = useTheme();
   const { orgId } = useOrg();
   const { user } = useAuth();
   const { role } = useRole();
@@ -201,7 +201,10 @@ export default function OrdersScreen() {
   }
 
   const pendingCount = rows.filter((r) => r.status === 'pending_approval').length;
-  const empty = ordersListEmpty(failed && rows.length === 0, canApprove);
+  // The empty words are only ever the empty words now: a read that FAILED
+  // (D4) is DataListScreen's failed panel (D25), in the list's own words.
+  const empty = ordersListEmpty(false, canApprove);
+  const failure = ordersListEmpty(true, canApprove);
   const reloadNote = ordersListReloadNote(failed, rows.length);
   const placeAnOrder = () => router.push('/order/new' as Href);
 
@@ -212,34 +215,42 @@ export default function OrdersScreen() {
       italic="requests."
       emptyTitle={empty.title}
       emptyBody={empty.body}
+      // "Place an order" creates something new at page level: the accent
+      // button (DESIGN-SPEC 6.2), behind the same gate as the "+" above.
       emptyAction={
-        failed && rows.length === 0 ? (
-          <SmallAction label={ORDERS_LIST_RETRY_COPY} onPress={() => void refresh()} />
-        ) : canPlace ? (
-          <SmallAction label={STOREFRONT_TITLE_COPY} variant="primary" onPress={placeAnOrder} />
+        canPlace ? (
+          <Button variant="accent" onPress={placeAnOrder}>
+            {STOREFRONT_TITLE_COPY}
+          </Button>
         ) : undefined
       }
+      // A failed read with no rows: its words, a warning glyph and Load
+      // again, never "No orders yet." A read again that failed over the rows
+      // shown keeps them and says so above them (PO-4 review), as before:
+      // the note says to pull down, so Load again stays with the empty list.
+      failed={
+        failed
+          ? {
+              title: failure.title,
+              body: failure.body,
+              action:
+                rows.length === 0 ? (
+                  <SmallAction label={ORDERS_LIST_RETRY_COPY} onPress={() => void refresh()} />
+                ) : undefined,
+              reloadNote: reloadNote ?? undefined,
+            }
+          : null
+      }
       header={
-        unconfirmed > 0 || reloadNote ? (
-          <View style={{ gap: 10 }}>
-            {/* A read again that failed keeps the rows shown and says so
-                (PO-4 review). */}
-            {reloadNote ? (
-              <Body size={13} color={c.warnText} accessibilityRole="alert">
-                {reloadNote}
+        unconfirmed > 0 ? (
+          <Card padding={12}>
+            <View style={{ gap: 8 }}>
+              <Body size={13.5} accessibilityRole="alert">
+                {ORDERS_LIST_UNCONFIRMED_COPY}
               </Body>
-            ) : null}
-            {unconfirmed > 0 ? (
-              <Card padding={12}>
-                <View style={{ gap: 8 }}>
-                  <Body size={13.5} accessibilityRole="alert">
-                    {ORDERS_LIST_UNCONFIRMED_COPY}
-                  </Body>
-                  <SmallAction label={ORDERS_LIST_OPEN_UNCONFIRMED_COPY} onPress={placeAnOrder} />
-                </View>
-              </Card>
-            ) : null}
-          </View>
+              <SmallAction label={ORDERS_LIST_OPEN_UNCONFIRMED_COPY} onPress={placeAnOrder} />
+            </View>
+          </Card>
         ) : undefined
       }
       emptyIcon={ShoppingCart}
@@ -285,36 +296,53 @@ function OrderCard({ order }: { order: OrderRow }) {
   const { fontScale } = useWindowDimensions();
   const stacked = shouldStackRow(fontScale);
 
+  // The card opens the order, so VoiceOver hears it as a button (it read
+  // the card's words with no role). Its words are the reference's card
+  // recipe: the order number and warehouse as a muted mono eyebrow, the
+  // requester in the display face, the details in muted ink (ink3, at AA:
+  // ink4 held them at 3.2-3.6:1).
   return (
     <Pressable
       onPress={() => router.push(`/order/${order.id}` as Href)}
+      accessibilityRole="button"
       style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
     >
       <Card padding={16}>
-        <View style={stacked ? { gap: 8 } : { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+        <View
+          style={
+            stacked
+              ? { gap: 8 }
+              : { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }
+          }
+        >
           <View style={stacked ? undefined : { flex: 1, minWidth: 0 }}>
-            <Mono size={9.5} tracking={0.2} upper color={c.ink4}>
-              {order.order_number ? `${formatOrderNumber(order.order_number)} — ` : '— '}{order.warehouse?.name ?? 'No warehouse'}
+            <Mono size={11} tracking={0.1} upper color={c.ink3}>
+              {order.order_number ? `${formatOrderNumber(order.order_number)} — ` : '— '}
+              {order.warehouse?.name ?? 'No warehouse'}
             </Mono>
             <Body size={15.5} color={c.ink} style={{ marginTop: 6, fontFamily: FONT.display }}>
               {requester}
             </Body>
             {order.requester_org_label ? (
-              <Mono size={11} tracking={0.04} color={c.ink4} style={{ marginTop: 3 }}>
+              <Body size={12.5} color={c.ink3} style={{ marginTop: 2 }}>
                 {order.requester_org_label}
-              </Mono>
+              </Body>
             ) : null}
           </View>
           <View style={{ alignItems: stacked ? 'flex-start' : 'flex-end', gap: 6 }}>
-            {meta.status === 'default' ? <Pill>{meta.label}</Pill> : <Pill status={meta.status}>{meta.label}</Pill>}
+            {meta.status === 'default' ? (
+              <Pill>{meta.label}</Pill>
+            ) : (
+              <Pill status={meta.status}>{meta.label}</Pill>
+            )}
             {order.exchangeChip ? <Pill dot={false}>{order.exchangeChip}</Pill> : null}
           </View>
         </View>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 }}>
-          <Mono size={11} tracking={0.04} color={c.ink4}>
+          <Mono size={11.5} color={c.ink3}>
             {order.lineCount} {order.lineCount === 1 ? 'line' : 'lines'}
           </Mono>
-          <Mono size={11} tracking={0.04} color={c.ink4}>
+          <Mono size={11.5} color={c.ink3}>
             {when.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
           </Mono>
         </View>

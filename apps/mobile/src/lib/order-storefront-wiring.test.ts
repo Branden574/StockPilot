@@ -137,10 +137,17 @@ describe('the Orders list (D4, D5, D6) and the order screen', () => {
   it('a failed read is said, with Load again, never "No orders yet." (mutation: ignore the error)', () => {
     expect(orders).toMatch(/const \[\{ data, error \}, unsettled\] = await Promise\.all\(/);
     expect(orders).toMatch(/if \(error\) \{\s*setFailed\(true\);/);
-    // Who is reading it decides the empty words (PO-4 review).
-    expect(orders).toContain('const empty = ordersListEmpty(failed && rows.length === 0, canApprove);');
+    // Who is reading it decides the empty words (PO-4 review). Re-pinned by
+    // the redesign (P5.7a): the failed read is DataListScreen's failed panel
+    // (D25) in the list's own words (ordersListEmpty(true, ...)) with Load
+    // again while there are no rows, so the empty words are only ever the
+    // empty words.
+    expect(orders).toContain('const empty = ordersListEmpty(false, canApprove);');
+    expect(orders).toContain('const failure = ordersListEmpty(true, canApprove);');
     expect(orders).toContain('emptyTitle={empty.title}');
-    expect(orders).toContain('<SmallAction label={ORDERS_LIST_RETRY_COPY} onPress={() => void refresh()} />');
+    expect(flat(orders)).toContain(
+      'failed={ failed ? { title: failure.title, body: failure.body, action: rows.length === 0 ? ( <SmallAction label={ORDERS_LIST_RETRY_COPY} onPress={() => void refresh()} /> ) : undefined, reloadNote: reloadNote ?? undefined, } : null }',
+    );
   });
 
   it('every status’s pill is core’s (mutation: a local table again)', () => {
@@ -156,7 +163,11 @@ describe('the Orders list (D4, D5, D6) and the order screen', () => {
     expect(flat(orders)).toMatch(/const canPlace = showPlaceOrder\(\{ role: role \?\? null, permissions, ordersModuleEnabled: enabledModules\.has\('orders'\),? \}\);/);
     expect(orders).toMatch(/<MobileTour tour=\{MOBILE_ORDERS_TOUR\} \/>\s*\{canPlace \? \(/);
     expect(orders).toMatch(/<IconChip icon=\{Plus\} onPress=\{placeAnOrder\} accessibilityLabel=\{STOREFRONT_TITLE_COPY\} minTap \/>/);
-    expect(orders).toMatch(/\) : canPlace \? \(\s*<SmallAction label=\{STOREFRONT_TITLE_COPY\} variant="primary" onPress=\{placeAnOrder\} \/>/);
+    // Re-pinned by the redesign (P5.7a, look only): the empty state's Place an
+    // order is the accent Button (a page-level create action), same gate.
+    expect(flat(orders)).toContain(
+      'emptyAction={ canPlace ? ( <Button variant="accent" onPress={placeAnOrder}> {STOREFRONT_TITLE_COPY} </Button> ) : undefined }',
+    );
     expect(orders).toContain("const placeAnOrder = () => router.push('/order/new' as Href);");
   });
 
@@ -995,7 +1006,14 @@ describe('the Orders list says when a read again failed over the rows shown (PO-
   it('the tested note, above the list', () => {
     const orders = codeOnly(read('src/screens/orders.tsx'));
     expect(orders).toContain('const reloadNote = ordersListReloadNote(failed, rows.length);');
-    expect(orders).toMatch(/\{reloadNote \? \(\s*<Body size=\{13\} color=\{c\.warnText\} accessibilityRole="alert">\s*\{reloadNote\}/);
+    // Re-pinned by the redesign (P5.7a): the note is DataListScreen's
+    // reloadNote, which it says above the rows the failed read kept.
+    expect(flat(orders)).toContain('reloadNote: reloadNote ?? undefined,');
+    const list = codeOnly(read('src/components/data-list-screen.tsx'));
+    expect(list).toContain('const reloadNote = dataListReloadNote(failed, data.length);');
+    expect(list).toMatch(
+      /reloadNote \? \(\s*<View style=\{styles\.reloadNote\}>\s*(?:\{\}\s*)?<Body size=\{13\} color=\{c\.warnText\} accessibilityRole="alert">\s*\{reloadNote\}/,
+    );
   });
 });
 
