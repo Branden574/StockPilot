@@ -19,6 +19,11 @@ import { describe, expect, it } from 'vitest';
  *   lighter dark fill;
  * - .dark never defined --ed-accent-wash, so dark fell back to the light wash.
  *
+ * P2.1c adds a fourth: .font-display was a plain class in an @layer utilities
+ * block that Tailwind emits after its generated utilities, so its -0.022em
+ * silently beat tracking-[-0.025em] and every other tracking utility on the
+ * same element.
+ *
  * Values are read from the stylesheet (parsed with postcss) and resolved the
  * way the browser does it: .dark and :root both sit on <html>, so a token
  * .dark leaves out falls back to its :root value.
@@ -422,5 +427,130 @@ describe('globals.css palette (redesign P2.1)', () => {
       '@layer base',
     ]);
     expect(enclosingAtRules(onlyRule(built, '.text-base'))).toEqual(['@layer utilities']);
+  });
+});
+
+/** globals.css through Tailwind (as Next builds it), with only these classes as sources. */
+async function build(classes: readonly string[]): Promise<postcss.Root> {
+  const input = SOURCE.replace(
+    "@import 'tailwindcss';",
+    "@import 'tailwindcss' source(none);",
+  ).concat(`\n@source inline("${classes.join(' ')}");\n`);
+  expect(input).toContain("@import 'tailwindcss' source(none);");
+  const { css } = await postcss([tailwindcss({ optimize: false })]).process(input, {
+    from: GLOBALS,
+  });
+  return postcss.parse(css);
+}
+
+/** A class name as Tailwind writes it in a selector: `.tracking-\[-0\.025em\]`. */
+function classSelector(name: string): string {
+  return `.${name.replace(/[^\w-]/g, (ch) => `\\${ch}`)}`;
+}
+
+/**
+ * The letter-spacing an element with these classes gets at a viewport width,
+ * by the cascade: every rule here is one class in @layer utilities, so the
+ * last matching declaration in the built CSS wins.
+ */
+function letterSpacing(
+  built: postcss.Root,
+  classes: readonly string[],
+  widthPx: number,
+): string | undefined {
+  const selectors = new Set(classes.map(classSelector));
+  let value: string | undefined;
+  built.walkRules((rule) => {
+    if (!selectors.has(rule.selector)) return;
+    const media = enclosingAtRules(rule).filter((at) => at.startsWith('@media'));
+    const applies = media.every((at) => {
+      const min = /^@media \(width >= ([\d.]+)rem\)$/.exec(at);
+      if (!min) throw new Error(`unexpected media query ${at}`);
+      return widthPx >= Number(min[1]) * 16;
+    });
+    if (!applies) return;
+    expect(enclosingAtRules(rule).at(-1), rule.selector).toBe('@layer utilities');
+    rule.walkDecls('letter-spacing', (decl) => {
+      value = decl.value;
+    });
+  });
+  return value;
+}
+
+/**
+ * Every tracking utility the app writes beside font-display (AST scan of
+ * apps/web/src at 78c52d145: 68 class lists, plus the release drawer's
+ * font-display on SheetTitle, whose own classes carry tracking-tight).
+ */
+const TRACKING_WITH_FONT_DISPLAY: ReadonlyArray<readonly [utility: string, letterSpacing: string]> =
+  [
+    ['tracking-[-0.025em]', '-0.025em'],
+    ['tracking-[-0.03em]', '-0.03em'],
+    ['tracking-[-0.01em]', '-0.01em'],
+    ['tracking-[-0.02em]', '-0.02em'],
+    ['tracking-[-0.015em]', '-0.015em'],
+    ['tracking-tight', 'var(--tracking-tight)'],
+    ['tracking-[-0.04em]', '-0.04em'],
+    ['tracking-[-0.005em]', '-0.005em'],
+  ];
+
+/**
+ * Tailwind reads this file for class names like any other source, so a class
+ * the app does not use yet is joined at run time: written out whole, every
+ * build would emit it (and any colour variable it needs) before a page uses it.
+ */
+const SM_TRACKING = ['sm', 'tracking-[-0.03em]'].join(':');
+
+describe('globals.css follow-ups (redesign P2.1c)', () => {
+  it('lets a tracking utility on the same element beat font-display, at phone and desktop widths', async () => {
+    const tracking = TRACKING_WITH_FONT_DISPLAY.map(([utility]) => utility);
+    const built = await build(['font-display', ...tracking, SM_TRACKING]);
+
+    // The winning declaration for each class list the app writes. Before
+    // P2.1c every one of these read -0.022em.
+    for (const width of [390, 1280]) {
+      expect(letterSpacing(built, ['font-display'], width)).toBe('-0.022em');
+      for (const [utility, value] of TRACKING_WITH_FONT_DISPLAY) {
+        expect(letterSpacing(built, ['font-display', utility], width), utility).toBe(value);
+      }
+      expect(letterSpacing(built, ['font-display', SM_TRACKING], width)).toBe(
+        width >= 640 ? '-0.03em' : '-0.022em',
+      );
+    }
+
+    // Why: every tracking rule is emitted after font-display in the same layer.
+    const order: string[] = [];
+    built.walkRules((rule) => {
+      order.push(rule.selector);
+    });
+    const at = (cls: string) => order.indexOf(classSelector(cls));
+    expect(tracking.filter((cls) => !(at(cls) > at('font-display')))).toEqual([]);
+  });
+
+  it('declares font-display once, as an @utility, with the same family and -0.022em', async () => {
+    // Not a plain class in an @layer block any more: one top-level @utility.
+    expect(rulesIn(TREE, '.font-display')).toEqual([]);
+    const declared: AtRule[] = [];
+    TREE.walkAtRules('utility', (rule) => {
+      if (rule.params === 'font-display') declared.push(rule);
+    });
+    expect(declared).toHaveLength(1);
+    expect(declared[0]!.parent?.type).toBe('root');
+
+    // It merges with the family utility --font-display creates: one rule in
+    // the built CSS, in the utilities layer.
+    const built = await build(['font-display']);
+    const own: Rule[] = [];
+    built.walkRules((rule) => {
+      if (rule.selector.split(',').some((s) => s.trim().startsWith('.font-display'))) {
+        own.push(rule);
+      }
+    });
+    expect(own).toHaveLength(1);
+    expect(enclosingAtRules(own[0]!)).toEqual(['@layer utilities']);
+    expect(Object.fromEntries(declarations(own[0]!))).toEqual({
+      'font-family': 'var(--font-display)',
+      'letter-spacing': '-0.022em',
+    });
   });
 });

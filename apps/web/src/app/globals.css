@@ -318,12 +318,20 @@
   }
 }
 
+/* The display face. As an @utility it joins the family utility that
+   --font-display already creates and is sorted with Tailwind's own utilities
+   (font-family before letter-spacing), so a tracking-* utility on the same
+   element wins, at every breakpoint and state. As a plain class in the
+   @layer utilities block below it came after every generated utility and
+   silently beat tracking-[...]. On its own it still sets the display family
+   and -0.022em. */
+@utility font-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.022em;
+}
+
 @layer utilities {
-  /* Display + serif emphasis utilities */
-  .font-display {
-    font-family: var(--font-display);
-    letter-spacing: -0.022em;
-  }
+  /* Serif emphasis and figure utilities */
   .font-serif-italic {
     font-family: var(--font-serif);
     font-style: italic;
