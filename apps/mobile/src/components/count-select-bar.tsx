@@ -10,7 +10,7 @@ import { showWriteCtaForRole } from '@/lib/cta-gating';
 import { groupSelectedHref, phoneGroupingCheck } from '@/lib/display-groups';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import { isOnline } from '@/lib/sync';
-import { TYPE_CEILING, capTo } from '@/lib/theme';
+import { SHADOW, TYPE_CEILING, capTo } from '@/lib/theme';
 import { phoneUngroupCheck, phoneUngroupOffer, ungroupSelectedHref } from '@/lib/ungroup-selected';
 import { countSelection, useCountPicks, useCountSelectionCount } from '@/lib/use-count-selection';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
@@ -33,13 +33,25 @@ import { useTheme } from '@/lib/use-theme';
  * undo (a display group or a shared SKU with items:update; a size family also
  * with sports:manage and the sports module on): the same rule as the web's
  * bulk bar (core ungroupOfferKind). Online only; the route refuses on its own.
+ *
+ * Look (DESIGN-SPEC 6.21, the phone select bar): the card surface with the
+ * stronger border (it floats over rows of the same card colour, where the
+ * hairline and a shadow both vanish in dark mode), radius 14, the count in
+ * mono, Clear in muted ink, Group and Ungroup in ink, Review the ink button.
+ * Every action is a 44pt frame, so the bar is as tall as its targets.
+ *
+ * `onHeight` reports the bar's height, which grows when its actions wrap at
+ * large text sizes, so a list can keep its last rows and its pager clear of
+ * the bar instead of under it.
  */
 export function CountSelectBar({
   visible,
   bottomInset,
+  onHeight,
 }: {
   visible: boolean;
   bottomInset: number;
+  onHeight?: (height: number) => void;
 }) {
   const router = useRouter();
   const { c } = useTheme();
@@ -85,9 +97,11 @@ export function CountSelectBar({
 
   return (
     <View
+      onLayout={onHeight ? (e) => onHeight(e.nativeEvent.layout.height) : undefined}
       style={[
         styles.wrap,
-        { bottom: bottomInset + 12, backgroundColor: c.card, borderColor: c.hair },
+        SHADOW.fab,
+        { bottom: bottomInset + 12, backgroundColor: c.card, borderColor: c.hair2 },
       ]}
     >
       {/* Dynamic Type: the bar is absolutely positioned with left/right pinned,
@@ -106,7 +120,14 @@ export function CountSelectBar({
           off its edge (maxWidth): at large Dynamic Type sizes Clear, Group and
           Review together are wider than a phone. */}
       <View style={styles.actions}>
-        <Pressable onPress={() => countSelection.clear()} hitSlop={8} disabled={count === 0}>
+        {/* A button with a name now (VoiceOver read the word with no role). */}
+        <Pressable
+          onPress={() => countSelection.clear()}
+          hitSlop={GROUP_HIT_SLOP}
+          disabled={count === 0}
+          accessibilityRole="button"
+          style={styles.textAction}
+        >
           <Mono size={12.5} color={count === 0 ? c.ink4 : c.ink3}>
             Clear
           </Mono>
@@ -118,6 +139,7 @@ export function CountSelectBar({
             hitSlop={GROUP_HIT_SLOP}
             accessibilityRole="button"
             accessibilityLabel={GROUP_COPY.bulkAction}
+            style={styles.textAction}
           >
             <Mono
               size={12.5}
@@ -135,6 +157,7 @@ export function CountSelectBar({
             hitSlop={GROUP_HIT_SLOP}
             accessibilityRole="button"
             accessibilityLabel={UNGROUP_COPY.bulkAction}
+            style={styles.textAction}
           >
             <Mono
               size={12.5}
@@ -151,6 +174,7 @@ export function CountSelectBar({
             router.push('/cycle-count/new');
           }}
           disabled={count === 0}
+          accessibilityRole="button"
           style={({ pressed }) => [
             styles.reviewBtn,
             { backgroundColor: c.ink, opacity: count === 0 ? 0.4 : pressed ? 0.85 : 1 },
@@ -166,9 +190,12 @@ export function CountSelectBar({
   );
 }
 
-/** Group's touch target (people review P11): its 12.5pt label sits on a line
- *  of about 16pt, and 14pt above and below make 44pt, the minimum, without
- *  making the bar taller (8pt on each side keeps it clear of its neighbours). */
+/** The text actions' touch target (people review P11): a 12.5pt label sits on
+ *  a line of about 16pt, and 14pt above and below make 44pt, the minimum;
+ *  8pt on each side widens it and keeps it clear of its neighbours. React
+ *  Native's hitSlop never reaches past the parent's bounds (the actions row),
+ *  so each action is also a 44pt frame (styles.textAction): the frame holds
+ *  the height, and the slop's sides still widen the target. */
 const GROUP_HIT_SLOP = { top: 14, bottom: 14, left: 8, right: 8 };
 
 const styles = StyleSheet.create({
@@ -183,13 +210,8 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingHorizontal: 16,
     paddingVertical: 12,
-    borderRadius: 12,
+    borderRadius: 14,
     borderWidth: 1,
-    shadowColor: '#000',
-    shadowOpacity: 0.12,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 6,
   },
   actions: {
     flexDirection: 'row',
@@ -201,12 +223,21 @@ const styles = StyleSheet.create({
     flexShrink: 0,
     maxWidth: '100%',
   },
+  // Clear, Group and Ungroup: words in a frame at least 44pt tall (a real
+  // frame, so VoiceOver outlines the target a finger can hit).
+  textAction: {
+    minHeight: 44,
+    justifyContent: 'center',
+  },
+  // The ink button, 44pt tall (minHeight, so it grows with its words), radius
+  // 10 as the reference's phone segments.
   reviewBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+    minHeight: 44,
     paddingHorizontal: 14,
     paddingVertical: 8,
-    borderRadius: 8,
+    borderRadius: 10,
   },
 });
