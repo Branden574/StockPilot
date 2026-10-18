@@ -1728,9 +1728,17 @@ describe('scanner tip: defects fixed in this package', () => {
         }),
       );
     });
-    expect(chains).toEqual([['Modal', 'ScrollView styles.centerWrap']]);
+    expect(chains).toEqual([
+      ['Modal', 'ScrollView [styles.centerWrap, { paddingVertical: edge }]'],
+    ]);
     const src = sourceOf(SCANNER_TIP);
     expect(styleBlock(src, 'centerWrap')).toMatch(/flexGrow: 1,[\s\S]*justifyContent: 'center',/);
     expect(styleBlock(src, 'centerWrap')).not.toMatch(/\bflex: 1/);
+    // The same space at both ends, clear of the status bar and the home
+    // indicator, so the card is centred when it fits and readable when not.
+    expect(codeOnly(src)).toContain('const insets = useSafeAreaInsets();');
+    expect(codeOnly(src)).toContain(
+      'const edge = Math.max(space.xl, Math.max(insets.top, insets.bottom) + space.sm);',
+    );
   });
 });

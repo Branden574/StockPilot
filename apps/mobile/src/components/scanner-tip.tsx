@@ -10,6 +10,7 @@ import {
   View,
   useAnimatedValue,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Button } from '@/components/ui/button';
 import { FONT, SHADOW, palette, space, type Palette } from '@/lib/theme';
@@ -55,6 +56,10 @@ export function ScannerTip({
 }) {
   const { mode } = useTheme();
   const styles = TIP_STYLES[mode];
+  // Clear of the status bar and the home indicator when the card is taller
+  // than the screen, and the same at both ends, so it is centred when it fits.
+  const insets = useSafeAreaInsets();
+  const edge = Math.max(space.xl, Math.max(insets.top, insets.bottom) + space.sm);
   const [reduceMotion, setReduceMotion] = React.useState(false);
   /** Backdrop fade: 0 → 1 (timing). */
   const backdrop = useAnimatedValue(0);
@@ -148,8 +153,7 @@ export function ScannerTip({
           left. In a scroll view the card is still centred while it fits, and
           scrolls to its button when it does not. */}
       <ScrollView
-        contentContainerStyle={styles.centerWrap}
-        contentInsetAdjustmentBehavior="automatic"
+        contentContainerStyle={[styles.centerWrap, { paddingVertical: edge }]}
         alwaysBounceVertical={false}
       >
         <Animated.View
