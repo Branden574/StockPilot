@@ -27,7 +27,11 @@ interface StockStatusBadgeProps {
   expectedVerbose?: boolean;
 }
 
-/** The 5px dot that leads a stock status pill, in the label's own colour. */
+/** The 5px dot that leads a stock status pill, in the label's own colour.
+ *  P2.2's restyled Badge draws this same dot through its `dot` prop and has
+ *  PILL's gap and nowrap in its base classes; when this branch rebases onto
+ *  P2.2, each pill becomes `<Badge variant=... dot>` (its title kept) and
+ *  StatusDot and PILL go, so the dot lives in one place. */
 function StatusDot() {
   return <span aria-hidden className="size-[5px] shrink-0 rounded-full bg-current" />;
 }

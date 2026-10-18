@@ -21,9 +21,13 @@ import { cn } from '@/lib/utils';
  * signed URL serves the original upload, not a crop, so the preview is
  * genuinely sharp rather than a stretched 28px frame.
  *
- * Look (DESIGN-SPEC 4 and 6.14): a hairline (--line) box on the inset (sunk)
- * surface, the photo cropped to fill it; no photo is the hatch in the line
- * colour on sunk, the same placeholder the Items table draws.
+ * Look (DESIGN-SPEC 4 and 6.14): a hairline (--line) box, the photo cropped to
+ * fill it on a white tile in both themes (a cut-out photo shot on white reads
+ * the same in either theme, and a dark one does not vanish into a dark tile);
+ * no photo is the hatch in the line colour on sunk, the same placeholder the
+ * Items table draws. When this branch rebases onto P2.6, the tile and the
+ * hatch render through patterns/thumb.tsx and patterns/missing-photo.tsx and
+ * the local HATCH goes (PLAN P2.4).
  */
 interface Props {
   /** Small tile source (a ~200px thumb where available) — kept lightweight so
@@ -101,7 +105,7 @@ export function ItemThumb({
         loading="lazy"
         decoding="async"
         onError={() => setFailed(true)}
-        className={cn(boxClass, 'bg-sunk object-cover')}
+        className={cn(boxClass, 'bg-white object-cover')}
       />
     ) : (
       <div

@@ -126,6 +126,12 @@ describe('StepUpModal', () => {
     const select = await screen.findByLabelText('Authenticator');
     expect(select).toHaveValue('factor-1');
     expect(screen.getByRole('option', { name: 'Authenticator (factor)' })).toBeInTheDocument();
+    // The shared text-field recipe (DESIGN-SPEC 2.4 item 3 and 6.3; P2.2's
+    // Input, so the code field below it matches once P2.2 lands): the stronger
+    // hairline (--line2) on the card fill, never the 1.26:1 input hairline
+    // alone, and a visible focus ring.
+    expect(select).toHaveClass('border-[var(--ed-line-strong)]', 'bg-card', 'focus-visible:ring-2');
+    expect(select).not.toHaveClass('border-input');
   });
 
   // Mutation caught: an unreadable list (auth-js answers { data: null, error })

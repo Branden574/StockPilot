@@ -51,6 +51,17 @@ describe('ItemThumb', () => {
     expect(screen.getByTestId('preview')).toHaveAttribute('data-src', 'https://x.test/thumb.webp');
   });
 
+  // Defect caught in review: the photo sat on the sunk fill (near-black in
+  // dark), so a cut-out of a dark product all but vanished at 28px in dark
+  // mode. DESIGN-SPEC 4 and 6.14: every thumbnail photo is on white in both
+  // themes; only the no-photo hatch is on sunk.
+  it('puts the photo on a white tile in both themes', () => {
+    render(<ItemThumb imageUrl="https://x.test/thumb.webp" alt="Polo" size="sm" />);
+    const img = screen.getByRole('img', { name: 'Polo' });
+    expect(img).toHaveClass('bg-white', 'object-cover');
+    expect(img).not.toHaveClass('bg-sunk');
+  });
+
   it('draws the hatch, not a broken image, when there is no photo or it fails to load', () => {
     const { rerender } = render(<ItemThumb imageUrl={null} alt="Polo" />);
     const hatch = screen.getByTestId('item-thumb-placeholder');
