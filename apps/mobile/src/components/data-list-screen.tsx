@@ -1,6 +1,6 @@
 import { BottomTabBarHeightContext } from 'expo-router/js-tabs';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
-import { ArrowLeft, Menu, type LucideIcon } from 'lucide-react-native';
+import { ArrowLeft, Menu, TriangleAlert, WifiOff, type LucideIcon } from 'lucide-react-native';
 import * as React from 'react';
 import {
   ActivityIndicator,
@@ -11,17 +11,25 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import {
+  dataListEmptyKind,
+  dataListReloadNote,
+  type DataListFailure,
+} from '@/components/ui/data-list-state';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow } from '@/components/ui/text';
 import { useTheme } from '@/lib/use-theme';
+
+export type { DataListFailure } from '@/components/ui/data-list-state';
 
 /**
  * Shared chrome for every drawer-surface list screen. Renders a top
  * bar with a hamburger that opens the drawer + optional trailing
  * action, then a header (eyebrow + display title with serif-italic
- * emphasis), then the supplied list. Empty / loading / error states
- * are all standardized so each drawer screen only writes its own
- * data-fetch + row renderer.
+ * emphasis), then the supplied list. Loading, empty, failed-read and
+ * offline states are standardized (ui/data-list-state.ts has the table) so
+ * each drawer screen only writes its own data-fetch + row renderer, and a
+ * failed read is never shown as an empty list.
  */
 export function DataListScreen<T>({
   eyebrow,
@@ -39,6 +47,7 @@ export function DataListScreen<T>({
   trailing,
   header,
   emptyAction,
+  failed,
   ItemSeparator,
 }: {
   eyebrow: string;
@@ -60,6 +69,11 @@ export function DataListScreen<T>({
   /** A control under the empty state's words (the Orders list's "Place an
    *  order", or "Load again" after a failed read). */
   emptyAction?: React.ReactNode;
+  /** The last read failed: with no rows, its words replace the empty state
+   *  (with a warning glyph, or a no-connection one when `offline`); with
+   *  rows from an earlier read, they stay and `reloadNote` is said above
+   *  them. Null or absent: the read succeeded. */
+  failed?: DataListFailure | null;
   ItemSeparator?: React.ComponentType<unknown>;
 }) {
   const { c } = useTheme();
@@ -86,6 +100,8 @@ export function DataListScreen<T>({
     if (router.canGoBack()) router.back();
     else router.replace('/');
   };
+  const emptyKind = dataListEmptyKind(failed);
+  const reloadNote = dataListReloadNote(failed, data.length);
 
   return (
     <View style={[styles.root, { backgroundColor: c.paper }]}>
@@ -126,6 +142,18 @@ export function DataListScreen<T>({
             tabBarInset > 0 && { paddingBottom: 24 + tabBarInset },
           ]}
           ItemSeparatorComponent={ItemSeparator}
+          ListHeaderComponent={
+            reloadNote ? (
+              <View style={styles.reloadNote}>
+                {/* Rows from an earlier read stay on screen; say they may be
+                    out of date rather than dropping them. */}
+                <Body size={13} color={c.warnText} accessibilityRole="alert">
+                  {reloadNote}
+                </Body>
+                {failed?.action ? <View>{failed.action}</View> : null}
+              </View>
+            ) : undefined
+          }
           refreshControl={
             onRefresh ? (
               <RefreshControl
@@ -136,20 +164,40 @@ export function DataListScreen<T>({
             ) : undefined
           }
           ListEmptyComponent={
-            <View style={styles.empty}>
-              {EmptyIcon ? (
+            failed ? (
+              // The read failed: its own words, never "No X yet." (D25).
+              <View style={styles.empty}>
                 <View style={{ marginBottom: 12 }}>
-                  <EmptyIcon size={32} color={c.ink4} strokeWidth={1.3} />
+                  {emptyKind === 'offline' ? (
+                    <WifiOff size={32} color={c.ink3} strokeWidth={1.3} />
+                  ) : (
+                    <TriangleAlert size={32} color={c.warnText} strokeWidth={1.3} />
+                  )}
                 </View>
-              ) : null}
-              <Display size={18}>
-                {emptyTitle}
-              </Display>
-              <Body muted style={{ marginTop: 6, textAlign: 'center', maxWidth: 320 }}>
-                {emptyBody}
-              </Body>
-              {emptyAction ? <View style={{ marginTop: 14 }}>{emptyAction}</View> : null}
-            </View>
+                <Display size={18} accessibilityRole="alert">
+                  {failed.title}
+                </Display>
+                <Body muted style={{ marginTop: 6, textAlign: 'center', maxWidth: 320 }}>
+                  {failed.body}
+                </Body>
+                {failed.action ? <View style={{ marginTop: 14 }}>{failed.action}</View> : null}
+              </View>
+            ) : (
+              <View style={styles.empty}>
+                {EmptyIcon ? (
+                  <View style={{ marginBottom: 12 }}>
+                    <EmptyIcon size={32} color={c.ink4} strokeWidth={1.3} />
+                  </View>
+                ) : null}
+                <Display size={18}>
+                  {emptyTitle}
+                </Display>
+                <Body muted style={{ marginTop: 6, textAlign: 'center', maxWidth: 320 }}>
+                  {emptyBody}
+                </Body>
+                {emptyAction ? <View style={{ marginTop: 14 }}>{emptyAction}</View> : null}
+              </View>
+            )
           }
           renderItem={({ item, index }) => renderItem(item, index)}
         />
@@ -189,5 +237,8 @@ const styles = StyleSheet.create({
     paddingTop: 40,
     paddingHorizontal: 24,
     alignItems: 'center',
+  },
+  reloadNote: {
+    gap: 10,
   },
 });

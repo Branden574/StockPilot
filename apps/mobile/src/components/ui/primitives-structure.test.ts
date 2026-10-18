@@ -4,6 +4,7 @@ import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
 import {
+  attr,
   attrText,
   listTsx,
   parseTsx,
@@ -30,7 +31,9 @@ const at = (file: string) => path.join(MOBILE_ROOT, file);
 const OWNED = [
   ...listTsx(at('src/components/ui')),
   at('src/components/ui/tones.ts'),
+  at('src/components/ui/data-list-state.ts'),
   at('src/components/SyncStatusBadge.tsx'),
+  at('src/components/data-list-screen.tsx'),
 ].map(rel);
 
 function source(file: string): ts.SourceFile {
@@ -67,9 +70,15 @@ function elements(file: string, match: (el: JsxNode, sf: ts.SourceFile) => boole
   return { sf, els: out };
 }
 
+/** The expression inside `name={...}` on an element. */
+function attrExpression(el: JsxNode, name: string, sf: ts.SourceFile): ts.Expression | undefined {
+  const init = attr(el, name, sf)?.initializer;
+  return init && ts.isJsxExpression(init) ? init.expression : undefined;
+}
+
 describe('every shared primitive follows the device mode', () => {
   it('finds the files (the sweep is not vacuous)', () => {
-    expect(OWNED.length).toBeGreaterThanOrEqual(19);
+    expect(OWNED.length).toBeGreaterThanOrEqual(20);
     expect(OWNED).toContain('src/components/ui/button.tsx');
     expect(OWNED).toContain('src/components/SyncStatusBadge.tsx');
   });
@@ -113,6 +122,7 @@ describe('every shared primitive follows the device mode', () => {
       visit(sf);
     }
     expect(uses.sort()).toEqual([
+      'src/components/data-list-screen.tsx EmptyIcon ink4', // the empty state's glyph
       'src/components/ui/paginator.tsx Mono ink4', // the "·" gap marker, hidden from VoiceOver
       'src/components/ui/row.tsx ChevronRight ink4', // the row's arrow
     ]);
@@ -178,5 +188,54 @@ describe('SyncStatusBadge keeps its words and its tap', () => {
     expect(attrText(els[0]!, 'numberOfLines', sf)).toBe('1');
     expect(attrText(els[0]!, 'maxFontSizeMultiplier', sf)).toBe('LABEL_CAP');
     expect(readSource(at(file))).toContain('const LABEL_CAP = capTo(11, TYPE_CEILING.chrome);');
+  });
+});
+
+describe('DataListScreen keeps loading, empty, failed and offline apart', () => {
+  const file = 'src/components/data-list-screen.tsx';
+  const { sf, els } = elements(file, (el, s) => tagOf(el, s) === 'FlatList');
+
+  it('loading is the spinner, before any list', () => {
+    expect(readSource(at(file))).toMatch(/\{loading \? \(\s*<ActivityIndicator color=\{c\.ink\}/);
+  });
+
+  // Mutation caught (D25): the failed read showing the screen's "No X yet."
+  // copy, or the empty state losing its own words.
+  it('a failed read with no rows shows its own words, never the empty copy', () => {
+    expect(els).toHaveLength(1);
+    const empty = attrExpression(els[0]!, 'ListEmptyComponent', sf);
+    expect(empty && ts.isConditionalExpression(empty)).toBe(true);
+    const cond = empty as ts.ConditionalExpression;
+    expect(cond.condition.getText(sf)).toBe('failed');
+    const whenFailed = cond.whenTrue.getText(sf);
+    const whenEmpty = cond.whenFalse.getText(sf);
+    expect(whenFailed).toContain('{failed.title}');
+    expect(whenFailed).toContain('{failed.body}');
+    expect(whenFailed).not.toMatch(/emptyTitle|emptyBody|emptyAction/);
+    expect(whenEmpty).toContain('{emptyTitle}');
+    expect(whenEmpty).toContain('{emptyBody}');
+    expect(whenEmpty).toContain('{emptyAction}');
+    expect(whenEmpty).not.toMatch(/failed/);
+  });
+
+  it('offline has its own glyph; any other failure the warning glyph', () => {
+    const empty = attrExpression(els[0]!, 'ListEmptyComponent', sf) as ts.ConditionalExpression;
+    const whenFailed = empty.whenTrue.getText(sf);
+    expect(whenFailed).toMatch(/emptyKind === 'offline' \? \(\s*<WifiOff/);
+    expect(whenFailed).toContain('<TriangleAlert');
+    expect(readSource(at(file))).toContain('const emptyKind = dataListEmptyKind(failed);');
+  });
+
+  it('rows an earlier read left stay on screen, with the reload note above them', () => {
+    const header = attrExpression(els[0]!, 'ListHeaderComponent', sf);
+    expect(header && ts.isConditionalExpression(header)).toBe(true);
+    const cond = header as ts.ConditionalExpression;
+    expect(cond.condition.getText(sf)).toBe('reloadNote');
+    expect(cond.whenTrue.getText(sf)).toContain('{reloadNote}');
+    expect(readSource(at(file))).toContain(
+      'const reloadNote = dataListReloadNote(failed, data.length);',
+    );
+    // The rows are the caller's, whatever the read did.
+    expect(attrText(els[0]!, 'data', sf)).toBe('data');
   });
 });
