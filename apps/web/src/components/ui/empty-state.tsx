@@ -40,6 +40,11 @@ export interface EmptyStateProps {
   className?: string;
 }
 
+/**
+ * The quiet empty state (DESIGN-SPEC 6.21): a dashed hairline box with no fill,
+ * a neutral icon chip, the page's own words, and the flat accent CTA (the
+ * `gradient` Button variant is the flat accent primary in the redesign).
+ */
 export function EmptyState({
   icon: Icon,
   title,
@@ -53,22 +58,24 @@ export function EmptyState({
   return (
     <div
       className={cn(
-        'bg-card/40 flex w-full flex-col items-center justify-center rounded-xl border border-dashed text-center',
+        'flex w-full flex-col items-center justify-center rounded-lg border border-dashed text-center',
         isSm ? 'min-h-[200px] gap-2 px-4 py-8' : 'min-h-[360px] gap-3 px-6 py-16',
         className,
       )}
     >
       <div
         className={cn(
-          'bg-muted/50 text-muted-foreground flex items-center justify-center rounded-full',
+          'bg-sunk text-muted-foreground flex items-center justify-center rounded-full border border-[var(--ed-line-strong)]',
           isSm ? 'p-2' : 'p-3',
         )}
         aria-hidden="true"
       >
         <Icon className={isSm ? 'h-4 w-4' : 'h-5 w-5'} />
       </div>
-      <h3 className={cn('text-foreground font-medium', isSm ? 'text-sm' : 'text-base')}>{title}</h3>
-      <p className="text-muted-foreground max-w-md text-sm">{description}</p>
+      <h3 className={cn('text-foreground font-medium', isSm ? 'text-[13.5px]' : 'text-[15px]')}>
+        {title}
+      </h3>
+      <p className="text-muted-foreground max-w-md text-[13px]">{description}</p>
       {action ? (
         <div className={isSm ? 'mt-1' : 'mt-3'}>{action}</div>
       ) : cta ? (

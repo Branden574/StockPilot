@@ -32,7 +32,8 @@ export const AvatarFallback = React.forwardRef<
   <AvatarPrimitive.Fallback
     ref={ref}
     className={cn(
-      'flex h-full w-full items-center justify-center rounded-full bg-muted text-xs font-medium uppercase text-muted-foreground',
+      // Initials on the sunk fill (the reference avatar), not the hover fill.
+      'flex h-full w-full items-center justify-center rounded-full bg-sunk text-xs font-medium uppercase text-muted-foreground',
       className,
     )}
     {...props}

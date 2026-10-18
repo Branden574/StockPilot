@@ -93,11 +93,9 @@ export function Pagination({
     ) : null;
 
   return (
-    <div
-      className={cn('text-muted-foreground flex items-center gap-3 text-[12px]', className)}
-    >
+    <div className={cn('text-muted-foreground flex items-center gap-3 text-[12.5px]', className)}>
       {range}
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-2">
         <PageBtn disabled={prevDisabled} href={linkForPage?.(safePage - 1)} onClick={() => go(safePage - 1)}>
           ← Prev
         </PageBtn>
@@ -108,7 +106,7 @@ export function Pagination({
               <button
                 type="button"
                 aria-label="Jump to page"
-                className="hover:text-foreground hover:bg-muted/40 text-muted-foreground cursor-pointer rounded px-2 py-0.5 text-[11.5px] transition-colors"
+                className="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring inline-flex h-7 cursor-pointer items-center rounded-md px-2 text-[12.5px] tabular-nums transition-colors focus-visible:outline-none focus-visible:ring-2"
               >
                 Page {safePage} of {totalPages}
               </button>
@@ -134,6 +132,12 @@ export function Pagination({
   );
 }
 
+/** The pager recipe (DESIGN-SPEC 6.2): an enabled Prev/Next is the 28 px
+ *  secondary button; a disabled one goes quiet (no fill, the plain hairline,
+ *  the faint ink) instead of fading. */
+const PAGE_BTN_DISABLED =
+  'disabled:opacity-100 disabled:border-border disabled:bg-transparent disabled:text-[var(--ed-ink-4)]';
+
 /** Prev/Next control — a Link in href mode, a button in client mode. */
 function PageBtn({
   disabled,
@@ -148,7 +152,7 @@ function PageBtn({
 }) {
   if (disabled) {
     return (
-      <Button variant="outline" size="sm" disabled>
+      <Button variant="outline" size="sm" disabled className={PAGE_BTN_DISABLED}>
         {children}
       </Button>
     );
@@ -167,10 +171,23 @@ function PageBtn({
   );
 }
 
+/** The jump grid: five columns, eight from sm up, but five again on a coarse
+ *  pointer (an iPad) so every column stays at least 44 px wide. */
+const JUMP_GRID = 'grid grid-cols-5 gap-1 sm:grid-cols-8 pointer-coarse:grid-cols-5';
+/** A page button: 28 px on desktop, a full 44 px target where Button grows its
+ *  touch area (below sm and on coarse pointers). */
+const JUMP_TARGET =
+  'h-7 w-full px-2 text-[12.5px] tabular-nums max-sm:h-11 pointer-coarse:h-11';
+
 /**
  * The jump target. For a manageable page count, a grid of every page (like
  * Items). For a very large count (a big server-paginated ledger), a "go to
  * page" number input instead of thousands of buttons.
+ *
+ * Below sm and on coarse pointers each page button is a real 44 px target and
+ * the grid keeps five columns (each at least 44 px wide in the 260 px popover).
+ * At 28 px with 4 px gaps, Button's 44 px touch area reached over the row
+ * above, so a tap on the bottom of page 1 opened page 6.
  */
 function JumpGrid({
   totalPages,
@@ -212,7 +229,7 @@ function JumpGrid({
     );
   }
   return (
-    <div className="grid grid-cols-5 gap-1 sm:grid-cols-8">
+    <div className={JUMP_GRID}>
       {Array.from({ length: totalPages }, (_, i) => i + 1).map((n) =>
         hrefForPage ? (
           <Button
@@ -220,7 +237,7 @@ function JumpGrid({
             asChild
             variant={n === current ? 'default' : 'ghost'}
             size="sm"
-            className="h-7 w-full px-2 text-[12px]"
+            className={JUMP_TARGET}
           >
             <Link href={hrefForPage(n)} aria-current={n === current ? 'page' : undefined}>
               {n}
@@ -231,7 +248,7 @@ function JumpGrid({
             key={n}
             variant={n === current ? 'default' : 'ghost'}
             size="sm"
-            className="h-7 w-full px-2 text-[12px]"
+            className={JUMP_TARGET}
             onClick={() => go(n)}
             aria-current={n === current ? 'page' : undefined}
           >

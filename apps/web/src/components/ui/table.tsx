@@ -2,10 +2,22 @@ import * as React from 'react';
 
 import { cn } from '@/lib/utils';
 
+/**
+ * Table (DESIGN-SPEC 6.9): header cells 11 px / 500, uppercase, +0.06em in the
+ * muted ink; body cells pad by the density variable (--row-py: 11 px
+ * comfortable, 6 px compact; phones stay comfortable) and 12 px across, 16 px
+ * on the first and last cell; the whole row takes the neutral hover fill. A
+ * wide table scrolls inside its own wrapper, never the page. A cell holding a
+ * checkbox keeps no right padding, so the checkbox column stays narrow.
+ */
 export const Table = React.forwardRef<HTMLTableElement, React.HTMLAttributes<HTMLTableElement>>(
   ({ className, ...props }, ref) => (
     <div className="relative w-full overflow-auto">
-      <table ref={ref} className={cn('w-full caption-bottom text-sm', className)} {...props} />
+      <table
+        ref={ref}
+        className={cn('w-full caption-bottom text-[13.5px]', className)}
+        {...props}
+      />
     </div>
   ),
 );
@@ -33,24 +45,25 @@ export const TableFooter = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <tfoot
     ref={ref}
-    className={cn('border-t bg-muted/40 font-medium [&>tr]:last:border-b-0', className)}
+    className={cn('bg-sunk border-t font-medium [&>tr]:last:border-b-0', className)}
     {...props}
   />
 ));
 TableFooter.displayName = 'TableFooter';
 
-export const TableRow = React.forwardRef<HTMLTableRowElement, React.HTMLAttributes<HTMLTableRowElement>>(
-  ({ className, ...props }, ref) => (
-    <tr
-      ref={ref}
-      className={cn(
-        'border-b transition-colors hover:bg-muted/40 data-[state=selected]:bg-muted',
-        className,
-      )}
-      {...props}
-    />
-  ),
-);
+export const TableRow = React.forwardRef<
+  HTMLTableRowElement,
+  React.HTMLAttributes<HTMLTableRowElement>
+>(({ className, ...props }, ref) => (
+  <tr
+    ref={ref}
+    className={cn(
+      'hover:bg-muted data-[state=selected]:bg-success-wash border-b transition-colors',
+      className,
+    )}
+    {...props}
+  />
+));
 TableRow.displayName = 'TableRow';
 
 export const TableHead = React.forwardRef<
@@ -60,7 +73,7 @@ export const TableHead = React.forwardRef<
   <th
     ref={ref}
     className={cn(
-      'h-10 px-3 text-left align-middle text-[11px] font-semibold uppercase tracking-wider text-muted-foreground [&:has([role=checkbox])]:pr-0',
+      'text-muted-foreground px-3 py-2.5 text-left align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0',
       className,
     )}
     {...props}
@@ -74,7 +87,10 @@ export const TableCell = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <td
     ref={ref}
-    className={cn('px-3 py-3 align-middle [&:has([role=checkbox])]:pr-0', className)}
+    className={cn(
+      'px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0',
+      className,
+    )}
     {...props}
   />
 ));
@@ -84,6 +100,10 @@ export const TableCaption = React.forwardRef<
   HTMLTableCaptionElement,
   React.HTMLAttributes<HTMLTableCaptionElement>
 >(({ className, ...props }, ref) => (
-  <caption ref={ref} className={cn('mt-4 text-sm text-muted-foreground', className)} {...props} />
+  <caption
+    ref={ref}
+    className={cn('text-muted-foreground mt-4 text-[12.5px]', className)}
+    {...props}
+  />
 ));
 TableCaption.displayName = 'TableCaption';
