@@ -123,6 +123,28 @@ describe('ImageLightbox keeps every control', () => {
     renderViewer({ onDelete: vi.fn() });
     expect(document.body.innerHTML).not.toMatch(/backdrop-blur/);
   });
+
+  // Defect caught in review: in light mode keyboard focus showed nothing on
+  // Close and the arrows. The global ring sits outside a control (a 2px offset
+  // in the page colour, then the ring), so the offset fell on the white chip
+  // and the ink ring on the black viewing surface. Each control now draws the
+  // ring inside itself, on its own surface, in both themes.
+  it('draws the keyboard focus ring inside every control, on its own surface', () => {
+    const C = { id: 'img-c', url: 'https://files.example.test/c.jpg' };
+    renderViewer({ images: [A, B, C], startIndex: 1, onDelete: vi.fn() });
+    const controls = [
+      screen.getByRole('button', { name: 'Zoom out' }),
+      screen.getByRole('button', { name: 'Zoom in' }),
+      screen.getByRole('link', { name: 'Download image' }),
+      screen.getByRole('button', { name: 'Delete image' }),
+      screen.getByRole('button', { name: 'Close' }),
+      screen.getByRole('button', { name: 'Previous image' }),
+      screen.getByRole('button', { name: 'Next image' }),
+    ];
+    for (const control of controls) {
+      expect(control).toHaveClass('focus-visible:ring-inset', 'focus-visible:ring-offset-0');
+    }
+  });
 });
 
 describe('ImageLightbox: a photo that will not load', () => {

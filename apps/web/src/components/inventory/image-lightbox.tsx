@@ -483,14 +483,25 @@ const TOUCH = 'h-11 sm:h-8 [@media(pointer:coarse)]:h-11';
 const CHIP =
   'flex items-center rounded-lg border border-[var(--ed-line-strong)] bg-popover text-popover-foreground';
 
-const ARROW =
-  'absolute top-1/2 z-10 grid size-11 -translate-y-1/2 place-items-center rounded-lg border border-[var(--ed-line-strong)] bg-popover text-popover-foreground transition-colors hover:bg-muted';
+/** Every control draws its focus ring inside itself, on its own popover
+ *  surface: ink on white in light, near-white on the dark chip in dark. The
+ *  global ring sits outside the control (a 2px offset in the page colour, then
+ *  the ring), so in light its offset fell on the white chip and its ink ring
+ *  on the black viewing surface, and keyboard focus on Close and the arrows
+ *  showed nothing (DESIGN-SPEC 2.4 item 3: always keep a visible focus ring). */
+const INSET_FOCUS_RING = 'focus-visible:ring-inset focus-visible:ring-offset-0';
+
+const ARROW = cn(
+  'absolute top-1/2 z-10 grid size-11 -translate-y-1/2 place-items-center rounded-lg border border-[var(--ed-line-strong)] bg-popover text-popover-foreground transition-colors hover:bg-muted',
+  INSET_FOCUS_RING,
+);
 
 /** The icon-button recipe (DESIGN-SPEC 6.2): ink2 on transparent, the neutral
  *  hover fill; Delete keeps the destructive colour and its wash on hover. */
 function toolClass(tone: 'default' | 'danger') {
   return cn(
     'grid place-items-center rounded-md transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+    INSET_FOCUS_RING,
     'size-11 sm:size-8 [@media(pointer:coarse)]:size-11',
     tone === 'danger'
       ? 'text-destructive hover:bg-destructive-wash'

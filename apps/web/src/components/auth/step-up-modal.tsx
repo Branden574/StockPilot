@@ -178,7 +178,7 @@ function StepUpModal({ open, onDone }: { open: boolean; onDone: (ok: boolean) =>
                   setFactorId(e.target.value);
                   setCode('');
                 }}
-                className="border-input bg-background text-foreground focus-visible:ring-ring focus-visible:ring-offset-background h-11 w-full rounded-md border px-3 text-base focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 sm:h-8 sm:text-sm"
+                className="bg-card text-foreground focus-visible:ring-ring focus-visible:ring-offset-background h-11 w-full rounded-md border border-[var(--ed-line-strong)] px-2.5 text-base focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 sm:h-8 sm:text-[13px]"
               >
                 {factors.map((f) => (
                   <option key={f.id} value={f.id}>
