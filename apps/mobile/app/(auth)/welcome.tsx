@@ -49,7 +49,13 @@ export default function Welcome() {
           <Mono size={13} tracking={0.04} color={c.ink}>
             StockPilot
           </Mono>
-          <Pressable hitSlop={10} onPress={() => router.push('/(auth)/sign-in')}>
+          {/* A button in a real 44pt frame (hitSlop never reached past the
+              words' own box). */}
+          <Pressable
+            onPress={() => router.push('/(auth)/sign-in')}
+            accessibilityRole="button"
+            style={styles.signInFrame}
+          >
             <Body size={14} color={c.ink2}>
               Sign in
             </Body>
@@ -88,7 +94,7 @@ export default function Welcome() {
           {STATS.map((s) => (
             <View key={s.label} style={styles.statCell}>
               <Display size={24}>{s.value}</Display>
-              <Mono size={9.5} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
+              <Mono size={9.5} tracking={0.04} color={c.ink3} style={{ marginTop: 4 }}>
                 {s.label}
               </Mono>
             </View>
@@ -131,7 +137,7 @@ export default function Welcome() {
             >
               Sign in
             </Button>
-            <Body size={13} color={c.ink4} style={{ textAlign: 'center', marginTop: 4 }}>
+            <Body size={13} color={c.ink3} style={{ textAlign: 'center', marginTop: 4 }}>
               New here? Your organization admin can invite you.
             </Body>
           </View>
@@ -144,7 +150,6 @@ export default function Welcome() {
 const styles = StyleSheet.create({
   root: { flex: 1 },
   topbar: {
-    marginTop: 6,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -152,6 +157,12 @@ const styles = StyleSheet.create({
     // and Sign in is the reason a returning user opens this screen.
     flexWrap: 'wrap',
     gap: 10,
+  },
+  // minHeight, not a fixed height: 44pt at the default size, growing with
+  // the words. It takes the bar's old 6pt top margin into its own height.
+  signInFrame: {
+    minHeight: 44,
+    justifyContent: 'center',
   },
   statRow: {
     marginTop: 30,

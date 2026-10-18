@@ -3,12 +3,13 @@ import { StyleSheet, View, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BrandLockup } from '@/components/brand/mark';
-import { MintWash } from '@/components/ui/mint-wash';
 import { useTheme } from '@/lib/use-theme';
 
 /**
- * Shared chrome for every auth screen — top-anchored brand lockup,
- * faint mint radial wash bleeding from the top-left, 24pt edge gutters.
+ * Shared chrome for every auth screen — top-anchored brand lockup on the
+ * flat page colour of the device's mode, 24pt edge gutters. (The mint radial
+ * wash it used to bleed from the top-left is gone: the redesign draws quiet,
+ * flat surfaces with no gradients, and MintWash already painted nothing.)
  */
 export function AuthShell({
   children,
@@ -22,13 +23,6 @@ export function AuthShell({
 
   return (
     <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <View
-        pointerEvents="none"
-        style={{ position: 'absolute', top: -100, left: -80 }}
-      >
-        <MintWash width={380} height={380} intensity={0.18} />
-      </View>
-
       <View
         style={{
           paddingTop: Math.max(insets.top, 24) + 16,
@@ -49,8 +43,6 @@ export function AuthShell({
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    position: 'relative',
-    overflow: 'hidden',
   },
   content: {
     flex: 1,
