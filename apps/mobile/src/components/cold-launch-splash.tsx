@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 import Svg, { Circle, Defs, Mask, Path, Rect } from 'react-native-svg';
 
-import { FONT } from '@/lib/theme';
+import { FONT, palette } from '@/lib/theme';
 
 /**
  * StockPilot cold-launch screen — the native twin of the landing page's
@@ -48,12 +48,23 @@ const REDUCED_DONE = 300;
 export const CROSSFADE_MS = 460;
 const REDUCED_CROSSFADE_MS = 240;
 
-// Brand surface. ALWAYS dark — a branded loading screen, independent of theme.
-// Ink matches the landing hero so the two surfaces are the same colour.
-const INK = '#0b0c0a';
-const PAPER = '#faf9f4';
-const MINT = '#5db89f';
-const GRID_LINE = 'rgba(250,249,244,0.045)';
+/** '#rrggbb' at `alpha`, as an rgba() string. */
+function withAlpha(hex: string, alpha: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+}
+
+// Brand surface. ALWAYS dark — a branded loading screen, independent of the
+// device's mode — drawn in the dark palette's tokens: its page (one step from
+// the landing hero's ink, and exactly the root's cold-launch ground, so the
+// hand-off from the font gate is seamless), its ink for the lockup and the
+// beam, and its accent for the pip, the reference's always-dark mint.
+const DARK = palette('dark');
+const INK = DARK.paper;
+const PAPER = DARK.ink;
+const MINT = DARK.accent;
+const GRID_LINE = withAlpha(PAPER, 0.045);
+const BEAM_TAIL = withAlpha(PAPER, 0.1);
 const GRID_CELL = 56;
 
 /** The design's cubic-in-out, as an Easing the native driver can run. */
@@ -341,7 +352,7 @@ const styles = StyleSheet.create({
     bottom: 0,
     right: 1.5,
     width: 90,
-    backgroundColor: 'rgba(250,249,244,0.10)',
+    backgroundColor: BEAM_TAIL,
   },
   beamEdge: {
     position: 'absolute',
