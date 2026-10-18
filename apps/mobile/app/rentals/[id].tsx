@@ -42,7 +42,7 @@ import {
   type RentalDetailLoad,
 } from '@/lib/rental-view';
 import { supabase } from '@/lib/supabase';
-import { ACCENT, FONT } from '@/lib/theme';
+import { FONT } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { useTheme } from '@/lib/use-theme';
@@ -157,7 +157,7 @@ export default function RentalDetailScreen() {
     return (
       <View style={[styles.root, { backgroundColor: c.paper }]}>
         <TopBar onBack={goBack} />
-        <ActivityIndicator color={c.ink4} style={{ marginTop: 37 }} />
+        <ActivityIndicator color={c.ink3} style={{ marginTop: 37 }} />
       </View>
     );
   }
@@ -211,7 +211,11 @@ export default function RentalDetailScreen() {
               </Body>
             ) : null}
             {borrower.note ? (
-              <Body size={12.5} color={borrower.email ? undefined : ACCENT.warn} muted={Boolean(borrower.email)}>
+              <Body
+                size={12.5}
+                color={borrower.email ? undefined : c.warnText}
+                muted={Boolean(borrower.email)}
+              >
                 {borrower.note}
               </Body>
             ) : null}
@@ -224,14 +228,17 @@ export default function RentalDetailScreen() {
           </View>
           {emails.map((line, i) => {
             const Icon = TONE_ICON[line.tone];
+            // The glyph repeats the line's state (the words say it): accent
+            // for an email recorded as sent, the warning tone, ink2 for one
+            // still to come, muted ink3 for none.
             const color =
               line.tone === 'recorded'
-                ? ACCENT.mint
+                ? c.accent
                 : line.tone === 'warn'
-                  ? ACCENT.warn
+                  ? c.warnText
                   : line.tone === 'upcoming'
                     ? c.ink2
-                    : c.ink4;
+                    : c.ink3;
             return (
               <View key={line.key}>
                 {i > 0 ? <Hair /> : null}
@@ -268,7 +275,7 @@ export default function RentalDetailScreen() {
             <Detail
               label="EXPECTED RETURN"
               value={rentalTimeLabel(rental.expected_return_at, context.timeZone)}
-              color={overdue ? ACCENT.crit : undefined}
+              color={overdue ? c.critText : undefined}
             />
             {rental.returned_at ? (
               <Detail label="RETURNED" value={rentalTimeLabel(rental.returned_at, context.timeZone)} />
@@ -323,7 +330,7 @@ export default function RentalDetailScreen() {
           <View style={{ marginTop: 18, gap: 8 }}>
             <Button
               block
-              variant="ghost"
+              variant="outline"
               onPress={() => {
                 Linking.openURL(`https://stockpilotusa.com/dashboard/rentals/${rental.id}`).catch(() => undefined);
               }}
@@ -352,7 +359,7 @@ function Detail({ label, value, color }: { label: string; value: string; color?:
   const { c } = useTheme();
   return (
     <View style={{ gap: 4 }}>
-      <Mono size={10} tracking={0.12} upper color={c.ink4}>
+      <Mono size={10.5} tracking={0.12} upper color={c.ink3}>
         {label}
       </Mono>
       <Body size={14} color={color}>
@@ -391,7 +398,7 @@ function Gate({
                 {
                   marginTop: 12,
                   alignSelf: 'flex-start',
-                  borderColor: c.hair,
+                  borderColor: c.hair2,
                   backgroundColor: c.card,
                   opacity: retrying ? 0.5 : pressed ? 0.85 : 1,
                 },
@@ -436,10 +443,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
+  // Try again: at least the 44pt iOS minimum, and growing with its words
+  // (minHeight, never height), radius 10 like the shared small button.
   chip: {
+    minHeight: 44,
     paddingHorizontal: 14,
     paddingVertical: 8,
-    borderRadius: 999,
+    borderRadius: 10,
     borderWidth: 1,
+    justifyContent: 'center',
   },
 });
