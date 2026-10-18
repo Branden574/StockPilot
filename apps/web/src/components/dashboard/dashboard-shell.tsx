@@ -89,6 +89,13 @@ interface DashboardShellProps {
   initialCollapsedSections?: NavSectionKey[] | null;
 }
 
+/**
+ * The organization switcher's trigger (org-switcher.tsx). It is a button only
+ * for someone in more than one organization; for everyone else the switcher
+ * is a static label.
+ */
+const ORG_SWITCHER_TRIGGER = 'button[aria-label="Switch organization"]:not(:disabled)';
+
 export function DashboardShell({
   children,
   email,
@@ -210,6 +217,22 @@ export function DashboardShell({
   React.useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle
     setMounted(true);
+  }, []);
+
+  // Where focus lands when the phone drawer opens: where it did before the
+  // nav's sections could fold. Radix focuses the first control that is not a
+  // link, which was the organization switcher for someone in more than one
+  // organization and the drawer's Close for everyone else. The section
+  // headings are buttons now, so Radix's own pick would be the first of them
+  // (Inventory), mid-nav, where Enter folds the section.
+  const drawerCloseRef = React.useRef<HTMLButtonElement>(null);
+  const focusDrawerStart = React.useCallback((event: Event) => {
+    const drawer = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+    const start =
+      drawer?.querySelector<HTMLElement>(ORG_SWITCHER_TRIGGER) ?? drawerCloseRef.current;
+    if (!start) return; // Radix's own pick
+    event.preventDefault();
+    start.focus();
   }, []);
 
   // Identify the signed-in user to PostHog. `identify` is a no-op when
@@ -372,6 +395,7 @@ export function DashboardShell({
             hideClose
             className="w-[280px] max-w-[280px] gap-0 p-0"
             aria-describedby={undefined}
+            onOpenAutoFocus={focusDrawerStart}
           >
             <SheetTitle className="sr-only">Dashboard navigation</SheetTitle>
             <Sidebar
@@ -392,10 +416,12 @@ export function DashboardShell({
             />
             {/* The drawer's own close control, a 44px target in the brand
                 row's empty right end (the sheet's built-in one is 16px).
-                After the sidebar in the DOM, as the built-in one was, so
-                focus still lands on the brand link first. */}
+                After the sidebar in the DOM, as the built-in one was, so the
+                Tab order is unchanged: from Close, Tab wraps to the brand link
+                and then the nav. Where focus starts: focusDrawerStart. */}
             <SheetClose asChild>
               <button
+                ref={drawerCloseRef}
                 type="button"
                 aria-label="Close"
                 className="hover:bg-muted hover:text-foreground absolute right-1.5 top-1.5 grid size-11 place-items-center rounded-md text-[var(--ed-ink-2)] transition-colors"
