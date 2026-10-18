@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { AuthStage } from '@/components/auth/auth-stage';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
 import { IconMark } from '@/components/ui/icon-mark';
+import './auth.css';
 
 /**
  * The authentication shell — shared by /signin, /signin/mfa, /signup, /reset,
