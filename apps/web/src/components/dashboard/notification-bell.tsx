@@ -304,21 +304,19 @@ export function NotificationBell({ userId, organizationId }: Props) {
   const showBadge = count > 0;
   const label = count > 99 ? '99+' : String(count);
 
+  // The EXACT unread count (99+ past 99) on the danger tone, where the
+  // reference design draws only a dot: the number is real data the bell has.
   return (
     <Link
       href="/dashboard/notifications"
-      className="hover:bg-muted hover:text-foreground relative grid h-[30px] w-[30px] shrink-0 place-items-center rounded-md text-[var(--ed-ink-3)] transition-colors"
-      aria-label={
-        showBadge
-          ? `Notifications (${count} unread)`
-          : 'Notifications'
-      }
+      className="hover:bg-muted hover:text-foreground relative grid size-8 shrink-0 place-items-center rounded-md text-[var(--ed-ink-2)] transition-colors [@media(pointer:coarse)]:size-11"
+      aria-label={showBadge ? `Notifications (${count} unread)` : 'Notifications'}
     >
-      <Bell className="h-3.5 w-3.5" />
+      <Bell aria-hidden strokeWidth={1.6} className="size-4" />
       {showBadge && (
         <span
           aria-hidden
-          className="outline-background bg-destructive text-destructive-foreground absolute -right-0.5 -top-0.5 grid min-h-[14px] min-w-[14px] place-items-center rounded-full px-1 text-[9.5px] font-bold leading-none outline outline-[1.5px]"
+          className="bg-destructive text-destructive-foreground ring-background absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full px-1 font-mono text-[10px] font-medium leading-none tabular-nums ring-2"
         >
           {label}
         </span>

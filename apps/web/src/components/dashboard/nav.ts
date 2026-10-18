@@ -22,6 +22,12 @@ export interface NavItem {
 }
 
 export interface NavSection {
+  /**
+   * The registry section key. It is the section's identity (labels can be
+   * renamed, keys never change), so the sidebar remembers a collapsed section
+   * by it. Presentation only: it changes nothing about which items appear.
+   */
+  key: NavSectionKey;
   label?: string;
   items: NavItem[];
 }
@@ -62,6 +68,7 @@ export function navForRole(
 ): NavSection[] {
   const resolved = resolveSurface('web_sidebar', { role, enabledModules, permissions });
   return applyNavOverrides(resolved, overrides ?? null).map((sec) => ({
+    key: sec.section,
     label: SECTION_LABEL[sec.section],
     items: sec.items.map((it) => ({
       href: it.href,

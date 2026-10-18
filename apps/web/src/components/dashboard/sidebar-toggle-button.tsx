@@ -28,11 +28,11 @@ export function SidebarToggleButton({ hidden, onToggle, className }: SidebarTogg
       aria-controls={hidden ? undefined : SIDEBAR_DOM_ID}
       aria-label={hidden ? 'Show sidebar' : 'Hide sidebar'}
       className={cn(
-        'hover:bg-muted hover:text-foreground grid h-[30px] w-[30px] place-items-center rounded-md text-[var(--ed-ink-3)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+        'hover:bg-muted hover:text-foreground grid size-8 place-items-center rounded-md text-[var(--ed-ink-2)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background [@media(pointer:coarse)]:size-11',
         className,
       )}
     >
-      <PanelLeft className="h-4 w-4" aria-hidden />
+      <PanelLeft className="size-4" strokeWidth={1.6} aria-hidden />
     </button>
   );
 }

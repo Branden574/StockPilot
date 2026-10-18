@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useTheme } from 'next-themes';
 
+import type { Density } from '@/components/dashboard/sidebar-pref';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import {
@@ -28,7 +29,17 @@ interface UserMenuProps {
   organizationName: string;
   /** True only for platform super-admins — gates the Platform console link. */
   isPlatformAdmin?: boolean;
+  /**
+   * The viewer's table density and its setter. The shell passes both; the
+   * Density choice is shown only when it can be changed.
+   */
+  density?: Density;
+  onDensityChange?: (density: Density) => void;
 }
+
+/** Group labels inside the menu: the same quiet uppercase as the sidebar's. */
+const GROUP_LABEL =
+  'text-muted-foreground px-2 pb-1 pt-2 text-[11px] font-medium uppercase tracking-[0.06em]';
 
 export function UserMenu({
   email,
@@ -36,6 +47,8 @@ export function UserMenu({
   avatarUrl,
   organizationName,
   isPlatformAdmin,
+  density,
+  onDensityChange,
 }: UserMenuProps) {
   const router = useRouter();
   const { theme, setTheme } = useTheme();
@@ -54,11 +67,13 @@ export function UserMenu({
           variant="ghost"
           size="icon"
           aria-label={`Account menu for ${fullName ?? email}`}
-          className="shrink-0 rounded-full ring-offset-background hover:ring-2 hover:ring-border focus-visible:ring-2 focus-visible:ring-ring"
+          className="ring-offset-background hover:ring-border focus-visible:ring-ring ml-1 size-8 shrink-0 rounded-full p-0 hover:bg-transparent hover:ring-2 focus-visible:ring-2 [@media(pointer:coarse)]:size-11"
         >
-          <Avatar className="h-8 w-8">
+          <Avatar className="size-7">
             {avatarUrl && <AvatarImage src={avatarUrl} alt="" />}
-            <AvatarFallback>{initials}</AvatarFallback>
+            <AvatarFallback className="bg-sunk text-foreground border border-[var(--ed-line-strong)] text-[11px] font-semibold">
+              {initials}
+            </AvatarFallback>
           </Avatar>
         </Button>
       </DropdownMenuTrigger>
@@ -70,19 +85,19 @@ export function UserMenu({
         align="end"
         className="max-h-[var(--radix-dropdown-menu-content-available-height)] w-64 overflow-y-auto p-0"
       >
-        <DropdownMenuLabel className="border-border bg-muted/40 flex items-center gap-3 border-b px-3 py-3">
-          <Avatar className="h-10 w-10 shrink-0">
+        <DropdownMenuLabel className="border-border bg-sunk flex items-center gap-3 border-b px-3 py-3 text-[13px] font-normal normal-case tracking-normal">
+          <Avatar className="size-10 shrink-0">
             {avatarUrl && <AvatarImage src={avatarUrl} alt="" />}
-            <AvatarFallback>{initials}</AvatarFallback>
+            <AvatarFallback className="bg-card text-foreground border border-[var(--ed-line-strong)] text-[13px] font-semibold">
+              {initials}
+            </AvatarFallback>
           </Avatar>
           <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-semibold">
+            <div className="text-foreground truncate text-[13.5px] font-medium">
               {fullName ?? email}
             </div>
-            <div className="text-muted-foreground truncate text-[11px]">
-              {email}
-            </div>
-            <div className="text-muted-foreground mt-0.5 truncate text-[11px]">
+            <div className="text-muted-foreground truncate text-[12px]">{email}</div>
+            <div className="text-muted-foreground mt-0.5 truncate text-[12px]">
               {organizationName}
             </div>
           </div>
@@ -117,11 +132,11 @@ export function UserMenu({
             </Link>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuLabel>Theme</DropdownMenuLabel>
+          <DropdownMenuLabel className={GROUP_LABEL}>Theme</DropdownMenuLabel>
           {/* One choice of three: the one in use is marked with a dot in the
               icon column (announced as checked); pl-10 lines the names up
               with the items above (icon 16 + its margin + the item's gap). */}
-          <DropdownMenuRadioGroup value={theme} onValueChange={setTheme}>
+          <DropdownMenuRadioGroup aria-label="Theme" value={theme} onValueChange={setTheme}>
             <DropdownMenuRadioItem value="light" className="pl-10">
               Light
             </DropdownMenuRadioItem>
@@ -132,6 +147,27 @@ export function UserMenu({
               System
             </DropdownMenuRadioItem>
           </DropdownMenuRadioGroup>
+          {density && onDensityChange ? (
+            <>
+              <DropdownMenuLabel className={GROUP_LABEL}>Density</DropdownMenuLabel>
+              {/* Table rows only: Compact trims their padding, never text,
+                  checkboxes or touch targets, and phones keep Comfortable. */}
+              <DropdownMenuRadioGroup
+                aria-label="Density"
+                value={density}
+                onValueChange={(value) =>
+                  onDensityChange(value === 'compact' ? 'compact' : 'comfortable')
+                }
+              >
+                <DropdownMenuRadioItem value="comfortable" className="pl-10">
+                  Comfortable
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="compact" className="pl-10">
+                  Compact
+                </DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+            </>
+          ) : null}
           {isPlatformAdmin && (
             <>
               <DropdownMenuSeparator />

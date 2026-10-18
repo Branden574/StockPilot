@@ -31,6 +31,10 @@ vi.mock('@/components/dashboard/mfa-required-banner', () => ({ MfaRequiredBanner
 vi.mock('@/components/dashboard/sidebar-pref', () => ({
   SIDEBAR_HIDDEN_COOKIE: 'sidebar-hidden',
   parseSidebarHidden: () => false,
+  DENSITY_COOKIE: 'density',
+  parseDensity: () => 'comfortable',
+  NAV_COLLAPSED_COOKIE: 'nav-collapsed',
+  parseCollapsedSections: () => null,
 }));
 vi.mock('@/components/platform/impersonation-banner', () => ({ ImpersonationBanner: () => null }));
 vi.mock('@/components/realtime/inventory-realtime', () => ({ InventoryRealtime: () => null }));

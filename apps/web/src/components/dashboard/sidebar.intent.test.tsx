@@ -105,6 +105,34 @@ describe('Sidebar route warming and the intent mark', () => {
     expect(callsOf(markNavigationIntent)).toEqual([]);
   });
 
+  // Fix (redesign P2.3): the warm-up used to fetch all five pages for
+  // everyone, so an org with Books off, or a viewer without Movements, paid a
+  // full server render of a page they cannot open on every hard landing.
+  it("warms only the top routes this person's sidebar shows", () => {
+    render(<Sidebar {...baseProps} role="viewer" />);
+    act(() => {
+      vi.advanceTimersByTime(5 * 150);
+    });
+    // A viewer has no Movements link (no activity_logs:read).
+    expect(callsOf(prefetchMock)).toEqual([
+      ['/dashboard/inventory'],
+      ['/dashboard/books'],
+      ['/dashboard/orders'],
+    ]);
+  });
+
+  it('skips Books when the org has the Books module off', () => {
+    render(<Sidebar {...baseProps} enabledModules={['orders']} />);
+    act(() => {
+      vi.advanceTimersByTime(5 * 150);
+    });
+    expect(callsOf(prefetchMock)).toEqual([
+      ['/dashboard/inventory'],
+      ['/dashboard/orders'],
+      ['/dashboard/movements'],
+    ]);
+  });
+
   it.each([
     ['hover', (el: Element) => fireEvent.pointerEnter(el)],
     ['keyboard focus', (el: Element) => fireEvent.focus(el)],

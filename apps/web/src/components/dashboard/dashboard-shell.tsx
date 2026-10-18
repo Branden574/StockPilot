@@ -1,5 +1,6 @@
 'use client';
 
+import { X } from 'lucide-react';
 import * as React from 'react';
 
 import { CommandPaletteLauncher } from '@/components/dashboard/command-palette-launcher';
@@ -15,6 +16,10 @@ import { PermissionsRealtime } from '@/components/realtime/permissions-realtime'
 import { SessionRevocationListener } from '@/components/realtime/session-revocation-listener';
 import { Sidebar } from '@/components/dashboard/sidebar';
 import {
+  collapsedSectionsCookieString,
+  defaultCollapsedSections,
+  type Density,
+  densityCookieString,
   isDesktopViewport,
   isSidebarToggleChord,
   isTypingTarget,
@@ -22,12 +27,12 @@ import {
   sidebarCookieString,
 } from '@/components/dashboard/sidebar-pref';
 import { Topbar } from '@/components/dashboard/topbar';
-import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
+import { Sheet, SheetClose, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { UpdateCenter } from '@/components/updates/update-center';
 import { identify } from '@/lib/analytics';
 import { forgetTourState } from '@/lib/onboarding/tour-state-cache';
 
-import type { ModuleId, NavOverrides, Permission, Role } from '@stockpilot/core';
+import type { ModuleId, NavOverrides, NavSectionKey, Permission, Role } from '@stockpilot/core';
 
 interface DashboardShellProps {
   children: React.ReactNode;
@@ -68,9 +73,19 @@ interface DashboardShellProps {
     warehouses: Array<{ id: string; name: string }>;
     activeId: string | null;
     warehouseLabel: string;
+    /** The org's plural term ("Warehouses", "Backrooms") for "All …". */
+    warehousePluralLabel?: string;
   };
   /** Server-read initial value of the desktop sidebar hide preference. */
   initialSidebarHidden?: boolean;
+  /** Server-read (sp_density cookie) table density for this viewer. */
+  initialDensity?: Density;
+  /**
+   * Server-read (sp_nav_collapsed cookie) nav sections this viewer collapsed.
+   * null or omitted: they never chose, so the role's default applies (Admin
+   * collapsed for owners and admins).
+   */
+  initialCollapsedSections?: NavSectionKey[] | null;
 }
 
 export function DashboardShell({
@@ -93,10 +108,42 @@ export function DashboardShell({
   orderStatusConfig,
   warehouseFilter,
   initialSidebarHidden = false,
+  initialDensity = 'comfortable',
+  initialCollapsedSections = null,
 }: DashboardShellProps) {
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
   const [desktopSidebarHidden, setDesktopSidebarHidden] =
     React.useState(initialSidebarHidden);
+
+  // Table density: data-density on the shell root, which globals.css turns
+  // into --row-py (table body cell padding only). Chosen in the account menu,
+  // remembered per viewer in a cookie the layout reads for the first paint.
+  const [density, setDensity] = React.useState<Density>(initialDensity);
+  const handleDensityChange = React.useCallback((next: Density) => {
+    setDensity(next);
+    document.cookie = densityCookieString(next);
+  }, []);
+
+  // Collapsed nav sections, shared by the desktop sidebar and the phone
+  // drawer's copy so they always agree. null = the viewer never chose: the
+  // default follows the role in use (it can change with an org switch).
+  const [collapsedPref, setCollapsedPref] = React.useState<NavSectionKey[] | null>(
+    initialCollapsedSections,
+  );
+  const collapsedSections = React.useMemo(
+    () => collapsedPref ?? defaultCollapsedSections(role),
+    [collapsedPref, role],
+  );
+  const handleToggleSection = React.useCallback(
+    (key: NavSectionKey, collapse: boolean) => {
+      const next = collapse
+        ? [...new Set([...collapsedSections, key])]
+        : collapsedSections.filter((k) => k !== key);
+      setCollapsedPref(next);
+      document.cookie = collapsedSectionsCookieString(next);
+    },
+    [collapsedSections],
+  );
 
   // The org's OVERRIDDEN nav — the exact same navForRole pass the Sidebar
   // runs internally, memoized here for the Topbar so breadcrumbs inherit
@@ -181,32 +228,42 @@ export function DashboardShell({
   //
   // Restored on unmount so the marketing site (long scrollable pages)
   // gets its natural scroll back when the user navigates away.
+  //
+  // The way back puts back ONLY what this effect changed. It used to restore
+  // the whole class and style attributes of <html> and <body> as they were at
+  // mount, but next-themes writes the theme class and color-scheme on <html>
+  // while the dashboard is open: switching to Light and then signing out put
+  // the old Dark class back, and the landing page came up dark.
   React.useEffect(() => {
     const body = document.body;
     const html = document.documentElement;
+    const removedClasses = ['min-h-dvh', 'min-h-screen'].filter((c) => body.classList.contains(c));
     const prev = {
-      bodyClass: body.className,
-      htmlClass: html.className,
-      bodyStyle: body.getAttribute('style') ?? '',
-      htmlStyle: html.getAttribute('style') ?? '',
+      position: body.style.position,
+      inset: body.style.inset,
+      overflow: body.style.overflow,
+      height: html.style.height,
     };
-    body.classList.remove('min-h-dvh', 'min-h-screen');
+    body.classList.remove(...removedClasses);
     body.style.position = 'fixed';
     body.style.inset = '0';
     body.style.overflow = 'hidden';
     html.style.height = '100%';
     return () => {
-      body.className = prev.bodyClass;
-      html.className = prev.htmlClass;
-      if (prev.bodyStyle) body.setAttribute('style', prev.bodyStyle);
-      else body.removeAttribute('style');
-      if (prev.htmlStyle) html.setAttribute('style', prev.htmlStyle);
-      else html.removeAttribute('style');
+      body.classList.add(...removedClasses);
+      body.style.position = prev.position;
+      body.style.inset = prev.inset;
+      body.style.overflow = prev.overflow;
+      html.style.height = prev.height;
+      if (!body.getAttribute('style')) body.removeAttribute('style');
+      if (!html.getAttribute('style')) html.removeAttribute('style');
     };
   }, []);
 
   return (
-    <div className="bg-background flex h-dvh overflow-hidden">
+    // .sp-shell (globals.css) carries the dashboard chrome type, 13.5px Inter;
+    // data-density feeds --row-py to every table in the page.
+    <div className="sp-shell bg-background flex h-dvh overflow-hidden" data-density={density}>
       {/* Top progress bar — fires at click time on every internal nav,
           covers links the per-link useLinkStatus indicator can't see
           (topbar, dashboard cards, table rows, breadcrumbs, etc), and
@@ -248,6 +305,8 @@ export function DashboardShell({
           permissions={permissions}
           enabledModules={enabledModules}
           navOverrides={navOverrides}
+          collapsedSections={collapsedSections}
+          onToggleSection={handleToggleSection}
         />
       )}
 
@@ -264,6 +323,8 @@ export function DashboardShell({
           sidebarHidden={desktopSidebarHidden}
           warehouseFilter={warehouseFilter}
           navSections={navSections}
+          density={density}
+          onDensityChange={handleDensityChange}
         />
         {/*
           main bg matches the Card bg so any empty area below short
@@ -295,6 +356,7 @@ export function DashboardShell({
         <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
           <SheetContent
             side="left"
+            hideClose
             className="w-[280px] max-w-[280px] gap-0 p-0"
             aria-describedby={undefined}
           >
@@ -311,8 +373,23 @@ export function DashboardShell({
               permissions={permissions}
               enabledModules={enabledModules}
               navOverrides={navOverrides}
+              collapsedSections={collapsedSections}
+              onToggleSection={handleToggleSection}
               onNavigate={() => setMobileNavOpen(false)}
             />
+            {/* The drawer's own close control, a 44px target in the brand
+                row's empty right end (the sheet's built-in one is 16px).
+                After the sidebar in the DOM, as the built-in one was, so
+                focus still lands on the brand link first. */}
+            <SheetClose asChild>
+              <button
+                type="button"
+                aria-label="Close"
+                className="hover:bg-muted hover:text-foreground absolute right-1.5 top-1.5 grid size-11 place-items-center rounded-md text-[var(--ed-ink-2)] transition-colors"
+              >
+                <X aria-hidden className="size-4" />
+              </button>
+            </SheetClose>
           </SheetContent>
         </Sheet>
       )}
