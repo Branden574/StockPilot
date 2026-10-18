@@ -30,9 +30,19 @@ export function sidebarCookieString(hidden: boolean): string {
     : `${SIDEBAR_HIDDEN_COOKIE}=; path=/; max-age=0; samesite=lax`;
 }
 
+/** Desktop width: Tailwind `md`, where the pinned sidebar shows. */
+const DESKTOP_QUERY = '(min-width: 768px)';
+
 /** True when the viewport is desktop-width (Tailwind `md`, ≥768px). */
 export function isDesktopViewport(): boolean {
-  return typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches;
+  return typeof window !== 'undefined' && window.matchMedia(DESKTOP_QUERY).matches;
+}
+
+/** Calls `onChange` whenever the window crosses the desktop width; returns the unsubscribe. */
+export function subscribeToDesktopViewport(onChange: () => void): () => void {
+  const query = window.matchMedia(DESKTOP_QUERY);
+  query.addEventListener('change', onChange);
+  return () => query.removeEventListener('change', onChange);
 }
 
 /** The chord that toggles the sidebar: Cmd+\ (mac) / Ctrl+\ (win/linux). */

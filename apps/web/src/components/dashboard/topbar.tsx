@@ -104,16 +104,21 @@ export function Topbar({
   // the narrowest was 768px beside the sidebar (iPad portrait, 768-834px, is
   // touch only, so ⌘K is no substitute). At 400px the icon fits beside the
   // picker's whole "All warehouses" (measured: header-check).
-  // The warehouse picker is the one control that yields: its name truncates.
-  // Before (2026-09-28/29): the buttons shrank to 14px and the account avatar
-  // was pushed past the right edge, 13px at 390px and entirely at 768px with
-  // the sidebar, clipped by the shell's overflow-hidden (no page scroll).
+  // The warehouse picker is the one control that yields: its name truncates,
+  // and it gives up its width before the breadcrumb does (shrink 10 to the
+  // trail's 1), so on a touch tablet, where every icon button is 44px, the
+  // trail stays readable. Before (2026-09-28/29): the buttons shrank to 14px
+  // and the account avatar was pushed past the right edge, 13px at 390px and
+  // entirely at 768px with the sidebar, clipped by the shell's overflow-hidden
+  // (no page scroll).
   //
   // A SOLID bar (DESIGN-SPEC 5.2): the page colour and a hairline, no blur.
-  // It stays 56px tall, the height the storefront's --sf-topbar-h assumes.
+  // It stays 56px tall, the height the storefront's --sf-topbar-h assumes. Its
+  // gap is the reference 12px from sm up, 8px on a phone, where the bar is
+  // narrowest.
   return (
     <header
-      className="border-border bg-background @container sticky top-0 z-20 flex shrink-0 items-center gap-3 border-b px-4 sm:px-6"
+      className="border-border bg-background @container sticky top-0 z-20 flex shrink-0 items-center gap-2 border-b px-4 sm:gap-3 sm:px-6"
       style={{ height: 56 }}
     >
       <SidebarToggleButton
@@ -160,7 +165,7 @@ export function Topbar({
         </ol>
       </nav>
 
-      <div className="ml-auto flex min-w-0 items-center gap-2">
+      <div className="ml-auto flex min-w-0 shrink-[10] items-center gap-2">
         {warehouseFilter && warehouseFilter.warehouses.length > 0 && (
           <WarehouseFilterPicker
             warehouses={warehouseFilter.warehouses}

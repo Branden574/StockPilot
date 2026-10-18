@@ -25,6 +25,7 @@ import {
   isTypingTarget,
   SIDEBAR_DOM_ID,
   sidebarCookieString,
+  subscribeToDesktopViewport,
 } from '@/components/dashboard/sidebar-pref';
 import { Topbar } from '@/components/dashboard/topbar';
 import { Sheet, SheetClose, SheetContent, SheetTitle } from '@/components/ui/sheet';
@@ -179,6 +180,18 @@ export function DashboardShell({
     else setMobileNavOpen(true);
   }, []);
 
+  // What that control says follows what it does. On a phone it opens the
+  // drawer, so it reads "Show sidebar", collapsed (the drawer is closed
+  // whenever the button can be reached: the open drawer hides the page from
+  // assistive tech). It used to read "Hide sidebar", expanded, pointing at the
+  // desktop sidebar that is not displayed on a phone. Server render and
+  // hydration assume a desktop, then the real width takes over.
+  const desktopViewport = React.useSyncExternalStore(
+    subscribeToDesktopViewport,
+    isDesktopViewport,
+    () => true,
+  );
+
   // Cmd/Ctrl+\ toggles on desktop; ignored while typing so a literal "\"
   // in a text field is never swallowed.
   React.useEffect(() => {
@@ -320,7 +333,7 @@ export function DashboardShell({
           organizationId={organizationId}
           isPlatformAdmin={isPlatformAdmin}
           onToggleSidebar={handleToggleSidebar}
-          sidebarHidden={desktopSidebarHidden}
+          sidebarHidden={desktopViewport ? desktopSidebarHidden : true}
           warehouseFilter={warehouseFilter}
           navSections={navSections}
           density={density}

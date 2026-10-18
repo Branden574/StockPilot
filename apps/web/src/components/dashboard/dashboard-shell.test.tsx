@@ -145,13 +145,35 @@ describe('DashboardShell sidebar hide', () => {
     expect(screen.queryByTestId('desktop-sidebar')).not.toBeInTheDocument();
   });
 
+  // LABEL UPDATED (redesign P2.3 fix): on a phone the button opens the drawer,
+  // so it now says "Show sidebar", collapsed, where it said "Hide sidebar",
+  // expanded. What this test guards is unchanged: pressing it never hides the
+  // desktop sidebar or writes the cookie.
   it('mobile: the toggle does not hide the desktop sidebar or set the cookie', () => {
     setViewport(false);
     render(<DashboardShell {...baseProps}>body</DashboardShell>);
     // Desktop sidebar is still rendered (CSS hides it at mobile width, not the DOM).
-    fireEvent.click(screen.getByRole('button', { name: 'Hide sidebar' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show sidebar' }));
     expect(screen.getByTestId('desktop-sidebar')).toBeInTheDocument();
     expect(document.cookie).not.toContain('sp_sidebar_hidden=1');
+  });
+
+  it('mobile: the toggle says what it does there (opens the drawer), not "Hide sidebar"', () => {
+    setViewport(false);
+    render(<DashboardShell {...baseProps}>body</DashboardShell>);
+    const toggle = screen.getByRole('button', { name: 'Show sidebar' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    // The desktop sidebar is not displayed on a phone: nothing to point at.
+    expect(toggle).not.toHaveAttribute('aria-controls');
+    expect(screen.queryByRole('button', { name: 'Hide sidebar' })).toBeNull();
+  });
+
+  it('desktop: the toggle still names and controls the pinned sidebar', () => {
+    setViewport(true);
+    render(<DashboardShell {...baseProps}>body</DashboardShell>);
+    const toggle = screen.getByRole('button', { name: 'Hide sidebar' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(toggle).toHaveAttribute('aria-controls', 'dashboard-sidebar');
   });
 });
 
