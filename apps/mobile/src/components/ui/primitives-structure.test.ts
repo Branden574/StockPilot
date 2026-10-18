@@ -100,7 +100,9 @@ describe('every shared primitive follows the device mode', () => {
   // ink4 and ink5 are 1.8-3.7:1: fine for an arrow or a glyph, under AA for
   // words. Mutation caught: an eyebrow, a row subtitle, a stat label, the
   // pager's range line, a field label or placeholder, or the calendar's
-  // weekday letters put back on ink4 / ink5.
+  // weekday letters put back on ink4 / ink5. Inventory, P2.5b: the shared
+  // Checkbox's clear-box edge is ink4, a UI mark held at 3:1 on the card and
+  // the page in both modes (checkbox.test.ts measures it); no words.
   it('the faint inks colour decorative marks only', () => {
     const uses: string[] = [];
     for (const file of OWNED) {
@@ -124,6 +126,7 @@ describe('every shared primitive follows the device mode', () => {
     }
     expect(uses.sort()).toEqual([
       'src/components/data-list-screen.tsx EmptyIcon ink4', // the empty state's glyph
+      'src/components/ui/checkbox.tsx (not in JSX) ink4', // checkboxTone: a clear box's edge
       'src/components/ui/paginator.tsx Mono ink4', // the "·" gap marker, hidden from VoiceOver
       'src/components/ui/row.tsx ChevronRight ink4', // the row's arrow
     ]);
