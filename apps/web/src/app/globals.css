@@ -158,10 +158,13 @@
     --ring: 80 7% 5%;
 
     /* Chart series palette (light) — saturated enough to read against the
-       white card surface while staying within the warm editorial register. */
+       white card surface while staying within the warm editorial register.
+       Only chart-1 follows the redesign accent; the other series keep their
+       palette (DESIGN-SPEC 6.17), so 2 and 3 no longer equal --warning and
+       --destructive. */
     --chart-1: var(--ed-accent); /* the accent */
-    --chart-2: 38 60% 52%;  /* warning amber */
-    --chart-3: 18 65% 47%;  /* terracotta (matches destructive hue) */
+    --chart-2: 38 60% 52%;  /* amber */
+    --chart-3: 18 65% 47%;  /* terracotta */
     --chart-4: 95 22% 45%;  /* muted olive */
     --chart-5: 80 7% 35%;   /* slate ink */
 

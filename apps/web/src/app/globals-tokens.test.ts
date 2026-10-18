@@ -189,7 +189,22 @@ const TEXT_ON_SURFACE: ReadonlyArray<readonly [text: string, surface: string]> =
   ['--destructive', '--card'],
 ];
 
-/** Text on a solid fill. */
+/**
+ * Text on a solid fill.
+ *
+ * The solid warning fill is the one fill left out, on purpose. Its only text
+ * use is the warning Badge (`bg-warning text-warning-foreground`, "Low stock"),
+ * and ink on the new light fill reads 3.58:1 (9.76:1 in dark). No token value
+ * can fix that pair: --warning-foreground is also the text colour on light
+ * warning tints (dashboard widgets, the public item page), where white would
+ * not read. P2.2 moves the Badge to the warn-on-wash recipe (--warning on
+ * --warning-wash, 4.70:1, checked in TEXT_ON_SURFACE above).
+ *
+ * Text on the accent fill is --accent-ink only. --accent-foreground is page
+ * text, so the hovers that still pair it (or ink) with bg-accent (Button
+ * outline and ghost, menu, select and calendar items) read 1.71:1 (3.48:1 for
+ * ink) in light until P2.2 moves them to the neutral bg-muted hover.
+ */
 const TEXT_ON_FILL: ReadonlyArray<readonly [text: string, fill: string]> = [
   ['--primary-foreground', '--primary'], // ink buttons and the toast
   ['--accent-ink', '--accent'], // accent-filled buttons
