@@ -7,9 +7,11 @@ import {
   View,
 } from 'react-native';
 
+import { syncBadgeDot, syncBadgeSurface } from '@/components/ui/tones';
 import { cycleCountSync, useSyncStatus } from '@/lib/cycle-count-sync';
-import { syncBadgeState, type SyncBadgeTone } from '@/lib/sync-badge';
-import { TYPE_CEILING, capTo, radius, space, theme } from '@/lib/theme';
+import { syncBadgeState } from '@/lib/sync-badge';
+import { TYPE_CEILING, capTo, radius, space } from '@/lib/theme';
+import { useTheme } from '@/lib/use-theme';
 
 /**
  * Header pill that reflects the sync engine's state. Tap to force a
@@ -26,16 +28,22 @@ import { TYPE_CEILING, capTo, radius, space, theme } from '@/lib/theme';
  *     parked as rejected too, but it MAY have been applied. The badge called
  *     it "not sent", which reads as "enter it again". It now says "not
  *     confirmed".
+ *
+ * Colours follow the device's mode (redesign plan P2.5 moved it off the
+ * light-only legacy `theme` alias): the reference's neutral chip, with the
+ * state's tone on the dot (tones.ts `syncBadgeDot`). The words carry the
+ * state; the dot only repeats it.
+ *
+ * Its hosts have not moved yet: the light-only header of
+ * app/cycle-count/[id].tsx and the always-dark camera bars of
+ * app/cycle-count/scan/[id].tsx and ai-scan/[id].tsx. In light mode it is
+ * the light chip it always was; in dark mode it is a dark chip on the light
+ * count header, and its outline all but disappears on the camera bars. That
+ * lasts until P5.9 migrates those screens (and decides whether the camera
+ * bars need a fixed dark-bar surface here).
  */
-const TONE_COLOR: Record<SyncBadgeTone, string> = {
-  primary: theme.primary,
-  muted: theme.textMuted,
-  destructive: theme.destructive,
-  success: theme.success,
-  warning: theme.warning,
-};
-
 export function SyncStatusBadge() {
+  const { c } = useTheme();
   const { status, pendingCount, rejectedCount, unconfirmedCount } = useSyncStatus();
   const { label, tone, spinner } = syncBadgeState({
     status,
@@ -43,7 +51,8 @@ export function SyncStatusBadge() {
     rejectedCount,
     unconfirmedCount,
   });
-  const dotColor = TONE_COLOR[tone];
+  const dotColor = syncBadgeDot(tone, c);
+  const surface = syncBadgeSurface(c);
   const kind: 'dot' | 'spinner' = spinner ? 'spinner' : 'dot';
 
   return (
@@ -51,7 +60,12 @@ export function SyncStatusBadge() {
       onPress={() => {
         void cycleCountSync.forceSync();
       }}
-      style={({ pressed }) => [styles.pill, pressed && { opacity: 0.65 }]}
+      style={({ pressed }) => [
+        styles.pill,
+        { backgroundColor: surface.bg, borderColor: surface.border },
+        pressed && { opacity: 0.65 },
+      ]}
+      accessibilityRole="button"
       accessibilityLabel={`Sync status: ${label}. Tap to retry.`}
     >
       {kind === 'spinner' ? (
@@ -63,7 +77,11 @@ export function SyncStatusBadge() {
           with the Release / Reassign buttons in the cycle-count header, where
           nothing else can shrink, so an uncapped "Offline · 12 queued" pushes
           them off-screen. */}
-      <Text style={styles.label} numberOfLines={1} maxFontSizeMultiplier={LABEL_CAP}>
+      <Text
+        style={[styles.label, { color: surface.fg }]}
+        numberOfLines={1}
+        maxFontSizeMultiplier={LABEL_CAP}
+      >
         {label}
       </Text>
     </Pressable>
@@ -81,9 +99,7 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     paddingHorizontal: 10,
     borderRadius: radius.lg,
-    backgroundColor: theme.bgElevated,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
     alignSelf: 'flex-start',
     marginRight: space.xs,
     maxWidth: '60%',
@@ -95,7 +111,6 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
   label: {
-    color: theme.text,
     fontSize: 11,
     fontWeight: '600',
     flexShrink: 1,

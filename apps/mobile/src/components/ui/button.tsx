@@ -1,17 +1,29 @@
 import * as React from 'react';
 import { Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native';
 
-import { ACCENT, FONT, RADIUS, TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
+import { BUTTON_RADIUS, buttonTone, type ButtonVariant } from './tones';
 
-type Variant = 'primary' | 'ghost' | 'destructive' | 'outline';
+type Variant = ButtonVariant;
 type Size = 'sm' | 'md';
 
 /**
- * Primary CTA — solid ink-black on light, solid paper on dark. Press
- * scales to 0.98 per brand motion spec. Ghost is borderless (used for
- * "Not now", "Use password instead", etc.). Destructive is text-only
- * crit-red — never a full red bar (per design).
+ * The shared button. Which variant goes where is decided once, in
+ * tones.ts `buttonTone` (the web's hierarchy rule, DESIGN-SPEC 6.2):
+ *
+ *   primary      ink fill: commit the work in front of you (Post receipt,
+ *                Save count, Distribute, Submit order request)
+ *   accent       accent fill: create something new at page level (New item,
+ *                Place an order, Start count); an icon in `leading` takes
+ *                `c.accentInk`
+ *   outline      secondary
+ *   ghost        borderless words ("Not now", "Use password instead")
+ *   destructive  refusal-red words only, never a full red bar
+ *
+ * A screen shows at most one ink and one accent button. 52pt (md) and 36pt
+ * (sm) tall, corner radius 14 / 10. Press scales to 0.98 per brand motion
+ * spec.
  */
 export function Button({
   children,
@@ -41,25 +53,7 @@ export function Button({
   accessibilityHint?: string;
 }) {
   const { c } = useTheme();
-
-  const bg =
-    variant === 'primary'
-      ? c.ink
-      : variant === 'outline'
-        ? c.card
-        : 'transparent';
-  const fg =
-    variant === 'destructive'
-      ? ACCENT.crit
-      : variant === 'primary'
-        ? c.paper
-        : c.ink;
-  const border =
-    variant === 'outline'
-      ? c.hair
-      : variant === 'primary'
-        ? c.ink
-        : 'transparent';
+  const tone = buttonTone(variant, c);
 
   const minHeight = size === 'sm' ? 36 : 52;
   const padH = size === 'sm' ? 14 : 20;
@@ -78,12 +72,13 @@ export function Button({
         styles.base,
         {
           // minHeight, not height: the label is allowed to grow to the 22pt
-          // control ceiling, and the pill grows with it instead of clipping.
+          // control ceiling, and the button grows with it instead of clipping.
           minHeight,
           paddingVertical: 6,
           paddingHorizontal: padH,
-          backgroundColor: bg,
-          borderColor: border,
+          borderRadius: BUTTON_RADIUS[size],
+          backgroundColor: tone.bg,
+          borderColor: tone.border,
           opacity: disabled ? 0.5 : 1,
           transform: [{ scale: pressed ? 0.98 : 1 }],
           ...(block ? { width: '100%' } : null),
@@ -96,7 +91,7 @@ export function Button({
         style={[
           styles.label,
           {
-            color: fg,
+            color: tone.fg,
             fontSize,
           },
         ]}
@@ -116,7 +111,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    borderRadius: RADIUS.pill,
     borderWidth: 1,
   },
   slot: {
@@ -129,7 +123,7 @@ const styles = StyleSheet.create({
     letterSpacing: -0.15,
     // Paired with the cap: RN defaults text to flexShrink 0, so without this a
     // numberOfLines={1} label refuses to yield and shoves its sibling out of a
-    // two-button footer row instead of ellipsizing inside its own pill.
+    // two-button footer row instead of ellipsizing inside its own button.
     flexShrink: 1,
     minWidth: 0,
   },

@@ -12,9 +12,14 @@ import { useTheme } from '@/lib/use-theme';
 import { Mono } from './text';
 
 /**
- * Form input field — mono-eyebrow label above, 50pt-tall input with
- * hairline border that deepens to ink on focus. Optional trailing icon
- * slot (eye, mail, etc).
+ * Form input field — mono-eyebrow label above, 50pt-tall input with the
+ * stronger border (a control must not rely on a hairline alone) that deepens
+ * to ink on focus. Optional trailing icon slot (eye, mail, etc). The label
+ * and the placeholder are muted ink (ink3): the label names the box and the
+ * placeholder says what goes in it, so both must read at AA (6.6:1 or more on
+ * the card in both modes; the old ink5 placeholder was 1.8-2.1:1). Typed text
+ * is full ink, so the hint still reads as a hint. The web's inputs use the
+ * same muted ink for placeholders.
  */
 export function Field({
   label,
@@ -31,7 +36,7 @@ export function Field({
 
   return (
     <View style={[styles.wrap, style]}>
-      <Mono size={10} tracking={0.12} upper color={c.ink4}>
+      <Mono size={10} tracking={0.12} upper color={c.ink3}>
         {label}
       </Mono>
       <View
@@ -39,7 +44,7 @@ export function Field({
           styles.inputBox,
           {
             backgroundColor: c.card,
-            borderColor: focused ? c.ink : c.hair,
+            borderColor: focused ? c.ink : c.hair2,
           },
         ]}
       >
@@ -61,7 +66,7 @@ export function Field({
             setFocused(false);
             inputProps.onBlur?.(e);
           }}
-          placeholderTextColor={c.ink5}
+          placeholderTextColor={c.ink3}
           style={[
             styles.input,
             {

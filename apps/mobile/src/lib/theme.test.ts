@@ -156,3 +156,206 @@ describe('text colours meet WCAG AA (4.5:1) on every surface, in both modes (PO-
     }
   });
 });
+/**
+ * THE REDESIGN PALETTE (2026-10, package P2.5). The phone's two palettes are
+ * the redesign reference's tokens per mode (DESIGN-SPEC 2.1 and 2.5, the same
+ * values the web's globals.css takes): pinned whole, so a later edit to a
+ * colour is a deliberate one that updates this list, not a drift.
+ */
+describe('palette: each mode mapped onto the redesign reference (DESIGN-SPEC 2.5)', () => {
+  it('light', async () => {
+    const { palette } = await import('./theme');
+    expect(palette('light')).toEqual({
+      paper: '#fafaf7', // --bg
+      paper2: '#f4f3ee', // --sunk (was #f3f1ea)
+      card: '#ffffff', // --elev
+      sunk: '#f4f3ee', // --sunk
+      ink: '#0e0f0d', // --ink
+      ink2: '#2a2c28', // --ink2
+      ink3: '#5a5d56', // --ink3
+      ink4: '#8b8e85', // --ink4
+      ink5: '#b5b5ac', // no reference twin (the web's --ed-ink-5)
+      hair: '#e7e5dd', // --line
+      hair2: '#d4d2c8', // --line2, the stronger border
+      accent: '#2f7463', // --acc
+      accentInk: '#ffffff', // --accInk
+      accentWash: '#e7f3f0', // --accWash
+      warnText: '#975d11', // --warn at 33% L (DESIGN-SPEC 2.4)
+      warnWash: '#f9eedc', // --warnWash
+      critText: '#bc4224', // --dan
+      critWash: '#fbede9', // --danWash
+    });
+  });
+
+  it('dark', async () => {
+    const { palette } = await import('./theme');
+    expect(palette('dark')).toEqual({
+      paper: '#0c0d0a', // --bg
+      paper2: '#131410', // --elev, the inset tone the phone has always used here
+      card: '#131410', // --elev (was #15160f)
+      sunk: '#08090a', // --sunk: below the page in dark
+      ink: '#f0efe8', // --ink (was #fafaf7)
+      ink2: '#d8d6cc', // --ink2
+      ink3: '#9a9b91', // --ink3
+      ink4: '#6a6b62', // --ink4
+      ink5: '#42423d', // no reference twin
+      hair: '#1f201b', // --line
+      hair2: '#2a2b25', // --line2, the stronger border
+      accent: '#7acdb8', // --acc
+      accentInk: '#07120e', // --accInk
+      accentWash: '#182a26', // --accWash
+      warnText: '#e2b05a', // --warn
+      warnWash: '#292114', // --warnWash
+      critText: '#e87a5e', // --dan
+      critWash: '#2d1a16', // --danWash
+    });
+  });
+
+  it('the accent, washes, warn and danger are the reference HSL values, per mode', async () => {
+    const { palette } = await import('./theme');
+    const { hexOf } = await import('../components/ui/__fixtures__/contrast');
+    const light = palette('light');
+    const dark = palette('dark');
+    expect(light.accent).toBe(hexOf('hsl(165 42% 32%)'));
+    expect(dark.accent).toBe(hexOf('hsl(165 45% 64%)'));
+    expect(light.accentWash).toBe(hexOf('hsl(165 35% 93%)'));
+    expect(dark.accentWash).toBe(hexOf('hsl(165 28% 13%)'));
+    expect(light.warnText).toBe(hexOf('hsl(34 80% 33%)'));
+    expect(dark.warnText).toBe(hexOf('hsl(38 70% 62%)'));
+    expect(light.warnWash).toBe(hexOf('hsl(38 70% 92%)'));
+    expect(dark.warnWash).toBe(hexOf('hsl(38 35% 12%)'));
+    expect(light.critText).toBe(hexOf('hsl(12 68% 44%)'));
+    expect(dark.critText).toBe(hexOf('hsl(12 75% 64%)'));
+    expect(light.critWash).toBe(hexOf('hsl(12 70% 95%)'));
+    expect(dark.critWash).toBe(hexOf('hsl(12 35% 13%)'));
+  });
+
+  it('hands back the same object for a mode, so memoised rows and style arrays stay stable', async () => {
+    const { palette } = await import('./theme');
+    expect(palette('light')).toBe(palette('light'));
+    expect(palette('dark')).toBe(palette('dark'));
+    expect(palette('light')).not.toBe(palette('dark'));
+  });
+});
+
+describe('the redesign palette reads at AA in both modes', () => {
+  const MODES = ['light', 'dark'] as const;
+  const TEXT = ['ink', 'ink2', 'ink3', 'accent', 'warnText', 'critText'] as const;
+  const SURFACES = ['paper', 'paper2', 'card', 'sunk'] as const;
+
+  it('every text token on every surface (4.5:1)', async () => {
+    const { palette } = await import('./theme');
+    const { AA_TEXT, contrast } = await import('../components/ui/__fixtures__/contrast');
+    for (const mode of MODES) {
+      const p = palette(mode);
+      for (const text of TEXT) {
+        for (const surface of SURFACES) {
+          expect(
+            contrast(p[text], p[surface]),
+            `${mode} ${text} on ${surface}`,
+          ).toBeGreaterThanOrEqual(AA_TEXT);
+        }
+      }
+    }
+  });
+
+  it("each tone's words on its own wash, and the on-accent ink on the accent fill (4.5:1)", async () => {
+    const { palette } = await import('./theme');
+    const { AA_TEXT, contrast } = await import('../components/ui/__fixtures__/contrast');
+    for (const mode of MODES) {
+      const p = palette(mode);
+      expect(
+        contrast(p.accent, p.accentWash),
+        `${mode} accent on accentWash`,
+      ).toBeGreaterThanOrEqual(AA_TEXT);
+      expect(
+        contrast(p.warnText, p.warnWash),
+        `${mode} warnText on warnWash`,
+      ).toBeGreaterThanOrEqual(AA_TEXT);
+      expect(
+        contrast(p.critText, p.critWash),
+        `${mode} critText on critWash`,
+      ).toBeGreaterThanOrEqual(AA_TEXT);
+      expect(contrast(p.accentInk, p.accent), `${mode} accentInk on accent`).toBeGreaterThanOrEqual(
+        AA_TEXT,
+      );
+      // The ink button and the selected chip: paper (or card) words on ink.
+      expect(contrast(p.paper, p.ink), `${mode} paper on ink`).toBeGreaterThanOrEqual(AA_TEXT);
+      expect(contrast(p.card, p.ink), `${mode} card on ink`).toBeGreaterThanOrEqual(AA_TEXT);
+    }
+  });
+
+  it('ink4, the decoration ink (chevrons, separators, empty-state glyphs), still marks at 3:1 on paper and card', async () => {
+    const { palette } = await import('./theme');
+    const { AA_UI, contrast } = await import('../components/ui/__fixtures__/contrast');
+    for (const mode of MODES) {
+      const p = palette(mode);
+      expect(contrast(p.ink4, p.paper), `${mode} ink4 on paper`).toBeGreaterThanOrEqual(AA_UI);
+      expect(contrast(p.ink4, p.card), `${mode} ink4 on card`).toBeGreaterThanOrEqual(AA_UI);
+    }
+  });
+
+  it('the mode-independent mintInk twins stay AA text on their own mode', async () => {
+    // The screens that still colour mint words with ACCENT read mintInk in
+    // light and mintInkDark in dark (pill.tsx did, serials.ts and
+    // order-line-readiness.tsx still do).
+    const { ACCENT, palette } = await import('./theme');
+    const { AA_TEXT, contrast } = await import('../components/ui/__fixtures__/contrast');
+    for (const surface of SURFACES) {
+      expect(
+        contrast(ACCENT.mintInk, palette('light')[surface]),
+        `mintInk on light ${surface}`,
+      ).toBeGreaterThanOrEqual(AA_TEXT);
+      expect(
+        contrast(ACCENT.mintInkDark, palette('dark')[surface]),
+        `mintInkDark on dark ${surface}`,
+      ).toBeGreaterThanOrEqual(AA_TEXT);
+    }
+  });
+});
+
+describe('exports other screens still read', () => {
+  it('ACCENT keeps its mode-independent values (53 importers; lib/serials.ts pins crit)', async () => {
+    const { ACCENT } = await import('./theme');
+    expect(ACCENT).toEqual({
+      mint: 'hsl(165, 38%, 56%)',
+      mintSoft: 'hsla(165, 38%, 56%, 0.14)',
+      mintInk: 'hsl(165, 42%, 28%)',
+      mintInkDark: 'hsl(165, 50%, 70%)',
+      pipOrange: '#ff7a45',
+      pipTeal: '#46c2ca',
+      pipAmber: '#f5b042',
+      warn: '#b97a1d',
+      crit: '#b03a3a',
+    });
+  });
+
+  it('the legacy `theme` alias keeps every key, light only, until P5.4 removes it', async () => {
+    // Light only by design: a screen still on it renders light in dark mode
+    // until its owner moves it to useTheme().
+    const { ACCENT, palette, theme } = await import('./theme');
+    const light = palette('light');
+    expect(theme).toEqual({
+      bg: light.paper,
+      bgElevated: light.paper2,
+      border: light.hair,
+      text: light.ink,
+      textMuted: light.ink3,
+      primary: light.ink,
+      primaryDark: light.ink2,
+      success: ACCENT.mintInk,
+      warning: ACCENT.warn,
+      destructive: ACCENT.crit,
+      card: light.card,
+    });
+  });
+
+  it('radius, space, RADIUS, SPACE and SHADOW are unchanged', async () => {
+    const { RADIUS, SHADOW, SPACE, radius, space } = await import('./theme');
+    expect(RADIUS).toEqual({ tile: 8, card: 10, cardHero: 14, pill: 999 });
+    expect(SPACE).toEqual({ xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32 });
+    expect(radius).toEqual({ sm: 6, md: 10, lg: 14, xl: 20 });
+    expect(space).toBe(SPACE);
+    expect(Object.keys(SHADOW)).toEqual(['card', 'sheet', 'fab']);
+  });
+});

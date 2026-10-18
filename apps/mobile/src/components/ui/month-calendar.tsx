@@ -15,8 +15,10 @@ import { useTheme } from '@/lib/use-theme';
  *
  *   - Core's grid: always 6 rows of 7, Sunday first, only the month's own
  *     days (the rest are empty), so the grid never changes height.
- *   - The start and end are filled, the days between tinted, the
- *     organization's today outlined.
+ *   - The start and end are filled (ink), the days between tinted with the
+ *     accent wash (the inset tone it used before is the sheet's own colour
+ *     in dark mode, so the range did not show there), the organization's
+ *     today outlined.
  *   - Previous month / Next month are 44 pt buttons; there is no swipe (a
  *     gesture would fight VoiceOver's own swipes).
  *   - Every day is its own button, named 'Tuesday, September 1, 2026', with
@@ -103,7 +105,7 @@ export function MonthCalendar({
           <View key={d.long} style={styles.weekday}>
             <Mono
               size={11.5}
-              color={c.ink4}
+              color={c.ink3}
               maxFontSizeMultiplier={capTo(11.5, TYPE_CEILING.chrome)}
             >
               {d.short}
@@ -138,7 +140,7 @@ function DayCell({ day, onPick }: { day: MonthCalendarDay; onPick: (ymd: string)
       accessibilityState={{ selected: day.selected }}
       style={({ pressed }) => [
         styles.cell,
-        { backgroundColor: day.inRange ? c.paper2 : 'transparent', opacity: pressed ? 0.7 : 1 },
+        { backgroundColor: day.inRange ? c.accentWash : 'transparent', opacity: pressed ? 0.7 : 1 },
       ]}
     >
       <View

@@ -9,9 +9,9 @@ import { Mono } from './text';
 /**
  * Shared profile avatar — shows the user's uploaded photo from
  * `user_profiles.avatar_url` when present, otherwise falls back to a
- * monogram of their initials inside a hairline-bordered circle. Same
- * source as the web app's topbar avatar; updates on the web appear
- * here on the next mount (or after force-refresh).
+ * monogram of their initials in a recessed circle with the stronger border
+ * (the reference avatar). Same source as the web app's topbar avatar;
+ * updates on the web appear here on the next mount (or after force-refresh).
  */
 export function Avatar({
   size = 38,
@@ -50,9 +50,9 @@ export function Avatar({
           width: size,
           height: size,
           borderRadius: radius,
-          backgroundColor: c.card,
-          borderColor: bordered ? c.ink3 : 'transparent',
-          borderWidth: bordered ? 1.4 : 0,
+          backgroundColor: c.sunk,
+          borderColor: bordered ? c.hair2 : 'transparent',
+          borderWidth: bordered ? 1 : 0,
         },
       ]}
     >
@@ -82,7 +82,9 @@ export function Avatar({
           height: size,
           borderRadius: radius,
           borderWidth: 1,
-          borderColor: c.hair,
+          // The same ring as the monogram's, so a photo and initials read as
+          // one control.
+          borderColor: c.hair2,
           overflow: 'hidden',
         }}
       >

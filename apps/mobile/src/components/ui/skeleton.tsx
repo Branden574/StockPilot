@@ -3,11 +3,14 @@ import { Animated, Easing, View, useAnimatedValue } from 'react-native';
 
 import { Hair } from '@/components/ui/card';
 import { useTheme } from '@/lib/use-theme';
+import { skeletonFill } from './tones';
 
 /**
  * Subtle pulsing block used as a placeholder while real content
  * loads. Apple-style: a low-amplitude opacity fade rather than a
- * sweeping shimmer — looks intentional, not flashy.
+ * sweeping shimmer — looks intentional, not flashy. Filled with the
+ * hairline tone (tones.ts `skeletonFill`): the inset tone it used before is
+ * the card colour itself in dark mode, so the blocks were invisible there.
  */
 function Block({
   width,
@@ -50,7 +53,7 @@ function Block({
           width,
           height,
           borderRadius: radius,
-          backgroundColor: c.paper2,
+          backgroundColor: skeletonFill(c),
           opacity,
         },
         style,

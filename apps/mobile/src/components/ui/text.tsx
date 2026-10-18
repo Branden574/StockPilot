@@ -39,6 +39,9 @@ type EyebrowProps = SharedTextProps & {
  * with an em-dash. This is the brand signature line that sits above
  * every section title and on auth/empty states.
  *
+ * Muted ink (ink3), the reference's eyebrow colour: it carries live counts,
+ * so it is information, and ink4 held it at 3.2-3.6:1, under AA.
+ *
  * Two lines by default, not one: eyebrows carry live counts
  * ("INVENTORY · 1,234 ITEMS", "RENTALS · 3 OUT · 1 OVERDUE") and it is
  * exactly that suffix which gets ellipsized away at larger text sizes. The
@@ -63,7 +66,7 @@ export function Eyebrow({
         {...rest}
         style={[
           styles.eyebrow,
-          { color: color ?? c.ink4 },
+          { color: color ?? c.ink3 },
         ]}
         numberOfLines={numberOfLines}
         maxFontSizeMultiplier={resolveFontCap(

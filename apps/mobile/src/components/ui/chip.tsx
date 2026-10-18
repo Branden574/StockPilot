@@ -19,6 +19,10 @@ import { useTheme } from '@/lib/use-theme';
  *
  * A swatch NEVER replaces the label — see CrateColorOption. The dot is an
  * accelerator for people who can use it; the name is the information.
+ *
+ * Look (the reference's chips): unselected is the recessed fill (sunk) with
+ * the stronger border; selected is the ink fill, its words in the card
+ * colour.
  */
 export function Chip({
   label,
@@ -49,8 +53,8 @@ export function Chip({
         paddingVertical: 9,
         borderRadius: 8,
         borderWidth: 1,
-        borderColor: active ? c.ink : c.hair,
-        backgroundColor: active ? c.ink : c.paper2,
+        borderColor: active ? c.ink : c.hair2,
+        backgroundColor: active ? c.ink : c.sunk,
       }}
     >
       {swatch ? (
@@ -65,7 +69,7 @@ export function Chip({
               // of the registry stay visible on both pill states: white on the
               // light pill, black on the selected dark one.
               borderWidth: 1,
-              borderColor: active ? c.card : c.hair,
+              borderColor: active ? c.card : c.hair2,
             }}
           />
           {text}
