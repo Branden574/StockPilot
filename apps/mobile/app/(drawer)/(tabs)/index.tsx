@@ -482,11 +482,15 @@ export default function Home() {
                       <View style={[styles.accentPip, { backgroundColor: c.accent }]} />
                     </View>
                     {/* The ink button's look (a View: the whole card is the
-                        one target, so no button sits inside it). */}
+                        one target, so no button sits inside it). Two lines,
+                        centred: beside the 56pt well on a 320pt-wide screen
+                        (Display Zoom) the label has 132pt, and one line read
+                        "Open scann…" from the larger text sizes; it wrapped
+                        before the restyle and wraps again. */}
                     <View style={[styles.openScanCta, { backgroundColor: c.ink }]}>
                       <Text
                         style={[styles.openScanLabel, { color: c.paper }]}
-                        numberOfLines={1}
+                        numberOfLines={2}
                         maxFontSizeMultiplier={OPEN_SCANNER_CAP}
                       >
                         Open scanner →
@@ -648,11 +652,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 10,
   },
-  // See all: a 44pt frame around the same 11pt words; the negative margin
-  // gives the frame's extra height back, so the heading row keeps its height.
+  // See all: a 44pt frame around the same 11pt words. The frame is 15pt of
+  // padding above and below the words, so it grows with them at large text
+  // sizes instead of centring taller words in a fixed box (which pushed them
+  // out of the heading row, 3-5pt into the card below at AX4 and AX5 where
+  // the heading fits one line), and the negative margin gives the padding
+  // back, so the heading row is the words' own height, as before the
+  // restyle. 14.5 + 30 = 44.5pt at the default size; minHeight keeps 44 at
+  // the sizes below the default.
   seeAll: {
     minHeight: 44,
     minWidth: 44,
+    paddingVertical: 15,
     marginVertical: -15,
     alignItems: 'flex-end',
     justifyContent: 'center',
@@ -735,8 +746,9 @@ const styles = StyleSheet.create({
     height: 5,
     borderRadius: 3,
   },
-  // The shared button's md recipe (components/ui/button.tsx): radius 14, the
-  // label on one line, and minHeight so a larger label grows the box.
+  // The shared button's md recipe (components/ui/button.tsx): radius 14 and
+  // minHeight so a larger label grows the box; the label takes up to two
+  // centred lines (see the scan card).
   openScanCta: {
     flex: 1,
     minHeight: 48,
@@ -751,5 +763,6 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     fontSize: 15.5,
     letterSpacing: -0.15,
+    textAlign: 'center',
   },
 });

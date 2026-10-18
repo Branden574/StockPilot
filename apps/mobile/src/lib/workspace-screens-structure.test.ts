@@ -473,6 +473,10 @@ describe('Home: real figures, real sync words, no fake sparklines (D26)', () => 
     const block = styleBlock(HOME, 'seeAll');
     expect(block).toMatch(/minHeight: 44\b/);
     expect(block).toMatch(/minWidth: 44\b/);
+    // Padding, not a fixed box the words are centred in: larger words grow
+    // the frame and the heading row with it (-15 + 15), where centred ones
+    // spilled out of the row into the card below at AX4 and AX5.
+    expect(block).toMatch(/paddingVertical: 15,\s*marginVertical: -15,/);
     expect(code).toMatch(
       /accessibilityLabel="See all movements"\s+style=\{\(\{ pressed \}\) => \[styles\.seeAll[\s\S]{0,120}color=\{c\.accent\}>\s*See all/,
     );
@@ -484,6 +488,22 @@ describe('Home: real figures, real sync words, no fake sparklines (D26)', () => 
     expect(code).toContain('styles.openScanCta, { backgroundColor: c.ink }');
     expect(styleBlock(HOME, 'openScanCta')).toMatch(/minHeight: 48,[\s\S]*borderRadius: 14/);
     expect(code).toContain('const OPEN_SCANNER_CAP = capTo(15.5, TYPE_CEILING.control);');
+  });
+
+  // Beside the 56pt well on a 320pt-wide screen (Display Zoom) the label has
+  // 132pt: one line read "Open scann…" from xxL (138pt there, 159pt at the
+  // 22pt ceiling). It wrapped before the restyle; it wraps again, to two
+  // centred lines, and the button grows (minHeight).
+  it('Open scanner → wraps to two centred lines instead of being cut', () => {
+    const { sf, els } = elements(
+      HOME,
+      (el, s) => tagOf(el, s) === 'Text' && textOf(el, s) === 'Open scanner →',
+    );
+    expect(els).toHaveLength(1);
+    expect(attrText(els[0]!.el, 'numberOfLines', sf)).toBe('2');
+    expect(attrText(els[0]!.el, 'maxFontSizeMultiplier', sf)).toBe('OPEN_SCANNER_CAP');
+    expect(styleBlock(HOME, 'openScanLabel')).toMatch(/textAlign: 'center',/);
+    expect(styleBlock(HOME, 'openScanCta')).not.toMatch(/\bheight:/);
   });
 });
 
