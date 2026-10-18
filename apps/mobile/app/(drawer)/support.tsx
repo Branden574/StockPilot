@@ -1,18 +1,29 @@
-import { useNavigation } from 'expo-router';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
-import { Camera, ImageIcon, LifeBuoy, Menu, X } from 'lucide-react-native';
+import { ArrowLeft, Camera, ImageIcon, LifeBuoy, Menu, X } from 'lucide-react-native';
 import * as React from 'react';
-import { ActivityIndicator, Alert, Image, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Field } from '@/components/ui/field';
-import { Pill } from '@/components/ui/pill';
+import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow } from '@/components/ui/text';
+import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { api } from '@/lib/api';
 import { resizeForUpload } from '@/lib/image-resize';
 import { supabase } from '@/lib/supabase';
+import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -21,6 +32,11 @@ import { useTheme } from '@/lib/use-theme';
  * to the private support-attachments bucket under `${userId}/…` (mig 0260
  * storage policy) and only its path is sent; identity comes from the session
  * server-side.
+ *
+ * Reached by link only (the rewrite of /dashboard/support: What's New, a
+ * notification), as before. Its top bar is now the other screens' bar: Back
+ * (a `?return=` path, else back, else Home) and the menu, both named for
+ * VoiceOver (redesign defect D28: no Back, and a menu with no name).
  */
 const CATEGORIES = [
   { value: 'bug', label: 'Bug' },
@@ -33,6 +49,17 @@ type Category = (typeof CATEGORIES)[number]['value'];
 export default function SupportScreen() {
   const { c } = useTheme();
   const navigation = useNavigation();
+  const router = useRouter();
+  const { return: returnPath } = useLocalSearchParams<{ return?: string }>();
+  const goBack = () => {
+    if (typeof returnPath === 'string' && returnPath.length > 0) {
+      router.replace(returnPath as never);
+    } else if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/');
+    }
+  };
 
   const [category, setCategory] = React.useState<Category>('bug');
   const [subject, setSubject] = React.useState('');
@@ -154,25 +181,28 @@ export default function SupportScreen() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: c.paper }} edges={['top']}>
       <View style={[styles.topbar, { borderBottomColor: c.hair }]}>
-        <Pressable
-          onPress={() => (navigation as { openDrawer?: () => void }).openDrawer?.()}
-          hitSlop={10}
-          style={styles.iconBtn}
-        >
-          <Menu size={22} color={c.ink2} />
-        </Pressable>
+        <View style={styles.chips}>
+          <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
+          <IconChip
+            icon={Menu}
+            onPress={() => (navigation as { openDrawer?: () => void }).openDrawer?.()}
+            accessibilityLabel="Open menu"
+            minTap
+          />
+        </View>
         <View style={styles.topbarTitle}>
           <LifeBuoy size={16} color={c.ink3} />
           <Body color={c.ink2} style={{ flexShrink: 1 }}>Support &amp; feedback</Body>
         </View>
-        <View style={styles.iconBtn} />
+        {/* Balances the two chips, so the title stays centred. */}
+        <View style={styles.chipsSpacer} />
       </View>
 
       <ScrollView
         contentContainerStyle={{ padding: 16, paddingBottom: 48 }}
         keyboardShouldPersistTaps="handled"
       >
-        <Eyebrow color={c.ink4}>WE READ EVERYTHING</Eyebrow>
+        <Eyebrow>WE READ EVERYTHING</Eyebrow>
         <Display color={c.ink} style={{ marginTop: 4 }}>
           How can we <Em>help?</Em>
         </Display>
@@ -196,15 +226,38 @@ export default function SupportScreen() {
         ) : (
           <Card style={{ marginTop: 20, padding: 16, gap: 16 }}>
             <View>
-              <Eyebrow color={c.ink4} style={{ marginBottom: 8 }}>CATEGORY</Eyebrow>
-              <View style={styles.pillRow}>
-                {CATEGORIES.map((cat) => (
-                  <Pressable key={cat.value} onPress={() => setCategory(cat.value)}>
-                    <Pill status={category === cat.value ? 'ok' : 'default'} dot={false}>
-                      {cat.label}
-                    </Pill>
-                  </Pressable>
-                ))}
+              <Eyebrow style={{ marginBottom: 2 }}>CATEGORY</Eyebrow>
+              {/* The reference's choice chips in 44pt frames, each a button
+                  that says whether it is the chosen category. */}
+              <View style={styles.chipRow}>
+                {CATEGORIES.map((cat) => {
+                  const selected = category === cat.value;
+                  return (
+                    <Pressable
+                      key={cat.value}
+                      onPress={() => setCategory(cat.value)}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected }}
+                      style={({ pressed }) => [styles.chipFrame, { opacity: pressed ? 0.7 : 1 }]}
+                    >
+                      <View
+                        style={[
+                          styles.chip,
+                          selected
+                            ? { backgroundColor: c.ink, borderColor: c.ink }
+                            : { backgroundColor: 'transparent', borderColor: c.hair2 },
+                        ]}
+                      >
+                        <Text
+                          style={[styles.chipLabel, { color: selected ? c.paper : c.ink2 }]}
+                          maxFontSizeMultiplier={CHIP_CAP}
+                        >
+                          {cat.label}
+                        </Text>
+                      </View>
+                    </Pressable>
+                  );
+                })}
               </View>
             </View>
 
@@ -226,12 +279,22 @@ export default function SupportScreen() {
             />
 
             <View>
-              <Eyebrow color={c.ink4} style={{ marginBottom: 8 }}>SCREENSHOT (OPTIONAL)</Eyebrow>
+              <Eyebrow style={{ marginBottom: 8 }}>SCREENSHOT (OPTIONAL)</Eyebrow>
               {attachment ? (
                 <View style={[styles.attachRow, { borderColor: c.hair }]}>
-                  <Image source={{ uri: attachment.uri }} style={styles.thumb} />
+                  {/* The photo ground: white with a hairline in both modes. */}
+                  <Image
+                    source={{ uri: attachment.uri }}
+                    style={[styles.thumb, { backgroundColor: PHOTO_BACKGROUND, borderColor: c.hair }]}
+                  />
                   <Body color={c.ink3} style={{ flex: 1 }}>Screenshot attached</Body>
-                  <Pressable onPress={removeAttachment} hitSlop={8} style={styles.iconBtn}>
+                  {/* A named 44pt button (it was a nameless X with hitSlop). */}
+                  <Pressable
+                    onPress={removeAttachment}
+                    accessibilityRole="button"
+                    accessibilityLabel="Remove screenshot"
+                    style={styles.removeFrame}
+                  >
                     <X size={18} color={c.ink3} />
                   </Pressable>
                 </View>
@@ -270,21 +333,50 @@ export default function SupportScreen() {
   );
 }
 
+/** A choice chip's label is a control's: the control ceiling. */
+const CHIP_CAP = capTo(13, TYPE_CEILING.control);
+
 const styles = StyleSheet.create({
+  // The other screens' bar: the chips' 44pt frames are 3pt wider than the
+  // 38pt chips, so the bar's padding is 9 (12 less 3) and 5 on top (8 less
+  // 3). minHeight, not height: the title is uncapped Body between the chips
+  // and the spacer, and it wraps at accessibility sizes.
   topbar: {
-    // minHeight, not height: the title is uncapped Body between two fixed
-    // icon buttons, so a 52pt frame sliced it at accessibility sizes.
     minHeight: 52,
-    paddingVertical: 6,
+    paddingHorizontal: 9,
+    paddingTop: 5,
+    paddingBottom: 6,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 12,
+    gap: 8,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  topbarTitle: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1, minWidth: 0 },
-  iconBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  chips: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  // Two 44pt frames and the 2pt gap between them.
+  chipsSpacer: { width: 90 },
+  topbarTitle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    flexShrink: 1,
+    minWidth: 0,
+  },
   pillRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 8 },
+  // The 44pt target; the 32pt chip sits in its middle.
+  chipFrame: { minHeight: 44, minWidth: 44, justifyContent: 'center' },
+  chip: {
+    minHeight: 32,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chipLabel: { fontFamily: FONT.displayRegular, fontSize: 13 },
   attachRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -293,5 +385,6 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     padding: 8,
   },
-  thumb: { width: 44, height: 44, borderRadius: 6 },
+  thumb: { width: 44, height: 44, borderRadius: 6, borderWidth: 1 },
+  removeFrame: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
 });
