@@ -4,14 +4,15 @@ import {
   Animated,
   Easing,
   Modal,
-  Pressable,
   StyleSheet,
   Text,
   View,
   useAnimatedValue,
 } from 'react-native';
 
-import { SHADOW, radius, space, theme } from '@/lib/theme';
+import { Button } from '@/components/ui/button';
+import { FONT, SHADOW, palette, space, type Palette } from '@/lib/theme';
+import { useTheme } from '@/lib/use-theme';
 
 /**
  * Demo pill geometry — fixed pixel sizes so the native-driver translateX is
@@ -36,8 +37,9 @@ const THUMB_H = PILL_H - 2 * PILL_BORDER - 2 * PILL_PAD; // 26
  * native modules. Reduce-motion (AccessibilityInfo) skips the loop and the
  * entrance spring: static pill showing both labels, plain fades only.
  *
- * Styling follows po-attachments.tsx (static light `theme` tokens), since
- * this modal only ever appears from that card.
+ * Look (redesign P3.8): the card, the demo pill and the button follow the
+ * device's mode (it was drawn from the light-only legacy theme, so it stayed
+ * light in dark mode). Its one button is the shared ink button.
  */
 export function ScannerTip({
   visible,
@@ -50,6 +52,8 @@ export function ScannerTip({
   /** Hardware back (Android) — dismiss without opening the scanner. */
   onRequestClose: () => void;
 }) {
+  const { mode } = useTheme();
+  const styles = TIP_STYLES[mode];
   const [reduceMotion, setReduceMotion] = React.useState(false);
   /** Backdrop fade: 0 → 1 (timing). */
   const backdrop = useAnimatedValue(0);
@@ -205,104 +209,125 @@ export function ScannerTip({
             You can also retake any page or drag its corners before saving.
           </Text>
 
-          <Pressable
-            accessibilityRole="button"
-            onPress={onContinue}
-            style={({ pressed }) => [styles.cta, pressed && { opacity: 0.85 }]}
-          >
-            <Text style={styles.ctaText}>Got it — start scanning</Text>
-          </Pressable>
+          <Button onPress={onContinue} style={styles.cta}>
+            Got it — start scanning
+          </Button>
         </Animated.View>
       </View>
     </Modal>
   );
 }
 
-const styles = StyleSheet.create({
-  backdrop: {
-    ...StyleSheet.absoluteFill,
-    backgroundColor: 'rgba(14,15,13,0.38)', // ink-tinted scrim, as biometric-optin-sheet
-  },
-  centerWrap: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: space.xl,
-  },
-  card: {
-    width: '100%',
-    maxWidth: 340,
-    backgroundColor: theme.card,
-    borderWidth: 1,
-    borderColor: theme.border,
-    borderRadius: radius.lg,
-    padding: space.lg,
-    ...SHADOW.card,
-  },
-  title: { color: theme.text, fontSize: 17, fontWeight: '700' },
-  body: { color: theme.textMuted, fontSize: 13.5, lineHeight: 19, marginTop: 6 },
-  demoWrap: { alignItems: 'center', marginVertical: space.lg },
-  pill: {
-    width: PILL_W,
-    height: PILL_H,
-    borderRadius: PILL_H / 2,
-    backgroundColor: theme.bgElevated,
-    borderWidth: PILL_BORDER,
-    borderColor: theme.border,
-  },
-  thumb: {
-    position: 'absolute',
-    top: PILL_PAD,
-    left: PILL_PAD,
-    width: THUMB_W,
-    height: THUMB_H,
-    borderRadius: THUMB_H / 2,
-    backgroundColor: theme.card,
-    borderWidth: 1,
-    borderColor: theme.border,
-    shadowColor: '#0e0f0d',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.08,
-    shadowRadius: 3,
-    elevation: 1,
-  },
-  labelRow: {
-    position: 'absolute',
-    top: PILL_PAD,
-    bottom: PILL_PAD,
-    left: PILL_PAD,
-    right: PILL_PAD,
-    flexDirection: 'row',
-  },
-  labelCell: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  labelBase: { color: theme.textMuted, fontSize: 12, fontWeight: '600', letterSpacing: 0.2 },
-  labelStatic: { color: theme.text },
-  labelEmphasis: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    textAlign: 'center',
-    lineHeight: THUMB_H, // vertical centering inside the cell
-    color: theme.text,
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 0.2,
-  },
-  caption: { color: theme.text, fontSize: 13, lineHeight: 18, textAlign: 'center' },
-  captionStrong: { fontWeight: '700' },
-  secondary: {
-    color: theme.textMuted,
-    fontSize: 12.5,
-    lineHeight: 17,
-    textAlign: 'center',
-    marginTop: 6,
-  },
-  cta: {
-    backgroundColor: theme.text,
-    borderRadius: radius.sm,
-    paddingVertical: 12,
-    alignItems: 'center',
-    marginTop: space.lg,
-  },
-  ctaText: { color: theme.bg, fontWeight: '700', fontSize: 14 },
-});
+/** The tip's styles in one mode. */
+function makeStyles(c: Palette, scrim: string) {
+  return StyleSheet.create({
+    backdrop: {
+      ...StyleSheet.absoluteFill,
+      backgroundColor: scrim,
+    },
+    centerWrap: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: space.xl,
+    },
+    card: {
+      width: '100%',
+      maxWidth: 340,
+      backgroundColor: c.card,
+      borderWidth: 1,
+      borderColor: c.hair,
+      borderRadius: 16,
+      padding: space.lg,
+      ...SHADOW.card,
+    },
+    title: { color: c.ink, fontFamily: FONT.displaySemi, fontWeight: '600', fontSize: 17 },
+    body: {
+      color: c.ink3,
+      fontFamily: FONT.displayRegular,
+      fontSize: 13.5,
+      lineHeight: 19,
+      marginTop: 6,
+    },
+    demoWrap: { alignItems: 'center', marginVertical: space.lg },
+    pill: {
+      width: PILL_W,
+      height: PILL_H,
+      borderRadius: PILL_H / 2,
+      backgroundColor: c.sunk,
+      borderWidth: PILL_BORDER,
+      borderColor: c.hair2,
+    },
+    thumb: {
+      position: 'absolute',
+      top: PILL_PAD,
+      left: PILL_PAD,
+      width: THUMB_W,
+      height: THUMB_H,
+      borderRadius: THUMB_H / 2,
+      backgroundColor: c.card,
+      borderWidth: 1,
+      borderColor: c.hair2,
+      shadowColor: '#0e0f0d',
+      shadowOffset: { width: 0, height: 1 },
+      shadowOpacity: 0.08,
+      shadowRadius: 3,
+      elevation: 1,
+    },
+    labelRow: {
+      position: 'absolute',
+      top: PILL_PAD,
+      bottom: PILL_PAD,
+      left: PILL_PAD,
+      right: PILL_PAD,
+      flexDirection: 'row',
+    },
+    labelCell: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+    labelBase: {
+      color: c.ink3,
+      fontFamily: FONT.display,
+      fontWeight: '500',
+      fontSize: 12,
+      letterSpacing: 0.2,
+    },
+    labelStatic: { color: c.ink },
+    labelEmphasis: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      textAlign: 'center',
+      lineHeight: THUMB_H, // vertical centering inside the cell
+      color: c.ink,
+      fontFamily: FONT.displaySemi,
+      fontSize: 12,
+      fontWeight: '600',
+      letterSpacing: 0.2,
+    },
+    caption: {
+      color: c.ink,
+      fontFamily: FONT.displayRegular,
+      fontSize: 13,
+      lineHeight: 18,
+      textAlign: 'center',
+    },
+    captionStrong: { fontFamily: FONT.displaySemi, fontWeight: '600' },
+    secondary: {
+      color: c.ink3,
+      fontFamily: FONT.displayRegular,
+      fontSize: 12.5,
+      lineHeight: 17,
+      textAlign: 'center',
+      marginTop: 6,
+    },
+    cta: { marginTop: space.lg },
+  });
+}
+
+/**
+ * Both modes' styles, made once. The scrim is ink-tinted in light (as the
+ * biometric opt-in sheet's) and black in dark, the app's sheet scrims.
+ */
+const TIP_STYLES = {
+  light: makeStyles(palette('light'), 'rgba(14,15,13,0.38)'),
+  dark: makeStyles(palette('dark'), 'rgba(0,0,0,0.6)'),
+};

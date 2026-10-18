@@ -1624,3 +1624,86 @@ describe.each(CARDS)('%s: the device mode and Dynamic Type', (_name, file) => {
     expect(capped).toEqual(['styles.coverPlaceholderText']);
   });
 });
+
+// ── The scanner tip (before the first document scan) ─────────────────────
+
+const SCANNER_TIP = 'src/components/scanner-tip.tsx';
+
+describe('scanner tip: every word, the button and Reduce Motion survive the restyle', () => {
+  const src = sourceOf(SCANNER_TIP);
+  const code = codeOnly(src);
+
+  it.each([
+    'Scans snap automatically',
+    'When the scanner sees a page it captures instantly. Want more control?',
+    "Demo of the scanner's capture toggle switching from Auto to Manual",
+    'Auto',
+    'Manual',
+    'Tap the',
+    'Shutter',
+    'button (the Ⓐ icon at the bottom) to switch to Manual — then you press the big button yourself.',
+    'You can also retake any page or drag its corners before saving.',
+    'Got it — start scanning',
+  ])('says "%s"', (word) => {
+    expect(wordsOf(SCANNER_TIP)).toContain(word);
+  });
+
+  it('has no emoji (the Ⓐ names the iOS shutter control and stays)', () => {
+    expect(wordsOf(SCANNER_TIP).filter((w) => /\p{Extended_Pictographic}/u.test(w))).toEqual([]);
+  });
+
+  it('its one button is the shared ink button and continues into the scanner; Android back closes it', () => {
+    const { sf, els } = elements(SCANNER_TIP, (el, s) => tagOf(el, s) === 'Button');
+    expect(
+      els.map((el) => [textOf(el, sf), attrText(el, 'onPress', sf), attrText(el, 'variant', sf)]),
+    ).toEqual([['Got it — start scanning', 'onContinue', undefined]]);
+    const modal = elements(SCANNER_TIP, (el, s) => tagOf(el, s) === 'Modal');
+    expect(attrText(modal.els[0]!, 'onRequestClose', modal.sf)).toBe('onRequestClose');
+    expect(attrText(modal.els[0]!, 'visible', modal.sf)).toBe('visible');
+    // The card is a modal for VoiceOver, and the demo one named element.
+    expect(code).toMatch(/<Animated\.View\s+accessibilityViewIsModal\b/);
+    const demo = elements(SCANNER_TIP, (el, s) => attrText(el, 'accessible', s) === 'true');
+    expect(demo.els.map((el) => attrText(el, 'style', demo.sf))).toEqual(['styles.pill']);
+  });
+
+  it('Reduce Motion still skips the loop and the spring: a static pill and plain fades', () => {
+    expect(code).toContain('void AccessibilityInfo.isReduceMotionEnabled().then((on) => {');
+    expect(code).toMatch(
+      /\(reduceMotion\s*\? Animated\.timing\(card, \{[\s\S]*?\}\)\s*: Animated\.spring\(card, \{/,
+    );
+    const stop = code.indexOf('if (reduceMotion) return;');
+    expect(stop).toBeGreaterThan(-1);
+    expect(code.indexOf('Animated.loop(')).toBeGreaterThan(stop);
+    expect(code).toContain('!reduceMotion && { transform: [{ translateX: thumbX }] },');
+    expect(code).toContain('}, [visible, reduceMotion, backdrop, card, demo]);');
+  });
+});
+
+describe('scanner tip: the device mode', () => {
+  const src = sourceOf(SCANNER_TIP);
+
+  it('is off the light-only legacy alias', () => {
+    expect(themeImports(SCANNER_TIP)).not.toContain('theme');
+    expect(themeImports(SCANNER_TIP)).not.toContain('radius');
+    expect(src).toContain('const { mode } = useTheme();');
+    expect(src).toContain("light: makeStyles(palette('light'), 'rgba(14,15,13,0.38)'),");
+    expect(src).toContain("dark: makeStyles(palette('dark'), 'rgba(0,0,0,0.6)'),");
+  });
+
+  it('words take ink or ink3, never the faint inks', () => {
+    const reads = paletteReads(SCANNER_TIP);
+    expect(reads.filter((t) => t === 'ink4' || t === 'ink5')).toEqual([]);
+    expect(styleBlock(src, 'card')).toMatch(/backgroundColor: c\.card,/);
+    expect(styleBlock(src, 'pill')).toMatch(/backgroundColor: c\.sunk,/);
+    expect(styleBlock(src, 'labelBase')).toMatch(/color: c\.ink3,/);
+    expect(styleBlock(src, 'labelEmphasis')).toMatch(/color: c\.ink,/);
+  });
+
+  it.each(MODES)('%s: every pair the tip draws reads at AA', (_mode, p) => {
+    // Title and caption (ink), body and the secondary line (ink3), on the card.
+    for (const t of [p.ink, p.ink3]) expect(contrast(t, p.card)).toBeGreaterThanOrEqual(AA_TEXT);
+    // The demo's words: ink3 on the recessed track, ink on the card thumb.
+    expect(contrast(p.ink3, p.sunk)).toBeGreaterThanOrEqual(AA_TEXT);
+    expect(contrast(p.ink, p.card)).toBeGreaterThanOrEqual(AA_TEXT);
+  });
+});
