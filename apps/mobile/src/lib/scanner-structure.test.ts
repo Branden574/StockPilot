@@ -439,6 +439,45 @@ describe('count scanner: defects fixed in this package', () => {
     expect(sourceOf(COUNT_SCANNER)).not.toMatch(/\n {2}sheet: \{[^}]*position: 'absolute'/);
   });
 
+  // React Native's KeyboardAvoidingView pads by `frame.y + frame.height -
+  // keyboardTop`, with the frame its PARENT lays it out in, so it assumes that
+  // frame begins at the top of the screen. Set inside the viewfinder, below the
+  // camera bar, it fell short by the bar's height (about 120pt, 170pt once the
+  // Burst switch wraps to the bar's second line), which left Save under the
+  // decimal pad. Mutation caught: the view moved back inside the viewfinder,
+  // or under anything that does not start at the top of the screen.
+  it('the keyboard-avoiding view starts at the top of the screen, so it lifts the sheet the whole way', () => {
+    const sf = treeOf(COUNT_SCANNER);
+    const found: { parent: string; children: string[]; offset: string | undefined }[] = [];
+    walkJsx(sf, (el, ancestors) => {
+      if (tagOf(el, sf) !== 'KeyboardAvoidingView') return;
+      const parent = ancestors[ancestors.length - 1];
+      const kids = ts.isJsxElement(el)
+        ? el.children.filter(
+            (ch): ch is JsxNode => ts.isJsxElement(ch) || ts.isJsxSelfClosingElement(ch),
+          )
+        : [];
+      found.push({
+        parent: parent ? `${tagOf(parent, sf)} ${attrText(parent, 'style', sf)}` : '(none)',
+        children: kids.map((ch) => `${tagOf(ch, sf)} ${attrText(ch, 'style', sf)}`),
+        offset: attrText(el, 'keyboardVerticalOffset', sf),
+      });
+    });
+    // One view: a child of the screen's root, holding the camera bar and the
+    // viewfinder, so its frame starts where the screen does and needs no offset.
+    expect(found).toEqual([
+      {
+        parent: 'View styles.root',
+        children: ['SafeAreaView styles.barArea', 'View styles.viewfinder'],
+        offset: undefined,
+      },
+    ]);
+    // The root is the whole screen (a fullScreenModal starts at the top).
+    expect(sourceOf(COUNT_SCANNER)).toMatch(
+      /\n {2}root: \{ flex: 1, backgroundColor: CAMERA\.surface \},/,
+    );
+  });
+
   // Number('') is 0: a Counted box cleared to type a new number and saved
   // before the typing recorded a count of zero for the line, where the count
   // screen (app/cycle-count/[id].tsx) records nothing from an empty box. This

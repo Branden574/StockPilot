@@ -239,88 +239,92 @@ function CycleCountScanScreenInner() {
       <Stack.Screen options={{ headerShown: false }} />
       {/* The bar is dark in both modes, so the clock and battery over it are light. */}
       <StatusBar style="light" />
-      {/* Dynamic Type: camera chrome over a LIVE viewfinder cannot grow the
-          bar or scroll it, and the `flex: 1` tally column is the only
-          shrinkable child — so uncapped Done and Burst eat the whole deficit
-          and the live count (the reason the bar exists) disappears. Cap the
-          two controls at the chrome ceiling; the tally itself keeps scaling. */}
-      <SafeAreaView edges={['top']} style={styles.barArea}>
-        <View style={styles.topBar}>
-          <Pressable
-            style={styles.closeFrame}
-            onPress={() => router.back()}
-            accessibilityRole="button"
-            accessibilityLabel="Done"
-          >
-            <View style={styles.closeBtn}>
-              <Text style={styles.closeText} numberOfLines={1} maxFontSizeMultiplier={CLOSE_CAP}>
-                Done
+      {/* The keyboard is a decimal pad, which has no key that puts it away:
+          with the sheet left under it, the Counted box and Save were hidden
+          the moment the box took focus, so the sheet rides above it. This
+          view wraps the whole screen, the camera bar included, because it
+          measures the keyboard against its own frame as if that frame began
+          at the top of the screen. Set inside the viewfinder, below the bar,
+          it lifted the sheet short by the height of the bar and left Save
+          under the keyboard. */}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.fill}
+      >
+        {/* Dynamic Type: camera chrome over a LIVE viewfinder cannot grow the
+            bar or scroll it, and the `flex: 1` tally column is the only
+            shrinkable child — so uncapped Done and Burst eat the whole deficit
+            and the live count (the reason the bar exists) disappears. Cap the
+            two controls at the chrome ceiling; the tally itself keeps scaling. */}
+        <SafeAreaView edges={['top']} style={styles.barArea}>
+          <View style={styles.topBar}>
+            <Pressable
+              style={styles.closeFrame}
+              onPress={() => router.back()}
+              accessibilityRole="button"
+              accessibilityLabel="Done"
+            >
+              <View style={styles.closeBtn}>
+                <Text style={styles.closeText} numberOfLines={1} maxFontSizeMultiplier={CLOSE_CAP}>
+                  Done
+                </Text>
+              </View>
+            </Pressable>
+            <View style={styles.titleCol}>
+              <Text style={styles.headerLabel} maxFontSizeMultiplier={TITLE_CAP}>
+                Counting
+              </Text>
+              <Text style={styles.headerSub}>
+                {counted} of {total} done
               </Text>
             </View>
-          </Pressable>
-          <View style={styles.titleCol}>
-            <Text style={styles.headerLabel} maxFontSizeMultiplier={TITLE_CAP}>
-              Counting
-            </Text>
-            <Text style={styles.headerSub}>
-              {counted} of {total} done
-            </Text>
+            <SyncStatusBadge surface="camera" />
+            {/* The reference's Single / Batch switch: "Burst off" is Single (each
+                scan opens the confirm sheet), "Burst" is Batch (each scan adds 1).
+                One control, as before: a tap anywhere on it flips the mode. */}
+            <Pressable
+              style={styles.burstFrame}
+              onPress={() => setBurstMode((v) => !v)}
+              accessibilityRole="switch"
+              accessibilityLabel="Burst"
+              accessibilityState={{ checked: burstMode }}
+            >
+              <View style={styles.burstTrack}>
+                <View style={[styles.burstSegment, !burstMode && styles.burstSegmentOn]}>
+                  <Text
+                    style={[styles.burstLabel, !burstMode && styles.burstLabelOn]}
+                    numberOfLines={1}
+                    maxFontSizeMultiplier={BURST_CAP}
+                  >
+                    Burst off
+                  </Text>
+                </View>
+                <View style={[styles.burstSegment, burstMode && styles.burstSegmentOn]}>
+                  <Text
+                    style={[styles.burstLabel, burstMode && styles.burstLabelOn]}
+                    numberOfLines={1}
+                    maxFontSizeMultiplier={BURST_CAP}
+                  >
+                    Burst
+                  </Text>
+                </View>
+              </View>
+            </Pressable>
           </View>
-          <SyncStatusBadge surface="camera" />
-          {/* The reference's Single / Batch switch: "Burst off" is Single (each
-              scan opens the confirm sheet), "Burst" is Batch (each scan adds 1).
-              One control, as before: a tap anywhere on it flips the mode. */}
-          <Pressable
-            style={styles.burstFrame}
-            onPress={() => setBurstMode((v) => !v)}
-            accessibilityRole="switch"
-            accessibilityLabel="Burst"
-            accessibilityState={{ checked: burstMode }}
-          >
-            <View style={styles.burstTrack}>
-              <View style={[styles.burstSegment, !burstMode && styles.burstSegmentOn]}>
-                <Text
-                  style={[styles.burstLabel, !burstMode && styles.burstLabelOn]}
-                  numberOfLines={1}
-                  maxFontSizeMultiplier={BURST_CAP}
-                >
-                  Burst off
-                </Text>
-              </View>
-              <View style={[styles.burstSegment, burstMode && styles.burstSegmentOn]}>
-                <Text
-                  style={[styles.burstLabel, burstMode && styles.burstLabelOn]}
-                  numberOfLines={1}
-                  maxFontSizeMultiplier={BURST_CAP}
-                >
-                  Burst
-                </Text>
-              </View>
-            </View>
-          </Pressable>
-        </View>
-      </SafeAreaView>
+        </SafeAreaView>
 
-      <View style={styles.viewfinder}>
-        {!sheet ? (
-          <CameraView
-            style={StyleSheet.absoluteFill}
-            facing="back"
-            barcodeScannerSettings={{
-              barcodeTypes: ['qr', 'ean13', 'ean8', 'upc_a', 'upc_e', 'code128', 'code39', 'code93', 'codabar', 'pdf417'],
-            }}
-            onBarcodeScanned={onBarcode}
-          />
-        ) : null}
+        <View style={styles.viewfinder}>
+          {!sheet ? (
+            <CameraView
+              style={StyleSheet.absoluteFill}
+              facing="back"
+              barcodeScannerSettings={{
+                barcodeTypes: ['qr', 'ean13', 'ean8', 'upc_a', 'upc_e', 'code128', 'code39', 'code93', 'codabar', 'pdf417'],
+              }}
+              onBarcodeScanned={onBarcode}
+            />
+          ) : null}
 
-        {/* The keyboard is a decimal pad, which has no key that puts it away:
-            with the sheet left under it, the Counted box and Save were hidden
-            the moment the box took focus. The sheet now rides above it. */}
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={styles.fill}
-          pointerEvents="box-none"
-        >
           <SafeAreaView style={styles.fill} edges={['bottom']} pointerEvents="box-none">
             {!sheet && (
               <View style={styles.frameWrap} pointerEvents="none">
@@ -390,8 +394,8 @@ function CycleCountScanScreenInner() {
               </View>
             )}
           </SafeAreaView>
-        </KeyboardAvoidingView>
-      </View>
+        </View>
+      </KeyboardAvoidingView>
     </View>
   );
 }
