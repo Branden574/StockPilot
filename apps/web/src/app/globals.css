@@ -149,7 +149,10 @@
        gave 4.47:1 (DESIGN-SPEC 2.4). */
     --warning: 34 80% 33%;
     /* Ink: it is also the text colour on light warning tints (dashboard widgets,
-       the public item page), so it is not switched to white. */
+       the public item page), so it is not switched to white. Those tint uses
+       fail in dark (ink on a dark tint reads 1.06-1.48:1, and did before
+       P2.1); their owners, P3.1 and P5.1, move them to bg-warning-wash
+       text-warning. */
     --warning-foreground: 80 7% 5%;
     --warning-wash: 38 70% 92%;
 

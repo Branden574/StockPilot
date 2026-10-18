@@ -200,10 +200,34 @@ const TEXT_ON_SURFACE: ReadonlyArray<readonly [text: string, surface: string]> =
  * not read. P2.2 moves the Badge to the warn-on-wash recipe (--warning on
  * --warning-wash, 4.70:1, checked in TEXT_ON_SURFACE above).
  *
+ * Those tints only read in light. In dark, ink on a dark warning tint reads
+ * 1.48:1 (warning/0.18 on the card) and 1.06-1.13:1 (warning/0.05), and it
+ * failed the same way before P2.1. Light text there would drop the dark
+ * Badge from 9.76:1 to about 1.7:1, so the owning packages move these uses
+ * to `bg-warning-wash text-warning` (4.70:1 light, 8.01:1 dark) instead:
+ * - P3.1: components/dashboard/widgets/recent-activity.tsx:140, the Low pill,
+ *   and widgets/shared.tsx:88, the warn icon;
+ * - P5.1: app/p/items/[id]/page.tsx:123, the on-hand panel at quantity 1.
+ *
  * Text on the accent fill is --accent-ink only. --accent-foreground is page
- * text, so the hovers that still pair it (or ink) with bg-accent (Button
- * outline and ghost, menu, select and calendar items) read 1.71:1 (3.48:1 for
- * ink) in light until P2.2 moves them to the neutral bg-muted hover.
+ * text, so the hovers that still pair it (or ink) with bg-accent read 1.71:1
+ * (3.48:1 for ink) in light on the deep teal, where the old mint gave 4.07:1
+ * (8.31:1); in dark they read 1.51-1.66:1 and already failed before P2.1.
+ * Each moves to the neutral hover, `hover:bg-muted hover:text-foreground`
+ * (DESIGN-SPEC 2.3 item 1; ink and muted-foreground on --muted are checked in
+ * TEXT_ON_SURFACE above), in the package that owns the file:
+ * - P2.2: Button outline and ghost, menu, select and calendar items;
+ * - P4.A2: components/inventory/staging-table.tsx:379, the type filter
+ *   (accent-foreground on accent, 1.71:1);
+ * - P4.F2: components/customers/customers-panel.tsx:707, the item match row
+ *   (ink 3.48:1; its SKU in muted-foreground 1.21:1);
+ * - P4.E2: components/reports/book-order-totals/by-charter.tsx:71, the
+ *   charter row (ink 3.48:1), and showing-chips.tsx:68, the chip's remove
+ *   icon (3.48:1, above the 3:1 an icon needs; it moves for the look).
+ * The one other accent hover outside components/ui,
+ * components/dashboard/get-started-checklist.tsx:162 (P3.1,
+ * `hover:bg-accent/40`), still reads (10.69:1 light, 6.24:1 dark) and moves
+ * for the look only.
  */
 const TEXT_ON_FILL: ReadonlyArray<readonly [text: string, fill: string]> = [
   ['--primary-foreground', '--primary'], // ink buttons and the toast
