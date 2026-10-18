@@ -366,6 +366,7 @@ export default function GroupSelectedScreen() {
             <Button
               variant="outline"
               size="sm"
+              style={styles.smallButton}
               onPress={() => {
                 // Never the same request when it could only fail again: more
                 // records than one request takes fall back to the ones the
@@ -497,6 +498,7 @@ export default function GroupSelectedScreen() {
                 <Button
                   variant="outline"
                   size="sm"
+                  style={styles.smallButton}
                   // One request reviews at most 100 records: past that the
                   // review could only fail, so the button is off and says why
                   // (recheck R2-4).
@@ -764,6 +766,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     paddingHorizontal: 12,
     paddingVertical: 10,
+  },
+  // Try again and Add them to the selection: the small button's look in a
+  // 44pt target (the small size is 36pt). minHeight, so it still grows.
+  smallButton: {
+    minHeight: 44,
   },
   // Pinned over the scrolling review, so a hairline marks its top edge.
   footer: {

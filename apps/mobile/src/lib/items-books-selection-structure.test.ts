@@ -782,6 +782,15 @@ describe.each(REVIEWS)('$name review', (r) => {
       expect(attrText(n.el, 'disabled', sf)).toBe('busy');
     }
   });
+
+  it('every small button (Try again, Add them to the selection) is a 44pt target, not the 36pt small size', () => {
+    const small = nodesIn(sf).filter(
+      (n) => tagOf(n.el, sf) === 'Button' && attrText(n.el, 'size', sf) === 'sm',
+    );
+    expect(small.length).toBe(r.name === 'Group' ? 2 : 1);
+    for (const n of small) expect(attrText(n.el, 'style', sf)).toBe('styles.smallButton');
+    expect(styleBlock(sourceOf(r.file), 'smallButton')).toMatch(/minHeight: 44,/);
+  });
 });
 
 /** The tag of the element whose attribute reads each `c.ink4` in a file

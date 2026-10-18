@@ -305,7 +305,12 @@ export default function UngroupSelectedScreen() {
             <Body size={14} color={c.ink}>
               {loadState.kind === 'offline' ? UNGROUP_COPY.selectedOffline : loadState.message}
             </Body>
-            <Button variant="outline" size="sm" onPress={() => setNonce((n) => n + 1)}>
+            <Button
+              variant="outline"
+              size="sm"
+              style={styles.smallButton}
+              onPress={() => setNonce((n) => n + 1)}
+            >
               Try again
             </Button>
           </View>
@@ -519,6 +524,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
+    minHeight: 44,
+  },
+  // Try again: the small button's look in a 44pt target (the small size is
+  // 36pt). minHeight, so it still grows.
+  smallButton: {
     minHeight: 44,
   },
   // Pinned over the scrolling review, so a hairline marks its top edge.
