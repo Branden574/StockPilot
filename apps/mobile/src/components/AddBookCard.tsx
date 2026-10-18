@@ -178,12 +178,16 @@ export function AddBookCard({ user, result, onCancel, onCreated }: Props) {
         </View>
       </View>
 
+      {/* What is typed is content, so it grows with the text size as these
+          boxes always did: 0, React Native's no-limit sentinel, lifts the
+          shared Field's 24pt input ceiling (the box grows with it). */}
       <Field
         label="Title"
         accessibilityLabel="Title"
         value={title}
         onChangeText={setTitle}
         placeholder="The Great Gatsby"
+        maxFontSizeMultiplier={0}
         style={styles.field}
       />
       <Field
@@ -192,6 +196,7 @@ export function AddBookCard({ user, result, onCancel, onCreated }: Props) {
         value={author}
         onChangeText={setAuthor}
         placeholder="F. Scott Fitzgerald"
+        maxFontSizeMultiplier={0}
         style={styles.field}
       />
       <View style={[styles.row, stacked && styles.rowStacked]}>
@@ -201,6 +206,7 @@ export function AddBookCard({ user, result, onCancel, onCreated }: Props) {
           value={sku}
           onChangeText={setSku}
           autoCapitalize="characters"
+          maxFontSizeMultiplier={0}
           style={stacked ? styles.field : styles.fieldInRow}
         />
         <Field
@@ -209,6 +215,7 @@ export function AddBookCard({ user, result, onCancel, onCreated }: Props) {
           value={qty}
           onChangeText={setQty}
           keyboardType="numeric"
+          maxFontSizeMultiplier={0}
           style={stacked ? styles.field : styles.fieldInRow}
         />
       </View>

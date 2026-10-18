@@ -1546,19 +1546,26 @@ const CARD_WORDS: Record<string, string[]> = {
   ],
 };
 
-/** Each card's text boxes: label, value, setter and the box's own options. */
+/**
+ * Each card's text boxes: label, value, setter, the box's own options, and
+ * its text-size cap. The cap is '0', React Native's no-limit sentinel, which
+ * Field honours (resolveFontCap): before the restyle these were raw
+ * TextInputs with no cap, so a typed title, name, SKU or quantity grew all
+ * the way, and the shared Field's 24pt input ceiling would have stopped it at
+ * every accessibility size. Updated expectation (review): the cap column.
+ */
 const CARD_FIELDS: Record<string, string[][]> = {
   [ADD_BOOK]: [
-    ['Title', 'title', 'setTitle', 'The Great Gatsby', '', ''],
-    ['Author', 'author', 'setAuthor', 'F. Scott Fitzgerald', '', ''],
-    ['SKU', 'sku', 'setSku', '', '', 'characters'],
-    ['Initial qty', 'qty', 'setQty', '', 'numeric', ''],
+    ['Title', 'title', 'setTitle', 'The Great Gatsby', '', '', '0'],
+    ['Author', 'author', 'setAuthor', 'F. Scott Fitzgerald', '', '', '0'],
+    ['SKU', 'sku', 'setSku', '', '', 'characters', '0'],
+    ['Initial qty', 'qty', 'setQty', '', 'numeric', '', '0'],
   ],
   [ADD_ITEM]: [
-    ['Name', 'name', 'setName', 'Wireless mouse', '', ''],
-    ['Model #', 'modelNumber', 'setModelNumber', 'e.g. MX432LL/A', '', ''],
-    ['SKU', 'sku', 'setSku', '', '', 'characters'],
-    ['Initial qty', 'qty', 'setQty', '', 'numeric', ''],
+    ['Name', 'name', 'setName', 'Wireless mouse', '', '', '0'],
+    ['Model #', 'modelNumber', 'setModelNumber', 'e.g. MX432LL/A', '', '', '0'],
+    ['SKU', 'sku', 'setSku', '', '', 'characters', '0'],
+    ['Initial qty', 'qty', 'setQty', '', 'numeric', '', '0'],
   ],
 };
 
@@ -1584,6 +1591,7 @@ describe.each(CARDS)('%s: every word, field and rule survives the restyle', (_na
         attrText(el, 'placeholder', sf) ?? '',
         attrText(el, 'keyboardType', sf) ?? '',
         attrText(el, 'autoCapitalize', sf) ?? '',
+        attrText(el, 'maxFontSizeMultiplier', sf) ?? '',
       ]),
     ).toEqual(CARD_FIELDS[file]);
     for (const el of els) {
@@ -1711,7 +1719,7 @@ describe.each(CARDS)('%s: the device mode and Dynamic Type', (_name, file) => {
     expect(codeOnly(src)).not.toMatch(/actionsStacked|cancelBtn|addBtn/);
   });
 
-  it('only the placeholder in its fixed frame is capped; the boxes cap themselves', () => {
+  it('only the placeholder in its fixed frame is capped; the text boxes grow without a cap', () => {
     expect(src).toContain('const PLACEHOLDER_CAP = capTo(10, TYPE_CEILING.chrome);');
     const { sf, els } = elements(file, (el, s) => tagOf(el, s) === 'Text');
     const capped = els

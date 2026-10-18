@@ -182,12 +182,16 @@ export function AddItemCard({ user, result, onCancel, onCreated }: Props) {
         </View>
       </View>
 
+      {/* What is typed is content, so it grows with the text size as these
+          boxes always did: 0, React Native's no-limit sentinel, lifts the
+          shared Field's 24pt input ceiling (the box grows with it). */}
       <Field
         label="Name"
         accessibilityLabel="Name"
         value={name}
         onChangeText={setName}
         placeholder="Wireless mouse"
+        maxFontSizeMultiplier={0}
         style={styles.field}
       />
       <Field
@@ -196,6 +200,7 @@ export function AddItemCard({ user, result, onCancel, onCreated }: Props) {
         value={modelNumber}
         onChangeText={setModelNumber}
         placeholder="e.g. MX432LL/A"
+        maxFontSizeMultiplier={0}
         style={styles.field}
       />
       <View style={[styles.row, stacked && styles.rowStacked]}>
@@ -205,6 +210,7 @@ export function AddItemCard({ user, result, onCancel, onCreated }: Props) {
           value={sku}
           onChangeText={setSku}
           autoCapitalize="characters"
+          maxFontSizeMultiplier={0}
           style={stacked ? styles.field : styles.fieldInRow}
         />
         <Field
@@ -213,6 +219,7 @@ export function AddItemCard({ user, result, onCancel, onCreated }: Props) {
           value={qty}
           onChangeText={setQty}
           keyboardType="numeric"
+          maxFontSizeMultiplier={0}
           style={stacked ? styles.field : styles.fieldInRow}
         />
       </View>
