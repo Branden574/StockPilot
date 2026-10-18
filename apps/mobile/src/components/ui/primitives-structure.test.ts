@@ -13,6 +13,10 @@ import {
   walkJsx,
   type JsxNode,
 } from '../../lib/__fixtures__/jsx-touch-audit';
+import type { SyncBadgeTone } from '../../lib/sync-badge';
+import { palette } from '../../lib/theme';
+import { AA_TEXT, AA_UI, contrast } from './__fixtures__/contrast';
+import { syncBadgeDot, syncBadgeSurface } from './tones';
 
 /**
  * THE SHARED PHONE PRIMITIVES, READ AS SOURCE (redesign package P2.5).
@@ -192,6 +196,109 @@ describe('SyncStatusBadge keeps its words and its tap', () => {
     expect(attrText(els[0]!, 'numberOfLines', sf)).toBe('1');
     expect(attrText(els[0]!, 'maxFontSizeMultiplier', sf)).toBe('LABEL_CAP');
     expect(readSource(at(file))).toContain('const LABEL_CAP = capTo(11, TYPE_CEILING.chrome);');
+  });
+});
+
+/**
+ * THE BADGE ON A CAMERA BAR (redesign P3.8, an integrator grant on this
+ * P2.5 file). The count scanner draws the badge on its always-dark camera
+ * bar, where the device-mode chip's outline was 1.47:1 in dark mode. One
+ * optional prop, `surface="camera"`, draws it from the dark palette in both
+ * modes; without it the badge is exactly what it was.
+ */
+describe('SyncStatusBadge on a camera bar', () => {
+  const file = 'src/components/SyncStatusBadge.tsx';
+  const src = readSource(at(file));
+  const dark = palette('dark');
+  const TONES: SyncBadgeTone[] = ['primary', 'muted', 'destructive', 'success', 'warning'];
+  /** An opaque colour laid at `alpha` over another, as '#rrggbb'. */
+  const over = (top: string, alpha: number, under: string): string =>
+    `#${[1, 3, 5]
+      .map((i) =>
+        Math.round(
+          parseInt(top.slice(i, i + 2), 16) * alpha +
+            parseInt(under.slice(i, i + 2), 16) * (1 - alpha),
+        )
+          .toString(16)
+          .padStart(2, '0'),
+      )
+      .join('')}`;
+  /** The dark bars a camera screen draws: black, the viewfinder colour, and
+   *  the 55% black bar (ai-scan) over a black and over a white scene. */
+  const BARS = [
+    '#000000',
+    '#0a0b09',
+    over('#000000', 0.55, '#000000'),
+    over('#000000', 0.55, '#ffffff'),
+  ];
+  /** The camera chip's tokens, read from the source (each a dark-palette key). */
+  const chipTokens = (() => {
+    const m =
+      /const CAMERA_CHIP: Tone = \{\s*fg: CAMERA_PALETTE\.(\w+),\s*bg: CAMERA_PALETTE\.(\w+),\s*border: CAMERA_PALETTE\.(\w+),?\s*\};/.exec(
+        src,
+      );
+    expect(m, 'CAMERA_CHIP is not three dark-palette tokens').not.toBeNull();
+    return { fg: m![1]!, bg: m![2]!, border: m![3]! } as Record<
+      'fg' | 'bg' | 'border',
+      keyof typeof dark
+    >;
+  })();
+  const chip = {
+    fg: dark[chipTokens.fg],
+    bg: dark[chipTokens.bg],
+    border: dark[chipTokens.border],
+  };
+
+  // Mutation caught: the default changed, so the cycle-count header's badge
+  // (no prop) would draw the camera chip.
+  it('without the prop it is the device-mode chip it was, hairline and all', () => {
+    expect(src).toContain(
+      "export function SyncStatusBadge({ surface = 'screen' }: { surface?: SyncBadgeSurface })",
+    );
+    expect(src).toContain("export type SyncBadgeSurface = 'screen' | 'camera';");
+    expect(src).toContain("const onCamera = surface === 'camera';");
+    expect(src).toContain(
+      'const dotColor = onCamera ? syncBadgeDot(tone, CAMERA_PALETTE) : syncBadgeDot(tone, c);',
+    );
+    expect(src).toContain('const chip = onCamera ? CAMERA_CHIP : syncBadgeSurface(c);');
+    expect(src).toMatch(/\n {2}pill: \{[^}]*borderWidth: StyleSheet\.hairlineWidth,/);
+    const { sf, els } = elements(file, (el, s) => tagOf(el, s) === 'Pressable');
+    expect(attrText(els[0]!, 'style', sf)).toMatch(
+      /styles\.pill,\s*onCamera && styles\.pillOnCamera,/,
+    );
+  });
+
+  // Mutation caught: the camera chip read from the device palette (light in
+  // light mode, on a bar that is always dark).
+  it('the camera chip is the dark palette in both modes, a full point outline', () => {
+    expect(src).toContain("const CAMERA_PALETTE = palette('dark');");
+    expect(chipTokens).toEqual({ fg: 'ink2', bg: 'card', border: 'ink4' });
+    expect(src).toMatch(/\n {2}pillOnCamera: \{\s*borderWidth: 1,\s*\}/);
+  });
+
+  it('its words read at AA and every state dot (or spinner) at 3:1 on the chip', () => {
+    expect(contrast(chip.fg, chip.bg)).toBeGreaterThanOrEqual(AA_TEXT);
+    for (const tone of TONES) {
+      expect(contrast(syncBadgeDot(tone, dark), chip.bg), tone).toBeGreaterThanOrEqual(AA_UI);
+    }
+  });
+
+  // The P2.5 review's finding: the device-mode chip's outline was 1.47:1 on a
+  // camera bar in dark mode. Mutation caught: an outline or fill that loses
+  // the chip on any of the bars (for example the old sunk / hair2 chip).
+  it('stands out at 3:1 from every dark bar, by its outline or by its fill', () => {
+    for (const bar of BARS) {
+      const best = Math.max(contrast(chip.border, bar), contrast(chip.bg, bar));
+      expect(best, bar).toBeGreaterThanOrEqual(AA_UI);
+    }
+    // On the solid bars it is the outline that does it.
+    expect(contrast(chip.border, '#0a0b09')).toBeGreaterThanOrEqual(AA_UI);
+    expect(contrast(chip.border, '#000000')).toBeGreaterThanOrEqual(AA_UI);
+    // The old device-mode chip in dark mode fails the same check (vacuity control).
+    const old = syncBadgeSurface(dark);
+    expect(Math.max(contrast(old.border, '#000000'), contrast(old.bg, '#000000'))).toBeLessThan(
+      AA_UI,
+    );
   });
 });
 

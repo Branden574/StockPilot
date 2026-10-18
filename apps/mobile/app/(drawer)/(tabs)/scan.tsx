@@ -5,10 +5,13 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 // src/lib/maintenance-upload.ts for the full note.
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
-import { useRouter, type Href } from 'expo-router';
-import { X } from 'lucide-react-native';
+import { useIsFocused, useRouter, type Href } from 'expo-router';
+import { useDrawerStatus } from 'expo-router/drawer';
+import { StatusBar } from 'expo-status-bar';
+import { Camera, X } from 'lucide-react-native';
 import * as React from 'react';
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   Alert,
   Animated,
@@ -20,6 +23,7 @@ import {
   Text,
   View,
   useAnimatedValue,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -38,10 +42,13 @@ import {
 import { AddBookCard, type IsbnLookupResult } from '@/components/AddBookCard';
 import { AddItemCard, type UpcLookupResult } from '@/components/AddItemCard';
 import { SignaturePadModal } from '@/components/signature-pad-modal';
+import { Button } from '@/components/ui/button';
 import { CachedImage } from '@/components/ui/cached-image';
+import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { showWriteCta } from '@/lib/cta-gating';
+import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import { readItemElsewhere } from '@/lib/holdings-elsewhere';
 import { signItemImage } from '@/lib/image-cache';
@@ -64,7 +71,8 @@ import {
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { useRole } from '@/lib/use-role';
-import { radius, space, theme } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo, palette, space, type Palette } from '@/lib/theme';
+import { useTheme } from '@/lib/use-theme';
 
 interface FoundItem {
   id: string;
@@ -186,6 +194,18 @@ export default function Scan() {
   const canReportProblem =
     maintenanceEnabled && showWriteCta(permissions, 'maintenance_requests:submit');
   const [permission, requestPermission] = useCameraPermissions();
+  // The cards and sheets follow the device's mode; the camera chrome is dark
+  // in both (CAMERA, below). `colors` is the mode's palette, for icons.
+  const { mode: themeMode, c: colors } = useTheme();
+  const styles = SCAN_STYLES[themeMode];
+  // The light status bar goes with the dark camera bar, and only while this
+  // tab is the one on screen (tabs stay mounted behind each other) with
+  // nothing over the bar. The drawer and the packing-slip signature pad cover
+  // it without taking this tab's focus, and both are near white in light
+  // mode, so the root's own status bar takes over while either is up.
+  const focused = useIsFocused();
+  const drawerOpen = useDrawerStatus() === 'open';
+  const stacked = shouldStackRow(useWindowDimensions().fontScale);
   const [scanning, setScanning] = React.useState(true);
   const [mode, setMode] = React.useState<'lookup' | 'cover'>('lookup');
   const { orgId } = useOrg();
@@ -866,7 +886,7 @@ export default function Scan() {
   if (!permission) return <CenterMessage>Loading camera permission…</CenterMessage>;
   if (!permission.granted) {
     return (
-      <SafeAreaView style={styles.container} edges={['top']}>
+      <SafeAreaView style={styles.page} edges={['top']}>
         <View style={styles.permission}>
           <Text style={styles.permTitle}>Camera access needed</Text>
           <Text style={styles.permBody}>
@@ -880,13 +900,13 @@ export default function Scan() {
               (canAskAgain=false), iOS won't re-prompt, so we link to Settings
               instead of a button that silently does nothing. */}
           {permission.canAskAgain ? (
-            <Pressable style={styles.cta} onPress={requestPermission}>
-              <Text style={styles.ctaLabel}>Continue</Text>
-            </Pressable>
+            <Button onPress={requestPermission} style={styles.cta}>
+              Continue
+            </Button>
           ) : (
-            <Pressable style={styles.cta} onPress={() => Linking.openSettings()}>
-              <Text style={styles.ctaLabel}>Open Settings</Text>
-            </Pressable>
+            <Button onPress={() => Linking.openSettings()} style={styles.cta}>
+              Open Settings
+            </Button>
           )}
         </View>
       </SafeAreaView>
@@ -976,316 +996,381 @@ export default function Scan() {
    */
   const canQuickAdjust =
     showWriteCta(permissions, 'stock:adjust') && item?.status !== 'archived';
+  /**
+   * ONE CARD AT A TIME. While the result sheet, an add card or the placement
+   * picker is up, the mode switch, the Photo ID card and the camera stay away.
+   * The Add item card was missing from those tests, where the Add book card
+   * (its twin) was in them: after a Photo ID found a product, the Photo ID
+   * card stayed under the new card, the switch stayed on the bar, and a tap on
+   * Scan started the camera under the card, where a scan opened the result
+   * sheet on top of it. The placement picker left the switch and the Photo ID
+   * card up the same way.
+   */
+  const cardUp = Boolean(item || addBook || addItem || placementChoices);
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      {scanning && !item && !addBook && !placementChoices && mode === 'lookup' ? (
-        <CameraView
-          style={StyleSheet.absoluteFill}
-          facing="back"
-          barcodeScannerSettings={{
-            barcodeTypes: ['qr', 'ean13', 'ean8', 'upc_a', 'upc_e', 'code128', 'code39', 'code93', 'codabar', 'pdf417'],
-          }}
-          onBarcodeScanned={onBarCodeScanned}
-        />
-      ) : null}
+    <View style={styles.container}>
+      {/* The camera bar is dark in both modes, so the clock and battery over
+          it are light while this tab is the one on screen and neither the
+          drawer nor the signature pad covers the bar. */}
+      {focused && !drawerOpen && !signatureModalVisible ? <StatusBar style="light" /> : null}
 
-      <Pressable
-        onPress={() => {
-          if (router.canGoBack()) router.back();
-          else router.replace('/');
-        }}
-        style={styles.closeBtn}
-        hitSlop={10}
-        accessibilityRole="button"
-        accessibilityLabel="Close scanner"
-      >
-        <X size={20} color="#f6f4ef" strokeWidth={1.8} />
-      </Pressable>
+      {/* THE CAMERA BAR: solid, and dark in both modes, so the close button
+          and the mode switch read the same over any scene. */}
+      <SafeAreaView edges={['top']} style={styles.cameraBar}>
+        <View style={styles.barRow}>
+          <Pressable
+            onPress={() => {
+              if (router.canGoBack()) router.back();
+              else router.replace('/');
+            }}
+            style={styles.closeBtn}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Close scanner"
+          >
+            <X size={20} color={CAMERA.ink} strokeWidth={1.8} />
+          </Pressable>
 
-      <View style={styles.overlay} pointerEvents="box-none">
-        {!item && !addBook && (
-          <View style={styles.modeChips} pointerEvents="auto">
-            <Pressable
-              onPress={() => setMode('lookup')}
-              style={[styles.modeChip, mode === 'lookup' && styles.modeChipOn]}
-            >
-              <Text style={[styles.modeLabel, mode === 'lookup' && styles.modeLabelOn]}>
-                Scan
+          {/* The reference's mode switch, carrying the two modes this tab has.
+              Each 36pt segment reaches the track's 44pt edge for a finger. */}
+          {!cardUp ? (
+            <View style={styles.modeTrack}>
+              <Pressable
+                onPress={() => setMode('lookup')}
+                style={[styles.modeSegment, mode === 'lookup' && styles.modeSegmentOn]}
+                hitSlop={SEGMENT_SLOP}
+                accessibilityRole="button"
+                accessibilityState={{ selected: mode === 'lookup' }}
+              >
+                <Text
+                  style={[styles.modeLabel, mode === 'lookup' && styles.modeLabelOn]}
+                  maxFontSizeMultiplier={MODE_CAP}
+                >
+                  Scan
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setMode('cover')}
+                style={[styles.modeSegment, mode === 'cover' && styles.modeSegmentOn]}
+                hitSlop={SEGMENT_SLOP}
+                accessibilityRole="button"
+                accessibilityState={{ selected: mode === 'cover' }}
+              >
+                <Text
+                  style={[styles.modeLabel, mode === 'cover' && styles.modeLabelOn]}
+                  maxFontSizeMultiplier={MODE_CAP}
+                >
+                  Photo ID
+                </Text>
+              </Pressable>
+            </View>
+          ) : null}
+
+          {/* Balances the close button, so the switch sits in the middle. */}
+          <View style={styles.barSpacer} />
+        </View>
+      </SafeAreaView>
+
+      <View style={styles.viewfinder}>
+        {scanning && !cardUp && mode === 'lookup' ? (
+          <CameraView
+            style={StyleSheet.absoluteFill}
+            facing="back"
+            barcodeScannerSettings={{
+              barcodeTypes: ['qr', 'ean13', 'ean8', 'upc_a', 'upc_e', 'code128', 'code39', 'code93', 'codabar', 'pdf417'],
+            }}
+            onBarcodeScanned={onBarCodeScanned}
+          />
+        ) : null}
+
+        <View style={styles.overlay} pointerEvents="box-none">
+          {mode === 'lookup' ? (
+            <View style={styles.finder} pointerEvents="none">
+              <ScanReticle />
+              <View style={styles.caption}>
+                <Text style={styles.reticleLabel} maxFontSizeMultiplier={EYEBROW_CAP}>
+                  — ALIGN BARCODE
+                </Text>
+                {scanning && !item ? (
+                  <Text style={styles.hint}>Point at a barcode or QR code</Text>
+                ) : null}
+              </View>
+            </View>
+          ) : !cardUp ? (
+            <View style={styles.coverCta} pointerEvents="auto">
+              <Text style={styles.coverHint}>
+                Snap a clear photo of the front cover. Vision will read the
+                title and author.
               </Text>
-            </Pressable>
-            <Pressable
-              onPress={() => setMode('cover')}
-              style={[styles.modeChip, mode === 'cover' && styles.modeChipOn]}
-            >
-              <Text style={[styles.modeLabel, mode === 'cover' && styles.modeLabelOn]}>
-                Photo ID
-              </Text>
-            </Pressable>
+              <Button
+                onPress={captureCoverId}
+                disabled={busy}
+                block
+                leading={busy ? undefined : <Camera size={18} color={colors.paper} strokeWidth={1.8} />}
+              >
+                {busy ? 'Identifying…' : 'Capture cover'}
+              </Button>
+            </View>
+          ) : null}
+        </View>
+
+        {item && (
+          <View style={styles.sheet}>
+            <ScrollView contentContainerStyle={styles.sheetContent}>
+              <View style={styles.headerRow}>
+                {item.image_url ? (
+                  <CachedImage uri={item.image_url} style={styles.thumb} recyclingKey={item.id} />
+                ) : (
+                  <View style={[styles.thumb, styles.thumbPlaceholder]}>
+                    <Text style={styles.thumbPlaceholderText} maxFontSizeMultiplier={PLACEHOLDER_CAP}>
+                      No image
+                    </Text>
+                  </View>
+                )}
+                <View style={styles.headerText}>
+                  <Text style={styles.sheetName} numberOfLines={2}>
+                    {item.name}
+                  </Text>
+                  <Text style={styles.sheetSku} numberOfLines={1}>
+                    {item.sku}
+                    {item.barcode ? ` · ${item.barcode}` : ''}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={[styles.statRow, stacked && styles.statRowStacked]}>
+                <View style={styles.stat}>
+                  <Text style={styles.statLabel} maxFontSizeMultiplier={LABEL_CAP}>
+                    On hand
+                  </Text>
+                  <Text style={[styles.statValue, lowStock && styles.statValueLow]}>
+                    {item.quantity_on_hand}
+                  </Text>
+                  {unconfirmed ? (
+                    <Text style={styles.unconfirmedNote}>{unconfirmedScanLabel(unconfirmed)}</Text>
+                  ) : null}
+                </View>
+                <View style={styles.stat}>
+                  <Text style={styles.statLabel} maxFontSizeMultiplier={LABEL_CAP}>
+                    Reorder at
+                  </Text>
+                  <Text style={styles.statValueMuted}>{item.reorder_point}</Text>
+                </View>
+                <View style={styles.stat}>
+                  <Text style={styles.statLabel} maxFontSizeMultiplier={LABEL_CAP}>
+                    Price
+                  </Text>
+                  <Text style={styles.statValueMuted}>
+                    {formatCurrency(item.retail_price)}
+                  </Text>
+                </View>
+              </View>
+
+              {(item.primary_location_name ||
+                item.bin_location ||
+                placement?.source === 'holdings' ||
+                elsewhereLoc ||
+                elsewhereNote ||
+                structuredRack ||
+                storage?.crateNumber ||
+                storage?.grade) && (
+                <View style={styles.locationBox}>
+                  {item.primary_location_name && (
+                    <LocRow label="Location" value={item.primary_location_name} />
+                  )}
+                  {placement?.source === 'holdings' ? (
+                    // The HOLDINGS contradict any single label, and the resolver
+                    // says which way: 'split' = stock on more than one rack/crate
+                    // (one label names only one of them); 'crate' = every holding
+                    // is a crate, so the item's rack keys survive naming a rack
+                    // the stock has left (mig 0335 preserves them on purpose).
+                    <LocRow
+                      label={placement.reason === 'split' ? 'Split stock' : 'In crate'}
+                      value={formatPlacementLabel(placement) ?? ''}
+                    />
+                  ) : (
+                    item.bin_location && (
+                      <LocRow label="Bin/shelf" value={item.bin_location} />
+                    )
+                  )}
+                  {elsewhereLoc && <LocRow label="Elsewhere" value={elsewhereLoc.value} />}
+                  {elsewhereNote && <Text style={styles.locNote}>{elsewhereNote}</Text>}
+                  {structuredRack && <LocRow label="Rack" value={structuredRack} mono />}
+                  {storage?.crateNumber && (
+                    <View style={[styles.locRow, stacked && styles.locRowStacked]}>
+                      <Text style={styles.locLabel}>Crate</Text>
+                      <View style={styles.crateValue}>
+                        {/* Number identifies the crate; the color is optional.
+                            A hollow dot (bordered, no fill) means "no color set". */}
+                        <View
+                          style={[
+                            styles.crateDot,
+                            crateHex ? { backgroundColor: crateHex } : null,
+                          ]}
+                        />
+                        <Text style={styles.locValue}>{storage.crateNumber}</Text>
+                      </View>
+                    </View>
+                  )}
+                  {storage?.grade && (
+                    <LocRow
+                      label="Grade"
+                      value={
+                        /^\d{1,2}$/.test(storage.grade)
+                          ? `Grade ${storage.grade}`
+                          : storage.grade
+                      }
+                    />
+                  )}
+                </View>
+              )}
+
+              {/* Quick adjust, the reference's stepper buttons. Each tap is a
+                  write the server answers before the number moves. */}
+              {canQuickAdjust && (
+                <View style={styles.actions}>
+                  <ActionBtn label="−1" onPress={() => void adjust(-1)} disabled={busy} />
+                  <ActionBtn label="+1" onPress={() => void adjust(1)} disabled={busy} />
+                  <ActionBtn label="+5" onPress={() => void adjust(5)} disabled={busy} />
+                  <ActionBtn label="+25" onPress={() => void adjust(25)} disabled={busy} />
+                </View>
+              )}
+
+              {/* One full-width button under the other at every text size: a
+                  button's words stay on one line, and two side by side (about
+                  161pt each on a 6.1in phone) cut "Take photo" short from the
+                  largest standard text size, and at the default size under
+                  Display Zoom. */}
+              <View style={styles.secondaryActions}>
+                <Button
+                  variant="outline"
+                  onPress={capturePhoto}
+                  disabled={busy}
+                  leading={<Camera size={18} color={colors.ink} strokeWidth={1.8} />}
+                >
+                  Take photo
+                </Button>
+                <Button variant="ghost" onPress={reset}>
+                  Scan another
+                </Button>
+              </View>
+
+              {canReportProblem ? (
+                <Button
+                  variant="outline"
+                  style={styles.reportProblemBtn}
+                  onPress={() =>
+                    router.push({
+                      pathname: '/maintenance/new',
+                      // Deep-link HINT only (mirrors web's ReportProblemButton
+                      // doc comment) — the create route re-derives and
+                      // validates this id server-side (uuid shape + THIS org)
+                      // before it is ever attached to a request. Only the id
+                      // crosses the boundary; sku/name stay client-local
+                      // display data the server never trusts or re-reads from
+                      // here (binding constraint 6).
+                      params: { itemId: item.id },
+                      // .expo/types/router.d.ts is stale (regenerated only by
+                      // the Expo dev server) and predates Task 19's route —
+                      // same cast maintenance.tsx's own 'New' button already
+                      // needs for this identical reason (see that file). The
+                      // double cast (TS's own suggested escape hatch) is
+                      // required because an unregistered pathname doesn't
+                      // structurally overlap any registered route's object
+                      // shape, unlike the plain-string form.
+                    } as unknown as Href)
+                  }
+                >
+                  Report a problem
+                </Button>
+              ) : null}
+            </ScrollView>
           </View>
         )}
 
-        {mode === 'lookup' ? (
-          <>
-            <ScanReticle />
-            <Text style={styles.reticleLabel}>— ALIGN BARCODE</Text>
-            <Text style={styles.hint}>
-              {scanning && !item ? 'Point at a barcode or QR code' : ''}
-            </Text>
-          </>
-        ) : !item && !addBook ? (
-          <View style={styles.coverCta} pointerEvents="auto">
-            <Text style={styles.coverHint}>
-              Snap a clear photo of the front cover. Vision will read the
-              title and author.
-            </Text>
-            <Pressable
-              onPress={captureCoverId}
-              style={styles.coverShutter}
-              disabled={busy}
-            >
-              <Text style={styles.coverShutterLabel}>
-                {busy ? 'Identifying…' : '📷  Capture cover'}
-              </Text>
-            </Pressable>
+        {/* The add cards are forms. While the keyboard is up it covers the
+            card's lower half, where the Warehouse chips and Add to inventory
+            are, and the number pad of Initial qty has no key that puts it
+            away; insetting the scroll by the keyboard (iOS) lets the form
+            scroll clear of it and brings the focused box into view. */}
+        {addBook && (
+          <View style={styles.addWrap}>
+            <ScrollView contentContainerStyle={styles.addContent} automaticallyAdjustKeyboardInsets>
+              <AddBookCard
+                user={user}
+                result={addBook}
+                onCancel={reset}
+                onCreated={(id) => {
+                  setAddBook(null);
+                  void (async () => {
+                    const found = await loadItemById(id);
+                    if (found) showScannedItem(found);
+                    else reset();
+                  })();
+                }}
+              />
+            </ScrollView>
           </View>
-        ) : null}
-      </View>
+        )}
 
-      {item && (
-        <View style={styles.sheet}>
-          <ScrollView contentContainerStyle={{ paddingBottom: space.md }}>
-            <View style={styles.headerRow}>
-              {item.image_url ? (
-                <CachedImage uri={item.image_url} style={styles.thumb} recyclingKey={item.id} />
-              ) : (
-                <View style={[styles.thumb, styles.thumbPlaceholder]}>
-                  <Text style={styles.thumbPlaceholderText}>No image</Text>
-                </View>
-              )}
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={styles.sheetSku} numberOfLines={1}>
-                  {item.sku}
-                  {item.barcode ? ` · ${item.barcode}` : ''}
-                </Text>
-                <Text style={styles.sheetName} numberOfLines={2}>
-                  {item.name}
-                </Text>
-              </View>
-            </View>
+        {addItem && (
+          <View style={styles.addWrap}>
+            <ScrollView contentContainerStyle={styles.addContent} automaticallyAdjustKeyboardInsets>
+              <AddItemCard
+                user={user}
+                result={addItem}
+                onCancel={reset}
+                onCreated={(id) => {
+                  setAddItem(null);
+                  void (async () => {
+                    const found = await loadItemById(id);
+                    if (found) showScannedItem(found);
+                    else reset();
+                  })();
+                }}
+              />
+            </ScrollView>
+          </View>
+        )}
 
-            <View style={styles.statRow}>
-              <View style={styles.stat}>
-                <Text style={styles.statLabel}>On hand</Text>
-                <Text
-                  style={[styles.statValue, lowStock && { color: theme.warning }]}
+        {placementChoices && (
+          <View style={styles.sheet}>
+            <ScrollView contentContainerStyle={styles.sheetContent}>
+              <Text style={styles.pickerTitle}>Multiple placements found</Text>
+              <Text style={styles.pickerSubtitle}>{scanPickerSubtitle(placementChoices)}</Text>
+              {placementChoices.map((c) => (
+                <Pressable
+                  key={c.id}
+                  style={({ pressed }) => [styles.pickerRow, pressed && styles.pressed]}
+                  onPress={() => void choosePlacement(c)}
+                  disabled={busy}
+                  accessibilityRole="button"
                 >
-                  {item.quantity_on_hand}
-                </Text>
-                {unconfirmed ? (
-                  <Text style={styles.unconfirmedNote}>{unconfirmedScanLabel(unconfirmed)}</Text>
-                ) : null}
-              </View>
-              <View style={styles.stat}>
-                <Text style={styles.statLabel}>Reorder at</Text>
-                <Text style={styles.statValueMuted}>{item.reorder_point}</Text>
-              </View>
-              <View style={styles.stat}>
-                <Text style={styles.statLabel}>Price</Text>
-                <Text style={styles.statValueMuted}>
-                  {formatCurrency(item.retail_price)}
-                </Text>
-              </View>
-            </View>
+                  <Text style={styles.pickerRowTitle} numberOfLines={1}>
+                    {c.charterName ?? 'Unassigned charter'}
+                  </Text>
+                  <Text style={styles.pickerRowSku} numberOfLines={1}>
+                    SKU {c.sku}
+                  </Text>
+                  <Text style={styles.pickerRowSubtitle} numberOfLines={1}>
+                    {c.binLocation ?? 'No bin set'} · {c.quantityOnHand} on hand
+                  </Text>
+                </Pressable>
+              ))}
+              <Button variant="ghost" onPress={cancelPlacementChoice} disabled={busy}>
+                Cancel
+              </Button>
+            </ScrollView>
+          </View>
+        )}
 
-            {(item.primary_location_name ||
-              item.bin_location ||
-              placement?.source === 'holdings' ||
-              elsewhereLoc ||
-              elsewhereNote ||
-              structuredRack ||
-              storage?.crateNumber ||
-              storage?.grade) && (
-              <View style={styles.locationBox}>
-                {item.primary_location_name && (
-                  <LocRow label="Location" value={item.primary_location_name} />
-                )}
-                {placement?.source === 'holdings' ? (
-                  // The HOLDINGS contradict any single label, and the resolver
-                  // says which way: 'split' = stock on more than one rack/crate
-                  // (one label names only one of them); 'crate' = every holding
-                  // is a crate, so the item's rack keys survive naming a rack
-                  // the stock has left (mig 0335 preserves them on purpose).
-                  <LocRow
-                    label={placement.reason === 'split' ? 'Split stock' : 'In crate'}
-                    value={formatPlacementLabel(placement) ?? ''}
-                  />
-                ) : (
-                  item.bin_location && (
-                    <LocRow label="Bin/shelf" value={item.bin_location} />
-                  )
-                )}
-                {elsewhereLoc && <LocRow label="Elsewhere" value={elsewhereLoc.value} />}
-                {elsewhereNote && <Text style={styles.locNote}>{elsewhereNote}</Text>}
-                {structuredRack && <LocRow label="Rack" value={structuredRack} mono />}
-                {storage?.crateNumber && (
-                  <View style={styles.locRow}>
-                    <Text style={styles.locLabel}>Crate</Text>
-                    <View
-                      style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}
-                    >
-                      {/* Number identifies the crate; the color is optional.
-                          A hollow dot (bordered, no fill) means "no color set". */}
-                      <View
-                        style={[
-                          styles.crateDot,
-                          crateHex ? { backgroundColor: crateHex } : null,
-                        ]}
-                      />
-                      <Text style={styles.locValue}>{storage.crateNumber}</Text>
-                    </View>
-                  </View>
-                )}
-                {storage?.grade && (
-                  <LocRow
-                    label="Grade"
-                    value={
-                      /^\d{1,2}$/.test(storage.grade)
-                        ? `Grade ${storage.grade}`
-                        : storage.grade
-                    }
-                  />
-                )}
-              </View>
-            )}
-
-            {canQuickAdjust && (
-              <View style={styles.actions}>
-                <ActionBtn label="−1" onPress={() => void adjust(-1)} disabled={busy} />
-                <ActionBtn label="+1" onPress={() => void adjust(1)} disabled={busy} primary />
-                <ActionBtn label="+5" onPress={() => void adjust(5)} disabled={busy} primary />
-                <ActionBtn label="+25" onPress={() => void adjust(25)} disabled={busy} />
-              </View>
-            )}
-
-            <View style={styles.secondaryActions}>
-              <Pressable
-                style={styles.photoBtn}
-                onPress={capturePhoto}
-                disabled={busy}
-              >
-                <Text style={styles.photoBtnLabel}>📷  Take photo</Text>
-              </Pressable>
-              <Pressable style={styles.dismiss} onPress={reset}>
-                <Text style={styles.dismissLabel}>Scan another</Text>
-              </Pressable>
-            </View>
-
-            {canReportProblem ? (
-              <Pressable
-                style={styles.reportProblemBtn}
-                onPress={() =>
-                  router.push({
-                    pathname: '/maintenance/new',
-                    // Deep-link HINT only (mirrors web's ReportProblemButton
-                    // doc comment) — the create route re-derives and
-                    // validates this id server-side (uuid shape + THIS org)
-                    // before it is ever attached to a request. Only the id
-                    // crosses the boundary; sku/name stay client-local
-                    // display data the server never trusts or re-reads from
-                    // here (binding constraint 6).
-                    params: { itemId: item.id },
-                    // .expo/types/router.d.ts is stale (regenerated only by
-                    // the Expo dev server) and predates Task 19's route —
-                    // same cast maintenance.tsx's own 'New' button already
-                    // needs for this identical reason (see that file). The
-                    // double cast (TS's own suggested escape hatch) is
-                    // required because an unregistered pathname doesn't
-                    // structurally overlap any registered route's object
-                    // shape, unlike the plain-string form.
-                  } as unknown as Href)
-                }
-              >
-                <Text style={styles.reportProblemLabel}>Report a problem</Text>
-              </Pressable>
-            ) : null}
-          </ScrollView>
-        </View>
-      )}
-
-      {addBook && (
-        <View style={styles.addBookWrap}>
-          <ScrollView contentContainerStyle={{ paddingBottom: space.lg }}>
-            <AddBookCard
-              user={user}
-              result={addBook}
-              onCancel={reset}
-              onCreated={(id) => {
-                setAddBook(null);
-                void (async () => {
-                  const found = await loadItemById(id);
-                  if (found) showScannedItem(found);
-                  else reset();
-                })();
-              }}
-            />
-          </ScrollView>
-        </View>
-      )}
-
-      {addItem && (
-        <View style={styles.addBookWrap}>
-          <ScrollView contentContainerStyle={{ paddingBottom: space.lg }}>
-            <AddItemCard
-              user={user}
-              result={addItem}
-              onCancel={reset}
-              onCreated={(id) => {
-                setAddItem(null);
-                void (async () => {
-                  const found = await loadItemById(id);
-                  if (found) showScannedItem(found);
-                  else reset();
-                })();
-              }}
-            />
-          </ScrollView>
-        </View>
-      )}
-
-      {placementChoices && (
-        <View style={styles.sheet}>
-          <ScrollView contentContainerStyle={{ paddingBottom: space.md }}>
-            <Text style={styles.pickerTitle}>Multiple placements found</Text>
-            <Text style={styles.pickerSubtitle}>{scanPickerSubtitle(placementChoices)}</Text>
-            {placementChoices.map((c) => (
-              <Pressable
-                key={c.id}
-                style={({ pressed }) => [styles.pickerRow, pressed && { opacity: 0.7 }]}
-                onPress={() => void choosePlacement(c)}
-                disabled={busy}
-              >
-                <Text style={styles.pickerRowTitle} numberOfLines={1}>
-                  {c.charterName ?? 'Unassigned charter'}
-                </Text>
-                <Text style={styles.pickerRowSubtitle} numberOfLines={1}>
-                  SKU {c.sku}
-                </Text>
-                <Text style={styles.pickerRowSubtitle} numberOfLines={1}>
-                  {c.binLocation ?? 'No bin set'} · {c.quantityOnHand} on hand
-                </Text>
-              </Pressable>
-            ))}
-            <Pressable style={styles.dismiss} onPress={cancelPlacementChoice} disabled={busy}>
-              <Text style={styles.dismissLabel}>Cancel</Text>
-            </Pressable>
-          </ScrollView>
-        </View>
-      )}
-
-      {busy && !item && !addBook && !addItem && !placementChoices && (
-        <ActivityIndicator style={styles.spinner} color="#fafaf7" size="large" />
-      )}
+        {busy && !cardUp && (
+          <View style={styles.spinnerWrap} pointerEvents="none">
+            <ActivityIndicator color={CAMERA.ink} size="large" />
+          </View>
+        )}
+      </View>
 
       {signatureToken ? (
         <SignaturePadModal
@@ -1303,17 +1388,51 @@ export default function Scan() {
           signatureToken={signatureToken}
         />
       ) : null}
-    </SafeAreaView>
+    </View>
   );
 }
 
-// Animated reticle — 4 corner brackets with a mint scan line that
-// sweeps top→bottom→top continuously while the scanner is open.
-function ScanReticle() {
-  // 0 = top, 1 = bottom — interpolated to translateY across the
-  // reticle's interior so the line never crosses the corner brackets.
-  const t = useAnimatedValue(0);
+/**
+ * Whether iOS's Reduce Motion is on: null until the first answer, then kept
+ * current while the screen is up. The Scan tab stays mounted behind the other
+ * tabs, so a setting changed in the meantime must still reach it.
+ */
+function useReduceMotion(): boolean | null {
+  const [reduce, setReduce] = React.useState<boolean | null>(null);
   React.useEffect(() => {
+    let active = true;
+    void AccessibilityInfo.isReduceMotionEnabled().then((on) => {
+      if (active) setReduce(on);
+    });
+    const sub = AccessibilityInfo.addEventListener('reduceMotionChanged', (on) => {
+      if (active) setReduce(on);
+    });
+    return () => {
+      active = false;
+      sub.remove();
+    };
+  }, []);
+  return reduce;
+}
+
+/**
+ * The finder: the reference's four corner brackets in the dark-mode mint, and
+ * a scan line that sweeps top to bottom and back while the scanner is open.
+ * With Reduce Motion on (and until iOS has said whether it is), the line rests
+ * across the middle, as the reference draws it, and nothing moves.
+ */
+function ScanReticle() {
+  const styles = useScanStyles();
+  const reduceMotion = useReduceMotion();
+  // 0 = top, 1 = bottom — interpolated to translateY across the reticle's
+  // interior so the line never crosses the corner brackets.
+  const t = useAnimatedValue(0.5);
+  React.useEffect(() => {
+    if (reduceMotion !== false) {
+      t.setValue(0.5);
+      return;
+    }
+    t.setValue(0);
     const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(t, {
@@ -1332,10 +1451,10 @@ function ScanReticle() {
     );
     loop.start();
     return () => loop.stop();
-  }, [t]);
+  }, [t, reduceMotion]);
   const translateY = t.interpolate({
     inputRange: [0, 1],
-    outputRange: [10, 270],
+    outputRange: [SCAN_LINE_TOP, SCAN_LINE_BOTTOM],
   });
   return (
     <View style={styles.reticle}>
@@ -1348,41 +1467,70 @@ function ScanReticle() {
   );
 }
 
+/**
+ * One row of the location box. Reflow, not a cap: the label names the value
+ * beside it (LOCATION / a rack name), so both are content and both grow with
+ * the user's text size. Past the stacking scale the row becomes label over
+ * value, as the item screen's MetaRow does, and the value takes the full width.
+ */
 function LocRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  const styles = useScanStyles();
+  const stacked = shouldStackRow(useWindowDimensions().fontScale);
   return (
-    <View style={styles.locRow}>
+    <View style={[styles.locRow, stacked && styles.locRowStacked]}>
       <Text style={styles.locLabel}>{label}</Text>
       {/* locValueFit: a value longer than the row ("+12 in other warehouses",
           a long rack name, or any value at a large text size) wraps inside
           the row instead of running past the sheet's edge. */}
-      <Text style={[styles.locValue, styles.locValueFit, mono && { fontFamily: 'Menlo' }]}>
+      <Text
+        style={[
+          styles.locValue,
+          styles.locValueFit,
+          stacked && styles.locValueStacked,
+          mono && styles.locValueMono,
+        ]}
+      >
         {value}
       </Text>
     </View>
   );
 }
 
-function ActionBtn({ label, onPress, disabled, primary }: { label: string; onPress: () => void; disabled?: boolean; primary?: boolean }) {
+/** One quick-adjust stepper: the reference's 52pt outline button. */
+function ActionBtn({
+  label,
+  onPress,
+  disabled,
+}: {
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+}) {
+  const styles = useScanStyles();
   return (
     <Pressable
       onPress={onPress}
       disabled={disabled}
+      accessibilityRole="button"
+      accessibilityState={{ disabled: Boolean(disabled) }}
       style={({ pressed }) => [
         styles.actionBtn,
-        primary && { backgroundColor: theme.primary },
-        pressed && { opacity: 0.7 },
-        disabled && { opacity: 0.4 },
+        pressed && styles.pressed,
+        disabled && styles.disabled,
       ]}
     >
-      <Text style={[styles.actionLabel, primary && { color: '#fff' }]}>{label}</Text>
+      <Text style={styles.actionLabel} maxFontSizeMultiplier={STEP_CAP}>
+        {label}
+      </Text>
     </Pressable>
   );
 }
 
 function CenterMessage({ children }: { children: React.ReactNode }) {
+  const styles = useScanStyles();
   return (
-    <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
-      <Text style={{ color: theme.textMuted }}>{children}</Text>
+    <View style={[styles.page, styles.center]}>
+      <Text style={styles.centerText}>{children}</Text>
     </View>
   );
 }
@@ -1396,226 +1544,360 @@ function unconfirmedScanLabel(u: UnconfirmedStock): string {
   return u.mayStillLand ? 'Not confirmed · may still be saving' : 'Not confirmed · scan again to check';
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000' },
-  overlay: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingTop: 80,
-  },
-  closeBtn: {
-    position: 'absolute',
-    top: 60,
-    left: 16,
-    zIndex: 10,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  reticle: {
-    width: 280,
-    height: 280,
-    position: 'relative',
-  },
-  corner: {
-    position: 'absolute',
-    width: 36,
-    height: 36,
-    borderColor: '#f6f4ef',
-  },
-  cornerTL: { top: 0, left: 0, borderTopWidth: 2, borderLeftWidth: 2, borderTopLeftRadius: 4 },
-  cornerTR: { top: 0, right: 0, borderTopWidth: 2, borderRightWidth: 2, borderTopRightRadius: 4 },
-  cornerBL: { bottom: 0, left: 0, borderBottomWidth: 2, borderLeftWidth: 2, borderBottomLeftRadius: 4 },
-  cornerBR: { bottom: 0, right: 0, borderBottomWidth: 2, borderRightWidth: 2, borderBottomRightRadius: 4 },
-  scanLine: {
-    position: 'absolute',
-    left: 12,
-    right: 12,
-    top: 0,
-    height: 2,
-    backgroundColor: '#9adfc8',
-    borderRadius: 2,
-    shadowColor: '#9adfc8',
-    shadowOpacity: 0.95,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 0 },
-  },
-  reticleLabel: {
-    color: '#f6f4ef',
-    marginTop: 24,
-    fontSize: 11,
-    letterSpacing: 2,
-    opacity: 0.7,
-    fontFamily: 'Menlo',
-  },
-  hint: { color: '#fff', marginTop: space.lg, fontSize: 13, fontWeight: '500' },
-  sheet: {
-    position: 'absolute',
-    bottom: 90,
-    left: space.lg,
-    right: space.lg,
-    maxHeight: '75%',
-    backgroundColor: theme.card,
-    borderRadius: radius.xl,
-    padding: space.lg,
-    borderWidth: 1,
-    borderColor: theme.border,
-  },
-  headerRow: { flexDirection: 'row', gap: space.md, alignItems: 'center' },
-  thumb: { width: 72, height: 72, borderRadius: radius.md, backgroundColor: theme.bgElevated },
-  thumbPlaceholder: { alignItems: 'center', justifyContent: 'center' },
-  thumbPlaceholderText: { color: theme.textMuted, fontSize: 10 },
-  sheetSku: { color: theme.textMuted, fontSize: 11, fontFamily: 'Menlo' },
-  sheetName: { color: theme.text, fontSize: 17, fontWeight: '700', marginTop: 2 },
-  statRow: {
-    flexDirection: 'row',
-    gap: space.md,
-    marginTop: space.lg,
-  },
-  stat: { flex: 1 },
-  statLabel: {
-    color: theme.textMuted,
-    fontSize: 10,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    fontWeight: '600',
-  },
-  statValue: { color: theme.text, fontSize: 22, fontWeight: '700', marginTop: 2 },
-  unconfirmedNote: { color: theme.warning, fontSize: 11, fontWeight: '600', marginTop: 2 },
-  statValueMuted: { color: theme.text, fontSize: 14, fontWeight: '600', marginTop: 2 },
-  locationBox: {
-    marginTop: space.md,
-    padding: space.md,
-    backgroundColor: theme.bgElevated,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: theme.border,
-    gap: 6,
-  },
-  locRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  locLabel: { color: theme.textMuted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 },
-  locValue: { color: theme.text, fontSize: 13, fontWeight: '600' },
-  locValueFit: { flexShrink: 1, marginLeft: 12, textAlign: 'right' },
-  locNote: { color: theme.textMuted, fontSize: 12, lineHeight: 17 },
-  crateDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: theme.border,
-  },
-  actions: { flexDirection: 'row', gap: space.sm, marginTop: space.lg },
-  actionBtn: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: radius.md,
-    backgroundColor: theme.bgElevated,
-    borderWidth: 1,
-    borderColor: theme.border,
-    alignItems: 'center',
-  },
-  actionLabel: { color: theme.text, fontWeight: '700', fontSize: 14 },
-  secondaryActions: {
-    flexDirection: 'row',
-    gap: space.sm,
-    marginTop: space.md,
-    alignItems: 'center',
-  },
-  photoBtn: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: radius.md,
-    backgroundColor: theme.bgElevated,
-    borderWidth: 1,
-    borderColor: theme.border,
-    alignItems: 'center',
-  },
-  photoBtnLabel: { color: theme.text, fontWeight: '600', fontSize: 13 },
-  dismiss: { flex: 1, alignItems: 'center', paddingVertical: 10 },
-  dismissLabel: { color: theme.primary, fontSize: 13, fontWeight: '600' },
-  reportProblemBtn: {
-    marginTop: space.sm,
-    paddingVertical: 10,
-    borderRadius: radius.md,
-    backgroundColor: theme.bgElevated,
-    borderWidth: 1,
-    borderColor: theme.border,
-    alignItems: 'center',
-  },
-  reportProblemLabel: { color: theme.text, fontWeight: '600', fontSize: 13 },
-  pickerTitle: { color: theme.text, fontSize: 17, fontWeight: '700' },
-  pickerSubtitle: { color: theme.textMuted, fontSize: 13, marginTop: 4, marginBottom: space.md },
-  pickerRow: {
-    paddingVertical: 12,
-    paddingHorizontal: space.md,
-    borderRadius: radius.md,
-    backgroundColor: theme.bgElevated,
-    borderWidth: 1,
-    borderColor: theme.border,
-    marginBottom: space.sm,
-  },
-  pickerRowTitle: { color: theme.text, fontSize: 15, fontWeight: '700' },
-  pickerRowSubtitle: { color: theme.textMuted, fontSize: 12.5, marginTop: 2 },
-  permission: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: space.xl, backgroundColor: theme.bg },
-  permTitle: { color: theme.text, fontSize: 20, fontWeight: '700' },
-  permBody: { color: theme.textMuted, fontSize: 14, textAlign: 'center', marginTop: space.sm },
-  cta: { backgroundColor: theme.primary, paddingHorizontal: space.lg, paddingVertical: 12, borderRadius: radius.md, marginTop: space.lg },
-  ctaLabel: { color: '#fff', fontWeight: '600' },
-  spinner: { position: 'absolute', top: '50%', left: '50%' },
-  addBookWrap: {
-    position: 'absolute',
-    top: 60,
-    left: space.lg,
-    right: space.lg,
-    bottom: 80,
-  },
-  modeChips: {
-    position: 'absolute',
-    top: 16,
-    flexDirection: 'row',
-    gap: 6,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    borderRadius: 999,
-    padding: 4,
-  },
-  modeChip: {
-    paddingVertical: 6,
-    paddingHorizontal: 14,
-    borderRadius: 999,
-  },
-  modeChipOn: { backgroundColor: '#fafaf7' },
-  modeLabel: { color: '#fafaf7', fontSize: 12, fontWeight: '600', opacity: 0.7 },
-  modeLabelOn: { color: '#0e0f0d', opacity: 1 },
-  coverCta: {
-    position: 'absolute',
-    bottom: 120,
-    left: space.lg,
-    right: space.lg,
-    padding: space.lg,
-    borderRadius: radius.xl,
-    backgroundColor: theme.card,
-    borderWidth: 1,
-    borderColor: theme.border,
-    alignItems: 'center',
-  },
-  coverHint: {
-    color: theme.textMuted,
-    fontSize: 13,
-    textAlign: 'center',
-    marginBottom: space.md,
-    lineHeight: 18,
-  },
-  coverShutter: {
-    paddingVertical: 14,
-    paddingHorizontal: 20,
-    backgroundColor: theme.primary,
-    borderRadius: radius.md,
-    width: '100%',
-    alignItems: 'center',
-  },
-  coverShutterLabel: { color: '#fff', fontSize: 15, fontWeight: '700' },
-});
+/**
+ * THE CAMERA CHROME IS DARK IN BOTH MODES. The bar, the viewfinder and the
+ * finder sit over a live camera, which does not change with the device's
+ * mode, so they draw from the dark palette whatever the mode is
+ * (DESIGN-SPEC 10: the viewfinder and the reticle are fixed colours). The
+ * cards and sheets over it, and the permission screen, follow the device.
+ * The count scanner (app/cycle-count/scan/[id].tsx) draws the same values.
+ */
+const CAMERA_PALETTE = palette('dark');
+const CAMERA = {
+  /** The bar and the ground behind the camera: the reference viewfinder. */
+  surface: '#0a0b09',
+  ink: CAMERA_PALETTE.ink,
+  ink2: CAMERA_PALETTE.ink2,
+  ink3: CAMERA_PALETTE.ink3,
+  /** A control on the bar: the raised fill with an outline at 3:1. */
+  chip: CAMERA_PALETTE.card,
+  chipBorder: CAMERA_PALETTE.ink4,
+  /** The mode switch's track, and the fill of its selected half. */
+  track: CAMERA_PALETTE.hair2,
+  segment: CAMERA_PALETTE.hair,
+  /** Corner brackets and scan line: the reference's dark-mode mint. */
+  reticle: CAMERA_PALETTE.accent,
+  /** Behind the finder's words over the live picture, so they read over a white shelf. */
+  scrim: 'rgba(10, 11, 9, 0.72)',
+} as const;
+
+/** The finder's size, and how far its scan line travels inside the brackets. */
+const RETICLE_WIDTH = 260;
+const RETICLE_HEIGHT = 220;
+const SCAN_LINE_TOP = 10;
+const SCAN_LINE_BOTTOM = RETICLE_HEIGHT - 12;
+
+/** The bottom tab bar is drawn over this screen; sheets end above it. */
+const TAB_BAR_CLEARANCE = 90;
+
+/** A mode segment is 36pt; this takes its target to the track's 44pt edge. */
+const SEGMENT_SLOP = { top: 4, bottom: 4 } as const;
+
+/**
+ * Dynamic Type: chrome caps in points (lib/theme.ts TYPE_CEILING). The mode
+ * switch and the steppers are controls; the three stat labels (On hand,
+ * Reorder at, Price) are capped like the item screen's ON HAND eyebrow; the
+ * placeholder sits in a fixed 56pt square. Names, SKUs, numbers, notes and
+ * hints are content and are not capped, and neither are the location box's
+ * labels: each names the value beside it, so those rows reflow past the
+ * stacking scale instead (LocRow).
+ */
+const MODE_CAP = capTo(12.5, TYPE_CEILING.control);
+const STEP_CAP = capTo(18, TYPE_CEILING.control);
+const EYEBROW_CAP = capTo(11, TYPE_CEILING.eyebrow);
+const LABEL_CAP = capTo(10.5, TYPE_CEILING.eyebrow);
+const PLACEHOLDER_CAP = capTo(10, TYPE_CEILING.chrome);
+
+/** The tab's styles in one mode (the camera chrome is the same in both). */
+function makeStyles(c: Palette) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: CAMERA.surface },
+    page: { flex: 1, backgroundColor: c.paper },
+    center: { justifyContent: 'center', alignItems: 'center' },
+    centerText: { color: c.ink3, fontFamily: FONT.displayRegular, fontSize: 14.5 },
+    cameraBar: { backgroundColor: CAMERA.surface },
+    barRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: space.sm,
+      paddingHorizontal: space.lg,
+      paddingVertical: space.sm,
+    },
+    closeBtn: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      borderWidth: 1,
+      borderColor: CAMERA.chipBorder,
+      backgroundColor: CAMERA.chip,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    barSpacer: { width: 40 },
+    modeTrack: {
+      flexDirection: 'row',
+      flexShrink: 1,
+      gap: 2,
+      padding: 3,
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: CAMERA.track,
+    },
+    modeSegment: {
+      minHeight: 36,
+      paddingHorizontal: 14,
+      borderRadius: 7,
+      borderWidth: 1,
+      borderColor: 'transparent',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    // The selected half carries an outline at 3:1 as well as its fill, so
+    // which mode is on never rests on a 1.2:1 fill or the words' weight alone.
+    modeSegmentOn: { backgroundColor: CAMERA.segment, borderColor: CAMERA.chipBorder },
+    modeLabel: { color: CAMERA.ink3, fontFamily: FONT.display, fontWeight: '500', fontSize: 12.5 },
+    modeLabelOn: { color: CAMERA.ink, fontFamily: FONT.displaySemi, fontWeight: '600' },
+    viewfinder: { flex: 1, backgroundColor: CAMERA.surface },
+    overlay: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+    // Centred in the part of the viewfinder the tab bar leaves showing.
+    finder: { alignItems: 'center', marginBottom: TAB_BAR_CLEARANCE / 2 },
+    reticle: { width: RETICLE_WIDTH, height: RETICLE_HEIGHT },
+    corner: { position: 'absolute', width: 26, height: 26, borderColor: CAMERA.reticle },
+    cornerTL: { top: 0, left: 0, borderTopWidth: 3, borderLeftWidth: 3, borderTopLeftRadius: 8 },
+    cornerTR: { top: 0, right: 0, borderTopWidth: 3, borderRightWidth: 3, borderTopRightRadius: 8 },
+    cornerBL: {
+      bottom: 0,
+      left: 0,
+      borderBottomWidth: 3,
+      borderLeftWidth: 3,
+      borderBottomLeftRadius: 8,
+    },
+    cornerBR: {
+      bottom: 0,
+      right: 0,
+      borderBottomWidth: 3,
+      borderRightWidth: 3,
+      borderBottomRightRadius: 8,
+    },
+    scanLine: {
+      position: 'absolute',
+      left: '8%',
+      right: '8%',
+      top: 0,
+      height: 2,
+      borderRadius: 1,
+      backgroundColor: CAMERA.reticle,
+      opacity: 0.7,
+    },
+    caption: {
+      marginTop: space.lg,
+      marginHorizontal: space.lg,
+      paddingVertical: 8,
+      paddingHorizontal: 14,
+      borderRadius: 10,
+      backgroundColor: CAMERA.scrim,
+      alignItems: 'center',
+      gap: 4,
+    },
+    reticleLabel: {
+      color: CAMERA.ink2,
+      fontFamily: FONT.mono,
+      fontSize: 11,
+      letterSpacing: 11 * 0.18,
+    },
+    hint: {
+      color: CAMERA.ink,
+      fontFamily: FONT.display,
+      fontWeight: '500',
+      fontSize: 13,
+      textAlign: 'center',
+    },
+    sheet: {
+      position: 'absolute',
+      bottom: TAB_BAR_CLEARANCE,
+      left: space.lg,
+      right: space.lg,
+      maxHeight: '75%',
+      padding: 14,
+      backgroundColor: c.card,
+      borderRadius: 16,
+      borderWidth: 1,
+      borderColor: c.hair,
+    },
+    sheetContent: { paddingBottom: space.xs },
+    headerRow: { flexDirection: 'row', gap: 14, alignItems: 'center' },
+    thumb: {
+      width: 56,
+      height: 56,
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: c.hair,
+      backgroundColor: PHOTO_BACKGROUND,
+    },
+    thumbPlaceholder: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 4,
+      backgroundColor: c.sunk,
+    },
+    thumbPlaceholderText: {
+      color: c.ink3,
+      fontFamily: FONT.displayRegular,
+      fontSize: 10,
+      textAlign: 'center',
+    },
+    headerText: { flex: 1, minWidth: 0 },
+    sheetName: {
+      color: c.ink,
+      fontFamily: FONT.displaySemi,
+      fontWeight: '600',
+      fontSize: 15,
+      lineHeight: 20,
+    },
+    sheetSku: { color: c.ink3, fontFamily: FONT.mono, fontSize: 12, marginTop: 4 },
+    statRow: { flexDirection: 'row', gap: space.md, marginTop: space.lg },
+    statRowStacked: { flexDirection: 'column', gap: space.sm },
+    stat: { flex: 1, minWidth: 0 },
+    statLabel: {
+      color: c.ink3,
+      fontFamily: FONT.mono,
+      fontSize: 10.5,
+      letterSpacing: 10.5 * 0.12,
+      textTransform: 'uppercase',
+    },
+    statValue: {
+      color: c.ink,
+      fontFamily: FONT.display,
+      fontWeight: '500',
+      fontSize: 28,
+      marginTop: 2,
+    },
+    // At or under the reorder point: the warning ink of this mode (5.40:1 on
+    // the light card, 9.33:1 on the dark one; the single-mode amber it
+    // replaces was 3.58:1 on the light card).
+    statValueLow: { color: c.warnText },
+    unconfirmedNote: {
+      color: c.warnText,
+      fontFamily: FONT.displaySemi,
+      fontWeight: '600',
+      fontSize: 11.5,
+      marginTop: 2,
+    },
+    statValueMuted: { color: c.ink, fontFamily: FONT.mono, fontSize: 15, marginTop: 8 },
+    locationBox: {
+      marginTop: space.md,
+      padding: space.md,
+      backgroundColor: c.sunk,
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: c.hair,
+      gap: 8,
+    },
+    locRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    // Past the stacking scale: the label over its value, both from the left.
+    locRowStacked: { flexDirection: 'column', alignItems: 'flex-start', gap: 4 },
+    locLabel: {
+      color: c.ink3,
+      fontFamily: FONT.mono,
+      fontSize: 10.5,
+      letterSpacing: 10.5 * 0.12,
+      textTransform: 'uppercase',
+    },
+    locValue: { color: c.ink, fontFamily: FONT.display, fontWeight: '500', fontSize: 13.5 },
+    locValueFit: { flexShrink: 1, marginLeft: 12, textAlign: 'right' },
+    locValueStacked: { marginLeft: 0, textAlign: 'left' },
+    locValueMono: { fontFamily: FONT.mono, fontWeight: '500' },
+    locNote: { color: c.ink3, fontFamily: FONT.displayRegular, fontSize: 12, lineHeight: 17 },
+    crateValue: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    // The ring shows even with no colour set (hollow): muted ink, 6:1 or more
+    // on the recessed box in both modes.
+    crateDot: { width: 12, height: 12, borderRadius: 6, borderWidth: 1, borderColor: c.ink3 },
+    actions: { flexDirection: 'row', gap: space.sm, marginTop: space.lg },
+    actionBtn: {
+      flex: 1,
+      minHeight: 52,
+      paddingVertical: 6,
+      borderRadius: 14,
+      borderWidth: 1,
+      borderColor: c.hair2,
+      backgroundColor: c.card,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    actionLabel: { color: c.ink, fontFamily: FONT.display, fontWeight: '500', fontSize: 18 },
+    pressed: { opacity: 0.7 },
+    disabled: { opacity: 0.4 },
+    secondaryActions: { flexDirection: 'column', gap: space.sm, marginTop: space.md },
+    reportProblemBtn: { marginTop: space.sm },
+    pickerTitle: { color: c.ink, fontFamily: FONT.displaySemi, fontWeight: '600', fontSize: 17 },
+    pickerSubtitle: {
+      color: c.ink3,
+      fontFamily: FONT.displayRegular,
+      fontSize: 13.5,
+      lineHeight: 19,
+      marginTop: 4,
+      marginBottom: space.md,
+    },
+    pickerRow: {
+      paddingVertical: 12,
+      paddingHorizontal: space.md,
+      borderRadius: 12,
+      backgroundColor: c.sunk,
+      borderWidth: 1,
+      borderColor: c.hair,
+      marginBottom: space.sm,
+    },
+    pickerRowTitle: { color: c.ink, fontFamily: FONT.displaySemi, fontWeight: '600', fontSize: 15 },
+    pickerRowSku: { color: c.ink3, fontFamily: FONT.mono, fontSize: 12, marginTop: 4 },
+    pickerRowSubtitle: {
+      color: c.ink3,
+      fontFamily: FONT.displayRegular,
+      fontSize: 12.5,
+      marginTop: 2,
+    },
+    permission: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: space.xl },
+    permTitle: {
+      color: c.ink,
+      fontFamily: FONT.displaySemi,
+      fontWeight: '600',
+      fontSize: 20,
+      textAlign: 'center',
+    },
+    permBody: {
+      color: c.ink3,
+      fontFamily: FONT.displayRegular,
+      fontSize: 14.5,
+      lineHeight: 21,
+      textAlign: 'center',
+      marginTop: space.sm,
+    },
+    cta: { marginTop: space.lg, minWidth: 200 },
+    spinnerWrap: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
+    addWrap: {
+      position: 'absolute',
+      top: space.lg,
+      left: space.lg,
+      right: space.lg,
+      bottom: TAB_BAR_CLEARANCE,
+    },
+    addContent: { paddingBottom: space.lg },
+    coverCta: {
+      position: 'absolute',
+      bottom: 120,
+      left: space.lg,
+      right: space.lg,
+      padding: space.lg,
+      borderRadius: 16,
+      backgroundColor: c.card,
+      borderWidth: 1,
+      borderColor: c.hair,
+      alignItems: 'center',
+    },
+    coverHint: {
+      color: c.ink3,
+      fontFamily: FONT.displayRegular,
+      fontSize: 13.5,
+      lineHeight: 19,
+      textAlign: 'center',
+      marginBottom: space.md,
+    },
+  });
+}
+
+/** Both modes' styles, made once; a screen takes the one for the device's mode. */
+const SCAN_STYLES = { light: makeStyles(palette('light')), dark: makeStyles(palette('dark')) };
+
+function useScanStyles() {
+  return SCAN_STYLES[useTheme().mode];
+}
