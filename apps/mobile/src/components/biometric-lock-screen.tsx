@@ -1,11 +1,11 @@
 import { Fingerprint, ScanFace } from 'lucide-react-native';
 import * as React from 'react';
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   Animated,
   Easing,
   StyleSheet,
-  Text,
   View,
   useAnimatedValue,
 } from 'react-native';
@@ -18,14 +18,67 @@ import { useAuth } from '@/lib/auth-context';
 import { useColdLaunchGate } from '@/lib/cold-launch-gate';
 import { getBiometricCapability, type BiometricCapability } from '@/lib/biometric';
 import { useProfile } from '@/lib/use-profile';
-import { ACCENT, FONT } from '@/lib/theme';
+import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
+
+/**
+ * Whether iOS's Reduce Motion is on: null until the first answer, then kept
+ * current while the lock is up (the setting can change in the meantime). The
+ * Scan tab's finder reads it the same way.
+ */
+function useReduceMotion(): boolean | null {
+  const [reduce, setReduce] = React.useState<boolean | null>(null);
+  React.useEffect(() => {
+    let active = true;
+    void AccessibilityInfo.isReduceMotionEnabled().then((on) => {
+      if (active) setReduce(on);
+    });
+    const sub = AccessibilityInfo.addEventListener('reduceMotionChanged', (on) => {
+      if (active) setReduce(on);
+    });
+    return () => {
+      active = false;
+      sub.remove();
+    };
+  }, []);
+  return reduce;
+}
+
+/**
+ * The subtle pulse ring behind the biometric glyph: a slow loop while Reduce
+ * Motion is known to be off. With it on (and until iOS has said whether it
+ * is), the ring rests, drawn still at its starting size, and nothing moves.
+ * The loop stops when the setting changes and when the lock goes away (it ran
+ * on after the unlock before, and ignored Reduce Motion).
+ */
+function useLockPulse(): Animated.Value {
+  const reduceMotion = useReduceMotion();
+  const pulse = useAnimatedValue(0);
+  React.useEffect(() => {
+    if (reduceMotion !== false) {
+      pulse.setValue(0);
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.timing(pulse, {
+        toValue: 1,
+        duration: 2400,
+        easing: Easing.bezier(0.16, 1, 0.3, 1),
+        useNativeDriver: true,
+      }),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [pulse, reduceMotion]);
+  return pulse;
+}
 
 /**
  * Full-screen biometric lock — auto-prompts on mount when the device is
  * capable, with a "Try again" button and a "Use password" escape hatch.
- * Brand-themed warm-paper / ink-black, large line-art biometric icon
- * with a subtle pulse ring behind it.
+ * Drawn on the per-mode palette: a large line-art biometric icon with a
+ * subtle pulse ring behind it (still under Reduce Motion), an accent pip, the
+ * shared ink and borderless buttons.
  */
 export function BiometricLockScreen() {
   const { unlock, signOutToFallback } = useAuth();
@@ -40,18 +93,8 @@ export function BiometricLockScreen() {
   const [attempted, setAttempted] = React.useState(false);
   const [failedOnce, setFailedOnce] = React.useState(false);
 
-  // Subtle pulse ring behind the biometric glyph
-  const pulse = useAnimatedValue(0);
-  React.useEffect(() => {
-    Animated.loop(
-      Animated.timing(pulse, {
-        toValue: 1,
-        duration: 2400,
-        easing: Easing.bezier(0.16, 1, 0.3, 1),
-        useNativeDriver: true,
-      }),
-    ).start();
-  }, [pulse]);
+  // Subtle pulse ring behind the biometric glyph (resting under Reduce Motion).
+  const pulse = useLockPulse();
   const pulseScale = pulse.interpolate({ inputRange: [0, 0.7, 1], outputRange: [0.92, 1.18, 1.18] });
   const pulseOpacity = pulse.interpolate({ inputRange: [0, 0.7, 1], outputRange: [0.9, 0, 0] });
 
@@ -111,7 +154,7 @@ export function BiometricLockScreen() {
             style={[
               styles.pulseRing,
               {
-                borderColor: c.hair,
+                borderColor: c.hair2,
                 transform: [{ scale: pulseScale }],
                 opacity: pulseOpacity,
               },
@@ -122,7 +165,7 @@ export function BiometricLockScreen() {
           ) : (
             <Icon size={96} color={c.ink} strokeWidth={1.2} />
           )}
-          <View style={[styles.pip, { backgroundColor: ACCENT.pipTeal }]} />
+          <View style={[styles.pip, { backgroundColor: c.accent }]} />
         </View>
 
         <Display size={26} style={{ textAlign: 'center', maxWidth: 280, marginTop: 8 }}>

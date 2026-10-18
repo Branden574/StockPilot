@@ -1,12 +1,12 @@
 import { Lock } from 'lucide-react-native';
 import * as React from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import { AuthShell } from '@/components/auth/auth-shell';
+import { Button } from '@/components/ui/button';
 import { Body, Display } from '@/components/ui/text';
 import { setAccountDisabled } from '@/lib/account-disabled-state';
 import { useAuth } from '@/lib/auth-context';
-import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 import { ACCOUNT_DISABLED_MESSAGE, ACCOUNT_DISABLED_TITLE } from '@stockpilot/core';
@@ -31,6 +31,10 @@ import { ACCOUNT_DISABLED_MESSAGE, ACCOUNT_DISABLED_TITLE } from '@stockpilot/co
  * to reach GoTrue with a banned user's token, and this device is already
  * server-side revoked anyway — while the user's other devices are not ours to
  * cascade into.
+ *
+ * Drawn on the per-mode palette: the lock in an outlined ring, Sign out as
+ * the shared outline button (a 52pt target, announced as a button and as
+ * dimmed while the sign-out runs).
  */
 export function AccountDisabledScreen() {
   const { signOutToFallback } = useAuth();
@@ -56,7 +60,7 @@ export function AccountDisabledScreen() {
   return (
     <AuthShell>
       <View style={styles.iconWrap}>
-        <View style={[styles.iconRing, { borderColor: c.hair }]}>
+        <View style={[styles.iconRing, { borderColor: c.hair2 }]}>
           <Lock size={28} color={c.ink} strokeWidth={1.5} />
         </View>
       </View>
@@ -68,23 +72,9 @@ export function AccountDisabledScreen() {
         {ACCOUNT_DISABLED_MESSAGE}
       </Body>
 
-      <Pressable
-        accessibilityRole="button"
-        onPress={() => void onSignOut()}
-        disabled={busy}
-        style={({ pressed }) => [
-          styles.action,
-          {
-            borderColor: c.hair,
-            backgroundColor: c.card,
-            opacity: busy ? 0.5 : pressed ? 0.8 : 1,
-          },
-        ]}
-      >
-        <Body size={15} style={{ fontFamily: FONT.display }}>
-          Sign out
-        </Body>
-      </Pressable>
+      <Button block variant="outline" onPress={() => void onSignOut()} disabled={busy}>
+        Sign out
+      </Button>
     </AuthShell>
   );
 }
@@ -123,11 +113,5 @@ const styles = StyleSheet.create({
   message: {
     marginTop: 10,
     marginBottom: 24,
-  },
-  action: {
-    borderWidth: 1,
-    borderRadius: 14,
-    paddingVertical: 16,
-    alignItems: 'center',
   },
 });
