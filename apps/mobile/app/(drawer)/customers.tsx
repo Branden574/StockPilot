@@ -17,9 +17,20 @@ interface CustomerRow {
   name: string;
   status: 'active' | 'archived';
   price_list: { name: string | null } | { name: string | null }[] | null;
-  customer_users: Array<{ count: number }> | null;
-  customer_catalog: Array<{ count: number }> | null;
+  customer_users: { count: number }[] | null;
+  customer_catalog: { count: number }[] | null;
 }
+
+/**
+ * The accounts list's failed read, in its own words (redesign defect D25: a
+ * failed read used to say "No accounts yet."). Accounts an earlier read left
+ * on screen stay, with the reload note above them.
+ */
+const ACCOUNTS_LOAD_FAILED = {
+  title: 'Could not load accounts.',
+  body: 'Check your connection and pull down to try again.',
+  reloadNote: 'Could not load accounts again, so these may be out of date. Pull down to try again.',
+};
 
 /**
  * B2B customers — mobile twin of /dashboard/customers (read + activate/archive;
@@ -31,13 +42,15 @@ export default function CustomersScreen() {
   const { user } = useAuth();
   const { activeOrgId } = useWorkspace();
   const [rows, setRows] = React.useState<CustomerRow[]>([]);
+  // The last read failed (set by every read that answers).
+  const [loadFailed, setLoadFailed] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   const [busyId, setBusyId] = React.useState<string | null>(null);
 
   const load = React.useCallback(async () => {
     if (!user || !activeOrgId) return;
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('customers')
       .select(
         'id, name, status, price_list:price_lists(name), customer_users(count), customer_catalog(count)',
@@ -45,7 +58,13 @@ export default function CustomersScreen() {
       .eq('organization_id', activeOrgId)
       .order('created_at', { ascending: false })
       .limit(200);
-    setRows((data ?? []) as CustomerRow[]);
+    if (error) {
+      // Said, never "No accounts yet."; earlier rows stay.
+      setLoadFailed(true);
+    } else {
+      setLoadFailed(false);
+      setRows((data ?? []) as CustomerRow[]);
+    }
     setLoading(false);
   }, [user, activeOrgId]);
 
@@ -85,12 +104,18 @@ export default function CustomersScreen() {
 
   return (
     <DataListScreen
-      eyebrow={`B2B · ${rows.filter((r) => r.status === 'active').length} ACTIVE`}
+      // A read that failed with nothing on screen quotes no count.
+      eyebrow={
+        loadFailed && rows.length === 0
+          ? 'B2B'
+          : `B2B · ${rows.filter((r) => r.status === 'active').length} ACTIVE`
+      }
       title="Accounts"
       italic="."
       emptyTitle="No accounts yet."
       emptyBody="Create B2B accounts on the web dashboard (Accounts) — assign a price list and catalog, invite portal users, and their orders flow into your normal approval queue."
       emptyIcon={Handshake}
+      failed={loadFailed ? ACCOUNTS_LOAD_FAILED : null}
       data={rows}
       loading={loading}
       refreshing={refreshing}
@@ -127,7 +152,7 @@ function CustomerCard({
           <Body size={15} color={c.ink} numberOfLines={1}>
             {row.name}
           </Body>
-          <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 3 }}>
+          <Mono size={10.5} tracking={0.04} color={c.ink3} style={{ marginTop: 3 }}>
             {[
               plObj?.name ?? 'No price list',
               `${users} user${users === 1 ? '' : 's'}`,
@@ -138,7 +163,12 @@ function CustomerCard({
         <Pill status={row.status === 'active' ? 'ok' : 'default'}>
           {row.status === 'active' ? 'Active' : 'Archived'}
         </Pill>
-        <Toggle value={row.status === 'active'} onValueChange={busy ? undefined : onToggle} />
+        {/* No label sits beside the switch, so it is named for its row. */}
+        <Toggle
+          value={row.status === 'active'}
+          onValueChange={busy ? undefined : onToggle}
+          accessibilityLabel={row.name}
+        />
       </View>
     </Card>
   );

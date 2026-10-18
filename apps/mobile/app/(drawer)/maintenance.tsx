@@ -7,6 +7,7 @@ import {
   Pressable,
   RefreshControl,
   StyleSheet,
+  Text,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -27,7 +28,7 @@ import {
   type MobileMaintenanceListRow,
 } from '@/lib/maintenance-api';
 import { MAINTENANCE_STATUS_CHIPS, statusPillTone, statusQueryParam } from '@/lib/maintenance-filters';
-import { FONT } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useTheme } from '@/lib/use-theme';
 
@@ -149,20 +150,24 @@ export default function MaintenanceListScreen() {
             <IconChip icon={Menu} onPress={openDrawer} accessibilityLabel="Open menu" minTap />
           </View>
           {enabled && canSubmit ? (
+            // The page's create action: the accent button, drawn in a 44pt
+            // frame (it took hitSlop before). The frame is 3pt taller than the
+            // 38pt button, as the chips' frames are.
             <Pressable
               onPress={() => router.push('/maintenance/new' as Href)}
               accessibilityRole="button"
               accessibilityLabel="New maintenance request"
-              hitSlop={8}
-              style={({ pressed }) => [
-                styles.newBtn,
-                { borderColor: c.hair, backgroundColor: c.card, opacity: pressed ? 0.7 : 1 },
-              ]}
+              style={({ pressed }) => [styles.newFrame, { opacity: pressed ? 0.7 : 1 }]}
             >
-              <Plus size={14} color={c.ink} strokeWidth={1.8} />
-              <Mono size={11} tracking={0.04} color={c.ink} style={{ fontFamily: FONT.display }}>
-                New
-              </Mono>
+              <View style={[styles.newBtn, { backgroundColor: c.accent }]}>
+                <Plus size={14} color={c.accentInk} strokeWidth={1.8} />
+                <Text
+                  style={[styles.newLabel, { color: c.accentInk }]}
+                  maxFontSizeMultiplier={CONTROL_CAP}
+                >
+                  New
+                </Text>
+              </View>
             </Pressable>
           ) : null}
         </View>
@@ -189,27 +194,33 @@ export default function MaintenanceListScreen() {
       ) : (
         <>
           <View style={styles.toolbar}>
-            <View style={{ flexDirection: 'row', gap: 8 }}>
-              <Pressable onPress={() => setScope('mine')}>
-                <Pill status={scope === 'mine' ? 'ok' : 'default'} dot={false}>
-                  My requests
-                </Pill>
-              </Pressable>
+            {/* My / All requests: the reference's segmented control (DESIGN-SPEC
+                6.5), each segment a button that says it is selected. */}
+            <View style={[styles.segmentTrack, { backgroundColor: c.sunk, borderColor: c.hair }]}>
+              <ScopeSegment
+                label="My requests"
+                selected={scope === 'mine'}
+                onPress={() => setScope('mine')}
+              />
               {canReadAll ? (
-                <Pressable onPress={() => setScope('all')}>
-                  <Pill status={scope === 'all' ? 'ok' : 'default'} dot={false}>
-                    All requests
-                  </Pill>
-                </Pressable>
+                <ScopeSegment
+                  label="All requests"
+                  selected={scope === 'all'}
+                  onPress={() => setScope('all')}
+                />
               ) : null}
             </View>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
+            {/* Status: the reference's filter chips (DESIGN-SPEC 6.6) in 44pt
+                frames, so the rows sit a little apart and every chip is a
+                full target. */}
+            <View style={styles.chipRow}>
               {MAINTENANCE_STATUS_CHIPS.map((chip) => (
-                <Pressable key={chip.label} onPress={() => setStatusLabel(chip.label)}>
-                  <Pill status={statusLabel === chip.label ? 'ok' : 'default'} dot={false}>
-                    {chip.label}
-                  </Pill>
-                </Pressable>
+                <StatusChip
+                  key={chip.label}
+                  label={chip.label}
+                  selected={statusLabel === chip.label}
+                  onPress={() => setStatusLabel(chip.label)}
+                />
               ))}
             </View>
             {scope === 'all' ? (
@@ -229,7 +240,9 @@ export default function MaintenanceListScreen() {
           {loadError ? (
             <View style={{ paddingHorizontal: 20, marginTop: 8 }}>
               <Card padding={16}>
-                <Body size={14.5}>{loadError}</Body>
+                <Body size={14.5} accessibilityRole="alert">
+                  {loadError}
+                </Body>
                 <View style={{ marginTop: 14, alignSelf: 'flex-start' }}>
                   <Button variant="outline" size="sm" onPress={() => void load()}>
                     Try again
@@ -238,7 +251,7 @@ export default function MaintenanceListScreen() {
               </Card>
             </View>
           ) : loading ? (
-            <ActivityIndicator color={c.ink4} style={{ marginTop: 32 }} />
+            <ActivityIndicator color={c.ink} style={{ marginTop: 32 }} />
           ) : (
             <FlatList
               data={rows}
@@ -278,6 +291,77 @@ export default function MaintenanceListScreen() {
   );
 }
 
+/** One half of the My / All requests switch. */
+function ScopeSegment({
+  label,
+  selected,
+  onPress,
+}: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  const { c } = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      style={({ pressed }) => [
+        styles.segment,
+        selected
+          ? { backgroundColor: c.ink, borderColor: c.ink }
+          : { backgroundColor: 'transparent', borderColor: 'transparent' },
+        { opacity: pressed ? 0.7 : 1 },
+      ]}
+    >
+      <Text
+        style={[styles.segmentLabel, { color: selected ? c.paper : c.ink3 }]}
+        maxFontSizeMultiplier={CONTROL_CAP}
+      >
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+/** A status filter chip: ink fill when chosen, an outline when not. */
+function StatusChip({
+  label,
+  selected,
+  onPress,
+}: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  const { c } = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      style={({ pressed }) => [styles.chipFrame, { opacity: pressed ? 0.7 : 1 }]}
+    >
+      <View
+        style={[
+          styles.chip,
+          selected
+            ? { backgroundColor: c.ink, borderColor: c.ink }
+            : { backgroundColor: 'transparent', borderColor: c.hair2 },
+        ]}
+      >
+        <Text
+          style={[styles.chipLabel, { color: selected ? c.paper : c.ink2 }]}
+          maxFontSizeMultiplier={CONTROL_CAP}
+        >
+          {label}
+        </Text>
+      </View>
+    </Pressable>
+  );
+}
+
 function MaintenanceRow({
   row,
   showRequester,
@@ -292,7 +376,11 @@ function MaintenanceRow({
   const pillStatus = statusPillTone(row.status);
 
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}>
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
+    >
       <Card padding={16}>
         <View
           style={{
@@ -303,7 +391,7 @@ function MaintenanceRow({
           }}
         >
           <View style={{ flex: 1, minWidth: 0 }}>
-            <Mono size={9.5} tracking={0.2} upper color={c.ink4}>
+            <Mono size={9.5} tracking={0.2} upper color={c.ink3}>
               {handle}
             </Mono>
             <Body
@@ -320,25 +408,25 @@ function MaintenanceRow({
           </Pill>
         </View>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 12 }}>
-          <Mono size={11} tracking={0.04} upper color={c.ink4}>
+          <Mono size={11} tracking={0.04} upper color={c.ink3}>
             {row.priority}
           </Mono>
           {row.category ? (
-            <Mono size={11} tracking={0.04} color={c.ink4}>
+            <Mono size={11} tracking={0.04} color={c.ink3}>
               {row.category}
             </Mono>
           ) : null}
           {row.siteName ? (
-            <Mono size={11} tracking={0.04} color={c.ink4}>
+            <Mono size={11} tracking={0.04} color={c.ink3}>
               {row.siteName}
             </Mono>
           ) : null}
           {showRequester ? (
-            <Mono size={11} tracking={0.04} color={c.ink4}>
+            <Mono size={11} tracking={0.04} color={c.ink3}>
               {row.requesterName}
             </Mono>
           ) : null}
-          <Mono size={11} tracking={0.04} color={c.ink4}>
+          <Mono size={11} tracking={0.04} color={c.ink3}>
             {row.photoCount} photo{row.photoCount === 1 ? '' : 's'}
           </Mono>
         </View>
@@ -346,6 +434,9 @@ function MaintenanceRow({
     </Pressable>
   );
 }
+
+/** Button-like labels (New, the segments, the chips): the control ceiling. */
+const CONTROL_CAP = capTo(13, TYPE_CEILING.control);
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
@@ -362,14 +453,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   chips: { flexDirection: 'row', alignItems: 'center', gap: 2, marginLeft: -3 },
+  // The frame is the target (44pt tall); the 38pt button sits in it, the
+  // chips' height, with the small button's radius 10.
+  newFrame: {
+    minHeight: 44,
+    minWidth: 44,
+    justifyContent: 'center',
+  },
   newBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderWidth: 1,
-    borderRadius: 999,
+    minHeight: 38,
+    paddingHorizontal: 14,
+    paddingVertical: 4,
+    borderRadius: 10,
+  },
+  newLabel: {
+    fontFamily: FONT.display,
+    fontWeight: '500',
+    fontSize: 13,
   },
   head: {
     paddingHorizontal: 20,
@@ -379,6 +482,57 @@ const styles = StyleSheet.create({
   toolbar: {
     paddingHorizontal: 20,
     paddingTop: 16,
+  },
+  // DESIGN-SPEC 6.5 (the phone's action segmented control): a recessed track
+  // with a hairline edge. The chosen segment takes the ink fill, as a chosen
+  // chip does, so which scope is on reads at 3:1 or more (the reference's
+  // raised white segment is 1.1:1 on its track). Each segment is 38pt, so the
+  // track reaches 44pt.
+  segmentTrack: {
+    flexDirection: 'row',
+    alignSelf: 'flex-start',
+    gap: 2,
+    padding: 3,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  segment: {
+    minHeight: 38,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  segmentLabel: {
+    fontFamily: FONT.display,
+    fontWeight: '500',
+    fontSize: 13,
+  },
+  chipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    columnGap: 8,
+    marginTop: 6,
+  },
+  // The 44pt target; the 32pt chip sits in its middle.
+  chipFrame: {
+    minHeight: 44,
+    minWidth: 44,
+    justifyContent: 'center',
+  },
+  chip: {
+    minHeight: 32,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chipLabel: {
+    fontFamily: FONT.displayRegular,
+    fontSize: 13,
   },
   list: {
     paddingHorizontal: 20,

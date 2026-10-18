@@ -108,13 +108,19 @@ export default function TeamScreen() {
       }
       title="Team"
       italic="& roles."
-      emptyTitle={loadFailed ? 'Could not load the team.' : 'No team yet.'}
-      emptyBody={
-        loadFailed
-          ? 'Check your connection and pull down to try again.'
-          : 'Invite teammates on the web. Pending invites and active members show here.'
-      }
+      emptyTitle="No team yet."
+      emptyBody="Invite teammates on the web. Pending invites and active members show here."
       emptyIcon={Users}
+      // The failed read in its own words, through the list's failed state
+      // (a warning glyph and an alert), never the empty team's words.
+      failed={
+        loadFailed
+          ? {
+              title: 'Could not load the team.',
+              body: 'Check your connection and pull down to try again.',
+            }
+          : null
+      }
       data={rows}
       loading={loading}
       refreshing={refreshing}
@@ -168,18 +174,29 @@ function MemberCard({ member }: { member: MemberRow }) {
             {name}
           </Body>
           {email ? (
+            // A link (it opens Mail) in a 44pt frame. The frame is padding
+            // around the email, so it grows with the email (a wrapped or
+            // larger address) instead of centring it in a fixed box, and the
+            // negative margins give the padding back: the email sits 3pt
+            // under the name and the card keeps its padding at every text
+            // size. One line at the default size is 15.2 + 29 = 44.2pt;
+            // minHeight keeps 44 at the sizes below the default.
             <Pressable
               onPress={() => Linking.openURL(`mailto:${email}`).catch(() => undefined)}
+              accessibilityRole="link"
               style={({ pressed }) => ({
-                marginTop: 3,
+                minHeight: 44,
+                paddingVertical: 14.5,
+                marginTop: -11.5,
+                marginBottom: -14.5,
                 flexDirection: 'row',
                 alignItems: 'center',
                 gap: 4,
                 opacity: pressed ? 0.7 : 1,
               })}
             >
-              <Mail size={11} color={c.ink4} strokeWidth={1.5} />
-              <Mono size={11.5} tracking={0.04} color={c.ink4}>
+              <Mail size={11} color={c.ink3} strokeWidth={1.5} />
+              <Mono size={11.5} tracking={0.04} color={c.ink3}>
                 {email}
               </Mono>
             </Pressable>
