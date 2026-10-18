@@ -119,6 +119,32 @@ describe('SegmentedTabs (tablist semantics)', () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 
+  it('draws the focus ring inside each tab, so the scrolling track cannot clip it', () => {
+    const { container, rerender } = render(
+      <SegmentedTabs aria-label="Stock view" items={VIEWS} activeId="all" />,
+    );
+    // The track scrolls sideways (overflow-x-auto), which clips the global
+    // ring drawn 4 px outside a control; an inset ring with no offset stays whole.
+    expect(container.querySelector('[data-slot="segmented-tabs"]')).toHaveClass('overflow-x-auto');
+    for (const tab of screen.getAllByRole('tab')) {
+      expect(tab).toHaveClass('focus-visible:ring-inset', 'focus-visible:ring-offset-0');
+    }
+    rerender(
+      <SegmentedTabs
+        aria-label="Layout"
+        size="sm"
+        items={[
+          { id: 'table', label: 'List' },
+          { id: 'grid', label: 'Grid' },
+        ]}
+        activeId="table"
+      />,
+    );
+    for (const tab of screen.getAllByRole('tab')) {
+      expect(tab).toHaveClass('focus-visible:ring-inset', 'focus-visible:ring-offset-0');
+    }
+  });
+
   it('passes data attributes, a title and an aria-label through to the tab', () => {
     render(
       <SegmentedTabs
@@ -204,7 +230,8 @@ describe('SegmentedTabs (button mode)', () => {
     expect(onSelect).toHaveBeenCalledWith('grid', expect.anything());
   });
 
-  it('uses aria-pressed for a button in a nav strip', () => {
+  it('uses aria-pressed toggles in a named group, not a navigation landmark, when no tab is a link', () => {
+    const onSelect = vi.fn();
     render(
       <SegmentedTabs
         semantics="nav"
@@ -214,12 +241,38 @@ describe('SegmentedTabs (button mode)', () => {
           { id: 'placed', label: 'Placed only' },
         ]}
         activeId="placed"
+        onSelect={onSelect}
       />,
     );
-    expect(screen.getByRole('button', { name: 'Placed only' })).toHaveAttribute(
+    const group = screen.getByRole('group', { name: 'On hand' });
+    expect(group).toHaveAttribute('data-slot', 'segmented-tabs');
+    expect(screen.queryByRole('navigation')).toBeNull();
+    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(within(group).getByRole('button', { name: 'Placed only' })).toHaveAttribute(
       'aria-pressed',
       'true',
     );
-    expect(screen.getByRole('button', { name: 'Total' })).toHaveAttribute('aria-pressed', 'false');
+    expect(within(group).getByRole('button', { name: 'Total' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+    fireEvent.click(within(group).getByRole('button', { name: 'Total' }));
+    expect(onSelect).toHaveBeenCalledWith('total', expect.anything());
+  });
+
+  it('stays a navigation landmark when any tab is a link', () => {
+    render(
+      <SegmentedTabs
+        semantics="nav"
+        aria-label="Status"
+        items={[
+          { id: 'all', label: 'All', href: '/dashboard/orders' },
+          { id: 'mine', label: 'Mine' },
+        ]}
+        activeId="all"
+      />,
+    );
+    expect(screen.getByRole('navigation', { name: 'Status' })).toBeInTheDocument();
+    expect(screen.queryByRole('group')).toBeNull();
   });
 });

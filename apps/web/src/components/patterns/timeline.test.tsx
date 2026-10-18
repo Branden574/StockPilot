@@ -1,6 +1,19 @@
 import { render, screen, within } from '@testing-library/react';
 import { Truck } from 'lucide-react';
-import { describe, expect, it } from 'vitest';
+import Link from 'next/link';
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('next/link', () => ({
+  default: ({
+    href,
+    children,
+    ...rest
+  }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) => (
+    <a href={href} {...rest}>
+      {children}
+    </a>
+  ),
+}));
 
 import { DeltaText, Timeline, TimelineEntry, TimelineLabel, TimelineRow } from './timeline';
 
@@ -80,6 +93,34 @@ describe('Timeline (rows)', () => {
     expect(row).toHaveTextContent('Receive · L4L Polo — Men’s');
     expect(row).toHaveTextContent('Jordan Lee · Today, 3:40 PM');
     expect(screen.getByText('Receive')).toHaveClass('font-medium', 'text-accent');
+  });
+
+  it('draws the focus ring inside the row while a title link has keyboard focus, never the clipped one on the link', () => {
+    render(
+      <Timeline variant="rows" aria-label="Recent activity">
+        <TimelineRow
+          title={
+            <>
+              <TimelineLabel tone="muted">Pick</TimelineLabel> ·{' '}
+              <Link href="/dashboard/inventory/i1">L4L Insulated Bottle 20 oz</Link>
+            </>
+          }
+          meta="Ana Ruiz · Today, 4:12 PM"
+        />
+      </Timeline>,
+    );
+    const link = screen.getByRole('link', { name: 'L4L Insulated Bottle 20 oz' });
+    const title = link.closest('[data-slot="timeline-row-title"]')!;
+    // The ellipsis (overflow hidden) cut the link's own ring to two side bars.
+    expect(title).toHaveClass('truncate');
+    expect(title).toHaveClass('[&_a:focus-visible]:ring-0', '[&_a:focus-visible]:ring-offset-0');
+    // The row spans a card that clips at its border, so its ring is inset.
+    expect(screen.getByRole('listitem')).toHaveClass(
+      'has-[[data-slot=timeline-row-title]_a:focus-visible]:ring-2',
+      'has-[[data-slot=timeline-row-title]_a:focus-visible]:ring-inset',
+      'has-[[data-slot=timeline-row-title]_a:focus-visible]:ring-ring',
+    );
+    expect(link).toHaveAttribute('href', '/dashboard/inventory/i1');
   });
 });
 

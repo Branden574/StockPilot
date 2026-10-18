@@ -24,7 +24,12 @@ import { PatternPhoto } from './photo';
  * checkbox with the table's row key; it is a sibling of the name link, never
  * inside it), shown on hover or focus, always while `selected` or
  * `selectionActive`, and always on touch; `badge` top-right (the size
- * badge); `status` bottom-left (the stock status pill).
+ * badge), never wider than the tile and never over the checkbox chip, so a
+ * long label ("14 variants · 1,240 pairs total") ends in an ellipsis instead
+ * of losing its first figure; `status` bottom-left (the stock status pill).
+ * The badge and status slots sit on an opaque card backing: the tile stays
+ * white in both themes, and an outline pill (Archived, Discontinued) has no
+ * fill of its own.
  *
  * BODY: the name (its detail link) clamped to two lines, the mono SKU, an
  * optional meta line, the labelled quantity ("142 on hand") with the
@@ -33,9 +38,16 @@ import { PatternPhoto } from './photo';
  * drill-down).
  *
  * `stretchLink` (default on) widens the name link's click area to the whole
- * card, as the reference's card opens the record; the checkbox, badge and
- * footer stay separate targets above it. Turn it off when the media carries
- * its own interaction (a hover preview).
+ * card, as the reference's card opens the record. The checkbox, the status
+ * pill (so its explanatory title still shows on hover), the SKU and the
+ * placement (so both stay selectable and copyable, as in the table) and the
+ * footer sit above it as their own targets; a click on the size badge, the
+ * photo, the quantity or anywhere else opens the record. Turn it off when the
+ * media carries its own interaction (a hover preview).
+ *
+ * FOCUS: the name clamp clips anything drawn outside the link, so while the
+ * name link has keyboard focus the card draws the app's focus ring around
+ * itself instead (with or without `stretchLink`).
  */
 
 export interface GridCardQuantity {
@@ -88,7 +100,7 @@ export function GridCard({
       data-slot="grid-card"
       data-selected={selected ? '' : undefined}
       className={cn(
-        'group/card border-border bg-background relative isolate flex h-full min-w-0 flex-col overflow-hidden rounded-lg border transition-colors focus-within:border-[var(--ed-ink-4)] hover:border-[var(--ed-ink-4)]',
+        'group/card border-border bg-background has-[[data-slot=grid-card-name]_a:focus-visible]:ring-ring has-[[data-slot=grid-card-name]_a:focus-visible]:ring-offset-background relative isolate flex h-full min-w-0 flex-col overflow-hidden rounded-lg border transition-colors focus-within:border-[var(--ed-ink-4)] hover:border-[var(--ed-ink-4)] has-[[data-slot=grid-card-name]_a:focus-visible]:ring-2 has-[[data-slot=grid-card-name]_a:focus-visible]:ring-offset-2',
         selected &&
           'border-accent ring-accent focus-within:border-accent hover:border-accent ring-1',
         className,
@@ -116,7 +128,10 @@ export function GridCard({
         {badge != null ? (
           <div
             data-slot="grid-card-badge"
-            className="pointer-events-none absolute right-2 top-2 z-10"
+            className={cn(
+              'bg-card pointer-events-none absolute right-2 top-2 z-10 flex rounded-full',
+              checkbox != null ? 'max-w-[calc(100%-3.25rem)]' : 'max-w-[calc(100%-1rem)]',
+            )}
           >
             {badge}
           </div>
@@ -124,7 +139,7 @@ export function GridCard({
         {status != null ? (
           <div
             data-slot="grid-card-status"
-            className="pointer-events-none absolute bottom-2 left-2 z-10"
+            className="bg-card absolute bottom-2 left-2 z-10 flex rounded-full"
           >
             {status}
           </div>
@@ -135,14 +150,17 @@ export function GridCard({
           <div
             data-slot="grid-card-name"
             className={cn(
-              'text-foreground line-clamp-2 min-h-[2.7em] text-[13.5px] font-medium leading-[1.35] [overflow-wrap:anywhere]',
+              'text-foreground line-clamp-2 min-h-[2.7em] text-[13.5px] font-medium leading-[1.35] [overflow-wrap:anywhere] [&_a:focus-visible]:ring-0 [&_a:focus-visible]:ring-offset-0',
               stretchLink && "[&_a]:after:absolute [&_a]:after:inset-0 [&_a]:after:content-['']",
             )}
           >
             {name}
           </div>
           {sku != null ? (
-            <div className="text-muted-foreground mt-0.5 truncate font-mono text-[11.5px] leading-[17.25px]">
+            <div
+              data-slot="grid-card-sku"
+              className="text-muted-foreground relative z-10 mt-0.5 cursor-text select-text truncate font-mono text-[11.5px] leading-[17.25px]"
+            >
               {sku}
             </div>
           ) : null}
@@ -169,7 +187,7 @@ export function GridCard({
             {placement != null ? (
               <div
                 data-slot="grid-card-placement"
-                className="text-muted-foreground min-w-0 truncate whitespace-nowrap font-mono text-[11.5px]"
+                className="text-muted-foreground relative z-10 min-w-0 cursor-text select-text truncate whitespace-nowrap font-mono text-[11.5px]"
               >
                 {placement}
               </div>

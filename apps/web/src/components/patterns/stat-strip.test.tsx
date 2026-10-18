@@ -78,4 +78,32 @@ describe('StatStrip', () => {
     expect(picking).toHaveAttribute('data-prefetch', 'false');
     expect(picking.textContent).toBe('Picking');
   });
+
+  it('draws a stage`s focus ring inside the tile, so the clipped strip cannot cut it', () => {
+    const { container } = render(
+      <StatStrip as="nav" variant="stages" aria-label="Status">
+        <StatStripLink href="/dashboard/orders?status=pending" label="Needs approval" active />
+        <StatStripLink href="/dashboard/orders?status=picking" label="Picking" />
+      </StatStrip>,
+    );
+    // The strip clips at its rounded edge (overflow-hidden) and each tile
+    // fills its row, which cuts the global ring drawn 4 px outside a control.
+    expect(container.querySelector('[data-slot="stat-strip"]')).toHaveClass('overflow-hidden');
+    for (const link of screen.getAllByRole('link')) {
+      expect(link).toHaveClass('focus-visible:ring-inset', 'focus-visible:ring-offset-0');
+    }
+  });
+
+  it('keeps 12 px between the figure and the stage bar in its bottom padding (81.75 px strip)', () => {
+    render(
+      <StatStrip as="nav" variant="stages" aria-label="Status">
+        <StatStripLink href="/dashboard/orders?status=pending" label="Needs approval" count={3} />
+      </StatStrip>,
+    );
+    const link = screen.getByRole('link', { name: /Needs approval/ });
+    // 12 top + 14 bottom: the 2 px bar sits absolutely in the bottom padding.
+    expect(link).toHaveClass('pt-3', 'pb-3.5');
+    expect(link).not.toHaveClass('py-3');
+    expect(link.querySelector('span[aria-hidden]')).toHaveClass('absolute', 'bottom-0', 'h-0.5');
+  });
 });

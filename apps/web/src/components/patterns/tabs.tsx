@@ -13,10 +13,15 @@ import { cn } from '@/lib/utils';
  *
  * LINK DRIVEN (every item has an `href`): the URL is the state, so `?tab=`
  * deep links keep working and the server renders the right tab on first paint.
- * The page computes each href (the item page links the tab it rendered to the
- * URL exactly as it is, so the address bar and the href agree). This strip
- * then gives instant feedback the same way the item page's tabs do (owner
- * report 2026-09-22, a tab showed nothing for 3.6-6.6 s):
+ * The page passes each tab's own href (other query params carried along, as
+ * the item page does). The tab the server rendered (`activeId`) links to the
+ * address bar exactly as it is instead, however the URL spells that tab
+ * (`?tab=overview`, an unknown `?tab=`, params in another order), so its href
+ * and the URL agree: NavProgressBar compares the two to decide whether a
+ * click is a navigation at all, and would otherwise start a bar for a click
+ * this strip cancels (rule 2). This strip then gives instant feedback the
+ * same way the item page's tabs do (owner report 2026-09-22, a tab showed
+ * nothing for 3.6-6.6 s):
  *   1. the clicked tab shows selected at once, and its underline pulses while
  *      next/link reports the navigation pending (useLinkStatus);
  *   2. a click on the tab already shown does nothing (Next would treat a link
@@ -31,6 +36,9 @@ import { cn } from '@/lib/utils';
  *
  * `idPrefix` gives each tab the id its panel names (`{idPrefix}-tab-{id}`) and
  * an `aria-controls` of `{idPrefix}-panel-{id}`.
+ *
+ * FOCUS: the strip scrolls sideways on a phone and each tab fills its height,
+ * so a focused tab draws the app's focus ring inside its own edge.
  *
  * It reads the current URL (usePathname / useSearchParams), as the item
  * page's strip does: fine on the dashboard's dynamic pages; a statically
@@ -47,7 +55,10 @@ export interface TabItem {
 
 export interface TabsProps {
   items: readonly TabItem[];
-  /** The tab the server rendered (link mode) or the chosen one (button mode). */
+  /**
+   * The tab the server rendered (link mode: it links to the current URL as it
+   * is) or the chosen one (button mode).
+   */
   activeId: string;
   'aria-label': string;
   idPrefix?: string;
@@ -127,7 +138,7 @@ export function Tabs({
                 }
               : {};
             const tabClass = cn(
-              'relative inline-flex h-10 items-center gap-1.5 whitespace-nowrap px-3 text-[13.5px] font-medium transition-colors max-sm:min-h-11 pointer-coarse:min-h-11',
+              'relative inline-flex h-10 items-center gap-1.5 whitespace-nowrap px-3 text-[13.5px] font-medium transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11 pointer-coarse:min-h-11',
               isShown ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
             );
             const count =
@@ -144,7 +155,7 @@ export function Tabs({
               return (
                 <Link
                   key={item.id}
-                  href={item.href}
+                  href={item.id === activeId && pathname ? currentHref : item.href}
                   role="tab"
                   aria-selected={isShown}
                   scroll={scroll}

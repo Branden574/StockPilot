@@ -120,7 +120,14 @@ export interface TimelineRowProps extends Omit<React.ComponentProps<'li'>, 'titl
   aside?: React.ReactNode;
 }
 
-/** One activity row (DESIGN-SPEC 6.16), for `Timeline variant="rows"` in a card. */
+/**
+ * One activity row (DESIGN-SPEC 6.16), for `Timeline variant="rows"` in a card.
+ *
+ * The title line ends in an ellipsis, which clips anything drawn outside it,
+ * so while a link in the title has keyboard focus the row draws the app's
+ * focus ring inside its own edge instead (the row spans a card that clips at
+ * its rounded border).
+ */
 export function TimelineRow({
   title,
   meta,
@@ -133,13 +140,18 @@ export function TimelineRow({
     <li
       data-slot="timeline-row"
       className={cn(
-        'border-border grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 border-b px-[18px] py-2.5 last:border-b-0',
+        'border-border has-[[data-slot=timeline-row-title]_a:focus-visible]:ring-ring grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 border-b px-[18px] py-2.5 last:border-b-0 has-[[data-slot=timeline-row-title]_a:focus-visible]:ring-2 has-[[data-slot=timeline-row-title]_a:focus-visible]:ring-inset',
         className,
       )}
       {...props}
     >
       <div className="min-w-0">
-        <div className="text-foreground truncate text-[13.5px] leading-5">{title}</div>
+        <div
+          data-slot="timeline-row-title"
+          className="text-foreground truncate text-[13.5px] leading-5 [&_a:focus-visible]:ring-0 [&_a:focus-visible]:ring-offset-0"
+        >
+          {title}
+        </div>
         {meta != null ? (
           <div className="text-muted-foreground mt-0.5 text-[12px] leading-[18px]">{meta}</div>
         ) : null}

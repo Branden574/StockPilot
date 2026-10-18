@@ -126,6 +126,11 @@ export interface StatStripLinkProps extends Omit<React.ComponentProps<typeof Lin
 /**
  * A stage tile that is a link (the Orders tabs as a stage strip): same URL as
  * the tab it replaces, `aria-current="page"` on the current one.
+ *
+ * The bottom padding keeps 12 px between the figure and the 2 px stage bar
+ * that sits in it (DESIGN-SPEC 6.8: 81.75 px strip). The strip clips at its
+ * rounded edge and a tile fills its row, so a focused tile draws the app's
+ * focus ring inside its own edge.
  */
 export function StatStripLink({
   label,
@@ -140,7 +145,7 @@ export function StatStripLink({
       data-state={active ? 'active' : 'inactive'}
       aria-current={active ? 'page' : undefined}
       className={cn(
-        'hover:bg-muted pointer-coarse:min-h-11 relative flex min-w-0 flex-col justify-center gap-0.5 px-4 py-3 transition-colors max-sm:min-h-11',
+        'hover:bg-muted pointer-coarse:min-h-11 relative flex min-w-0 flex-col justify-center gap-0.5 px-4 pb-3.5 pt-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11',
         active && 'bg-muted',
         className,
       )}

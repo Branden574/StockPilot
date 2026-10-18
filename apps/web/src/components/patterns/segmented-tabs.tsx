@@ -19,13 +19,22 @@ import { cn } from '@/lib/utils';
  *   `aria-selected`, like ArchiveViewToggle and the rentals tabs.
  * - `nav`: a `<nav aria-label>` of links with `aria-current="page"` on the
  *   current one, like the status strips ("Filter by status"; the Orders tour
- *   targets `nav[aria-label="Status"]`).
+ *   targets `nav[aria-label="Status"]`). A strip in which no tab has an
+ *   `href` (a set of `aria-pressed` toggles such as On hand: Total / Placed
+ *   only) navigates nowhere, so it is a named `role="group"` instead of a
+ *   navigation landmark.
  * Every tab stays in the Tab order, as today (no roving focus).
+ *
+ * FOCUS: the track scrolls sideways, which clips anything drawn outside it,
+ * so a focused tab draws the app's focus ring inside its own edge.
  *
  * COUNTS: `count` prints only when the page passes one, and a page passes one
  * only where it already has the figure (owner decision O2: no new counts).
  *
- * No hooks and no data: it renders in server and client components alike.
+ * No hooks and no data. Link tabs without an `onClick` render in server and
+ * client components alike; button mode (an `onClick` on every button) and a
+ * per-tab `onClick` hand functions to their elements, so those strips need a
+ * client component parent.
  */
 
 type DataAttributes = { [key: `data-${string}`]: string | undefined };
@@ -101,7 +110,7 @@ export function SegmentedTabs({
   const tabs = items.map((item) => {
     const active = item.id === activeId;
     const segmentClass = cn(
-      'inline-flex shrink-0 items-center whitespace-nowrap font-medium transition-colors max-sm:min-h-11 pointer-coarse:min-h-11 [&_svg]:shrink-0',
+      'inline-flex shrink-0 items-center whitespace-nowrap font-medium transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11 pointer-coarse:min-h-11 [&_svg]:shrink-0',
       SEGMENT[size],
       active
         ? 'bg-card text-foreground shadow-[0_0_0_1px_var(--ed-line-strong)]'
@@ -168,6 +177,19 @@ export function SegmentedTabs({
   });
 
   if (semantics === 'nav') {
+    if (!items.some((item) => item.href != null)) {
+      return (
+        <div
+          id={id}
+          role="group"
+          aria-label={ariaLabel}
+          data-slot="segmented-tabs"
+          className={trackClass}
+        >
+          {tabs}
+        </div>
+      );
+    }
     return (
       <nav id={id} aria-label={ariaLabel} data-slot="segmented-tabs" className={trackClass}>
         {tabs}

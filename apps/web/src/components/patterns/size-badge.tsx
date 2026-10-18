@@ -9,7 +9,10 @@ import { cn } from '@/lib/utils';
  * stored group with a counting unit).
  *
  * `placement="table"`: an outlined pill after the name in a row.
- * `placement="grid"`: a filled pill for a grid card's media corner.
+ * `placement="grid"`: a filled pill for a grid card's media corner. It never
+ * grows past its slot: a label longer than the tile is cut off at its END
+ * with an ellipsis ("14 variants · 1,240 pai…"), so the figure it starts with
+ * always shows. The full words stay in the page for assistive technology.
  */
 export interface SizeBadgeProps extends React.ComponentProps<'span'> {
   placement?: 'table' | 'grid';
@@ -20,10 +23,10 @@ export function SizeBadge({ placement = 'table', className, ...props }: SizeBadg
     <span
       data-slot="size-badge"
       className={cn(
-        'inline-flex shrink-0 items-center whitespace-nowrap rounded-full',
+        'shrink-0 whitespace-nowrap rounded-full',
         placement === 'table'
-          ? 'text-muted-foreground border border-[var(--ed-line-strong)] px-1.5 text-[11px] leading-[16.5px]'
-          : 'bg-card px-2 py-px text-[11.5px] leading-[17.25px] text-[var(--ed-ink-2)]',
+          ? 'text-muted-foreground inline-flex items-center border border-[var(--ed-line-strong)] px-1.5 text-[11px] leading-[16.5px]'
+          : 'bg-card inline-block max-w-full truncate px-2 py-px text-[11.5px] leading-[17.25px] text-[var(--ed-ink-2)]',
         className,
       )}
       {...props}

@@ -69,11 +69,13 @@ import { Tabs, type TabItem } from './tabs';
 
 const BASE = '/dashboard/rentals/items/r1';
 
-/** What a page passes: the tab it rendered links to the URL exactly as it is. */
-function items(search: string, active: string): TabItem[] {
-  const current = search ? `${BASE}?${search}` : BASE;
+/**
+ * What a page passes: every tab's own canonical href, the rest of the query
+ * carried along. Nothing special for the tab the server rendered: linking it
+ * to the URL exactly as it is is the strip's job (pinned below).
+ */
+function items(search: string): TabItem[] {
   const href = (id: string) => {
-    if (id === active) return current;
     const params = new URLSearchParams(search);
     if (id === 'overview') params.delete('tab');
     else params.set('tab', id);
@@ -92,7 +94,7 @@ function Strip({ active }: { active: string }) {
     <Tabs
       aria-label="Item detail sections"
       idPrefix="item-detail"
-      items={items(nav.search, active)}
+      items={items(nav.search)}
       activeId={active}
       scroll={false}
     />
@@ -148,6 +150,29 @@ describe('Tabs: semantics', () => {
     expect(tab('Activity')).toHaveAttribute('data-scroll', 'false');
   });
 
+  it('draws the focus ring inside each tab, so the scrolling strip cannot clip it', () => {
+    const { container, rerender } = render(<Strip active="overview" />);
+    // The strip scrolls sideways (overflow-x-auto) and each tab fills its
+    // height, which clips the global ring drawn 4 px outside a control.
+    expect(container.querySelector('.overflow-x-auto')).not.toBeNull();
+    for (const t of screen.getAllByRole('tab')) {
+      expect(t).toHaveClass('focus-visible:ring-inset', 'focus-visible:ring-offset-0');
+    }
+    rerender(
+      <Tabs
+        aria-label="Settings sections"
+        activeId="general"
+        items={[
+          { id: 'general', label: 'General' },
+          { id: 'access', label: 'Access' },
+        ]}
+      />,
+    );
+    for (const t of screen.getAllByRole('tab')) {
+      expect(t).toHaveClass('focus-visible:ring-inset', 'focus-visible:ring-offset-0');
+    }
+  });
+
   it('prints a count only where the page passes one', () => {
     const { container } = render(
       <Tabs
@@ -185,6 +210,37 @@ describe('Tabs: link mode click feedback', () => {
     expect(notPrevented).toBe(false);
     expect(nav.navigate).not.toHaveBeenCalled();
     expect(selected()).toEqual(['Movements']);
+  });
+
+  it('the selected tab links to the URL exactly as it is, however the URL spells the tab', () => {
+    // NavProgressBar compares a link's href with the address bar: a canonical
+    // href here (no ?tab=) would start a bar for a click the strip cancels.
+    nav.search = 'tab=overview&from=search';
+    render(<Strip active="overview" />);
+
+    expect(tab('Overview')).toHaveAttribute('href', `${BASE}?tab=overview&from=search`);
+    expect(fireEvent.click(tab('Overview'))).toBe(false);
+    expect(nav.navigate).not.toHaveBeenCalled();
+    expect(selected()).toEqual(['Overview']);
+    // The other tabs keep the page's own hrefs, the rest of the query carried along.
+    expect(tab('Activity')).toHaveAttribute('href', `${BASE}?tab=activity&from=search`);
+    expect(tab('Movements')).toHaveAttribute('href', `${BASE}?tab=movements&from=search`);
+  });
+
+  it('an unknown ?tab= value: the tab the server fell back to links to that URL too', () => {
+    nav.search = 'tab=bogus';
+    render(<Strip active="overview" />);
+
+    expect(tab('Overview')).toHaveAttribute('href', `${BASE}?tab=bogus`);
+    fireEvent.click(tab('Overview'));
+    expect(nav.navigate).not.toHaveBeenCalled();
+  });
+
+  it('keeps the page`s href for the selected tab when the current path is unknown', () => {
+    nav.pathname = '';
+    render(<Strip active="overview" />);
+
+    expect(tab('Overview')).toHaveAttribute('href', BASE);
   });
 
   it('clicking the tab that is still loading again does not restart its navigation', () => {

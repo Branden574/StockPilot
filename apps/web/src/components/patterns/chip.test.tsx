@@ -106,4 +106,20 @@ describe('SizeBadge', () => {
     rerender(<SizeBadge placement="grid">8 sizes</SizeBadge>);
     expect(screen.getByText('8 sizes')).toHaveClass('bg-card');
   });
+
+  it('cuts a long grid label off at its end, never its start; a row badge never truncates', () => {
+    const long = '14 variants · 1,240 pairs total';
+    const { rerender } = render(<SizeBadge placement="grid">{long}</SizeBadge>);
+    const grid = screen.getByText(long);
+    // inline-block + truncate: an ellipsis after "1,240 pai", so the leading
+    // "14" always shows (an inline-flex nowrap pill grew left past the tile).
+    expect(grid).toHaveClass('inline-block', 'max-w-full', 'truncate', 'whitespace-nowrap');
+    expect(grid).not.toHaveClass('inline-flex');
+    expect(grid.textContent).toBe(long);
+
+    rerender(<SizeBadge>{long}</SizeBadge>);
+    const row = screen.getByText(long);
+    expect(row).toHaveClass('inline-flex', 'whitespace-nowrap');
+    expect(row).not.toHaveClass('truncate');
+  });
 });
