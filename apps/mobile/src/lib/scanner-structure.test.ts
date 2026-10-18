@@ -1111,7 +1111,7 @@ describe('Scan tab: Dynamic Type caps only the chrome', () => {
       .filter((el) => (attrText(el, 'style', sf) ?? '').includes(style))
       .map((el) => attrText(el, 'maxFontSizeMultiplier', sf));
 
-  it('the mode switch, the steppers, the field labels and the placeholder are capped', () => {
+  it('the mode switch, the steppers, the stat labels and the placeholder are capped', () => {
     expect(src).toContain('const MODE_CAP = capTo(12.5, TYPE_CEILING.control);');
     expect(src).toContain('const STEP_CAP = capTo(18, TYPE_CEILING.control);');
     expect(src).toContain('const EYEBROW_CAP = capTo(11, TYPE_CEILING.eyebrow);');
@@ -1120,9 +1120,43 @@ describe('Scan tab: Dynamic Type caps only the chrome', () => {
     expect(capOf('styles.modeLabel')).toEqual(['MODE_CAP', 'MODE_CAP']);
     expect(capOf('styles.actionLabel')).toEqual(['STEP_CAP']);
     expect(capOf('styles.reticleLabel')).toEqual(['EYEBROW_CAP']);
+    // On hand, Reorder at and Price: the item screen's ON HAND is an eyebrow.
     expect(capOf('styles.statLabel')).toEqual(['LABEL_CAP', 'LABEL_CAP', 'LABEL_CAP']);
-    expect(capOf('styles.locLabel')).toEqual(['LABEL_CAP', 'LABEL_CAP']);
     expect(capOf('styles.thumbPlaceholderText')).toEqual(['PLACEHOLDER_CAP']);
+  });
+
+  // A location label (Location, Split stock / In crate, Bin/shelf, Elsewhere,
+  // Rack, Crate, Grade) names the value beside it, so it is content, not
+  // eyebrow chrome. Capped at the 16pt eyebrow ceiling it became the smallest
+  // text on the card while its value grew to about 48pt at AX5; it had no cap
+  // before the restyle, and the item screen's MetaRow leaves the same label
+  // uncapped. Updated expectation (review): both label sites uncapped.
+  // Mutation caught: a cap back on either label.
+  it('the location labels are content: neither is capped, as before the restyle', () => {
+    expect(capOf('styles.locLabel')).toEqual([undefined, undefined]);
+  });
+
+  // Reflow instead of a cap, as the item screen's MetaRow does: past the
+  // stacking scale each location row is its label over its value, and the
+  // value starts at the left with the full width. Mutation caught: either row
+  // without the stacked style, or a stacked value still pushed right.
+  it('the location rows, the Crate row among them, stack label over value past the stacking scale', () => {
+    const locRow = functionBody(src, SCAN_TAB, 'LocRow');
+    expect(locRow).toContain('const stacked = shouldStackRow(useWindowDimensions().fontScale);');
+    expect(locRow).toMatch(/styles\.locValueFit,\s*stacked && styles\.locValueStacked,/);
+    const { sf: rowSf, els: rows } = elements(SCAN_TAB, (el, s) =>
+      (attrText(el, 'style', s) ?? '').includes('styles.locRow'),
+    );
+    // The Crate row (in the screen, beside its dot) and LocRow, in that order.
+    expect(rows.map((el) => attrText(el, 'style', rowSf))).toEqual([
+      '[styles.locRow, stacked && styles.locRowStacked]',
+      '[styles.locRow, stacked && styles.locRowStacked]',
+    ]);
+    expect(textOf(rows[0]!, rowSf)).toBe('Crate');
+    expect(styleBlock(src, 'locRowStacked')).toBe(
+      " flexDirection: 'column', alignItems: 'flex-start', gap: 4 ",
+    );
+    expect(styleBlock(src, 'locValueStacked')).toBe(" marginLeft: 0, textAlign: 'left' ");
   });
 
   it('content scales all the way: names, SKUs, numbers, notes and hints', () => {

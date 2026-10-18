@@ -1192,10 +1192,8 @@ export default function Scan() {
                   {elsewhereNote && <Text style={styles.locNote}>{elsewhereNote}</Text>}
                   {structuredRack && <LocRow label="Rack" value={structuredRack} mono />}
                   {storage?.crateNumber && (
-                    <View style={styles.locRow}>
-                      <Text style={styles.locLabel} maxFontSizeMultiplier={LABEL_CAP}>
-                        Crate
-                      </Text>
+                    <View style={[styles.locRow, stacked && styles.locRowStacked]}>
+                      <Text style={styles.locLabel}>Crate</Text>
                       <View style={styles.crateValue}>
                         {/* Number identifies the crate; the color is optional.
                             A hollow dot (bordered, no fill) means "no color set". */}
@@ -1463,17 +1461,29 @@ function ScanReticle() {
   );
 }
 
+/**
+ * One row of the location box. Reflow, not a cap: the label names the value
+ * beside it (LOCATION / a rack name), so both are content and both grow with
+ * the user's text size. Past the stacking scale the row becomes label over
+ * value, as the item screen's MetaRow does, and the value takes the full width.
+ */
 function LocRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   const styles = useScanStyles();
+  const stacked = shouldStackRow(useWindowDimensions().fontScale);
   return (
-    <View style={styles.locRow}>
-      <Text style={styles.locLabel} maxFontSizeMultiplier={LABEL_CAP}>
-        {label}
-      </Text>
+    <View style={[styles.locRow, stacked && styles.locRowStacked]}>
+      <Text style={styles.locLabel}>{label}</Text>
       {/* locValueFit: a value longer than the row ("+12 in other warehouses",
           a long rack name, or any value at a large text size) wraps inside
           the row instead of running past the sheet's edge. */}
-      <Text style={[styles.locValue, styles.locValueFit, mono && styles.locValueMono]}>
+      <Text
+        style={[
+          styles.locValue,
+          styles.locValueFit,
+          stacked && styles.locValueStacked,
+          mono && styles.locValueMono,
+        ]}
+      >
         {value}
       </Text>
     </View>
@@ -1569,10 +1579,12 @@ const SEGMENT_SLOP = { top: 4, bottom: 4 } as const;
 
 /**
  * Dynamic Type: chrome caps in points (lib/theme.ts TYPE_CEILING). The mode
- * switch and the steppers are controls; the field-style labels are capped
- * like eyebrows so a long one ("SPLIT STOCK") leaves its value room; the
+ * switch and the steppers are controls; the three stat labels (On hand,
+ * Reorder at, Price) are capped like the item screen's ON HAND eyebrow; the
  * placeholder sits in a fixed 56pt square. Names, SKUs, numbers, notes and
- * hints are content and are not capped.
+ * hints are content and are not capped, and neither are the location box's
+ * labels: each names the value beside it, so those rows reflow past the
+ * stacking scale instead (LocRow).
  */
 const MODE_CAP = capTo(12.5, TYPE_CEILING.control);
 const STEP_CAP = capTo(18, TYPE_CEILING.control);
@@ -1767,6 +1779,8 @@ function makeStyles(c: Palette) {
       gap: 8,
     },
     locRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    // Past the stacking scale: the label over its value, both from the left.
+    locRowStacked: { flexDirection: 'column', alignItems: 'flex-start', gap: 4 },
     locLabel: {
       color: c.ink3,
       fontFamily: FONT.mono,
@@ -1776,6 +1790,7 @@ function makeStyles(c: Palette) {
     },
     locValue: { color: c.ink, fontFamily: FONT.display, fontWeight: '500', fontSize: 13.5 },
     locValueFit: { flexShrink: 1, marginLeft: 12, textAlign: 'right' },
+    locValueStacked: { marginLeft: 0, textAlign: 'left' },
     locValueMono: { fontFamily: FONT.mono, fontWeight: '500' },
     locNote: { color: c.ink3, fontFamily: FONT.displayRegular, fontSize: 12, lineHeight: 17 },
     crateValue: { flexDirection: 'row', alignItems: 'center', gap: 6 },
