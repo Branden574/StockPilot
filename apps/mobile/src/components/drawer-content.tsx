@@ -1,5 +1,5 @@
 import { useDrawerStatus, type DrawerContentComponentProps } from 'expo-router/drawer';
-import { useRouter, useSegments } from 'expo-router';
+import { useIsFocused, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { LogOut } from 'lucide-react-native';
 import * as React from 'react';
@@ -40,7 +40,9 @@ const SENSOR_HOUSING = Platform.OS === 'ios' && (initialWindowMetrics?.insets.to
 
 /**
  * Whether the drawer hides the status bar: only while it is open over the
- * Scan tab in light mode. Past the 320pt panel the battery sits on the Scan
+ * Scan tab in light mode, with nothing pushed over them (`onTop`: a screen
+ * opened from a notification or a link while the drawer is open leaves the
+ * drawer open underneath). Past the 320pt panel the battery sits on the Scan
  * tab's camera bar, which is dark in both modes, so the root's dark glyphs
  * read at about 1.08:1 there (the clock over the panel reads at 20:1). Only
  * on an iPhone with a sensor housing, where hiding moves nothing: on an
@@ -53,11 +55,12 @@ const SENSOR_HOUSING = Platform.OS === 'ios' && (initialWindowMetrics?.insets.to
  */
 function hidesStatusBar(
   open: boolean,
+  onTop: boolean,
   mode: ThemeMode,
   activeHref: string,
   sensorHousing: boolean,
 ): boolean {
-  return open && mode === 'light' && activeHref === '/scan' && sensorHousing;
+  return open && onTop && mode === 'light' && activeHref === '/scan' && sensorHousing;
 }
 
 /**
@@ -77,6 +80,8 @@ export function DrawerContent(props: DrawerContentComponentProps) {
   const { c, mode } = useTheme();
   const insets = useSafeAreaInsets();
   const drawerOpen = useDrawerStatus() === 'open';
+  // The drawer's own screen (the root stack's drawer group) is on top.
+  const onTop = useIsFocused();
   const { signOut, user } = useAuth();
   const profile = useProfile();
   const { role } = useRole();
@@ -121,7 +126,7 @@ export function DrawerContent(props: DrawerContentComponentProps) {
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       {/* Mounted only while it applies: when the drawer closes it unmounts and
           the status bar of the root (or of the Scan tab) shows again. */}
-      {hidesStatusBar(drawerOpen, mode, activeHref, SENSOR_HOUSING) ? (
+      {hidesStatusBar(drawerOpen, onTop, mode, activeHref, SENSOR_HOUSING) ? (
         <StatusBar hidden animated hideTransitionAnimation="fade" style="dark" />
       ) : null}
       <SafeAreaView edges={['top']} style={{ paddingHorizontal: 16, paddingTop: 8 }}>

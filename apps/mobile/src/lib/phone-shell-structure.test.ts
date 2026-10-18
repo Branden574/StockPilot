@@ -707,19 +707,22 @@ describe('drawer content: the registry, as the reference sidebar', () => {
     const { hidesStatusBar } = compileTopLevel(DRAWER, ['hidesStatusBar'], {}) as {
       hidesStatusBar: (
         open: boolean,
+        onTop: boolean,
         mode: 'light' | 'dark',
         activeHref: string,
         sensorHousing: boolean,
       ) => boolean;
     };
     for (const open of [true, false]) {
-      for (const mode of ['light', 'dark'] as const) {
-        for (const href of ['/scan', '/', '/inventory', '/books', '/receive', '/orders']) {
-          for (const housing of [true, false]) {
-            expect(
-              hidesStatusBar(open, mode, href, housing),
-              `${open} ${mode} ${href} ${housing}`,
-            ).toBe(open && mode === 'light' && href === '/scan' && housing);
+      for (const onTop of [true, false]) {
+        for (const mode of ['light', 'dark'] as const) {
+          for (const href of ['/scan', '/', '/inventory', '/books', '/receive', '/orders']) {
+            for (const housing of [true, false]) {
+              expect(
+                hidesStatusBar(open, onTop, mode, href, housing),
+                `${open} ${onTop} ${mode} ${href} ${housing}`,
+              ).toBe(open && onTop && mode === 'light' && href === '/scan' && housing);
+            }
           }
         }
       }
@@ -732,9 +735,12 @@ describe('drawer content: the registry, as the reference sidebar', () => {
     );
     // From the drawer's state, never from a gesture: mounted while it applies
     // (a fade out), unmounted as the drawer closes, when the bar shows again.
+    // A screen pushed over the open drawer (a notification, a link) takes the
+    // drawer group's focus, so the bar shows again there too.
     expect(code).toContain("const drawerOpen = useDrawerStatus() === 'open';");
+    expect(code).toContain('const onTop = useIsFocused();');
     expect(code).toContain(
-      '{hidesStatusBar(drawerOpen, mode, activeHref, SENSOR_HOUSING) ? ( <StatusBar hidden animated hideTransitionAnimation="fade" style="dark" /> ) : null}',
+      '{hidesStatusBar(drawerOpen, onTop, mode, activeHref, SENSOR_HOUSING) ? ( <StatusBar hidden animated hideTransitionAnimation="fade" style="dark" /> ) : null}',
     );
     expect((code.match(/<StatusBar\b/g) ?? []).length).toBe(1);
   });
