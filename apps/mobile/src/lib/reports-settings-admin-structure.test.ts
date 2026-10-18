@@ -841,11 +841,39 @@ describe('Settings: Customize tab bar', () => {
     );
     expect(tabs).toContain('color={unavailable ? c.ink3 : undefined}');
     expect(tabs).toContain('UNAVAILABLE RIGHT NOW — HIDDEN FROM THE BAR');
-    expect(tabs).toContain('const tint = active ? c.ink : c.ink3;');
+    expect(tabs).toContain('const tint = active ? c.accent : c.ink3;');
     expect(tabs).toContain(
       '<Mono size={10.5} tracking={0.04} color={c.ink3} style={{ marginTop: 3 }}> Home · Items · Books · POs · Scan </Mono>',
     );
     expect(tabs).toContain('<Mono size={10} tracking={0.1} color={c.ink3}> {text} </Mono>');
+  });
+
+  // The preview is the real bar in miniature. The bar (the tab layout,
+  // redesign P5.4; DESIGN-SPEC 6.20) draws the active tab in the accent, the
+  // others in the muted ink, and every label in the display face, semibold
+  // when active, at the display-face tiers on both platforms. The preview
+  // had kept the active tab in full ink and its labels in mono on iOS.
+  // Mutation caught: the active tint back to the ink, the label face back to
+  // mono or the same on both tabs, or the iOS mono tiers back.
+  it('the preview draws the bar as the tab layout does: its tints, its label face and its tiers', () => {
+    const { sf, fn } = functionNamed(CUSTOMIZE_TABS, 'PreviewTab');
+    const preview = codeOnly(fn.getText(sf)).replace(/\s+/g, ' ');
+    expect(preview).toContain('const tint = active ? c.accent : c.ink3;');
+    expect(preview).toContain('<Icon size={20} color={tint} strokeWidth={active ? 1.7 : 1.4} />');
+    expect(preview).toContain(
+      'style={[ styles.previewLabel, { color: tint, fontFamily: active ? FONT.displaySemi : FONT.display }, metrics, ]}',
+    );
+    expect(styleBlock(CUSTOMIZE_TABS, 'previewLabel')).not.toMatch(/fontFamily|FONT\.mono/);
+    expect(tabs).toContain("const PREVIEW_LABEL_TIERS: TabLabelPlatform = 'android';");
+    expect(tabs).toContain(
+      'const previewMetrics = previewLabelStyleForCount(1 + previewSlots.length, PREVIEW_LABEL_TIERS);',
+    );
+  });
+
+  it.each(MODES)("%s: the preview's tints read at AA on its card", (_m, p) => {
+    // Home, the active tab, in the accent; the others in the muted ink.
+    expect(contrast(p.accent, p.card)).toBeGreaterThanOrEqual(AA_TEXT);
+    expect(contrast(p.ink3, p.card)).toBeGreaterThanOrEqual(AA_TEXT);
   });
 
   // Each chip was a 30pt box plus hitSlop 6 (a 42pt target), 8pt apart, so
@@ -891,7 +919,7 @@ describe('Settings: Customize tab bar', () => {
       'void resetTabSlots(userId);',
       'Reset to default',
       'adjustsFontSizeToFit minimumFontScale={PREVIEW_MIN_FONT_SCALE} allowFontScaling={false}',
-      'previewLabelStyleForCount( 1 + previewSlots.length,',
+      'previewLabelStyleForCount(1 + previewSlots.length, PREVIEW_LABEL_TIERS)',
       'if (reduceMotion) return;',
     ]) {
       expect(tabs).toContain(words);

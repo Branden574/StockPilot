@@ -49,11 +49,21 @@ import {
   PREVIEW_MIN_FONT_SCALE,
   previewLabelStyleForCount,
   type TabLabelMetrics,
+  type TabLabelPlatform,
 } from '@/lib/tab-label';
 import { FONT } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useRole } from '@/lib/use-role';
 import { useTheme } from '@/lib/use-theme';
+
+/**
+ * The label tiers the preview takes: the display-face ones on both
+ * platforms, because the real bar now draws its labels in the display face
+ * everywhere (the tab layout, redesign P5.4). tabLabelStyleForCount keeps
+ * those tiers under 'android', where the bar always drew this face; its iOS
+ * tiers were sized for the JetBrains Mono labels the bar used to draw there.
+ */
+const PREVIEW_LABEL_TIERS: TabLabelPlatform = 'android';
 
 // Old-architecture Android needs the experimental switch for
 // LayoutAnimation; on the new architecture (this app) it's a harmless no-op
@@ -93,9 +103,12 @@ try {
  * The look (redesign P5.10): the device mode's palette; every word (the
  * hints, the unavailable note, a greyed choice, the preview's other tabs) is
  * the muted ink or stronger, so it reads at AA (the faint ink4 held them near
- * 3:1). Each reorder / add / remove chip is the same 30pt chip inside a real
- * 44pt frame (it was the chip plus hitSlop, a 42pt target whose neighbours'
- * slop overlapped); the frames stand side by side, so a touch has one owner.
+ * 3:1). The preview draws the bar as the tab layout does (DESIGN-SPEC 6.20):
+ * Home, the active tab, in the accent and the others in the muted ink, with
+ * the labels in the display face, semibold on the active tab. Each reorder /
+ * add / remove chip is the same 30pt chip inside a real 44pt frame (it was
+ * the chip plus hitSlop, a 42pt target whose neighbours' slop overlapped);
+ * the frames stand side by side, so a touch has one owner.
  */
 export default function CustomizeTabsScreen() {
   const { c } = useTheme();
@@ -135,11 +148,9 @@ export default function CustomizeTabsScreen() {
     [allowed, slots],
   );
   // Same density tier the real bar will use for this config (Home + gated
-  // chosen slots), scaled for the miniature preview.
-  const previewMetrics = previewLabelStyleForCount(
-    1 + previewSlots.length,
-    Platform.OS === 'android' ? 'android' : 'ios',
-  );
+  // chosen slots), scaled for the miniature preview: the display-face tiers
+  // on both platforms, as the bar's labels are (PREVIEW_LABEL_TIERS).
+  const previewMetrics = previewLabelStyleForCount(1 + previewSlots.length, PREVIEW_LABEL_TIERS);
 
   // Reduce-motion: one-shot probe, same pattern as scanner-tip.tsx — skip
   // the reorder/add/remove layout animation entirely when enabled.
@@ -393,9 +404,12 @@ function PreviewTab({
   active?: boolean;
 }) {
   const { c } = useTheme();
-  // The other tabs' words read at AA in the muted ink (the reference's idle
-  // tab, DESIGN-SPEC 6.20); Home, the active one, in full ink.
-  const tint = active ? c.ink : c.ink3;
+  // The real bar's tints (DESIGN-SPEC 6.20, as the tab layout draws them):
+  // Home, the active tab, in the accent (5.53:1 on the card in light, 9.91:1
+  // in dark), the others in the muted ink, so their words read at AA (the
+  // faint ink4 held them near 3:1). As on the bar, the active tab also takes
+  // the heavier stroke and the semibold face, so colour is never the only cue.
+  const tint = active ? c.accent : c.ink3;
   // Raw Text, not <Mono>: the bar's letterSpacing is ABSOLUTE pt while
   // Mono's `tracking` prop is an em ratio — feeding 0.6 into Mono produced
   // 9 × 0.6 = 5.4pt of tracking, the "O r d e r s" bug this replaces. One
@@ -409,7 +423,11 @@ function PreviewTab({
         adjustsFontSizeToFit
         minimumFontScale={PREVIEW_MIN_FONT_SCALE}
         allowFontScaling={false}
-        style={[styles.previewLabel, { color: tint }, metrics]}
+        style={[
+          styles.previewLabel,
+          { color: tint, fontFamily: active ? FONT.displaySemi : FONT.display },
+          metrics,
+        ]}
       >
         {label}
       </Text>
@@ -499,8 +517,8 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
   },
+  // The face is set per tab in PreviewTab (semibold on the active one).
   previewLabel: {
-    fontFamily: Platform.OS === 'android' ? FONT.display : FONT.mono,
     textAlign: 'center',
     alignSelf: 'stretch',
     marginTop: 5,
