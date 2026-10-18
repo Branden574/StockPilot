@@ -1,5 +1,6 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 import * as React from 'react';
 import {
   ActivityIndicator,
@@ -10,10 +11,12 @@ import {
   Text,
   TextInput,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
 import { SyncStatusBadge } from '@/components/SyncStatusBadge';
+import { Button } from '@/components/ui/button';
 import { useAuth } from '@/lib/auth-context';
 import {
   getCycleCount,
@@ -21,7 +24,9 @@ import {
   type CachedCycleCountLine,
 } from '@/lib/cycle-count-cache';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
-import { TYPE_CEILING, capTo, radius, space, theme } from '@/lib/theme';
+import { shouldStackRow } from '@/lib/dynamic-type-layout';
+import { FONT, TYPE_CEILING, capTo, palette, radius, space } from '@/lib/theme';
+import { useTheme } from '@/lib/use-theme';
 
 interface SheetState {
   line: CachedCycleCountLine;
@@ -75,6 +80,10 @@ function CycleCountScanScreenInner() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
   const [permission, requestPermission] = useCameraPermissions();
+  // The confirm sheet and the permission screen follow the device's mode;
+  // the camera chrome is dark in both (CAMERA, below).
+  const { c } = useTheme();
+  const stacked = shouldStackRow(useWindowDimensions().fontScale);
 
   const [lines, setLines] = React.useState<CachedCycleCountLine[]>([]);
   const [busy, setBusy] = React.useState(false);
@@ -183,30 +192,30 @@ function CycleCountScanScreenInner() {
 
   if (!permission) {
     return (
-      <View style={styles.center}>
-        <ActivityIndicator color={theme.primary} />
+      <View style={[styles.center, { backgroundColor: c.paper }]}>
+        <ActivityIndicator color={c.ink} />
       </View>
     );
   }
   if (!permission.granted) {
     return (
-      <SafeAreaView style={styles.root} edges={['top']}>
+      <SafeAreaView style={[styles.root, { backgroundColor: c.paper }]} edges={['top']}>
         <View style={styles.center}>
-          <Text style={styles.permTitle}>Camera access needed</Text>
-          <Text style={styles.permBody}>
+          <Text style={[styles.permTitle, { color: c.ink }]}>Camera access needed</Text>
+          <Text style={[styles.permBody, { color: c.ink3 }]}>
             {permission.canAskAgain
               ? 'Scan-to-count uses the camera to read item barcodes.'
               : 'Camera access is off for StockPilot. Turn it on in Settings to scan-to-count.'}
           </Text>
           {/* App Store 5.1.1(iv): neutral CTA; link to Settings once denied. */}
           {permission.canAskAgain ? (
-            <Pressable style={styles.cta} onPress={requestPermission}>
-              <Text style={styles.ctaLabel}>Continue</Text>
-            </Pressable>
+            <Button onPress={requestPermission} style={styles.cta}>
+              Continue
+            </Button>
           ) : (
-            <Pressable style={styles.cta} onPress={() => Linking.openSettings()}>
-              <Text style={styles.ctaLabel}>Open Settings</Text>
-            </Pressable>
+            <Button onPress={() => Linking.openSettings()} style={styles.cta}>
+              Open Settings
+            </Button>
           )}
         </View>
       </SafeAreaView>
@@ -221,24 +230,15 @@ function CycleCountScanScreenInner() {
   return (
     <View style={styles.root}>
       <Stack.Screen options={{ headerShown: false }} />
-      {!sheet ? (
-        <CameraView
-          style={StyleSheet.absoluteFill}
-          facing="back"
-          barcodeScannerSettings={{
-            barcodeTypes: ['qr', 'ean13', 'ean8', 'upc_a', 'upc_e', 'code128', 'code39', 'code93', 'codabar', 'pdf417'],
-          }}
-          onBarcodeScanned={onBarcode}
-        />
-      ) : null}
-
-      <SafeAreaView style={StyleSheet.absoluteFill} edges={['top', 'bottom']} pointerEvents="box-none">
-        {/* Dynamic Type: camera chrome over a LIVE viewfinder cannot grow the
-            bar or scroll it, and the `flex: 1` tally column is the only
-            shrinkable child — so uncapped Done and Burst eat the whole deficit
-            and the live count (the reason the bar exists) disappears. Cap the
-            two buttons at the chrome ceiling; the tally itself keeps scaling. */}
-        <View style={styles.topBar} pointerEvents="auto">
+      {/* The bar is dark in both modes, so the clock and battery over it are light. */}
+      <StatusBar style="light" />
+      {/* Dynamic Type: camera chrome over a LIVE viewfinder cannot grow the
+          bar or scroll it, and the `flex: 1` tally column is the only
+          shrinkable child — so uncapped Done and Burst eat the whole deficit
+          and the live count (the reason the bar exists) disappears. Cap the
+          two controls at the chrome ceiling; the tally itself keeps scaling. */}
+      <SafeAreaView edges={['top']} style={styles.barArea}>
+        <View style={styles.topBar}>
           <Pressable
             style={styles.closeFrame}
             onPress={() => router.back()}
@@ -259,82 +259,174 @@ function CycleCountScanScreenInner() {
               {counted} of {total} done
             </Text>
           </View>
-          <SyncStatusBadge />
+          <SyncStatusBadge surface="camera" />
+          {/* The reference's Single / Batch switch: "Burst off" is Single (each
+              scan opens the confirm sheet), "Burst" is Batch (each scan adds 1).
+              One control, as before: a tap anywhere on it flips the mode. */}
           <Pressable
-            style={[styles.burstBtn, burstMode && styles.burstBtnOn]}
+            style={styles.burstFrame}
             onPress={() => setBurstMode((v) => !v)}
+            accessibilityRole="switch"
+            accessibilityLabel="Burst"
+            accessibilityState={{ checked: burstMode }}
           >
-            <Text
-              style={[styles.burstLabel, burstMode && styles.burstLabelOn]}
-              numberOfLines={1}
-              maxFontSizeMultiplier={BURST_CAP}
-            >
-              {burstMode ? 'Burst' : 'Burst off'}
-            </Text>
+            <View style={styles.burstTrack}>
+              <View style={[styles.burstSegment, !burstMode && styles.burstSegmentOn]}>
+                <Text
+                  style={[styles.burstLabel, !burstMode && styles.burstLabelOn]}
+                  numberOfLines={1}
+                  maxFontSizeMultiplier={BURST_CAP}
+                >
+                  Burst off
+                </Text>
+              </View>
+              <View style={[styles.burstSegment, burstMode && styles.burstSegmentOn]}>
+                <Text
+                  style={[styles.burstLabel, burstMode && styles.burstLabelOn]}
+                  numberOfLines={1}
+                  maxFontSizeMultiplier={BURST_CAP}
+                >
+                  Burst
+                </Text>
+              </View>
+            </View>
           </Pressable>
         </View>
-
-        {!sheet && (
-          <View style={styles.frameWrap} pointerEvents="none">
-            <View style={styles.frame} />
-            <Text style={styles.hint}>
-              {burstMode
-                ? 'Burst mode — scan to add 1 to count'
-                : 'Scan a barcode to record the line'}
-            </Text>
-          </View>
-        )}
-
-        {sheet && (
-          <View style={styles.sheet}>
-            <Text style={styles.sheetSku}>{sheet.line.itemSku || sheet.line.itemId.slice(0, 8)}</Text>
-            <Text style={styles.sheetName} numberOfLines={2}>
-              {sheet.line.itemName}
-            </Text>
-            {/* WHICH VARIANT was scanned. Six sizes of one shoe carry six
-                barcodes and near-identical names; without this the counter
-                cannot tell which line the sheet is about. */}
-            {sheet.line.itemVariantLabel ? (
-              <Text style={styles.sheetVariant}>{sheet.line.itemVariantLabel}</Text>
-            ) : null}
-            <View style={styles.row}>
-              <View style={styles.kv}>
-                <Text style={styles.kvLabel}>Expected</Text>
-                <Text style={styles.kvValue}>{sheet.line.expected}</Text>
-              </View>
-              <View style={[styles.kv, { flex: 1 }]}>
-                <Text style={styles.kvLabel}>Counted</Text>
-                <TextInput
-                  style={styles.qtyInput}
-                  keyboardType="numeric"
-                  value={sheet.qty}
-                  onChangeText={(v) => setSheet({ ...sheet, qty: v })}
-                  selectTextOnFocus
-                />
-              </View>
-            </View>
-            <View style={styles.actions}>
-              <Pressable style={[styles.btn, styles.btnGhost]} onPress={() => setSheet(null)} disabled={busy}>
-                <Text style={styles.btnGhostLabel}>Cancel</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.btn, styles.btnPrimary, busy && { opacity: 0.5 }]}
-                onPress={confirmSheet}
-                disabled={busy}
-              >
-                <Text style={styles.btnPrimaryLabel}>{busy ? 'Saving…' : 'Save'}</Text>
-              </Pressable>
-            </View>
-          </View>
-        )}
       </SafeAreaView>
+
+      <View style={styles.viewfinder}>
+        {!sheet ? (
+          <CameraView
+            style={StyleSheet.absoluteFill}
+            facing="back"
+            barcodeScannerSettings={{
+              barcodeTypes: ['qr', 'ean13', 'ean8', 'upc_a', 'upc_e', 'code128', 'code39', 'code93', 'codabar', 'pdf417'],
+            }}
+            onBarcodeScanned={onBarcode}
+          />
+        ) : null}
+
+        <SafeAreaView style={styles.fill} edges={['bottom']} pointerEvents="box-none">
+          {!sheet && (
+            <View style={styles.frameWrap} pointerEvents="none">
+              <ScanFrame />
+              <View style={styles.hintPill}>
+                <Text style={styles.hint}>
+                  {burstMode
+                    ? 'Burst mode — scan to add 1 to count'
+                    : 'Scan a barcode to record the line'}
+                </Text>
+              </View>
+            </View>
+          )}
+
+          {sheet && (
+            <View style={styles.sheetWrap}>
+              <View style={[styles.sheet, { backgroundColor: c.card, borderColor: c.hair }]}>
+                <Text style={[styles.sheetSku, { color: c.ink3 }]}>
+                  {sheet.line.itemSku || sheet.line.itemId.slice(0, 8)}
+                </Text>
+                <Text style={[styles.sheetName, { color: c.ink }]} numberOfLines={2}>
+                  {sheet.line.itemName}
+                </Text>
+                {/* WHICH VARIANT was scanned. Six sizes of one shoe carry six
+                    barcodes and near-identical names; without this the counter
+                    cannot tell which line the sheet is about. */}
+                {sheet.line.itemVariantLabel ? (
+                  <Text style={[styles.sheetVariant, { color: c.ink2 }]}>
+                    {sheet.line.itemVariantLabel}
+                  </Text>
+                ) : null}
+                <View style={[styles.row, stacked && styles.rowStacked]}>
+                  <View style={styles.kv}>
+                    <Text style={[styles.kvLabel, { color: c.ink3 }]}>Expected</Text>
+                    <Text style={[styles.kvValue, { color: c.ink }]}>{sheet.line.expected}</Text>
+                  </View>
+                  <View style={styles.kv}>
+                    <Text style={[styles.kvLabel, { color: c.ink3 }]}>Counted</Text>
+                    <TextInput
+                      style={[
+                        styles.qtyInput,
+                        { backgroundColor: c.sunk, borderColor: c.hair2, color: c.ink },
+                      ]}
+                      keyboardType="numeric"
+                      value={sheet.qty}
+                      onChangeText={(v) => setSheet({ ...sheet, qty: v })}
+                      selectTextOnFocus
+                      accessibilityLabel="Counted"
+                    />
+                  </View>
+                </View>
+                <View style={styles.actions}>
+                  <Button
+                    variant="outline"
+                    onPress={() => setSheet(null)}
+                    disabled={busy}
+                    style={styles.actionBtn}
+                  >
+                    Cancel
+                  </Button>
+                  {/* Save commits the count: the ink button (redesign button rule). */}
+                  <Button onPress={confirmSheet} disabled={busy} style={styles.actionBtn}>
+                    {busy ? 'Saving…' : 'Save'}
+                  </Button>
+                </View>
+              </View>
+            </View>
+          )}
+        </SafeAreaView>
+      </View>
     </View>
   );
 }
 
-/** Chrome caps for the two pinned viewfinder buttons (13pt Done, 12pt Burst). */
+/**
+ * The reference viewfinder's finder: four corner brackets and a scan line in
+ * the dark-mode mint (DESIGN-SPEC 6.20). It sits still, as the frame it
+ * replaces did: nothing on this screen moves.
+ */
+function ScanFrame() {
+  return (
+    <View style={styles.frame}>
+      <View style={[styles.corner, styles.cornerTL]} />
+      <View style={[styles.corner, styles.cornerTR]} />
+      <View style={[styles.corner, styles.cornerBL]} />
+      <View style={[styles.corner, styles.cornerBR]} />
+      <View style={styles.scanLine} />
+    </View>
+  );
+}
+
+/**
+ * THE CAMERA CHROME IS DARK IN BOTH MODES. The bar and the viewfinder sit
+ * over a live camera, which does not change with the device's mode, so they
+ * draw from the dark palette whatever the mode is (DESIGN-SPEC 10: the
+ * viewfinder and the reticle are fixed colours). The bar is solid, so every
+ * word on it reads the same over any scene. The permission screen and the
+ * confirm sheet are ordinary screens and follow the device (`useTheme`).
+ */
+const CAMERA_PALETTE = palette('dark');
+const CAMERA = {
+  /** The bar and the ground behind the camera: the reference viewfinder. */
+  surface: '#0a0b09',
+  ink: CAMERA_PALETTE.ink,
+  ink2: CAMERA_PALETTE.ink2,
+  ink3: CAMERA_PALETTE.ink3,
+  /** A control on the bar: the raised fill with an outline at 3:1. */
+  chip: CAMERA_PALETTE.card,
+  chipBorder: CAMERA_PALETTE.ink4,
+  /** The Burst switch's track, and the fill of its selected half. */
+  track: CAMERA_PALETTE.hair2,
+  segment: CAMERA_PALETTE.hair,
+  /** Corner brackets and scan line: the reference's dark-mode mint. */
+  reticle: CAMERA_PALETTE.accent,
+  /** Behind the hint over the live picture, so it reads over a white shelf. */
+  scrim: 'rgba(10, 11, 9, 0.72)',
+} as const;
+
+/** Chrome caps for the two pinned viewfinder controls (13pt Done, 12.5pt Burst). */
 const CLOSE_CAP = capTo(13, TYPE_CEILING.chrome);
-const BURST_CAP = capTo(12, TYPE_CEILING.chrome);
+const BURST_CAP = capTo(12.5, TYPE_CEILING.chrome);
 /**
  * The screen name is chrome too — it is the one thing in this bar the user
  * already knows, having just tapped the button that opened it. Capping it is
@@ -343,15 +435,18 @@ const BURST_CAP = capTo(12, TYPE_CEILING.chrome);
 const TITLE_CAP = capTo(12, TYPE_CEILING.chrome);
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#000' },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: space.xl, backgroundColor: theme.bg },
+  root: { flex: 1, backgroundColor: CAMERA.surface },
+  fill: { flex: 1 },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: space.xl },
+  /** The status bar's strip and the bar under it, one solid dark band. */
+  barArea: { backgroundColor: CAMERA.surface },
   topBar: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: space.sm,
     padding: space.md,
     alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.55)',
+    backgroundColor: CAMERA.surface,
   },
   /**
    * A FLOOR, not `minWidth: 0`. `flexWrap` on the bar can only move a sibling
@@ -364,7 +459,9 @@ const styles = StyleSheet.create({
    * 120pt covers "Counting" at the 20pt title ceiling (~84pt) and the tally's
    * longest word, "done", at AX5 (14pt × 3.57 ≈ 108pt), so the tally wraps at
    * word boundaries rather than per character. At default size the title's own
-   * content is wider than this, so nothing about the bar changes.
+   * content is wider than this, so nothing about the bar changes. The Burst
+   * switch is the widest control on the bar and, on a phone, the one that
+   * wraps to the bar's second line.
    */
   titleCol: { flex: 1, minWidth: 120 },
   // Done is a button in a frame at least 44pt tall around the same pill (it
@@ -372,61 +469,133 @@ const styles = StyleSheet.create({
   // title column's height, so the bar keeps its height; the frame reaches
   // into the bar's 12pt padding.
   closeFrame: { minHeight: 44, minWidth: 44, justifyContent: 'center', marginVertical: -8, flexShrink: 0 },
-  closeBtn: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: radius.sm, backgroundColor: 'rgba(255,255,255,0.12)', flexShrink: 0 },
-  closeText: { color: '#fff', fontWeight: '600', fontSize: 13 },
-  headerLabel: { color: '#fff', fontSize: 12, opacity: 0.7 },
-  headerSub: { color: '#fff', fontSize: 14, fontWeight: '700' },
-  burstBtn: {
+  closeBtn: {
     paddingVertical: 6,
     paddingHorizontal: 12,
-    borderRadius: radius.sm,
-    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: CAMERA.chipBorder,
+    backgroundColor: CAMERA.chip,
     flexShrink: 0,
   },
-  burstBtnOn: { backgroundColor: theme.primary },
-  burstLabel: { color: '#fff', fontWeight: '700', fontSize: 12 },
-  burstLabelOn: { color: '#fff' },
-  frameWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  frame: { width: 260, height: 260, borderWidth: 2, borderColor: theme.primary, borderRadius: radius.xl },
-  hint: { color: '#fff', marginTop: space.lg, fontSize: 13, fontWeight: '500' },
-  sheet: {
-    position: 'absolute',
-    bottom: 30,
-    left: space.lg,
-    right: space.lg,
-    padding: space.lg,
-    borderRadius: radius.xl,
-    backgroundColor: theme.card,
+  closeText: { color: CAMERA.ink, fontFamily: FONT.displaySemi, fontWeight: '600', fontSize: 13 },
+  headerLabel: { color: CAMERA.ink2, fontFamily: FONT.display, fontSize: 12 },
+  headerSub: { color: CAMERA.ink, fontFamily: FONT.displaySemi, fontWeight: '600', fontSize: 14 },
+  // The switch is a frame at least 44pt tall around the 40pt track; -2 top
+  // and bottom gives the bar back the difference.
+  burstFrame: { minHeight: 44, justifyContent: 'center', marginVertical: -2, flexShrink: 0 },
+  burstTrack: {
+    flexDirection: 'row',
+    gap: 2,
+    padding: 3,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: CAMERA.track,
   },
-  sheetSku: { color: theme.textMuted, fontFamily: 'Menlo', fontSize: 11 },
-  sheetName: { color: theme.text, fontSize: 17, fontWeight: '700', marginTop: 2 },
-  sheetVariant: { color: theme.primary, fontSize: 14, fontWeight: '700', marginTop: 2 },
+  burstSegment: {
+    minHeight: 32,
+    paddingHorizontal: 10,
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: 'transparent',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // The selected half carries an outline at 3:1 as well as its fill, so which
+  // mode is on never rests on a fill of 1.2:1 or on the words' weight alone.
+  burstSegmentOn: { backgroundColor: CAMERA.segment, borderColor: CAMERA.chipBorder },
+  burstLabel: { color: CAMERA.ink3, fontFamily: FONT.display, fontWeight: '500', fontSize: 12.5 },
+  burstLabelOn: { color: CAMERA.ink, fontFamily: FONT.displaySemi, fontWeight: '600' },
+  viewfinder: { flex: 1, backgroundColor: CAMERA.surface },
+  frameWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  frame: { width: 260, height: 220 },
+  corner: { position: 'absolute', width: 26, height: 26, borderColor: CAMERA.reticle },
+  cornerTL: { top: 0, left: 0, borderTopWidth: 3, borderLeftWidth: 3, borderTopLeftRadius: 8 },
+  cornerTR: { top: 0, right: 0, borderTopWidth: 3, borderRightWidth: 3, borderTopRightRadius: 8 },
+  cornerBL: {
+    bottom: 0,
+    left: 0,
+    borderBottomWidth: 3,
+    borderLeftWidth: 3,
+    borderBottomLeftRadius: 8,
+  },
+  cornerBR: {
+    bottom: 0,
+    right: 0,
+    borderBottomWidth: 3,
+    borderRightWidth: 3,
+    borderBottomRightRadius: 8,
+  },
+  scanLine: {
+    position: 'absolute',
+    left: '8%',
+    right: '8%',
+    top: '50%',
+    marginTop: -1,
+    height: 2,
+    borderRadius: 1,
+    backgroundColor: CAMERA.reticle,
+    opacity: 0.7,
+  },
+  hintPill: {
+    marginTop: space.lg,
+    marginHorizontal: space.lg,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: CAMERA.scrim,
+  },
+  hint: {
+    color: CAMERA.ink2,
+    fontFamily: FONT.display,
+    fontWeight: '500',
+    fontSize: 13,
+    textAlign: 'center',
+  },
+  sheetWrap: { flex: 1, justifyContent: 'flex-end', padding: space.lg },
+  sheet: {
+    padding: space.lg,
+    borderRadius: 16,
+    borderWidth: 1,
+  },
+  sheetSku: { fontFamily: FONT.mono, fontSize: 11.5 },
+  sheetName: {
+    fontFamily: FONT.displaySemi,
+    fontWeight: '600',
+    fontSize: 17,
+    lineHeight: 22,
+    marginTop: 4,
+  },
+  sheetVariant: { fontFamily: FONT.displaySemi, fontWeight: '600', fontSize: 14, marginTop: 2 },
   row: { flexDirection: 'row', gap: space.md, marginTop: space.md },
-  kv: { flex: 1 },
-  kvLabel: { color: theme.textMuted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 },
-  kvValue: { color: theme.text, fontSize: 22, fontWeight: '700', marginTop: 2 },
+  rowStacked: { flexDirection: 'column' },
+  kv: { flex: 1, minWidth: 0 },
+  kvLabel: {
+    fontFamily: FONT.mono,
+    fontSize: 10.5,
+    letterSpacing: 10.5 * 0.12,
+    textTransform: 'uppercase',
+  },
+  kvValue: { fontFamily: FONT.display, fontWeight: '500', fontSize: 28, marginTop: 4 },
   qtyInput: {
-    backgroundColor: theme.bgElevated,
     borderRadius: radius.md,
     borderWidth: 1,
-    borderColor: theme.border,
-    color: theme.text,
+    fontFamily: FONT.display,
+    fontWeight: '500',
     fontSize: 22,
-    fontWeight: '700',
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    marginTop: 2,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginTop: 4,
   },
   actions: { flexDirection: 'row', gap: space.md, marginTop: space.lg },
-  btn: { flex: 1, paddingVertical: 14, borderRadius: radius.md, alignItems: 'center' },
-  btnGhost: { backgroundColor: theme.bgElevated, borderWidth: 1, borderColor: theme.border },
-  btnGhostLabel: { color: theme.text, fontWeight: '600', fontSize: 14 },
-  btnPrimary: { backgroundColor: theme.primary },
-  btnPrimaryLabel: { color: '#fff', fontWeight: '700', fontSize: 14 },
-  permTitle: { color: theme.text, fontSize: 20, fontWeight: '700' },
-  permBody: { color: theme.textMuted, fontSize: 14, textAlign: 'center', marginTop: space.sm },
-  cta: { backgroundColor: theme.primary, paddingHorizontal: space.lg, paddingVertical: 12, borderRadius: radius.md, marginTop: space.lg },
-  ctaLabel: { color: '#fff', fontWeight: '600' },
+  actionBtn: { flex: 1 },
+  permTitle: { fontFamily: FONT.displaySemi, fontWeight: '600', fontSize: 20, textAlign: 'center' },
+  permBody: {
+    fontFamily: FONT.displayRegular,
+    fontSize: 14.5,
+    lineHeight: 21,
+    textAlign: 'center',
+    marginTop: space.sm,
+  },
+  cta: { marginTop: space.lg, minWidth: 200 },
 });
