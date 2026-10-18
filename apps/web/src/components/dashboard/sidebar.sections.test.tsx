@@ -257,4 +257,100 @@ describe('sections fold away', () => {
     expect(sectionButton('Admin')).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByRole('link', { name: 'Charters' })).toHaveAttribute('aria-current', 'page');
   });
+
+  // Review of 2026-10-18: the hold outlived the visit. Fold Admin on Bins, go
+  // to Items, come back to Bins (Back, a crumb, the palette): Admin stayed
+  // folded and the page's own link was hidden, while arriving on any other
+  // Admin page opened it.
+  it('a fold by hand ends with the visit: coming back to the same page opens its section again', () => {
+    currentPathname = '/dashboard/admin/bins';
+    const onToggleSection = vi.fn();
+    const sidebar = () => (
+      <Sidebar {...props('admin', { collapsedSections: ['admin'], onToggleSection })} />
+    );
+    const view = render(sidebar());
+    fireEvent.click(sectionButton('Admin'));
+    expect(sectionButton('Admin')).toHaveAttribute('aria-expanded', 'false');
+
+    currentPathname = '/dashboard/inventory';
+    view.rerender(sidebar());
+    expect(sectionButton('Admin')).toHaveAttribute('aria-expanded', 'false');
+
+    currentPathname = '/dashboard/admin/bins';
+    view.rerender(sidebar());
+    expect(sectionButton('Admin')).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('link', { name: 'Bins' })).toHaveAttribute('aria-current', 'page');
+  });
+});
+
+/**
+ * Arriving on a page whose link sits below (or above) what the nav shows, the
+ * nav scrolls just enough to show it, a third of the way down, so the sidebar
+ * always says where you are. A link already in view is left where it is. The
+ * test DOM has no layout, so the nav's box and the active link's box are given.
+ */
+describe('the nav scrolls to show the link of the page on screen', () => {
+  const NAV = { top: 100, height: 400 }; // the nav shows 100 to 500
+  let linkTop = 0;
+
+  const box = (top: number, height: number) =>
+    ({
+      top,
+      bottom: top + height,
+      height,
+      left: 0,
+      right: 200,
+      width: 200,
+      x: 0,
+      y: top,
+      toJSON: () => ({}),
+    }) as DOMRect;
+
+  beforeEach(() => {
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      if (this.tagName === 'NAV') return box(NAV.top, NAV.height);
+      if (this.getAttribute('aria-current') === 'page') return box(linkTop, 32);
+      return box(0, 0);
+    });
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const at = (path: string, top: number) => {
+    currentPathname = path;
+    linkTop = top;
+    return <Sidebar {...props('admin', { collapsedSections: [], onToggleSection: () => {} })} />;
+  };
+
+  // Mutation caught: the scroll made unconditional (the nav jumps on every
+  // page change), or either edge check dropped.
+  it('scrolls only when the link is outside the nav, and only the nav', () => {
+    const view = render(at('/dashboard/admin/bins', 300)); // in view
+    const nav = screen.getByRole('navigation');
+    expect(nav.scrollTop).toBe(0);
+
+    view.rerender(at('/dashboard/admin/charters', 700)); // below the nav
+    expect(nav.scrollTop).toBeCloseTo(700 - NAV.top - NAV.height / 3);
+
+    let before = nav.scrollTop;
+    view.rerender(at('/dashboard/admin/bins', 20)); // above the nav
+    expect(nav.scrollTop).toBeCloseTo(before + (20 - NAV.top - NAV.height / 3));
+
+    before = nav.scrollTop;
+    view.rerender(at('/dashboard/admin/charters', 480)); // cut off at the bottom edge
+    expect(nav.scrollTop).toBeCloseTo(before + (480 - NAV.top - NAV.height / 3));
+
+    before = nav.scrollTop;
+    view.rerender(at('/dashboard/admin/bins', 250)); // in view again
+    expect(nav.scrollTop).toBe(before);
+
+    // The page itself is never moved.
+    expect(document.documentElement.scrollTop).toBe(0);
+  });
+
+  it('does nothing on a page with no link in the nav', () => {
+    render(at('/dashboard/whats-new', 700));
+    expect(screen.getByRole('navigation').scrollTop).toBe(0);
+  });
 });

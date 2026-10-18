@@ -207,6 +207,12 @@ export function Sidebar({
   const [closedHere, setClosedHere] = React.useState<{ path: string; key: NavSectionKey } | null>(
     null,
   );
+  // The hold ends when the viewer moves to another page, so coming back to
+  // this one later (Back, a crumb, the palette) opens its section again, as
+  // arriving on any other page in it does. Cleared during render, React's
+  // pattern for adjusting state when an input changes: no effect, and no
+  // frame drawn with a stale hold.
+  if (closedHere !== null && closedHere.path !== pathname) setClosedHere(null);
   const sectionIdPrefix = React.useId();
 
   // Arriving on a page whose link sits below the fold of a long nav (an admin
@@ -305,11 +311,15 @@ export function Sidebar({
                 className="text-muted-foreground hover:text-foreground group flex w-full items-center gap-1.5 rounded-md px-2.5 pb-1 pt-2 text-left text-[10.5px] font-medium uppercase leading-4 tracking-[0.1em] transition-colors [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:py-0"
               >
                 <span className="min-w-0 flex-1">{section.label}</span>
+                {/* The chevron is what says a folded heading opens, so it
+                    keeps 3:1 against the page (WCAG 1.4.11): ink 4, the
+                    faintest ink DESIGN-SPEC 2.4 allows for an arrow (3.19:1
+                    light, 3.61:1 dark), never a fade of it. */}
                 <ChevronRight
                   aria-hidden
                   strokeWidth={2}
                   className={cn(
-                    'size-3 shrink-0 opacity-60 transition-transform group-hover:opacity-100',
+                    'group-hover:text-foreground size-3 shrink-0 text-[var(--ed-ink-4)] transition-transform',
                     open && 'rotate-90',
                   )}
                 />
