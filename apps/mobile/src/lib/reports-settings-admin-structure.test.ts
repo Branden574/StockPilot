@@ -792,6 +792,18 @@ describe('Settings: Change email', () => {
     expect(email).toContain('secureTextEntry={!showPw}');
   });
 
+  // The small buttons were the 36pt size. Mutation caught: a small button
+  // without the 44pt frame.
+  it('every small button is at least 44pt tall', () => {
+    const sf = treeOf(CHANGE_EMAIL);
+    const small = elementsIn(sf).filter(
+      (n) => tagOf(n.el, sf) === 'Button' && attrText(n.el, 'size', sf) === 'sm',
+    );
+    expect(small.map((n) => textOf(n.el, sf) || attrText(n.el, 'onPress', sf))).toHaveLength(5);
+    for (const n of small) expect(attrText(n.el, 'style', sf)).toContain('minHeight: MIN_TAP');
+    expect(email).toContain('const MIN_TAP = 44;');
+  });
+
   it('keeps every state, word and request', () => {
     for (const words of [
       "api<Status>('/api/v1/account/email')",

@@ -40,7 +40,10 @@ import { useTheme } from '@/lib/use-theme';
  * The look (redesign P5.10): the device mode's palette; the card labels are
  * the muted ink, a refused request is said in the per-mode refusal red (it
  * was a fixed red) and announced, and the password's show / hide eye is a
- * named button in a 44pt frame (VoiceOver found an unnamed element).
+ * named button in a 44pt frame (VoiceOver found an unnamed element). The
+ * small buttons (Try again, Resend links, Use a different address, Cancel
+ * change, Keep the pending address) are at least 44pt tall, as the report's
+ * are.
  */
 
 interface Status {
@@ -246,7 +249,12 @@ export default function ChangeEmailScreen() {
           {loadError ? (
             <Card padding={16}>
               <Body>{loadError}</Body>
-              <Button variant="outline" size="sm" style={{ marginTop: 12 }} onPress={() => void load()}>
+              <Button
+                variant="outline"
+                size="sm"
+                style={{ marginTop: 12, minHeight: MIN_TAP }}
+                onPress={() => void load()}
+              >
                 Try again
               </Button>
             </Card>
@@ -287,13 +295,31 @@ export default function ChangeEmailScreen() {
               </Body>
               <Hair />
               <View style={{ gap: 8 }}>
-                <Button variant="outline" size="sm" disabled={busy !== null} onPress={() => void resend()}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={busy !== null}
+                  onPress={() => void resend()}
+                  style={{ minHeight: MIN_TAP }}
+                >
                   {busy === 'resend' ? 'Sending…' : 'Resend links'}
                 </Button>
-                <Button variant="outline" size="sm" disabled={busy !== null} onPress={() => setShowForm(true)}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={busy !== null}
+                  onPress={() => setShowForm(true)}
+                  style={{ minHeight: MIN_TAP }}
+                >
                   Use a different address
                 </Button>
-                <Button variant="destructive" size="sm" disabled={busy !== null} onPress={cancel}>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  disabled={busy !== null}
+                  onPress={cancel}
+                  style={{ minHeight: MIN_TAP }}
+                >
                   {busy === 'cancel' ? 'Cancelling…' : 'Cancel change'}
                 </Button>
               </View>
@@ -353,7 +379,13 @@ export default function ChangeEmailScreen() {
                 {busy === 'request' ? 'Sending…' : 'Send verification'}
               </Button>
               {pending ? (
-                <Button variant="ghost" size="sm" disabled={busy !== null} onPress={() => setShowForm(false)}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={busy !== null}
+                  onPress={() => setShowForm(false)}
+                  style={{ minHeight: MIN_TAP }}
+                >
                   Keep the pending address
                 </Button>
               ) : null}
@@ -364,6 +396,9 @@ export default function ChangeEmailScreen() {
     </View>
   );
 }
+
+/** The iOS minimum tap target, in points. */
+const MIN_TAP = 44;
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
