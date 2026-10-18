@@ -382,7 +382,12 @@ describe('Rentals screen wiring', () => {
     );
     expect(screen).toMatch(/if \(error\) \{[\s\S]*?settleRentalCheckouts\(prev, orgId, \{ ok: false, reason, context, readAt \}\)/);
     expect(screen).toContain('const checkoutsFailed = shown?.failed ?? false;');
-    expect(screen).toMatch(/checkoutsFailed \? 'Could not load rentals\.' : 'No rentals yet\.'/);
+    // Redesign P5.9 (D25): said in DataListScreen's `failed` panel, which
+    // replaces the empty words, for a failed read (or no workspace).
+    expect(screen).toMatch(
+      /failed=\{\s*noWorkspace \|\| checkoutsFailed\s*\?\s*\{\s*title: noWorkspace \? RENTAL_LIST_NO_WORKSPACE_TITLE : 'Could not load rentals\.',/,
+    );
+    expect(screen).toContain('emptyTitle="No rentals yet."');
     expect(screen).toMatch(/checkoutsFailed \|\| !shown\s*\? 'RENTALS · CHECKOUTS'/);
   });
 });

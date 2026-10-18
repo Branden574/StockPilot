@@ -52,7 +52,7 @@ import {
   type StagingWorklistRow,
 } from '@/lib/staging-worklist';
 import { supabase } from '@/lib/supabase';
-import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { useRole } from '@/lib/use-role';
@@ -326,7 +326,14 @@ export default function StagingScreen() {
                 onBack={backToOrder}
               />
             ) : null}
-            <View style={styles.filterRow}>
+            {/* The All / Books / Items filter as the reference's segmented
+                switch: a recessed track (sunk) with the chosen segment on the
+                card colour, its words in ink and semibold. Its ring is muted
+                ink3, at 3:1 or more against the track in both modes (the
+                reference's hairline ring is 1.4:1), so which filter is on
+                never rests on a faint fill or a colour alone. Each segment is
+                a 44pt target; the same buttons, words and selected state. */}
+            <View style={[styles.filterRow, { backgroundColor: c.sunk }]}>
               {STAGING_TYPE_OPTIONS.map((opt) => {
                 const active = opt.value === filter;
                 return (
@@ -335,26 +342,31 @@ export default function StagingScreen() {
                     onPress={() => setFilter(opt.value)}
                     accessibilityRole="button"
                     accessibilityState={{ selected: active }}
-                    style={{
-                      paddingHorizontal: 14,
-                      paddingVertical: 8,
-                      borderRadius: 8,
-                      borderWidth: 1,
-                      borderColor: active ? c.ink : c.hair,
-                      backgroundColor: active ? c.ink : c.card,
-                    }}
+                    style={({ pressed }) => [
+                      styles.segment,
+                      {
+                        borderColor: active ? c.ink3 : 'transparent',
+                        backgroundColor: active ? c.card : 'transparent',
+                        opacity: pressed ? 0.7 : 1,
+                      },
+                    ]}
                   >
-                    <Mono size={12} color={active ? c.card : c.ink2}>
+                    <Body
+                      size={13}
+                      color={active ? c.ink : c.ink3}
+                      maxFontSizeMultiplier={SEGMENT_CAP}
+                      style={[styles.segmentLabel, active && styles.segmentLabelOn]}
+                    >
                       {opt.label}
-                    </Mono>
+                    </Body>
                   </Pressable>
                 );
               })}
             </View>
             {error ? (
-              <Mono size={11.5} color={ACCENT.crit}>
+              <Body size={13} color={c.critText} accessibilityRole="alert">
                 {error}
-              </Mono>
+              </Body>
             ) : null}
           </View>
         }
@@ -476,14 +488,20 @@ function StagingCard({
 
   return (
     <Card padding={14}>
-      <Pressable onPress={onOpenItem} style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}>
+      {/* A button to VoiceOver (it read the row's words with no trait). */}
+      <Pressable
+        onPress={onOpenItem}
+        accessibilityRole="button"
+        accessibilityHint="Opens the item"
+        style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
+      >
         <View style={{ flexDirection: 'row', gap: 12 }}>
           <View style={{ flex: 1, minWidth: 0 }}>
             <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }} numberOfLines={2}>
               {row.name}
             </Body>
             <View style={styles.metaRow}>
-              <Mono size={10.5} color={c.ink4}>
+              <Mono size={11.5} color={c.ink3}>
                 {row.sku}
               </Mono>
               <Pill dot={false} status={row.sourceKind === 'unplaced' ? 'warn' : 'default'}>
@@ -493,7 +511,7 @@ function StagingCard({
           </View>
           <View style={{ alignItems: 'flex-end' }}>
             <Display size={22}>{row.quantity}</Display>
-            <Mono size={9} tracking={0.14} upper color={c.ink4} style={{ marginTop: 2 }}>
+            <Mono size={10} tracking={0.14} upper color={c.ink3} style={{ marginTop: 2 }}>
               TO PLACE
             </Mono>
           </View>
@@ -517,7 +535,7 @@ function StagingCard({
 
       <View style={styles.footer}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <Mono size={11} color={stale ? ACCENT.crit : c.ink4}>
+          <Mono size={11.5} color={stale ? c.critText : c.ink3}>
             {age}
           </Mono>
           {stale ? (
@@ -532,26 +550,29 @@ function StagingCard({
               with no PO and no warehouse raises, and it is a read — the route
               asserts only 'items:read', which the user already has to be
               looking at this list. */}
+          {/* 44pt targets: the shared small button is 36pt, so each takes the
+              iOS minimum as its minHeight (the location screen's rule). */}
           <Button
             size="sm"
             variant="ghost"
             onPress={onOpenHistory}
             leading={<History size={14} color={c.ink} strokeWidth={1.6} />}
+            style={TAP}
           >
             History
           </Button>
           {canPlace ? (
-            <Button size="sm" variant="outline" onPress={onPlace}>
+            <Button size="sm" variant="outline" onPress={onPlace} style={TAP}>
               Place
             </Button>
           ) : disabledReason ? (
             <View style={{ alignItems: 'flex-end', gap: 4, flexShrink: 1 }}>
-              <Button size="sm" variant="outline" disabled>
+              <Button size="sm" variant="outline" disabled style={TAP}>
                 Place
               </Button>
               {/* The web button carries this as a tooltip; a phone has no hover,
-                  so the same words go on screen. */}
-              <Mono size={9.5} color={c.ink4} style={{ textAlign: 'right' }}>
+                  so the same words go on screen, in muted ink3 (information). */}
+              <Mono size={11} color={c.ink3} style={{ textAlign: 'right' }}>
                 {disabledReason}
               </Mono>
             </View>
@@ -595,7 +616,7 @@ function StagingFilterChipCard({
         justifyContent: 'center',
         borderRadius: 8,
         borderWidth: 1,
-        borderColor: c.hair,
+        borderColor: c.hair2,
         backgroundColor: c.card,
         opacity: pressed ? 0.7 : 1,
       })}
@@ -613,7 +634,7 @@ function StagingFilterChipCard({
         borderRadius: 10,
         borderWidth: 1,
         borderColor: c.hair,
-        backgroundColor: c.paper2,
+        backgroundColor: c.sunk,
       }}
     >
       <Body size={14} color={c.ink} accessibilityRole="header" style={{ fontFamily: FONT.display }}>
@@ -645,6 +666,13 @@ function StagingFilterChipCard({
 /** The chip's action labels are chrome: capped at the control ceiling. */
 const CHIP_ACTION_CAP = capTo(12.5, TYPE_CEILING.control);
 
+/** The filter segments' labels are control chrome too (the shared Button's
+ *  ceiling); the segment grows with them (minHeight, never height). */
+const SEGMENT_CAP = capTo(13, TYPE_CEILING.control);
+
+/** A 44pt minimum for the shared small Buttons (36pt on their own). */
+const TAP = { minHeight: MIN_TAP };
+
 /**
  * One label/value pair — the phone's stand-in for a web table column, since a
  * 375pt screen cannot carry seven columns side by side. The VALUE text is
@@ -654,7 +682,7 @@ function CardField({ label, value }: { label: string; value: string }) {
   const { c } = useTheme();
   return (
     <View style={styles.fieldRow}>
-      <Mono size={9.5} tracking={0.12} upper color={c.ink4}>
+      <Mono size={10} tracking={0.12} upper color={c.ink3}>
         {label}
       </Mono>
       <Mono size={11.5} color={c.ink2} style={{ flexShrink: 1, textAlign: 'right' }}>
@@ -688,10 +716,28 @@ const styles = StyleSheet.create({
     paddingBottom: 24,
     gap: 10,
   },
+  // The segmented track: padding 3, radius 10 (DESIGN-SPEC 6.5, the phone's
+  // action segments), segments sharing its width.
   filterRow: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 4,
+    padding: 3,
+    borderRadius: 10,
   },
+  segment: {
+    flex: 1,
+    minHeight: MIN_TAP,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  segmentLabel: {
+    fontFamily: FONT.display,
+    textAlign: 'center',
+  },
+  segmentLabelOn: { fontFamily: FONT.displaySemi },
   empty: {
     paddingTop: 40,
     paddingHorizontal: 24,
@@ -714,6 +760,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     marginTop: 12,
-    minHeight: 36,
+    minHeight: MIN_TAP,
   },
 });

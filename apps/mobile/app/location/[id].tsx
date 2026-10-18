@@ -33,7 +33,7 @@ import { IconChip } from '@/components/ui/row';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { isOfflineState } from '@/lib/exceptions-api';
-import { ACCENT, FONT } from '@/lib/theme';
+import { FONT } from '@/lib/theme';
 import { useOrg } from '@/lib/use-org';
 import { useTheme } from '@/lib/use-theme';
 import { retryWorkspace } from '@/lib/use-workspace';
@@ -197,7 +197,7 @@ export default function LocationScreen() {
 
       {view.kind === 'loading' ? (
         <ActivityIndicator
-          color={c.ink4}
+          color={c.ink3}
           style={{ marginTop: 29 }}
           accessibilityLabel="Loading this location"
         />
@@ -380,7 +380,7 @@ function LocationBody({
               })}
             </Body>
             {data.truncated ? (
-              <Body size={13} color={ACCENT.warn} style={{ marginTop: 6 }}>
+              <Body size={13} color={c.warnText} style={{ marginTop: 6 }}>
                 {LOCATION_HOLDINGS_TRUNCATED_COPY}
               </Body>
             ) : null}
@@ -400,7 +400,7 @@ function LocationBody({
                   </Body>
                 ) : null}
                 {gather.kind === 'failed' ? (
-                  <Body size={13} color={ACCENT.crit} accessibilityRole="alert">
+                  <Body size={13} color={c.critText} accessibilityRole="alert">
                     {gather.message}
                   </Body>
                 ) : null}
@@ -488,7 +488,7 @@ function LocationRow({
               {row.name}
             </Body>
             {row.sku ? (
-              <Mono size={11} color={c.ink4} style={{ marginTop: 2 }}>
+              <Mono size={11.5} color={c.ink3} style={{ marginTop: 2 }}>
                 {row.sku}
               </Mono>
             ) : null}
@@ -498,7 +498,7 @@ function LocationRow({
           </Mono>
         </View>
         <View style={{ marginTop: 8, gap: 3 }}>
-          <Body size={13.5} color={unavailable ? ACCENT.warn : c.ink}>
+          <Body size={13.5} color={unavailable ? c.warnText : c.ink}>
             {copy.count}
           </Body>
           {copy.movementsSince ? (
@@ -517,7 +517,7 @@ function LocationRow({
             </Body>
           ) : null}
           {row.issues.map((issue, i) => (
-            <Body key={issue.id} size={12.5} color={ACCENT.warn}>
+            <Body key={issue.id} size={12.5} color={c.warnText}>
               {chips[i]}
             </Body>
           ))}
