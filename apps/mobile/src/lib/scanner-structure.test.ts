@@ -408,6 +408,37 @@ describe('count scanner: the counting rules are unchanged', () => {
   });
 });
 
+describe('count scanner: defects fixed in this package', () => {
+  // The Counted box opens iOS's decimal pad, which has no key that puts it
+  // away, and the sheet sat at the bottom of the screen under it: once the box
+  // took focus, the box and Save were hidden and the only way out was Done,
+  // which dropped the count. Mutation caught: the sheet outside a
+  // KeyboardAvoidingView, or one that does nothing on iOS.
+  it('the confirm sheet rides above the keyboard', () => {
+    const sf = treeOf(COUNT_SCANNER);
+    const chains: string[][] = [];
+    walkJsx(sf, (el, ancestors) => {
+      if (attrText(el, 'style', sf) === 'styles.sheetWrap') {
+        chains.push(
+          ancestors.map((a) =>
+            tagOf(a, sf) === 'KeyboardAvoidingView'
+              ? `KeyboardAvoidingView behavior={${attrText(a, 'behavior', sf)}}`
+              : tagOf(a, sf),
+          ),
+        );
+      }
+    });
+    expect(chains).toHaveLength(1);
+    expect(chains[0]).toContain(
+      "KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}",
+    );
+    // The sheet is laid out at the foot of that view (not absolutely
+    // positioned, which the view's padding would not move).
+    expect(sourceOf(COUNT_SCANNER)).toMatch(/\n {2}sheetWrap: \{[^}]*justifyContent: 'flex-end'/);
+    expect(sourceOf(COUNT_SCANNER)).not.toMatch(/\n {2}sheet: \{[^}]*position: 'absolute'/);
+  });
+});
+
 describe('count scanner: Dynamic Type caps stay where they were', () => {
   const src = sourceOf(COUNT_SCANNER);
 

@@ -5,7 +5,9 @@ import * as React from 'react';
 import {
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
   Linking,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -306,75 +308,84 @@ function CycleCountScanScreenInner() {
           />
         ) : null}
 
-        <SafeAreaView style={styles.fill} edges={['bottom']} pointerEvents="box-none">
-          {!sheet && (
-            <View style={styles.frameWrap} pointerEvents="none">
-              <ScanFrame />
-              <View style={styles.hintPill}>
-                <Text style={styles.hint}>
-                  {burstMode
-                    ? 'Burst mode — scan to add 1 to count'
-                    : 'Scan a barcode to record the line'}
-                </Text>
-              </View>
-            </View>
-          )}
-
-          {sheet && (
-            <View style={styles.sheetWrap}>
-              <View style={[styles.sheet, { backgroundColor: c.card, borderColor: c.hair }]}>
-                <Text style={[styles.sheetSku, { color: c.ink3 }]}>
-                  {sheet.line.itemSku || sheet.line.itemId.slice(0, 8)}
-                </Text>
-                <Text style={[styles.sheetName, { color: c.ink }]} numberOfLines={2}>
-                  {sheet.line.itemName}
-                </Text>
-                {/* WHICH VARIANT was scanned. Six sizes of one shoe carry six
-                    barcodes and near-identical names; without this the counter
-                    cannot tell which line the sheet is about. */}
-                {sheet.line.itemVariantLabel ? (
-                  <Text style={[styles.sheetVariant, { color: c.ink2 }]}>
-                    {sheet.line.itemVariantLabel}
+        {/* The keyboard is a decimal pad, which has no key that puts it away:
+            with the sheet left under it, the Counted box and Save were hidden
+            the moment the box took focus. The sheet now rides above it. */}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.fill}
+          pointerEvents="box-none"
+        >
+          <SafeAreaView style={styles.fill} edges={['bottom']} pointerEvents="box-none">
+            {!sheet && (
+              <View style={styles.frameWrap} pointerEvents="none">
+                <ScanFrame />
+                <View style={styles.hintPill}>
+                  <Text style={styles.hint}>
+                    {burstMode
+                      ? 'Burst mode — scan to add 1 to count'
+                      : 'Scan a barcode to record the line'}
                   </Text>
-                ) : null}
-                <View style={[styles.row, stacked && styles.rowStacked]}>
-                  <View style={styles.kv}>
-                    <Text style={[styles.kvLabel, { color: c.ink3 }]}>Expected</Text>
-                    <Text style={[styles.kvValue, { color: c.ink }]}>{sheet.line.expected}</Text>
-                  </View>
-                  <View style={styles.kv}>
-                    <Text style={[styles.kvLabel, { color: c.ink3 }]}>Counted</Text>
-                    <TextInput
-                      style={[
-                        styles.qtyInput,
-                        { backgroundColor: c.sunk, borderColor: c.hair2, color: c.ink },
-                      ]}
-                      keyboardType="numeric"
-                      value={sheet.qty}
-                      onChangeText={(v) => setSheet({ ...sheet, qty: v })}
-                      selectTextOnFocus
-                      accessibilityLabel="Counted"
-                    />
-                  </View>
-                </View>
-                <View style={styles.actions}>
-                  <Button
-                    variant="outline"
-                    onPress={() => setSheet(null)}
-                    disabled={busy}
-                    style={styles.actionBtn}
-                  >
-                    Cancel
-                  </Button>
-                  {/* Save commits the count: the ink button (redesign button rule). */}
-                  <Button onPress={confirmSheet} disabled={busy} style={styles.actionBtn}>
-                    {busy ? 'Saving…' : 'Save'}
-                  </Button>
                 </View>
               </View>
-            </View>
-          )}
-        </SafeAreaView>
+            )}
+
+            {sheet && (
+              <View style={styles.sheetWrap}>
+                <View style={[styles.sheet, { backgroundColor: c.card, borderColor: c.hair }]}>
+                  <Text style={[styles.sheetSku, { color: c.ink3 }]}>
+                    {sheet.line.itemSku || sheet.line.itemId.slice(0, 8)}
+                  </Text>
+                  <Text style={[styles.sheetName, { color: c.ink }]} numberOfLines={2}>
+                    {sheet.line.itemName}
+                  </Text>
+                  {/* WHICH VARIANT was scanned. Six sizes of one shoe carry six
+                      barcodes and near-identical names; without this the counter
+                      cannot tell which line the sheet is about. */}
+                  {sheet.line.itemVariantLabel ? (
+                    <Text style={[styles.sheetVariant, { color: c.ink2 }]}>
+                      {sheet.line.itemVariantLabel}
+                    </Text>
+                  ) : null}
+                  <View style={[styles.row, stacked && styles.rowStacked]}>
+                    <View style={styles.kv}>
+                      <Text style={[styles.kvLabel, { color: c.ink3 }]}>Expected</Text>
+                      <Text style={[styles.kvValue, { color: c.ink }]}>{sheet.line.expected}</Text>
+                    </View>
+                    <View style={styles.kv}>
+                      <Text style={[styles.kvLabel, { color: c.ink3 }]}>Counted</Text>
+                      <TextInput
+                        style={[
+                          styles.qtyInput,
+                          { backgroundColor: c.sunk, borderColor: c.hair2, color: c.ink },
+                        ]}
+                        keyboardType="numeric"
+                        value={sheet.qty}
+                        onChangeText={(v) => setSheet({ ...sheet, qty: v })}
+                        selectTextOnFocus
+                        accessibilityLabel="Counted"
+                      />
+                    </View>
+                  </View>
+                  <View style={styles.actions}>
+                    <Button
+                      variant="outline"
+                      onPress={() => setSheet(null)}
+                      disabled={busy}
+                      style={styles.actionBtn}
+                    >
+                      Cancel
+                    </Button>
+                    {/* Save commits the count: the ink button (redesign button rule). */}
+                    <Button onPress={confirmSheet} disabled={busy} style={styles.actionBtn}>
+                      {busy ? 'Saving…' : 'Save'}
+                    </Button>
+                  </View>
+                </View>
+              </View>
+            )}
+          </SafeAreaView>
+        </KeyboardAvoidingView>
       </View>
     </View>
   );
