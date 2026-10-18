@@ -680,8 +680,14 @@ function RolePickerSheet({
 }
 
 const pickerStyles = StyleSheet.create({
-  container: { flex: 1, justifyContent: 'flex-end' },
+  // Fills the modal; the scrim and the sheet are both pinned inside it, the
+  // sheet to the bottom edge as before.
+  container: { flex: 1 },
   sheet: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
     maxHeight: '85%',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
