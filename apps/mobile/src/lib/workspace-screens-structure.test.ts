@@ -9,6 +9,7 @@ import { AA_TEXT, AA_UI, contrast } from '../components/ui/__fixtures__/contrast
 import { pillTone } from '../components/ui/tones';
 import {
   TOUCHABLE_TAG,
+  attr,
   attrText,
   parseTsx,
   readSource,
@@ -281,6 +282,7 @@ describe('contrast: every pair the screens draw, both modes', () => {
     ['pending sync words on the page', 'warnText', 'paper'],
     ['a recent movement in (+N) on its card', 'accent', 'card'],
     ['a recent movement out (-N) on its card', 'critText', 'card'],
+    ['Open in Outlook and Add note as the outline (ink on the card)', 'ink', 'card'],
   ];
   const MARKS: [string, keyof Palette, keyof Palette][] = [
     ['the accent pip on the recessed barcode well', 'accent', 'sunk'],
@@ -290,6 +292,7 @@ describe('contrast: every pair the screens draw, both modes', () => {
     ['the Send circle on the composer', 'ink', 'card'],
     ['the sending spinner on the recessed circle', 'ink', 'sunk'],
     ['a chosen chip or segment against the page or track', 'ink', 'sunk'],
+    ['the Mail glyph on the outline Open in Outlook', 'ink', 'card'],
   ];
   it.each(MODES)('%s: words at AA', (_mode, c) => {
     for (const [what, fg, bg] of WORDS) {
@@ -962,10 +965,37 @@ describe('Maintenance request (M-WS-10)', () => {
   });
 
   it('Retry and the photo source buttons are 44pt frames', () => {
-    expect(styleBlock(REQUEST, 'retryFrame')).toMatch(/minHeight: 44,\s*minWidth: 44,/);
+    // Padding, not a fixed box the word is centred in: a taller word at a
+    // large text size grows the frame and stays 6pt under the message
+    // (-9 + 15), where a centred one rose into the message and sank past the
+    // card's padding.
+    expect(styleBlock(REQUEST, 'retryFrame')).toMatch(
+      /minHeight: 44,\s*minWidth: 44,\s*paddingVertical: 15,\s*justifyContent: 'center',\s*marginTop: -9,\s*marginBottom: -15,/,
+    );
     expect(styleBlock(REQUEST, 'addPhotoBtn')).toMatch(/minHeight: 44,/);
     expect(code).toMatch(
       /accessibilityLabel=\{`Retry \$\{label\}`\}\s*style=\{styles\.retryFrame\}/,
+    );
+  });
+
+  // WCAG 2.5.3 (label in name): each spoken name starts with the word the
+  // button shows, so Voice Control's "Tap Camera" and "Tap Library" find it.
+  it('the Camera and Library buttons are named with the words they show', () => {
+    const { sf, els } = elements(REQUEST, (el, s) => tagOf(el, s) === 'PhotoSourceButton');
+    expect(
+      els.map(({ el }) => [attrText(el, 'label', sf), attrText(el, 'accessibilityLabel', sf)]),
+    ).toEqual([
+      ['CAMERA', 'Camera, take a photo for this request'],
+      ['LIBRARY', 'Library, choose a photo from your library for this request'],
+      ['CAMERA', 'Camera, take a proof photo'],
+      ['LIBRARY', 'Library, choose a proof photo from your library'],
+    ]);
+    for (const { el } of els) {
+      const shown = attrText(el, 'label', sf)!.toLowerCase();
+      expect(attrText(el, 'accessibilityLabel', sf)!.toLowerCase().startsWith(shown)).toBe(true);
+    }
+    expect(functionBody(REQUEST, 'PhotoSourceButton')).toContain(
+      'accessibilityLabel={accessibilityLabel}',
     );
   });
 
@@ -975,15 +1005,64 @@ describe('Maintenance request (M-WS-10)', () => {
     expect(styleBlock(REQUEST, 'detailRowStacked')).toMatch(/flexDirection: 'column'/);
   });
 
-  // One ink button while nothing is open: Open in Outlook. The Resolve and
-  // Internal notes forms carry their own commit when opened; their toggles
-  // and every other action are the outline.
-  it('the button hierarchy', () => {
+  // One ink button on the screen (DESIGN-SPEC 6.2), whichever forms are
+  // open: Open in Outlook while none is; the Resolve or the Internal notes
+  // commit while its form shows (Open in Outlook then the outline), and the
+  // Resolve commit when both are. Their toggles and every other action are
+  // the outline. The variants are the screen's own expressions, run here
+  // over the screen's own form flags.
+  it('the button hierarchy: one ink button whichever forms are open', () => {
+    const flags =
+      /const resolveFormShowing = [^;]+;\s*const notesFormShowing = [^;]+;\s*const formCommitShowing = [^;]+;/.exec(
+        code,
+      );
+    expect(flags, 'the form flags').not.toBeNull();
     const { sf, els } = elements(REQUEST, (el, s) => tagOf(el, s) === 'Button');
-    const inks = els
-      .filter(({ el }) => attrText(el, 'variant', sf) === undefined)
-      .map(({ el }) => textOf(el, sf) || attrText(el, 'onPress', sf));
-    expect(inks).toEqual(['Open in Outlook', '() => void doResolve()', '() => void doAddNote()']);
+    const OUTLOOK = 'Open in Outlook';
+    const RESOLVE = '() => void doResolve()';
+    const ADD_NOTE = '() => void doAddNote()';
+    const name = (el: JsxNode) => textOf(el, sf) || attrText(el, 'onPress', sf)!;
+    for (const [resolveOpen, notesOpen, ink] of [
+      [false, false, OUTLOOK],
+      [true, false, RESOLVE],
+      [false, true, ADD_NOTE],
+      [true, true, RESOLVE],
+    ] as const) {
+      const scope = new vm.Script(
+        `${flags![0]} ({ resolveFormShowing, notesFormShowing, formCommitShowing });`,
+      ).runInNewContext({
+        actions: { resolve: true, notes: true },
+        resolveOpen,
+        notesOpen,
+      }) as Record<string, boolean>;
+      // A form's commit shows only while its form does; the rest may all show.
+      const shown = els.filter(({ el }) =>
+        name(el) === RESOLVE
+          ? scope.resolveFormShowing
+          : name(el) === ADD_NOTE
+            ? scope.notesFormShowing
+            : true,
+      );
+      const inks = shown
+        .filter(({ el }) => {
+          const v = attr(el, 'variant', sf)?.initializer;
+          if (v === undefined) return true; // Button's default is the ink
+          const variant = ts.isStringLiteral(v)
+            ? v.text
+            : new vm.Script(`(${(v as ts.JsxExpression).expression!.getText(sf)})`).runInNewContext(
+                { ...scope },
+              );
+          return variant === 'primary';
+        })
+        .map(({ el }) => name(el));
+      expect(inks, `resolve ${resolveOpen}, notes ${notesOpen}`).toEqual([ink]);
+    }
+    // The Mail glyph follows Open in Outlook's fill (paper on the ink, ink on
+    // the outline), never paper on the card.
+    const outlook = els.find(({ el }) => name(el) === OUTLOOK);
+    expect(attrText(outlook!.el, 'leading', sf)).toContain(
+      'color={formCommitShowing ? c.ink : c.paper}',
+    );
     expect(code).toMatch(/\{resolveOpen \? \([\s\S]*?onPress=\{\(\) => void doResolve\(\)\}/);
     expect(code).toMatch(/\{notesOpen \? \([\s\S]*?onPress=\{\(\) => void doAddNote\(\)\}/);
   });
@@ -1045,6 +1124,21 @@ describe('New maintenance request (M-WS-11)', () => {
     expect(chip).toContain('accessibilityRole="button"');
     expect(chip).toContain('accessibilityState={{ selected }}');
     expect(chip).toContain('<Check size={13} color={c.paper} strokeWidth={2}');
+    // Dynamic Type: a site or category name is content, uncapped before the
+    // restyle; capped at the 22pt control ceiling it stopped growing at AX2
+    // and read smaller than its own field label.
+    const labels = elements(
+      NEW_REQUEST,
+      (el, s) =>
+        tagOf(el, s) === 'Body' && attrText(el, 'size', s) === '13' && textOf(el, s) === '',
+    );
+    const chipLabel = labels.els.filter(({ ancestors }) =>
+      ancestors.some((a) => attrText(a, 'style', labels.sf)?.includes('styles.chip,')),
+    );
+    expect(chipLabel).toHaveLength(1);
+    expect(attrText(chipLabel[0]!.el, 'maxFontSizeMultiplier', labels.sf)).toBeUndefined();
+    expect(chip).not.toContain('maxFontSizeMultiplier');
+    expect(code).not.toContain('CHIP_CAP');
     expect(styleBlock(NEW_REQUEST, 'chipFrame')).toMatch(/minHeight: 44,\s*minWidth: 44,/);
     const { sf, els } = elements(NEW_REQUEST, (el, s) => tagOf(el, s) === 'ChoiceChip');
     expect(els.map(({ el }) => attrText(el, 'onPress', sf))).toEqual([
@@ -1077,14 +1171,19 @@ describe('New maintenance request (M-WS-11)', () => {
 
   it('the photo step: named source buttons, a named Retry in a 44pt frame, a Done button', () => {
     expect(code).toMatch(
-      /onPress=\{onCamera\}\s*accessibilityRole="button"\s*accessibilityLabel="Take a photo for this request"/,
+      /onPress=\{onCamera\}\s*accessibilityRole="button"\s*accessibilityLabel="Camera, take a photo for this request"/,
     );
     expect(code).toMatch(
-      /onPress=\{onLibrary\}\s*accessibilityRole="button"\s*accessibilityLabel="Choose a photo from your library for this request"/,
+      /onPress=\{onLibrary\}\s*accessibilityRole="button"\s*accessibilityLabel="Library, choose a photo from your library for this request"/,
     );
     expect(code).toMatch(/onPress=\{onFinish\}\s*accessibilityRole="button"/);
     expect(code).toContain("accessibilityLabel={`Retry ${entry.fileName ?? 'photo'}`}");
-    expect(styleBlock(NEW_REQUEST, 'retryFrame')).toMatch(/minHeight: 44,/);
+    // Padding, not a fixed box the pill is centred in: a taller pill at a
+    // large text size grows the frame and stays where it was (-8 + 8),
+    // where a centred one rose into the 6pt gap under the message.
+    expect(styleBlock(NEW_REQUEST, 'retryFrame')).toMatch(
+      /minHeight: 44,\s*paddingVertical: 8,\s*justifyContent: 'center',\s*marginVertical: -8,/,
+    );
     expect(styleBlock(NEW_REQUEST, 'addBtn')).toMatch(/minHeight: 44,/);
     expect(styleBlock(NEW_REQUEST, 'thumb')).toMatch(
       /borderWidth: 1,[\s\S]*backgroundColor: PHOTO_BACKGROUND,/,

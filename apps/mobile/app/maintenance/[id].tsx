@@ -273,7 +273,10 @@ function PhotoQueueRow({
 }
 
 /** Camera/Library pair, shared by the request-photo card and the close-out
- *  proof picker so the two never drift in shape or reach. */
+ *  proof picker so the two never drift in shape or reach. Each caller's
+ *  accessibilityLabel starts with the word the button shows ("Camera, …",
+ *  "Library, …"), so Voice Control's "Tap Camera" still finds it (WCAG
+ *  2.5.3, label in name). */
 function PhotoSourceButton({
   icon: Icon,
   label,
@@ -1068,6 +1071,13 @@ export default function MaintenanceRequestDetailScreen() {
     resolvedAt: detail.resolvedAt,
   });
   const showCloseout = actions.resolve || actions.archive || actions.assignOwner || actions.notes;
+  // One ink button on the screen (DESIGN-SPEC 6.2). Open in Outlook is the
+  // ink while no form is open; the Resolve form's commit and the Internal
+  // notes form's commit take it while their form shows (Open in Outlook
+  // turns outline), and with both open the Resolve commit keeps it.
+  const resolveFormShowing = actions.resolve && resolveOpen;
+  const notesFormShowing = actions.notes && notesOpen;
+  const formCommitShowing = resolveFormShowing || notesFormShowing;
 
   return (
     <View style={[styles.root, { backgroundColor: c.paper }]}>
@@ -1178,13 +1188,13 @@ export default function MaintenanceRequestDetailScreen() {
                 <PhotoSourceButton
                   icon={Camera}
                   label="CAMERA"
-                  accessibilityLabel="Take a photo for this request"
+                  accessibilityLabel="Camera, take a photo for this request"
                   onPress={() => void pickFromCamera().then(addRequestPhotos)}
                 />
                 <PhotoSourceButton
                   icon={ImageIcon}
                   label="LIBRARY"
-                  accessibilityLabel="Choose a photo from your library for this request"
+                  accessibilityLabel="Library, choose a photo from your library for this request"
                   onPress={() => void pickFromLibrary().then(addRequestPhotos)}
                 />
               </View>
@@ -1304,9 +1314,12 @@ export default function MaintenanceRequestDetailScreen() {
             {prepared && prepared.linkFits ? (
               <Button
                 block
+                variant={formCommitShowing ? 'outline' : 'primary'}
                 onPress={() => handleOpenPress('outlook')}
                 disabled={busy}
-                leading={<Mail size={16} color={c.paper} strokeWidth={1.5} />}
+                leading={
+                  <Mail size={16} color={formCommitShowing ? c.ink : c.paper} strokeWidth={1.5} />
+                }
               >
                 Open in Outlook
               </Button>
@@ -1463,13 +1476,13 @@ export default function MaintenanceRequestDetailScreen() {
                       <PhotoSourceButton
                         icon={Camera}
                         label="CAMERA"
-                        accessibilityLabel="Take a proof photo"
+                        accessibilityLabel="Camera, take a proof photo"
                         onPress={() => void pickFromCamera().then(addResolvePhotos)}
                       />
                       <PhotoSourceButton
                         icon={ImageIcon}
                         label="LIBRARY"
-                        accessibilityLabel="Choose a proof photo from your library"
+                        accessibilityLabel="Library, choose a proof photo from your library"
                         onPress={() => void pickFromLibrary().then(addResolvePhotos)}
                       />
                     </View>
@@ -1635,6 +1648,7 @@ export default function MaintenanceRequestDetailScreen() {
                     />
                     <Button
                       block
+                      variant={resolveFormShowing ? 'outline' : 'primary'}
                       disabled={!noteBody.trim() || notePending}
                       onPress={() => void doAddNote()}
                     >
@@ -1765,13 +1779,18 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 14,
   },
-  // A 44pt frame centred on the word where it was (6pt under the message):
-  // the margins take back the frame's 30pt beyond the word's ~14pt line, so
-  // the row keeps its height.
+  // A 44pt frame around the word where it was (6pt under the message): 15pt
+  // of padding above and below the word's ~14pt line, so the frame grows with
+  // the word at large text sizes instead of centring a taller word in a fixed
+  // box (which raised it into the message and sank it past the card's
+  // padding), and the margins take the padding back: the word sits 6pt under
+  // the message and the row keeps its height at every size. 13.9 + 30 =
+  // 43.9pt at the default size, so minHeight keeps the 44.
   retryFrame: {
     alignSelf: 'flex-start',
     minHeight: 44,
     minWidth: 44,
+    paddingVertical: 15,
     justifyContent: 'center',
     marginTop: -9,
     marginBottom: -15,

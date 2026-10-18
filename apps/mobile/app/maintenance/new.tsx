@@ -77,7 +77,7 @@ import {
   UploadError,
 } from '@/lib/maintenance-upload';
 import { supabase } from '@/lib/supabase';
-import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useTheme } from '@/lib/use-theme';
 import { retryWorkspace, useWorkspace } from '@/lib/use-workspace';
@@ -1162,12 +1162,14 @@ function PhotosStep({
         </Mono>
 
         {/* Buttons with the request screen's names for the same two
-            sources (they had no role), 44pt tall, the outline recipe. */}
+            sources (they had no role), 44pt tall, the outline recipe. Each
+            name starts with the word the button shows, so Voice Control's
+            "Tap Camera" and "Tap Library" still work (WCAG 2.5.3). */}
         <View style={{ flexDirection: 'row', gap: 10, marginBottom: 14 }}>
           <Pressable
             onPress={onCamera}
             accessibilityRole="button"
-            accessibilityLabel="Take a photo for this request"
+            accessibilityLabel="Camera, take a photo for this request"
             style={({ pressed }) => [
               photoStyles.addBtn,
               { borderColor: c.hair2, backgroundColor: c.card, opacity: pressed ? 0.7 : 1 },
@@ -1181,7 +1183,7 @@ function PhotosStep({
           <Pressable
             onPress={onLibrary}
             accessibilityRole="button"
-            accessibilityLabel="Choose a photo from your library for this request"
+            accessibilityLabel="Library, choose a photo from your library for this request"
             style={({ pressed }) => [
               photoStyles.addBtn,
               { borderColor: c.hair2, backgroundColor: c.card, opacity: pressed ? 0.7 : 1 },
@@ -1389,7 +1391,9 @@ function ChipTextPickerField({
  * A choice (site, category, priority): a button that says whether it is
  * chosen, in a 44pt frame. Chosen is the ink fill with the check mark the
  * chips always carried; otherwise the outline on the page. The label wraps
- * inside the chip for a long name, and grows to the control ceiling.
+ * inside the chip for a long name and, like every site and category name,
+ * grows with the text size with no cap (it was uncapped before the restyle,
+ * and the chip is not fixed-frame chrome: it grows with its label).
  */
 function ChoiceChip({
   label,
@@ -1420,7 +1424,6 @@ function ChoiceChip({
           size={13}
           color={selected ? c.paper : c.ink}
           style={{ fontFamily: FONT.display, flexShrink: 1 }}
-          maxFontSizeMultiplier={CHIP_CAP}
         >
           {label}
         </Body>
@@ -1431,9 +1434,6 @@ function ChoiceChip({
     </Pressable>
   );
 }
-
-/** A choice chip's label is a control's: the control ceiling. */
-const CHIP_CAP = capTo(13, TYPE_CEILING.control);
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
@@ -1534,11 +1534,16 @@ const photoStyles = StyleSheet.create({
     height: 4,
     borderRadius: 2,
   },
-  // The 44pt target around the ~28pt pill; the margins give back its extra
-  // height so the row keeps its size.
+  // The 44pt target around the ~28.5pt pill: padding around the pill, so the
+  // frame grows with it at large text sizes instead of centring a taller pill
+  // in a fixed box (which raised it into the 6pt gap under the message), and
+  // the margins give the padding back so the pill sits where it did and the
+  // row keeps its size. 28.5 + 16 = 44.5pt at the default size; minHeight
+  // keeps 44 at the sizes below the default.
   retryFrame: {
     alignSelf: 'flex-start',
     minHeight: 44,
+    paddingVertical: 8,
     justifyContent: 'center',
     marginVertical: -8,
   },
