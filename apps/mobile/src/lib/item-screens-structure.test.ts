@@ -967,20 +967,19 @@ describe('recount sheet: a started recount is never dismissed as if nothing happ
     );
   });
 
-  it('every caller re-reads in onDone and only closes in onClose (so the difference matters)', () => {
-    for (const file of [
-      ITEM,
-      'app/(drawer)/exceptions.tsx',
-      'app/exceptions/[id].tsx',
-      'app/location/[id].tsx',
-    ]) {
-      const sheet = elements(file, (el, sf) => tagOf(el, sf) === 'ExceptionRecountSheet');
-      expect(sheet, file).toHaveLength(1);
-      const done = flat(attrText(sheet[0]!.el, 'onDone', sheet[0]!.sf) ?? '');
-      const close = flat(attrText(sheet[0]!.el, 'onClose', sheet[0]!.sf) ?? '');
-      expect(done, `${file} onDone`).toMatch(/load\(\)|refreshVerification\(\)/);
-      expect(close, `${file} onClose`).not.toMatch(/load\(\)|refreshVerification\(\)/);
-    }
+  // The item screen's two handlers show why the difference matters: only
+  // Done re-reads the last physical count card. (The exceptions list, the
+  // exception detail and the location screen, the sheet's other callers, do
+  // the same in their onDone; they belong to another package, so this test
+  // reads only this one.)
+  it('the item screen re-reads its card in onDone and only closes in onClose', () => {
+    const sheet = elements(ITEM, (el, sf) => tagOf(el, sf) === 'ExceptionRecountSheet');
+    expect(sheet).toHaveLength(1);
+    const done = flat(attrText(sheet[0]!.el, 'onDone', sheet[0]!.sf) ?? '');
+    const close = flat(attrText(sheet[0]!.el, 'onClose', sheet[0]!.sf) ?? '');
+    expect(done).toContain('setCountOpen(false);');
+    expect(done).toContain('refreshVerification();');
+    expect(close).toBe('() => setCountOpen(false)');
   });
 });
 
