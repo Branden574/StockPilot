@@ -55,9 +55,17 @@ function Tick() {
   );
 }
 
-/** The mixed mark: a 10 x 2 bar. */
+/** The mixed mark: a 10 x 2 bar. It is drawn with a background, which forced
+ *  colors (Windows High Contrast) removes, so there it keeps a system-colour
+ *  fill; otherwise a mixed select-all looked unchecked. (The tick is drawn
+ *  with borders, which forced colors keeps.) */
 function Bar() {
-  return <span aria-hidden className="bg-background h-[2px] w-[10px] rounded-full" />;
+  return (
+    <span
+      aria-hidden
+      className="bg-background h-[2px] w-[10px] rounded-full forced-colors:bg-[CanvasText] forced-colors:forced-color-adjust-none"
+    />
+  );
 }
 
 export interface CheckboxGlyphProps {

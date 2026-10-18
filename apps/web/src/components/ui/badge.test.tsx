@@ -17,7 +17,7 @@ const TONES: Array<[NonNullable<BadgeProps['variant']>, string[]]> = [
   ['destructive', ['bg-destructive-wash', 'text-destructive']],
   ['secondary', ['bg-sunk', 'text-[var(--ed-ink-2)]', 'border-[var(--ed-line-strong)]']],
   ['outline', ['bg-transparent', 'text-muted-foreground', 'border-[var(--ed-line-strong)]']],
-  ['default', ['bg-primary', 'text-primary-foreground']],
+  ['default', ['bg-primary', 'text-primary-foreground', 'border-transparent']],
 ];
 
 describe('Badge', () => {
@@ -53,6 +53,19 @@ describe('Badge', () => {
     const badge = screen.getByText('Archived');
     expect(badge.childElementCount).toBe(0);
     expect(badge).not.toHaveAttribute('dot');
+  });
+
+  it('the ink default draws no ink ring: a caller that recolours only the fill and text keeps a clean pill', () => {
+    // MaintenanceStatusBadge recolours a default Badge per status. With an ink
+    // border, tailwind-merge kept border-primary beside the caller's fill, so
+    // every maintenance pill had a 1 px near-black (light) or near-white (dark)
+    // ring. A transparent border looks the same under the ink fill.
+    render(<Badge className="bg-blue-100 text-blue-800">Saved</Badge>);
+    const c = classes(screen.getByText('Saved'));
+    expect(c).toContain('border-transparent');
+    expect(c).not.toContain('border-primary');
+    expect(c).toEqual(expect.arrayContaining(['bg-blue-100', 'text-blue-800']));
+    expect(c).not.toContain('bg-primary');
   });
 
   it("a caller's own classes still win", () => {

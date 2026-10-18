@@ -139,6 +139,18 @@ describe('RadioGroup', () => {
     expect(data.get('mfa-policy')).toBe('admins');
   });
 
+  it('in forced colors the browser draws its own radio, so the chosen one still shows', () => {
+    // The custom dot is a fill and an inset shadow, both removed by forced
+    // colors (Windows High Contrast): a chosen radio looked empty.
+    for (const variant of ['default', 'card'] as const) {
+      const { unmount } = render(<Formats variant={variant} />);
+      for (const radio of screen.getAllByRole('radio')) {
+        expect(radio).toHaveClass('appearance-none', 'forced-colors:appearance-auto');
+      }
+      unmount();
+    }
+  });
+
   it('an option outside a group is a mistake that says so', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(() => render(<RadioGroupItem value="x" label="Lost" />)).toThrow(

@@ -20,9 +20,18 @@ import { cn } from '@/lib/utils';
  * neutral `bg-muted`, never the accent (accent text on an accent hover was
  * unreadable once the light accent deepened).
  *
+ * Sizes: `lg` (48 px) and `xl` (56 px) stay as they were, for the deliberately
+ * large calls to action whose own packages restyle them (Sign in, reset, MFA,
+ * Create organization, Change password, Complete picking, Confirm & complete).
+ *
  * Touch: on phones and on coarse pointers a transparent ::before grows the hit
  * area to at least 44 x 44 around the button without moving anything; the
- * visual size stays the desktop one.
+ * visual size stays the desktop one. A later button's ::before paints over an
+ * earlier neighbour, so in a dense group a tap on the edge of one button can
+ * press the next. Such a group needs (44 - height) / 2 px between its buttons
+ * (8 px for 28 px buttons, 6 px for 32 px ones), or a 44 px size below sm and
+ * on coarse pointers (`max-sm:h-11 pointer-coarse:h-11`, as the jump-to-page
+ * grid in pagination.tsx does).
  */
 const buttonVariants = cva(
   [
@@ -47,8 +56,8 @@ const buttonVariants = cva(
       size: {
         default: 'h-8 px-3.5 text-[13px]',
         sm: 'h-7 px-2.5 text-[12.5px]',
-        lg: 'h-10 px-5 text-sm',
-        xl: 'h-12 px-8 text-base',
+        lg: 'h-12 px-8 text-base',
+        xl: 'h-14 px-10 text-base',
         icon: 'h-8 w-8',
       },
     },

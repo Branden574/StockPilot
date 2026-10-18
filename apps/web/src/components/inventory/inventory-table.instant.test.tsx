@@ -2213,10 +2213,11 @@ describe('InventoryTable count vocabulary (SKUs vs item rows vs placement rows)'
       .map((p) => p.textContent ?? '')
       .find((t) => t.includes('on hand'))!;
   /** The coverage bar's fill percentage inside one rendered row. The
-   *  outer track carries the fixed 80px width; its single child is the
-   *  fill, whose inline width IS stock/par. */
+   *  outer track carries the fixed 72px width (StockBar's default since the
+   *  redesign's 72 x 4 bar); its single child is the fill, whose inline
+   *  width IS stock/par. */
   const barFillPct = (row: HTMLElement): string | undefined => {
-    const track = row.querySelector('span[style*="width: 80px"]');
+    const track = row.querySelector('span[style*="width: 72px"]');
     return (track?.firstElementChild as HTMLElement | null)?.style.width;
   };
 

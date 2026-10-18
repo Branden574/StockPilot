@@ -66,9 +66,11 @@ describe('components/ui redesign guards', () => {
 
   it('every redesign token utility the primitives use is built from globals.css', async () => {
     const globals = join(UI, '../../app/globals.css');
+    // The primitives only: the tests name the same classes, and scanning them
+    // would build a class a primitive no longer uses.
     const input = readFileSync(globals, 'utf8')
       .replace("@import 'tailwindcss';", "@import 'tailwindcss' source(none);")
-      .concat(`\n@source "${UI}/*.tsx";\n`);
+      .concat(`\n@source "${UI}/*.tsx";\n@source not "${UI}/*.test.tsx";\n`);
     const { css } = await postcss([tailwindcss({ optimize: false })]).process(input, {
       from: globals,
     });
@@ -76,10 +78,12 @@ describe('components/ui redesign guards', () => {
     postcss.parse(css).walkRules((rule: Rule) => {
       selectors.add(rule.selector);
     });
-    const built = (cls: string) =>
-      [...selectors].some((s) =>
-        s.startsWith(`.${cls.replace(/[^a-zA-Z0-9_-]/g, (c) => `\\${c}`)}`),
-      );
+    // The whole class, then the end or a pseudo-class (`forced-colors:border`
+    // must not pass on `forced-colors:border-[ButtonText]` alone).
+    const built = (cls: string) => {
+      const sel = `.${cls.replace(/[^a-zA-Z0-9_-]/g, (c) => `\\${c}`)}`;
+      return [...selectors].some((s) => s.startsWith(sel) && !/^[\w\\-]/.test(s.slice(sel.length)));
+    };
 
     for (const cls of [
       'bg-accent',
@@ -97,6 +101,23 @@ describe('components/ui redesign guards', () => {
       "pointer-coarse:before:content-['']",
       'max-sm:h-11',
       'max-sm:text-base',
+      // The jump-to-page grid's 44 px targets on touch (pagination.tsx).
+      'pointer-coarse:h-11',
+      'pointer-coarse:grid-cols-5',
+      // The toast shadow and focus rings beat sonner's unlayered CSS only as
+      // !important classes, and the wash toasts turn the button pair round.
+      'shadow-[0_10px_30px_rgba(0,0,0,0.25)]!',
+      'focus-visible:shadow-[0_10px_30px_rgba(0,0,0,0.25),0_0_0_2px_hsl(var(--ring))]!',
+      'focus-visible:[box-shadow:0_0_0_2px_var(--normal-bg),0_0_0_4px_var(--normal-text)]!',
+      '[--normal-bg:hsl(var(--primary-foreground))]',
+      '[--normal-text:hsl(var(--primary))]',
+      // Forced colors (Windows High Contrast) keep the new controls' states.
+      'forced-colors:appearance-auto',
+      'forced-colors:border',
+      'forced-colors:border-[ButtonText]',
+      'forced-colors:forced-color-adjust-none',
+      'forced-colors:bg-[ButtonText]',
+      'forced-colors:bg-[CanvasText]',
     ]) {
       expect(built(cls), cls).toBe(true);
     }

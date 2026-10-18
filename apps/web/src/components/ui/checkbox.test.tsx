@@ -267,6 +267,19 @@ describe('Checkbox: the box', () => {
     expect(glyph().firstElementChild).toHaveClass('h-[2px]', 'w-[10px]');
   });
 
+  it('the mixed bar keeps a system-colour fill in forced colors, so a mixed select-all never looks empty', () => {
+    // Forced colors (Windows High Contrast) remove backgrounds; the bar is a
+    // background, so it vanished and a partly selected page looked unselected.
+    // The tick is drawn with borders, which forced colors keeps.
+    render(<Checkbox checked={false} indeterminate label="Select all rows on this page" />);
+    const box = screen.getByRole('checkbox', { name: 'Select all rows on this page' })
+      .firstElementChild as HTMLElement;
+    expect(box.firstElementChild).toHaveClass(
+      'forced-colors:forced-color-adjust-none',
+      'forced-colors:bg-[CanvasText]',
+    );
+  });
+
   it('CheckboxGlyph is the same box with no behaviour, hidden from assistive technology', () => {
     const { container } = render(
       <div role="checkbox" aria-checked="true" aria-label="Warehouse A" tabIndex={0}>

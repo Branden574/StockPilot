@@ -149,6 +149,10 @@ export const RadioGroupItem = React.forwardRef<HTMLInputElement, RadioGroupItemP
             // themes), like the empty checkbox.
             'bg-card mt-px size-4 shrink-0 appearance-none rounded-full border border-[var(--ed-ink-4)] transition-colors',
             'checked:border-foreground checked:bg-foreground checked:shadow-[inset_0_0_0_3px_hsl(var(--card))]',
+            // Forced colors drop the fill and the inset shadow that draw the
+            // chosen dot, so a chosen radio looked empty: there the browser's
+            // own radio comes back, which shows its state.
+            'forced-colors:appearance-auto',
             'disabled:cursor-not-allowed',
             card
               ? 'focus-visible:outline-none'

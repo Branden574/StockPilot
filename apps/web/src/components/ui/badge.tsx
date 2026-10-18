@@ -13,7 +13,10 @@ import { cn } from '@/lib/utils';
  * - destructive: danger text on the danger wash
  * - secondary: neutral text on the sunk fill, stronger hairline
  * - outline: muted text, stronger hairline, no fill
- * - default: the ink fill
+ * - default: the ink fill. Its border is transparent, not ink: the fill paints
+ *   under a transparent border, so the pill looks the same, and a caller that
+ *   recolours only the fill and the text (the maintenance status pills) gets no
+ *   ink ring around its own colours.
  * Every badge keeps its words, so colour is never the only cue.
  */
 const badgeVariants = cva(
@@ -21,7 +24,7 @@ const badgeVariants = cva(
   {
     variants: {
       variant: {
-        default: 'border-primary bg-primary text-primary-foreground',
+        default: 'border-transparent bg-primary text-primary-foreground',
         secondary: 'border-[var(--ed-line-strong)] bg-sunk text-[var(--ed-ink-2)]',
         destructive: 'border-transparent bg-destructive-wash text-destructive',
         success: 'border-transparent bg-success-wash text-success',

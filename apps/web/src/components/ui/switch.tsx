@@ -19,7 +19,9 @@ import { cn } from '@/lib/utils';
  * Look: a 36 x 20 track, ink when on and the faint ink when off (both read at
  * 3:1 or better against the card, so the off state is visible in dark too),
  * with a 16 px thumb. On phones and coarse pointers the hit area grows to at
- * least 44 x 44 without moving anything, like Button.
+ * least 44 x 44 without moving anything, like Button. In forced colors the
+ * track keeps a system-colour edge and the thumb a system-colour fill, so the
+ * thumb's side still shows on or off.
  */
 export interface SwitchProps extends Omit<
   React.ButtonHTMLAttributes<HTMLButtonElement>,
@@ -67,6 +69,10 @@ export const Switch = React.forwardRef<HTMLButtonElement, SwitchProps>(function 
         'disabled:cursor-not-allowed disabled:opacity-50',
         "pointer-coarse:before:content-[''] before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-['']",
         checked ? 'bg-primary' : 'bg-[var(--ed-ink-4)]',
+        // Forced colors (Windows High Contrast) drop backgrounds, which left
+        // neither the track nor the thumb: the track takes a system-colour edge
+        // and the thumb a system-colour fill, so its position shows the state.
+        'forced-colors:border forced-colors:border-[ButtonText]',
         pending && 'cursor-progress opacity-60',
         className,
       )}
@@ -75,6 +81,7 @@ export const Switch = React.forwardRef<HTMLButtonElement, SwitchProps>(function 
         aria-hidden
         className={cn(
           'pointer-events-none inline-block h-4 w-4 rounded-full transition-transform',
+          'forced-colors:bg-[ButtonText] forced-colors:forced-color-adjust-none',
           checked ? 'bg-primary-foreground translate-x-[18px]' : 'translate-x-0.5 bg-white',
         )}
       />

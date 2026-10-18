@@ -12,11 +12,10 @@ interface StockBarProps {
  * Stock against par, drawn in the coverage-bar look (DESIGN-SPEC 6.11): a 4 px
  * track in the stronger hairline, radius 2, filled in the status colour. The
  * figure is still stock / par exactly as the caller computes it; there is no
- * days-of-cover label (the app has no such number). The reference column draws
- * it 72 wide: callers pass width={72} where their layout takes it (the default
- * stays 80 because the Items table tests find the bar by that width).
+ * days-of-cover label (the app has no such number). 72 x 4 by default, the
+ * reference column's size; a caller can still pass its own width.
  */
-export function StockBar({ stock, par, status, width = 80, className }: StockBarProps) {
+export function StockBar({ stock, par, status, width = 72, className }: StockBarProps) {
   const pct = par > 0 ? Math.min(100, Math.max(0, (stock / par) * 100)) : 0;
   return (
     <span

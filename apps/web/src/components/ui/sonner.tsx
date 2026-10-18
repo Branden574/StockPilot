@@ -11,10 +11,12 @@ import { Toaster as Sonner, type ToasterProps } from 'sonner';
  *
  * Sonner injects its stylesheet unlayered, which beats every Tailwind utility
  * (those live in @layer utilities), so the look is set through sonner's own CSS
- * variables on the toaster element instead of class names. Stacking, swipe,
- * actions, the close button, the screen-reader region and the update-notice
- * offset (globals.css lifts the toaster above the product-update card) are all
- * sonner's and unchanged.
+ * variables on the toaster element instead of class names. Where a property has
+ * no sonner variable (the shadow, the focus rings), the class carries a
+ * trailing `!`, and an !important declaration beats sonner's normal one.
+ * Stacking, swipe, actions, the close button, the screen-reader region and the
+ * update-notice offset (globals.css lifts the toaster above the product-update
+ * card) are all sonner's and unchanged.
  */
 const INK = 'hsl(var(--primary))';
 const ON_INK = 'hsl(var(--primary-foreground))';
@@ -52,6 +54,46 @@ const CLOSE_HOVER_WARNING =
 const CLOSE_HOVER_ERROR =
   '[--gray2:var(--error-bg)] [--gray5:var(--error-text)] [--normal-bg-hover:var(--error-bg)] [--normal-border-hover:var(--error-text)]';
 
+/**
+ * Sonner draws a toast's action button in --normal-text with --normal-bg words,
+ * and its cancel words in --normal-text, whatever the toast's type. On the ink
+ * toast that is right; on the pale warning and error washes the ink pair made
+ * the cancel words near-white on the wash (unreadable: "Open it" on the SKU
+ * taken error) and the action pill nearly the wash's colour. On those two the
+ * pair is turned round, as sonner had it before the redesign: an ink pill with
+ * on-ink words, and ink cancel words. Every toast with buttons in the app today
+ * is an error toast. Only the buttons and their focus rings read this pair: the
+ * warning and error toasts take their own fill, edge, text and close button
+ * from the --warning-* and --error-* variables.
+ */
+const BUTTONS_ON_WASH =
+  '[--normal-bg:hsl(var(--primary-foreground))] [--normal-text:hsl(var(--primary))]';
+
+/**
+ * The toast's shadow (DESIGN-SPEC 6.19), over sonner's lighter one. The focus
+ * class keeps a ring when the toast itself is focused; globals.css's
+ * :focus-visible ring also composes into this shadow, so the app's own ring
+ * shows there.
+ */
+const TOAST_SHADOW =
+  'shadow-[0_10px_30px_rgba(0,0,0,0.25)]! focus-visible:shadow-[0_10px_30px_rgba(0,0,0,0.25),0_0_0_2px_hsl(var(--ring))]!';
+
+/**
+ * The focus ring of the close, action and cancel buttons: a 2 px band in
+ * --normal-bg, then a 2 px ring in --normal-text. On the ink toast that is a
+ * gap in the toast's fill and a ring in its text colour; on the warning and
+ * error washes (pair turned round above) an on-ink band and an ink ring. One
+ * band always contrasts with what is behind it, including the part of the
+ * close button that sits outside the toast. Sonner's own rings are black at 20%
+ * and 40%, invisible on the ink toast (1.02:1 in light). It is a plain
+ * box-shadow, not a shadow-[] utility: those put the app's ring variables
+ * (set by globals.css :focus-visible) ahead of their own value, so the
+ * page-coloured global ring would cover these bands, and on the ink toast the
+ * action pill would only look 2 px larger.
+ */
+const BUTTON_FOCUS =
+  'focus-visible:[box-shadow:0_0_0_2px_var(--normal-bg),0_0_0_4px_var(--normal-text)]!';
+
 export function Toaster({ style, toastOptions, ...props }: ToasterProps) {
   const { theme = 'system' } = useTheme();
 
@@ -66,8 +108,12 @@ export function Toaster({ style, toastOptions, ...props }: ToasterProps) {
         ...toastOptions,
         style: { padding: '12px 16px', ...toastOptions?.style },
         classNames: {
-          warning: CLOSE_HOVER_WARNING,
-          error: CLOSE_HOVER_ERROR,
+          toast: TOAST_SHADOW,
+          warning: `${CLOSE_HOVER_WARNING} ${BUTTONS_ON_WASH}`,
+          error: `${CLOSE_HOVER_ERROR} ${BUTTONS_ON_WASH}`,
+          closeButton: BUTTON_FOCUS,
+          actionButton: BUTTON_FOCUS,
+          cancelButton: BUTTON_FOCUS,
           ...toastOptions?.classNames,
         },
       }}

@@ -171,10 +171,23 @@ function PageBtn({
   );
 }
 
+/** The jump grid: five columns, eight from sm up, but five again on a coarse
+ *  pointer (an iPad) so every column stays at least 44 px wide. */
+const JUMP_GRID = 'grid grid-cols-5 gap-1 sm:grid-cols-8 pointer-coarse:grid-cols-5';
+/** A page button: 28 px on desktop, a full 44 px target where Button grows its
+ *  touch area (below sm and on coarse pointers). */
+const JUMP_TARGET =
+  'h-7 w-full px-2 text-[12.5px] tabular-nums max-sm:h-11 pointer-coarse:h-11';
+
 /**
  * The jump target. For a manageable page count, a grid of every page (like
  * Items). For a very large count (a big server-paginated ledger), a "go to
  * page" number input instead of thousands of buttons.
+ *
+ * Below sm and on coarse pointers each page button is a real 44 px target and
+ * the grid keeps five columns (each at least 44 px wide in the 260 px popover).
+ * At 28 px with 4 px gaps, Button's 44 px touch area reached over the row
+ * above, so a tap on the bottom of page 1 opened page 6.
  */
 function JumpGrid({
   totalPages,
@@ -216,7 +229,7 @@ function JumpGrid({
     );
   }
   return (
-    <div className="grid grid-cols-5 gap-1 sm:grid-cols-8">
+    <div className={JUMP_GRID}>
       {Array.from({ length: totalPages }, (_, i) => i + 1).map((n) =>
         hrefForPage ? (
           <Button
@@ -224,7 +237,7 @@ function JumpGrid({
             asChild
             variant={n === current ? 'default' : 'ghost'}
             size="sm"
-            className="h-7 w-full px-2 text-[12.5px] tabular-nums"
+            className={JUMP_TARGET}
           >
             <Link href={hrefForPage(n)} aria-current={n === current ? 'page' : undefined}>
               {n}
@@ -235,7 +248,7 @@ function JumpGrid({
             key={n}
             variant={n === current ? 'default' : 'ghost'}
             size="sm"
-            className="h-7 w-full px-2 text-[12.5px] tabular-nums"
+            className={JUMP_TARGET}
             onClick={() => go(n)}
             aria-current={n === current ? 'page' : undefined}
           >

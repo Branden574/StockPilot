@@ -47,6 +47,18 @@ describe('Button: the redesign look under the old names', () => {
     );
   });
 
+  it('lg and xl keep their large sizes (48 and 56 px, 16 px text) for the large calls to action', () => {
+    // Sign in, reset, MFA, Create organization, Change password, Complete
+    // picking and Confirm & complete are deliberately large; their own
+    // packages restyle them, so the primitive does not shrink them first.
+    const lg = buttonVariants({ size: 'lg' }).split(/\s+/);
+    expect(lg).toEqual(expect.arrayContaining(['h-12', 'px-8', 'text-base', 'rounded-md']));
+    expect(lg).not.toContain('h-10');
+    expect(buttonVariants({ size: 'xl' }).split(/\s+/)).toEqual(
+      expect.arrayContaining(['h-14', 'px-10', 'text-base']),
+    );
+  });
+
   it('grows its hit area to 44 x 44 below sm and on coarse pointers, without changing its size', () => {
     const c = buttonVariants({ size: 'sm' }).split(/\s+/);
     expect(c).toEqual(

@@ -130,6 +130,24 @@ describe('Switch', () => {
     expect(onCheckedChange).not.toHaveBeenCalled();
   });
 
+  it('keeps a visible track edge and thumb in forced colors, on and off', () => {
+    // Forced colors (Windows High Contrast) remove backgrounds, which drew the
+    // whole switch: it disappeared in both states. The track takes a
+    // system-colour edge and the thumb a system-colour fill; the thumb's side
+    // shows the state.
+    const { rerender } = render(<Switch checked={false} label="Toggle Rentals" />);
+    for (const checked of [false, true]) {
+      rerender(<Switch checked={checked} label="Toggle Rentals" />);
+      const sw = screen.getByRole('switch', { name: 'Toggle Rentals' });
+      expect(sw).toHaveClass('forced-colors:border', 'forced-colors:border-[ButtonText]');
+      expect(sw.firstElementChild).toHaveClass(
+        'forced-colors:forced-color-adjust-none',
+        'forced-colors:bg-[ButtonText]',
+        checked ? 'translate-x-[18px]' : 'translate-x-0.5',
+      );
+    }
+  });
+
   it('can be named by aria-labelledby and passes test hooks through', () => {
     render(
       <>
