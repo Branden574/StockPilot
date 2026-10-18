@@ -3,11 +3,12 @@ import { useRouter, useSegments } from 'expo-router';
 import { LogOut } from 'lucide-react-native';
 import * as React from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BrandLockup } from '@/components/brand/mark';
 import { Avatar } from '@/components/ui/avatar';
 import { Hair } from '@/components/ui/card';
+import { BUTTON_RADIUS } from '@/components/ui/tones';
 import { Body, Eyebrow, Mono } from '@/components/ui/text';
 import {
   WorkspaceHeaderChip,
@@ -21,7 +22,7 @@ import { useProfile } from '@/lib/use-profile';
 import { usePermissionsRealtime } from '@/lib/use-permissions-realtime';
 import { useRole } from '@/lib/use-role';
 import { useWorkspace } from '@/lib/use-workspace';
-import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -30,9 +31,16 @@ import { useTheme } from '@/lib/use-theme';
  * POs, Locations, Suppliers, Reports, AI, Schedule, Notifications, Team,
  * Settings, Scan). Surfaces also accessible via bottom tabs are tagged
  * "TAB" so the user knows which entries are shortcuts vs. drawer-only.
+ *
+ * Drawn as the reference sidebar (DESIGN-SPEC 5.1) on the per-mode palette:
+ * section labels in the muted ink, rows in ink2 with ink3 icons, the page on
+ * screen on the reference's selected-row fill in full ink and the heavier
+ * weight (and announced as selected), every row a 44pt target. The entries,
+ * their order, gates and words are the registry's, exactly as before.
  */
 export function DrawerContent(props: DrawerContentComponentProps) {
   const { c } = useTheme();
+  const insets = useSafeAreaInsets();
   const { signOut, user } = useAuth();
   const profile = useProfile();
   const { role } = useRole();
@@ -94,7 +102,7 @@ export function DrawerContent(props: DrawerContentComponentProps) {
           <View key={section.label ?? `section-${sIdx}`} style={{ marginTop: sIdx === 0 ? 0 : 20 }}>
             {section.label ? (
               <View style={{ paddingHorizontal: 12, paddingBottom: 8 }}>
-                <Eyebrow>{section.label}</Eyebrow>
+                <Eyebrow accessibilityRole="header">{section.label}</Eyebrow>
               </View>
             ) : null}
             {section.items.map((item) => {
@@ -107,20 +115,20 @@ export function DrawerContent(props: DrawerContentComponentProps) {
                 <Pressable
                   key={item.id}
                   onPress={() => navigate(item)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: isActive }}
                   style={({ pressed }) => [
                     styles.row,
                     {
-                      backgroundColor: isActive ? c.card : 'transparent',
-                      borderColor: isActive ? c.hair : 'transparent',
+                      // The reference's selected nav row: the hover fill,
+                      // which paper2 is in both modes (a step below the page
+                      // in light, a step above it in dark).
+                      backgroundColor: isActive ? c.paper2 : 'transparent',
                       opacity: pressed ? 0.7 : 1,
                     },
                   ]}
                 >
-                  <Icon
-                    size={18}
-                    color={isActive ? c.ink : c.ink3}
-                    strokeWidth={isActive ? 1.6 : 1.4}
-                  />
+                  <Icon size={18} color={isActive ? c.ink : c.ink3} strokeWidth={1.6} />
                   <Body
                     size={14}
                     color={isActive ? c.ink : c.ink2}
@@ -139,7 +147,7 @@ export function DrawerContent(props: DrawerContentComponentProps) {
                       size={9}
                       tracking={0.16}
                       upper
-                      color={c.ink4}
+                      color={c.ink3}
                       numberOfLines={1}
                       maxFontSizeMultiplier={capTo(9, TYPE_CEILING.chrome)}
                       style={{ flexShrink: 0 }}
@@ -154,7 +162,9 @@ export function DrawerContent(props: DrawerContentComponentProps) {
         ))}
       </ScrollView>
 
-      <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
+      {/* Clear of the home indicator: the root is a plain View, so the
+          footer takes the bottom inset itself (16pt where there is none). */}
+      <View style={{ paddingHorizontal: 16, paddingBottom: Math.max(insets.bottom, 16) }}>
         <Hair />
         <View style={styles.profile}>
           <Avatar size={36} />
@@ -162,27 +172,24 @@ export function DrawerContent(props: DrawerContentComponentProps) {
             <Body size={14} color={c.ink} style={{ fontFamily: FONT.display }}>
               {profile.fullName ?? profile.email ?? 'Account'}
             </Body>
-            <Mono size={10.5} color={c.ink4} tracking={0.04} style={{ marginTop: 2 }}>
+            <Mono size={10.5} color={c.ink3} tracking={0.04} style={{ marginTop: 2 }}>
               {profile.email ?? ''}
             </Mono>
           </View>
         </View>
         <Pressable
           onPress={() => void signOut()}
+          accessibilityRole="button"
           style={({ pressed }) => [
             styles.signout,
             {
-              borderColor: c.hair,
+              borderColor: c.hair2,
               opacity: pressed ? 0.7 : 1,
             },
           ]}
         >
-          <LogOut size={16} color={ACCENT.crit} strokeWidth={1.5} />
-          <Body
-            size={14}
-            color={ACCENT.crit}
-            style={{ fontFamily: FONT.display, flexShrink: 1 }}
-          >
+          <LogOut size={16} color={c.critText} strokeWidth={1.5} />
+          <Body size={14} color={c.critText} style={{ fontFamily: FONT.display, flexShrink: 1 }}>
             Sign out
           </Body>
         </Pressable>
@@ -195,14 +202,15 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
   },
+  // minHeight, not a fixed height: a 44pt target that grows with the label.
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
+    minHeight: 44,
     paddingVertical: 10,
     paddingHorizontal: 12,
     borderRadius: 8,
-    borderWidth: 1,
     marginBottom: 2,
   },
   profile: {
@@ -217,12 +225,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    // minHeight + padding, not a 40pt frame: the label is uncapped (it is the
-    // one destructive action here) so the pill has to grow around it.
-    minHeight: 40,
+    // minHeight + padding, not a fixed frame: the label is uncapped (it is the
+    // one destructive action here) so the button has to grow around it. 44pt
+    // at the default size, the iOS minimum target.
+    minHeight: 44,
     paddingVertical: 8,
     paddingHorizontal: 12,
-    borderRadius: 999,
+    borderRadius: BUTTON_RADIUS.sm,
     borderWidth: 1,
     marginTop: 4,
   },

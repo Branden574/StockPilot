@@ -1,5 +1,6 @@
 import { Drawer } from 'expo-router/drawer';
 import * as React from 'react';
+import { StyleSheet } from 'react-native';
 
 import { DrawerContent } from '@/components/drawer-content';
 import { useTheme } from '@/lib/use-theme';
@@ -10,6 +11,10 @@ import { useTheme } from '@/lib/use-theme';
  * Tags, Movements, Procedures, Purchase orders, Locations, Suppliers,
  * Reports, AI Assistant, Schedule, Notifications, Team, Settings, Admin)
  * — the bottom tabs are just the 5 most-used surfaces.
+ *
+ * The panel is the page colour with a hairline on its open edge, as the
+ * reference sidebar (DESIGN-SPEC 5.1), so it keeps a visible edge over the
+ * dimmed screen in dark mode too.
  */
 export default function DrawerLayout() {
   const { c, mode } = useTheme();
@@ -22,6 +27,8 @@ export default function DrawerLayout() {
         swipeEdgeWidth: 32,
         drawerStyle: {
           backgroundColor: c.paper,
+          borderRightWidth: StyleSheet.hairlineWidth,
+          borderRightColor: c.hair,
           width: 320,
         },
         sceneStyle: { backgroundColor: c.paper },
