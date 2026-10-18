@@ -24,6 +24,25 @@ function loadBody(src: string): string {
   return src.slice(start, end);
 }
 
+/**
+ * The words a list shows in place of its rows when the load failed, in
+ * either spelling: DataListScreen's `failed` prop (its failed state, shown
+ * over the empty state: the redesign's D25 hand-off, which team.tsx took in
+ * P5.10), or the empty state's words swapped on the flag (users.tsx). Null
+ * when neither is there, so the empty list's words would stand for a failed
+ * read.
+ */
+function failureWords(src: string): { title: string; body: string } | null {
+  const viaFailed =
+    /failed=\{\s*loadFailed\s*\?\s*\{\s*title:\s*'([^']*)',\s*body:\s*'([^']*)',?\s*\}\s*:\s*null,?\s*\}/.exec(
+      src,
+    );
+  if (viaFailed) return { title: viaFailed[1]!, body: viaFailed[2]! };
+  const title = /emptyTitle=\{loadFailed \? '([^']*)' : /.exec(src);
+  const body = /emptyBody=\{\s*loadFailed\s*\?\s*'([^']*)'/.exec(src);
+  return title && body ? { title: title[1]!, body: body[1]! } : null;
+}
+
 describe.each([
   ['users', users, 'Could not load users.', "'ADMIN · USERS'"],
   ['team', team, 'Could not load the team.', "'TEAM'"],
@@ -41,9 +60,13 @@ describe.each([
     expect(body).toMatch(/setLoadFailed\(false\);\s*\} catch \(e\) \{[\s\S]*?setRows\(\[\]\);\s*setLoadFailed\(true\);/);
   });
 
+  // Mutation caught: a failed load shown with the empty list's words, or the
+  // failure's words changed (either spelling, see failureWords).
   it('shows the failure, not an empty team, and quotes no member count', () => {
-    expect(src).toContain(`emptyTitle={loadFailed ? '${failedTitle}' : `);
-    expect(src).toContain("? 'Check your connection and pull down to try again.'");
+    expect(failureWords(src)).toEqual({
+      title: failedTitle,
+      body: 'Check your connection and pull down to try again.',
+    });
     expect(src).toMatch(new RegExp(`loadFailed\\s*\\? ${neutralEyebrow.replace(/[·]/g, '.')}`));
   });
 });
