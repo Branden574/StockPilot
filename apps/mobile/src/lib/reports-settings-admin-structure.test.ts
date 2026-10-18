@@ -15,6 +15,7 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
+import { unsentWorkDetail } from './rejected-work';
 import { palette, type Palette } from './theme';
 
 /**
@@ -711,6 +712,48 @@ describe('Settings: the account screen', () => {
     expect(flatCode(SETTINGS)).toContain(
       "detail={cap && !cap.hasHardware ? 'No hardware' : 'Tap to enrol'}",
     );
+  });
+
+  // The defect (the failed-read class of D25, fixed on the Unsent work screen
+  // it opens): the three counts start at 0 and a count that threw left them
+  // there, so the row read "None" over work the device could not read. The
+  // detail the row renders is run here with the real wording. Mutation
+  // caught: the flag dropped from the detail, a catch that no longer marks
+  // the read failed, or a flag never cleared once the counts answer.
+  it('the Unsent work row shows no detail after a count that failed, never "None"', () => {
+    const sf = treeOf(SETTINGS);
+    const rows = elementsIn(sf).filter(
+      (n) => tagOf(n.el, sf) === 'SettingRow' && attrText(n.el, 'title', sf) === 'Unsent work',
+    );
+    expect(rows).toHaveLength(1);
+    const detail = attrText(rows[0]!.el, 'detail', sf)!;
+    const run = (countsFailed: boolean, rejected: number, held: number, unconfirmed: number) =>
+      runCondition(detail, {
+        countsFailed,
+        unsentWorkDetail,
+        rejectedCount: rejected,
+        heldCount: held,
+        unconfirmedCount: unconfirmed,
+      });
+    expect(run(false, 0, 0, 0)).toBe('None');
+    expect(run(true, 0, 0, 0)).toBeUndefined();
+    expect(run(false, 3, 1, 1)).toBe('2 never sent · 1 not confirmed · 1 from another account');
+    expect(run(true, 3, 1, 1)).toBeUndefined();
+    // Each catch marks this read failed; the flag is set once all three
+    // counts have answered or failed, so a read that answers clears it.
+    const settings = flatCode(SETTINGS);
+    for (const [read, setter, word] of [
+      ['countRejected', 'setRejectedCount', 'rejected'],
+      ['countHeld', 'setHeldCount', 'held'],
+      ['countUnconfirmedAdjust', 'setUnconfirmedCount', 'unconfirmed'],
+    ] as const) {
+      expect(settings).toContain(
+        `try { const n = await ${read}(); if (!cancelled) ${setter}(n); } catch (e) { console.warn('[settings] ${word} count failed', e); failed = true; }`,
+      );
+    }
+    expect(settings).toContain('let failed = false; try { const n = await countRejected();');
+    expect(settings).toContain('failed = true; } if (!cancelled) setCountsFailed(failed); })();');
+    expect(settings).toContain('const [countsFailed, setCountsFailed] = React.useState(false);');
   });
 
   it('keeps every row, web page, confirmation and the account deletion with the typed DELETE', () => {

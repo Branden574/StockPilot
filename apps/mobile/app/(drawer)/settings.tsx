@@ -92,7 +92,9 @@ const OTA_ID = Updates.updateId ? Updates.updateId.slice(0, 8) : null;
  * the per-mode refusal red. Every row is announced as a button. The Face ID
  * switch is reachable on its own: while it can be turned on it is no longer
  * inside an outer touchable, which VoiceOver read as one element whose double
- * tap did nothing, so the switch could not be flipped without sight.
+ * tap did nothing, so the switch could not be flipped without sight. The
+ * Unsent work row shows no detail after a count that failed, where it said
+ * "None" over work the device could not read.
  */
 export default function Settings() {
   const { signOut, biometricEnabled, enableBiometric, disableBiometric } = useAuth();
@@ -119,6 +121,9 @@ export default function Settings() {
   // Of rejectedCount: stock adjustments whose answer never came back, which
   // may have been applied (adjust-outbox.ts). Not called "never sent".
   const [unconfirmedCount, setUnconfirmedCount] = React.useState(0);
+  // The last read of the three counts had one that failed: the Unsent work
+  // row then shows no detail, never "None" over work it could not read.
+  const [countsFailed, setCountsFailed] = React.useState(false);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -133,17 +138,21 @@ export default function Settings() {
 
   // Count the terminally-rejected outbox rows so the row can say how many there
   // are without opening the screen. Re-read on focus: coming back from the list
-  // after clearing it must not leave a stale count behind. Never fatal — a
-  // failed count just leaves the row reading "None".
+  // after clearing it must not leave a stale count behind. Never fatal, and
+  // never "None" over a read that failed (the failed-read class of D25): a
+  // count that throws leaves the row with no detail, as the Unsent work screen
+  // it opens says the failure, until all three counts answer again.
   useFocusEffect(
     React.useCallback(() => {
       let cancelled = false;
       void (async () => {
+        let failed = false;
         try {
           const n = await countRejected();
           if (!cancelled) setRejectedCount(n);
         } catch (e) {
           console.warn('[settings] rejected count failed', e);
+          failed = true;
         }
         // Work queued here by ANOTHER account, held for them: only the Unsent
         // work screen can discard it, so the row must not read "None" over it.
@@ -152,13 +161,16 @@ export default function Settings() {
           if (!cancelled) setHeldCount(n);
         } catch (e) {
           console.warn('[settings] held count failed', e);
+          failed = true;
         }
         try {
           const n = await countUnconfirmedAdjust();
           if (!cancelled) setUnconfirmedCount(n);
         } catch (e) {
           console.warn('[settings] unconfirmed count failed', e);
+          failed = true;
         }
+        if (!cancelled) setCountsFailed(failed);
       })();
       return () => {
         cancelled = true;
@@ -464,11 +476,17 @@ export default function Settings() {
           <SettingRow
             icon={FileWarning}
             title="Unsent work"
-            detail={unsentWorkDetail({
-              rejected: rejectedCount,
-              held: heldCount,
-              unconfirmed: unconfirmedCount,
-            })}
+            // No detail while the last read of the counts failed: never
+            // "None" over work the device could not read.
+            detail={
+              countsFailed
+                ? undefined
+                : unsentWorkDetail({
+                    rejected: rejectedCount,
+                    held: heldCount,
+                    unconfirmed: unconfirmedCount,
+                  })
+            }
             chevron
             onPress={() => router.push('/settings/rejected-work' as never)}
           />
