@@ -6,19 +6,21 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { MintWash } from '@/components/ui/mint-wash';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
-import { ACCENT, FONT } from '@/lib/theme';
+import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
- * AI Assistant entry point. The conversation surface itself (streamed
- * tokens, tool calls, citations) lives on web — porting that to React
- * Native with the same fidelity is its own project, so this screen
- * acts as the launcher: explains what it does, lists example prompts,
- * and deep-links to the web chat. Same `/dashboard/ai` URL as the web.
+ * AI Assistant launcher: says what the assistant does, lists example
+ * prompts, and opens the native chat (app/ai/chat.tsx, the same /api/ai/chat
+ * engine the web uses). Each prompt opens the chat too; its words are not
+ * carried into it.
+ *
+ * The footer used to say native chat "ships after the desktop beta exits"
+ * while Start chat already opened it (redesign defect D28); it now says what
+ * is true, in the beta words the eyebrow and the pill already use.
  */
 export default function AIAssistantScreen() {
   const { c } = useTheme();
@@ -70,12 +72,9 @@ export default function AIAssistantScreen() {
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <Card hero style={styles.heroCard}>
-          <View pointerEvents="none" style={styles.washPos}>
-            <MintWash width={240} height={240} intensity={0.22} />
-          </View>
-          <View style={[styles.iconWell, { backgroundColor: c.paper2, borderColor: c.hair }]}>
+          <View style={[styles.iconWell, { backgroundColor: c.sunk, borderColor: c.hair }]}>
             <Sparkles size={36} color={c.ink} strokeWidth={1.3} />
-            <View style={[styles.pip, { backgroundColor: ACCENT.mint }]} />
+            <View style={[styles.pip, { backgroundColor: c.accent }]} />
           </View>
           <Pill status="ok">BETA · NATIVE</Pill>
           <Display size={20} style={{ textAlign: 'center', marginTop: 4 }}>
@@ -84,7 +83,13 @@ export default function AIAssistantScreen() {
           <Body muted style={{ textAlign: 'center', maxWidth: 320 }}>
             Natural-language queries that resolve to real reads + writes — what&apos;s low, which POs are stuck, who needs reordering. Streamed responses with tool calls, same engine the web uses.
           </Body>
-          <Button block onPress={openChat} trailing={<ArrowUpRight size={16} color={c.paper} strokeWidth={1.6} />}>
+          {/* Starting a chat is the page's create action: the accent button. */}
+          <Button
+            block
+            variant="accent"
+            onPress={openChat}
+            trailing={<ArrowUpRight size={16} color={c.accentInk} strokeWidth={1.6} />}
+          >
             Start chat
           </Button>
         </Card>
@@ -96,6 +101,7 @@ export default function AIAssistantScreen() {
               <Pressable
                 key={ex}
                 onPress={() => openChat()}
+                accessibilityRole="button"
                 style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
               >
                 <Card padding={14}>
@@ -112,13 +118,19 @@ export default function AIAssistantScreen() {
           </View>
         </View>
 
-        <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 18, textAlign: 'center' }}>
-          Native mobile chat ships after the desktop beta exits.
+        <Mono size={10.5} tracking={0.04} color={c.ink3} style={{ marginTop: 18, textAlign: 'center' }}>
+          {AI_FOOTER}
         </Mono>
       </ScrollView>
     </View>
   );
 }
+
+/**
+ * The footer, corrected (D28): native chat is here (Start chat opens it) and
+ * in beta, as the eyebrow's BETA and the BETA · NATIVE pill say.
+ */
+const AI_FOOTER = 'Native mobile chat is in beta.';
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
@@ -137,10 +149,7 @@ const styles = StyleSheet.create({
     padding: 24,
     alignItems: 'center',
     gap: 16,
-    overflow: 'hidden',
-    position: 'relative',
   },
-  washPos: { position: 'absolute', top: -50, left: '50%', marginLeft: -120 },
   iconWell: {
     width: 88,
     height: 88,
