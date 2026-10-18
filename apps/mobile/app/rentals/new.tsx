@@ -152,6 +152,9 @@ export default function NewRental() {
   const [stockError, setStockError] = React.useState<string | null>(null);
   const [itemsNonce, setItemsNonce] = React.useState(0);
   const [search, setSearch] = React.useState('');
+  // The item search's border deepens to ink while it is typed in, as the
+  // shared Field's does (DESIGN-SPEC 6.3: never a search with no visible focus).
+  const [searchFocused, setSearchFocused] = React.useState(false);
   /** itemId → quantity. The cart; each entry becomes one `lines[]` element. */
   const [cart, setCart] = React.useState<Record<string, number>>({});
   // The borrower: a picked team member, or anyone else by typed name and
@@ -534,11 +537,18 @@ export default function NewRental() {
           </FormSection>
 
           <FormSection icon={PackageOpen} label={`ITEMS${lines.length > 0 ? ` · ${lines.length}` : ''}`}>
-            <View style={[styles.search, { borderColor: c.hair2, backgroundColor: c.card }]}>
+            <View
+              style={[
+                styles.search,
+                { borderColor: searchFocused ? c.ink : c.hair2, backgroundColor: c.card },
+              ]}
+            >
               <Search size={14} color={c.ink3} strokeWidth={1.5} />
               <TextInput
                 value={search}
                 onChangeText={setSearch}
+                onFocus={() => setSearchFocused(true)}
+                onBlur={() => setSearchFocused(false)}
                 placeholder="Search rental items"
                 placeholderTextColor={c.ink3}
                 autoCapitalize="none"

@@ -33,7 +33,8 @@ import { palette, type Palette } from './theme';
  *     choices, Try again and Change (they were 32-38pt, some with hitSlop),
  *     and the rental's Try again;
  *   - the checkout's text boxes on the shared Field's recipe (muted ink3
- *     labels and hints, the stronger border, named for VoiceOver).
+ *     labels and hints, the stronger border, named for VoiceOver), and its
+ *     item search showing its focus as they do.
  *
  * The behaviour stays pinned where it was: rental-checkout-wiring,
  * rental-detail-wiring, rental-items and rental-screens-a11y. The screens are
@@ -306,6 +307,26 @@ describe('Check out', () => {
     );
   });
 
+  // Mutation caught: the search box back on a constant border (DESIGN-SPEC
+  // 6.3: never a search field with no visible focus), or focus and blur not
+  // wired to the search's own input.
+  it('the item search shows its focus as the text boxes do: the border deepens to ink', () => {
+    expect(code).toContain('const [searchFocused, setSearchFocused] = React.useState(false);');
+    expect(code).toContain(
+      'styles.search, { borderColor: searchFocused ? c.ink : c.hair2, backgroundColor: c.card },',
+    );
+    const { sf, els } = elements(
+      CHECKOUT,
+      (el, s) =>
+        tagOf(el, s) === 'TextInput' &&
+        attrText(el, 'accessibilityLabel', s) === 'Search rental items',
+    );
+    expect(els).toHaveLength(1);
+    expect(attrText(els[0]!, 'onFocus', sf)).toBe('() => setSearchFocused(true)');
+    expect(attrText(els[0]!, 'onBlur', sf)).toBe('() => setSearchFocused(false)');
+    expect(attrText(els[0]!, 'onChangeText', sf)).toBe('setSearch');
+  });
+
   it("the text boxes: the shared Field's recipe, named by their label, focus and blur still reach the caller", () => {
     const fn = code.slice(code.indexOf('function Field('));
     expect(fn).toContain('<Mono size={10} tracking={0.12} upper color={c.ink3}> {label} </Mono>');
@@ -396,7 +417,7 @@ describe('contrast, both modes', () => {
     ['accent', 'card', 'an email recorded as sent'],
     ['warnText', 'card', 'an email warning'],
     ['ink3', 'card', 'no email, the search glyph'],
-    ['ink', 'card', 'the stepper glyphs'],
+    ['ink', 'card', 'the stepper glyphs, the border of a focused text box or search'],
     ['warnText', 'warnWash', "the stale banner's glyph"],
   ];
 
