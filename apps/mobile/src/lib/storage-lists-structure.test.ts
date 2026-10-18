@@ -222,7 +222,7 @@ describe('D25: a failed read is said, never shown as an empty list', () => {
     });
 
     it('a failed read lands through settleList, after the newest-read check', () => {
-      expect(code).toContain('if (error) throw error;');
+      expect(code).toContain('if (error) throw new Error(error.message);');
       expect(code).toMatch(
         /if \(!orgId\) return; const seq = \+\+seqRef\.current; let rows: \w+\[\] \| null = null; try \{/,
       );

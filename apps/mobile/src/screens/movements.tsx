@@ -108,7 +108,9 @@ export default function MovementsScreen() {
         .eq('organization_id', orgId)
         .order('created_at', { ascending: false })
         .limit(100);
-      if (error) throw error;
+      // Only the message travels on (and into the warning below): never the
+      // whole PostgREST error object.
+      if (error) throw new Error(error.message);
 
       // Web parity (packages/core movement-order-ref.ts): pick/cancel rows
       // written before migration 0306 stringified the ORDER'S UUID into their

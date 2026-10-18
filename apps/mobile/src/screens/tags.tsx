@@ -70,7 +70,9 @@ export default function TagsScreen() {
         .select('id, name, color')
         .eq('organization_id', orgId)
         .order('name', { ascending: true });
-      if (error) throw error;
+      // Only the message travels on (and into the warning below): never the
+      // whole PostgREST error object.
+      if (error) throw new Error(error.message);
       rows = (data ?? []) as TagRow[];
     } catch (e) {
       console.warn('[tags] load failed:', e instanceof Error ? e.message : e);

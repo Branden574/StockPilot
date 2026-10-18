@@ -120,7 +120,9 @@ export default function Categories() {
         .eq('organization_id', orgId)
         .is('deleted_at', null)
         .order('name', { ascending: true });
-      if (error) throw error;
+      // Only the message travels on (and into the warning below): never the
+      // whole PostgREST error object.
+      if (error) throw new Error(error.message);
 
       // Count items per category so the row tells the user how big each
       // category is. RLS limits to their org.

@@ -80,7 +80,9 @@ export default function ProceduresScreen() {
         .is('archived_at', null)
         .order('updated_at', { ascending: false })
         .limit(100);
-      if (error) throw error;
+      // Only the message travels on (and into the warning below): never the
+      // whole PostgREST error object.
+      if (error) throw new Error(error.message);
       rows = (data ?? []).map((row) => {
         const r = row as Record<string, unknown>;
         const cat = r.category as { name: string | null } | { name: string | null }[] | null;
