@@ -13,6 +13,13 @@ interface StatCardProps {
   className?: string;
 }
 
+/**
+ * One figure in its own card (Overview stat row, purchase orders, warehouse
+ * detail), drawn as a cell of the reference's stat strip (DESIGN-SPEC 6.8):
+ * a flat hairline card, the label quiet at 12.5, the figure in Inter Tight
+ * 24 / 500, the foot line at 12, and the delta in mono, accent when it rises
+ * and destructive when it falls. Props and every consumer are unchanged.
+ */
 export function StatCard({
   label,
   value,
@@ -26,38 +33,38 @@ export function StatCard({
   return (
     <div
       className={cn(
-        'border-border bg-card flex min-h-[136px] flex-col justify-between gap-3 overflow-hidden rounded-lg border px-4 py-4 shadow-[0_10px_34px_rgba(14,15,13,0.04)] transition-colors hover:border-[var(--ed-line-strong)]',
+        'border-border bg-card flex min-h-[106px] min-w-0 flex-col justify-between gap-2 overflow-hidden rounded-lg border px-[18px] py-4',
         className,
       )}
     >
-      <div className="flex items-center gap-1.5 text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--ed-ink-4)]">
-        {Icon && <Icon className="h-3 w-3 text-[var(--ed-ink-4)]" />}
+      <div className="text-muted-foreground flex items-center gap-1.5 text-[12.5px] leading-[18.75px]">
+        {Icon && <Icon aria-hidden className="h-3.5 w-3.5 shrink-0" strokeWidth={1.6} />}
         {label}
       </div>
 
       <div className="flex min-w-0 items-end justify-between gap-3">
-        <p className="font-display min-w-0 truncate text-[32px] font-medium tabular-nums leading-[1.05] tracking-[-0.025em]">
+        <p className="text-foreground min-w-0 truncate text-[24px] font-medium tabular-nums leading-9 tracking-[-0.02em] [font-family:var(--font-display)]">
           {value}
         </p>
         {series && series.length > 1 && (
-          <Sparkline data={series} width={84} height={26} tone={dir} />
+          <Sparkline data={series} width={72} height={22} tone={dir} className="shrink-0" />
         )}
       </div>
 
       {(foot || delta) && (
-        <div className="flex items-center justify-between text-[11.5px]">
-          <span className="text-[var(--ed-ink-3)]">{foot}</span>
+        <div className="flex items-center justify-between gap-2 text-[12px] leading-[18px]">
+          <span className="text-muted-foreground min-w-0">{foot}</span>
           {delta && (
             <span
               className={cn(
-                'inline-flex items-center gap-0.5 font-mono text-[11px] tabular-nums',
-                dir === 'up' && 'text-[hsl(var(--accent-foreground))]',
-                dir === 'down' && 'text-[hsl(var(--destructive))]',
-                dir === 'flat' && 'text-[var(--ed-ink-3)]',
+                'inline-flex shrink-0 items-center gap-0.5 font-mono text-[11.5px] tabular-nums',
+                dir === 'up' && 'text-accent',
+                dir === 'down' && 'text-destructive',
+                dir === 'flat' && 'text-muted-foreground',
               )}
             >
-              {dir === 'up' && <ArrowUp className="h-2.5 w-2.5" />}
-              {dir === 'down' && <ArrowDown className="h-2.5 w-2.5" />}
+              {dir === 'up' && <ArrowUp aria-hidden className="h-2.5 w-2.5" />}
+              {dir === 'down' && <ArrowDown aria-hidden className="h-2.5 w-2.5" />}
               {delta.value}
             </span>
           )}
