@@ -43,18 +43,25 @@ import { useTheme } from '@/lib/use-theme';
 
 /**
  * Where the screen is before the distribute form: still reading the cache
- * ('loading'), done reading with no such bundle on this phone ('missing': a
- * link to a bundle that has not synced yet, or one taken off the cache), or
- * the bundle ('ready'). It used to spin for good when the bundle was not
- * cached, with no way back on screen.
+ * ('loading'), the read of the cached bundles threw ('failed': the phone could
+ * not say whether it holds the bundle), done reading with no such bundle on
+ * this phone ('missing': a link to a bundle that has not synced yet, or one
+ * taken off the cache), or the bundle ('ready'). It used to spin for good when
+ * the bundle was not cached, with no way back on screen, and a read that threw
+ * was then said as "not on this phone".
  */
 function bundleScreenState(
   bundle: CachedBundle | null,
   looked: boolean,
-): 'loading' | 'missing' | 'ready' {
+  failed: boolean,
+): 'loading' | 'failed' | 'missing' | 'ready' {
   if (bundle) return 'ready';
+  if (failed) return 'failed';
   return looked ? 'missing' : 'loading';
 }
+
+/** The cache read that threw: the cached bundles, or a part of the bundle found. */
+type FailedRead = 'bundle' | 'components' | 'warehouses';
 
 /**
  * One bundle: its components and, for a manager who may, distributing kits
@@ -83,6 +90,10 @@ export default function BundleDetail() {
   const [bundle, setBundle] = React.useState<CachedBundle | null>(null);
   // The cache has been read for this bundle (found or not).
   const [looked, setLooked] = React.useState(false);
+  // Which read threw, if one did: said on screen, never as a bundle that is
+  // not on this phone, an empty Components card or a Distribute that is off
+  // for no reason.
+  const [failedRead, setFailedRead] = React.useState<FailedRead | null>(null);
   const [components, setComponents] = React.useState<CachedBundleComponent[]>([]);
   const [items, setItems] = React.useState<Map<string, CachedItem>>(new Map());
   const [warehouses, setWarehouses] = React.useState<CachedWarehouse[]>([]);
@@ -94,19 +105,26 @@ export default function BundleDetail() {
   React.useEffect(() => {
     void (async () => {
       if (!id) return;
+      // The read under way, so a throw says which one failed.
+      let reading: FailedRead = 'bundle';
       try {
         const all = await listBundles();
         const b = all.find((x) => x.id === id) ?? null;
         setBundle(b);
         if (!b) return;
+        reading = 'components';
         const comps = await getBundleComponents(b.id);
-        setComponents(comps);
         const itemMap = new Map<string, CachedItem>();
         for (const c of comps) {
           const item = await getItemById(c.itemId);
           if (item) itemMap.set(c.itemId, item);
         }
+        // The components show with their items, once every item is read: a
+        // read that threw part way showed the components whose items it had
+        // not read as "(deleted)".
+        setComponents(comps);
         setItems(itemMap);
+        reading = 'warehouses';
         const whs = await listWarehouses();
         setWarehouses(whs);
         // Start on the warehouse the kit can actually be handed out from: the
@@ -121,6 +139,7 @@ export default function BundleDetail() {
         );
       } catch (e) {
         console.warn('[bundle] cache read failed:', e instanceof Error ? e.message : e);
+        setFailedRead(reading);
       } finally {
         setLooked(true);
       }
@@ -240,14 +259,22 @@ export default function BundleDetail() {
 
   if (!bundle) {
     // No id at all is a bundle this phone cannot hold either.
-    const state = bundleScreenState(bundle, looked || !id);
+    const state = bundleScreenState(bundle, looked || !id, failedRead === 'bundle');
     return (
       <SafeAreaView style={[styles.root, { backgroundColor: c.paper }]} edges={['top']}>
         <Stack.Screen options={{ headerShown: false }} />
         <View style={[styles.header, { borderBottomColor: c.hair }]}>
           <BackLink onPress={() => router.back()} />
         </View>
-        {state === 'missing' ? (
+        {state === 'failed' ? (
+          <View style={styles.body}>
+            <Card padding={16}>
+              <Body size={14.5} color={c.warnText} accessibilityRole="alert">
+                Could not read this bundle on this phone. Go back and try again.
+              </Body>
+            </Card>
+          </View>
+        ) : state === 'missing' ? (
           <View style={styles.body}>
             <Card padding={16}>
               <Body size={14.5} accessibilityRole="alert">
@@ -294,6 +321,11 @@ export default function BundleDetail() {
         )}
 
         <SectionLabel>Components</SectionLabel>
+        {failedRead === 'components' ? (
+          <Body size={13} color={c.warnText} accessibilityRole="alert">
+            Could not read this bundle&apos;s components on this phone. Go back and try again.
+          </Body>
+        ) : null}
         {/* One card, a hairline between components (the reference's list). */}
         {components.length > 0 ? (
           <Card>
@@ -340,6 +372,17 @@ export default function BundleDetail() {
               <Mono size={10} tracking={0.12} upper color={c.ink3} style={{ marginTop: space.md }}>
                 Warehouse
               </Mono>
+              {/* No warehouse to choose, so Distribute stays off: say why. */}
+              {failedRead === 'warehouses' ? (
+                <Body
+                  size={13}
+                  color={c.warnText}
+                  accessibilityRole="alert"
+                  style={{ marginTop: 6 }}
+                >
+                  Could not read the warehouses on this phone. Go back and try again.
+                </Body>
+              ) : null}
               <View style={styles.whRow}>
                 {warehouses.map((w) => {
                   const active = w.id === warehouseId;

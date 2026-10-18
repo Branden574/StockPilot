@@ -19,6 +19,32 @@ import { syncNow } from '@/lib/sync';
 import { FONT, space } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
+/** Where the read of the offline cache is: not answered yet, read, or failed. */
+type CacheRead = 'pending' | 'ok' | 'failed';
+
+/**
+ * What the list's body shows besides its rows. A cache read that failed is
+ * never "No bundles synced yet." (CONFLICTS D25): with no rows the failure is
+ * said in their place, and rows from an earlier read stay under a note that
+ * says they could not be refreshed. Before the first read answers, nothing is
+ * claimed: the spinner shows. A pull shows its own spinner, so the body's
+ * stays away and one refresh never shows two.
+ */
+function bundlesListBody(
+  read: CacheRead,
+  rowCount: number,
+  refreshing: boolean,
+  pulling: boolean,
+): { spinner: boolean; words: 'empty' | 'failed' | null; staleNote: boolean } {
+  const empty = rowCount === 0;
+  return {
+    spinner: empty && !pulling && (refreshing || read === 'pending'),
+    words:
+      empty && !refreshing && read !== 'pending' ? (read === 'failed' ? 'failed' : 'empty') : null,
+    staleNote: !empty && read === 'failed',
+  };
+}
+
 /**
  * Bundles: the kits this phone holds in its offline cache (the sync
  * snapshot, RLS-scoped), each opening its bundle. Refresh (the button, or a
@@ -34,14 +60,25 @@ export default function BundlesList() {
   const { c } = useTheme();
   const router = useRouter();
   const [rows, setRows] = React.useState<CachedBundle[]>([]);
+  const [read, setRead] = React.useState<CacheRead>('pending');
   const [refreshing, setRefreshing] = React.useState(false);
   // A pull's own spinner: the list's pull-to-refresh shows it, so the body's
   // spinner stays away and one refresh never shows two.
   const [pulling, setPulling] = React.useState(false);
 
+  // A cache read that throws is caught here and said on screen
+  // (bundlesListBody): it used to escape as an unhandled rejection from the
+  // first load, Refresh and a pull, and leave "No bundles synced yet." over a
+  // read that had failed. The rows already shown stay.
   const load = React.useCallback(async () => {
-    const list = await listBundles();
-    setRows(list);
+    try {
+      const list = await listBundles();
+      setRows(list);
+      setRead('ok');
+    } catch (e) {
+      console.warn('[bundles] cache read failed:', e instanceof Error ? e.message : e);
+      setRead('failed');
+    }
   }, []);
 
   React.useEffect(() => {
@@ -50,7 +87,9 @@ export default function BundlesList() {
   }, [load]);
 
   // The refreshing state ends when this refresh ends, whatever happened: a
-  // cache read that threw used to leave Refresh busy for good.
+  // cache read that threw used to leave Refresh busy for good. Neither step
+  // rejects (syncNow and load catch their own failures), so neither does
+  // this, from the button or from a pull.
   async function refresh() {
     setRefreshing(true);
     try {
@@ -71,6 +110,8 @@ export default function BundlesList() {
       setPulling(false);
     }
   }
+
+  const body = bundlesListBody(read, rows.length, refreshing, pulling);
 
   return (
     <SafeAreaView style={[styles.root, { backgroundColor: c.paper }]} edges={['top']}>
@@ -111,12 +152,19 @@ export default function BundlesList() {
           <RefreshControl refreshing={pulling} onRefresh={() => void pull()} tintColor={c.ink} />
         }
       >
-        {refreshing && !pulling && rows.length === 0 ? (
-          <ActivityIndicator color={c.ink} style={{ marginTop: space.xl }} />
-        ) : null}
-        {rows.length === 0 && !refreshing ? (
+        {body.spinner ? <ActivityIndicator color={c.ink} style={{ marginTop: space.xl }} /> : null}
+        {body.words === 'failed' ? (
+          <Body color={c.warnText} accessibilityRole="alert" style={styles.empty}>
+            Could not read the bundles saved on this phone. Tap Refresh to try again.
+          </Body>
+        ) : body.words === 'empty' ? (
           <Body muted style={styles.empty}>
             No bundles synced yet. Pull-to-refresh or check back after the next sync.
+          </Body>
+        ) : null}
+        {body.staleNote ? (
+          <Body size={13} color={c.warnText} accessibilityRole="alert">
+            Could not refresh the bundles. Tap Refresh to try again.
           </Body>
         ) : null}
         {rows.map((b) => (

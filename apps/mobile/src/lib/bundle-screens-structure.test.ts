@@ -32,7 +32,13 @@ import { palette, type Palette } from './theme';
  *   - Refresh stayed busy for good when the cache read threw (no finally);
  *   - the empty words promise "Pull-to-refresh" and there was no pull;
  *   - the warehouse choices and the bundle rows had no button role, and
- *     Distribute hid its words behind the spinner while it sent.
+ *     Distribute hid its words behind the spinner while it sent;
+ *   - a cache read that threw (CONFLICTS D25): on Bundles it escaped as an
+ *     unhandled rejection and left "No bundles synced yet." on screen (its
+ *     own bundlesListBody is run below); on a bundle it was said as "not on
+ *     this phone", and a throw after the bundle was found left an empty
+ *     Components section, or its items read as "(deleted)", and Distribute
+ *     off with no reason.
  */
 
 const MOBILE_ROOT = path.resolve(__dirname, '../..');
@@ -214,8 +220,58 @@ describe('Bundles', () => {
     expect(code).toContain(
       'async function pull() { setPulling(true); try { await refresh(); } finally { setPulling(false); } }',
     );
-    expect(code).toContain('{refreshing && !pulling && rows.length === 0 ? (');
-    expect(code).toContain('{rows.length === 0 && !refreshing ? (');
+    expect(code).toContain('const body = bundlesListBody(read, rows.length, refreshing, pulling);');
+    expect(code).toContain(
+      '{body.spinner ? <ActivityIndicator color={c.ink} style={{ marginTop: space.xl }} /> : null}',
+    );
+  });
+
+  // Mutation caught: any branch of the rule changed: the empty words over a
+  // read that failed (D25) or over one that has not answered, the failure
+  // hidden while earlier rows stay, or two spinners for one pull.
+  it('its own bundlesListBody: a failed read is said, never the empty words', () => {
+    const body = screenFunction(LIST, 'bundlesListBody');
+    const shows = (spinner: boolean, words: string | null, staleNote: boolean) => ({
+      spinner,
+      words,
+      staleNote,
+    });
+    // Before the first read answers: the spinner, and no claim either way.
+    expect(body('pending', 0, false, false)).toEqual(shows(true, null, false));
+    // Read, with none cached: the empty words.
+    expect(body('ok', 0, false, false)).toEqual(shows(false, 'empty', false));
+    // The read threw with none shown: the failure in their place.
+    expect(body('failed', 0, false, false)).toEqual(shows(false, 'failed', false));
+    // The read threw over rows from an earlier read: they stay, under the note.
+    expect(body('failed', 3, false, false)).toEqual(shows(false, null, true));
+    expect(body('ok', 3, false, false)).toEqual(shows(false, null, false));
+    // Refreshing with nothing shown: the body's spinner; during a pull only
+    // the pull's own.
+    expect(body('ok', 0, true, false)).toEqual(shows(true, null, false));
+    expect(body('failed', 0, true, true)).toEqual(shows(false, null, false));
+    expect(body('ok', 3, true, false)).toEqual(shows(false, null, false));
+  });
+
+  // Mutation caught: the old load() with no catch: a cache read that threw
+  // escaped as an unhandled rejection from the first load, from Refresh
+  // (onPress={refresh}) and from a pull (void pull()).
+  it('the cache read is caught and kept, so the first load, Refresh and a pull never reject', () => {
+    expect(code).toContain(
+      "const load = React.useCallback(async () => { try { const list = await listBundles(); setRows(list); setRead('ok'); } catch (e) { console.warn('[bundles] cache read failed:', e instanceof Error ? e.message : e); setRead('failed'); } }, []);",
+    );
+    expect(code).toContain("const [read, setRead] = React.useState<CacheRead>('pending');");
+  });
+
+  // Mutation caught: the failure words swapped into the empty words' place
+  // without their tone or announcement, the empty words shown for a failed
+  // read, or the note above earlier rows dropped.
+  it('the failure words: the warning tone, announced, in place of the empty words or above the rows', () => {
+    expect(code).toContain(
+      "{body.words === 'failed' ? ( <Body color={c.warnText} accessibilityRole=\"alert\" style={styles.empty}> Could not read the bundles saved on this phone. Tap Refresh to try again. </Body> ) : body.words === 'empty' ? ( <Body muted style={styles.empty}> No bundles synced yet. Pull-to-refresh or check back after the next sync. </Body> ) : null}",
+    );
+    expect(code).toContain(
+      '{body.staleNote ? ( <Body size={13} color={c.warnText} accessibilityRole="alert"> Could not refresh the bundles. Tap Refresh to try again. </Body> ) : null}',
+    );
   });
 
   it('a row is a button that opens its bundle, on the reference card', () => {
@@ -241,25 +297,75 @@ describe('a bundle', () => {
   const code = flatCode(DETAIL);
 
   // Mutation caught: any branch of the rule changed (a missing bundle shown
-  // as the endless spinner again).
+  // as the endless spinner again, or a read that threw said as missing).
   it('its own bundleScreenState: the spinner only while the cache is read', () => {
     const state = screenFunction(DETAIL, 'bundleScreenState');
     const bundle = { id: 'b1' };
-    expect(state(null, false)).toBe('loading');
-    expect(state(null, true)).toBe('missing');
-    expect(state(bundle, false)).toBe('ready');
-    expect(state(bundle, true)).toBe('ready');
+    expect(state(null, false, false)).toBe('loading');
+    expect(state(null, true, false)).toBe('missing');
+    expect(state(null, true, true)).toBe('failed');
+    expect(state(bundle, false, false)).toBe('ready');
+    expect(state(bundle, true, false)).toBe('ready');
+    expect(state(bundle, true, true)).toBe('ready');
   });
 
   // Mutation caught: `looked` set only on success (a cache read that throws
-  // spins for good), or a missing id never counted as looked.
+  // spins for good), the failed read not kept, or a missing id never counted
+  // as looked.
   it('the cache read always ends as looked, and no id is a bundle this phone cannot hold', () => {
     expect(code).toMatch(
-      /\} catch \(e\) \{ console\.warn\('\[bundle\] cache read failed:', e instanceof Error \? e\.message : e\); \} finally \{ setLooked\(true\); \}/,
+      /\} catch \(e\) \{ console\.warn\('\[bundle\] cache read failed:', e instanceof Error \? e\.message : e\); setFailedRead\(reading\); \} finally \{ setLooked\(true\); \}/,
     );
-    expect(code).toContain('const state = bundleScreenState(bundle, looked || !id);');
     expect(code).toContain(
-      '{state === \'missing\' ? ( <View style={styles.body}> <Card padding={16}> <Body size={14.5} accessibilityRole="alert"> This bundle is not on this phone. Go back to Bundles and tap Refresh, or check back after the next sync. </Body>',
+      "const state = bundleScreenState(bundle, looked || !id, failedRead === 'bundle');",
+    );
+    expect(code).toContain(
+      ') : state === \'missing\' ? ( <View style={styles.body}> <Card padding={16}> <Body size={14.5} accessibilityRole="alert"> This bundle is not on this phone. Go back to Bundles and tap Refresh, or check back after the next sync. </Body>',
+    );
+  });
+
+  // Mutation caught: a read of the cached bundles that threw said as "This
+  // bundle is not on this phone" again, or without its tone or announcement.
+  it('a read that threw is said as a failure, never as a bundle not on this phone', () => {
+    expect(code).toContain(
+      "{state === 'failed' ? ( <View style={styles.body}> <Card padding={16}> <Body size={14.5} color={c.warnText} accessibilityRole=\"alert\"> Could not read this bundle on this phone. Go back and try again. </Body> </Card> </View> ) : state === 'missing' ? (",
+    );
+  });
+
+  // Mutation caught: the step not moved on before a read (a throw blamed on
+  // the wrong read), or the components shown before their items are read
+  // (a throw part way showed them as "(deleted)").
+  it('which read threw is kept, in order; the components show only with all their items', () => {
+    const start = code.indexOf("let reading: FailedRead = 'bundle';");
+    const end = code.indexOf('setFailedRead(reading);');
+    expect(start).toBeGreaterThan(-1);
+    const effect = code.slice(start, end);
+    let at = -1;
+    for (const step of [
+      'await listBundles()',
+      "reading = 'components';",
+      'await getBundleComponents(b.id)',
+      'await getItemById(c.itemId)',
+      'setComponents(comps); setItems(itemMap);',
+      "reading = 'warehouses';",
+      'await listWarehouses()',
+      'setWarehouseId(',
+    ]) {
+      const i = effect.indexOf(step);
+      expect(i, step).toBeGreaterThan(at);
+      at = i;
+    }
+    expect((effect.match(/setComponents\(/g) ?? []).length).toBe(1);
+  });
+
+  // Mutation caught: a part that could not be read left without its note:
+  // an empty Components section, or Distribute off with no reason.
+  it('a part of a found bundle that could not be read is said where it would show', () => {
+    expect(code).toContain(
+      '<SectionLabel>Components</SectionLabel> {failedRead === \'components\' ? ( <Body size={13} color={c.warnText} accessibilityRole="alert"> Could not read this bundle&apos;s components on this phone. Go back and try again. </Body> ) : null}',
+    );
+    expect(code).toContain(
+      'Warehouse </Mono> {failedRead === \'warehouses\' ? ( <Body size={13} color={c.warnText} accessibilityRole="alert" style={{ marginTop: 6 }} > Could not read the warehouses on this phone. Go back and try again. </Body> ) : null} <View style={styles.whRow}>',
     );
   });
 
@@ -392,6 +498,8 @@ describe('contrast, both modes', () => {
     ['paper', 'ink', 'the chosen warehouse, Distribute'],
     ['ink', 'warnWash', 'the preview lines in a shortage'],
     ['warnText', 'warnWash', 'the shortage line'],
+    ['warnText', 'paper', "the list's failure words and the note above earlier rows"],
+    ['warnText', 'card', "a bundle's failure words and the components and warehouses notes"],
   ];
   const MARKS: [keyof Palette, keyof Palette, string][] = [
     ['ink', 'paper', 'the refresh glyph and spinner'],
