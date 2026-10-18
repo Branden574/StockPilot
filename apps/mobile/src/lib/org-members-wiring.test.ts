@@ -24,24 +24,74 @@ function loadBody(src: string): string {
   return src.slice(start, end);
 }
 
+/** A string literal in either quote style; its text is the first group that matched. */
+const STR = String.raw`(?:'([^']*)'|"([^"]*)")`;
+
 /**
- * The words a list shows in place of its rows when the load failed, in
- * either spelling: DataListScreen's `failed` prop (its failed state, shown
+ * The title and body of a failed-state object literal, `{ title, body }`
+ * with an optional `reloadNote` (DataListScreen's shape), or null when the
+ * text is not one.
+ */
+function failedObject(obj: string): { title: string; body: string } | null {
+  const m = new RegExp(
+    String.raw`^\{\s*title:\s*${STR},\s*body:\s*${STR},?(?:\s*reloadNote:\s*${STR},?)?\s*\}$`,
+  ).exec(obj.trim());
+  return m ? { title: (m[1] ?? m[2])!, body: (m[3] ?? m[4])! } : null;
+}
+
+/**
+ * The words a list shows in place of its rows when the load failed, in any
+ * of these spellings: DataListScreen's `failed` prop (its failed state, shown
  * over the empty state: the redesign's D25 hand-off, which team.tsx took in
- * P5.10), or the empty state's words swapped on the flag (users.tsx). Null
- * when neither is there, so the empty list's words would stand for a failed
- * read.
+ * P5.10) with the object written inline, `failed={loadFailed ? { title,
+ * body } : null}`, or as the screen's own const, `failed={loadFailed ? NAME :
+ * null}` with `const NAME = { title, body, reloadNote? }`; or the empty
+ * state's words swapped on the flag (users.tsx before its restyle). Null when
+ * none is there, so the empty list's words would stand for a failed read.
  */
 function failureWords(src: string): { title: string; body: string } | null {
   const viaFailed =
-    /failed=\{\s*loadFailed\s*\?\s*\{\s*title:\s*'([^']*)',\s*body:\s*'([^']*)',?\s*\}\s*:\s*null,?\s*\}/.exec(
-      src,
-    );
-  if (viaFailed) return { title: viaFailed[1]!, body: viaFailed[2]! };
+    /failed=\{\s*loadFailed\s*\?\s*(\{[^}]*\}|[A-Za-z_$][\w$]*)\s*:\s*null,?\s*\}/.exec(src);
+  if (viaFailed) {
+    const value = viaFailed[1]!;
+    if (value.startsWith('{')) return failedObject(value);
+    const decl = new RegExp(
+      String.raw`\bconst ${value}(?:\s*:[^=]+)?\s*=\s*(\{[^}]*\})(?:\s*as const)?\s*;`,
+    ).exec(src);
+    return decl ? failedObject(decl[1]!) : null;
+  }
   const title = /emptyTitle=\{loadFailed \? '([^']*)' : /.exec(src);
   const body = /emptyBody=\{\s*loadFailed\s*\?\s*'([^']*)'/.exec(src);
   return title && body ? { title: title[1]!, body: body[1]! } : null;
 }
+
+// The reader itself, over each spelling it accepts (and one it must not).
+describe('failureWords', () => {
+  const words = { title: 'Could not load users.', body: 'Check your connection.' };
+  it.each([
+    [
+      "failed={loadFailed ? { title: 'Could not load users.', body: 'Check your connection.' } : null}",
+    ],
+    [
+      `failed={\n  loadFailed\n    ? {\n        title: 'Could not load users.',\n        body: 'Check your connection.',\n      }\n    : null\n}`,
+    ],
+    [
+      "const USERS_LOAD_FAILED = {\n  title: 'Could not load users.',\n  body: 'Check your connection.',\n  reloadNote:\n    'Could not load users again, so these may be out of date.',\n};\n<DataListScreen failed={loadFailed ? USERS_LOAD_FAILED : null} />",
+    ],
+    [
+      `const FAILED: DataListFailed = { title: "Could not load users.", body: 'Check your connection.' };\nfailed={loadFailed ? FAILED : null}`,
+    ],
+    [
+      "emptyTitle={loadFailed ? 'Could not load users.' : 'No users yet.'}\nemptyBody={\n  loadFailed\n    ? 'Check your connection.'\n    : 'Invite people.'\n}",
+    ],
+  ])('reads %#', (src) => {
+    expect(failureWords(src)).toEqual(words);
+  });
+  it('says null for the empty words alone, or a const it cannot find', () => {
+    expect(failureWords("emptyTitle='No users yet.'")).toBeNull();
+    expect(failureWords('failed={loadFailed ? MISSING : null}')).toBeNull();
+  });
+});
 
 describe.each([
   ['users', users, 'Could not load users.', "'ADMIN · USERS'"],
