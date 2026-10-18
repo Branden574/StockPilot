@@ -14,8 +14,9 @@ import { DataListScreen } from '@/components/data-list-screen';
 import { Body, Mono } from '@/components/ui/text';
 import { actorText, isRowPersonDeleted } from '@/lib/deleted-user-labels';
 import { useOrg } from '@/lib/use-org';
+import { retryWorkspace } from '@/lib/use-workspace';
 import { supabase } from '@/lib/supabase';
-import { ACCENT, FONT } from '@/lib/theme';
+import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 interface MovementRow {
@@ -46,6 +47,30 @@ const TYPE_LABEL: Record<string, string> = {
   initial: 'Initialized',
 };
 
+/** What the list shows, and the workspace it was read for. */
+interface ListState<Row> {
+  orgId: string;
+  rows: Row[];
+  /** The last read failed; any rows are an earlier read of this workspace's. */
+  failed: boolean;
+}
+
+/**
+ * The list after one read for `orgId` (`rows` null: the read failed). A failed
+ * read is never "No movements yet." (redesign defect D25): it keeps the rows
+ * this workspace already shows, marked failed so the screen says so above
+ * them, or with none it is the failure itself. Another workspace's rows are
+ * never kept.
+ */
+function settleList<Row>(
+  prev: ListState<Row> | null,
+  orgId: string,
+  rows: Row[] | null,
+): ListState<Row> {
+  if (rows) return { orgId, rows, failed: false };
+  return { orgId, rows: prev && prev.orgId === orgId ? prev.rows : [], failed: true };
+}
+
 /**
  * Stock movements ledger screen. Lives in src/screens so two thin routes can
  * render the same component: the drawer destination
@@ -53,64 +78,77 @@ const TYPE_LABEL: Record<string, string> = {
  * app/(drawer)/(tabs)/movements-tab.tsx (Settings → Customize tab bar).
  * DataListScreen pads for the tab bar only when rendered inside the tabs
  * navigator, so the drawer rendering is unchanged.
+ *
+ * The latest 100 movements, newest first, each opening its item; no filters
+ * on the phone. A failed read says so (DataListScreen's `failed`), never "No
+ * movements yet."; a refresh that fails keeps the list and says so above it;
+ * with no workspace a pull loads it again, as the Locations list does.
  */
 export default function MovementsScreen() {
-  const { orgId } = useOrg();
+  const { orgId, loading: workspaceLoading } = useOrg();
   const router = useRouter();
-  const [rows, setRows] = React.useState<MovementRow[]>([]);
-  const [loading, setLoading] = React.useState(true);
+  const [stored, setStored] = React.useState<ListState<MovementRow> | null>(null);
   const [refreshing, setRefreshing] = React.useState(false);
+  // Only the newest read may land (a refresh, or a workspace switch).
+  const seqRef = React.useRef(0);
 
   const load = React.useCallback(async () => {
     if (!orgId) return;
-    const { data } = await supabase
-      .from('stock_movements')
-      .select(
-        `id, movement_type, quantity_change, previous_quantity, new_quantity,
-         reason, created_at, item_id, user_id, deleted_users,
-         item:inventory_items!item_id (name, sku),
-         actor:user_profiles!user_id (full_name, email)`,
-      )
-      .eq('organization_id', orgId)
-      .order('created_at', { ascending: false })
-      .limit(100);
+    const seq = ++seqRef.current;
+    let rows: MovementRow[] | null = null;
+    try {
+      const { data, error } = await supabase
+        .from('stock_movements')
+        .select(
+          `id, movement_type, quantity_change, previous_quantity, new_quantity,
+           reason, created_at, item_id, user_id, deleted_users,
+           item:inventory_items!item_id (name, sku),
+           actor:user_profiles!user_id (full_name, email)`,
+        )
+        .eq('organization_id', orgId)
+        .order('created_at', { ascending: false })
+        .limit(100);
+      if (error) throw error;
 
-    // Web parity (packages/core movement-order-ref.ts): pick/cancel rows
-    // written before migration 0306 stringified the ORDER'S UUID into their
-    // reason because order_number only arrived in 0254, and the shipped RMA
-    // RPCs (0153/0154/0197) still write a return's uuid the same way. The
-    // ledger is append-only, so both are resolved at read time — ONE batched,
-    // org-scoped lookup per kind for the whole page, never one per row, and
-    // the two run concurrently. A failed/empty lookup degrades to "Order pick"
-    // with the parenthetical dropped; the raw uuid never reaches the card.
-    const legacyRefIds = collectLegacyRefIdsByKind(
-      (data ?? []).map((row) => ({ reason: (row as Record<string, unknown>).reason as string | null })),
-    );
-    const [orders, returns] = await Promise.all([
-      legacyRefIds.order_request.length > 0
-        ? supabase
-            .from('order_requests')
-            .select('id, order_number')
-            .eq('organization_id', orgId)
-            // in-list-bound: legacy refs from the 100 movements this screen reads (.limit(100))
-            .in('id', legacyRefIds.order_request)
-        : Promise.resolve({ data: [] as { id: string; order_number: number | null }[] }),
-      legacyRefIds.return.length > 0
-        ? supabase
-            .from('returns')
-            .select('id, return_number')
-            .eq('organization_id', orgId)
-            // in-list-bound: legacy refs from the 100 movements this screen reads (.limit(100))
-            .in('id', legacyRefIds.return)
-        : Promise.resolve({ data: [] as { id: string; return_number: string | null }[] }),
-    ]);
-    const refLabelById = new Map([
-      ...orderNumberLabels((orders.data ?? []) as { id: string; order_number: number | null }[]),
-      ...returnNumberLabels((returns.data ?? []) as { id: string; return_number: string | null }[]),
-    ]);
+      // Web parity (packages/core movement-order-ref.ts): pick/cancel rows
+      // written before migration 0306 stringified the ORDER'S UUID into their
+      // reason because order_number only arrived in 0254, and the shipped RMA
+      // RPCs (0153/0154/0197) still write a return's uuid the same way. The
+      // ledger is append-only, so both are resolved at read time — ONE batched,
+      // org-scoped lookup per kind for the whole page, never one per row, and
+      // the two run concurrently. A failed/empty lookup degrades to "Order pick"
+      // with the parenthetical dropped; the raw uuid never reaches the card.
+      const legacyRefIds = collectLegacyRefIdsByKind(
+        (data ?? []).map((row) => ({
+          reason: (row as Record<string, unknown>).reason as string | null,
+        })),
+      );
+      const [orders, returns] = await Promise.all([
+        legacyRefIds.order_request.length > 0
+          ? supabase
+              .from('order_requests')
+              .select('id, order_number')
+              .eq('organization_id', orgId)
+              // in-list-bound: legacy refs from the 100 movements this screen reads (.limit(100))
+              .in('id', legacyRefIds.order_request)
+          : Promise.resolve({ data: [] as { id: string; order_number: number | null }[] }),
+        legacyRefIds.return.length > 0
+          ? supabase
+              .from('returns')
+              .select('id, return_number')
+              .eq('organization_id', orgId)
+              // in-list-bound: legacy refs from the 100 movements this screen reads (.limit(100))
+              .in('id', legacyRefIds.return)
+          : Promise.resolve({ data: [] as { id: string; return_number: string | null }[] }),
+      ]);
+      const refLabelById = new Map([
+        ...orderNumberLabels((orders.data ?? []) as { id: string; order_number: number | null }[]),
+        ...returnNumberLabels(
+          (returns.data ?? []) as { id: string; return_number: string | null }[],
+        ),
+      ]);
 
-    setRows(
-      (data ?? []).map((row) => {
+      rows = (data ?? []).map((row) => {
         const r = row as Record<string, unknown>;
         const item = r.item as MovementRow['item'] | MovementRow['item'][] | null;
         const actor = r.actor as MovementRow['actor'] | MovementRow['actor'][] | null;
@@ -123,53 +161,99 @@ export default function MovementsScreen() {
           reason: resolveMovementRefReason((r.reason as string | null) ?? null, refLabelById),
           created_at: r.created_at as string,
           item_id: r.item_id as string,
-          item: Array.isArray(item) ? item[0] ?? null : item,
-          actor: Array.isArray(actor) ? actor[0] ?? null : actor,
+          item: Array.isArray(item) ? (item[0] ?? null) : item,
+          actor: Array.isArray(actor) ? (actor[0] ?? null) : actor,
           actor_deleted: isRowPersonDeleted(r),
         };
-      }),
-    );
-    setLoading(false);
+      });
+    } catch (e) {
+      console.warn('[movements] load failed:', e instanceof Error ? e.message : e);
+    }
+    if (seq !== seqRef.current) return;
+    setStored((prev) => settleList(prev, orgId, rows));
   }, [orgId]);
 
   React.useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await; the effect synchronizes with the server
     void load();
   }, [load]);
 
+  // Only rows read for the workspace on screen.
+  const list = stored && stored.orgId === orgId ? stored : null;
+  const rows = list?.rows ?? [];
+  // No workspace could be loaded: the read never starts, so say so (a pull
+  // loads the workspace again).
+  const noWorkspace = !orgId && !workspaceLoading;
+  const failedEmpty = noWorkspace || (list !== null && list.failed && rows.length === 0);
+
   async function refresh() {
     setRefreshing(true);
-    await load();
-    setRefreshing(false);
+    try {
+      await (noWorkspace ? retryWorkspace() : load());
+    } finally {
+      setRefreshing(false);
+    }
   }
 
   return (
     <DataListScreen
-      eyebrow={`ACTIVITY · ${rows.length} EVENTS`}
+      eyebrow={
+        list === null || failedEmpty ? 'ACTIVITY · EVENTS' : `ACTIVITY · ${rows.length} EVENTS`
+      }
       title="Stock"
       italic="movements."
       emptyTitle="No movements yet."
       emptyBody="Every receive, adjust, transfer, and count posts a row to the ledger here."
       emptyIcon={ArrowLeftRight}
+      failed={
+        noWorkspace
+          ? {
+              title: 'Could not load your workspace.',
+              body: 'Check your connection and pull down to try again.',
+            }
+          : list?.failed
+            ? {
+                title: 'Could not load movements.',
+                body: 'Check your connection and pull down to try again.',
+                reloadNote: 'Could not refresh the movements. Pull down to try again.',
+              }
+            : null
+      }
       data={rows}
-      loading={loading}
+      loading={!noWorkspace && list === null}
       refreshing={refreshing}
-      onRefresh={refresh}
+      onRefresh={() => void refresh()}
       keyExtractor={(m) => m.id}
-      renderItem={(m) => <MovementCard m={m} onPress={() => router.push({ pathname: '/item/[id]', params: { id: m.item_id } })} />}
+      renderItem={(m) => (
+        <MovementCard
+          m={m}
+          onPress={() => router.push({ pathname: '/item/[id]', params: { id: m.item_id } })}
+        />
+      )}
     />
   );
 }
 
+/**
+ * One ledger row: what moved (the item), how (the verb, the resolved reason,
+ * who), the signed change and the day. The sign is in the words ("+3", "-2")
+ * and the glyph (+, -, rotate); the colours repeat it: accent for stock in,
+ * the refusal red for stock out, the warning tone for a change of 0.
+ */
 function MovementCard({ m, onPress }: { m: MovementRow; onPress: () => void }) {
   const { c } = useTheme();
   const isAdd = m.quantity_change > 0;
   const Icon = isAdd ? Plus : m.quantity_change < 0 ? Minus : RotateCcw;
-  const pipColor = isAdd ? ACCENT.mint : m.quantity_change < 0 ? ACCENT.crit : ACCENT.warn;
+  const pipColor = isAdd ? c.accent : m.quantity_change < 0 ? c.critText : c.warnText;
   const verb = TYPE_LABEL[m.movement_type] ?? m.movement_type;
   const actor = actorText(m.actor, m.actor_deleted);
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}>
+    <Pressable
+      onPress={onPress}
+      // A button to VoiceOver (it read the row's words with no trait).
+      accessibilityRole="button"
+      accessibilityHint="Opens the item"
+      style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
+    >
       <Card padding={14}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
           <View
@@ -182,7 +266,7 @@ function MovementCard({ m, onPress }: { m: MovementRow; onPress: () => void }) {
               alignItems: 'center',
               justifyContent: 'center',
               position: 'relative',
-              backgroundColor: c.card,
+              backgroundColor: c.sunk,
             }}
           >
             <Icon size={14} color={c.ink} strokeWidth={1.6} />
@@ -202,7 +286,7 @@ function MovementCard({ m, onPress }: { m: MovementRow; onPress: () => void }) {
             <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
               {m.item?.name ?? 'Unknown item'}
             </Body>
-            <Mono size={11} tracking={0.04} color={c.ink4} style={{ marginTop: 3 }}>
+            <Mono size={11.5} tracking={0.04} color={c.ink3} style={{ marginTop: 3 }}>
               {verb}
               {m.reason ? ` · ${m.reason}` : ''}
               {' · '}
@@ -211,16 +295,18 @@ function MovementCard({ m, onPress }: { m: MovementRow; onPress: () => void }) {
           </View>
           <View style={{ alignItems: 'flex-end' }}>
             <Mono
-              size={16}
-              tracking={-0.012}
-              color={isAdd ? ACCENT.mintInk : m.quantity_change < 0 ? ACCENT.crit : c.ink}
-              style={{ fontFamily: FONT.display }}
+              size={15}
+              tracking={0}
+              color={isAdd ? c.accent : m.quantity_change < 0 ? c.critText : c.ink}
             >
               {isAdd ? '+' : ''}
               {m.quantity_change}
             </Mono>
-            <Mono size={10} color={c.ink4} tracking={0.04} style={{ marginTop: 2 }}>
-              {new Date(m.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+            <Mono size={11} color={c.ink3} tracking={0.04} style={{ marginTop: 2 }}>
+              {new Date(m.created_at).toLocaleDateString(undefined, {
+                month: 'short',
+                day: 'numeric',
+              })}
             </Mono>
           </View>
         </View>

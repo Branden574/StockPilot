@@ -15,7 +15,7 @@ import {
 } from '@/lib/locations-list';
 import { useOrg } from '@/lib/use-org';
 import { supabase } from '@/lib/supabase';
-import { ACCENT, FONT } from '@/lib/theme';
+import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { retryWorkspace } from '@/lib/use-workspace';
 import { LOCATION_WORKSPACE_UNAVAILABLE } from '@/lib/verification-api';
@@ -33,8 +33,9 @@ import { LOCATION_WORKSPACE_UNAVAILABLE } from '@/lib/verification-api';
  * there and what each item's last physical count says about it.
  *
  * A failed read is said, never shown as "No locations yet." (lib/locations-list.ts
- * throws on any failed page); a refresh that fails keeps the list on screen
- * and says so above it.
+ * throws on any failed page): its words are DataListScreen's `failed` panel
+ * (redesign defect D25), not the empty words swapped out; a refresh that fails
+ * keeps the list on screen and says so above it.
  */
 /** What the screen last read, for which workspace. */
 type ListState = {
@@ -46,6 +47,7 @@ type ListState = {
 };
 
 export default function LocationsScreen() {
+  const { c } = useTheme();
   const router = useRouter();
   const { orgId, loading: workspaceLoading } = useOrg();
   const [stored, setStored] = React.useState<ListState | null>(null);
@@ -109,18 +111,29 @@ export default function LocationsScreen() {
 
   return (
     <DataListScreen
-      eyebrow={failedEmpty ? 'WAREHOUSE · LOCATIONS' : `WAREHOUSE · ${rows.length} LOCATIONS`}
+      eyebrow={
+        list === null || failedEmpty
+          ? 'WAREHOUSE · LOCATIONS'
+          : `WAREHOUSE · ${rows.length} LOCATIONS`
+      }
       title="Locations"
       italic="& bins."
-      emptyTitle={failedEmpty ? LOCATIONS_LIST_UNAVAILABLE_COPY : 'No locations yet.'}
-      emptyBody={
-        noWorkspace
-          ? `${LOCATION_WORKSPACE_UNAVAILABLE} Pull down to try again.`
-          : failedEmpty
-            ? 'Check your connection and pull down to try again.'
-            : 'Locations group inventory by site, rack, row, or bin. Create them on the web.'
-      }
+      emptyTitle="No locations yet."
+      emptyBody="Locations group inventory by site, rack, row, or bin. Create them on the web."
       emptyIcon={MapPin}
+      // The failed read's own words (D25), with nothing shown for this
+      // workspace. A failed refresh over rows says so in the notice above
+      // them instead, so `failed` is set only when there are none.
+      failed={
+        failedEmpty
+          ? {
+              title: LOCATIONS_LIST_UNAVAILABLE_COPY,
+              body: noWorkspace
+                ? `${LOCATION_WORKSPACE_UNAVAILABLE} Pull down to try again.`
+                : 'Check your connection and pull down to try again.',
+            }
+          : null
+      }
       data={failedEmpty ? [] : rows}
       loading={!noWorkspace && list === null}
       refreshing={refreshing}
@@ -129,7 +142,7 @@ export default function LocationsScreen() {
         notice ? (
           <Body
             size={12.5}
-            color={error ? ACCENT.warn : undefined}
+            color={error ? c.warnText : undefined}
             muted={!error}
             accessibilityRole={error ? 'alert' : undefined}
           >
@@ -156,6 +169,8 @@ function LocationCard({ loc, onPress }: { loc: LocationListRow; onPress: () => v
     >
       <Card padding={14}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+          {/* The pin sits in a recessed well (sunk, the reference's inset
+              fill), as the other list rows' glyphs do. */}
           <View
             style={{
               width: 32,
@@ -163,7 +178,7 @@ function LocationCard({ loc, onPress }: { loc: LocationListRow; onPress: () => v
               borderRadius: 8,
               borderWidth: 1,
               borderColor: c.hair,
-              backgroundColor: c.card,
+              backgroundColor: c.sunk,
               alignItems: 'center',
               justifyContent: 'center',
             }}

@@ -357,12 +357,17 @@ describe('Locations list (src/screens/locations.tsx)', () => {
   });
 
   // Mutation caught: `data ?? []` on a failed read ("No locations yet.").
+  // Redesign P5.9 (D25): the failure is said in DataListScreen's `failed`
+  // panel, which replaces the empty words, whenever a failed read (or no
+  // workspace) leaves no rows; "No locations yet." is only the empty words.
   it('reads every page through readLocationList and says a failed read', () => {
     expect(list).toContain('readLocationList(supabase, orgId)');
     expect(list).toContain('LOCATIONS_LIST_UNAVAILABLE_COPY');
-    expect(list).toContain(
-      "emptyTitle={failedEmpty ? LOCATIONS_LIST_UNAVAILABLE_COPY : 'No locations yet.'}",
+    expect(list).toContain('const failedEmpty = noWorkspace || (error && rows.length === 0);');
+    expect(list).toMatch(
+      /failed=\{\s*failedEmpty\s*\?\s*\{\s*title: LOCATIONS_LIST_UNAVAILABLE_COPY,/,
     );
+    expect(list).toContain('emptyTitle="No locations yet."');
     expect(list).not.toContain("from('locations')");
   });
 
