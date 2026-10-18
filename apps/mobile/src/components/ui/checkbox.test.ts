@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   TOUCHABLE_TAG,
+  attr,
   attrText,
   listTsx,
   parseTsx,
@@ -203,31 +204,89 @@ function hookCalls(file: string): string[] {
 
 type Use = { file: string; sf: ts.SourceFile; el: JsxNode; touchables: JsxNode[] };
 
-/** Every `<tag>` in app/ and src/, with the touchables around it (outermost
+/** Every `<tag>` in one source, with the touchables around it (outermost
  *  first). */
-function usesOf(tag: 'Checkbox' | 'CheckboxMark'): Use[] {
+function usesIn(src: string, file: string, tag: 'Checkbox' | 'CheckboxMark'): Use[] {
   const out: Use[] = [];
-  for (const abs of listTsx(at('app'), at('src'))) {
-    const src = readSource(abs);
-    if (!src.includes(tag)) continue;
-    const file = path.relative(MOBILE_ROOT, abs);
-    const sf = parseTsx(src, file);
-    walkJsx(sf, (el, ancestors) => {
-      if (tagOf(el, sf) !== tag) return;
-      out.push({
-        file,
-        sf,
-        el,
-        touchables: ancestors.filter((a) => TOUCHABLE_TAG.test(tagOf(a, sf))),
-      });
+  const sf = parseTsx(src, file);
+  walkJsx(sf, (el, ancestors) => {
+    if (tagOf(el, sf) !== tag) return;
+    out.push({
+      file,
+      sf,
+      el,
+      touchables: ancestors.filter((a) => TOUCHABLE_TAG.test(tagOf(a, sf))),
     });
-  }
+  });
   return out;
+}
+
+/** Every `<tag>` in app/ and src/. */
+function usesOf(tag: 'Checkbox' | 'CheckboxMark'): Use[] {
+  return listTsx(at('app'), at('src')).flatMap((abs) => {
+    const src = readSource(abs);
+    return src.includes(tag) ? usesIn(src, path.relative(MOBILE_ROOT, abs), tag) : [];
+  });
 }
 
 function where(u: Use): string {
   const { line } = u.sf.getLineAndCharacterOfPosition(u.el.getStart(u.sf));
   return `${u.file}:${line + 1} <${tagOf(u.el, u.sf)}>`;
+}
+
+/** What an expression can come to: through parentheses, `as`, `satisfies`,
+ *  `!` and both branches of a condition, so
+ *  `selecting ? { checked: picked } : undefined` is the object or undefined. */
+function outcomes(e: ts.Expression): ts.Expression[] {
+  if (
+    ts.isParenthesizedExpression(e) ||
+    ts.isAsExpression(e) ||
+    ts.isSatisfiesExpression(e) ||
+    ts.isNonNullExpression(e)
+  ) {
+    return outcomes(e.expression);
+  }
+  if (ts.isConditionalExpression(e)) return [...outcomes(e.whenTrue), ...outcomes(e.whenFalse)];
+  return [e];
+}
+
+/** What one JSX attribute can come to (nothing when it is absent or bare). */
+function attrOutcomes(el: JsxNode, name: string, sf: ts.SourceFile): ts.Expression[] {
+  const init = attr(el, name, sf)?.initializer;
+  if (init && ts.isStringLiteral(init)) return [init];
+  return init && ts.isJsxExpression(init) && init.expression ? outcomes(init.expression) : [];
+}
+
+/** The keys an object literal sets itself: `{ checked, disabled: off }` sets
+ *  checked and disabled; `{ selected: row.checked }` sets only selected. */
+function ownKeys(o: ts.ObjectLiteralExpression): string[] {
+  return o.properties.flatMap((p) =>
+    (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) &&
+    (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name))
+      ? [p.name.text]
+      : [],
+  );
+}
+
+/**
+ * D29's rule for the row a mark sits in, read as code, not as words: the
+ * innermost touchable around it can take the role "checkbox", and its
+ * accessibilityState can be an object with `checked` as one of its own keys.
+ * A state whose value is only named checked (`{ selected: row.checked }`, or
+ * the shortfall sheet's `{ disabled: !row.checked || locked }`) and a role
+ * whose condition only mentions the word (`kind === 'checkbox' ? 'button' :
+ * 'radio'`) give VoiceOver "checkbox" with no state, or no checkbox at all.
+ */
+function announcedAsCheckbox(u: Use): boolean {
+  const host = u.touchables[u.touchables.length - 1];
+  if (!host) return false;
+  const role = attrOutcomes(host, 'accessibilityRole', u.sf).some(
+    (e) => ts.isStringLiteralLike(e) && e.text === 'checkbox',
+  );
+  const state = attrOutcomes(host, 'accessibilityState', u.sf).some(
+    (e) => ts.isObjectLiteralExpression(e) && ownKeys(e).includes('checked'),
+  );
+  return role && state;
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────
@@ -348,12 +407,19 @@ describe('the target: a 22pt box in a frame at least 44pt each way', () => {
     const height = 2 * l.padding + Math.max(l.boxTop + l.box, l.labelTop + l.firstLine);
     expect(height).toBeCloseTo(44, 6);
     expect(l.padding + l.boxTop).toBeCloseTo(11, 6);
-    // The tree spends exactly those numbers.
+    // The tree spends exactly those numbers, from the row's top. Mutation
+    // caught: a centred row (or a child that centres itself) keeps a one-line
+    // row the same, but puts the box halfway down a wrapped label instead of
+    // beside its first line.
     const el = checkbox();
     expect(flat(el.props.style).paddingVertical).toBe(l.padding);
+    expect(flat(el.props.style).alignItems).toBe('flex-start');
     const [boxSlot, words] = el.props.children as Node[];
     expect(flat(boxSlot!.props.style).marginTop).toBe(l.boxTop);
     expect(flat(words!.props.style).marginTop).toBe(l.labelTop);
+    for (const child of [boxSlot!, words!]) {
+      expect(flat(child.props.style)).not.toHaveProperty('alignSelf');
+    }
   });
 });
 
@@ -571,9 +637,11 @@ describe('colours, per mode, measured', () => {
     });
   });
 
-  // Mutation caught: the mark reading one fixed mode, as the light-only legacy
-  // `theme` alias draws (light boxes in dark mode).
-  it('the mark paints the recipe of the mode it is drawn in, with no opacity', () => {
+  // Mutations caught: the mark reading one fixed mode, as the light-only
+  // legacy `theme` alias draws (light boxes in dark mode); and the edge's
+  // width deleted or set to 0, which keeps every colour above but leaves a
+  // clear box a card-filled square on a card row (1:1), so it vanishes.
+  it('the mark paints the recipe of the mode it is drawn in, its edge drawn 1.5pt wide, with no opacity', () => {
     for (const mode of MODES) {
       const p = palette(mode);
       for (const checked of VALUES) {
@@ -584,6 +652,7 @@ describe('colours, per mode, measured', () => {
           expect(s, `${mode} ${String(checked)} ${disabled}`).toMatchObject({
             backgroundColor: t.fill,
             borderColor: t.border,
+            borderWidth: 1.5,
             width: 22,
             height: 22,
           });
@@ -666,14 +735,58 @@ describe('where a checkbox may be used (sweeps app/ and src/)', () => {
   // D29: the Items and Books select rows drew a check with no checkbox role or
   // state. A row that draws a mark must say what the mark shows.
   it('a CheckboxMark always sits in a touchable announced as a checkbox with its checked state', () => {
-    const unannounced = marks.filter((u) => {
-      const host = u.touchables[u.touchables.length - 1];
-      if (!host) return true;
-      const role = attrText(host, 'accessibilityRole', u.sf) ?? '';
-      const state = attrText(host, 'accessibilityState', u.sf) ?? '';
-      return !role.includes('checkbox') || !/\bchecked\b/.test(state);
-    });
-    expect(unannounced.map(where)).toEqual([]);
+    expect(marks.filter((u) => !announcedAsCheckbox(u)).map(where)).toEqual([]);
+  });
+
+  // No screen draws a CheckboxMark yet (P5.5, P5.7 and P5.9 adopt it), so the
+  // rule is pinned on probe rows. Mutation caught: a word test over the
+  // attribute text passed `{ selected: row.checked }`, a real risk where the
+  // shortfall sheet's value is named row.checked, and VoiceOver would hear
+  // "checkbox" with no state (D29 again).
+  it('the rule reads the row as code: checked a key of the state, checkbox a value of the role', () => {
+    const announced = (attrs: string) => {
+      const uses = usesIn(
+        `export const Row = () => (\n  <Pressable onPress={toggle} ${attrs}>\n    <CheckboxMark checked={on} />\n  </Pressable>\n);\n`,
+        'probe.tsx',
+        'CheckboxMark',
+      );
+      expect(uses, attrs).toHaveLength(1);
+      return announcedAsCheckbox(uses[0]!);
+    };
+    // The spellings the Checkbox and today's checkbox rows use (the count
+    // picker, group review, exceptions, the shortfall sheet, the book order
+    // sheet); the Items and Books rows will take the exceptions one.
+    for (const attrs of [
+      'accessibilityRole="checkbox" accessibilityState={{ checked: picked }}',
+      'accessibilityRole="checkbox" accessibilityState={{ checked, disabled }}',
+      'accessibilityRole="checkbox" accessibilityState={{ disabled, checked }}',
+      'accessibilityRole="checkbox" accessibilityState={{ checked: row.checked, disabled: !row.draftable || locked }}',
+      "accessibilityRole={selecting ? 'checkbox' : 'button'} accessibilityState={selecting ? { checked: picked } : undefined}",
+      "accessibilityRole={kind === 'radio' ? 'radio' : 'checkbox'} accessibilityState={kind === 'radio' ? { selected } : { checked: selected }}",
+    ]) {
+      expect(announced(attrs), attrs).toBe(true);
+    }
+    // A state that only names checked (nested, as an argument or as a value),
+    // a role that only mentions the word, or either one missing.
+    for (const attrs of [
+      'accessibilityRole="checkbox" accessibilityState={{ selected: row.checked }}',
+      'accessibilityRole="checkbox" accessibilityState={{ disabled: !row.checked || locked }}',
+      'accessibilityRole="checkbox" accessibilityState={{ selected: { checked } }}',
+      'accessibilityRole="checkbox" accessibilityState={{ selected: pick(row, checked, 1) }}',
+      "accessibilityRole={kind === 'checkbox' ? 'button' : 'radio'} accessibilityState={{ checked }}",
+      'accessibilityRole="button" accessibilityState={{ checked }}',
+      'accessibilityRole="checkbox"',
+      'accessibilityState={{ checked }}',
+    ]) {
+      expect(announced(attrs), attrs).toBe(false);
+    }
+    // A mark in no touchable has no row to announce it.
+    const loose = usesIn(
+      'export const Loose = () => <View><CheckboxMark checked /></View>;\n',
+      'probe.tsx',
+      'CheckboxMark',
+    );
+    expect(loose.map(announcedAsCheckbox)).toEqual([false]);
   });
 });
 
