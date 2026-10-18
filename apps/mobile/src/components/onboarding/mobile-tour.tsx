@@ -16,6 +16,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Body } from '@/components/ui/text';
+import { BUTTON_RADIUS, buttonTone } from '@/components/ui/tones';
 import {
   getTourState,
   recordTourOutcome,
@@ -46,11 +47,18 @@ import { useTheme } from '@/lib/use-theme';
  *
  * State is the SAME user_onboarding row the web uses. Fade-only under
  * Reduce Motion; all controls are VoiceOver-labeled buttons.
+ *
+ * Drawn on the per-mode palette: the Tour pill with the stronger control
+ * border inside a real 44pt frame (its margins hand the extra height back, so
+ * the screens that place it lay out around the same pill), the card's Start
+ * tour / Next / Done as the shared ink button and No thanks / Back as the
+ * borderless one, each a 44pt target at radius 10, the X in the muted ink and
+ * the resting dots in ink4.
  */
 export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
   const { c } = useTheme();
   const insets = useSafeAreaInsets();
-  const { width: winW, height: winH } = useWindowDimensions();
+  const { width: winW, height: winH, fontScale } = useWindowDimensions();
   const params = useLocalSearchParams<{ tour?: string }>();
   // Mutual lock: if What's New grabbed the interruption slot first, keep this
   // tour's Modal hidden until it closes (we keep our phase, so we re-present).
@@ -190,6 +198,8 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
   const cardOnTop = hole ? hole.y + hole.h / 2 > winH * 0.5 : false;
 
   const dim = 'rgba(0,0,0,0.45)';
+  const primary = buttonTone('primary', c);
+  const ghost = buttonTone('ghost', c);
 
   /**
    * The card may never be taller than the window. Step copy is uncapped Body
@@ -211,14 +221,16 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
           setPhase('running');
         }}
         style={({ pressed }) => [
-          styles.pill,
-          { borderColor: c.hair, opacity: pressed ? 0.6 : 1 },
+          styles.pillFrame,
+          { marginVertical: tourPillFrameMargin(fontScale), opacity: pressed ? 0.6 : 1 },
         ]}
       >
-        <Sparkles size={11} color={c.ink3} />
-        <Body size={11} color={c.ink3}>
-          Tour
-        </Body>
+        <View style={[styles.pill, { borderColor: c.hair2 }]}>
+          <Sparkles size={11} color={c.ink3} />
+          <Body size={TOUR_PILL_LABEL} color={c.ink3}>
+            Tour
+          </Body>
+        </View>
       </Pressable>
 
       <Modal
@@ -272,8 +284,10 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
               { opacity: fade },
             ]}
           >
+            {/* The escape scrub ends the tour, as the X and Android's back do. */}
             <View
               accessibilityViewIsModal
+              onAccessibilityEscape={() => finish('dismissed')}
               style={[
                 cardOnTop ? styles.cardFloating : styles.sheet,
                 {
@@ -308,9 +322,14 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
                     <Pressable
                       accessibilityRole="button"
                       onPress={() => finish('dismissed')}
-                      style={styles.btnGhost}
+                      style={[styles.action, { borderColor: ghost.border }]}
                     >
-                      <Body size={12.5} color={c.ink3} maxFontSizeMultiplier={ACTION_CAP}>
+                      <Body
+                        size={ACTION_SIZE}
+                        color={ghost.fg}
+                        style={styles.actionLabel}
+                        maxFontSizeMultiplier={ACTION_CAP}
+                      >
                         No thanks
                       </Body>
                     </Pressable>
@@ -321,12 +340,15 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
                         setStep(0);
                         setPhase('running');
                       }}
-                      style={[styles.btn, { backgroundColor: c.ink }]}
+                      style={[
+                        styles.action,
+                        { backgroundColor: primary.bg, borderColor: primary.border },
+                      ]}
                     >
                       <Body
-                        size={12.5}
-                        color={c.card}
-                        style={{ fontFamily: FONT.displaySemi }}
+                        size={ACTION_SIZE}
+                        color={primary.fg}
+                        style={styles.actionLabel}
                         maxFontSizeMultiplier={ACTION_CAP}
                       >
                         Start tour
@@ -346,7 +368,7 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
                       onPress={() => finish('dismissed')}
                       style={styles.closeFrame}
                     >
-                      <X size={15} color={c.ink4} />
+                      <X size={15} color={c.ink3} />
                     </Pressable>
                   </View>
                   <ScrollView
@@ -366,7 +388,7 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
                           style={[
                             styles.dot,
                             {
-                              backgroundColor: i === step ? c.ink : c.hair,
+                              backgroundColor: i === step ? c.ink : c.ink4,
                               width: i === step ? 14 : 5,
                             },
                           ]}
@@ -377,9 +399,14 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
                       <Pressable
                         accessibilityRole="button"
                         onPress={() => setStep(step - 1)}
-                        style={styles.btnGhost}
+                        style={[styles.action, { borderColor: ghost.border }]}
                       >
-                        <Body size={12.5} color={c.ink3} maxFontSizeMultiplier={ACTION_CAP}>
+                        <Body
+                          size={ACTION_SIZE}
+                          color={ghost.fg}
+                          style={styles.actionLabel}
+                          maxFontSizeMultiplier={ACTION_CAP}
+                        >
                           Back
                         </Body>
                       </Pressable>
@@ -387,12 +414,15 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
                     <Pressable
                       accessibilityRole="button"
                       onPress={() => (isLast ? finish('completed') : setStep(step + 1))}
-                      style={[styles.btn, { backgroundColor: c.ink }]}
+                      style={[
+                        styles.action,
+                        { backgroundColor: primary.bg, borderColor: primary.border },
+                      ]}
                     >
                       <Body
-                        size={12.5}
-                        color={c.card}
-                        style={{ fontFamily: FONT.displaySemi }}
+                        size={ACTION_SIZE}
+                        color={primary.fg}
+                        style={styles.actionLabel}
                         maxFontSizeMultiplier={ACTION_CAP}
                       >
                         {isLast ? 'Done' : 'Next'}
@@ -411,21 +441,51 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
 
 /**
  * The tour's own buttons are chrome — Back / Next / Done / No thanks / Start
- * tour are 12.5pt labels in fixed-radius pills, and they are the ONLY way out
- * of a modal that covers the whole app. The step title and body stay uncapped.
+ * tour are the shared small button's 13pt label, and they are the ONLY way
+ * out of a modal that covers the whole app. The step title and body stay
+ * uncapped.
  */
-const ACTION_CAP = capTo(12.5, TYPE_CEILING.control);
+const ACTION_SIZE = 13;
+const ACTION_CAP = capTo(ACTION_SIZE, TYPE_CEILING.control);
+
+/** The iOS minimum tap target, in points. */
+const MIN_TAP = 44;
+/** The Tour pill's label, in points. Body content: uncapped, as it always was. */
+const TOUR_PILL_LABEL = 11;
+
+/**
+ * The vertical margin that hands the Tour pill's 44pt frame back to the
+ * screen around it: the frame is the target VoiceOver outlines and a finger
+ * hits (a real frame, not hitSlop, which never reaches past the pill's
+ * parent), while the screens that place the pill (Home, Items, Orders) lay
+ * out around the pill's own height, as before. The pill is its label's line
+ * (Body draws 1.5 lines, and React Native grows the line with the text size),
+ * 4pt of padding above and below and a 1pt border; once that is taller than
+ * the frame the margin is 0 and the frame is the pill.
+ */
+function tourPillFrameMargin(fontScale: number): number {
+  const scale = Number.isFinite(fontScale) && fontScale > 0 ? fontScale : 1;
+  const pill = TOUR_PILL_LABEL * 1.5 * scale + 2 * 4 + 2 * 1;
+  return -Math.max(0, (MIN_TAP - pill) / 2);
+}
 
 const styles = StyleSheet.create({
+  // minHeight / minWidth, never a fixed size: the frame is at least 44pt and
+  // is the pill itself once the pill outgrows it.
+  pillFrame: {
+    minHeight: MIN_TAP,
+    minWidth: MIN_TAP,
+    justifyContent: 'center',
+    alignSelf: 'flex-start',
+  },
   pill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    borderWidth: StyleSheet.hairlineWidth,
+    borderWidth: 1,
     borderRadius: 999,
     paddingHorizontal: 9,
     paddingVertical: 4,
-    alignSelf: 'flex-start',
   },
   fill: { flex: 1 },
   dim: { position: 'absolute' },
@@ -485,6 +545,17 @@ const styles = StyleSheet.create({
   spacer: { flex: 1 },
   dots: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 4 },
   dot: { height: 5, borderRadius: 999 },
-  btn: { borderRadius: 999, paddingHorizontal: 14, paddingVertical: 7 },
-  btnGhost: { paddingHorizontal: 10, paddingVertical: 7 },
+  // The shared button's look (tones.ts buttonTone, radius 10) at the iOS
+  // minimum target: minHeight, not a fixed height. The borderless one keeps a
+  // transparent 1pt edge so both sit on one line at one height.
+  action: {
+    minHeight: MIN_TAP,
+    borderWidth: 1,
+    borderRadius: BUTTON_RADIUS.sm,
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionLabel: { fontFamily: FONT.display },
 });
