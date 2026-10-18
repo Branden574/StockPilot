@@ -21,12 +21,24 @@ interface WarehouseRow {
   charter: { name: string | null } | null;
 }
 
+/**
+ * Admin · Warehouses with their first charter, read only. A read that fails
+ * is said as a failure, never "No warehouses yet." (D25): with no rows its
+ * words stand in for the list, with rows from an earlier read they stay under
+ * "Could not refresh", and the eyebrow quotes no count it did not read. When
+ * the warehouses arrive but their charters do not, the list shows and says
+ * the charters could not be loaded (a warehouse is never shown as having no
+ * charter only because that read failed).
+ */
 export default function WarehousesAdmin() {
   const { orgId } = useOrg();
   const { isAdmin, loading: roleLoading } = useRole();
   const [rows, setRows] = React.useState<WarehouseRow[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
+  // The last read failed: 'list' (the warehouses), 'charters' (the list
+  // arrived without its charter names), or null.
+  const [failed, setFailed] = React.useState<'list' | 'charters' | null>(null);
 
   const load = React.useCallback(async () => {
     if (!orgId || !isAdmin) {
@@ -39,34 +51,46 @@ export default function WarehousesAdmin() {
     // results. Now we fetch warehouses + the join in parallel and
     // resolve each warehouse to its first associated charter for the
     // single-pill display.
-    const [whResp, joinResp] = await Promise.all([
-      supabase
-        .from('warehouses')
-        .select('id, name, code, status, contact_name')
-        .eq('organization_id', orgId)
-        .order('name', { ascending: true }),
-      supabase
-        .from('warehouse_charters')
-        .select('warehouse_id, charter_id')
-        .eq('organization_id', orgId),
-    ]);
+    let reads;
+    try {
+      reads = await Promise.all([
+        supabase
+          .from('warehouses')
+          .select('id, name, code, status, contact_name')
+          .eq('organization_id', orgId)
+          .order('name', { ascending: true }),
+        supabase
+          .from('warehouse_charters')
+          .select('warehouse_id, charter_id')
+          .eq('organization_id', orgId),
+      ]);
+    } catch {
+      setFailed('list');
+      setLoading(false);
+      return;
+    }
+    const [whResp, joinResp] = reads;
     if (whResp.error) {
       console.warn('[admin/warehouses] fetch failed:', whResp.error.message);
+      setFailed('list');
+      setLoading(false);
+      return;
     }
     if (joinResp.error) {
       console.warn('[admin/warehouses] charter-join fetch failed:', joinResp.error.message);
     }
-    const whRows = (whResp.data ?? []) as Array<{
+    let chartersFailed = Boolean(joinResp.error);
+    const whRows = (whResp.data ?? []) as {
       id: string;
       name: string;
       code: string;
       status: string;
       contact_name: string | null;
-    }>;
-    const joinRows = (joinResp.data ?? []) as Array<{
+    }[];
+    const joinRows = (joinResp.data ?? []) as {
       warehouse_id: string;
       charter_id: string;
-    }>;
+    }[];
     const warehouseToCharter = new Map<string, string>();
     for (const j of joinRows) {
       if (!warehouseToCharter.has(j.warehouse_id)) {
@@ -83,6 +107,7 @@ export default function WarehousesAdmin() {
         .in('id', charterIds);
       if (chErr) {
         console.warn('[admin/warehouses] charter fetch failed:', chErr.message);
+        chartersFailed = true;
       }
       charterMap = new Map(
         (charters ?? []).map((c) => [c.id as string, (c.name as string | null) ?? '']),
@@ -101,6 +126,8 @@ export default function WarehousesAdmin() {
         };
       }),
     );
+    // Missing charters matter only when there are warehouses to name them on.
+    setFailed(chartersFailed && whRows.length > 0 ? 'charters' : null);
     setLoading(false);
   }, [orgId, isAdmin]);
 
@@ -134,12 +161,28 @@ export default function WarehousesAdmin() {
 
   return (
     <DataListScreen
-      eyebrow={`ADMIN · ${rows.length} WAREHOUSES`}
+      eyebrow={
+        failed === 'list' && rows.length === 0
+          ? 'ADMIN · WAREHOUSES'
+          : `ADMIN · ${rows.length} WAREHOUSES`
+      }
       title="Warehouses"
       italic="."
       emptyTitle="No warehouses yet."
       emptyBody="A warehouse is a physical site that holds its own inventory. Create one on the web."
       emptyIcon={Warehouse}
+      failed={
+        failed
+          ? {
+              title: 'Could not load warehouses.',
+              body: 'Check your connection and pull down to try again.',
+              reloadNote:
+                failed === 'charters'
+                  ? 'Could not load the charters. Pull down to try again.'
+                  : 'Could not refresh. Showing the last list.',
+            }
+          : null
+      }
       data={rows}
       loading={loading || roleLoading}
       refreshing={refreshing}
@@ -156,19 +199,19 @@ function WarehouseCard({ wh }: { wh: WarehouseRow }) {
     <Card padding={14}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
         <View style={{ flex: 1, minWidth: 0 }}>
-          <Mono size={9.5} tracking={0.18} upper color={c.ink4}>
+          <Mono size={9.5} tracking={0.18} upper color={c.ink3}>
             — {wh.code}
           </Mono>
           <Body size={15} color={c.ink} style={{ marginTop: 6, fontFamily: FONT.display }}>
             {wh.name}
           </Body>
           {wh.charter?.name ? (
-            <Mono size={11} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
+            <Mono size={11} tracking={0.04} color={c.ink3} style={{ marginTop: 4 }}>
               {wh.charter.name}
               {wh.contact_name ? ` · ${wh.contact_name}` : ''}
             </Mono>
           ) : wh.contact_name ? (
-            <Mono size={11} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
+            <Mono size={11} tracking={0.04} color={c.ink3} style={{ marginTop: 4 }}>
               {wh.contact_name}
             </Mono>
           ) : null}

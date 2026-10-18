@@ -42,8 +42,19 @@ describe.each([
   });
 
   it('shows the failure, not an empty team, and quotes no member count', () => {
-    expect(src).toContain(`emptyTitle={loadFailed ? '${failedTitle}' : `);
-    expect(src).toContain("? 'Check your connection and pull down to try again.'");
+    // The failure is said in the screen's own words whenever the load
+    // failed, in either of the two forms the list takes: its failed state
+    // (DataListScreen `failed`, which adds the warning glyph and the alert;
+    // the users screen since the redesign, P5.10b), or the empty words
+    // swapped for the failure's.
+    const flat = src.replace(/\s+/g, ' ');
+    const failedState = flat.includes(
+      `failed={ loadFailed ? { title: '${failedTitle}', body: 'Check your connection and pull down to try again.', } : null }`,
+    );
+    const swapped =
+      src.includes(`emptyTitle={loadFailed ? '${failedTitle}' : `) &&
+      src.includes("? 'Check your connection and pull down to try again.'");
+    expect(failedState || swapped).toBe(true);
     expect(src).toMatch(new RegExp(`loadFailed\\s*\\? ${neutralEyebrow.replace(/[·]/g, '.')}`));
   });
 });

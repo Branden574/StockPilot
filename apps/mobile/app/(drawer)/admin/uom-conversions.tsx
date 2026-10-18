@@ -22,27 +22,48 @@ interface ConversionRow {
   item: { name: string | null; sku: string | null } | null;
 }
 
+/**
+ * Admin · UoM conversions (latest 200), read only (defined on the web). A
+ * read that fails is said as a failure, never "No conversions yet." (D25):
+ * with no rows its words stand in for the list, with rows from an earlier
+ * read they stay under "Could not refresh", and the eyebrow quotes no count
+ * it did not read.
+ */
 export default function UoMConversionsAdmin() {
   const { orgId } = useOrg();
   const { isAdmin, loading: roleLoading } = useRole();
   const [rows, setRows] = React.useState<ConversionRow[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
+  // The last read failed (set by every read that completes).
+  const [failed, setFailed] = React.useState(false);
 
   const load = React.useCallback(async () => {
     if (!orgId || !isAdmin) {
       setLoading(false);
       return;
     }
-    const { data } = await supabase
-      .from('uom_conversions')
-      .select(
-        `id, from_uom, to_uom, numerator, denominator, rounding_rule,
+    let read;
+    try {
+      read = await supabase
+        .from('uom_conversions')
+        .select(
+          `id, from_uom, to_uom, numerator, denominator, rounding_rule,
          item:inventory_items!item_id (name, sku)`,
-      )
-      .eq('organization_id', orgId)
-      .order('created_at', { ascending: false })
-      .limit(200);
+        )
+        .eq('organization_id', orgId)
+        .order('created_at', { ascending: false })
+        .limit(200);
+    } catch {
+      read = null;
+    }
+    if (!read || read.error) {
+      setFailed(true);
+      setLoading(false);
+      return;
+    }
+    const { data } = read;
+    setFailed(false);
     setRows(
       (data ?? []).map((row) => {
         const r = row as Record<string, unknown>;
@@ -91,12 +112,21 @@ export default function UoMConversionsAdmin() {
 
   return (
     <DataListScreen
-      eyebrow={`ADMIN · ${rows.length} CONVERSIONS`}
+      eyebrow={failed && rows.length === 0 ? 'ADMIN · UOM' : `ADMIN · ${rows.length} CONVERSIONS`}
       title="UoM"
       italic="conversions."
       emptyTitle="No conversions yet."
       emptyBody="Define per-item PK → EA, CT → EA, dozens → EA conversions on the web so receiving knows how to fan out vendor packs."
       emptyIcon={ArrowLeftRight}
+      failed={
+        failed
+          ? {
+              title: 'Could not load conversions.',
+              body: 'Check your connection and pull down to try again.',
+              reloadNote: 'Could not refresh. Showing the last list.',
+            }
+          : null
+      }
       data={rows}
       loading={loading || roleLoading}
       refreshing={refreshing}
@@ -117,7 +147,7 @@ function ConversionCard({ conv }: { conv: ConversionRow }) {
     <Card padding={14}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
         <View style={{ flex: 1, minWidth: 0 }}>
-          <Mono size={9.5} tracking={0.18} upper color={c.ink4}>
+          <Mono size={9.5} tracking={0.18} upper color={c.ink3}>
             — {conv.item?.sku ?? 'unknown'}
           </Mono>
           <Body size={14} color={c.ink} style={{ marginTop: 6, fontFamily: FONT.display }} numberOfLines={2}>

@@ -20,24 +20,43 @@ interface CharterRow {
   status: string;
 }
 
+/**
+ * Admin · Charters, read only. A read that fails is said as a failure, never
+ * "No charters yet." (D25): with no rows its words stand in for the list,
+ * with rows from an earlier read they stay under "Could not refresh", and the
+ * eyebrow quotes no count it did not read.
+ */
 export default function CharterAdmin() {
   const { orgId } = useOrg();
   const { isAdmin, loading: roleLoading } = useRole();
   const [rows, setRows] = React.useState<CharterRow[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
+  // The last read failed (set by every read that completes).
+  const [failed, setFailed] = React.useState(false);
 
   const load = React.useCallback(async () => {
     if (!orgId || !isAdmin) {
       setLoading(false);
       return;
     }
-    const { data } = await supabase
-      .from('charters')
-      .select('id, name, code, description, status')
-      .eq('organization_id', orgId)
-      .order('name', { ascending: true });
-    setRows((data ?? []) as CharterRow[]);
+    let read;
+    try {
+      read = await supabase
+        .from('charters')
+        .select('id, name, code, description, status')
+        .eq('organization_id', orgId)
+        .order('name', { ascending: true });
+    } catch {
+      read = null;
+    }
+    if (!read || read.error) {
+      setFailed(true);
+      setLoading(false);
+      return;
+    }
+    setFailed(false);
+    setRows((read.data ?? []) as CharterRow[]);
     setLoading(false);
   }, [orgId, isAdmin]);
 
@@ -71,12 +90,21 @@ export default function CharterAdmin() {
 
   return (
     <DataListScreen
-      eyebrow={`ADMIN · ${rows.length} CHARTERS`}
+      eyebrow={failed && rows.length === 0 ? 'ADMIN · CHARTERS' : `ADMIN · ${rows.length} CHARTERS`}
       title="Charters"
       italic="."
       emptyTitle="No charters yet."
       emptyBody="Charters group warehouses into cost centers for reporting and routing."
       emptyIcon={Building2}
+      failed={
+        failed
+          ? {
+              title: 'Could not load charters.',
+              body: 'Check your connection and pull down to try again.',
+              reloadNote: 'Could not refresh. Showing the last list.',
+            }
+          : null
+      }
       data={rows}
       loading={loading || roleLoading}
       refreshing={refreshing}
@@ -94,7 +122,7 @@ function CharterCard({ charter }: { charter: CharterRow }) {
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
         <View style={{ flex: 1, minWidth: 0 }}>
           {charter.code ? (
-            <Mono size={9.5} tracking={0.18} upper color={c.ink4}>
+            <Mono size={9.5} tracking={0.18} upper color={c.ink3}>
               — {charter.code}
             </Mono>
           ) : null}

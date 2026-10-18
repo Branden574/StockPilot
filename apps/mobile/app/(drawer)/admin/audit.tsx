@@ -39,21 +39,38 @@ export default function AuditLogAdmin() {
   const [rows, setRows] = React.useState<AuditRow[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
+  // The last read failed (set by every read that completes): said as a
+  // failure, never "No audit events yet." (D25); rows from an earlier read
+  // stay under "Could not refresh", and the eyebrow quotes no count it did
+  // not read.
+  const [failed, setFailed] = React.useState(false);
 
   const load = React.useCallback(async () => {
     if (!orgId || !canView) {
       setLoading(false);
       return;
     }
-    const { data } = await supabase
-      .from('audit_logs')
-      .select(
-        `id, event, metadata, ip, user_agent, created_at, user_id, deleted_users,
+    let read;
+    try {
+      read = await supabase
+        .from('audit_logs')
+        .select(
+          `id, event, metadata, ip, user_agent, created_at, user_id, deleted_users,
          actor:user_profiles!user_id (full_name, email)`,
-      )
-      .eq('organization_id', orgId)
-      .order('created_at', { ascending: false })
-      .limit(200);
+        )
+        .eq('organization_id', orgId)
+        .order('created_at', { ascending: false })
+        .limit(200);
+    } catch {
+      read = null;
+    }
+    if (!read || read.error) {
+      setFailed(true);
+      setLoading(false);
+      return;
+    }
+    const { data } = read;
+    setFailed(false);
     setRows(
       (data ?? []).map((row) => {
         const r = row as Record<string, unknown>;
@@ -103,12 +120,21 @@ export default function AuditLogAdmin() {
 
   return (
     <DataListScreen
-      eyebrow={`ADMIN · ${rows.length} EVENTS`}
+      eyebrow={failed && rows.length === 0 ? 'ADMIN · AUDIT LOG' : `ADMIN · ${rows.length} EVENTS`}
       title="Audit"
       italic="log."
       emptyTitle="No audit events yet."
       emptyBody="Privileged actions (role changes, invites, PO approvals, admin edits) log here."
       emptyIcon={FileLock}
+      failed={
+        failed
+          ? {
+              title: 'Could not load audit events.',
+              body: 'Check your connection and pull down to try again.',
+              reloadNote: 'Could not refresh. Showing the last list.',
+            }
+          : null
+      }
       data={rows}
       loading={loading || roleLoading}
       refreshing={refreshing}
@@ -135,7 +161,7 @@ function AuditCard({ row }: { row: AuditRow }) {
             {row.ip ? ` · ${row.ip}` : ''}
           </Body>
         </View>
-        <Mono size={10} tracking={0.04} color={c.ink4}>
+        <Mono size={10} tracking={0.04} color={c.ink3}>
           {when.toLocaleString(undefined, {
             month: 'short',
             day: 'numeric',

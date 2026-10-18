@@ -1021,3 +1021,345 @@ describe('Settings: Unsent work', () => {
     expect(unsent).not.toMatch(/\bRetry\b|retry\(/);
   });
 });
+
+// ── Admin ────────────────────────────────────────────────────────────────
+
+const ADMIN_INDEX = 'app/(drawer)/admin/index.tsx';
+const ADMIN_USERS = 'app/(drawer)/admin/users.tsx';
+
+/**
+ * The six read-only admin lists: each one's failed-read words, the eyebrow it
+ * shows without a count, and its Restricted words (kept as they were).
+ */
+const ADMIN_LISTS = [
+  {
+    file: 'app/(drawer)/admin/audit.tsx',
+    noun: 'EVENTS',
+    neutral: 'ADMIN · AUDIT LOG',
+    title: 'Could not load audit events.',
+    empty: 'No audit events yet.',
+    restricted: 'Requires audit log access.',
+  },
+  {
+    file: 'app/(drawer)/admin/bins.tsx',
+    noun: 'BINS',
+    neutral: 'ADMIN · BINS',
+    title: 'Could not load bins.',
+    empty: 'No bins yet.',
+    restricted: 'Admin only.',
+  },
+  {
+    file: 'app/(drawer)/admin/charters.tsx',
+    noun: 'CHARTERS',
+    neutral: 'ADMIN · CHARTERS',
+    title: 'Could not load charters.',
+    empty: 'No charters yet.',
+    restricted: 'Admin only.',
+  },
+  {
+    file: 'app/(drawer)/admin/uom-conversions.tsx',
+    noun: 'CONVERSIONS',
+    neutral: 'ADMIN · UOM',
+    title: 'Could not load conversions.',
+    empty: 'No conversions yet.',
+    restricted: 'Admin only.',
+  },
+  {
+    file: 'app/(drawer)/admin/vendor-mappings.tsx',
+    noun: 'MAPPINGS',
+    neutral: 'ADMIN · VENDOR MAPPINGS',
+    title: 'Could not load mappings.',
+    empty: 'No mappings yet.',
+    restricted: 'Admin only.',
+  },
+  {
+    file: 'app/(drawer)/admin/warehouses.tsx',
+    noun: 'WAREHOUSES',
+    neutral: 'ADMIN · WAREHOUSES',
+    title: 'Could not load warehouses.',
+    empty: 'No warehouses yet.',
+    restricted: 'Admin only.',
+  },
+];
+
+const ADMIN_FILES = [ADMIN_INDEX, ADMIN_USERS, ...ADMIN_LISTS.map((l) => l.file)];
+
+/** The DataListScreen that shows the list (the one given `data={rows}`). */
+function listScreen(file: string): { sf: ts.SourceFile; el: JsxNode } {
+  const sf = treeOf(file);
+  const screens = elementsIn(sf).filter(
+    (n) => tagOf(n.el, sf) === 'DataListScreen' && attrText(n.el, 'data', sf) === 'rows',
+  );
+  expect(screens, `${file}: one list screen`).toHaveLength(1);
+  return { sf, el: screens[0]!.el };
+}
+
+describe('Admin lists: a failed read is said, never "No X yet." (D25)', () => {
+  it.each(ADMIN_LISTS)('$file passes the failed state with its own words', (list) => {
+    const { sf, el } = listScreen(list.file);
+    const failed = (attrText(el, 'failed', sf) ?? '').replace(/\s+/g, ' ');
+    expect(failed).toContain(`title: '${list.title}'`);
+    expect(failed).toContain("body: 'Check your connection and pull down to try again.'");
+    // The empty words are only for a read that answered.
+    expect(attrText(el, 'emptyTitle', sf)).toBe(list.empty);
+    // The eyebrow quotes no count it did not read: run the screen's own
+    // expression over each state.
+    const eyebrow = attrText(el, 'eyebrow', sf)!;
+    const failedFlag = list.file.endsWith('warehouses.tsx') ? 'list' : true;
+    expect(runCondition(eyebrow, { failed: failedFlag, rows: [] })).toBe(list.neutral);
+    expect(runCondition(eyebrow, { failed: failedFlag, rows: [{}, {}] })).toBe(
+      `ADMIN · 2 ${list.noun}`,
+    );
+    expect(
+      runCondition(eyebrow, {
+        failed: list.file.endsWith('warehouses.tsx') ? null : false,
+        rows: [],
+      }),
+    ).toBe(`ADMIN · 0 ${list.noun}`);
+  });
+
+  it.each(ADMIN_LISTS)(
+    '$file: a failed read keeps the rows it had and sets the flag; a good one clears it',
+    (list) => {
+      const body = codeOnly(sourceOf(list.file));
+      const load = body.slice(
+        body.indexOf('const load = React.useCallback('),
+        body.indexOf('React.useEffect('),
+      );
+      // The failure path returns before any setRows: rows from an earlier read
+      // stay on screen, under the reload note.
+      const failurePath =
+        /if \((!read \|\| read\.error|whResp\.error)\) \{([\s\S]*?)return;\s*\}/.exec(load);
+      expect(failurePath, list.file).not.toBeNull();
+      expect(failurePath![2]).toMatch(/setFailed\((true|'list')\);/);
+      expect(failurePath![2]).not.toContain('setRows(');
+      // A thrown read is a failure too, never a spinner that turns forever.
+      expect(load).toMatch(/\} catch \{\s*(read = null;|setFailed\('list'\);)/);
+      expect(load).toMatch(
+        /setFailed\((false|chartersFailed && whRows\.length > 0 \? 'charters' : null)\);/,
+      );
+    },
+  );
+
+  it('the warehouses say when their charters could not be loaded, rather than show none', () => {
+    const wh = flatCode('app/(drawer)/admin/warehouses.tsx');
+    expect(wh).toContain('let chartersFailed = Boolean(joinResp.error);');
+    expect(wh).toContain(
+      "console.warn('[admin/warehouses] charter fetch failed:', chErr.message); chartersFailed = true;",
+    );
+    expect(wh).toContain(
+      "reloadNote: failed === 'charters' ? 'Could not load the charters. Pull down to try again.' : 'Could not refresh. Showing the last list.',",
+    );
+  });
+
+  it.each(ADMIN_LISTS)('$file keeps its Restricted state, its title and its read', (list) => {
+    const src = flatCode(list.file);
+    expect(src).toContain('title="Restricted" italic="access."');
+    expect(src).toContain(`emptyTitle="${list.restricted}"`);
+    expect(src).toMatch(/\.limit\(200\)|\.order\('name', \{ ascending: true \}\)/);
+  });
+
+  it('the audit log keeps its wider gate: admins, or anyone with Activity logs, or while permissions load', () => {
+    expect(flatCode('app/(drawer)/admin/audit.tsx')).toContain(
+      "const canView = isAdmin || perms === undefined || perms.has('activity_logs:read');",
+    );
+  });
+});
+
+describe('Admin screens: the per-mode palette', () => {
+  it.each(ADMIN_FILES)(
+    '%s gives no word a faint ink and uses no fixed colour for a word or fill',
+    (file) => {
+      expect(themeImports(file)).not.toContain('ACCENT');
+      // The one faint word left is the vendor mapping's arrow glyph (pinned
+      // below as the only ink4 in that file).
+      const faint = wordColours(file).filter((x) => /\bc\.ink[45]\b/.test(x));
+      expect(faint).toEqual(file.endsWith('vendor-mappings.tsx') ? ['c.ink4'] : []);
+      expect(codeOnly(sourceOf(file))).not.toMatch(/'#[0-9a-f]{3,8}'/i);
+    },
+  );
+
+  // What ink4 may still draw here: glyphs (the mail glyph, the edit chevron)
+  // and the text arrow between a vendor number and its SKU; ink5 only the
+  // role sheet's grabber, which is decoration.
+  it('the faint inks are left only on glyphs and decoration', () => {
+    expect(tokenSites(ADMIN_USERS, 'ink4')).toEqual(['ChevronRight.color', 'Mail.color']);
+    expect(tokenSites(ADMIN_USERS, 'ink5')).toEqual(['View.backgroundColor']);
+    expect(tokenSites('app/(drawer)/admin/vendor-mappings.tsx', 'ink4')).toEqual(['Body.color']);
+    expect(flatCode('app/(drawer)/admin/vendor-mappings.tsx')).toContain(
+      '<Body size={12} color={c.ink4}> → </Body>',
+    );
+    for (const file of ADMIN_FILES.filter(
+      (f) => f !== ADMIN_USERS && !f.endsWith('vendor-mappings.tsx'),
+    )) {
+      expect(tokenSites(file, 'ink4'), file).toEqual([]);
+    }
+  });
+
+  it.each(MODES)('%s: the code lines, meta and descriptions read at AA on the card', (_m, p) => {
+    for (const t of [p.ink, p.ink2, p.ink3])
+      expect(contrast(t, p.card)).toBeGreaterThanOrEqual(AA_TEXT);
+    // The role and category rows: words on the chosen row's recessed fill.
+    for (const t of [p.ink, p.ink3]) expect(contrast(t, p.sunk)).toBeGreaterThanOrEqual(AA_TEXT);
+    // A chosen row's ink edge, and the clear box's ink4 edge on the card.
+    expect(contrast(p.ink, p.sunk)).toBeGreaterThanOrEqual(AA_UI);
+    expect(contrast(p.ink4, p.card)).toBeGreaterThanOrEqual(AA_UI);
+    // The category read's failure on the sheet's card.
+    expect(contrast(p.critText, p.card)).toBeGreaterThanOrEqual(AA_TEXT);
+  });
+});
+
+describe('Admin overview', () => {
+  const index = flatCode(ADMIN_INDEX);
+
+  it('each destination is a named button; its description a sentence in the muted body face', () => {
+    expect(index).toContain(
+      '<Pressable onPress={() => router.push(l.href as never)} accessibilityRole="button"',
+    );
+    expect(index).toContain(
+      '<Body size={13} muted style={{ marginTop: 2 }}> {link.description} </Body>',
+    );
+  });
+
+  it('keeps every link, the module filter and the Restricted state; Reconciliation stays gone', () => {
+    for (const href of [
+      '/admin/charters',
+      '/admin/warehouses',
+      '/admin/bins',
+      '/admin/users',
+      '/admin/vendor-mappings',
+      '/admin/uom-conversions',
+      '/cycle-counts',
+      '/admin/audit',
+    ]) {
+      expect(index).toContain(`href: '${href}'`);
+    }
+    expect(index).toContain("module: 'cycle_counts' }");
+    expect(index).toContain('LINKS.filter((l) => !l.module || enabledModules.has(l.module))');
+    expect(index).toContain('title="Restricted" italic="access."');
+    expect(index).toContain('emptyTitle="Admin only."');
+    expect(index).toContain('eyebrow="ADMIN OVERVIEW" title="System" italic="settings."');
+    expect(index).not.toContain('reconciliation');
+  });
+});
+
+describe('Admin · Users', () => {
+  const users = flatCode(ADMIN_USERS);
+
+  it("a failed member read is the list's failed state, the empty words only for a read that answered", () => {
+    expect(users).toContain(
+      "failed={ loadFailed ? { title: 'Could not load users.', body: 'Check your connection and pull down to try again.', } : null }",
+    );
+    expect(users).toContain('emptyTitle="No users yet."');
+    expect(users).toContain("loadFailed ? 'ADMIN · USERS'");
+  });
+
+  // The email link sits inside the card's Pressable, which iOS makes one
+  // VoiceOver element: offered as an action instead. Run the screen's own
+  // action list over each card.
+  it("a member's email link is reachable with VoiceOver as an action on the card; the picker opens as before", () => {
+    const { sf, fn } = functionNamed(ADMIN_USERS, 'UserCard');
+    const card = elementsIn(fn).find((n) => TOUCHABLE_TAG.test(tagOf(n.el, sf)))!;
+    expect(attrText(card.el, 'onPress', sf)).toBe('canEdit ? onPress : undefined');
+    expect(attrText(card.el, 'disabled', sf)).toBe('!canEdit');
+    expect(attrText(card.el, 'accessibilityRole', sf)).toBe("canEdit ? 'button' : undefined");
+    expect(attrText(card.el, 'accessibilityActions', sf)).toBe('userCardActions(canEdit, email)');
+    const actions = functionNamed(ADMIN_USERS, 'userCardActions');
+    const js = ts.transpileModule(actions.fn.getText(actions.sf), {
+      compilerOptions: { target: ts.ScriptTarget.ES2020 },
+    }).outputText;
+    const run = new Function(`${js}; return userCardActions;`)() as (
+      canEdit: boolean,
+      email: string | null,
+    ) => { name: string; label?: string }[] | undefined;
+    expect(run(true, 'a@b.co')).toEqual([
+      { name: 'activate' },
+      { name: 'email', label: 'Email a@b.co' },
+    ]);
+    expect(run(false, 'a@b.co')).toEqual([{ name: 'email', label: 'Email a@b.co' }]);
+    expect(run(true, null)).toEqual([{ name: 'activate' }]);
+    expect(run(false, null)).toBeUndefined();
+    expect(users).toContain(
+      "if (e.nativeEvent.actionName === 'email') openEmail(); else if (e.nativeEvent.actionName === 'activate' && canEdit) onPress();",
+    );
+    expect(users).toContain(
+      'if (email) Linking.openURL(`mailto:${email}`).catch(() => undefined);',
+    );
+    expect(users).toContain("const canEdit = canChangeRoles && user.role !== 'owner' && !isSelf;");
+  });
+
+  it('the role picker is a standard sheet: VoiceOver kept inside, a "Close" scrim beside the card', () => {
+    const { sf, fn } = functionNamed(ADMIN_USERS, 'RolePickerSheet');
+    const els = elementsIn(fn);
+    const container = els.find((n) => attrText(n.el, 'accessibilityViewIsModal', sf) === 'true')!;
+    expect(container).toBeTruthy();
+    expect(attrText(container.el, 'onAccessibilityEscape', sf)).toBe('onDismiss');
+    const kids = els.filter((n) => n.ancestors[n.ancestors.length - 1] === container.el);
+    expect(kids.map((k) => tagOf(k.el, sf))).toEqual(['Pressable', 'View']);
+    const scrim = kids[0]!.el;
+    expect(attrText(scrim, 'onPress', sf)).toBe('onDismiss');
+    expect(attrText(scrim, 'onAccessibilityTap', sf)).toBe('onDismiss');
+    expect(attrText(scrim, 'accessibilityRole', sf)).toBe('button');
+    expect(attrText(scrim, 'accessibilityLabel', sf)).toBe('Close');
+    expect(attrText(scrim, 'style', sf)).toContain('StyleSheet.absoluteFill');
+    expect(attrText(scrim, 'style', sf)).toContain(
+      "mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)'",
+    );
+    // Nothing between the container and the card's controls is a touchable.
+    const card = kids[1]!.el;
+    for (const n of els.filter(
+      (x) => x.ancestors.includes(card) && TOUCHABLE_TAG.test(tagOf(x.el, sf)),
+    )) {
+      const above = n.ancestors.slice(n.ancestors.indexOf(card));
+      expect(above.filter((a) => TOUCHABLE_TAG.test(tagOf(a, sf)))).toEqual([]);
+    }
+    expect(users).toContain('{ backgroundColor: c.card, borderColor: c.hair }, SHADOW.sheet,');
+    expect(users).toContain('<View style={[pickerStyles.grabber, { backgroundColor: c.ink5 }]} />');
+    expect(users).not.toContain("'#ccc'");
+  });
+
+  it('each role is a radio with its state and still applies on tap; owner is never offered', () => {
+    expect(users).toContain(
+      '<Pressable key={role} onPress={() => onSelect(role)} accessibilityRole="radio" accessibilityState={{ selected }}',
+    );
+    expect(users).toContain(
+      "const ASSIGNABLE_ROLES = ['admin', 'manager', 'staff', 'viewer'] as const;",
+    );
+    expect(users).toContain(
+      '<Body size={12.5} muted style={{ marginTop: 2 }}> {ROLE_DESCRIPTION[role]} </Body>',
+    );
+    expect(users).toContain(
+      "borderColor: selected ? c.ink : c.hair2, backgroundColor: selected ? c.sunk : 'transparent',",
+    );
+  });
+
+  it('each viewer category is a checkbox row with the shared box and its state; a failed read is said', () => {
+    const { sf, fn } = functionNamed(ADMIN_USERS, 'RolePickerSheet');
+    const marks = elementsIn(fn).filter((n) => tagOf(n.el, sf) === 'CheckboxMark');
+    expect(marks).toHaveLength(1);
+    expect(attrText(marks[0]!.el, 'checked', sf)).toBe('granted');
+    const row = marks[0]!.ancestors.filter((a) => TOUCHABLE_TAG.test(tagOf(a, sf))).pop()!;
+    expect(attrText(row, 'onPress', sf)).toBe('() => toggleCategory(cat.id)');
+    expect(attrText(row, 'accessibilityRole', sf)).toBe('checkbox');
+    expect(attrText(row, 'accessibilityState', sf)).toBe('{ checked: granted }');
+    expect(attrText(row, 'accessibilityLabel', sf)).toBe('cat.name');
+    expect(styleBlock(ADMIN_USERS, 'catRow')).toMatch(/minHeight: 44,/);
+    // Either read failing is said, never "No categories yet." or clear boxes.
+    expect(users).toContain(
+      'if (catsResp.error || grantsResp.error) { setCatsFailed(true); setCatsLoading(false); return; }',
+    );
+    expect(users).toContain(
+      ') : catsFailed ? ( <Body size={12.5} color={c.critText} accessibilityRole="alert" style={{ marginTop: 12 }} > Could not load the categories. Close this sheet and open it again. </Body> ) : categories.length === 0 ? (',
+    );
+    // The grant and revoke still paint first and revert on a refusal.
+    expect(users).toContain("Alert.alert('Could not revoke access', error.message);");
+    expect(users).toContain("Alert.alert('Could not grant access', error.message);");
+  });
+
+  it('Done is a named button in a 44pt frame', () => {
+    expect(users).toMatch(
+      /<Pressable onPress=\{onDismiss\} accessibilityRole="button" style=\{\(\{ pressed \}\) => \[pickerStyles\.cancel,/,
+    );
+    expect(styleBlock(ADMIN_USERS, 'cancel')).toMatch(/minWidth: 44,\s*minHeight: 44,/);
+  });
+});

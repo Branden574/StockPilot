@@ -26,29 +26,49 @@ interface MappingRow {
   item: { name: string | null; sku: string | null } | null;
 }
 
+/**
+ * Admin · Vendor mappings (latest 200 by approval), read only. A read that
+ * fails is said as a failure, never "No mappings yet." (D25): with no rows
+ * its words stand in for the list, with rows from an earlier read they stay
+ * under "Could not refresh", and the eyebrow quotes no count it did not read.
+ */
 export default function VendorMappingsAdmin() {
   const { orgId } = useOrg();
   const { isAdmin, loading: roleLoading } = useRole();
   const [rows, setRows] = React.useState<MappingRow[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
+  // The last read failed (set by every read that completes).
+  const [failed, setFailed] = React.useState(false);
 
   const load = React.useCallback(async () => {
     if (!orgId || !isAdmin) {
       setLoading(false);
       return;
     }
-    const { data } = await supabase
-      .from('vendor_item_mappings')
-      .select(
-        `id, vendor_item_number, vendor_product_number, vendor_description,
+    let read;
+    try {
+      read = await supabase
+        .from('vendor_item_mappings')
+        .select(
+          `id, vendor_item_number, vendor_product_number, vendor_description,
          vendor_uom, pack_qty, conversion_factor, match_source, confidence_score,
          vendor:suppliers!vendor_id (name),
          item:inventory_items!item_id (name, sku)`,
-      )
-      .eq('organization_id', orgId)
-      .order('approved_at', { ascending: false })
-      .limit(200);
+        )
+        .eq('organization_id', orgId)
+        .order('approved_at', { ascending: false })
+        .limit(200);
+    } catch {
+      read = null;
+    }
+    if (!read || read.error) {
+      setFailed(true);
+      setLoading(false);
+      return;
+    }
+    const { data } = read;
+    setFailed(false);
     setRows(
       (data ?? []).map((row) => {
         const r = row as Record<string, unknown>;
@@ -102,12 +122,23 @@ export default function VendorMappingsAdmin() {
 
   return (
     <DataListScreen
-      eyebrow={`ADMIN · ${rows.length} MAPPINGS`}
+      eyebrow={
+        failed && rows.length === 0 ? 'ADMIN · VENDOR MAPPINGS' : `ADMIN · ${rows.length} MAPPINGS`
+      }
       title="Vendor"
       italic="mappings."
       emptyTitle="No mappings yet."
       emptyBody="Vendor item numbers learn the mapping to your internal items the first time a PO is imported. Manual mappings can be added on the web."
       emptyIcon={Layers}
+      failed={
+        failed
+          ? {
+              title: 'Could not load mappings.',
+              body: 'Check your connection and pull down to try again.',
+              reloadNote: 'Could not refresh. Showing the last list.',
+            }
+          : null
+      }
       data={rows}
       loading={loading || roleLoading}
       refreshing={refreshing}
@@ -124,7 +155,7 @@ function MappingCard({ mapping }: { mapping: MappingRow }) {
     <Card padding={14}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
         <View style={{ flex: 1, minWidth: 0 }}>
-          <Mono size={9.5} tracking={0.18} upper color={c.ink4}>
+          <Mono size={9.5} tracking={0.18} upper color={c.ink3}>
             — {mapping.vendor?.name ?? 'Unknown vendor'}
           </Mono>
           <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 6 }}>
@@ -142,7 +173,7 @@ function MappingCard({ mapping }: { mapping: MappingRow }) {
             {mapping.item?.name ?? mapping.vendor_description ?? 'Unmapped'}
           </Body>
           {mapping.vendor_uom || mapping.pack_qty ? (
-            <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
+            <Mono size={10.5} tracking={0.04} color={c.ink3} style={{ marginTop: 4 }}>
               {[mapping.vendor_uom, mapping.pack_qty ? `pack ${mapping.pack_qty}` : null]
                 .filter(Boolean)
                 .join(' · ')}
