@@ -82,10 +82,21 @@ export function ArchiveViewToggle({
     return q ? `${base}?${q}` : base;
   }
 
+  // The view-toggle look (DESIGN-SPEC 6.5): a sunk track with a hairline; the
+  // chosen segment is the card colour with a stronger 1 px ring, the other is
+  // muted text. Links, roles and aria-selected are unchanged.
+  const segment = (active: boolean) =>
+    cn(
+      'inline-flex h-[26px] items-center rounded-[4px] px-2 text-[12.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+      active
+        ? 'bg-card text-foreground shadow-[0_0_0_1px_var(--ed-line-strong)]'
+        : 'text-muted-foreground hover:text-foreground',
+    );
+
   return (
     <div
       className={cn(
-        'inline-flex items-center gap-1 rounded-md border border-border bg-background p-0.5 text-xs',
+        'inline-flex items-center gap-0.5 rounded-md border border-border bg-sunk p-0.5',
         className,
       )}
       role="tablist"
@@ -95,12 +106,7 @@ export function ArchiveViewToggle({
         href={buildHref('active')}
         role="tab"
         aria-selected={current === 'active'}
-        className={cn(
-          'rounded-sm px-2.5 py-1 transition-colors',
-          current === 'active'
-            ? 'bg-foreground text-background'
-            : 'text-muted-foreground hover:bg-muted',
-        )}
+        className={segment(current === 'active')}
       >
         {activeLabel}
       </Link>
@@ -108,12 +114,7 @@ export function ArchiveViewToggle({
         href={buildHref('archived')}
         role="tab"
         aria-selected={current === 'archived'}
-        className={cn(
-          'rounded-sm px-2.5 py-1 transition-colors',
-          current === 'archived'
-            ? 'bg-foreground text-background'
-            : 'text-muted-foreground hover:bg-muted',
-        )}
+        className={segment(current === 'archived')}
       >
         {archivedLabel}
       </Link>

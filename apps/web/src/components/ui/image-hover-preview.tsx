@@ -347,7 +347,10 @@ export function ImageHoverPreview({
                 width: PREVIEW_SIZE,
               }}
             >
-              <div className="border-border bg-background overflow-hidden rounded-lg border shadow-2xl">
+              {/* The popover surface with one quiet shadow; the photo sits on
+                  white in both themes, like every product thumbnail
+                  (DESIGN-SPEC 6.14 and 10). */}
+              <div className="bg-popover text-popover-foreground overflow-hidden rounded-lg border border-[var(--ed-line-strong)] shadow-[0_10px_30px_rgba(0,0,0,0.25)]">
                 <NextImage
                   src={effectiveSrc}
                   alt={alt}
@@ -360,7 +363,7 @@ export function ImageHoverPreview({
                   // Skip the Vercel optimizer (and its first-time
                   // cold-cache delay) if the env disabled it; default
                   // path uses AVIF/WebP at PREVIEW_OPTIMIZED_WIDTH.
-                  className="block h-[280px] w-full bg-muted object-contain"
+                  className="block h-[280px] w-full bg-white object-contain"
                   draggable={false}
                 />
                 {(title || subtitle || meta) && (

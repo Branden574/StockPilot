@@ -157,7 +157,7 @@ export function DestructiveConfirm(props: DestructiveConfirmProps) {
             {title}
           </DialogTitle>
           <DialogDescription asChild>
-            <div className="space-y-2 text-sm text-muted-foreground">
+            <div className="space-y-2 text-[13px] text-muted-foreground">
               <div>{description}</div>
               {severity === 'critical' && (
                 <p className="font-medium text-destructive">This cannot be undone.</p>
@@ -170,7 +170,7 @@ export function DestructiveConfirm(props: DestructiveConfirmProps) {
           <div className="space-y-1.5">
             <Label htmlFor="destructive-confirm-input">
               Type{' '}
-              <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+              <code className="rounded border border-[var(--ed-line-strong)] bg-sunk px-1 py-0.5 font-mono text-xs">
                 {expected}
               </code>{' '}
               to confirm
@@ -196,7 +196,7 @@ export function DestructiveConfirm(props: DestructiveConfirmProps) {
 
         {error ? (
           <div className="space-y-2">
-            <p role="alert" className="text-destructive text-sm">
+            <p role="alert" className="text-destructive text-[13px]">
               {error}
             </p>
             {errorAction ? (

@@ -6,8 +6,9 @@ import * as React from 'react';
 
 import { cn } from '@/lib/utils';
 
+// Field labels at the control-label size (13 px / 500, DESIGN-SPEC 3).
 const labelVariants = cva(
-  'text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70',
+  'text-[13px] font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70',
 );
 
 export const Label = React.forwardRef<

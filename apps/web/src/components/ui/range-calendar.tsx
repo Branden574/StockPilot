@@ -146,7 +146,7 @@ export function RangeCalendar({
                   aria-label={CALENDAR_COPY.previousMonth}
                   disabled={!canShowPreviousMonth(first)}
                   onClick={() => onMonthChange(addMonths(first, -1))}
-                  className="text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-ring inline-flex h-9 w-9 items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-40"
+                  className="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring inline-flex h-9 w-9 items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-40"
                 >
                   <ChevronLeft aria-hidden className="h-4 w-4" />
                 </button>
@@ -162,7 +162,7 @@ export function RangeCalendar({
                   aria-label={CALENDAR_COPY.nextMonth}
                   disabled={!canShowNextMonth(last)}
                   onClick={() => onMonthChange(addMonths(first, 1))}
-                  className="text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-ring inline-flex h-9 w-9 items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-40"
+                  className="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring inline-flex h-9 w-9 items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-40"
                 >
                   <ChevronRight aria-hidden className="h-4 w-4" />
                 </button>
@@ -199,16 +199,18 @@ export function RangeCalendar({
                           role="gridcell"
                           aria-selected={s.selected}
                           className={cn(
+                            // The chosen range is an accent-wash band; its
+                            // start and end are ink (DESIGN-SPEC 6.21).
                             'h-9 w-9 p-0 text-center',
-                            band && 'bg-primary/10',
+                            band && 'bg-success-wash',
                             s.isStart &&
                               draft.end !== null &&
                               draft.end !== cell.ymd &&
-                              'bg-primary/10 rounded-l-md',
+                              'bg-success-wash rounded-l-md',
                             s.isEnd &&
                               draft.start !== null &&
                               draft.start !== cell.ymd &&
-                              'bg-primary/10 rounded-r-md',
+                              'bg-success-wash rounded-r-md',
                           )}
                         >
                           <button
@@ -231,7 +233,7 @@ export function RangeCalendar({
                               'focus-visible:ring-ring inline-flex h-9 w-9 items-center justify-center rounded-md text-sm tabular-nums focus-visible:outline-none focus-visible:ring-2',
                               s.selected
                                 ? 'bg-primary text-primary-foreground font-semibold'
-                                : 'hover:bg-accent hover:text-accent-foreground',
+                                : 'hover:bg-muted hover:text-foreground',
                               s.isToday &&
                                 !s.selected &&
                                 'ring-muted-foreground/60 ring-1 ring-inset',

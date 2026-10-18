@@ -199,7 +199,9 @@ function ChartTooltipContent({
   return (
     <div
       className={cn(
-        'border-border/50 bg-background grid min-w-[8rem] items-start gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs shadow-xl',
+        // The popover surface with one quiet shadow (DESIGN-SPEC 10: overlays
+        // in both themes); series colours come from --chart-N (chart-1 = accent).
+        'bg-popover text-popover-foreground grid min-w-[8rem] items-start gap-1.5 rounded-lg border border-[var(--ed-line-strong)] px-2.5 py-1.5 text-xs shadow-md',
         className,
       )}
     >

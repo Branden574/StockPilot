@@ -93,11 +93,9 @@ export function Pagination({
     ) : null;
 
   return (
-    <div
-      className={cn('text-muted-foreground flex items-center gap-3 text-[12px]', className)}
-    >
+    <div className={cn('text-muted-foreground flex items-center gap-3 text-[12.5px]', className)}>
       {range}
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-2">
         <PageBtn disabled={prevDisabled} href={linkForPage?.(safePage - 1)} onClick={() => go(safePage - 1)}>
           ← Prev
         </PageBtn>
@@ -108,7 +106,7 @@ export function Pagination({
               <button
                 type="button"
                 aria-label="Jump to page"
-                className="hover:text-foreground hover:bg-muted/40 text-muted-foreground cursor-pointer rounded px-2 py-0.5 text-[11.5px] transition-colors"
+                className="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring inline-flex h-7 cursor-pointer items-center rounded-md px-2 text-[12.5px] tabular-nums transition-colors focus-visible:outline-none focus-visible:ring-2"
               >
                 Page {safePage} of {totalPages}
               </button>
@@ -134,6 +132,12 @@ export function Pagination({
   );
 }
 
+/** The pager recipe (DESIGN-SPEC 6.2): an enabled Prev/Next is the 28 px
+ *  secondary button; a disabled one goes quiet (no fill, the plain hairline,
+ *  the faint ink) instead of fading. */
+const PAGE_BTN_DISABLED =
+  'disabled:opacity-100 disabled:border-border disabled:bg-transparent disabled:text-[var(--ed-ink-4)]';
+
 /** Prev/Next control — a Link in href mode, a button in client mode. */
 function PageBtn({
   disabled,
@@ -148,7 +152,7 @@ function PageBtn({
 }) {
   if (disabled) {
     return (
-      <Button variant="outline" size="sm" disabled>
+      <Button variant="outline" size="sm" disabled className={PAGE_BTN_DISABLED}>
         {children}
       </Button>
     );
@@ -220,7 +224,7 @@ function JumpGrid({
             asChild
             variant={n === current ? 'default' : 'ghost'}
             size="sm"
-            className="h-7 w-full px-2 text-[12px]"
+            className="h-7 w-full px-2 text-[12.5px] tabular-nums"
           >
             <Link href={hrefForPage(n)} aria-current={n === current ? 'page' : undefined}>
               {n}
@@ -231,7 +235,7 @@ function JumpGrid({
             key={n}
             variant={n === current ? 'default' : 'ghost'}
             size="sm"
-            className="h-7 w-full px-2 text-[12px]"
+            className="h-7 w-full px-2 text-[12.5px] tabular-nums"
             onClick={() => go(n)}
             aria-current={n === current ? 'page' : undefined}
           >
