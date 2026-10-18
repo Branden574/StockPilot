@@ -25,6 +25,9 @@ interface AuditRow {
   actor_deleted: boolean;
 }
 
+/** No rows yet (one array, so an empty list keeps one identity). */
+const NO_ROWS: AuditRow[] = [];
+
 export default function AuditLogAdmin() {
   const { orgId } = useOrg();
   const { isAdmin, loading: roleLoading } = useRole();
@@ -36,26 +39,50 @@ export default function AuditLogAdmin() {
   // simply returns no rows for the unauthorized.
   const perms = useEffectivePermissions();
   const canView = isAdmin || perms === undefined || perms.has('activity_logs:read');
-  const [rows, setRows] = React.useState<AuditRow[]>([]);
+  // The rows on screen and the workspace they were read for: a failed read
+  // keeps them only when they are this workspace's (never the last
+  // workspace's rows under "Could not refresh" after a switch).
+  const [list, setList] = React.useState<{ orgId: string; rows: AuditRow[] } | null>(null);
+  const rows = list?.rows ?? NO_ROWS;
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
+  // The last read failed (set by every read that completes): said as a
+  // failure, never "No audit events yet." (D25); rows from an earlier read
+  // stay under "Could not refresh", and the eyebrow quotes no count it did
+  // not read.
+  const [failed, setFailed] = React.useState(false);
 
   const load = React.useCallback(async () => {
     if (!orgId || !canView) {
       setLoading(false);
       return;
     }
-    const { data } = await supabase
-      .from('audit_logs')
-      .select(
-        `id, event, metadata, ip, user_agent, created_at, user_id, deleted_users,
+    const forOrg = orgId;
+    let read;
+    try {
+      read = await supabase
+        .from('audit_logs')
+        .select(
+          `id, event, metadata, ip, user_agent, created_at, user_id, deleted_users,
          actor:user_profiles!user_id (full_name, email)`,
-      )
-      .eq('organization_id', orgId)
-      .order('created_at', { ascending: false })
-      .limit(200);
-    setRows(
-      (data ?? []).map((row) => {
+        )
+        .eq('organization_id', orgId)
+        .order('created_at', { ascending: false })
+        .limit(200);
+    } catch {
+      read = null;
+    }
+    if (!read || read.error) {
+      setList((prev) => (prev !== null && prev.orgId === forOrg ? prev : null));
+      setFailed(true);
+      setLoading(false);
+      return;
+    }
+    const { data } = read;
+    setFailed(false);
+    setList({
+      orgId: forOrg,
+      rows: (data ?? []).map((row) => {
         const r = row as Record<string, unknown>;
         const a = r.actor as AuditRow['actor'] | AuditRow['actor'][] | null;
         return {
@@ -69,7 +96,7 @@ export default function AuditLogAdmin() {
           actor_deleted: isRowPersonDeleted(r),
         };
       }),
-    );
+    });
     setLoading(false);
   }, [orgId, canView]);
 
@@ -103,12 +130,21 @@ export default function AuditLogAdmin() {
 
   return (
     <DataListScreen
-      eyebrow={`ADMIN · ${rows.length} EVENTS`}
+      eyebrow={failed && rows.length === 0 ? 'ADMIN · AUDIT LOG' : `ADMIN · ${rows.length} EVENTS`}
       title="Audit"
       italic="log."
       emptyTitle="No audit events yet."
       emptyBody="Privileged actions (role changes, invites, PO approvals, admin edits) log here."
       emptyIcon={FileLock}
+      failed={
+        failed
+          ? {
+              title: 'Could not load audit events.',
+              body: 'Check your connection and pull down to try again.',
+              reloadNote: 'Could not refresh. Showing the last list.',
+            }
+          : null
+      }
       data={rows}
       loading={loading || roleLoading}
       refreshing={refreshing}
@@ -135,7 +171,7 @@ function AuditCard({ row }: { row: AuditRow }) {
             {row.ip ? ` · ${row.ip}` : ''}
           </Body>
         </View>
-        <Mono size={10} tracking={0.04} color={c.ink4}>
+        <Mono size={10} tracking={0.04} color={c.ink3}>
           {when.toLocaleString(undefined, {
             month: 'short',
             day: 'numeric',

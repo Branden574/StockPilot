@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 
 import { Card } from '@/components/ui/card';
+import { CheckboxMark } from '@/components/ui/checkbox';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Pill } from '@/components/ui/pill';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
@@ -23,7 +24,7 @@ import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { useRole } from '@/lib/use-role';
 import { supabase } from '@/lib/supabase';
-import { FONT } from '@/lib/theme';
+import { FONT, SHADOW } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { shouldShowDisabledBadge } from '@/lib/user-admin-badges';
 
@@ -68,6 +69,20 @@ const ROLE_DESCRIPTION: Record<AssignableRole, string> = {
   viewer: 'Read-only access to categories they\'re granted on the web.',
 };
 
+/**
+ * Admin · Users: org members with their roles, the role picker and the
+ * viewer category access. Owners and admins only; a role change also needs
+ * members:update_role, and applies on tap as before.
+ *
+ * The look (redesign P5.10): the device mode's palette; a failed member read
+ * is the list's failed state (its words, a warning glyph, an alert), never
+ * "No users yet." and never a role change offered on it. The role picker is
+ * the sheet every other phone sheet is: a "Close" scrim beside the card,
+ * VoiceOver kept inside, each role a radio with its state, each category a
+ * checkbox with the shared box and its state, and Done a named button in a
+ * 44pt frame. A member's email link, unreachable for VoiceOver inside the
+ * card, is offered as an action on the card.
+ */
 export default function UsersAdmin() {
   const { user } = useAuth();
   const { orgId } = useOrg();
@@ -239,13 +254,17 @@ export default function UsersAdmin() {
         }
         title="Users"
         italic="."
-        emptyTitle={loadFailed ? 'Could not load users.' : 'No users yet.'}
-        emptyBody={
-          loadFailed
-            ? 'Check your connection and pull down to try again.'
-            : 'Invite teammates on the web — pending and active members show here.'
-        }
+        emptyTitle="No users yet."
+        emptyBody="Invite teammates on the web — pending and active members show here."
         emptyIcon={Users}
+        failed={
+          loadFailed
+            ? {
+                title: 'Could not load users.',
+                body: 'Check your connection and pull down to try again.',
+              }
+            : null
+        }
         data={rows}
         loading={loading || roleLoading}
         refreshing={refreshing}
@@ -310,10 +329,26 @@ function UserCard({
   // Owner role and self both block role editing — owner needs the
   // transferOwnership flow, self-edit is blocked to avoid lockout.
   const canEdit = canChangeRoles && user.role !== 'owner' && !isSelf;
+  // The email link under the name is a real 44pt frame (it was its 15pt line
+  // alone), the line centred in it by the row's alignItems; the frame's own
+  // space stands in for the 3pt gap under the name, so the card grows about
+  // 27pt and the frame lies over neither the name nor the card's padding.
+  const openEmail = () => {
+    if (email) Linking.openURL(`mailto:${email}`).catch(() => undefined);
+  };
   return (
     <Pressable
       onPress={canEdit ? onPress : undefined}
       disabled={!canEdit}
+      accessibilityRole={canEdit ? 'button' : undefined}
+      // iOS folds the card's children into the card for VoiceOver, so the
+      // email link inside it is offered as an action here (swipe up or
+      // down); a double tap still opens the role picker where it did.
+      accessibilityActions={userCardActions(canEdit, email)}
+      onAccessibilityAction={(e) => {
+        if (e.nativeEvent.actionName === 'email') openEmail();
+        else if (e.nativeEvent.actionName === 'activate' && canEdit) onPress();
+      }}
       style={({ pressed }) => ({ opacity: pressed && canEdit ? 0.85 : 1 })}
     >
       <Card padding={14}>
@@ -343,9 +378,9 @@ function UserCard({
           </Body>
           {email ? (
             <Pressable
-              onPress={() => Linking.openURL(`mailto:${email}`).catch(() => undefined)}
+              onPress={openEmail}
               style={({ pressed }) => ({
-                marginTop: 3,
+                minHeight: 44,
                 flexDirection: 'row',
                 alignItems: 'center',
                 gap: 4,
@@ -353,7 +388,7 @@ function UserCard({
               })}
             >
               <Mail size={11} color={c.ink4} strokeWidth={1.5} />
-              <Mono size={11} tracking={0.04} color={c.ink4}>
+              <Mono size={11} tracking={0.04} color={c.ink3}>
                 {email}
               </Mono>
             </Pressable>
@@ -382,6 +417,20 @@ function UserCard({
   );
 }
 
+/**
+ * The card's VoiceOver actions: open the role picker (when the member's role
+ * can be changed here) and email the member (when there is an address).
+ */
+function userCardActions(
+  canEdit: boolean,
+  email: string | null | undefined,
+): { name: string; label?: string }[] | undefined {
+  const actions: { name: string; label?: string }[] = [];
+  if (canEdit) actions.push({ name: 'activate' });
+  if (email) actions.push({ name: 'email', label: `Email ${email}` });
+  return actions.length > 0 ? actions : undefined;
+}
+
 interface CategoryRow {
   id: string;
   name: string;
@@ -398,9 +447,12 @@ function RolePickerSheet({
   onSelect: (role: AssignableRole) => void;
   onDismiss: () => void;
 }) {
-  const { c } = useTheme();
+  const { c, mode } = useTheme();
   const [categories, setCategories] = React.useState<CategoryRow[]>([]);
   const [grantedIds, setGrantedIds] = React.useState<Set<string>>(new Set());
+  // Either read failed: said, never "No categories yet." and never a list of
+  // clear boxes that may not be what this viewer can read.
+  const [catsFailed, setCatsFailed] = React.useState(false);
 
   // Only viewers actually use the per-category grant table; load it lazily
   // when the sheet opens for a viewer member.
@@ -437,11 +489,14 @@ function RolePickerSheet({
       if (cancelled) return;
       if (catsResp.error) console.warn('[admin/users] categories fetch:', catsResp.error.message);
       if (grantsResp.error) console.warn('[admin/users] grants fetch:', grantsResp.error.message);
+      if (catsResp.error || grantsResp.error) {
+        setCatsFailed(true);
+        setCatsLoading(false);
+        return;
+      }
       setCategories((catsResp.data ?? []) as CategoryRow[]);
       setGrantedIds(
-        new Set(
-          ((grantsResp.data ?? []) as Array<{ category_id: string }>).map((g) => g.category_id),
-        ),
+        new Set(((grantsResp.data ?? []) as { category_id: string }[]).map((g) => g.category_id)),
       );
       setCatsLoading(false);
     })();
@@ -487,108 +542,151 @@ function RolePickerSheet({
   const name = member.profile?.full_name ?? member.profile?.email ?? 'this user';
   return (
     <Modal visible animationType="slide" transparent onRequestClose={onDismiss}>
-      <Pressable style={pickerStyles.backdrop} onPress={onDismiss} />
-      <View style={[pickerStyles.sheet, { backgroundColor: c.paper, borderColor: c.hair }]}>
-        <View style={pickerStyles.grabber} />
-        <ScrollView
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingBottom: 12 }}
+      {/* accessibilityViewIsModal keeps VoiceOver inside the open sheet;
+          onAccessibilityTap makes a VoiceOver double-tap on the scrim close
+          it directly (iOS otherwise taps the scrim's centre, which the card
+          covers); the two-finger scrub closes it too. */}
+      <View
+        style={pickerStyles.container}
+        accessibilityViewIsModal
+        onAccessibilityEscape={onDismiss}
+      >
+        <Pressable
+          onPress={onDismiss}
+          onAccessibilityTap={onDismiss}
+          accessibilityRole="button"
+          accessibilityLabel="Close"
+          style={[
+            StyleSheet.absoluteFill,
+            { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+          ]}
+        />
+        <View
+          style={[
+            pickerStyles.sheet,
+            { backgroundColor: c.card, borderColor: c.hair },
+            SHADOW.sheet,
+          ]}
         >
-          <Eyebrow>CHANGE ROLE</Eyebrow>
-          <Display size={22} style={{ marginTop: 8 }}>
-            Set role for <Em>{name}.</Em>
-          </Display>
-          <View style={{ marginTop: 18, gap: 8 }}>
-            {ASSIGNABLE_ROLES.map((role) => {
-              const selected = member.role === role;
-              return (
-                <Pressable
-                  key={role}
-                  onPress={() => onSelect(role)}
-                  style={({ pressed }) => [
-                    pickerStyles.option,
-                    {
-                      borderColor: selected ? c.ink : c.hair,
-                      backgroundColor: selected ? c.card : 'transparent',
-                      opacity: pressed ? 0.8 : 1,
-                    },
-                  ]}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
-                      {role[0].toUpperCase() + role.slice(1)}
-                    </Body>
-                    <Mono size={11} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
-                      {ROLE_DESCRIPTION[role]}
-                    </Mono>
-                  </View>
-                  {selected ? <Check size={16} color={c.ink} strokeWidth={2} /> : null}
-                </Pressable>
-              );
-            })}
-          </View>
-
-          {showCategoryAccess ? (
-            <View style={{ marginTop: 22 }}>
-              <Eyebrow>VIEWER ACCESS · CATEGORIES</Eyebrow>
-              <Mono size={11} tracking={0.04} color={c.ink4} style={{ marginTop: 8 }}>
-                Pick which categories this viewer can read. Items in
-                unchecked categories stay hidden from them.
-              </Mono>
-              {catsLoading ? (
-                <ActivityIndicator color={c.ink} style={{ marginTop: 18 }} />
-              ) : categories.length === 0 ? (
-                <Mono size={11} color={c.ink4} style={{ marginTop: 12 }}>
-                  No categories yet. Create one on the web first.
-                </Mono>
-              ) : (
-                <View style={{ marginTop: 10, gap: 6 }}>
-                  {categories.map((cat) => {
-                    const granted = grantedIds.has(cat.id);
-                    return (
-                      <Pressable
-                        key={cat.id}
-                        onPress={() => toggleCategory(cat.id)}
-                        style={({ pressed }) => [
-                          pickerStyles.catRow,
-                          {
-                            borderColor: granted ? c.ink : c.hair,
-                            backgroundColor: granted ? c.card : 'transparent',
-                            opacity: pressed ? 0.8 : 1,
-                          },
-                        ]}
-                      >
-                        <Body size={14} color={c.ink} style={{ flex: 1, fontFamily: FONT.display }}>
-                          {cat.name}
-                        </Body>
-                        {granted ? <Check size={14} color={c.ink} strokeWidth={2} /> : null}
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              )}
-            </View>
-          ) : null}
-
-          <Pressable
-            onPress={onDismiss}
-            style={({ pressed }) => [pickerStyles.cancel, { opacity: pressed ? 0.6 : 1 }]}
+          <View style={[pickerStyles.grabber, { backgroundColor: c.ink5 }]} />
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingBottom: 12 }}
           >
-            <Mono size={13} tracking={0.04} color={c.ink3} style={{ fontFamily: FONT.display }}>
-              Done
-            </Mono>
-          </Pressable>
-        </ScrollView>
+            <Eyebrow>CHANGE ROLE</Eyebrow>
+            <Display size={22} style={{ marginTop: 8 }}>
+              Set role for <Em>{name}.</Em>
+            </Display>
+            <View style={{ marginTop: 18, gap: 8 }}>
+              {ASSIGNABLE_ROLES.map((role) => {
+                const selected = member.role === role;
+                return (
+                  <Pressable
+                    key={role}
+                    onPress={() => onSelect(role)}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected }}
+                    style={({ pressed }) => [
+                      pickerStyles.option,
+                      {
+                        borderColor: selected ? c.ink : c.hair2,
+                        backgroundColor: selected ? c.sunk : 'transparent',
+                        opacity: pressed ? 0.8 : 1,
+                      },
+                    ]}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
+                        {role[0].toUpperCase() + role.slice(1)}
+                      </Body>
+                      <Body size={12.5} muted style={{ marginTop: 2 }}>
+                        {ROLE_DESCRIPTION[role]}
+                      </Body>
+                    </View>
+                    {selected ? <Check size={16} color={c.ink} strokeWidth={2} /> : null}
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            {showCategoryAccess ? (
+              <View style={{ marginTop: 22 }}>
+                <Eyebrow>VIEWER ACCESS · CATEGORIES</Eyebrow>
+                <Body size={12.5} muted style={{ marginTop: 8 }}>
+                  Pick which categories this viewer can read. Items in unchecked categories stay
+                  hidden from them.
+                </Body>
+                {catsLoading ? (
+                  <ActivityIndicator color={c.ink} style={{ marginTop: 18 }} />
+                ) : catsFailed ? (
+                  <Body
+                    size={12.5}
+                    color={c.critText}
+                    accessibilityRole="alert"
+                    style={{ marginTop: 12 }}
+                  >
+                    Could not load the categories. Close this sheet and open it again.
+                  </Body>
+                ) : categories.length === 0 ? (
+                  <Body size={12.5} muted style={{ marginTop: 12 }}>
+                    No categories yet. Create one on the web first.
+                  </Body>
+                ) : (
+                  <View style={{ marginTop: 10, gap: 6 }}>
+                    {categories.map((cat) => {
+                      const granted = grantedIds.has(cat.id);
+                      return (
+                        <Pressable
+                          key={cat.id}
+                          onPress={() => toggleCategory(cat.id)}
+                          accessibilityRole="checkbox"
+                          accessibilityState={{ checked: granted }}
+                          accessibilityLabel={cat.name}
+                          style={({ pressed }) => [
+                            pickerStyles.catRow,
+                            {
+                              borderColor: granted ? c.ink : c.hair2,
+                              backgroundColor: granted ? c.sunk : 'transparent',
+                              opacity: pressed ? 0.8 : 1,
+                            },
+                          ]}
+                        >
+                          <CheckboxMark checked={granted} />
+                          <Body
+                            size={14}
+                            color={c.ink}
+                            style={{ flex: 1, fontFamily: FONT.display }}
+                          >
+                            {cat.name}
+                          </Body>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                )}
+              </View>
+            ) : null}
+
+            <Pressable
+              onPress={onDismiss}
+              accessibilityRole="button"
+              style={({ pressed }) => [pickerStyles.cancel, { opacity: pressed ? 0.6 : 1 }]}
+            >
+              <Mono size={13} tracking={0.04} color={c.ink3} style={{ fontFamily: FONT.display }}>
+                Done
+              </Mono>
+            </Pressable>
+          </ScrollView>
+        </View>
       </View>
     </Modal>
   );
 }
 
 const pickerStyles = StyleSheet.create({
-  backdrop: {
-    ...StyleSheet.absoluteFill,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-  },
+  // Fills the modal; the scrim and the sheet are both pinned inside it, the
+  // sheet to the bottom edge as before.
+  container: { flex: 1 },
   sheet: {
     position: 'absolute',
     left: 0,
@@ -602,12 +700,12 @@ const pickerStyles = StyleSheet.create({
     paddingTop: 20,
     paddingBottom: 36,
   },
+  // Decoration only (the sheet has no drag): the faintest ink, per mode.
   grabber: {
     alignSelf: 'center',
     width: 36,
     height: 4,
     borderRadius: 2,
-    backgroundColor: '#ccc',
     marginBottom: 14,
   },
   option: {
@@ -625,11 +723,17 @@ const pickerStyles = StyleSheet.create({
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 11,
+    minHeight: 44,
     gap: 10,
   },
+  // A 44pt frame around the word (it was the word and 10pt of padding).
   cancel: {
     marginTop: 16,
     alignSelf: 'center',
     padding: 10,
+    minWidth: 44,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

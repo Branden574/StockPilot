@@ -638,14 +638,14 @@ export default function BookOrderTotalsScreen() {
         </Card>
       ) : null}
 
-      <View style={[styles.searchBox, { backgroundColor: c.card, borderColor: c.hair }]}>
-        <Search size={16} color={c.ink4} strokeWidth={1.4} />
+      <View style={[styles.searchBox, { backgroundColor: c.card, borderColor: c.hair2 }]}>
+        <Search size={16} color={c.ink3} strokeWidth={1.4} />
         <TextInput
           value={draftQ}
           onChangeText={setDraftQ}
           onSubmitEditing={searchNow}
           placeholder="Title, SKU or ISBN"
-          placeholderTextColor={c.ink4}
+          placeholderTextColor={c.ink3}
           accessibilityLabel="Search books"
           accessibilityHint="Searches title, SKU and ISBN across the whole report"
           autoCapitalize="none"
@@ -1048,7 +1048,9 @@ function TopBar({
  * default also has a remove button. The two are SIBLING buttons in a plain
  * View (a touchable inside a touchable is unreachable with VoiceOver), each
  * a real 44 pt frame, so the outline VoiceOver draws is the target a finger
- * hits.
+ * hits. A chip at its default is the recessed fill with the control border;
+ * a set filter is the card fill with the muted-ink edge (3:1 or more on the
+ * page in both modes), so set and unset differ by more than the remove X.
  */
 function FilterChip({
   chip,
@@ -1068,7 +1070,7 @@ function FilterChip({
     <View
       style={[
         styles.chip,
-        { borderColor: set ? c.ink3 : c.hair, backgroundColor: set ? c.card : c.paper2 },
+        { borderColor: set ? c.ink3 : c.hair2, backgroundColor: set ? c.card : c.sunk },
       ]}
     >
       <Pressable
@@ -1413,7 +1415,7 @@ function BookRow({
             </Mono>
           ) : null}
           {place ? (
-            <Mono size={11.5} color={c.ink4} style={{ marginTop: 2 }}>
+            <Mono size={11.5} color={c.ink3} style={{ marginTop: 2 }}>
               {place}
             </Mono>
           ) : null}

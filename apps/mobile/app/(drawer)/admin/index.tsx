@@ -18,7 +18,7 @@ import type { ModuleId } from '@stockpilot/core';
 
 import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
-import { Body, Mono } from '@/components/ui/text';
+import { Body } from '@/components/ui/text';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import { useRole } from '@/lib/use-role';
 import { FONT } from '@/lib/theme';
@@ -47,6 +47,13 @@ const LINKS: AdminLink[] = [
   { href: '/admin/audit', label: 'Audit log', icon: FileLock, description: 'Every privileged action with actor and time.' },
 ];
 
+/**
+ * Admin overview: one card per admin destination, each a named button (the
+ * bare Pressable had no role), its description in the muted ink, a sentence
+ * in the body face (it was the faint ink, about 3.3:1). Owners and admins
+ * only ("Restricted access." otherwise); Count history only with the cycle
+ * counts module, as the drawer.
+ */
 export default function AdminOverview() {
   const router = useRouter();
   const { isAdmin, loading } = useRole();
@@ -103,6 +110,7 @@ export default function AdminOverview() {
       renderItem={(l) => (
         <Pressable
           onPress={() => router.push(l.href as never)}
+          accessibilityRole="button"
           style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
         >
           <Card padding={14}>
@@ -137,9 +145,9 @@ function AdminRow({ link }: { link: AdminLink }) {
         <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
           {link.label}
         </Body>
-        <Mono size={11} tracking={0.04} color={c.ink4} style={{ marginTop: 3 }}>
+        <Body size={13} muted style={{ marginTop: 2 }}>
           {link.description}
-        </Mono>
+        </Body>
       </View>
     </View>
   );

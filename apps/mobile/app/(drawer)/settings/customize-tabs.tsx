@@ -49,11 +49,21 @@ import {
   PREVIEW_MIN_FONT_SCALE,
   previewLabelStyleForCount,
   type TabLabelMetrics,
+  type TabLabelPlatform,
 } from '@/lib/tab-label';
 import { FONT } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useRole } from '@/lib/use-role';
 import { useTheme } from '@/lib/use-theme';
+
+/**
+ * The label tiers the preview takes: the display-face ones on both
+ * platforms, because the real bar now draws its labels in the display face
+ * everywhere (the tab layout, redesign P5.4). tabLabelStyleForCount keeps
+ * those tiers under 'android', where the bar always drew this face; its iOS
+ * tiers were sized for the JetBrains Mono labels the bar used to draw there.
+ */
+const PREVIEW_LABEL_TIERS: TabLabelPlatform = 'android';
 
 // Old-architecture Android needs the experimental switch for
 // LayoutAnimation; on the new architecture (this app) it's a harmless no-op
@@ -89,6 +99,16 @@ try {
  * remaining allowed candidates with add. Min 2 / max 5 chosen — controls
  * disable at the bounds with a hint line. Only candidates the drawer/module
  * gating allows can be ADDED, so customization can never widen access.
+ *
+ * The look (redesign P5.10): the device mode's palette; every word (the
+ * hints, the unavailable note, a greyed choice, the preview's other tabs) is
+ * the muted ink or stronger, so it reads at AA (the faint ink4 held them near
+ * 3:1). The preview draws the bar as the tab layout does (DESIGN-SPEC 6.20):
+ * Home, the active tab, in the accent and the others in the muted ink, with
+ * the labels in the display face, semibold on the active tab. Each reorder /
+ * add / remove chip is the same 30pt chip inside a real 44pt frame (it was
+ * the chip plus hitSlop, a 42pt target whose neighbours' slop overlapped);
+ * the frames stand side by side, so a touch has one owner.
  */
 export default function CustomizeTabsScreen() {
   const { c } = useTheme();
@@ -128,11 +148,9 @@ export default function CustomizeTabsScreen() {
     [allowed, slots],
   );
   // Same density tier the real bar will use for this config (Home + gated
-  // chosen slots), scaled for the miniature preview.
-  const previewMetrics = previewLabelStyleForCount(
-    1 + previewSlots.length,
-    Platform.OS === 'android' ? 'android' : 'ios',
-  );
+  // chosen slots), scaled for the miniature preview: the display-face tiers
+  // on both platforms, as the bar's labels are (PREVIEW_LABEL_TIERS).
+  const previewMetrics = previewLabelStyleForCount(1 + previewSlots.length, PREVIEW_LABEL_TIERS);
 
   // Reduce-motion: one-shot probe, same pattern as scanner-tip.tsx — skip
   // the reorder/add/remove layout animation entirely when enabled.
@@ -237,7 +255,7 @@ export default function CustomizeTabsScreen() {
           </View>
         </Card>
         <View style={{ paddingHorizontal: 4, paddingTop: 10 }}>
-          <Mono size={10} tracking={0.1} color={c.ink4}>
+          <Mono size={10} tracking={0.1} color={c.ink3}>
             HOME IS ALWAYS FIRST · {slots.length} OF {MAX_TAB_SLOTS} SLOTS USED
           </Mono>
         </View>
@@ -260,7 +278,7 @@ export default function CustomizeTabsScreen() {
                   <View style={{ flex: 1, minWidth: 0 }}>
                     <Body
                       size={15.5}
-                      color={unavailable ? c.ink4 : undefined}
+                      color={unavailable ? c.ink3 : undefined}
                       style={{ fontFamily: FONT.display }}
                     >
                       {cand.settingsLabel}
@@ -269,16 +287,17 @@ export default function CustomizeTabsScreen() {
                       <Mono
                         size={10}
                         tracking={0.06}
-                        color={c.ink4}
+                        color={c.ink3}
                         style={{ marginTop: 3 }}
                       >
                         UNAVAILABLE RIGHT NOW — HIDDEN FROM THE BAR
                       </Mono>
                     ) : null}
                   </View>
-                  {/* Three 30pt chips plus the icon well leave the label ~200pt
-                      of a 393pt screen. Past the shared threshold the chips
-                      take their own line and the label takes the width. */}
+                  {/* Three 44pt chip frames plus the icon well leave the label
+                      about 130pt of a 393pt screen. Past the shared threshold
+                      the chips take their own line and the label takes the
+                      width. */}
                   <View style={[styles.controls, stackControls && styles.controlsStacked]}>
                     <ControlChip
                       icon={ChevronUp}
@@ -344,6 +363,7 @@ export default function CustomizeTabsScreen() {
         <Section label="RESET">
           <Pressable
             onPress={reset}
+            accessibilityRole="button"
             android_ripple={{ color: c.hair }}
             style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
           >
@@ -355,7 +375,7 @@ export default function CustomizeTabsScreen() {
                 <Body size={15.5} style={{ fontFamily: FONT.display }}>
                   Reset to default
                 </Body>
-                <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 3 }}>
+                <Mono size={10.5} tracking={0.04} color={c.ink3} style={{ marginTop: 3 }}>
                   Home · Items · Books · POs · Scan
                 </Mono>
               </View>
@@ -384,7 +404,12 @@ function PreviewTab({
   active?: boolean;
 }) {
   const { c } = useTheme();
-  const tint = active ? c.ink : c.ink4;
+  // The real bar's tints (DESIGN-SPEC 6.20, as the tab layout draws them):
+  // Home, the active tab, in the accent (5.53:1 on the card in light, 9.91:1
+  // in dark), the others in the muted ink, so their words read at AA (the
+  // faint ink4 held them near 3:1). As on the bar, the active tab also takes
+  // the heavier stroke and the semibold face, so colour is never the only cue.
+  const tint = active ? c.accent : c.ink3;
   // Raw Text, not <Mono>: the bar's letterSpacing is ABSOLUTE pt while
   // Mono's `tracking` prop is an em ratio — feeding 0.6 into Mono produced
   // 9 × 0.6 = 5.4pt of tracking, the "O r d e r s" bug this replaces. One
@@ -398,7 +423,11 @@ function PreviewTab({
         adjustsFontSizeToFit
         minimumFontScale={PREVIEW_MIN_FONT_SCALE}
         allowFontScaling={false}
-        style={[styles.previewLabel, { color: tint }, metrics]}
+        style={[
+          styles.previewLabel,
+          { color: tint, fontFamily: active ? FONT.displaySemi : FONT.display },
+          metrics,
+        ]}
       >
         {label}
       </Text>
@@ -406,7 +435,12 @@ function PreviewTab({
   );
 }
 
-/** 30pt bordered icon button for reorder/add/remove — disabled at bounds. */
+/**
+ * 30pt bordered icon button for reorder/add/remove — disabled at bounds. The
+ * press target is a real 44pt frame around the chip (not hitSlop), so the
+ * target VoiceOver outlines is the one a finger can hit; the frame takes 7pt
+ * of the row's padding above and below, so the row keeps its height.
+ */
 function ControlChip({
   icon: Icon,
   label,
@@ -426,15 +460,15 @@ function ControlChip({
       accessibilityState={{ disabled }}
       disabled={disabled}
       onPress={onPress}
-      hitSlop={6}
       style={({ pressed }) => [
-        styles.control,
-        { borderColor: c.hair },
+        styles.controlFrame,
         disabled && { opacity: 0.3 },
         pressed && !disabled && { opacity: 0.6 },
       ]}
     >
-      <Icon size={15} color={c.ink} strokeWidth={1.6} />
+      <View style={[styles.control, { borderColor: c.hair2 }]}>
+        <Icon size={15} color={c.ink} strokeWidth={1.6} />
+      </View>
     </Pressable>
   );
 }
@@ -454,7 +488,7 @@ function Hint({ text }: { text: string }) {
   const { c } = useTheme();
   return (
     <View style={{ paddingHorizontal: 4, paddingTop: 8 }}>
-      <Mono size={10} tracking={0.1} color={c.ink4}>
+      <Mono size={10} tracking={0.1} color={c.ink3}>
         {text}
       </Mono>
     </View>
@@ -483,8 +517,8 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
   },
+  // The face is set per tab in PreviewTab (semibold on the active one).
   previewLabel: {
-    fontFamily: Platform.OS === 'android' ? FONT.display : FONT.mono,
     textAlign: 'center',
     alignSelf: 'stretch',
     marginTop: 5,
@@ -499,7 +533,8 @@ const styles = StyleSheet.create({
     minHeight: 52,
   },
   rowStacked: { flexWrap: 'wrap' },
-  controls: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  // The 44pt frames stand side by side (no gap), so no two targets overlap.
+  controls: { flexDirection: 'row', alignItems: 'center' },
   controlsStacked: { width: '100%', justifyContent: 'flex-end' },
   iconWell: {
     width: 32,
@@ -511,6 +546,14 @@ const styles = StyleSheet.create({
     flexShrink: 0,
     marginRight: 6,
   },
+  controlFrame: {
+    minWidth: 44,
+    minHeight: 44,
+    marginVertical: -7,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // A fixed size: the chip holds an icon, never text.
   control: {
     width: 30,
     height: 30,

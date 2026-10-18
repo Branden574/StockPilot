@@ -3,6 +3,7 @@ import * as React from 'react';
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { Body, Display, Mono } from '@/components/ui/text';
+import { BUTTON_RADIUS } from '@/components/ui/tones';
 import {
   BOOK_REPORT_EXPORT_OFFLINE,
   BOOK_REPORT_EXPORT_PREPARING,
@@ -12,7 +13,7 @@ import {
   type BookReportExportChoice,
   type BookReportExportChoiceId,
 } from '@/lib/book-order-totals-view';
-import { ACCENT, FONT, SHADOW, TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT, SHADOW, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 const MIN_TAP = 44;
@@ -29,7 +30,8 @@ const MIN_TAP = 44;
  *     Android's Share cannot hand over a file, so the web is offered there.
  *
  * Sibling backdrop (sheet-backdrop-guard.test.ts): a childless "Close"
- * scrim behind a plain-View card.
+ * scrim behind a plain-View card. The offline line and a failed export take
+ * the per-mode warning and refusal words (AA on the card in both modes).
  */
 export function BookOrderExportSheet({
   visible,
@@ -94,7 +96,7 @@ export function BookOrderExportSheet({
               {BOOK_REPORT_EXPORT_SHEET_NOTE}
             </Body>
             {offline ? (
-              <Body size={13.5} color={ACCENT.warn} accessibilityRole="alert">
+              <Body size={13.5} color={c.warnText} accessibilityRole="alert">
                 {BOOK_REPORT_EXPORT_OFFLINE}
               </Body>
             ) : null}
@@ -130,7 +132,7 @@ export function BookOrderExportSheet({
               </View>
             ) : null}
             {error ? (
-              <Body size={13.5} color={ACCENT.crit} accessibilityRole="alert">
+              <Body size={13.5} color={c.critText} accessibilityRole="alert">
                 {error}
               </Body>
             ) : null}
@@ -165,7 +167,7 @@ function ChoiceButton({
         accessibilityState={{ disabled, busy: busy === choice.id }}
         style={({ pressed }) => [
           styles.choice,
-          { borderColor: c.hair, backgroundColor: c.paper, opacity: disabled ? 0.45 : pressed ? 0.75 : 1 },
+          { borderColor: c.hair2, backgroundColor: c.card, opacity: disabled ? 0.45 : pressed ? 0.75 : 1 },
         ]}
       >
         <Download size={18} color={c.ink} strokeWidth={1.6} />
@@ -211,11 +213,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  // The shared outline button's recipe at its 52 pt size (the card fill, the
+  // control border, radius 14): each format is a secondary action.
   choice: {
     minHeight: 52,
     paddingHorizontal: 16,
     paddingVertical: 10,
-    borderRadius: 12,
+    borderRadius: BUTTON_RADIUS.md,
     borderWidth: 1,
     flexDirection: 'row',
     alignItems: 'center',

@@ -37,7 +37,7 @@ import {
 } from '@/lib/integrations-api';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { useRole } from '@/lib/use-role';
-import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo, type Palette } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 const PROVIDER = 'quickbooks';
@@ -52,6 +52,12 @@ const PROVIDER = 'quickbooks';
  * we re-check `integrations` module + admin role and render an empty state
  * otherwise. The server is the source of truth — a 403 from any call surfaces a
  * friendly inline message regardless of what the client thinks.
+ *
+ * The look (redesign P5.10): the device mode's palette. A failed read is the
+ * refusal tone (its words in the per-mode red on the red wash, where it was a
+ * fixed red over a translucent border), the labels and the sync meta are the
+ * muted ink, and each sync row's status word is a status pill in its tone
+ * beside the same icon, now in the per-mode accent, amber or red.
  */
 export default function IntegrationsScreen() {
   const { c } = useTheme();
@@ -214,7 +220,7 @@ export default function IntegrationsScreen() {
         />
       ) : loading ? (
         <View style={styles.center}>
-          <ActivityIndicator color={c.ink4} />
+          <ActivityIndicator color={c.ink} />
         </View>
       ) : forbidden ? (
         <EmptyState
@@ -227,8 +233,11 @@ export default function IntegrationsScreen() {
           showsVerticalScrollIndicator={false}
         >
           {error ? (
-            <Card padding={14} style={{ marginTop: 14, borderColor: 'rgba(176,58,58,0.3)' }}>
-              <Body size={13.5} color={ACCENT.crit}>
+            <Card
+              padding={14}
+              style={{ marginTop: 14, backgroundColor: c.critWash, borderColor: c.critWash }}
+            >
+              <Body size={13.5} color={c.critText}>
                 {error}
               </Body>
             </Card>
@@ -308,10 +317,10 @@ function StatusCard({ connection }: { connection: ConnectionView | null }) {
       <DetailRow label="LAST SYNCED" value={formatDateTime(connection.lastSyncedAt)} />
       {connection.lastError ? (
         <View style={{ marginTop: 10 }}>
-          <Mono size={9.5} tracking={0.18} upper color={c.ink4}>
+          <Mono size={9.5} tracking={0.18} upper color={c.ink3}>
             LAST ERROR
           </Mono>
-          <Body size={13} color={ACCENT.crit} style={{ marginTop: 4 }}>
+          <Body size={13} color={c.critText} style={{ marginTop: 4 }}>
             {connection.lastError}
           </Body>
         </View>
@@ -341,7 +350,7 @@ function DetailRow({ label, value }: { label: string; value: string }) {
         size={9.5}
         tracking={0.18}
         upper
-        color={c.ink4}
+        color={c.ink3}
         // The label is a fixed micro-marker; the value it names is not capped.
         maxFontSizeMultiplier={capTo(9.5, TYPE_CEILING.chrome)}
         style={{ flexShrink: 1 }}
@@ -423,12 +432,19 @@ function MappingForm({
   );
 }
 
-const HEALTH_ICON: Record<SyncHealthStatus, { Icon: typeof CheckCircle2; color: string }> = {
-  success: { Icon: CheckCircle2, color: ACCENT.mintInk },
-  pending: { Icon: CircleDashed, color: ACCENT.warn },
-  error: { Icon: XCircle, color: ACCENT.crit },
-  dead: { Icon: XCircle, color: ACCENT.crit },
+const HEALTH_ICON: Record<SyncHealthStatus, { Icon: typeof CheckCircle2; status: 'ok' | 'warn' | 'crit' }> = {
+  success: { Icon: CheckCircle2, status: 'ok' },
+  pending: { Icon: CircleDashed, status: 'warn' },
+  error: { Icon: XCircle, status: 'crit' },
+  dead: { Icon: XCircle, status: 'crit' },
 };
+
+/** A sync row's icon colour: its pill's words (tones.ts pillTone), per mode. */
+function healthColor(status: 'ok' | 'warn' | 'crit', c: Palette): string {
+  if (status === 'ok') return c.accent;
+  if (status === 'warn') return c.warnText;
+  return c.critText;
+}
 
 function HealthList({ health }: { health: SyncHealthRow[] }) {
   const { c } = useTheme();
@@ -446,7 +462,8 @@ function HealthList({ health }: { health: SyncHealthRow[] }) {
           </View>
         ) : (
           health.map((row, i) => {
-            const { Icon, color } = HEALTH_ICON[row.status] ?? HEALTH_ICON.pending;
+            const { Icon, status } = HEALTH_ICON[row.status] ?? HEALTH_ICON.pending;
+            const color = healthColor(status, c);
             return (
               <View key={`${row.topic}-${row.createdAt}-${i}`}>
                 {i > 0 ? <Hair inset={16} /> : null}
@@ -456,30 +473,23 @@ function HealthList({ health }: { health: SyncHealthRow[] }) {
                     <Body size={14} color={c.ink} style={{ fontFamily: FONT.display }} numberOfLines={2}>
                       {row.topic}
                     </Body>
-                    <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 2 }} numberOfLines={2}>
+                    <Mono size={10.5} tracking={0.04} color={c.ink3} style={{ marginTop: 2 }} numberOfLines={2}>
                       {row.externalId ? `${row.externalId} · ` : ''}
                       {row.attempts} attempt{row.attempts === 1 ? '' : 's'} · {formatDateTime(row.completedAt ?? row.createdAt)}
                     </Mono>
                     {row.lastError ? (
-                      <Body size={12} color={ACCENT.crit} style={{ marginTop: 3 }} numberOfLines={2}>
+                      <Body size={12} color={c.critText} style={{ marginTop: 3 }} numberOfLines={2}>
                         {row.lastError}
                       </Body>
                     ) : null}
                   </View>
                   {/* The status word duplicates the icon to its left and is
-                      the only non-shrinking sibling of the flex: 1 column;
-                      capped so the topic and its meta keep their width. */}
-                  <Mono
-                    size={9.5}
-                    tracking={0.12}
-                    upper
-                    color={color}
-                    numberOfLines={1}
-                    maxFontSizeMultiplier={capTo(9.5, TYPE_CEILING.chrome)}
-                    style={{ flexShrink: 0 }}
-                  >
-                    {row.status}
-                  </Mono>
+                      the only non-shrinking sibling of the flex: 1 column:
+                      a status pill (capped at the chrome ceiling by the
+                      primitive), so the topic and its meta keep their width. */}
+                  <Pill status={status} dot={false} style={{ alignSelf: 'center' }}>
+                    {row.status.toUpperCase()}
+                  </Pill>
                 </View>
               </View>
             );

@@ -36,6 +36,14 @@ import { useTheme } from '@/lib/use-theme';
  * are no universal links), so this screen's job is to request, show pending,
  * resend, cancel — and, when it notices the change has completed, to refresh
  * the session so the drawer, lock screen and avatar pick up the new address.
+ *
+ * The look (redesign P5.10): the device mode's palette; the card labels are
+ * the muted ink, a refused request is said in the per-mode refusal red (it
+ * was a fixed red) and announced, and the password's show / hide eye is a
+ * named button in a 44pt frame (VoiceOver found an unnamed element). The
+ * small buttons (Try again, Resend links, Use a different address, Cancel
+ * change, Keep the pending address) are at least 44pt tall, as the report's
+ * are.
  */
 
 interface Status {
@@ -234,14 +242,19 @@ export default function ChangeEmailScreen() {
         >
           {!status && !loadError ? (
             <View style={{ paddingVertical: 40, alignItems: 'center' }}>
-              <ActivityIndicator />
+              <ActivityIndicator color={c.ink} />
             </View>
           ) : null}
 
           {loadError ? (
             <Card padding={16}>
               <Body>{loadError}</Body>
-              <Button variant="outline" size="sm" style={{ marginTop: 12 }} onPress={() => void load()}>
+              <Button
+                variant="outline"
+                size="sm"
+                style={{ marginTop: 12, minHeight: MIN_TAP }}
+                onPress={() => void load()}
+              >
                 Try again
               </Button>
             </Card>
@@ -249,7 +262,7 @@ export default function ChangeEmailScreen() {
 
           {status ? (
             <Card padding={16} style={{ gap: 10 }}>
-              <Mono size={10} tracking={0.12} upper color={c.ink4}>
+              <Mono size={10} tracking={0.12} upper color={c.ink3}>
                 SIGN-IN EMAIL
               </Mono>
               <View style={styles.row}>
@@ -266,7 +279,7 @@ export default function ChangeEmailScreen() {
 
           {status && pending ? (
             <Card padding={16} style={{ gap: 10 }}>
-              <Mono size={10} tracking={0.12} upper color={c.ink4}>
+              <Mono size={10} tracking={0.12} upper color={c.ink3}>
                 PENDING CHANGE
               </Mono>
               <View style={styles.row}>
@@ -282,13 +295,31 @@ export default function ChangeEmailScreen() {
               </Body>
               <Hair />
               <View style={{ gap: 8 }}>
-                <Button variant="outline" size="sm" disabled={busy !== null} onPress={() => void resend()}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={busy !== null}
+                  onPress={() => void resend()}
+                  style={{ minHeight: MIN_TAP }}
+                >
                   {busy === 'resend' ? 'Sending…' : 'Resend links'}
                 </Button>
-                <Button variant="outline" size="sm" disabled={busy !== null} onPress={() => setShowForm(true)}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={busy !== null}
+                  onPress={() => setShowForm(true)}
+                  style={{ minHeight: MIN_TAP }}
+                >
                   Use a different address
                 </Button>
-                <Button variant="destructive" size="sm" disabled={busy !== null} onPress={cancel}>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  disabled={busy !== null}
+                  onPress={cancel}
+                  style={{ minHeight: MIN_TAP }}
+                >
                   {busy === 'cancel' ? 'Cancelling…' : 'Cancel change'}
                 </Button>
               </View>
@@ -297,7 +328,7 @@ export default function ChangeEmailScreen() {
 
           {status && (!pending || showForm) ? (
             <Card padding={16} style={{ gap: 14 }}>
-              <Mono size={10} tracking={0.12} upper color={c.ink4}>
+              <Mono size={10} tracking={0.12} upper color={c.ink3}>
                 {pending ? 'CHANGE TO A DIFFERENT ADDRESS' : 'CHANGE EMAIL'}
               </Mono>
               <Body muted size={13}>
@@ -325,17 +356,22 @@ export default function ChangeEmailScreen() {
                 value={password}
                 onChangeText={setPassword}
                 trailing={
-                  <Pressable hitSlop={10} onPress={() => setShowPw((p) => !p)}>
+                  <Pressable
+                    onPress={() => setShowPw((p) => !p)}
+                    accessibilityRole="button"
+                    accessibilityLabel={showPw ? 'Hide password' : 'Show password'}
+                    style={({ pressed }) => [styles.eye, { opacity: pressed ? 0.6 : 1 }]}
+                  >
                     {showPw ? (
-                      <EyeOff size={18} color={c.ink4} strokeWidth={1.4} />
+                      <EyeOff size={18} color={c.ink3} strokeWidth={1.4} />
                     ) : (
-                      <Eye size={18} color={c.ink4} strokeWidth={1.4} />
+                      <Eye size={18} color={c.ink3} strokeWidth={1.4} />
                     )}
                   </Pressable>
                 }
               />
               {formError ? (
-                <Body size={13} style={{ color: '#b42318' }}>
+                <Body size={13} color={c.critText} accessibilityRole="alert">
                   {formError}
                 </Body>
               ) : null}
@@ -343,7 +379,13 @@ export default function ChangeEmailScreen() {
                 {busy === 'request' ? 'Sending…' : 'Send verification'}
               </Button>
               {pending ? (
-                <Button variant="ghost" size="sm" disabled={busy !== null} onPress={() => setShowForm(false)}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={busy !== null}
+                  onPress={() => setShowForm(false)}
+                  style={{ minHeight: MIN_TAP }}
+                >
                   Keep the pending address
                 </Button>
               ) : null}
@@ -354,6 +396,9 @@ export default function ChangeEmailScreen() {
     </View>
   );
 }
+
+/** The iOS minimum tap target, in points. */
+const MIN_TAP = 44;
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
@@ -369,4 +414,13 @@ const styles = StyleSheet.create({
   },
   head: { paddingHorizontal: 20, paddingTop: 15, paddingBottom: 18 },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  // A real 44pt frame around the 18pt eye (not hitSlop), its right margin
+  // giving back the frame's extra width so the eye sits where it did.
+  eye: {
+    minWidth: 44,
+    minHeight: 44,
+    marginRight: -13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });
