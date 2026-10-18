@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import * as React from 'react';
 
+import { useWarmRoute } from '@/lib/hooks/use-warm-route';
 import { queueLiveNotification } from '@/lib/notifications/live-toast';
 import { createClient } from '@/lib/supabase/client';
 import { ensureRealtimeAuth } from '@/lib/supabase/realtime-auth';
@@ -304,11 +305,21 @@ export function NotificationBell({ userId, organizationId }: Props) {
   const showBadge = count > 0;
   const label = count > 99 ? '99+' : String(count);
 
+  // The bell is in the top bar of every dashboard page, so it never prefetches
+  // the Notifications page on sight (two requests, each a full dynamic render,
+  // on every page view). It warms that page when a person comes to it, as the
+  // sidebar's links do (PLAN 0.6; lib/hooks/use-warm-route.ts).
+  const warmRoute = useWarmRoute();
+
   // The EXACT unread count (99+ past 99) on the danger tone, where the
   // reference design draws only a dot: the number is real data the bell has.
   return (
     <Link
-      href="/dashboard/notifications"
+      href={NOTIFICATIONS_PAGE}
+      prefetch={false}
+      onFocus={() => warmRoute(NOTIFICATIONS_PAGE)}
+      onPointerEnter={() => warmRoute(NOTIFICATIONS_PAGE)}
+      onPointerDown={() => warmRoute(NOTIFICATIONS_PAGE)}
       className="hover:bg-muted hover:text-foreground relative grid size-8 shrink-0 place-items-center rounded-md text-[var(--ed-ink-2)] transition-colors [@media(pointer:coarse)]:size-11"
       aria-label={showBadge ? `Notifications (${count} unread)` : 'Notifications'}
     >

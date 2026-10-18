@@ -1,14 +1,27 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { setTheme } = vi.hoisted(() => ({ setTheme: vi.fn() }));
+const { setTheme, nav } = vi.hoisted(() => ({
+  setTheme: vi.fn(),
+  nav: { pathname: '/dashboard/inventory/new', prefetch: vi.fn() },
+}));
 
 vi.mock('next/navigation', () => ({
-  usePathname: () => '/dashboard/inventory/new',
+  usePathname: () => nav.pathname,
   useSearchParams: () => new URLSearchParams(),
-  useRouter: () => ({ push: vi.fn(), prefetch: vi.fn(), refresh: vi.fn() }),
+  useRouter: () => ({ push: vi.fn(), prefetch: nav.prefetch, refresh: vi.fn() }),
 }));
+// The real Link, with the prefetch it was given written on its anchor
+// (data-prefetch), so a test can read what each link in the bar asks for.
+vi.mock('next/link', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('next/link')>();
+  const RealLink = actual.default;
+  function Link(props: React.ComponentProps<typeof RealLink>) {
+    return <RealLink {...props} data-prefetch={String(props.prefetch)} />;
+  }
+  return { ...actual, default: Link };
+});
 vi.mock('next-themes', () => ({ useTheme: () => ({ setTheme, theme: 'light' }) }));
 vi.mock('@/lib/supabase/client', () => ({ createClient: () => ({}) }));
 vi.mock('@/lib/supabase/realtime-auth', () => ({ ensureRealtimeAuth: vi.fn() }));
@@ -56,6 +69,11 @@ function renderBar() {
 }
 
 const classesOf = (el: Element) => (el.getAttribute('class') ?? '').split(/\s+/);
+
+beforeEach(() => {
+  nav.pathname = '/dashboard/inventory/new';
+  nav.prefetch.mockReset();
+});
 
 describe('the top bar decides what fits from its own width', () => {
   it('is a size container, so the sidebar beside it is taken into account', () => {
@@ -406,5 +424,63 @@ describe('Density in the account menu', () => {
       'aria-checked',
       'true',
     );
+  });
+});
+
+/**
+ * NO LINK IN THE BAR PREFETCHES ITS PAGE ON SIGHT (PLAN 0.6; review of
+ * 2026-10-18). The bar is on every dashboard page, and in a production build
+ * a default <Link> prefetches its page as soon as it is in view: two requests,
+ * each a full dynamic render of the dashboard layout, on every page view.
+ * Measured on the frozen 36cb9b619 build: every page fired them for
+ * Notifications, Help and Support, and /dashboard/settings/billing fired them
+ * for /dashboard/settings from the Settings crumb alone. Each link is warmed
+ * when a person comes to it instead, as the sidebar's links are.
+ */
+describe('the bar warms its pages when a person comes to a link, never on sight', () => {
+  // A trail with two parent links: Inventory / Purchase orders / PO imports / New.
+  const PATH = '/dashboard/purchase-orders/imports/new';
+  const LINKS = [
+    '/dashboard/purchase-orders',
+    '/dashboard/purchase-orders/imports',
+    '/dashboard/notifications',
+    '/dashboard/help',
+    '/dashboard/support',
+  ];
+
+  /** A spy's calls with every non-string reduced to its type, safe to print. */
+  const callsOf = (spy: { mock: { calls: unknown[][] } }) =>
+    spy.mock.calls.map((args) => args.map((a) => (typeof a === 'string' ? a : `<${typeof a}>`)));
+
+  // Mutation caught: prefetch={false} dropped from any crumb, the bell, Help
+  // or Support, or a new link added to the bar without it.
+  it('every link in the bar is rendered with prefetch={false}', () => {
+    nav.pathname = PATH;
+    const bar = renderBar();
+    const links = within(bar).getAllByRole('link');
+    expect(links.map((a) => a.getAttribute('href')).sort()).toEqual([...LINKS].sort());
+    for (const a of links) {
+      expect(a, a.getAttribute('href') ?? '').toHaveAttribute('data-prefetch', 'false');
+    }
+    expect(callsOf(nav.prefetch)).toEqual([]);
+  });
+
+  // Mutation caught: a link left with no warm-up (its click then waits for the
+  // whole page), or a handler that hands the warm-up the event, not the href.
+  it.each([
+    ['hover', (el: Element) => fireEvent.pointerEnter(el)],
+    ['keyboard focus', (el: Element) => fireEvent.focus(el)],
+    ['pointer-down', (el: Element) => fireEvent.pointerDown(el)],
+  ])('%s on a crumb, the bell, Help or Support warms that page', (_label, approach) => {
+    nav.pathname = PATH;
+    const bar = renderBar();
+    for (const href of LINKS) {
+      nav.prefetch.mockClear();
+      const link = within(bar)
+        .getAllByRole('link')
+        .find((a) => a.getAttribute('href') === href)!;
+      approach(link);
+      expect(callsOf(nav.prefetch), href).toEqual([[href]]);
+    }
   });
 });

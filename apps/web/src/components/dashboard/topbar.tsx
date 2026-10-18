@@ -12,6 +12,7 @@ import type { Density } from '@/components/dashboard/sidebar-pref';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
 import { WarehouseFilterPicker } from '@/components/dashboard/warehouse-filter-picker';
 import { WhatsNewButton } from '@/components/updates/whats-new-button';
+import { useWarmRoute } from '@/lib/hooks/use-warm-route';
 import { cn } from '@/lib/utils';
 
 import type { NavSection } from './nav';
@@ -87,6 +88,20 @@ export function Topbar({
     [pathname, labelByHref],
   );
 
+  // NO LINK IN THE BAR PREFETCHES ITS PAGE ON SIGHT (PLAN 0.6). The bar is on
+  // every dashboard page, so a default <Link> here costs a prefetch (two
+  // requests, each a full dynamic render of the dashboard layout) of its page
+  // on every page view: Notifications, Help and Support always, and up to two
+  // parent crumbs (Settings, Reports, a list). Like the sidebar's links, each
+  // is warmed when a person comes to it instead: hover, keyboard focus or
+  // pointer-down, through the app's one warm-up (lib/hooks/use-warm-route.ts).
+  const warmRoute = useWarmRoute();
+  const warmOnApproach = (href: string) => ({
+    onFocus: () => warmRoute(href),
+    onPointerEnter: () => warmRoute(href),
+    onPointerDown: () => warmRoute(href),
+  });
+
   // WHAT FITS IS DECIDED BY THE BAR'S OWN WIDTH (a CSS container query on the
   // header, `@container`), not the window's: beside the 228px desktop sidebar
   // a 768px window leaves the bar 540px. Every button keeps its full size
@@ -147,6 +162,8 @@ export function Topbar({
                 {c.href && !isLast ? (
                   <Link
                     href={c.href}
+                    prefetch={false}
+                    {...warmOnApproach(c.href)}
                     className="hover:text-foreground truncate underline-offset-2 transition-colors hover:underline"
                   >
                     {c.label}
@@ -216,6 +233,8 @@ export function Topbar({
 
         <Link
           href="/dashboard/help"
+          prefetch={false}
+          {...warmOnApproach('/dashboard/help')}
           className={cn(ICON_BUTTON, '@min-[680px]:grid hidden')}
           aria-label="Help & Learning"
           title="Help & Learning"
@@ -225,6 +244,8 @@ export function Topbar({
 
         <Link
           href="/dashboard/support"
+          prefetch={false}
+          {...warmOnApproach('/dashboard/support')}
           className={cn(ICON_BUTTON, '@min-[680px]:grid hidden')}
           aria-label="Support & feedback"
           title="Support & feedback"
