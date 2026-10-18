@@ -1,4 +1,4 @@
-import { X } from 'lucide-react-native';
+import { Circle, CircleDot, X } from 'lucide-react-native';
 import * as React from 'react';
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
@@ -11,6 +11,7 @@ import {
   type RecountUnavailableReason,
 } from '@stockpilot/core';
 
+import { MIN_TAP } from '@/components/item-verification-card';
 import { Button } from '@/components/ui/button';
 import { Body, FieldLabel, Mono } from '@/components/ui/text';
 import {
@@ -21,7 +22,7 @@ import {
 } from '@/lib/exceptions-api';
 import { buildReassignCandidates, loadOrgMembers, type ReassignCandidate } from '@/lib/org-members';
 import { supabase } from '@/lib/supabase';
-import { ACCENT, FONT } from '@/lib/theme';
+import { FONT, SHADOW } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -220,30 +221,42 @@ function SheetContent({
           : null;
 
   return (
-    <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+    // VoiceOver stays inside the open sheet (accessibilityViewIsModal) and the
+    // escape scrub closes it as the scrim does; the scrim is a "Close" button
+    // a double tap closes (onAccessibilityTap), the app's sheet rule
+    // (sheet-a11y-structure.test.ts has the why). It had the name only.
+    <View
+      style={{ flex: 1, justifyContent: 'flex-end' }}
+      accessibilityViewIsModal
+      onAccessibilityEscape={submitting ? undefined : onClose}
+    >
       {/* Backdrop is a SIBLING behind the sheet, not its parent, so the body
           scrolls (see add-order-items-sheet.tsx). */}
       <Pressable
         onPress={submitting ? undefined : onClose}
+        onAccessibilityTap={submitting ? undefined : onClose}
+        accessibilityRole="button"
         accessibilityLabel="Close"
         style={[
           StyleSheet.absoluteFill,
           { backgroundColor: themeMode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' },
         ]}
       />
-      <View style={[styles.sheet, { backgroundColor: c.card }]}>
+      <View style={[styles.sheet, { backgroundColor: c.card }, SHADOW.sheet]}>
         <View style={styles.header}>
           <Body size={16} color={c.ink} style={{ fontFamily: FONT.display, flex: 1 }}>
             {summary ? 'Recount' : title}
           </Body>
+          {/* A 44pt frame around the same 18pt X, its margins giving the
+              space back (it was the X with hitSlop), in the muted ink. */}
           <Pressable
             onPress={summary ? onDone : onClose}
             disabled={submitting}
-            hitSlop={8}
             accessibilityRole="button"
             accessibilityLabel="Close"
+            style={({ pressed }) => [styles.close, { opacity: pressed ? 0.7 : 1 }]}
           >
-            <X size={18} color={c.ink4} />
+            <X size={18} color={c.ink3} />
           </Pressable>
         </View>
 
@@ -263,7 +276,8 @@ function SheetContent({
                   size="sm"
                   variant="outline"
                   onPress={() => onOpenCount(summary.started!.cycleCountId)}
-                  style={{ alignSelf: 'flex-start' }}
+                  // 44pt, not the small Button's 36.
+                  style={{ alignSelf: 'flex-start', minHeight: MIN_TAP }}
                 >
                   Open the count
                 </Button>
@@ -274,7 +288,12 @@ function SheetContent({
                 key={a.cycleCountId}
                 onPress={() => onOpenCount(a.cycleCountId)}
                 accessibilityRole="link"
-                style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
+                // A frame at least 44pt tall around the sentence.
+                style={({ pressed }) => ({
+                  minHeight: MIN_TAP,
+                  justifyContent: 'center',
+                  opacity: pressed ? 0.7 : 1,
+                })}
               >
                 <Body size={14} color={c.ink}>
                   {a.text}
@@ -319,7 +338,10 @@ function SheetContent({
                 <View style={{ gap: 6 }}>
                   <FieldLabel>ASSIGN TO (OPTIONAL)</FieldLabel>
                   {members.kind === 'loading' ? (
-                    <ActivityIndicator color={c.ink4} style={{ alignSelf: 'flex-start', marginVertical: 8 }} />
+                    <ActivityIndicator
+                      color={c.ink3}
+                      style={{ alignSelf: 'flex-start', marginVertical: 8 }}
+                    />
                   ) : members.kind === 'failed' ? (
                     <View style={{ gap: 8 }}>
                       <Body size={13.5} muted>
@@ -330,7 +352,8 @@ function SheetContent({
                         <Button
                           size="sm"
                           variant="outline"
-                          style={{ alignSelf: 'flex-start' }}
+                          // 44pt, not the small Button's 36.
+                          style={{ alignSelf: 'flex-start', minHeight: MIN_TAP }}
                           onPress={() => {
                             setMembers({ kind: 'loading' });
                             setMembersNonce((n) => n + 1);
@@ -374,7 +397,7 @@ function SheetContent({
               </Body>
             ) : null}
             {error ? (
-              <Body size={13} color={ACCENT.crit} accessibilityRole="alert">
+              <Body size={13} color={c.critText} accessibilityRole="alert">
                 {error.message}
               </Body>
             ) : null}
@@ -403,6 +426,10 @@ function MemberOption({
   onPress: () => void;
 }) {
   const { c } = useTheme();
+  // The chosen member: the ink border, the recessed fill (paper2 is the card
+  // colour in dark, so the fill did not show there) and a filled radio mark,
+  // so the choice never rests on a colour alone; the role is in the muted ink.
+  const Mark = selected ? CircleDot : Circle;
   return (
     <Pressable
       onPress={onPress}
@@ -414,27 +441,33 @@ function MemberOption({
         paddingHorizontal: 14,
         borderRadius: 10,
         borderWidth: 1,
-        borderColor: selected ? c.ink : c.hair,
-        backgroundColor: selected ? c.paper2 : 'transparent',
-        justifyContent: 'center',
+        borderColor: selected ? c.ink : c.hair2,
+        backgroundColor: selected ? c.sunk : 'transparent',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
       }}
     >
-      <Body size={15} color={c.ink} style={{ fontFamily: selected ? FONT.display : undefined }}>
-        {name}
-      </Body>
-      {detail ? (
-        <Mono size={11} color={c.ink4}>
-          {detail}
-        </Mono>
-      ) : null}
+      <Mark size={20} color={selected ? c.ink : c.ink3} strokeWidth={1.8} />
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Body size={15} color={c.ink} style={{ fontFamily: selected ? FONT.display : undefined }}>
+          {name}
+        </Body>
+        {detail ? (
+          <Mono size={11} color={c.ink3}>
+            {detail}
+          </Mono>
+        ) : null}
+      </View>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
+  // The app's bottom-sheet corners (the item screen's sheets), and its shadow.
   sheet: {
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
     padding: 18,
     paddingBottom: 32,
     gap: 12,
@@ -443,5 +476,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
+  },
+  // (44 - 18) / 2: above, below and to the right the frame takes up the X's
+  // 18pt, as before, so the header row and the X stay where they were; to the
+  // left it keeps the row's gap from the title.
+  close: {
+    minWidth: MIN_TAP,
+    minHeight: MIN_TAP,
+    marginVertical: -13,
+    marginRight: -13,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });
