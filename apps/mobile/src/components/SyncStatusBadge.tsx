@@ -29,10 +29,18 @@ import { useTheme } from '@/lib/use-theme';
  *     it "not sent", which reads as "enter it again". It now says "not
  *     confirmed".
  *
- * Colours follow the device's mode (it was drawn from the light-only legacy
- * `theme` alias, so it stayed a light pill on the dark count screens): the
- * reference's neutral chip, with the state's tone on the dot (tones.ts
- * `syncBadgeDot`). The words carry the state; the dot only repeats it.
+ * Colours follow the device's mode (redesign plan P2.5 moved it off the
+ * light-only legacy `theme` alias): the reference's neutral chip, with the
+ * state's tone on the dot (tones.ts `syncBadgeDot`). The words carry the
+ * state; the dot only repeats it.
+ *
+ * Its hosts have not moved yet: the light-only header of
+ * app/cycle-count/[id].tsx and the always-dark camera bars of
+ * app/cycle-count/scan/[id].tsx and ai-scan/[id].tsx. In light mode it is
+ * the light chip it always was; in dark mode it is a dark chip on the light
+ * count header, and its outline all but disappears on the camera bars. That
+ * lasts until P5.9 migrates those screens (and decides whether the camera
+ * bars need a fixed dark-bar surface here).
  */
 export function SyncStatusBadge() {
   const { c } = useTheme();

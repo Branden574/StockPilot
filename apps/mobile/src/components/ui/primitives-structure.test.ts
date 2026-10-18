@@ -83,8 +83,9 @@ describe('every shared primitive follows the device mode', () => {
     expect(OWNED).toContain('src/components/SyncStatusBadge.tsx');
   });
 
-  // Mutation caught: SyncStatusBadge back on the light-only legacy alias (it
-  // drew a light pill on the dark count screens), or a primitive colouring
+  // Mutation caught: SyncStatusBadge back on the light-only legacy alias
+  // (redesign plan P2.5 puts every shared primitive on the device mode; the
+  // badge's hosts follow when P5.9 migrates them), or a primitive colouring
   // words with a single-mode ACCENT value (ACCENT.warn is 3.4:1 on light
   // paper, ACCENT.crit 3.1:1 on dark).
   it('none reads the light-only legacy `theme` alias or the single-mode ACCENT values', () => {

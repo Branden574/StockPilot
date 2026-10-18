@@ -178,9 +178,11 @@ describe('meters: StockBar fills and Sparkline strokes', () => {
 describe('the header sync badge (SyncStatusBadge)', () => {
   const TONES: SyncBadgeTone[] = ['primary', 'muted', 'destructive', 'success', 'warning'];
 
-  // The defect: it was drawn from the light-only legacy `theme` alias, so it
-  // stayed a light pill on dark screens. The words are lib/sync-badge.ts's,
-  // unchanged; only the colours follow the mode now.
+  // It was drawn from the light-only legacy `theme` alias; redesign plan P2.5
+  // makes it follow the device mode. Its hosts (the light-only
+  // cycle-count/[id] header, the always-dark camera bars of scan/[id] and
+  // ai-scan/[id]) still mismatch it in dark mode until P5.9 migrates them.
+  // The words are lib/sync-badge.ts's, unchanged; only the colours moved.
   it('is the neutral chip of the mode it is drawn in, its words at AA', () => {
     each((p, mode) => {
       const s = syncBadgeSurface(p);
