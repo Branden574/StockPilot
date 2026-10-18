@@ -19,6 +19,11 @@ import { describe, expect, it } from 'vitest';
  *   lighter dark fill;
  * - .dark never defined --ed-accent-wash, so dark fell back to the light wash.
  *
+ * P2.1c adds a fourth: .font-display was a plain class in an @layer utilities
+ * block that Tailwind emits after its generated utilities, so its -0.022em
+ * silently beat tracking-[-0.025em] and every other tracking utility on the
+ * same element. It also adds the ink-2, line-strong and ink-4 colours.
+ *
  * Values are read from the stylesheet (parsed with postcss) and resolved the
  * way the browser does it: .dark and :root both sit on <html>, so a token
  * .dark leaves out falls back to its :root value.
@@ -422,5 +427,247 @@ describe('globals.css palette (redesign P2.1)', () => {
       '@layer base',
     ]);
     expect(enclosingAtRules(onlyRule(built, '.text-base'))).toEqual(['@layer utilities']);
+  });
+});
+
+/** globals.css through Tailwind (as Next builds it), with only these classes as sources. */
+async function build(classes: readonly string[]): Promise<postcss.Root> {
+  const input = SOURCE.replace(
+    "@import 'tailwindcss';",
+    "@import 'tailwindcss' source(none);",
+  ).concat(`\n@source inline("${classes.join(' ')}");\n`);
+  expect(input).toContain("@import 'tailwindcss' source(none);");
+  const { css } = await postcss([tailwindcss({ optimize: false })]).process(input, {
+    from: GLOBALS,
+  });
+  return postcss.parse(css);
+}
+
+/** A class name as Tailwind writes it in a selector: `.tracking-\[-0\.025em\]`. */
+function classSelector(name: string): string {
+  return `.${name.replace(/[^\w-]/g, (ch) => `\\${ch}`)}`;
+}
+
+/**
+ * The letter-spacing an element with these classes gets at a viewport width,
+ * by the cascade: every rule here is one class in @layer utilities, so the
+ * last matching declaration in the built CSS wins.
+ */
+function letterSpacing(
+  built: postcss.Root,
+  classes: readonly string[],
+  widthPx: number,
+): string | undefined {
+  const selectors = new Set(classes.map(classSelector));
+  let value: string | undefined;
+  built.walkRules((rule) => {
+    if (!selectors.has(rule.selector)) return;
+    const media = enclosingAtRules(rule).filter((at) => at.startsWith('@media'));
+    const applies = media.every((at) => {
+      const min = /^@media \(width >= ([\d.]+)rem\)$/.exec(at);
+      if (!min) throw new Error(`unexpected media query ${at}`);
+      return widthPx >= Number(min[1]) * 16;
+    });
+    if (!applies) return;
+    expect(enclosingAtRules(rule).at(-1), rule.selector).toBe('@layer utilities');
+    rule.walkDecls('letter-spacing', (decl) => {
+      value = decl.value;
+    });
+  });
+  return value;
+}
+
+/**
+ * Every tracking utility the app writes beside font-display (AST scan of
+ * apps/web/src at 78c52d145: 68 class lists, plus the release drawer's
+ * font-display on SheetTitle, whose own classes carry tracking-tight).
+ */
+const TRACKING_WITH_FONT_DISPLAY: ReadonlyArray<readonly [utility: string, letterSpacing: string]> =
+  [
+    ['tracking-[-0.025em]', '-0.025em'],
+    ['tracking-[-0.03em]', '-0.03em'],
+    ['tracking-[-0.01em]', '-0.01em'],
+    ['tracking-[-0.02em]', '-0.02em'],
+    ['tracking-[-0.015em]', '-0.015em'],
+    ['tracking-tight', 'var(--tracking-tight)'],
+    ['tracking-[-0.04em]', '-0.04em'],
+    ['tracking-[-0.005em]', '-0.005em'],
+  ];
+
+/**
+ * Tailwind reads this file for class names like any other source, so a class
+ * the app does not use yet is joined at run time: written out whole, every
+ * build would emit it (and any colour variable it needs) before a page uses it.
+ */
+const SM_TRACKING = ['sm', 'tracking-[-0.03em]'].join(':');
+
+/**
+ * P2.1c: the editorial colours packages asked for, light / dark. Their class
+ * names are joined at run time too (prefix + name), as no page uses one yet.
+ */
+const EDITORIAL_COLOURS: ReadonlyArray<
+  readonly [name: string, token: string, light: string, dark: string]
+> = [
+  ['ink-2', '--ed-ink-2', '#2a2c28', '#d8d6cc'],
+  ['line-strong', '--ed-line-strong', '#d4d2c8', '#2a2b25'],
+  ['ink-4', '--ed-ink-4', '#8b8e85', '#6a6b62'],
+];
+
+/** The colour utilities a package may write with these names, and what each one sets. */
+const COLOUR_UTILITIES: ReadonlyArray<readonly [prefix: string, property: string]> = [
+  ['text', 'color'],
+  ['bg', 'background-color'],
+  ['border', 'border-color'],
+  ['outline', 'outline-color'],
+  ['decoration', 'text-decoration-color'],
+  ['fill', 'fill'],
+  ['stroke', 'stroke'],
+  ['caret', 'caret-color'],
+  ['accent', 'accent-color'],
+];
+const colourVar = (name: string) => `--color-${name}`;
+const colourUtility = (prefix: string, name: string) => [prefix, name].join('-');
+
+describe('globals.css follow-ups (redesign P2.1c)', () => {
+  it('lets a tracking utility on the same element beat font-display, at phone and desktop widths', async () => {
+    const tracking = TRACKING_WITH_FONT_DISPLAY.map(([utility]) => utility);
+    const built = await build(['font-display', ...tracking, SM_TRACKING]);
+
+    // The winning declaration for each class list the app writes. Before
+    // P2.1c every one of these read -0.022em.
+    for (const width of [390, 1280]) {
+      expect(letterSpacing(built, ['font-display'], width)).toBe('-0.022em');
+      for (const [utility, value] of TRACKING_WITH_FONT_DISPLAY) {
+        expect(letterSpacing(built, ['font-display', utility], width), utility).toBe(value);
+      }
+      expect(letterSpacing(built, ['font-display', SM_TRACKING], width)).toBe(
+        width >= 640 ? '-0.03em' : '-0.022em',
+      );
+    }
+
+    // Why: every tracking rule is emitted after the last font-display rule in
+    // the same layer. The last one, because before P2.1c there were two: the
+    // first was Tailwind's family-only rule, ahead of the tracking rules, and
+    // the one with -0.022em came after every utility.
+    const order: string[] = [];
+    built.walkRules((rule) => {
+      order.push(rule.selector);
+    });
+    const at = (cls: string) => order.lastIndexOf(classSelector(cls));
+    expect(at('font-display')).toBeGreaterThan(-1);
+    expect(tracking.filter((cls) => !(at(cls) > at('font-display')))).toEqual([]);
+  });
+
+  it('declares font-display once, as an @utility, with the same family and -0.022em', async () => {
+    // Not a plain class in an @layer block any more: one top-level @utility.
+    expect(rulesIn(TREE, '.font-display')).toEqual([]);
+    const declared: AtRule[] = [];
+    TREE.walkAtRules('utility', (rule) => {
+      if (rule.params === 'font-display') declared.push(rule);
+    });
+    expect(declared).toHaveLength(1);
+    expect(declared[0]!.parent?.type).toBe('root');
+
+    // It merges with the family utility --font-display creates: one rule in
+    // the built CSS, in the utilities layer.
+    const built = await build(['font-display']);
+    const own: Rule[] = [];
+    built.walkRules((rule) => {
+      if (rule.selector.split(',').some((s) => s.trim().startsWith('.font-display'))) {
+        own.push(rule);
+      }
+    });
+    expect(own).toHaveLength(1);
+    expect(enclosingAtRules(own[0]!)).toEqual(['@layer utilities']);
+    expect(Object.fromEntries(declarations(own[0]!))).toEqual({
+      'font-family': 'var(--font-display)',
+      'letter-spacing': '-0.022em',
+    });
+  });
+
+  it('names ink-2, line-strong and ink-4 as Tailwind colours that resolve in both themes', () => {
+    const themeBlocks: AtRule[] = [];
+    TREE.walkAtRules('theme', (rule) => {
+      themeBlocks.push(rule);
+    });
+    const theme = new Map<string, string>();
+    themeBlocks[0]!.walkDecls((decl) => {
+      theme.set(decl.prop, decl.value);
+    });
+    for (const [name, tokenName, light, dark] of EDITORIAL_COLOURS) {
+      expect(theme.get(colourVar(name)), name).toBe(`var(${tokenName})`);
+      expect([colour('light', tokenName), colour('dark', tokenName)], name).toEqual([light, dark]);
+      // The plain variable of the same name stays as it was.
+      expect(theme.get(`--${name}`), name).toBe(`var(${tokenName})`);
+    }
+    // Each colour is defined once in globals.css, and nowhere outside @theme.
+    for (const [name] of EDITORIAL_COLOURS) {
+      const defs: string[] = [];
+      TREE.walkDecls(colourVar(name), (decl) => {
+        defs.push(enclosingAtRules(decl).join(' '));
+      });
+      expect(defs, name).toEqual(['@theme ']);
+    }
+  });
+
+  it('keeps ink-2 at text contrast and ink-4 at 3:1 on the page and on cards (glyphs and dividers only)', () => {
+    const failing = THEMES.flatMap((theme) =>
+      (['--background', '--card'] as const).flatMap((surface) => {
+        const out: string[] = [];
+        const ink2 = contrast(theme, '--ed-ink-2', surface);
+        const ink4 = contrast(theme, '--ed-ink-4', surface);
+        if (ink2 < 4.5) out.push(`${theme}: ink-2 on ${surface} = ${ink2.toFixed(2)}`);
+        if (ink4 < 3) out.push(`${theme}: ink-4 on ${surface} = ${ink4.toFixed(2)}`);
+        return out;
+      }),
+    );
+    expect(failing).toEqual([]);
+    // What the comment beside the ink-4 colour in globals.css says, so the two
+    // stay in step.
+    const ink4 = (theme: Theme, surface: string) => contrast(theme, '--ed-ink-4', surface);
+    expect(
+      [ink4('light', '--background'), ink4('dark', '--background')].map((v) => v.toFixed(2)),
+    ).toEqual(['3.18', '3.61']);
+    expect([ink4('light', '--card'), ink4('dark', '--card')].map((v) => v.toFixed(2))).toEqual([
+      '3.33',
+      '3.43',
+    ]);
+    // Just under 3:1 on the light hover fill and the light inset fill.
+    expect(ink4('light', '--muted').toFixed(2)).toBe('2.97');
+    expect(ink4('light', '--ed-bg-sunk').toFixed(3)).toBe('2.998');
+    expect(Math.max(ink4('light', '--muted'), ink4('light', '--ed-bg-sunk'))).toBeLessThan(3);
+  });
+
+  it('builds each colour utility as one rule that only sets its colour, and the colours on :root', async () => {
+    const built = await build(
+      EDITORIAL_COLOURS.flatMap(([name]) =>
+        COLOUR_UTILITIES.map(([prefix]) => colourUtility(prefix, name)),
+      ),
+    );
+    for (const [name] of EDITORIAL_COLOURS) {
+      for (const [prefix, property] of COLOUR_UTILITIES) {
+        const utility = colourUtility(prefix, name);
+        // One rule with one declaration: no other utility, plugin class or
+        // theme key answers to the same name.
+        expect(rulesIn(built, classSelector(utility)), utility).toHaveLength(1);
+        const rule = onlyRule(built, classSelector(utility));
+        expect(enclosingAtRules(rule), utility).toEqual(['@layer utilities']);
+        expect(Object.fromEntries(declarations(rule)), utility).toEqual({
+          [property]: `var(${colourVar(name)})`,
+        });
+      }
+    }
+    // The colours are emitted once, on :root in the theme layer, so .dark's
+    // --ed-* values on <html> reach them; nothing else sets them.
+    const emitted = new Map<string, string[]>();
+    built.walkDecls(/^--color-/, (decl) => {
+      const where = `${(decl.parent as Rule).selector} ${enclosingAtRules(decl).join(' ')}`;
+      emitted.set(decl.prop, [...(emitted.get(decl.prop) ?? []), `${where} = ${decl.value}`]);
+    });
+    for (const [name, tokenName] of EDITORIAL_COLOURS) {
+      expect(emitted.get(colourVar(name)), name).toEqual([
+        `:root, :host @layer theme = var(${tokenName})`,
+      ]);
+    }
   });
 });

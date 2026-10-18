@@ -63,6 +63,20 @@
      fill (muted) sits above it. */
   --color-sunk: var(--ed-bg-sunk);
 
+  /* Editorial inks and the stronger hairline as Tailwind colours: `text-ink-2`
+     (secondary text) and `border-line-strong` (control borders, badges, the
+     active segment ring), in place of text-[var(--ed-ink-2)] and
+     border-[var(--ed-line-strong)]. */
+  --color-ink-2: var(--ed-ink-2);
+  --color-line-strong: var(--ed-line-strong);
+  /* ink-4 is for glyphs and dividers only (crumb separators, arrows, the grid
+     card's hover border, disabled controls), never for text that needs 4.5:1;
+     such text takes ink 3, `text-muted-foreground`. It holds 3:1 on the page
+     (3.18 light, 3.61 dark) and on cards (3.33, 3.43). In light it falls just
+     under 3:1 on the hover and inset fills: 2.97 on bg-muted, 2.998 on
+     bg-sunk. */
+  --color-ink-4: var(--ed-ink-4);
+
   /* Recharts/shadcn chart series palette. Referenced by the chart
      primitive (components/ui/chart.tsx) as var(--chart-N) and by Tailwind
      consumers via `bg-chart-1` etc. Hues drawn from the editorial system:
@@ -73,7 +87,8 @@
   --color-chart-4: hsl(var(--chart-4));
   --color-chart-5: hsl(var(--chart-5));
 
-  /* Editorial-only tokens (use directly via CSS, not Tailwind classes). */
+  /* Editorial-only tokens (use directly via CSS, not Tailwind classes; ink-2,
+     ink-4 and line-strong also have the Tailwind colours above). */
   --ink: var(--ed-ink);
   --ink-2: var(--ed-ink-2);
   --ink-3: var(--ed-ink-3);
@@ -318,12 +333,20 @@
   }
 }
 
+/* The display face. As an @utility it joins the family utility that
+   --font-display already creates and is sorted with Tailwind's own utilities
+   (font-family before letter-spacing), so a tracking-* utility on the same
+   element wins, at every breakpoint and state. As a plain class in the
+   @layer utilities block below it came after every generated utility and
+   silently beat tracking-[...]. On its own it still sets the display family
+   and -0.022em. */
+@utility font-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.022em;
+}
+
 @layer utilities {
-  /* Display + serif emphasis utilities */
-  .font-display {
-    font-family: var(--font-display);
-    letter-spacing: -0.022em;
-  }
+  /* Serif emphasis and figure utilities */
   .font-serif-italic {
     font-family: var(--font-serif);
     font-style: italic;
@@ -543,10 +566,13 @@
 }
 
 /* ── Authentication ground ────────────────────────────────────────────────────
- * `bg-mesh` was referenced by three surfaces — (auth)/layout.tsx, invite/[token]
- * and onboarding — but was never defined anywhere in the stylesheet or the
- * Tailwind config, so all three rendered a flat `--background`. This authors the
- * utility those files have always asked for.
+ * `bg-mesh` is the ground of two screens outside the (auth) group:
+ * app/invite/[token]/page.tsx and app/onboarding/page.tsx, which is why it lives
+ * here and not in app/(auth)/auth.css. It was referenced by three surfaces,
+ * those two and (auth)/layout.tsx, but was never defined anywhere in the
+ * stylesheet or the Tailwind config, so all three rendered a flat
+ * `--background`. #151 authored it, and in the same change the (auth) layout
+ * moved to its own shell, so the auth pages have not used it since.
  *
  * Design constraint: the decoration must cost the FORM nothing. The washes are
  * anchored to opposite corners and fall to zero well before the central band
