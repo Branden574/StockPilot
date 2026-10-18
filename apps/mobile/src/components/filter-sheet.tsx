@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 
 import { Button } from '@/components/ui/button';
+import { CheckboxMark } from '@/components/ui/checkbox';
 import { Body, Eyebrow, Mono } from '@/components/ui/text';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { FONT, SHADOW, TYPE_CEILING, capTo } from '@/lib/theme';
@@ -62,6 +63,16 @@ export function activeFilterCount(s: FilterState): number {
     + s.locationIds.length
     + s.charterIds.length
   );
+}
+
+/**
+ * The spoken name of the filter button beside the search box (CONFLICTS D29:
+ * it was an icon and a bare number, so VoiceOver found an unnamed element, or
+ * read "2" with nothing to say what it counted). The sheet it opens is headed
+ * FILTERS; the count is the one the button shows.
+ */
+export function filterButtonLabel(count: number): string {
+  return count > 0 ? `Filters, ${count} active` : 'Filters';
 }
 
 interface Props {
@@ -119,14 +130,24 @@ export function FilterSheet({
        * the search box first" workaround that masks the bug elsewhere does not
        * exist here — a stuck list is the only symptom. Do not re-nest this
        * card inside the scrim. See add-order-items-sheet.tsx.
+       *
+       * VoiceOver, as on the app's other sheets (sheet-a11y-structure.test.ts):
+       * the container keeps VoiceOver inside the open sheet and the two-finger
+       * scrub closes it; the scrim is its own element, so it says what it does
+       * ("Close", a button), and a VoiceOver double-tap on it closes directly
+       * (onAccessibilityTap) instead of tapping the scrim's centre, which the
+       * card covers. It was an unnamed element before.
        */}
-      <View style={styles.scrim}>
+      <View style={styles.container} accessibilityViewIsModal onAccessibilityEscape={onDismiss}>
         <Pressable
+          onPress={onDismiss}
+          onAccessibilityTap={onDismiss}
+          accessibilityRole="button"
+          accessibilityLabel="Close"
           style={[
             StyleSheet.absoluteFill,
             { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
           ]}
-          onPress={onDismiss}
         />
         <View
           style={[
@@ -166,28 +187,35 @@ export function FilterSheet({
               <Mono
                 size={13}
                 tracking={0.08}
+                accessibilityRole="header"
                 style={{ fontFamily: FONT.display, color: c.ink, flexShrink: 1, minWidth: 0 }}
               >
                 FILTERS
               </Mono>
             </View>
+            {/* A button, in a 44pt frame (it was unnamed as a control, its
+                words in the faint ink4 under AA, and its target the 11.5pt
+                words plus an 8pt slop, about 30pt). */}
             <Pressable
               onPress={() => onChange(EMPTY_FILTER_STATE)}
-              hitSlop={8}
-              style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1, flexShrink: 1, minWidth: 0 })}
+              accessibilityRole="button"
+              style={({ pressed }) => [styles.clearAll, { opacity: pressed ? 0.6 : 1 }]}
             >
-              <Mono size={11.5} tracking={0.06} color={c.ink4}>
+              <Mono size={11.5} tracking={0.06} color={c.ink3}>
                 CLEAR ALL
               </Mono>
             </Pressable>
           </View>
 
+          {/* flexShrink (ScrollView's own default, kept) lets the list give
+              way when the sheet reaches its 90% ceiling, so the header and
+              Apply stay on screen on a small phone or at large text sizes. */}
           <ScrollView
             style={{ maxHeight: 520 }}
             contentContainerStyle={{ paddingHorizontal: 22, paddingBottom: 18, gap: 22 }}
             showsVerticalScrollIndicator={false}
           >
-            <Section label="STOCK">
+            <Section label="STOCK" choice="radio">
               <RadioRow
                 label="All items"
                 active={state.status === 'all'}
@@ -220,7 +248,7 @@ export function FilterSheet({
               />
             </Section>
 
-            <Section label="SORT">
+            <Section label="SORT" choice="radio">
               {(Object.keys(SORT_LABEL) as SortKey[]).map((k) => (
                 <RadioRow
                   key={k}
@@ -232,7 +260,7 @@ export function FilterSheet({
             </Section>
 
             {categories.length > 0 && (
-              <Section label={`CATEGORY · ${state.categoryIds.length || 'ANY'}`}>
+              <Section label={`CATEGORY · ${state.categoryIds.length || 'ANY'}`} choice="check">
                 {categories.map((opt) => (
                   <CheckRow
                     key={opt.id}
@@ -247,7 +275,7 @@ export function FilterSheet({
             )}
 
             {locations.length > 0 && (
-              <Section label={`LOCATION · ${state.locationIds.length || 'ANY'}`}>
+              <Section label={`LOCATION · ${state.locationIds.length || 'ANY'}`} choice="check">
                 {locations.map((opt) => (
                   <CheckRow
                     key={opt.id}
@@ -262,7 +290,7 @@ export function FilterSheet({
             )}
 
             {charterOptions.length > 0 && (
-              <Section label={`CHARTER · ${state.charterIds.length || 'ANY'}`}>
+              <Section label={`CHARTER · ${state.charterIds.length || 'ANY'}`} choice="check">
                 {charterOptions.map((opt) => (
                   <CheckRow
                     key={opt.id}
@@ -288,15 +316,40 @@ export function FilterSheet({
   );
 }
 
-function Section({ label, children }: { label: string; children: React.ReactNode }) {
+/**
+ * One section of the sheet. Its label is a heading for VoiceOver's rotor; a
+ * section of radios (STOCK, SORT) is also a radio group, so VoiceOver says
+ * how many choices it holds.
+ */
+function Section({
+  label,
+  choice,
+  children,
+}: {
+  label: string;
+  choice: 'radio' | 'check';
+  children: React.ReactNode;
+}) {
   return (
     <View>
-      <Eyebrow>{label}</Eyebrow>
-      <View style={{ marginTop: 8 }}>{children}</View>
+      <Eyebrow accessibilityRole="header">{label}</Eyebrow>
+      <View
+        accessibilityRole={choice === 'radio' ? 'radiogroup' : undefined}
+        style={{ marginTop: 8 }}
+      >
+        {children}
+      </View>
     </View>
   );
 }
 
+/**
+ * A STOCK or SORT choice: a radio, announced with its state. The ring was the
+ * hairline (1.26:1 on the card in light, 1.13:1 in dark, under the 3:1 a mark
+ * needs); it is the checkbox's ink4 edge now (3.33:1 and 3.43:1), and the
+ * 22pt ring is the checkbox's size, so radio and checkbox labels share one
+ * left edge.
+ */
 function RadioRow({
   label,
   active,
@@ -310,13 +363,12 @@ function RadioRow({
   return (
     <Pressable
       onPress={onPress}
+      accessibilityRole="radio"
+      accessibilityState={{ checked: active }}
       style={({ pressed }) => [optStyles.row, { opacity: pressed ? 0.7 : 1 }]}
     >
       <View
-        style={[
-          optStyles.dot,
-          { borderColor: active ? c.ink : c.hair },
-        ]}
+        style={[optStyles.dot, { borderColor: active ? c.ink : c.ink4, backgroundColor: c.card }]}
       >
         {active ? <View style={[optStyles.dotFill, { backgroundColor: c.ink }]} /> : null}
       </View>
@@ -327,6 +379,12 @@ function RadioRow({
   );
 }
 
+/**
+ * A CATEGORY, LOCATION or CHARTER choice: the whole row is the checkbox, so it
+ * draws the shared CheckboxMark and carries the role and state itself. Its
+ * own hand-drawn box had a hairline edge (under 3:1) and no checkbox role or
+ * state, so VoiceOver read the name and nothing else.
+ */
 function CheckRow({
   label,
   active,
@@ -340,19 +398,11 @@ function CheckRow({
   return (
     <Pressable
       onPress={onPress}
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked: active }}
       style={({ pressed }) => [optStyles.row, { opacity: pressed ? 0.7 : 1 }]}
     >
-      <View
-        style={[
-          optStyles.checkbox,
-          {
-            borderColor: active ? c.ink : c.hair,
-            backgroundColor: active ? c.ink : 'transparent',
-          },
-        ]}
-      >
-        {active ? <Check size={12} color={c.paper} strokeWidth={2.4} /> : null}
-      </View>
+      <CheckboxMark checked={active} />
       <Body size={15} style={{ flex: 1, fontFamily: FONT.display, color: c.ink }}>
         {label}
       </Body>
@@ -373,11 +423,15 @@ export function FilterButton({
     <Pressable
       onPress={onPress}
       hitSlop={6}
+      // D29: named, and announced as a button (an icon and a number before).
+      accessibilityRole="button"
+      accessibilityLabel={filterButtonLabel(count)}
       style={({ pressed }) => [
         fbStyles.btn,
         {
           backgroundColor: isActive ? c.ink : 'transparent',
-          borderColor: isActive ? c.ink : c.hair,
+          // The stronger border: a control must not rely on a hairline alone.
+          borderColor: isActive ? c.ink : c.hair2,
           opacity: pressed ? 0.75 : 1,
         },
       ]}
@@ -444,9 +498,13 @@ export function ActiveFilterPill({
   return (
     <Pressable
       onPress={onClear}
+      // A tap clears every filter; VoiceOver read the filter names with no
+      // sign that they were a control, or what it would do.
+      accessibilityRole="button"
+      accessibilityHint="Clears all filters"
       style={({ pressed }) => [
         pillStyles.row,
-        { borderColor: c.hair, backgroundColor: c.card, opacity: pressed ? 0.8 : 1 },
+        { borderColor: c.hair2, backgroundColor: c.card, opacity: pressed ? 0.8 : 1 },
       ]}
     >
       {/* NO cap: `parts` splices USER-AUTHORED category, location and charter
@@ -459,7 +517,10 @@ export function ActiveFilterPill({
           an ungated `numberOfLines={2}` doubled the filter bar's height at
           DEFAULT text size for every user. Past the threshold the extra line
           is what stops an accessibility size showing three characters and an
-          ellipsis. The X stays put either way. */}
+          ellipsis. The X stays put either way.
+
+          Muted ink (ink3): these are the filters in force, information, and
+          the faint ink4 held them under AA. */}
       <Text
         numberOfLines={shouldStackRow(fontScale) ? 2 : 1}
         style={{
@@ -468,24 +529,31 @@ export function ActiveFilterPill({
           fontFamily: FONT.mono,
           fontSize: 11,
           letterSpacing: 11 * 0.04,
-          color: c.ink4,
+          color: c.ink3,
         }}
       >
         {parts.join(' · ')}
       </Text>
-      <X size={12} color={c.ink4} strokeWidth={1.6} />
+      <X size={12} color={c.ink3} strokeWidth={1.6} />
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  scrim: {
+  // The sheet's VoiceOver container (accessibilityViewIsModal): the scrim and
+  // the card, the card anchored at the foot.
+  container: {
     flex: 1,
     justifyContent: 'flex-end',
   },
   sheet: {
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
+    // On a small phone (iPhone SE: 667pt) or at large text sizes the header,
+    // a 520pt list and Apply came to more than the screen, and the top of the
+    // sheet, CLEAR ALL with it, went under the status bar. The list now gives
+    // way instead.
+    maxHeight: '90%',
   },
   grabberRow: {
     alignItems: 'center',
@@ -496,10 +564,11 @@ const styles = StyleSheet.create({
     height: 5,
     borderRadius: 100,
   },
+  // CLEAR ALL's 44pt frame sets the row's height, so the row takes no
+  // padding of its own above it.
   header: {
     paddingHorizontal: 22,
-    paddingTop: 4,
-    paddingBottom: 14,
+    paddingBottom: 4,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -510,7 +579,7 @@ const styles = StyleSheet.create({
   headerStacked: {
     flexDirection: 'column',
     alignItems: 'flex-start',
-    gap: 10,
+    gap: 2,
   },
   headerTitle: {
     flexDirection: 'row',
@@ -519,35 +588,37 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     minWidth: 0,
   },
+  // A real frame, not hitSlop: VoiceOver outlines the frame, and hitSlop does
+  // not reach past a parent's bounds. minHeight / minWidth, so it still grows.
+  clearAll: {
+    minHeight: 44,
+    minWidth: 44,
+    justifyContent: 'center',
+    flexShrink: 1,
+  },
 });
 
 const optStyles = StyleSheet.create({
+  // A 44pt row: the whole line is the target.
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    paddingVertical: 10,
+    minHeight: 44,
+    paddingVertical: 8,
   },
   dot: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
     borderWidth: 1.5,
     alignItems: 'center',
     justifyContent: 'center',
   },
   dotFill: {
-    width: 9,
-    height: 9,
+    width: 10,
+    height: 10,
     borderRadius: 5,
-  },
-  checkbox: {
-    width: 18,
-    height: 18,
-    borderRadius: 5,
-    borderWidth: 1.5,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
 });
 
@@ -568,8 +639,11 @@ const fbStyles = StyleSheet.create({
 });
 
 const pillStyles = StyleSheet.create({
+  // A 44pt target, the height of the search box above it (the 11pt line and
+  // 8pt of padding made about 30pt). minHeight, so it grows with its words.
   row: {
     marginTop: 10,
+    minHeight: 44,
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 8,
