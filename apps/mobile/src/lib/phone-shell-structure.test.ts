@@ -646,8 +646,9 @@ describe('drawer content: the registry, as the reference sidebar', () => {
     );
   });
 
-  it('the section headers are headers, and the TAB marker reads in the muted ink, capped as chrome', () => {
+  it('the section headers are headers; the TAB marker and the email read in the muted ink, the marker capped as chrome', () => {
     expect(code).toContain('<Eyebrow accessibilityRole="header">{section.label}</Eyebrow>');
+    expect(code).toMatch(/<Mono size=\{10\.5\} color=\{c\.ink3\}[^>]*> \{profile\.email \?\? ''\}/);
     expect(code).toMatch(
       /<Mono size=\{9\} tracking=\{0\.16\} upper color=\{c\.ink3\} numberOfLines=\{1\} maxFontSizeMultiplier=\{capTo\(9, TYPE_CEILING\.chrome\)\} style=\{\{ flexShrink: 0 \}\} > TAB <\/Mono>/,
     );
@@ -682,7 +683,6 @@ describe('drawer content: the registry, as the reference sidebar', () => {
     );
     expect(code).toContain("{profile.fullName ?? profile.email ?? 'Account'}");
     expect(code).toContain("{profile.email ?? ''}");
-    expect(code).toMatch(/<Mono size=\{10\.5\} color=\{c\.ink3\}/);
     expect(src).toContain('Force-logout lives in RootGate now');
   });
 });
@@ -971,7 +971,17 @@ describe('tours: the same targets, the same start rules, the reference buttons',
       const hosts = files.filter((f) => {
         const s = readSource(f);
         const ref = new RegExp(`const (\\w+) = useTourTarget\\('${id}'\\);`).exec(s)?.[1];
-        return !!ref && new RegExp(`ref=\\{${ref}\\}\\s+collapsable=\\{false\\}`).test(s);
+        if (!ref) return false;
+        // An element that takes the ref and keeps its native node, in any
+        // attribute order.
+        const sf = parseTsx(s, f);
+        let held = false;
+        walkJsx(sf, (el) => {
+          if (attrText(el, 'ref', sf) === ref && attrText(el, 'collapsable', sf) === 'false') {
+            held = true;
+          }
+        });
+        return held;
       });
       expect(hosts.length, id).toBeGreaterThan(0);
     }
