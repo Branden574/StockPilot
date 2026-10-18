@@ -98,8 +98,8 @@ function where(file: string, el: JsxNode, sf: ts.SourceFile): string {
 function textOf(node: ts.Node, sf: ts.SourceFile): string {
   let out = '';
   const visit = (n: ts.Node) => {
-    if (ts.isJsxText(n)) out += n.text;
-    else if (ts.isStringLiteral(n) && !ts.isJsxAttribute(n.parent)) out += n.text;
+    if (ts.isJsxText(n)) out += ` ${n.text}`;
+    else if (ts.isStringLiteral(n) && !ts.isJsxAttribute(n.parent)) out += ` ${n.text}`;
     ts.forEachChild(n, visit);
   };
   visit(node);
