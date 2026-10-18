@@ -545,12 +545,16 @@ describe('globals.css follow-ups (redesign P2.1c)', () => {
       );
     }
 
-    // Why: every tracking rule is emitted after font-display in the same layer.
+    // Why: every tracking rule is emitted after the last font-display rule in
+    // the same layer. The last one, because before P2.1c there were two: the
+    // first was Tailwind's family-only rule, ahead of the tracking rules, and
+    // the one with -0.022em came after every utility.
     const order: string[] = [];
     built.walkRules((rule) => {
       order.push(rule.selector);
     });
-    const at = (cls: string) => order.indexOf(classSelector(cls));
+    const at = (cls: string) => order.lastIndexOf(classSelector(cls));
+    expect(at('font-display')).toBeGreaterThan(-1);
     expect(tracking.filter((cls) => !(at(cls) > at('font-display')))).toEqual([]);
   });
 
