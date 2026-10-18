@@ -67,12 +67,12 @@ export function HelpTip({
           if (hoverOpened.current) e.preventDefault();
         }}
       >
-        <p className="text-sm font-medium">{label}</p>
-        <div className="text-muted-foreground mt-1 text-xs leading-relaxed">{children}</div>
+        <p className="text-[13.5px] font-medium">{label}</p>
+        <div className="text-muted-foreground mt-1 text-[12.5px] leading-relaxed">{children}</div>
         {learnMoreHref && (
           <Link
             href={learnMoreHref}
-            className="text-primary mt-2 inline-block text-xs font-medium hover:underline"
+            className="text-accent mt-2 inline-block text-[12.5px] font-medium underline-offset-2 hover:underline"
           >
             {learnMoreText} →
           </Link>

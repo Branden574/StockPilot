@@ -59,5 +59,5 @@ export async function ScopedWarehouseNotice({
   if (!message) return null;
   const withPlacement =
     placementNote && !scope.unreadable ? `${message} ${SCOPED_PLACEMENT_NOTE}` : message;
-  return <p className={className ?? 'text-muted-foreground mt-1 text-xs'}>{withPlacement}</p>;
+  return <p className={className ?? 'text-muted-foreground mt-1 text-[12.5px]'}>{withPlacement}</p>;
 }

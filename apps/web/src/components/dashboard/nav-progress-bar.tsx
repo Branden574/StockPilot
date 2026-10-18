@@ -304,13 +304,15 @@ export function NavProgressBar() {
 
   if (phase === 'idle') return null;
 
+  // A flat 2px accent line: no glow (the redesign keeps shadows to toasts,
+  // menus and dialogs).
   return (
     <div aria-hidden="true" className="pointer-events-none fixed inset-x-0 top-0 z-[60] h-[2px]">
       <div
         className={
           phase === 'climbing'
-            ? 'h-full origin-left animate-[nav-progress-climb_2.8s_cubic-bezier(0.2,0.8,0.2,1)_forwards] bg-[hsl(var(--accent))] shadow-[0_0_8px_hsl(var(--accent))]'
-            : 'h-full origin-left animate-[nav-progress-complete_240ms_ease-out_forwards] bg-[hsl(var(--accent))] shadow-[0_0_8px_hsl(var(--accent))]'
+            ? 'h-full origin-left animate-[nav-progress-climb_2.8s_cubic-bezier(0.2,0.8,0.2,1)_forwards] bg-[hsl(var(--accent))]'
+            : 'h-full origin-left animate-[nav-progress-complete_240ms_ease-out_forwards] bg-[hsl(var(--accent))]'
         }
       />
     </div>
