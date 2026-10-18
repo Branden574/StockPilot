@@ -27,7 +27,11 @@ const rel = (abs: string) => path.relative(MOBILE_ROOT, abs);
 const at = (file: string) => path.join(MOBILE_ROOT, file);
 
 /** Every file this package owns that draws or decides colour. */
-const OWNED = [...listTsx(at('src/components/ui')), at('src/components/ui/tones.ts')].map(rel);
+const OWNED = [
+  ...listTsx(at('src/components/ui')),
+  at('src/components/ui/tones.ts'),
+  at('src/components/SyncStatusBadge.tsx'),
+].map(rel);
 
 function source(file: string): ts.SourceFile {
   return parseTsx(readSource(at(file)), file);
@@ -65,13 +69,15 @@ function elements(file: string, match: (el: JsxNode, sf: ts.SourceFile) => boole
 
 describe('every shared primitive follows the device mode', () => {
   it('finds the files (the sweep is not vacuous)', () => {
-    expect(OWNED.length).toBeGreaterThanOrEqual(18);
+    expect(OWNED.length).toBeGreaterThanOrEqual(19);
     expect(OWNED).toContain('src/components/ui/button.tsx');
+    expect(OWNED).toContain('src/components/SyncStatusBadge.tsx');
   });
 
-  // Mutation caught: a primitive on the light-only legacy alias (it renders
-  // light in dark mode), or colouring words with a single-mode ACCENT value
-  // (ACCENT.warn is 3.4:1 on light paper, ACCENT.crit 3.1:1 on dark).
+  // Mutation caught: SyncStatusBadge back on the light-only legacy alias (it
+  // drew a light pill on the dark count screens), or a primitive colouring
+  // words with a single-mode ACCENT value (ACCENT.warn is 3.4:1 on light
+  // paper, ACCENT.crit 3.1:1 on dark).
   it('none reads the light-only legacy `theme` alias or the single-mode ACCENT values', () => {
     const offenders = OWNED.flatMap((file) =>
       themeImports(file)
@@ -142,5 +148,35 @@ describe('Toggle is a switch to VoiceOver', () => {
     );
     expect(attrText(els[0]!, 'disabled', sf)).toBe('inert');
     expect(attrText(els[0]!, 'onPress', sf)).toBe('() => onValueChange?.(!value)');
+  });
+});
+
+describe('SyncStatusBadge keeps its words and its tap', () => {
+  const file = 'src/components/SyncStatusBadge.tsx';
+
+  it('reads the colours of the mode it is drawn in', () => {
+    const src = readSource(at(file));
+    expect(src).toContain('const { c } = useTheme();');
+    expect(src).toContain('syncBadgeDot(tone, c)');
+    expect(src).toContain('syncBadgeSurface(c)');
+  });
+
+  // The words come from lib/sync-badge.ts (sync-badge.test.ts) and the tap
+  // drains the outbox (drain-rejection-wiring.test.ts pins the call shape).
+  it('one button: the same spoken words, and a tap still forces a sync', () => {
+    const { sf, els } = elements(file, (el, s) => tagOf(el, s) === 'Pressable');
+    expect(els).toHaveLength(1);
+    const pill = els[0]!;
+    expect(attrText(pill, 'accessibilityRole', sf)).toBe('button');
+    expect(attrText(pill, 'accessibilityLabel', sf)).toBe('`Sync status: ${label}. Tap to retry.`');
+    expect(attrText(pill, 'onPress', sf)).toMatch(/void cycleCountSync\.forceSync\(\)/);
+  });
+
+  it('the label still shows the state words, capped as chrome, on one line', () => {
+    const { sf, els } = elements(file, (el, s) => tagOf(el, s) === 'Text');
+    expect(els).toHaveLength(1);
+    expect(attrText(els[0]!, 'numberOfLines', sf)).toBe('1');
+    expect(attrText(els[0]!, 'maxFontSizeMultiplier', sf)).toBe('LABEL_CAP');
+    expect(readSource(at(file))).toContain('const LABEL_CAP = capTo(11, TYPE_CEILING.chrome);');
   });
 });
