@@ -201,8 +201,9 @@ export default function SignIn() {
               trailing={
                 // A named button in a real 44pt frame (the field's slot holds
                 // only the 18pt icon, and hitSlop never reached past it). The
-                // icon keeps its place at the frame's right edge; the names are
-                // the web password field's.
+                // frame covers the 44pt the field keeps free past the typed
+                // text and the icon keeps its place (styles.eyeFrame); the
+                // names are the web password field's.
                 <Pressable
                   onPress={() => setShowPw((p) => !p)}
                   accessibilityRole="button"
@@ -314,14 +315,26 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   // 44pt targets, as real frames (never hitSlop): see the trailing note.
+  // The field holds its trailing slot 12pt in from the box's right edge and
+  // ends the typed text 44pt in, so the frame reaches 12pt past the slot
+  // (marginRight -12) to cover exactly those 44pt: a tap on the password's
+  // last letters still puts the caret there instead of showing it. The
+  // paddingRight hands the 12pt back, so the icon stays where it was.
   eyeFrame: {
     width: 44,
     height: 44,
+    marginRight: -12,
+    paddingRight: 12,
     alignItems: 'flex-end',
     justifyContent: 'center',
   },
+  // At least 44pt each way (the word alone is about 42pt wide, 34pt at the
+  // smallest text size), the word at the frame's right edge, so it stays at
+  // the row's end and its underline stays under the word.
   forgotFrame: {
     minHeight: 44,
+    minWidth: 44,
+    alignItems: 'flex-end',
     justifyContent: 'center',
   },
   divider: {

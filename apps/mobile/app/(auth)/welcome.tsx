@@ -158,10 +158,15 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 10,
   },
-  // minHeight, not a fixed height: 44pt at the default size, growing with
-  // the words. It takes the bar's old 6pt top margin into its own height.
+  // minHeight and minWidth, not a fixed size: 44pt each way at the default
+  // size (the words alone are about 39pt wide, 32pt at the smallest text
+  // size), growing with the words. It takes the bar's old 6pt top margin
+  // into its own height, and holds the words at its right edge, where the
+  // bar has always put them.
   signInFrame: {
     minHeight: 44,
+    minWidth: 44,
+    alignItems: 'flex-end',
     justifyContent: 'center',
   },
   statRow: {

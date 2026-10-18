@@ -209,7 +209,14 @@ describe('Welcome: every word, the way in, the muted words readable', () => {
     expect(attrText(els[0]!.el, 'accessibilityRole', sf)).toBe('button');
     expect(attrText(els[0]!.el, 'hitSlop', sf)).toBeUndefined();
     expect(attrText(els[0]!.el, 'style', sf)).toBe('styles.signInFrame');
-    expect(styleBlock(WELCOME, 'signInFrame')).toContain('minHeight: 44,');
+    const frame = styleBlock(WELCOME, 'signInFrame');
+    // 44pt each way: the words alone are about 39pt wide (32pt at the
+    // smallest text size), and at base hitSlop made the target about 59pt.
+    expect(frame).toContain('minHeight: 44,');
+    expect(frame).toContain('minWidth: 44,');
+    // The words stay at the bar's right edge, where they always were.
+    expect(frame).toContain("alignItems: 'flex-end',");
+    expect(frame).not.toMatch(/(?<![a-zA-Z])(?:width|height):/);
     expect(welcome).toContain("<Button block onPress={() => router.push('/(auth)/sign-in')}");
   });
 
@@ -306,7 +313,15 @@ describe('Sign in: every control, word and path', () => {
     expect(attrText(els[0]!.el, 'onPress', sf)).toBe('forgotPassword');
     expect(attrText(els[0]!.el, 'accessibilityRole', sf)).toBe('button');
     expect(attrText(els[0]!.el, 'hitSlop', sf)).toBeUndefined();
-    expect(styleBlock(SIGN_IN, 'forgotFrame')).toContain('minHeight: 44,');
+    const frame = styleBlock(SIGN_IN, 'forgotFrame');
+    // 44pt each way: the word alone is about 42pt wide (34pt at the smallest
+    // text size).
+    expect(frame).toContain('minHeight: 44,');
+    expect(frame).toContain('minWidth: 44,');
+    // The word stays at the row's end, and its underline under the word only
+    // (a stretched word would draw it across the whole frame).
+    expect(frame).toContain("alignItems: 'flex-end',");
+    expect(frame).not.toMatch(/(?<![a-zA-Z])(?:width|height):/);
   });
 
   it('the password eye is a named button ("Show password" / "Hide password", the web field\'s names) in a 44pt frame', () => {
@@ -324,9 +339,36 @@ describe('Sign in: every control, word and path', () => {
     const frame = styleBlock(SIGN_IN, 'eyeFrame');
     expect(frame).toContain('width: 44,');
     expect(frame).toContain('height: 44,');
-    // The icon keeps its place at the frame's right edge.
+    expect(frame).toContain('marginRight: -12,');
+    expect(frame).toContain('paddingRight: 12,');
+    // The icon keeps its place at the right edge of the frame's content.
     expect(frame).toContain("alignItems: 'flex-end',");
     expect(signIn).toContain('secureTextEntry={!showPw}');
+  });
+
+  // The shared Field holds its trailing slot `right: 12` in from the box's
+  // inner right edge and ends the typed text `paddingRight: 44` in. A 44pt
+  // frame sitting in the slot reached 12pt into the text, where a tap (to
+  // put the caret after the last letter, or just to focus the box) showed
+  // the password instead. Distances below are from the box's inner edge.
+  it('the eye frame covers exactly the 44pt the field leaves free past the typed text, and the icon stays put', () => {
+    const field = sourceOf('src/components/ui/field.tsx');
+    const slotRight = Number(/\n {2}trailing: \{[^}]*\bright: (\d+),/.exec(field)?.[1]);
+    const textEnd = Number(/paddingRight: trailing \? (\d+) : \d+/.exec(field)?.[1]);
+    expect([slotRight, textEnd]).toEqual([12, 44]);
+    const frame = styleBlock(SIGN_IN, 'eyeFrame');
+    // A property the frame does not set is 0.
+    const value = (prop: string) =>
+      Number(new RegExp(`(?<![A-Za-z])${prop}: (-?\\d+),`).exec(frame)?.[1] ?? 0);
+    // The slot is as wide as the frame's outer box (width + marginRight) and
+    // ends at slotRight, so the frame itself ends marginRight further out.
+    const frameRight = slotRight + value('marginRight');
+    const frameLeft = frameRight + value('width');
+    expect(frameRight).toBe(0); // reaches the box's edge, never past it
+    expect(frameLeft).toBe(textEnd); // and starts where the typed text ends
+    // The 18pt icon ends paddingRight in from the frame's edge: where the
+    // slot's own edge put it before the frame grew.
+    expect(frameRight + value('paddingRight')).toBe(slotRight);
   });
 
   it('errors read in the refusal colour of the mode (the fixed red was 3.09:1 on the dark card) and are said aloud', () => {
