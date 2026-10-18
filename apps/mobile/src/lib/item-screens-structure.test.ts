@@ -1037,7 +1037,7 @@ describe('serial status pills take the shared pill tones', () => {
 describe('colours come from the per-mode palette', () => {
   // Mutation caught: a screen back on the light-only legacy alias, or a word
   // in a single-mode ACCENT value (ACCENT.warn is 3.4:1 on light paper,
-  // ACCENT.crit 3.1-3.3:1 on the dark card, ACCENT.mintInk 2.5:1 on it).
+  // ACCENT.crit 3.1:1 on the dark card, ACCENT.mintInk 2.7:1 on it).
   it.each(OWNED)('%s imports neither the legacy theme alias nor ACCENT', (file) => {
     const src = codeOnly(sourceOf(file));
     expect(src).not.toMatch(/import \{[^}]*\b(theme|ACCENT)\b[^}]*\} from '@\/lib\/theme'/);

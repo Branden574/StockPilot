@@ -2738,7 +2738,7 @@ function MovementCard({
               size={15}
               tracking={-0.012}
               // An add in the mode's accent, a removal in its refusal red: the
-              // light-only mint ink was 2.5:1 on the dark card.
+              // light-only mint ink was 2.7:1 on the dark card.
               color={
                 amount.kind === 'moved'
                   ? c.ink
