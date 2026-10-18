@@ -14,6 +14,8 @@ vi.mock('next/link', () => ({
   ),
 }));
 
+import { Checkbox } from '@/components/ui/checkbox';
+
 import { CardGrid, CardGridItem, GridCard } from './grid-card';
 import { SizeBadge } from './size-badge';
 
@@ -182,6 +184,54 @@ describe('GridCard', () => {
     const { container } = render(card());
     expect(container.querySelector('[data-slot="grid-card-name"]')).toHaveClass('line-clamp-2');
     expect(screen.getByText('SP-POM-8SZ')).toHaveClass('font-mono');
+  });
+
+  it('clamps the name without a scroll position, so focusing a long name cannot shift it', () => {
+    const { container } = render(card());
+    // line-clamp is overflow: hidden, which focus could scroll by a pixel and
+    // leave there; overflow: clip has no scroll position.
+    expect(container.querySelector('[data-slot="grid-card-name"]')).toHaveClass(
+      'line-clamp-2',
+      'supports-[overflow:clip]:overflow-clip',
+    );
+  });
+
+  it('makes the whole chip the shared Checkbox`s target, 44 x 44 on phones and coarse pointers', () => {
+    const onCheckedChange = vi.fn();
+    const onCardClick = vi.fn();
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { container } = render(
+      card({
+        onClick: onCardClick,
+        checkbox: (
+          <Checkbox
+            checked={false}
+            onCheckedChange={onCheckedChange}
+            label="Select L4L Polo — Men’s"
+          />
+        ),
+      }),
+    );
+    const slot = container.querySelector('[data-slot="grid-card-checkbox"]')!;
+    // The rule reaches the box only as the chip's direct child with role="checkbox".
+    const box = screen.getByRole('checkbox', { name: 'Select L4L Polo — Men’s' });
+    expect(box.parentElement).toBe(slot);
+    expect(slot).toHaveClass(
+      '[&>[role=checkbox]]:before:absolute',
+      '[&>[role=checkbox]]:before:-inset-px',
+      "[&>[role=checkbox]]:before:content-['']",
+      'max-sm:[&>[role=checkbox]]:before:-inset-[9px]',
+      'pointer-coarse:[&>[role=checkbox]]:before:-inset-[9px]',
+    );
+    // One toggle per click, and the click stays with the checkbox.
+    fireEvent.click(box);
+    expect(onCheckedChange).toHaveBeenCalledTimes(1);
+    expect(onCheckedChange).toHaveBeenCalledWith(true);
+    expect(onCardClick).not.toHaveBeenCalled();
+    // It sits beside the name link, not inside it (the Checkbox logs an error
+    // in development when it is nested in another control).
+    expect(error).not.toHaveBeenCalled();
+    error.mockRestore();
   });
 
   it('shows the checkbox on hover or focus only, and always while selected or while anything is selected', () => {

@@ -145,6 +145,46 @@ describe('SegmentedTabs (tablist semantics)', () => {
     }
   });
 
+  it('keeps its desktop size on a coarse pointer above sm, and taps reach the whole track height', () => {
+    const { container, rerender } = render(
+      <SegmentedTabs aria-label="Stock view" items={VIEWS} activeId="all" />,
+    );
+    const track = () => container.querySelector('[data-slot="segmented-tabs"]')!;
+    // md: a 36 px track (3 px padding) holding 28 px segments, 44 px below sm.
+    expect(track()).toHaveClass('p-[3px]');
+    for (const tab of screen.getAllByRole('tab')) {
+      expect(tab).toHaveClass('h-7', 'max-sm:min-h-11');
+      // A visibly 44 px segment on every coarse pointer made a 52 px track
+      // beside the 32 px search field on a touch tablet.
+      expect(tab).not.toHaveClass('pointer-coarse:min-h-11');
+      // The tap area spans the track padding above and below the segment and
+      // stops at the track's edge (the track scrolls, so it clips the rest).
+      expect(tab).toHaveClass(
+        'relative',
+        'before:absolute',
+        'before:inset-x-0',
+        'before:-inset-y-[3px]',
+        "before:content-['']",
+      );
+    }
+    rerender(
+      <SegmentedTabs
+        aria-label="Layout"
+        size="sm"
+        items={[
+          { id: 'table', label: 'List' },
+          { id: 'grid', label: 'Grid' },
+        ]}
+        activeId="table"
+      />,
+    );
+    expect(track()).toHaveClass('p-0.5');
+    for (const tab of screen.getAllByRole('tab')) {
+      expect(tab).toHaveClass('h-[26px]', 'max-sm:min-h-11', 'before:-inset-y-0.5');
+      expect(tab).not.toHaveClass('pointer-coarse:min-h-11');
+    }
+  });
+
   it('passes data attributes, a title and an aria-label through to the tab', () => {
     render(
       <SegmentedTabs

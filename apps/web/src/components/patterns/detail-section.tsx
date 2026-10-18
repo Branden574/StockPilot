@@ -12,6 +12,10 @@ import { cn } from '@/lib/utils';
  *
  * The title is a real heading (h2 by default) so the page outline reads the
  * way the cards do. Anything the page passes keeps its own gates and words.
+ *
+ * The header is 49 px whether its right side is quiet text, a link or a small
+ * (28 px) button, so cards side by side keep their header lines level; a
+ * taller control or a wrapped header grows it.
  */
 export interface DetailSectionProps extends Omit<React.ComponentProps<'section'>, 'title'> {
   title?: React.ReactNode;
@@ -51,7 +55,7 @@ export function DetailSection({
       {hasHeader ? (
         <div
           data-slot="detail-section-header"
-          className="border-border flex min-h-12 flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b px-[18px] py-3.5"
+          className="border-border flex min-h-[49px] flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b px-[18px] py-2.5"
         >
           {title != null ? (
             <Heading className="text-foreground min-w-0 text-[13.5px] font-medium leading-5">

@@ -14,6 +14,9 @@ import { cn } from '@/lib/utils';
  * lines that would sit against the card's own border are clipped, whatever the
  * column count. The last cell also drops its right border (the reference's
  * double line at wide widths, where auto-fit leaves empty tracks after it).
+ * The strip clips without being scrollable (overflow: clip where the browser
+ * has it): with `hidden`, keyboard focus on a stage in the last column or row
+ * scrolled the strip by that 1 px overhang and left it shifted.
  *
  * Figures come from the page; a strip never invents one (no tile without a
  * real number).
@@ -45,7 +48,10 @@ export function StatStrip({
     <Root
       data-slot="stat-strip"
       data-variant={variant}
-      className={cn('border-border bg-card overflow-hidden rounded-lg border', className)}
+      className={cn(
+        'border-border bg-card overflow-hidden rounded-lg border supports-[overflow:clip]:overflow-clip',
+        className,
+      )}
       {...(props as React.ComponentProps<'div'>)}
     >
       <div

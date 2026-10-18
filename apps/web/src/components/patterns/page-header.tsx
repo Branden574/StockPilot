@@ -14,8 +14,10 @@ import { cn } from '@/lib/utils';
  * Exactly one `<h1>`: the title. Nothing else in the header is a heading, so a
  * page that renders this header must not render another h1.
  *
- * Actions sit on the right, bottom-aligned with the title block, and wrap under
- * it on narrow screens. The hierarchy rule is structural: a page shows at most
+ * Actions sit on the right, bottom-aligned with the title block (on a record's
+ * page centred beside the photo and title, as the reference's item header has
+ * them), and wrap under it on narrow screens. The hierarchy rule is structural:
+ * a page shows at most
  * one ink-filled primary (`commitAction`, committing the work in front of you:
  * Receive stock, Post count) and at most one accent-filled primary
  * (`primaryAction`, page-level create: + New item, + New PO), each in its own
@@ -96,7 +98,8 @@ export function PageHeader({
       {back ? <div className="mb-2">{back}</div> : null}
       <div
         className={cn(
-          'flex min-w-0 flex-wrap items-end justify-between gap-4',
+          'flex min-w-0 flex-wrap justify-between gap-4',
+          variant === 'item' ? 'items-center' : 'items-end',
           variant === 'greeting' && 'pb-2',
         )}
       >

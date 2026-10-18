@@ -106,4 +106,21 @@ describe('StatStrip', () => {
     expect(link).not.toHaveClass('py-3');
     expect(link.querySelector('span[aria-hidden]')).toHaveClass('absolute', 'bottom-0', 'h-0.5');
   });
+
+  it('clips its 1 px overhang without a scroll position, so focusing the last stage cannot shift the strip', () => {
+    const { container } = render(
+      <StatStrip as="nav" variant="stages" aria-label="Status">
+        <StatStripLink href="/dashboard/orders?status=pending" label="Needs approval" />
+        <StatStripLink href="/dashboard/orders?status=completed" label="Completed" />
+      </StatStrip>,
+    );
+    // overflow: hidden is a scroll container: focus on a stage in the last
+    // column or row scrolled the strip by the overhang and left it there.
+    // overflow: clip (where supported) clips the same box and cannot scroll;
+    // hidden stays as the fallback.
+    expect(container.querySelector('[data-slot="stat-strip"]')).toHaveClass(
+      'overflow-hidden',
+      'supports-[overflow:clip]:overflow-clip',
+    );
+  });
 });

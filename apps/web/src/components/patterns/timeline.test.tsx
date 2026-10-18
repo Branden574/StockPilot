@@ -122,6 +122,28 @@ describe('Timeline (rows)', () => {
     );
     expect(link).toHaveAttribute('href', '/dashboard/inventory/i1');
   });
+
+  it('keeps the event type in view when a link in a long title takes keyboard focus', () => {
+    render(
+      <Timeline variant="rows" aria-label="Recent activity">
+        <TimelineRow
+          title={
+            <>
+              <TimelineLabel tone="accent">Receive PO</TimelineLabel> ·{' '}
+              <Link href="/dashboard/inventory/i1">
+                Fleece hoodie, heather grey, adult medium with a very long name
+              </Link>
+            </>
+          }
+        />
+      </Timeline>,
+    );
+    const title = screen.getByText('Receive PO').closest('[data-slot="timeline-row-title"]')!;
+    // `truncate` alone is overflow: hidden, a scroll container: focusing the
+    // link slid the clipped line sideways (84 px at 390 wide) and left
+    // "Receive PO" out of view after blur. overflow: clip cannot scroll.
+    expect(title).toHaveClass('truncate', 'supports-[overflow:clip]:overflow-clip');
+  });
 });
 
 describe('DeltaText', () => {

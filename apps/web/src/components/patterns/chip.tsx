@@ -3,6 +3,8 @@ import * as React from 'react';
 
 import { cn } from '@/lib/utils';
 
+import { touchTargetClass } from './touch-target';
+
 /**
  * Chips (DESIGN-SPEC 6.6 and 6.21).
  *
@@ -12,7 +14,10 @@ import { cn } from '@/lib/utils';
  * `sm` 28 px (saved views, toggles); `dashed` draws the "+ Save view" chip.
  * `filterChipClass` gives the same look to an element the page already
  * renders (a Link with its own shallow-navigation onClick), so its href,
- * aria-pressed and handlers stay exactly as they are.
+ * aria-pressed and handlers stay exactly as they are. A chip is 44 px tall
+ * below sm, like the search field in the same row; on a coarse pointer above
+ * sm it keeps its size and gets the Button's invisible 44 px touch target, so
+ * keep 8 px between chips.
  *
  * META CHIP: the small outlined pill on a row ("In group X", "Same SKU as
  * records in X") with an optional text action beside it ("Add to group").
@@ -31,7 +36,8 @@ export function filterChipClass({
   dashed = false,
 }: FilterChipStyle = {}) {
   return cn(
-    'inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border transition-colors max-sm:min-h-11 pointer-coarse:min-h-11',
+    'inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border transition-colors max-sm:min-h-11',
+    touchTargetClass,
     size === 'md' ? 'h-[30px] px-3 text-[13px]' : 'h-7 px-2.5 text-[12.5px]',
     active
       ? 'border-foreground bg-foreground text-background'

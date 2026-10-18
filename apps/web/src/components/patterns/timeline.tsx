@@ -126,7 +126,9 @@ export interface TimelineRowProps extends Omit<React.ComponentProps<'li'>, 'titl
  * The title line ends in an ellipsis, which clips anything drawn outside it,
  * so while a link in the title has keyboard focus the row draws the app's
  * focus ring inside its own edge instead (the row spans a card that clips at
- * its rounded border).
+ * its rounded border). The title clips without being scrollable (overflow:
+ * clip where the browser has it): with `hidden`, focusing a link in a long
+ * title slid the line sideways and left the event type out of view.
  */
 export function TimelineRow({
   title,
@@ -148,7 +150,7 @@ export function TimelineRow({
       <div className="min-w-0">
         <div
           data-slot="timeline-row-title"
-          className="text-foreground truncate text-[13.5px] leading-5 [&_a:focus-visible]:ring-0 [&_a:focus-visible]:ring-offset-0"
+          className="text-foreground truncate text-[13.5px] leading-5 supports-[overflow:clip]:overflow-clip [&_a:focus-visible]:ring-0 [&_a:focus-visible]:ring-offset-0"
         >
           {title}
         </div>

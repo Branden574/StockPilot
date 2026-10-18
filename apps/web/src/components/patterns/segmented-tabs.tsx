@@ -28,6 +28,12 @@ import { cn } from '@/lib/utils';
  * FOCUS: the track scrolls sideways, which clips anything drawn outside it,
  * so a focused tab draws the app's focus ring inside its own edge.
  *
+ * SIZE: 28 px segments (26 for `sm`) on a 36 (32) px track, and 44 px
+ * segments below sm, the same rule as the search field and filter triggers
+ * in the row, so a toolbar on a touch tablet stays one height. The track
+ * clips anything drawn outside it, so a segment's tap area reaches the
+ * track's full inner height instead of growing past it.
+ *
  * COUNTS: `count` prints only when the page passes one, and a page passes one
  * only where it already has the figure (owner decision O2: no new counts).
  *
@@ -78,9 +84,12 @@ const TRACK: Record<NonNullable<SegmentedTabsProps['size']>, string> = {
   sm: 'gap-0.5 rounded-md p-0.5',
 };
 
+// Each segment's ::before spans the track's padding above and below it (3 px
+// on `md`, 2 px on `sm`), so the whole inner height of the track is the tap
+// area without overflowing the scrolling track.
 const SEGMENT: Record<NonNullable<SegmentedTabsProps['size']>, string> = {
-  md: 'h-7 gap-1.5 rounded-[5px] px-2.5 text-[13px]',
-  sm: 'h-[26px] gap-1.5 rounded px-2 text-[12.5px] [&_svg]:h-3.5 [&_svg]:w-3.5',
+  md: 'h-7 gap-1.5 rounded-[5px] px-2.5 text-[13px] before:-inset-y-[3px]',
+  sm: 'h-[26px] gap-1.5 rounded px-2 text-[12.5px] before:-inset-y-0.5 [&_svg]:h-3.5 [&_svg]:w-3.5',
 };
 
 function dataAttributesOf(item: SegmentedTabItem): DataAttributes {
@@ -110,7 +119,7 @@ export function SegmentedTabs({
   const tabs = items.map((item) => {
     const active = item.id === activeId;
     const segmentClass = cn(
-      'inline-flex shrink-0 items-center whitespace-nowrap font-medium transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11 pointer-coarse:min-h-11 [&_svg]:shrink-0',
+      "relative inline-flex shrink-0 items-center whitespace-nowrap font-medium transition-colors before:absolute before:inset-x-0 before:content-[''] focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11 [&_svg]:shrink-0",
       SEGMENT[size],
       active
         ? 'bg-card text-foreground shadow-[0_0_0_1px_var(--ed-line-strong)]'

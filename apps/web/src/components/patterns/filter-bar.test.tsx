@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
+import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 
 import { FilterBar, FilterTrigger } from './filter-bar';
@@ -81,6 +82,33 @@ describe('FilterTrigger', () => {
     fireEvent.click(screen.getByTestId('charter'));
     expect(onClick).toHaveBeenCalledTimes(1);
     expect(ref.current).toBe(screen.getByRole('button'));
+  });
+
+  it('keeps the shared search field`s height beside it, with a 44 px touch target on coarse pointers', () => {
+    render(
+      <FilterBar>
+        <Input aria-label="Search" />
+        <FilterTrigger label="Category" aria-label="Filter by Category" />
+      </FilterBar>,
+    );
+    const search = screen.getByRole('textbox', { name: 'Search' });
+    const trigger = screen.getByRole('button', { name: 'Filter by Category' });
+    // The field is 32 px, and 44 px only below sm (components/ui/input.tsx).
+    expect(search).toHaveClass('h-8', 'max-sm:h-11');
+    expect(search.className).not.toContain('pointer-coarse:');
+    // The trigger follows it: 32 px, 44 px below sm. A visible 44 px on every
+    // coarse pointer made a touch tablet's filter row 32 px field + 44 px
+    // triggers; there it keeps 32 px and gets the Button's invisible target.
+    expect(trigger).toHaveClass('h-8', 'max-sm:min-h-11', 'relative');
+    expect(trigger).not.toHaveClass('pointer-coarse:min-h-11');
+    expect(trigger).toHaveClass(
+      'before:absolute',
+      'before:min-h-11',
+      'before:min-w-11',
+      'before:content-none',
+      "max-sm:before:content-['']",
+      "pointer-coarse:before:content-['']",
+    );
   });
 
   it('works as a Radix PopoverTrigger asChild child: one click opens its menu', () => {

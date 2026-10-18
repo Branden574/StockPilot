@@ -53,4 +53,36 @@ describe('StatCard', () => {
     expect(card.className).not.toContain('shadow');
     expect(screen.getByText('6')).toHaveClass('text-[24px]', 'font-medium');
   });
+
+  it('stacks label and figure from the top and drops the foot to the bottom, so figures line up in a row', () => {
+    const { container } = render(
+      <StatCard
+        label="Movements today"
+        value="2"
+        delta={{ value: '-11', direction: 'down' }}
+        foot="across all locations · last 24h"
+      />,
+    );
+    const card = container.firstElementChild!;
+    // justify-between centred the figure in whatever height the foot left, so
+    // on Overview a foot that wrapped to two lines lifted that card's figure
+    // above its neighbours' (and a card with no foot dropped it to the bottom).
+    expect(card).not.toHaveClass('justify-between');
+    expect(card).toHaveClass('flex-col');
+    expect(screen.getByText('across all locations · last 24h').parentElement).toHaveClass(
+      'mt-auto',
+    );
+  });
+
+  it('keeps every digit of the figure: the sparkline narrows first', () => {
+    const { container } = render(
+      <StatCard label="Inventory value" value="$155,945.29" series={[1, 2, 3]} />,
+    );
+    // At 1280 with the sidebar the figure lost its cents to the 72 px
+    // sparkline ("$155,94…"); now the sparkline gives way, and the figure
+    // ends in an ellipsis only when it alone is wider than the card.
+    expect(screen.getByText('$155,945.29')).toHaveClass('shrink-0', 'max-w-full', 'truncate');
+    expect(container.querySelector('svg')).toHaveClass('min-w-0', 'shrink');
+    expect(container.querySelector('svg')).not.toHaveClass('shrink-0');
+  });
 });

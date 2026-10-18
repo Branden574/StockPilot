@@ -77,4 +77,23 @@ describe('DetailSection', () => {
     const { container } = render(<DetailSection id="physical-count" title="Last physical count" />);
     expect(container.querySelector('section#physical-count')).not.toBeNull();
   });
+
+  it('keeps the header 49 px with a small button aside, level with a text or link header', () => {
+    const { container } = render(
+      <DetailSection
+        title="Serial numbers"
+        aside={
+          <button type="button" className="h-7">
+            Add serial
+          </button>
+        }
+      />,
+    );
+    const header = container.querySelector('[data-slot="detail-section-header"]')!;
+    // 10 + 28 + 10 + 1 px border = 49 with the shared 28 px small Button; a
+    // 20 px title line is centred in the same 49 px (14 px above it, as the
+    // reference's 14 x 18 header). With 14 px padding the button made 57.
+    expect(header).toHaveClass('min-h-[49px]', 'py-2.5', 'items-center');
+    expect(header).not.toHaveClass('py-3.5');
+  });
 });

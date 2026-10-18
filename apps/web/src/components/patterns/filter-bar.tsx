@@ -3,6 +3,8 @@ import * as React from 'react';
 
 import { cn } from '@/lib/utils';
 
+import { touchTargetClass } from './touch-target';
+
 /**
  * One wrapping filter row (DESIGN-SPEC 4 "Toolbar", 6.4).
  *
@@ -50,6 +52,10 @@ export function FilterBar({ leading, children, className, role, ...props }: Filt
  * It is a plain `<button>` that spreads every other prop and the ref, so it can
  * be a Radix `PopoverTrigger asChild` child; the caller keeps its own
  * aria-label ("Filter by Category", "Sort by Newest").
+ *
+ * Size follows the shared Input and Select beside it in the row: 32 px, and
+ * 44 px tall below sm. On a coarse pointer above sm it keeps 32 px (the search
+ * field does too) and gets the Button's invisible 44 px touch target.
  */
 export interface FilterTriggerProps extends Omit<React.ComponentProps<'button'>, 'value'> {
   label: React.ReactNode;
@@ -82,7 +88,8 @@ export function FilterTrigger({
       data-slot="filter-trigger"
       data-active={isActive ? '' : undefined}
       className={cn(
-        'border-border bg-card pointer-coarse:min-h-11 inline-flex h-8 max-w-full shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 text-[13px] font-normal text-[var(--ed-ink-2)] transition-colors hover:border-[var(--ed-line-strong)] disabled:pointer-events-none disabled:opacity-50 data-[state=open]:border-[var(--ed-line-strong)] max-sm:min-h-11 [&_svg]:shrink-0',
+        'border-border bg-card inline-flex h-8 max-w-full shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 text-[13px] font-normal text-[var(--ed-ink-2)] transition-colors hover:border-[var(--ed-line-strong)] disabled:pointer-events-none disabled:opacity-50 data-[state=open]:border-[var(--ed-line-strong)] max-sm:min-h-11 [&_svg]:shrink-0',
+        touchTargetClass,
         isActive && 'border-[var(--ed-line-strong)]',
         className,
       )}

@@ -65,6 +65,25 @@ describe('FilterChipLink and filterChipClass', () => {
     expect(filterChipClass()).toContain('border-[var(--ed-line-strong)]');
     expect(filterChipClass({ size: 'md' })).toContain('h-[30px]');
   });
+
+  it('is 44 px tall below sm, and keeps its size with a 44 px touch target on a coarse pointer above sm', () => {
+    render(
+      <>
+        <FilterChip pressed>Expected</FilterChip>
+        <FilterChipLink href="/dashboard/inventory?view=mine">My low stock</FilterChipLink>
+      </>,
+    );
+    for (const chip of [
+      screen.getByRole('button', { name: 'Expected' }),
+      screen.getByRole('link', { name: 'My low stock' }),
+    ]) {
+      // Beside the 32 px search field on a touch tablet a visibly 44 px chip
+      // broke the filter row; the target grows instead, as the Button's does.
+      expect(chip).toHaveClass('h-7', 'max-sm:min-h-11', 'relative', 'before:min-h-11');
+      expect(chip).not.toHaveClass('pointer-coarse:min-h-11');
+      expect(chip).toHaveClass("pointer-coarse:before:content-['']", "max-sm:before:content-['']");
+    }
+  });
 });
 
 describe('MetaChip', () => {

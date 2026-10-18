@@ -23,7 +23,10 @@ import { PatternPhoto } from './photo';
  * SLOTS on the media: `checkbox` top-left in a 28 px chip (the record's own
  * checkbox with the table's row key; it is a sibling of the name link, never
  * inside it), shown on hover or focus, always while `selected` or
- * `selectionActive`, and always on touch; `badge` top-right (the size
+ * `selectionActive`, and always on touch. The whole chip is the checkbox's
+ * target, and 44 x 44 below sm and on coarse pointers (the box keeps its
+ * 20 px look), so a tap just off the box never opens the record instead;
+ * `badge` top-right (the size
  * badge), never wider than the tile and never over the checkbox chip, so a
  * long label ("14 variants · 1,240 pairs total") ends in an ellipsis instead
  * of losing its first figure; `status` bottom-left (the stock status pill).
@@ -47,7 +50,9 @@ import { PatternPhoto } from './photo';
  *
  * FOCUS: the name clamp clips anything drawn outside the link, so while the
  * name link has keyboard focus the card draws the app's focus ring around
- * itself instead (with or without `stretchLink`).
+ * itself instead (with or without `stretchLink`). The clamp clips without
+ * being scrollable (overflow: clip where the browser has it), so focusing a
+ * long name cannot scroll its first line out of view.
  */
 
 export interface GridCardQuantity {
@@ -117,6 +122,9 @@ export function GridCard({
             data-slot="grid-card-checkbox"
             className={cn(
               'border-border bg-card absolute left-2 top-2 z-10 grid size-7 place-items-center rounded-md border transition-opacity',
+              // The checkbox's own ::before, positioned on this chip, covers
+              // the chip (and 44 x 44 on phones and coarse pointers).
+              "pointer-coarse:[&>[role=checkbox]]:before:-inset-[9px] [&>[role=checkbox]]:before:absolute [&>[role=checkbox]]:before:-inset-px [&>[role=checkbox]]:before:content-[''] max-sm:[&>[role=checkbox]]:before:-inset-[9px]",
               selected || selectionActive
                 ? 'opacity-100'
                 : 'pointer-coarse:opacity-100 opacity-0 group-focus-within/card:opacity-100 group-hover/card:opacity-100',
@@ -150,7 +158,7 @@ export function GridCard({
           <div
             data-slot="grid-card-name"
             className={cn(
-              'text-foreground line-clamp-2 min-h-[2.7em] text-[13.5px] font-medium leading-[1.35] [overflow-wrap:anywhere] [&_a:focus-visible]:ring-0 [&_a:focus-visible]:ring-offset-0',
+              'text-foreground line-clamp-2 min-h-[2.7em] text-[13.5px] font-medium leading-[1.35] [overflow-wrap:anywhere] supports-[overflow:clip]:overflow-clip [&_a:focus-visible]:ring-0 [&_a:focus-visible]:ring-offset-0',
               stretchLink && "[&_a]:after:absolute [&_a]:after:inset-0 [&_a]:after:content-['']",
             )}
           >

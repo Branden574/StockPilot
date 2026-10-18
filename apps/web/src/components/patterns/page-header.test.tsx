@@ -106,4 +106,33 @@ describe('PageHeader', () => {
     expect(h1).toHaveTextContent(/^Inventory$/);
     expect(h1.parentElement).toHaveTextContent('DC4');
   });
+
+  it('bottom-aligns the actions with the title block, and centres them beside a record`s photo', () => {
+    const actionsRow = (container: HTMLElement) =>
+      container.querySelector('[data-slot="page-header-actions"]')!.parentElement!;
+    const { container, rerender } = render(
+      <PageHeader title="Orders" actions={<button type="button">Export</button>} />,
+    );
+    expect(actionsRow(container)).toHaveClass('items-end');
+    rerender(
+      <PageHeader
+        title="Good afternoon, Branden."
+        variant="greeting"
+        actions={<button type="button">Export</button>}
+      />,
+    );
+    expect(actionsRow(container)).toHaveClass('items-end');
+    // The reference's item header centres Adjust / Transfer / Create PO on the
+    // 64 px photo and the title block (measured: both centred at 118 px).
+    rerender(
+      <PageHeader
+        title="L4L Insulated Bottle 20 oz"
+        variant="item"
+        media={<span data-testid="media" />}
+        actions={<button type="button">Adjust</button>}
+      />,
+    );
+    expect(actionsRow(container)).toHaveClass('items-center');
+    expect(actionsRow(container)).not.toHaveClass('items-end');
+  });
 });
