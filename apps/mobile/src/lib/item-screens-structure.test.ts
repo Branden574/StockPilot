@@ -886,7 +886,7 @@ describe('New item form: the rack boxes stay uncontrolled', () => {
 describe.each([
   [MOVE, 'MoveStockModal', 'onClose'],
   [REMOVE, 'RemoveFromRackContent', 'onClose'],
-  [RECOUNT, 'SheetContent', 'submitting ? undefined : onClose'],
+  [RECOUNT, 'SheetContent', 'submitting ? undefined : dismiss'],
   [HISTORY, 'ItemHistorySheet', 'onClose'],
 ])('%s keeps the sibling scrim', (file, fn, close) => {
   const containers = () =>
@@ -926,6 +926,61 @@ describe.each([
     expect(flat(attrText(scrim, 'style', c.sf) ?? '')).toMatch(
       /ode === 'dark' \? 'rgba\(0,0,0,0\.(55|6)\)' : 'rgba\(14,15,13,0\.(35|4)\)'/,
     );
+  });
+});
+
+// ── The recount sheet: once the result shows, every way out is Done ─────
+
+describe('recount sheet: a started recount is never dismissed as if nothing happened', () => {
+  // The defect: the scrim, the escape scrub and Android's back button called
+  // onClose after the result showed (only the X called onDone), so a recount
+  // started and then dismissed by a tap outside left the exceptions list with
+  // its selection and no re-read, and the item card and the location as they
+  // were. Every caller re-reads in onDone and only closes in onClose.
+  const code = flat(codeOnly(sourceOf(RECOUNT)));
+
+  it("the sheet's own ways out (scrim, escape scrub, X) take Done once the result shows", () => {
+    expect(code).toContain('const dismiss = summary ? onDone : onClose;');
+    const x = elements(
+      RECOUNT,
+      (el, sf) =>
+        TOUCHABLE_TAG.test(tagOf(el, sf)) && jsxChildren(el).some((ch) => tagOf(ch, sf) === 'X'),
+    );
+    expect(x).toHaveLength(1);
+    expect(attrText(x[0]!.el, 'onPress', x[0]!.sf)).toBe('dismiss');
+    // Done itself, and Open the count, are unchanged.
+    expect(code).toContain('<Button block onPress={onDone}> Done </Button>');
+    expect(code).toContain('onPress={() => onOpenCount(summary.started!.cycleCountId)}');
+  });
+
+  it("the Modal's own way out (Android back) takes Done once the result shows, and each opening starts without one", () => {
+    expect(code).toContain('onRequestClose={resultShown ? props.onDone : props.onClose}');
+    expect(code).toContain(
+      'if (props.visible !== wasVisible) { setWasVisible(props.visible); setResultShown(false); }',
+    );
+    expect(code).toContain(
+      '<SheetContent key="open" {...props} onResultShown={() => setResultShown(true)} />',
+    );
+    // Reported only when the result is set, never before the answer.
+    expect(code).toMatch(
+      /setSummary\(recountResultSummary\(result, \{ timeZone, assigneeLabel \}\)\); onResultShown\(\); \} catch/,
+    );
+  });
+
+  it('every caller re-reads in onDone and only closes in onClose (so the difference matters)', () => {
+    for (const file of [
+      ITEM,
+      'app/(drawer)/exceptions.tsx',
+      'app/exceptions/[id].tsx',
+      'app/location/[id].tsx',
+    ]) {
+      const sheet = elements(file, (el, sf) => tagOf(el, sf) === 'ExceptionRecountSheet');
+      expect(sheet, file).toHaveLength(1);
+      const done = flat(attrText(sheet[0]!.el, 'onDone', sheet[0]!.sf) ?? '');
+      const close = flat(attrText(sheet[0]!.el, 'onClose', sheet[0]!.sf) ?? '');
+      expect(done, `${file} onDone`).toMatch(/load\(\)|refreshVerification\(\)/);
+      expect(close, `${file} onClose`).not.toMatch(/load\(\)|refreshVerification\(\)/);
+    }
   });
 });
 

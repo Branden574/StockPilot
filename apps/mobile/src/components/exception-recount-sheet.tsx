@@ -72,11 +72,29 @@ export function ExceptionRecountSheet(props: {
   onDone: () => void;
   onOpenCount: (cycleCountId: string) => void;
 }) {
+  // Whether this opening of the sheet shows its result. Once it does, every
+  // way out is Done, so the caller re-reads and clears its selection; that
+  // includes Android's back button, which closes through the Modal. A new
+  // opening starts without a result (React's "adjust state when a prop
+  // changes" pattern, no effect).
+  const [resultShown, setResultShown] = React.useState(false);
+  const [wasVisible, setWasVisible] = React.useState(props.visible);
+  if (props.visible !== wasVisible) {
+    setWasVisible(props.visible);
+    setResultShown(false);
+  }
   return (
-    <Modal visible={props.visible} transparent animationType="slide" onRequestClose={props.onClose}>
+    <Modal
+      visible={props.visible}
+      transparent
+      animationType="slide"
+      onRequestClose={resultShown ? props.onDone : props.onClose}
+    >
       {/* Remounted per opening (key): every opening starts with no earlier
           attempt, key or result. */}
-      {props.visible ? <SheetContent key="open" {...props} /> : null}
+      {props.visible ? (
+        <SheetContent key="open" {...props} onResultShown={() => setResultShown(true)} />
+      ) : null}
     </Modal>
   );
 }
@@ -108,6 +126,7 @@ function SheetContent({
   onClose,
   onDone,
   onOpenCount,
+  onResultShown,
 }: {
   title: string;
   occurrenceIds?: readonly string[];
@@ -119,6 +138,8 @@ function SheetContent({
   onClose: () => void;
   onDone: () => void;
   onOpenCount: (cycleCountId: string) => void;
+  /** The result is on screen: the Modal's own way out becomes Done too. */
+  onResultShown: () => void;
 }) {
   const { c, mode: themeMode } = useTheme();
   const [members, setMembers] = React.useState<Members>(orgId ? { kind: 'loading' } : { kind: 'failed' });
@@ -201,6 +222,7 @@ function SheetContent({
           ? (members.list.find((m) => m.userId === result.assignedTo)?.name ?? null)
           : null;
       setSummary(recountResultSummary(result, { timeZone, assigneeLabel }));
+      onResultShown();
     } catch (e) {
       const described = describeRecountError(e);
       // The key stands for another selection: never send it again.
@@ -210,6 +232,14 @@ function SheetContent({
       setSubmitting(false);
     }
   }
+
+  // Every way out of the sheet once the result shows is Done (the caller
+  // re-reads and clears its selection). Only the X used to take Done there;
+  // the scrim (and the Modal's own close) took onClose, so a recount started
+  // and then dismissed by a tap outside left the list, the card or the
+  // location as they were before it, and the exceptions list kept its
+  // selection.
+  const dismiss = summary ? onDone : onClose;
 
   const note =
     targets.kind === 'failed'
@@ -228,13 +258,13 @@ function SheetContent({
     <View
       style={{ flex: 1, justifyContent: 'flex-end' }}
       accessibilityViewIsModal
-      onAccessibilityEscape={submitting ? undefined : onClose}
+      onAccessibilityEscape={submitting ? undefined : dismiss}
     >
       {/* Backdrop is a SIBLING behind the sheet, not its parent, so the body
           scrolls (see add-order-items-sheet.tsx). */}
       <Pressable
-        onPress={submitting ? undefined : onClose}
-        onAccessibilityTap={submitting ? undefined : onClose}
+        onPress={submitting ? undefined : dismiss}
+        onAccessibilityTap={submitting ? undefined : dismiss}
         accessibilityRole="button"
         accessibilityLabel="Close"
         style={[
@@ -250,7 +280,7 @@ function SheetContent({
           {/* A 44pt frame around the same 18pt X, its margins giving the
               space back (it was the X with hitSlop), in the muted ink. */}
           <Pressable
-            onPress={summary ? onDone : onClose}
+            onPress={dismiss}
             disabled={submitting}
             accessibilityRole="button"
             accessibilityLabel="Close"
