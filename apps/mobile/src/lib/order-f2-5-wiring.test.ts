@@ -183,10 +183,14 @@ describe('the draft sheet', () => {
   // OTA-safe (JS only) and nothing that sends or composes mail.
   it('imports only JS modules, and nothing that opens mail', () => {
     const imports = [...sheetSrc.matchAll(/^import[\s\S]*?from '([^']+)';/gm)].map((m) => m[1]);
+    // The redesign (P5.7a) added the shared checkbox mark (P2.5b) and the
+    // shared button tones, both JS modules: still nothing that opens mail.
     expect(imports.sort()).toEqual(
       [
         '@/components/item-verification-card',
+        '@/components/ui/checkbox',
         '@/components/ui/text',
+        '@/components/ui/tones',
         '@/lib/exception-sheet-layout',
         '@/lib/order-readiness',
         '@/lib/order-shortfall-po',
@@ -220,7 +224,8 @@ describe('the draft sheet', () => {
     expect(sheetCode).toContain(
       'const [selection, setSelection] = React.useState<ShortfallSelection>(() => defaultShortfallSelection(startView));',
     );
-    expect(sheetCode).toMatch(/<Body size=\{13\} color=\{ACCENT\.crit\} accessibilityRole="alert">\s*\{error\}/);
+    // Re-pinned by the redesign (P5.7a, look only): the per-mode refusal ink.
+    expect(sheetCode).toMatch(/<Body size=\{13\} color=\{c\.critText\} accessibilityRole="alert">\s*\{error\}/);
   });
 
   // Plan vitest: "The phone sheet is disabled offline". Mutation caught:
@@ -285,7 +290,8 @@ describe('the draft sheet', () => {
     expect(sheetCode).toMatch(
       /React\.useEffect\(\(\) => \{\s*if \(startNotice\) AccessibilityInfo\.announceForAccessibility\(startNotice\);\s*\}, \[startNotice\]\);/,
     );
-    expect(sheetCode).toMatch(/\{notice && !error && !created \? \(\s*<Body size=\{13\} color=\{ACCENT\.warn\}>\s*\{notice\}/);
+    // Re-pinned by the redesign (P5.7a, look only): the per-mode warning ink.
+    expect(sheetCode).toMatch(/\{notice && !error && !created \? \(\s*<Body size=\{13\} color=\{c\.warnText\}>\s*\{notice\}/);
   });
 
   describe('structure (sibling backdrop, VoiceOver, 44 pt, Dynamic Type, the keyboard)', () => {

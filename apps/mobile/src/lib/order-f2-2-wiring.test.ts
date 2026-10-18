@@ -334,6 +334,7 @@ describe('a short line’s fixes in the line sheet (decision D18)', () => {
     expect(s).toContain('accessibilityLabel={`${a.label}, ${line.name}`}');
     expect(s).toContain('maxFontSizeMultiplier={ACTION_CAP}');
     expect(s).toContain('const ACTION_CAP = capTo(13, TYPE_CEILING.control);');
-    expect(s).toContain('<Eyebrow color={ACCENT.warn}>{shortFix.label}</Eyebrow>');
+    // Re-pinned by the redesign (P5.7a, look only): the per-mode warning ink.
+    expect(s).toContain('<Eyebrow color={c.warnText}>{shortFix.label}</Eyebrow>');
   });
 });

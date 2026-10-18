@@ -9,6 +9,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Text,
   TextInput,
   useWindowDimensions,
   View,
@@ -16,9 +17,10 @@ import {
 
 import { MIN_TAP } from '@/components/item-verification-card';
 import { Body, Eyebrow, Mono } from '@/components/ui/text';
+import { buttonTone } from '@/components/ui/tones';
 import { api } from '@/lib/api';
 import { parseHoldOutcome } from '@/lib/order-hold';
-import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 import {
@@ -72,6 +74,14 @@ import {
  * (30)" / "Remove from order" after), through the same two writes. A lower
  * goes straight through (the button says exactly what it does); a remove asks
  * first, as it always has.
+ *
+ * The redesign look: Save quantity is the ink button, the fixes and Remove
+ * outlines in the stronger border (Remove's words in the per-mode refusal
+ * ink, critText), every label in the display face. Buttons, the steppers and
+ * the quantity box are 44pt frames that grow with the text (minHeight, never
+ * a fixed height, which cut a wrapped fix label at the largest sizes); the
+ * quantity box is the reference's count input (the recessed fill). Notes are
+ * muted ink (ink3, AA), the raise warning the per-mode warning ink.
  */
 export function EditOrderLineSheet({
   visible,
@@ -108,6 +118,10 @@ export function EditOrderLineSheet({
   shortFix?: OrderLineShortFix | null;
 }) {
   const { c, mode } = useTheme();
+  const ink = buttonTone('primary', c);
+  const outline = buttonTone('outline', c);
+  const inkText = [styles.actionLabel, { color: ink.fg }];
+  const refusalText = [styles.actionLabel, { color: c.critText }];
   const { height } = useWindowDimensions();
   const [qty, setQty] = React.useState('');
   const [busy, setBusy] = React.useState<'save' | 'remove' | null>(null);
@@ -299,25 +313,28 @@ export function EditOrderLineSheet({
 
   const showRemove = !(shortFix?.replacesRemove ?? false);
 
+  // A 44pt frame that VoiceOver outlines where a finger can hit it (it was a
+  // 40pt box widened by hitSlop, which VoiceOver does not see).
   const stepBtn = (label: string, delta: number, disabled: boolean) => (
     <Pressable
       onPress={() => step(delta)}
       disabled={disabled}
-      hitSlop={6}
       accessibilityRole="button"
       accessibilityLabel={delta > 0 ? 'Increase quantity' : 'Decrease quantity'}
+      accessibilityState={{ disabled }}
       style={{
-        width: 40,
-        height: 40,
+        minWidth: MIN_TAP,
+        minHeight: MIN_TAP,
         borderRadius: 10,
         borderWidth: 1,
-        borderColor: c.hair,
+        borderColor: c.hair2,
+        backgroundColor: c.card,
         alignItems: 'center',
         justifyContent: 'center',
         opacity: disabled ? 0.35 : 1,
       }}
     >
-      <Mono size={17} color={c.ink}>
+      <Mono size={17} color={c.ink} maxFontSizeMultiplier={STEP_CAP}>
         {label}
       </Mono>
     </Pressable>
@@ -377,7 +394,13 @@ export function EditOrderLineSheet({
                 alignItems: 'center',
               }}
             >
-              <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
+              <Body
+                size={15}
+                color={c.ink}
+                accessibilityRole="header"
+                maxFontSizeMultiplier={TITLE_CAP}
+                style={{ flex: 1, fontFamily: FONT.display }}
+              >
                 Edit line
               </Body>
               <Pressable
@@ -391,7 +414,7 @@ export function EditOrderLineSheet({
                   justifyContent: 'center',
                 }}
               >
-                <X size={18} color={c.ink4} />
+                <X size={18} color={c.ink2} />
               </Pressable>
             </View>
 
@@ -409,7 +432,7 @@ export function EditOrderLineSheet({
                   <Body size={15} color={c.ink} numberOfLines={3}>
                     {line.name}
                   </Body>
-                  <Mono size={11} color={c.ink4} style={{ marginTop: 3 }}>
+                  <Mono size={11.5} color={c.ink3} style={{ marginTop: 3 }}>
                     {`Ordered ${line.requested}${line.fulfilled > 0 ? ` · ${line.fulfilled} handed over` : ''}${line.picked > 0 ? ` · ${line.picked} staged` : ''}`}
                   </Mono>
                 </View>
@@ -418,7 +441,7 @@ export function EditOrderLineSheet({
                     is its own VoiceOver button, named with the item. */}
                 {shortFix ? (
                   <View style={{ gap: 8 }}>
-                    <Eyebrow color={ACCENT.warn}>{shortFix.label}</Eyebrow>
+                    <Eyebrow color={c.warnText}>{shortFix.label}</Eyebrow>
                     {shortFix.actions.map((a) => (
                       <Pressable
                         key={a.kind}
@@ -430,22 +453,25 @@ export function EditOrderLineSheet({
                         style={[
                           styles.action,
                           {
-                            borderWidth: 1,
-                            borderColor: a.kind === 'remove' ? c.hair : c.ink,
+                            backgroundColor: outline.bg,
+                            borderColor: a.kind === 'remove' ? outline.border : c.ink,
                             opacity: busy !== null ? 0.45 : 1,
                           },
                         ]}
                       >
                         {(a.kind === 'remove' ? busy === 'remove' : busy === 'save') ? (
-                          <ActivityIndicator color={a.kind === 'remove' ? ACCENT.crit : c.ink} />
+                          <ActivityIndicator color={a.kind === 'remove' ? c.critText : c.ink} />
                         ) : (
-                          <Mono
-                            size={13}
-                            color={a.kind === 'remove' ? ACCENT.crit : c.ink}
+                          <Text
+                            style={
+                              a.kind === 'remove'
+                                ? refusalText
+                                : [styles.actionLabel, { color: c.ink }]
+                            }
                             maxFontSizeMultiplier={ACTION_CAP}
                           >
                             {a.label}
-                          </Mono>
+                          </Text>
                         )}
                       </Pressable>
                     ))}
@@ -471,17 +497,18 @@ export function EditOrderLineSheet({
                       returnKeyType="done"
                       editable={busy === null}
                       accessibilityLabel="Quantity ordered"
+                      maxFontSizeMultiplier={INPUT_CAP}
                       style={[
                         styles.qtyInput,
-                        { borderColor: c.hair, backgroundColor: c.paper2, color: c.ink },
+                        { borderColor: c.hair2, backgroundColor: c.sunk, color: c.ink },
                       ]}
                     />
                     {stepBtn('+', 1, busy !== null)}
                   </View>
                   {floorNote ? (
-                    <Mono size={10.5} color={c.ink4}>
+                    <Body size={12} color={c.ink3}>
                       {floorNote}
-                    </Mono>
+                    </Body>
                   ) : null}
                   {/* Shown live under the stepper as well as in the
                       confirmation, so the consequence is visible while the
@@ -489,7 +516,7 @@ export function EditOrderLineSheet({
                       partial-fulfilment card on the order screen: needs
                       attention, nothing broken. */}
                   {raiseWarning ? (
-                    <Body size={11.5} color="#b45309">
+                    <Body size={12} color={c.warnText}>
                       {raiseWarning}
                     </Body>
                   ) : null}
@@ -505,27 +532,27 @@ export function EditOrderLineSheet({
                       style={[
                         styles.action,
                         {
-                          borderWidth: 1,
-                          borderColor: c.hair,
+                          backgroundColor: outline.bg,
+                          borderColor: outline.border,
                           opacity: busy !== null || !removal.ok ? 0.45 : 1,
                         },
                       ]}
                     >
                       {busy === 'remove' ? (
-                        <ActivityIndicator color={ACCENT.crit} />
+                        <ActivityIndicator color={c.critText} />
                       ) : (
-                        <Mono size={13} color={ACCENT.crit}>
+                        <Text style={refusalText} maxFontSizeMultiplier={ACTION_CAP}>
                           Remove from order
-                        </Mono>
+                        </Text>
                       )}
                     </Pressable>
                     {/* Disabled-with-reason: a greyed-out Remove with no
                         explanation is how the picker ends up believing the app
                         is broken. The reason is the service's own wording. */}
                     {!removal.ok && removal.reason ? (
-                      <Mono size={10.5} color={c.ink4}>
+                      <Body size={12} color={c.ink3}>
                         {removal.reason}
-                      </Mono>
+                      </Body>
                     ) : null}
                   </View>
                 ) : null}
@@ -533,23 +560,30 @@ export function EditOrderLineSheet({
             )}
 
             {error ? (
-              <Mono size={11} color={ACCENT.crit}>
+              <Body size={13} color={c.critText} accessibilityRole="alert">
                 {error}
-              </Mono>
+              </Body>
             ) : null}
 
             <Pressable
               onPress={() => void save()}
               disabled={busy !== null || line === null}
               accessibilityRole="button"
-              style={[styles.action, { backgroundColor: c.ink, opacity: busy !== null ? 0.6 : 1 }]}
+              style={[
+                styles.action,
+                {
+                  backgroundColor: ink.bg,
+                  borderColor: ink.border,
+                  opacity: busy !== null ? 0.6 : 1,
+                },
+              ]}
             >
               {busy === 'save' ? (
-                <ActivityIndicator color={c.paper} />
+                <ActivityIndicator color={ink.fg} />
               ) : (
-                <Mono size={13} color={c.paper}>
+                <Text style={inkText} maxFontSizeMultiplier={ACTION_CAP}>
                   Save quantity
-                </Mono>
+                </Text>
               )}
             </Pressable>
           </View>
@@ -559,18 +593,25 @@ export function EditOrderLineSheet({
   );
 }
 
-/** The fix buttons are fixed-height chrome: their labels stop growing at the
- *  control ceiling (the Button primitive's), so "Lower to what was picked
- *  (30)" never clips inside its 44pt frame. */
+/** The buttons' labels are chrome: they stop growing at the control ceiling
+ *  (the Button primitive's), and the button grows with them (minHeight), so a
+ *  wrapped "Lower to what was picked (30)" is never cut. */
 const ACTION_CAP = capTo(13, TYPE_CEILING.control);
+/** The sheet's title stops at the display ceiling, like every sheet's. */
+const TITLE_CAP = capTo(15, TYPE_CEILING.display);
+/** The steppers' glyphs are control chrome. */
+const STEP_CAP = capTo(17, TYPE_CEILING.control);
+/** The typed quantity stops at the input ceiling (a bordered box). */
+const INPUT_CAP = capTo(15, TYPE_CEILING.input);
 
 const styles = StyleSheet.create({
   qtyInput: {
     flex: 1,
-    height: 44,
+    minHeight: MIN_TAP,
     borderWidth: 1,
     borderRadius: 10,
     paddingHorizontal: 12,
+    paddingVertical: 8,
     fontFamily: FONT.mono,
     fontSize: 15,
     textAlign: 'center',
@@ -581,7 +622,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
     paddingHorizontal: 16,
-    height: 44,
+    paddingVertical: 10,
+    minHeight: MIN_TAP,
     borderRadius: 10,
+    borderWidth: 1,
   },
+  /** The shared Button's label: the display face at 500; it wraps. */
+  actionLabel: { fontFamily: FONT.display, fontSize: 13, textAlign: 'center', flexShrink: 1 },
 });
