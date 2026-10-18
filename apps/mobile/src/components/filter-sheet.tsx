@@ -317,9 +317,10 @@ export function FilterSheet({
 }
 
 /**
- * One section of the sheet. Its label is a heading for VoiceOver's rotor; a
- * section of radios (STOCK, SORT) is also a radio group, so VoiceOver says
- * how many choices it holds.
+ * One section of the sheet. Its label is a heading for VoiceOver's rotor. The
+ * 'radiogroup' role marks a section of radios (STOCK, SORT) as one semantic
+ * group; on iOS VoiceOver does not announce the group, and it reads each row
+ * as "radio button" with its checked state.
  */
 function Section({
   label,
