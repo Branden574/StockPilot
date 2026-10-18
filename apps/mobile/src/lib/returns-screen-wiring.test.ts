@@ -77,7 +77,10 @@ describe('the create sheet and the order screen (returns review)', () => {
     expect(order).toContain('const returnSheetLayout = exceptionSheetLayout(');
     expect(order).toContain('const returnRowsStacked = shouldStackRow(fontScale);');
     expect(sheet).toContain("flexDirection: returnRowsStacked ? 'column' : 'row'");
-    expect(sheet).toContain('minWidth: MIN_TAP,\n                      minHeight: MIN_TAP,');
+    // Re-pinned by the redesign (P5.7a, layout only): the sheet now sits in
+    // the keyboard-avoiding wrapper, one level deeper, so the stepper's two
+    // minimums are matched across any indentation (same claim).
+    expect(sheet).toMatch(/minWidth: MIN_TAP,\n\s+minHeight: MIN_TAP,/);
     expect(sheet).not.toMatch(/width: 32,\s+height: 32/);
     expect(sheet).toContain('{ height: undefined, minHeight: 44, paddingVertical: 10 }');
     // The help scrolls with the lines instead of pushing the header off screen.

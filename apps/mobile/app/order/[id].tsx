@@ -26,6 +26,7 @@ import {
   ScrollView,
   StyleSheet,
   Switch,
+  Text,
   TextInput,
   useWindowDimensions,
   View,
@@ -65,8 +66,16 @@ import {
 
 import { CachedImage } from '@/components/ui/cached-image';
 import { Card } from '@/components/ui/card';
+import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import {
+  PHOTO_BACKGROUND,
+  buttonTone,
+  meterColor,
+  meterTrack,
+  toggleTone,
+} from '@/components/ui/tones';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { resizeForUpload } from '@/lib/image-resize';
@@ -95,6 +104,7 @@ import {
   replacementGateLine,
   replacementHeldNow,
   replacementPickBlocked,
+  returnStatusTone,
   type MobileOrderReplacement,
 } from '@/lib/returns-view';
 import { ReplacementPickerList } from '@/components/replacement-picker-list';
@@ -250,7 +260,7 @@ import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { UploadBatchProgress, uploadFileToBucket } from '@/lib/storage-upload';
 import { supabase } from '@/lib/supabase';
 import { useWorkspace } from '@/lib/use-workspace';
-import { ACCENT, capTo, FONT, TYPE_CEILING } from '@/lib/theme';
+import { capTo, FONT, TYPE_CEILING } from '@/lib/theme';
 import { MIN_TAP } from '@/components/item-verification-card';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';
@@ -455,6 +465,14 @@ export default function OrderDetail() {
   const router = useRouter();
   const { user } = useAuth();
   const { c, mode } = useTheme();
+  // The shared outline button (tones.ts buttonTone): the card fill in the
+  // stronger border, for this screen's secondary actions and chips.
+  const outlineTone = buttonTone('outline', c);
+  const outlineButton = {
+    backgroundColor: outlineTone.bg,
+    borderWidth: 1,
+    borderColor: outlineTone.border,
+  };
 
   const { activeOrgId: orgId, activeRole: role } = useWorkspace();
   const [loadedOrder, setOrder] = React.useState<OrderHeader | null>(null);
@@ -526,7 +544,14 @@ export default function OrderDetail() {
   // line rows stacked at large text (the exception sheets' layout).
   const { height: windowHeight, fontScale } = useWindowDimensions();
   const sheetInsets = useSafeAreaInsets();
-  const returnSheetLayout = exceptionSheetLayout({ windowHeight, availableHeight: null, topInset: sheetInsets.top });
+  // The space the keyboard-avoiding wrapper leaves, measured (null before
+  // the first layout pass), so the sheet never runs under the keyboard.
+  const [returnAvailableHeight, setReturnAvailableHeight] = React.useState<number | null>(null);
+  const returnSheetLayout = exceptionSheetLayout({
+    windowHeight,
+    availableHeight: returnAvailableHeight,
+    topInset: sheetInsets.top,
+  });
   const returnRowsStacked = shouldStackRow(fontScale);
   const [returnDraft, setReturnDraft] = React.useState<Record<string, ReturnDraftLine>>({});
   const [returnReason, setReturnReason] = React.useState<ReturnReasonCode | null>(null);
@@ -2054,7 +2079,7 @@ export default function OrderDetail() {
   ) : null;
   const stockNotice = stockGates.notice ? (
     <View style={{ gap: 8 }}>
-      <Body size={12} color={ACCENT.warn}>
+      <Body size={12} color={c.warnText}>
         {stockGates.notice}
       </Body>
       {stockGates.canRetry ? (
@@ -2063,17 +2088,12 @@ export default function OrderDetail() {
           disabled={retrying}
           accessibilityRole="button"
           accessibilityState={{ disabled: retrying }}
-          style={[
-            styles.addBtn,
-            { borderWidth: 1, borderColor: c.hair, opacity: retrying ? 0.5 : 1 },
-          ]}
+          style={[styles.addBtn, { ...outlineButton, opacity: retrying ? 0.5 : 1 }]}
         >
           {retrying ? (
             <ActivityIndicator color={c.ink} />
           ) : (
-            <Mono size={13} color={c.ink}>
-              Try again
-            </Mono>
+            <Text style={[styles.actionLabel, { color: c.ink }]}>Try again</Text>
           )}
         </Pressable>
       ) : null}
@@ -2238,8 +2258,14 @@ export default function OrderDetail() {
       : offline && !WORKS_OFFLINE.has(busyKey)
         ? READINESS_NEEDS_CONNECTION_COPY
         : undefined;
-    const bg = tone === 'primary' ? c.ink : tone === 'danger' ? '#b42318' : 'transparent';
-    const fg = tone === 'default' ? c.ink : tone === 'danger' ? '#fff' : c.paper;
+    // The shared button tones (tones.ts buttonTone, DESIGN-SPEC 6.2): the
+    // ink fill for the step that commits the work in front of you, the
+    // outline for every other action, and a refusal (Deny, Reopen picking,
+    // Cancel) as the outline with its words in the per-mode refusal ink,
+    // never a full red bar.
+    const tones = buttonTone(tone === 'primary' ? 'primary' : 'outline', c);
+    const bg = tones.bg;
+    const fg = tone === 'danger' ? c.critText : tones.fg;
     return (
       <Pressable
         key={label}
@@ -2253,7 +2279,7 @@ export default function OrderDetail() {
           {
             backgroundColor: bg,
             borderWidth: 1,
-            borderColor: tone === 'default' ? c.hair : 'transparent',
+            borderColor: tones.border,
             opacity: disabled || (acting !== null && !isBusy) ? 0.5 : 1,
           },
         ]}
@@ -2261,9 +2287,7 @@ export default function OrderDetail() {
         {isBusy ? (
           <ActivityIndicator color={fg} />
         ) : (
-          <Mono size={13} color={fg} style={{ flexShrink: 1, textAlign: 'center' }}>
-            {label}
-          </Mono>
+          <Text style={[styles.actionLabel, { color: fg }]}>{label}</Text>
         )}
       </Pressable>
     );
@@ -2510,10 +2534,14 @@ export default function OrderDetail() {
             accessibilityState={{ disabled: retrying }}
             style={[
               styles.addBtn,
-              { marginTop: 16, borderWidth: 1, borderColor: c.hair, opacity: retrying ? 0.5 : 1 },
+              { marginTop: 16, ...outlineButton, opacity: retrying ? 0.5 : 1 },
             ]}
           >
-            {retrying ? <ActivityIndicator color={c.ink} /> : <Mono size={13} color={c.ink}>Try again</Mono>}
+            {retrying ? (
+              <ActivityIndicator color={c.ink} />
+            ) : (
+              <Text style={[styles.actionLabel, { color: c.ink }]}>Try again</Text>
+            )}
           </Pressable>
         </View>
       ) : !order ? (
@@ -2539,9 +2567,9 @@ export default function OrderDetail() {
             <Display size={30} style={{ marginTop: 10 }}>
               {order.requester ?? 'Order'}
             </Display>
-            <Mono size={11.5} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
+            <Body size={13} color={c.ink3} style={{ marginTop: 4 }}>
               {[order.orgLabel, order.warehouseName].filter(Boolean).join(' · ') || '—'}
-            </Mono>
+            </Body>
           </View>
 
           {/* RX-2: an exchange replacement says which RMA it belongs to, the
@@ -2568,7 +2596,6 @@ export default function OrderDetail() {
                       onPress={() => router.push(`/returns/${order.replacement!.returnId}` as Href)}
                       accessibilityRole="link"
                       accessibilityLabel={t.text}
-                      hitSlop={6}
                       style={{ minHeight: MIN_TAP, justifyContent: 'center' }}
                     >
                       <Body size={14} color={c.ink} style={{ textDecorationLine: 'underline' }}>
@@ -2586,7 +2613,6 @@ export default function OrderDetail() {
                     onPress={() => router.push(`/returns/${order.replacement!.returnId}` as Href)}
                     accessibilityRole="link"
                     accessibilityLabel={changeInRmaLabel(order.replacement)}
-                    hitSlop={6}
                     style={{ minHeight: MIN_TAP, justifyContent: 'center' }}
                   >
                     <Body size={14} color={c.ink} style={{ textDecorationLine: 'underline' }}>
@@ -2604,7 +2630,7 @@ export default function OrderDetail() {
             <Card padding={14}>
               <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
                 <View style={{ paddingTop: 3 }}>
-                  <WifiOff size={16} color={ACCENT.warn} strokeWidth={1.8} />
+                  <WifiOff size={16} color={c.warnText} strokeWidth={1.8} />
                 </View>
                 <Body size={13.5} color={c.ink} accessibilityRole="alert" style={{ flex: 1 }}>
                   {readinessOfflineCopy(orderViewAsOf(order.readiness, order.receivedAt), {
@@ -2631,11 +2657,14 @@ export default function OrderDetail() {
 
           {totalOwed > 0 && (totalFulfilled > 0 || order.status === 'backordered') ? (
             <Card padding={14}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Body size={13} color="#b45309">
+              {/* The warning's words and bar in the per-mode warning ink
+                  (tones.ts meterColor 'warn' on the meter track, hair2): the
+                  fixed amber read 3.5:1 on the light card. */}
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                <Body size={13} color={c.warnText} style={{ flexShrink: 1 }}>
                   {order.status === 'backordered' ? 'Backordered — awaiting stock' : 'Partially fulfilled'}
                 </Body>
-                <Mono size={11} color="#b45309">
+                <Mono size={11.5} color={c.warnText}>
                   {totalFulfilled} / {totalRequested} · {totalOwed} owed
                 </Mono>
               </View>
@@ -2644,7 +2673,7 @@ export default function OrderDetail() {
                   marginTop: 10,
                   height: 6,
                   borderRadius: 999,
-                  backgroundColor: c.hair,
+                  backgroundColor: meterTrack(c),
                   overflow: 'hidden',
                 }}
               >
@@ -2652,7 +2681,7 @@ export default function OrderDetail() {
                   style={{
                     height: '100%',
                     borderRadius: 999,
-                    backgroundColor: '#f59e0b',
+                    backgroundColor: meterColor('warn', c),
                     width: `${totalRequested > 0 ? Math.round((totalFulfilled / totalRequested) * 100) : 0}%`,
                   }}
                 />
@@ -2662,12 +2691,12 @@ export default function OrderDetail() {
                   sentence is the only one that names an action, so it rides
                   inside the same card rather than opening a second one. */}
               {shortfallNotice ? (
-                <Body size={12} color="#b45309" style={{ marginTop: 10 }}>
+                <Body size={12.5} color={c.warnText} style={{ marginTop: 10 }}>
                   {shortfallNotice}
                 </Body>
               ) : null}
               {shortLinesFinalNote ? (
-                <Body size={12} color="#b45309" style={{ marginTop: 6 }}>
+                <Body size={12.5} color={c.warnText} style={{ marginTop: 6 }}>
                   {shortLinesFinalNote}
                 </Body>
               ) : null}
@@ -2680,16 +2709,16 @@ export default function OrderDetail() {
           {shortfallNotice != null &&
           !(totalOwed > 0 && (totalFulfilled > 0 || order.status === 'backordered')) ? (
             <Card padding={14}>
-              <Body size={13} color={ACCENT.warn}>
+              <Body size={13} color={c.warnText}>
                 {UNPICKED_SHORTFALL_TITLE}
               </Body>
-              <Mono size={11} color={ACCENT.warn} style={{ marginTop: 4 }}>
+              <Body size={12.5} color={c.warnText} style={{ marginTop: 4 }}>
                 {shortfallNotice}
-              </Mono>
+              </Body>
               {shortLinesFinalNote ? (
-                <Mono size={11} color={ACCENT.warn} style={{ marginTop: 6 }}>
+                <Body size={12.5} color={c.warnText} style={{ marginTop: 6 }}>
                   {shortLinesFinalNote}
-                </Mono>
+                </Body>
               ) : null}
             </Card>
           ) : null}
@@ -2751,13 +2780,13 @@ export default function OrderDetail() {
                 status: order.status,
               }) ? (
                 <Card padding={14}>
-                  <Body size={13} color={ACCENT.warn}>
+                  <Body size={13} color={c.warnText}>
                     Pick slip out of date
                   </Body>
-                  <Mono size={11} color={ACCENT.warn} style={{ marginTop: 4 }}>
+                  <Body size={12.5} color={c.warnText} style={{ marginTop: 4 }}>
                     Items were added after it was printed. Generate the pick slip again before
                     picking.
-                  </Mono>
+                  </Body>
                 </Card>
               ) : null}
               {/* Returned units, stated as a LATER event beside the shipped
@@ -2779,15 +2808,15 @@ export default function OrderDetail() {
                       {formatOrderReturnSummary(returnSummary)}
                     </Mono>
                   </View>
-                  <Mono size={10.5} color={c.ink4} style={{ marginTop: 6 }}>
+                  <Body size={12} color={c.ink3} style={{ marginTop: 6 }}>
                     {ORDER_RETURN_SUMMARY_NOTE}
-                  </Mono>
+                  </Body>
                 </Card>
               ) : null}
               {order.lines.length === 0 ? (
-                <Mono size={11} color={c.ink4}>
+                <Body size={13} color={c.ink3}>
                   This order has no items yet.
-                </Mono>
+                </Body>
               ) : (
                 <Card padding={0}>
                   {order.lines.map((l, i) => {
@@ -2856,7 +2885,7 @@ export default function OrderDetail() {
                               {l.name}
                             </Body>
                             {l.sku ? (
-                              <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 2 }}>
+                              <Mono size={11.5} color={c.ink3} style={{ marginTop: 2 }}>
                                 {l.sku}
                               </Mono>
                             ) : null}
@@ -2876,17 +2905,16 @@ export default function OrderDetail() {
                                   paddingHorizontal: 6,
                                   paddingVertical: 1,
                                   borderRadius: 999,
-                                  backgroundColor: ACCENT.mintSoft,
+                                  // The accent tone's pill (tones.ts pillTone
+                                  // 'ok'): the per-mode accent on its wash.
+                                  backgroundColor: c.accentWash,
                                 }}
                               >
-                                <Landmark
-                                  size={10}
-                                  color={mode === 'dark' ? ACCENT.mintInkDark : ACCENT.mintInk}
-                                />
+                                <Landmark size={10} color={c.accent} />
                                 <Mono
                                   size={10}
                                   tracking={0.02}
-                                  color={mode === 'dark' ? ACCENT.mintInkDark : ACCENT.mintInk}
+                                  color={c.accent}
                                   numberOfLines={1}
                                   style={{ flexShrink: 1 }}
                                 >
@@ -2908,15 +2936,15 @@ export default function OrderDetail() {
                                 later event. Amber only while units are OWED. */}
                             {lineSubline ? (
                               <Mono
-                                size={10.5}
-                                color={l.fulfilled > 0 && l.fulfilled < l.requested ? '#b45309' : c.ink4}
+                                size={11.5}
+                                color={l.fulfilled > 0 && l.fulfilled < l.requested ? c.warnText : c.ink3}
                                 style={{ marginTop: 2 }}
                               >
                                 {lineSubline}
                               </Mono>
                             ) : null}
                             {editable ? (
-                              <Mono size={10} tracking={0.08} upper color={c.ink4} style={{ marginTop: 3 }}>
+                              <Mono size={10.5} tracking={0.08} upper color={c.ink3} style={{ marginTop: 3 }}>
                                 Edit
                               </Mono>
                             ) : null}
@@ -2948,16 +2976,16 @@ export default function OrderDetail() {
                 </Card>
               )}
               {canEditItems && order.lines.length > 0 && !offline ? (
-                <Mono size={10.5} color={c.ink4}>
+                <Body size={12} color={c.ink3}>
                   Tap a line to change its quantity or take it off the order.
-                </Mono>
+                </Body>
               ) : null}
               {canAddItems ? (
                 <>
                   {actionBtn('Add items', 'add-items', () => setAddOpen(true), 'default')}
-                  <Mono size={10.5} color={c.ink4}>
+                  <Body size={12} color={c.ink3}>
                     Items already on this order are topped up rather than listed twice.
-                  </Mono>
+                  </Body>
                 </>
               ) : null}
               {canEditItems || canAddItems ? connectionNotice : null}
@@ -2969,6 +2997,9 @@ export default function OrderDetail() {
               <Eyebrow>PICKING</Eyebrow>
               {/* Picker chip: unassigned, you, a named picker, or an anonymous
                   other (when only the id is readable). */}
+              {/* The reference's outline chip (the stronger border); the dot
+                  is the per-mode accent once a picker has it (9.91:1 dark,
+                  5.53:1 light on the card), the decoration ink before. */}
               <View
                 style={{
                   alignSelf: 'flex-start',
@@ -2976,7 +3007,7 @@ export default function OrderDetail() {
                   alignItems: 'center',
                   gap: 7,
                   borderWidth: 1,
-                  borderColor: c.hair,
+                  borderColor: c.hair2,
                   borderRadius: 999,
                   paddingHorizontal: 12,
                   paddingVertical: 6,
@@ -2988,10 +3019,12 @@ export default function OrderDetail() {
                     width: 7,
                     height: 7,
                     borderRadius: 4,
-                    backgroundColor: order.assignedPickerId ? '#16a34a' : c.ink4,
+                    backgroundColor: order.assignedPickerId ? c.accent : c.ink4,
                   }}
                 />
-                <Mono size={11} color={c.ink}>{pickerLabel}</Mono>
+                <Mono size={11} color={c.ink}>
+                  {pickerLabel}
+                </Mono>
               </View>
 
               {/* Unclaimed + viewer is staff → claim before picking. */}
@@ -3024,9 +3057,9 @@ export default function OrderDetail() {
               ) : !canClaimPick &&
                 order.assignedPickerId !== null &&
                 order.assignedPickerId !== user?.id ? (
-                <Mono size={11.5} color={c.ink4}>
+                <Body size={13} color={c.ink3}>
                   This order is being picked by someone else.
-                </Mono>
+                </Body>
               ) : null}
 
               {/* Self-release by the picker, or a manager override/reassign
@@ -3041,9 +3074,9 @@ export default function OrderDetail() {
                 : null}
               {canClaimPick || canReleasePick ? connectionNotice : null}
 
-              <Mono size={10.5} color={c.ink4}>
+              <Body size={12} color={c.ink3}>
                 Same actions as the web dashboard — changes sync instantly.
-              </Mono>
+              </Body>
             </View>
           ) : null}
 
@@ -3058,7 +3091,7 @@ export default function OrderDetail() {
                   {/* A strict Approve would be refused: say so before the tap
                       (core approveShortNotice, the web page's words). */}
                   {approveNotice ? (
-                    <Body size={12} color={ACCENT.warn}>
+                    <Body size={12} color={c.warnText}>
                       {approveNotice}
                     </Body>
                   ) : null}
@@ -3156,7 +3189,7 @@ export default function OrderDetail() {
               {managerActions.backorderedActions ? (
                 <>
                   {replacementPickBlocked(order.replacement) ? null : stockGates.resume === 'waiting' ? (
-                    <Body size={12} color={c.ink4}>
+                    <Body size={12} color={c.ink3}>
                       Resume unlocks when owed items are back in stock.
                     </Body>
                   ) : (
@@ -3195,9 +3228,9 @@ export default function OrderDetail() {
                 </>
               ) : null}
               {connectionNotice}
-              <Mono size={10.5} color={c.ink4}>
+              <Body size={12} color={c.ink3}>
                 Same actions as the web dashboard — changes sync instantly.
-              </Mono>
+              </Body>
             </View>
           ) : null}
 
@@ -3221,25 +3254,25 @@ export default function OrderDetail() {
               {/* Interpolated from the SAME resolved recipients the draft was
                   composed with (per-org email routing), so this sentence can
                   never name mailboxes the mail does not go to. */}
-              <Mono size={10.5} color={c.ink4}>
+              <Body size={12} color={c.ink3}>
                 {recipientsHelperText(deliveryRecipients)}
-              </Mono>
-              <Mono size={10.5} color={c.ink4}>
+              </Body>
+              <Body size={12} color={c.ink3}>
                 {DR_HONESTY_NOTICE}
-              </Mono>
+              </Body>
 
               {/* Two mutually exclusive length states, both sourced from the
                   shared builder so the phone and the web page describe the
                   same draft in the same words. */}
               {shouldShowCondensedNotice(deliveryPrepared) ? (
-                <Mono size={10.5} color={c.ink4}>
+                <Body size={12} color={c.ink3}>
                   {condensedNoticeText(deliveryPrepared.draft)}
-                </Mono>
+                </Body>
               ) : null}
               {!deliveryPrepared.linkFits ? (
-                <Mono size={10.5} color={c.ink4}>
+                <Body size={12} color={c.ink3}>
                   {DR_OVERSIZED}
-                </Mono>
+                </Body>
               ) : null}
 
               {/* Deliberately one behind the confirm dialog's threshold, which
@@ -3248,15 +3281,15 @@ export default function OrderDetail() {
                   an off-by-one between them is invisible on screen until
                   someone mails DC4 twice. Both live in the tested module. */}
               {shouldWarnDuplicateDrafts(deliveryDraftCount) ? (
-                <Mono size={10.5} color={c.ink4}>
+                <Body size={12} color={c.ink3}>
                   {DR_DUPLICATE_WARNING}
-                </Mono>
+                </Body>
               ) : null}
 
               {deliveryResult?.outcome === 'opened' ? (
-                <Mono size={10.5} color={c.ink4}>
+                <Body size={12} color={c.ink3}>
                   {deliverySuccessMessageFor(deliveryResult.used)}
-                </Mono>
+                </Body>
               ) : null}
               {/* A blocked open and an oversized draft are different failures
                   with different remedies — the retry this card offers is
@@ -3264,12 +3297,12 @@ export default function OrderDetail() {
                   keeps them apart lives in the tested module, not here. */}
               {shouldShowBlockedNotice(deliveryPrepared, deliveryResult) ? (
                 <>
-                  <Mono size={10.5} color={c.ink4}>
+                  <Body size={12} color={c.ink3}>
                     {DR_BLOCKED_HEADLINE}
-                  </Mono>
-                  <Mono size={10.5} color={c.ink4}>
+                  </Body>
+                  <Body size={12} color={c.ink3}>
                     {DR_BLOCKED_RETRY}
-                  </Mono>
+                  </Body>
                 </>
               ) : null}
 
@@ -3371,11 +3404,14 @@ export default function OrderDetail() {
                     <Mono size={12} color={c.ink} numberOfLines={1} style={{ flexShrink: 1 }}>
                       {returnHandle(r)}
                     </Mono>
-                    <Mono size={10} tracking={0.08} upper color={c.ink4}>
-                      {returnStatusLabel(r.status)}
-                    </Mono>
+                    {/* The RMA's status on its tone's pill (the returns list's
+                        own tone rule, returns-view.ts returnStatusTone), in
+                        the same upper-case words as before. */}
+                    <Pill status={returnStatusTone(r.status)} dot={false}>
+                      {returnStatusLabel(r.status).toUpperCase()}
+                    </Pill>
                   </View>
-                  <Mono size={10.5} color={c.ink4} style={{ marginTop: 2 }}>
+                  <Mono size={11.5} color={c.ink3} style={{ marginTop: 2 }}>
                     {describeReturnMeta(r)}
                   </Mono>
                   {r.lines.map((rl, i) => (
@@ -3406,25 +3442,25 @@ export default function OrderDetail() {
                     </Body>
                   ) : null}
                   {canReadReturns ? (
-                    <Mono size={10.5} color={c.ink4} style={{ marginTop: 8 }}>
+                    <Body size={12.5} color={c.ink3} style={{ marginTop: 8 }}>
                       Open the return →
-                    </Mono>
+                    </Body>
                   ) : null}
                 </Card>
                 </Pressable>
               ))}
               {order.returns.length > 0 ? (
-                <Mono size={10.5} color={c.ink4}>
+                <Body size={12} color={c.ink3}>
                   A return is a later event — the shipped count above is never rewritten.
-                </Mono>
+                </Body>
               ) : null}
               {showCreateReturn ? (
                 <>
                   {actionBtn('Create return', 'create-return', openReturnSheet)}
                   {connectionNotice}
-                  <Mono size={10.5} color={c.ink4}>
+                  <Body size={12} color={c.ink3}>
                     {RETURNS_COPY.createReturnQueueNote}
-                  </Mono>
+                  </Body>
                 </>
               ) : null}
               {showRequesterReturn ? (
@@ -3437,16 +3473,18 @@ export default function OrderDetail() {
           ) : null}
 
           {order.hasSignature ? (
-            <Pressable onPress={() => setSigOpen(true)}>
+            // It opens the signature, so VoiceOver hears it as a button (it
+            // read the card's words with no role).
+            <Pressable onPress={() => setSigOpen(true)} accessibilityRole="button">
               <Card padding={14}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
                   <PenLine size={16} color={c.ink} strokeWidth={1.7} />
                   <View style={{ flex: 1 }}>
                     <Body size={14} color={c.ink}>View signature</Body>
-                    <Mono size={11} color={c.ink4} style={{ marginTop: 2 }}>
+                    <Body size={12.5} color={c.ink3} style={{ marginTop: 2 }}>
                       {order.signedByName ?? 'Signed'}
                       {order.signedAt ? ` · ${new Date(order.signedAt).toLocaleDateString()}` : ''}
-                    </Mono>
+                    </Body>
                   </View>
                 </View>
               </Card>
@@ -3463,26 +3501,30 @@ export default function OrderDetail() {
                     <Body size={14} color={c.ink}>
                       {[shipment.carrier, shipment.service].filter(Boolean).join(' · ') || 'Carrier'}
                     </Body>
-                    <Mono size={11} color={c.ink4}>
+                    <Body size={12.5} color={c.ink3}>
                       {SHIPMENT_STATUS_LABELS[shipment.status] ??
                         shipment.status.replace(/_/g, ' ')}
                       {shipment.tracking_status ? ` · ${shipment.tracking_status}` : ''}
-                    </Mono>
+                    </Body>
                     {shipment.tracking_code ? (
-                      <Mono size={11} color={c.ink3}>{`Tracking ${shipment.tracking_code}`}</Mono>
+                      <Mono size={11.5} color={c.ink3}>{`Tracking ${shipment.tracking_code}`}</Mono>
                     ) : null}
                     {shipment.tracking_url ? (
+                      // A link, in a 44pt frame VoiceOver outlines where a
+                      // finger can hit it (it was a hitSlop on a 15pt line,
+                      // with no role).
                       <Pressable
                         onPress={() =>
                           Linking.openURL(shipment.tracking_url as string).catch(() =>
                             Alert.alert('Could not open', 'Unable to open the tracking page.'),
                           )
                         }
-                        hitSlop={6}
+                        accessibilityRole="link"
+                        style={{ minHeight: MIN_TAP, justifyContent: 'center', alignSelf: 'flex-start' }}
                       >
-                        <Mono size={11} color={c.ink} style={{ textDecorationLine: 'underline' }}>
+                        <Body size={13} color={c.ink} style={{ textDecorationLine: 'underline' }}>
                           Track package
-                        </Mono>
+                        </Body>
                       </Pressable>
                     ) : null}
                   </View>
@@ -3502,26 +3544,37 @@ export default function OrderDetail() {
                   {KINDS.map((k) => {
                     const on = kind === k;
                     return (
+                      // A choice (the reference's filter chip, DESIGN-SPEC
+                      // 6.6): VoiceOver hears its name and whether it is the
+                      // kind the next proof saves as (it had no role or
+                      // state), in a 44pt frame (it was about 28pt).
                       <Pressable
                         key={k}
                         onPress={() => setKind(k)}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: on }}
                         style={{
-                          paddingHorizontal: 10,
+                          minHeight: MIN_TAP,
+                          justifyContent: 'center',
+                          paddingHorizontal: 12,
                           paddingVertical: 6,
-                          borderRadius: 8,
+                          borderRadius: 999,
                           borderWidth: 1,
-                          borderColor: on ? c.ink : c.hair,
+                          borderColor: on ? c.ink : c.hair2,
                           backgroundColor: on ? c.ink : 'transparent',
                         }}
                       >
-                        <Mono size={10.5} color={on ? c.paper : c.ink3}>
+                        <Body size={13} color={on ? c.paper : c.ink2} maxFontSizeMultiplier={CHIP_CAP}>
                           {KIND_LABELS[k]}
-                        </Mono>
+                        </Body>
                       </Pressable>
                     );
                   })}
                 </View>
                 <View style={{ flexDirection: 'row', gap: 10 }}>
+                  {/* The outline: the order's next step keeps the screen's
+                      one ink button (Collect signature is offered at the
+                      same statuses). */}
                   <Pressable
                     onPress={addProof}
                     disabled={uploading || offline}
@@ -3529,24 +3582,24 @@ export default function OrderDetail() {
                     accessibilityState={{ disabled: uploading || offline }}
                     style={[
                       styles.addBtn,
-                      { backgroundColor: c.ink, opacity: uploading || offline ? 0.6 : 1 },
+                      { ...outlineButton, opacity: uploading || offline ? 0.6 : 1 },
                     ]}
                   >
                     {uploading ? (
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                        <ActivityIndicator color={c.paper} />
+                        <ActivityIndicator color={c.ink} />
                         {uploadProgress ? (
-                          <Mono size={13} color={c.paper}>
+                          <Text style={[styles.actionLabel, { color: c.ink }]}>
                             {uploadProgress.total > 1
                               ? `Uploading ${uploadProgress.done}/${uploadProgress.total} · ${uploadProgress.percent}%`
                               : `Uploading… ${uploadProgress.percent}%`}
-                          </Mono>
+                          </Text>
                         ) : null}
                       </View>
                     ) : (
                       <>
-                        <Camera size={16} color={c.paper} strokeWidth={1.8} />
-                        <Mono size={13} color={c.paper}>Add proof</Mono>
+                        <Camera size={16} color={c.ink} strokeWidth={1.8} />
+                        <Text style={[styles.actionLabel, { color: c.ink }]}>Add proof</Text>
                       </>
                     )}
                   </Pressable>
@@ -3554,52 +3607,81 @@ export default function OrderDetail() {
                 {connectionNotice}
               </View>
             ) : (
-              <Mono size={11} color={c.ink4}>
+              <Body size={12.5} color={c.ink3}>
                 {isManager
                   ? 'Available once the order is out for delivery or completed.'
                   : 'Managers can add proof of delivery here.'}
-              </Mono>
+              </Body>
             )}
 
             {attachments.length === 0 && attachmentsError ? (
-              <Pressable onPress={() => void loadAttachments()}>
-                <Mono size={11} color="#b42318" style={{ marginTop: 4 }}>
+              // A tap tries again, so VoiceOver hears a button (it had no
+              // role), in a 44pt frame; the words in the per-mode refusal ink.
+              <Pressable
+                onPress={() => void loadAttachments()}
+                accessibilityRole="button"
+                style={{ minHeight: MIN_TAP, justifyContent: 'center' }}
+              >
+                <Body size={12.5} color={c.critText}>
                   {`Couldn’t load attachments — tap to retry. (${attachmentsError})`}
-                </Mono>
+                </Body>
               </Pressable>
             ) : attachments.length === 0 ? (
-              <Mono size={11} color={c.ink4} style={{ marginTop: 4 }}>No attachments yet.</Mono>
+              <Body size={12.5} color={c.ink3} style={{ marginTop: 4 }}>
+                No attachments yet.
+              </Body>
             ) : (
               <View style={styles.grid}>
                 {attachments.map((a) => {
                   const isImage = (a.contentType ?? '').startsWith('image/');
                   return (
                     <View key={a.id} style={[styles.tile, { borderColor: c.hair, backgroundColor: c.card }]}>
-                      <Pressable onPress={() => openAttachment(a)}>
+                      {/* Opens the photo or the file: a button named by the
+                          proof's kind (it had no role or name, so a photo
+                          tile read nothing). A photo sits on white in both
+                          modes (DESIGN-SPEC 6.14), a file on the recessed
+                          fill. */}
+                      <Pressable
+                        onPress={() => openAttachment(a)}
+                        accessibilityRole="button"
+                        accessibilityLabel={KIND_LABELS[a.kind] ?? 'Other'}
+                      >
                         {isImage && a.url ? (
-                          <CachedImage uri={a.url} style={styles.tileImg} recyclingKey={a.id} />
+                          <CachedImage
+                            uri={a.url}
+                            style={[styles.tileImg, { backgroundColor: PHOTO_BACKGROUND }]}
+                            recyclingKey={a.id}
+                          />
                         ) : (
-                          <View style={[styles.tileImg, { alignItems: 'center', justifyContent: 'center', gap: 4 }]}>
-                            <ImagePlus size={20} color={c.ink4} />
-                            <Mono size={9} color={c.ink4}>Open</Mono>
+                          <View
+                            style={[
+                              styles.tileImg,
+                              { alignItems: 'center', justifyContent: 'center', gap: 4, backgroundColor: c.sunk },
+                            ]}
+                          >
+                            <ImagePlus size={20} color={c.ink3} />
+                            <Body size={11.5} color={c.ink3}>
+                              Open
+                            </Body>
                           </View>
                         )}
                       </Pressable>
                       <View style={styles.tileFoot}>
-                        <Mono size={9.5} color={c.ink4} numberOfLines={1} style={{ flex: 1 }}>
+                        <Body size={11.5} color={c.ink3} numberOfLines={1} style={{ flex: 1 }}>
                           {KIND_LABELS[a.kind] ?? 'Other'}
-                        </Mono>
+                        </Body>
                         {isManager ? (
+                          // A 44pt frame VoiceOver outlines where a finger
+                          // can hit it (it was a 14pt icon with a hitSlop).
                           <Pressable
                             onPress={() => void deleteAttachment(a)}
                             disabled={offline}
                             accessibilityRole="button"
                             accessibilityLabel="Delete attachment"
                             accessibilityState={{ disabled: offline }}
-                            style={{ opacity: offline ? 0.4 : 1 }}
-                            hitSlop={8}
+                            style={[styles.tileDelete, { opacity: offline ? 0.4 : 1 }]}
                           >
-                            <Trash2 size={14} color={c.ink4} />
+                            <Trash2 size={16} color={c.ink2} />
                           </Pressable>
                         ) : null}
                       </View>
@@ -3661,21 +3743,31 @@ export default function OrderDetail() {
           >
             <View style={{ backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 }}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>Customer signature</Body>
+                <Body
+                  size={15}
+                  color={c.ink}
+                  accessibilityRole="header"
+                  style={{ flex: 1, fontFamily: FONT.display }}
+                >
+                  Customer signature
+                </Body>
+                {/* A 44pt frame (it was an 18pt X with a hitSlop). */}
                 <Pressable
                   onPress={() => setSigOpen(false)}
-                  hitSlop={8}
                   accessibilityRole="button"
                   accessibilityLabel="Close"
+                  style={styles.closeFrame}
                 >
-                  <X size={18} color={c.ink4} />
+                  <X size={18} color={c.ink2} />
                 </Pressable>
               </View>
               {sigLoading ? (
                 <View style={{ height: 180, alignItems: 'center', justifyContent: 'center' }}>
-                  <ActivityIndicator color={c.ink4} />
+                  <ActivityIndicator color={c.ink3} />
                 </View>
               ) : sigUrl ? (
+                // The signature stays on white in both modes: it was drawn
+                // dark on the white pad, and prints the same on the slip.
                 <View style={{ backgroundColor: '#fff', borderRadius: 8, padding: 8 }}>
                   <Image
                     source={{ uri: sigUrl }}
@@ -3684,10 +3776,10 @@ export default function OrderDetail() {
                   />
                 </View>
               ) : null}
-              <Mono size={11} color={c.ink4}>
+              <Body size={12.5} color={c.ink3}>
                 {order?.signedByName ?? 'Signed'}
                 {order?.signedAt ? ` · ${new Date(order.signedAt).toLocaleString()}` : ''}
-              </Mono>
+              </Body>
             </View>
           </View>
         </View>
@@ -3699,8 +3791,12 @@ export default function OrderDetail() {
         animationType="fade"
         onRequestClose={() => setViewerUrl(null)}
       >
+        {/* The photo viewer stays dark in both modes (a photo reads best on
+            black, as the camera screens do). A tap anywhere closes it, so
+            VoiceOver hears a button named by its own words. */}
         <Pressable
           onPress={() => setViewerUrl(null)}
+          accessibilityRole="button"
           style={{
             flex: 1,
             alignItems: 'center',
@@ -3735,9 +3831,9 @@ export default function OrderDetail() {
               />
             </View>
           ) : null}
-          <Mono size={11} color="rgba(255,255,255,0.7)" style={{ marginTop: 16 }}>
+          <Body size={12.5} color="rgba(255,255,255,0.7)" style={{ marginTop: 16 }}>
             Tap anywhere to close
-          </Mono>
+          </Body>
         </Pressable>
       </Modal>
 
@@ -3761,33 +3857,37 @@ export default function OrderDetail() {
             pointerEvents="box-none"
           >
             <View style={{ backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 }}>
-              <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>Deny this request?</Body>
-              <Mono size={11} color={c.ink4}>The requester is notified with the reason you provide.</Mono>
+              <Body
+                size={15}
+                color={c.ink}
+                accessibilityRole="header"
+                style={{ fontFamily: FONT.display }}
+              >
+                Deny this request?
+              </Body>
+              <Body size={13} color={c.ink3}>
+                The requester is notified with the reason you provide.
+              </Body>
               <TextInput
                 value={denyReason}
                 onChangeText={setDenyReason}
                 placeholder="Reason"
-                placeholderTextColor={c.ink4}
+                placeholderTextColor={c.ink3}
                 multiline
-                style={{
-                  minHeight: 72,
-                  borderWidth: 1,
-                  borderColor: c.hair,
-                  borderRadius: 10,
-                  padding: 10,
-                  color: c.ink,
-                  fontFamily: FONT.mono,
-                  fontSize: 13,
-                  textAlignVertical: 'top',
-                }}
+                style={[
+                  styles.reasonInput,
+                  { borderColor: c.hair2, backgroundColor: c.card, color: c.ink },
+                ]}
               />
+              {/* Cancel is the outline; Deny the outline with its words in the
+                  per-mode refusal ink (never a full red bar). */}
               <View style={{ flexDirection: 'row', gap: 10, justifyContent: 'flex-end' }}>
                 <Pressable
                   onPress={dismissDenyModal}
                   accessibilityRole="button"
-                  style={[styles.addBtn, { backgroundColor: 'transparent', borderWidth: 1, borderColor: c.hair, paddingHorizontal: 18 }]}
+                  style={[styles.addBtn, { ...outlineButton, paddingHorizontal: 18 }]}
                 >
-                  <Mono size={13} color={c.ink}>Cancel</Mono>
+                  <Text style={[styles.actionLabel, { color: c.ink }]}>Cancel</Text>
                 </Pressable>
                 <Pressable
                   onPress={() => void submitDeny()}
@@ -3795,10 +3895,10 @@ export default function OrderDetail() {
                   accessibilityRole="button"
                   style={[
                     styles.addBtn,
-                    { backgroundColor: '#b42318', paddingHorizontal: 18, opacity: acting !== null ? 0.5 : 1 },
+                    { ...outlineButton, paddingHorizontal: 18, opacity: acting !== null ? 0.5 : 1 },
                   ]}
                 >
-                  <Mono size={13} color="#fff">Deny</Mono>
+                  <Text style={[styles.actionLabel, { color: c.critText }]}>Deny</Text>
                 </Pressable>
               </View>
             </View>
@@ -3835,8 +3935,15 @@ export default function OrderDetail() {
             pointerEvents="box-none"
           >
             <View style={{ backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 }}>
-              <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>Reopen picking?</Body>
-              <Mono size={11} color={c.ink4} style={{ lineHeight: 16 }}>
+              <Body
+                size={15}
+                color={c.ink}
+                accessibilityRole="header"
+                style={{ fontFamily: FONT.display }}
+              >
+                Reopen picking?
+              </Body>
+              <Body size={13} color={c.ink3}>
                 Sends this order back to picking so the count can be corrected. The picked
                 quantities and the assigned picker are kept, but the stock that was picked returns
                 to Unplaced — not necessarily its original rack — and will need to be put away
@@ -3845,32 +3952,25 @@ export default function OrderDetail() {
                   ? ' The already-generated packing slip will be voided; a new one must be printed after picking finishes.'
                   : ''}{' '}
                 A signed order can&apos;t be reopened. This is recorded in the audit log.
-              </Mono>
+              </Body>
               <TextInput
                 value={reopenReason}
                 onChangeText={setReopenReason}
                 placeholder="Why is this being reopened? (e.g. miscount on line 3)"
-                placeholderTextColor={c.ink4}
+                placeholderTextColor={c.ink3}
                 multiline
-                style={{
-                  minHeight: 72,
-                  borderWidth: 1,
-                  borderColor: c.hair,
-                  borderRadius: 10,
-                  padding: 10,
-                  color: c.ink,
-                  fontFamily: FONT.mono,
-                  fontSize: 13,
-                  textAlignVertical: 'top',
-                }}
+                style={[
+                  styles.reasonInput,
+                  { borderColor: c.hair2, backgroundColor: c.card, color: c.ink },
+                ]}
               />
               <View style={{ flexDirection: 'row', gap: 10, justifyContent: 'flex-end' }}>
                 <Pressable
                   onPress={dismissReopenModal}
                   accessibilityRole="button"
-                  style={[styles.addBtn, { backgroundColor: 'transparent', borderWidth: 1, borderColor: c.hair, paddingHorizontal: 18 }]}
+                  style={[styles.addBtn, { ...outlineButton, paddingHorizontal: 18 }]}
                 >
-                  <Mono size={13} color={c.ink}>Cancel</Mono>
+                  <Text style={[styles.actionLabel, { color: c.ink }]}>Cancel</Text>
                 </Pressable>
                 <Pressable
                   onPress={() => void reopenPicking()}
@@ -3879,13 +3979,13 @@ export default function OrderDetail() {
                   style={[
                     styles.addBtn,
                     {
-                      backgroundColor: '#b42318',
+                      ...outlineButton,
                       paddingHorizontal: 18,
                       opacity: reopenReason.trim() && acting === null ? 1 : 0.5,
                     },
                   ]}
                 >
-                  <Mono size={13} color="#fff">Reopen picking</Mono>
+                  <Text style={[styles.actionLabel, { color: c.critText }]}>Reopen picking</Text>
                 </Pressable>
               </View>
             </View>
@@ -3923,325 +4023,361 @@ export default function OrderDetail() {
          * something else took the responder first. Do not re-nest this card
          * inside the scrim. See add-order-items-sheet.tsx.
          */}
-        <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-          <Pressable
-            onPress={() => {
+        {/* The shared sheet shape for VoiceOver (it had none): the container
+            keeps VoiceOver inside and the escape scrub closes it; the scrim
+            is a "Close" button that a double-tap closes. None of them closes
+            while the return is being sent. The keyboard-avoiding wrapper the
+            other sheets use, with the space it leaves measured (it had none:
+            NOTES, low in the bottom-anchored sheet, and Submit return sat
+            under the keyboard, and the scrim above it closed the sheet). */}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={{ flex: 1 }}
+        >
+          <View
+            accessibilityViewIsModal
+            onAccessibilityEscape={() => {
               if (!returnSubmitting) setReturnOpen(false);
             }}
-            style={[
-              StyleSheet.absoluteFill,
-              {
-                backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)',
-              },
-            ]}
-          />
-          <View
-            style={{
-              backgroundColor: c.card,
-              borderTopLeftRadius: 18,
-              borderTopRightRadius: 18,
-              padding: 18,
-              gap: 12,
-              maxHeight: returnSheetLayout.sheetMaxHeight,
-            }}
+            onLayout={(e) => setReturnAvailableHeight(e.nativeEvent.layout.height)}
+            style={{ flex: 1, justifyContent: 'flex-end' }}
           >
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-              <Body
-                size={15}
-                color={c.ink}
-                accessibilityRole="header"
-                maxFontSizeMultiplier={capTo(15, TYPE_CEILING.display)}
-                style={{ fontFamily: FONT.display, flex: 1 }}
-              >
-                Create return
-              </Body>
-              <Pressable
-                onPress={() => {
-                  if (!returnSubmitting) setReturnOpen(false);
-                }}
-                disabled={returnSubmitting}
-                hitSlop={8}
-                accessibilityRole="button"
-                accessibilityLabel="Close"
-                accessibilityState={{ disabled: returnSubmitting }}
-                style={{ minWidth: MIN_TAP, minHeight: MIN_TAP, alignItems: 'flex-end', justifyContent: 'center' }}
-              >
-                <X size={18} color={c.ink4} />
-              </Pressable>
-            </View>
-
-            <ScrollView
-              // At large text the body takes all the room the bounded sheet
-              // leaves (it shrinks to fit between the header and Submit).
-              style={{ maxHeight: returnRowsStacked ? undefined : Math.max(returnSheetLayout.bodyMaxHeight, 380), flexShrink: 1 }}
-              contentContainerStyle={{ gap: 12 }}
+            <Pressable
+              onPress={() => {
+                if (!returnSubmitting) setReturnOpen(false);
+              }}
+              onAccessibilityTap={() => {
+                if (!returnSubmitting) setReturnOpen(false);
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Close"
+              style={[
+                StyleSheet.absoluteFill,
+                {
+                  backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)',
+                },
+              ]}
+            />
+            <View
+              style={{
+                backgroundColor: c.card,
+                borderTopLeftRadius: 18,
+                borderTopRightRadius: 18,
+                padding: 18,
+                gap: 12,
+                maxHeight: returnSheetLayout.sheetMaxHeight,
+              }}
             >
-              <Mono size={11} color={c.ink4}>
-                {RETURNS_COPY.createReturnHelp}
-              </Mono>
-              {orderReturnable.map((l) => {
-                const d = returnDraft[l.orderRequestLineId] ?? {
-                  quantity: 0,
-                  disposition: 'restock' as const,
-                };
-                const stepBtn = (label: string, delta: number, disabled: boolean) => (
-                  <Pressable
-                    onPress={() => stepReturnQty(l.orderRequestLineId, delta, l.quantityRemaining)}
-                    disabled={disabled}
-                    hitSlop={6}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${delta < 0 ? 'Return one fewer' : 'Return one more'} ${l.name}`}
-                    accessibilityState={{ disabled }}
-                    style={{
-                      minWidth: MIN_TAP,
-                      minHeight: MIN_TAP,
-                      paddingHorizontal: 8,
-                      borderRadius: 8,
-                      borderWidth: 1,
-                      borderColor: c.hair,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      opacity: disabled ? 0.35 : 1,
-                    }}
-                  >
-                    <Mono size={15} color={c.ink} maxFontSizeMultiplier={capTo(15, TYPE_CEILING.control)}>
-                      {label}
-                    </Mono>
-                  </Pressable>
-                );
-                return (
-                  <View
-                    key={l.orderRequestLineId}
-                    style={{ gap: 8, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: c.hair }}
-                  >
-                    <View
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+                <Body
+                  size={15}
+                  color={c.ink}
+                  accessibilityRole="header"
+                  maxFontSizeMultiplier={capTo(15, TYPE_CEILING.display)}
+                  style={{ fontFamily: FONT.display, flex: 1 }}
+                >
+                  Create return
+                </Body>
+                <Pressable
+                  onPress={() => {
+                    if (!returnSubmitting) setReturnOpen(false);
+                  }}
+                  disabled={returnSubmitting}
+                  accessibilityRole="button"
+                  accessibilityLabel="Close"
+                  accessibilityState={{ disabled: returnSubmitting }}
+                  style={styles.closeFrame}
+                >
+                  <X size={18} color={c.ink2} />
+                </Pressable>
+              </View>
+
+              <ScrollView
+                // At large text the body takes all the room the bounded sheet
+                // leaves (it shrinks to fit between the header and Submit).
+                style={{ maxHeight: returnRowsStacked ? undefined : Math.max(returnSheetLayout.bodyMaxHeight, 380), flexShrink: 1 }}
+                contentContainerStyle={{ gap: 12 }}
+              >
+                <Body size={12.5} color={c.ink3}>
+                  {RETURNS_COPY.createReturnHelp}
+                </Body>
+                {orderReturnable.map((l) => {
+                  const d = returnDraft[l.orderRequestLineId] ?? {
+                    quantity: 0,
+                    disposition: 'restock' as const,
+                  };
+                  const stepBtn = (label: string, delta: number, disabled: boolean) => (
+                    <Pressable
+                      onPress={() => stepReturnQty(l.orderRequestLineId, delta, l.quantityRemaining)}
+                      disabled={disabled}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${delta < 0 ? 'Return one fewer' : 'Return one more'} ${l.name}`}
+                      accessibilityState={{ disabled }}
                       style={{
-                        flexDirection: returnRowsStacked ? 'column' : 'row',
-                        alignItems: returnRowsStacked ? 'flex-start' : 'center',
-                        gap: 12,
+                        minWidth: MIN_TAP,
+                        minHeight: MIN_TAP,
+                        paddingHorizontal: 8,
+                        borderRadius: 8,
+                        borderWidth: 1,
+                        borderColor: c.hair2,
+                        backgroundColor: c.card,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        opacity: disabled ? 0.35 : 1,
                       }}
                     >
-                      <View style={returnRowsStacked ? { alignSelf: 'stretch' } : { flex: 1, minWidth: 0 }}>
-                        <Body size={14} color={c.ink} numberOfLines={returnRowsStacked ? undefined : 2}>{l.name}</Body>
-                        <Mono size={10.5} color={c.ink4} style={{ marginTop: 2 }}>
-                          {`${l.sku ? `${l.sku} · ` : ''}${l.quantityRemaining} of ${l.quantityFulfilled} returnable`}
-                        </Mono>
-                      </View>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                        {stepBtn('−', -1, d.quantity <= 0 || returnSubmitting)}
-                        <Mono
-                          size={15}
-                          color={c.ink}
-                          style={{ minWidth: 24, textAlign: 'center' }}
-                          accessibilityLabel={`${d.quantity} ${l.name} returning`}
-                          accessibilityLiveRegion="polite"
-                        >
-                          {d.quantity}
-                        </Mono>
-                        {stepBtn('+', 1, d.quantity >= l.quantityRemaining || returnSubmitting)}
-                      </View>
-                    </View>
+                      <Mono size={15} color={c.ink} maxFontSizeMultiplier={capTo(15, TYPE_CEILING.control)}>
+                        {label}
+                      </Mono>
+                    </Pressable>
+                  );
+                  return (
                     <View
-                      style={{ flexDirection: 'row', gap: 6 }}
-                      accessibilityRole="radiogroup"
-                      accessibilityLabel={`${RETURNS_COPY.returnDisposition} for ${l.name}`}
+                      key={l.orderRequestLineId}
+                      style={{ gap: 8, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: c.hair }}
                     >
-                      {(['restock', 'scrap'] as const).map((disp) => {
-                        const on = d.disposition === disp;
-                        return (
-                          <Pressable
-                            key={disp}
-                            onPress={() => setReturnDisposition(l.orderRequestLineId, disp)}
-                            disabled={returnSubmitting}
-                            accessibilityRole="radio"
-                            accessibilityLabel={disp === 'restock' ? RETURNS_COPY.restock : RETURNS_COPY.scrap}
-                            accessibilityState={{ checked: on, disabled: returnSubmitting }}
-                            style={{
-                              paddingHorizontal: 10,
-                              paddingVertical: 5,
-                              borderRadius: 8,
-                              borderWidth: 1,
-                              borderColor: on ? c.ink : c.hair,
-                              backgroundColor: on ? c.ink : 'transparent',
-                            }}
-                          >
-                            <Mono size={10.5} color={on ? c.paper : c.ink3} maxFontSizeMultiplier={capTo(10.5, TYPE_CEILING.control)}>
-                              {disp === 'restock' ? 'Restock' : 'Scrap'}
-                            </Mono>
-                          </Pressable>
-                        );
-                      })}
-                    </View>
-                    {/* RX-2: an exchange per line, while exchanges are on; the
-                        replacement's other sizes load on the first Exchange. */}
-                    {exchangesEnabled && d.quantity > 0 ? (
-                      <View style={{ gap: 8 }}>
-                        <View
-                          style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}
-                          accessibilityRole="radiogroup"
-                          accessibilityLabel={`${RETURNS_COPY.whatWouldYouLikeToDo} ${l.name}`}
-                        >
-                          {(
-                            [
-                              ['return', RETURNS_COPY.returnOnly],
-                              ['exchange', RETURNS_COPY.exchangeStaff],
-                            ] as const
-                          ).map(([mode, words]) => {
-                            const on = (d.mode ?? 'return') === mode;
-                            return (
-                              <Pressable
-                                key={mode}
-                                onPress={() => setReturnMode(l.orderRequestLineId, mode)}
-                                disabled={returnSubmitting}
-                                accessibilityRole="radio"
-                                accessibilityLabel={words}
-                                accessibilityState={{ checked: on, disabled: returnSubmitting }}
-                                style={{
-                                  paddingHorizontal: 10,
-                                  paddingVertical: 6,
-                                  borderRadius: 8,
-                                  borderWidth: 1,
-                                  minHeight: MIN_TAP,
-                                  justifyContent: 'center',
-                                  borderColor: on ? c.ink : c.hair,
-                                  backgroundColor: on ? c.ink : 'transparent',
-                                }}
-                              >
-                                <Mono size={10.5} color={on ? c.paper : c.ink3} maxFontSizeMultiplier={capTo(10.5, TYPE_CEILING.control)}>
-                                  {words}
-                                </Mono>
-                              </Pressable>
-                            );
-                          })}
-                        </View>
-                        {d.mode === 'exchange' && id ? (
-                          <ReplacementPickerList
-                            load={(q) => getOrderExchangeCandidates(id, l.orderRequestLineId, q)}
-                            needed={Math.max(1, d.quantity)}
-                            selectedItemId={d.exchangeItemId ?? null}
-                            onSelect={(row) => setReturnExchangeItem(l.orderRequestLineId, row.itemId)}
-                            label={l.name}
-                            online={!offline}
-                            disabled={returnSubmitting}
-                          />
-                        ) : null}
-                      </View>
-                    ) : null}
-                  </View>
-                );
-              })}
-
-              <View style={{ gap: 8 }}>
-                <Eyebrow>REASON</Eyebrow>
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }} accessibilityRole="radiogroup" accessibilityLabel="Reason">
-                  {RETURN_REASONS.map((r) => {
-                    const on = returnReason === r.value;
-                    return (
-                      <Pressable
-                        key={r.value}
-                        // Reason is optional server-side — tapping the active
-                        // chip again clears it.
-                        onPress={() => setReturnReason(on ? null : r.value)}
-                        disabled={returnSubmitting}
-                        accessibilityRole="radio"
-                        accessibilityLabel={r.label}
-                        accessibilityState={{ checked: on, disabled: returnSubmitting }}
+                      <View
                         style={{
-                          paddingHorizontal: 10,
-                          paddingVertical: 6,
-                          borderRadius: 8,
-                          borderWidth: 1,
-                          borderColor: on ? c.ink : c.hair,
-                          backgroundColor: on ? c.ink : 'transparent',
+                          flexDirection: returnRowsStacked ? 'column' : 'row',
+                          alignItems: returnRowsStacked ? 'flex-start' : 'center',
+                          gap: 12,
                         }}
                       >
-                        <Mono size={10.5} color={on ? c.paper : c.ink3} maxFontSizeMultiplier={capTo(10.5, TYPE_CEILING.control)}>
-                          {r.label}
-                        </Mono>
-                      </Pressable>
-                    );
-                  })}
+                        <View style={returnRowsStacked ? { alignSelf: 'stretch' } : { flex: 1, minWidth: 0 }}>
+                          <Body size={14} color={c.ink} numberOfLines={returnRowsStacked ? undefined : 2}>{l.name}</Body>
+                          <Mono size={11.5} color={c.ink3} style={{ marginTop: 2 }}>
+                            {`${l.sku ? `${l.sku} · ` : ''}${l.quantityRemaining} of ${l.quantityFulfilled} returnable`}
+                          </Mono>
+                        </View>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                          {stepBtn('−', -1, d.quantity <= 0 || returnSubmitting)}
+                          <Mono
+                            size={15}
+                            color={c.ink}
+                            style={{ minWidth: 24, textAlign: 'center' }}
+                            accessibilityLabel={`${d.quantity} ${l.name} returning`}
+                            accessibilityLiveRegion="polite"
+                          >
+                            {d.quantity}
+                          </Mono>
+                          {stepBtn('+', 1, d.quantity >= l.quantityRemaining || returnSubmitting)}
+                        </View>
+                      </View>
+                      <View
+                        style={{ flexDirection: 'row', gap: 6 }}
+                        accessibilityRole="radiogroup"
+                        accessibilityLabel={`${RETURNS_COPY.returnDisposition} for ${l.name}`}
+                      >
+                        {(['restock', 'scrap'] as const).map((disp) => {
+                          const on = d.disposition === disp;
+                          return (
+                            <Pressable
+                              key={disp}
+                              onPress={() => setReturnDisposition(l.orderRequestLineId, disp)}
+                              disabled={returnSubmitting}
+                              accessibilityRole="radio"
+                              accessibilityLabel={disp === 'restock' ? RETURNS_COPY.restock : RETURNS_COPY.scrap}
+                              accessibilityState={{ checked: on, disabled: returnSubmitting }}
+                              style={[
+                                styles.choice,
+                                {
+                                  borderColor: on ? c.ink : c.hair2,
+                                  backgroundColor: on ? c.ink : 'transparent',
+                                },
+                              ]}
+                            >
+                              <Body
+                                size={13}
+                                color={on ? c.paper : c.ink2}
+                                maxFontSizeMultiplier={CHIP_CAP}
+                              >
+                                {disp === 'restock' ? 'Restock' : 'Scrap'}
+                              </Body>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                      {/* RX-2: an exchange per line, while exchanges are on; the
+                          replacement's other sizes load on the first Exchange. */}
+                      {exchangesEnabled && d.quantity > 0 ? (
+                        <View style={{ gap: 8 }}>
+                          <View
+                            style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}
+                            accessibilityRole="radiogroup"
+                            accessibilityLabel={`${RETURNS_COPY.whatWouldYouLikeToDo} ${l.name}`}
+                          >
+                            {(
+                              [
+                                ['return', RETURNS_COPY.returnOnly],
+                                ['exchange', RETURNS_COPY.exchangeStaff],
+                              ] as const
+                            ).map(([mode, words]) => {
+                              const on = (d.mode ?? 'return') === mode;
+                              return (
+                                <Pressable
+                                  key={mode}
+                                  onPress={() => setReturnMode(l.orderRequestLineId, mode)}
+                                  disabled={returnSubmitting}
+                                  accessibilityRole="radio"
+                                  accessibilityLabel={words}
+                                  accessibilityState={{ checked: on, disabled: returnSubmitting }}
+                                  style={[
+                                    styles.choice,
+                                    {
+                                      borderColor: on ? c.ink : c.hair2,
+                                      backgroundColor: on ? c.ink : 'transparent',
+                                    },
+                                  ]}
+                                >
+                                  <Body
+                                    size={13}
+                                    color={on ? c.paper : c.ink2}
+                                    maxFontSizeMultiplier={CHIP_CAP}
+                                  >
+                                    {words}
+                                  </Body>
+                                </Pressable>
+                              );
+                            })}
+                          </View>
+                          {d.mode === 'exchange' && id ? (
+                            <ReplacementPickerList
+                              load={(q) => getOrderExchangeCandidates(id, l.orderRequestLineId, q)}
+                              needed={Math.max(1, d.quantity)}
+                              selectedItemId={d.exchangeItemId ?? null}
+                              onSelect={(row) => setReturnExchangeItem(l.orderRequestLineId, row.itemId)}
+                              label={l.name}
+                              online={!offline}
+                              disabled={returnSubmitting}
+                            />
+                          ) : null}
+                        </View>
+                      ) : null}
+                    </View>
+                  );
+                })}
+
+                <View style={{ gap: 8 }}>
+                  <Eyebrow>REASON</Eyebrow>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }} accessibilityRole="radiogroup" accessibilityLabel="Reason">
+                    {RETURN_REASONS.map((r) => {
+                      const on = returnReason === r.value;
+                      return (
+                        <Pressable
+                          key={r.value}
+                          // Reason is optional server-side — tapping the active
+                          // chip again clears it.
+                          onPress={() => setReturnReason(on ? null : r.value)}
+                          disabled={returnSubmitting}
+                          accessibilityRole="radio"
+                          accessibilityLabel={r.label}
+                          accessibilityState={{ checked: on, disabled: returnSubmitting }}
+                          style={[
+                            styles.choice,
+                            {
+                              borderColor: on ? c.ink : c.hair2,
+                              backgroundColor: on ? c.ink : 'transparent',
+                            },
+                          ]}
+                        >
+                          <Body
+                            size={13}
+                            color={on ? c.paper : c.ink2}
+                            maxFontSizeMultiplier={CHIP_CAP}
+                          >
+                            {r.label}
+                          </Body>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
                 </View>
-              </View>
 
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                <View style={{ flex: 1 }}>
-                  <Body size={14} color={c.ink}>
-                    {RETURNS_COPY.itemIsHere}
-                  </Body>
-                  <Body size={12} color={c.ink3}>
-                    {RETURNS_COPY.itemIsHereHelp}
-                  </Body>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                  <View style={{ flex: 1 }}>
+                    <Body size={14} color={c.ink}>
+                      {RETURNS_COPY.itemIsHere}
+                    </Body>
+                    <Body size={12} color={c.ink3}>
+                      {RETURNS_COPY.itemIsHereHelp}
+                    </Body>
+                  </View>
+                  {/* The system switch, drawn in the shared Toggle's per-mode
+                      recipe (tones.ts toggleTone): on, a paper knob on the ink
+                      track; off, a muted knob on the stronger border's track. */}
+                  <Switch
+                    value={returnItemIsHere}
+                    onValueChange={setReturnItemIsHere}
+                    disabled={returnSubmitting}
+                    accessibilityLabel={RETURNS_COPY.itemIsHere}
+                    accessibilityHint={RETURNS_COPY.itemIsHereHelp}
+                    trackColor={{
+                      false: toggleTone(false, c).track,
+                      true: toggleTone(true, c).track,
+                    }}
+                    ios_backgroundColor={toggleTone(false, c).track}
+                    thumbColor={toggleTone(returnItemIsHere, c).knob}
+                  />
                 </View>
-                <Switch
-                  value={returnItemIsHere}
-                  onValueChange={setReturnItemIsHere}
-                  disabled={returnSubmitting}
-                  accessibilityLabel={RETURNS_COPY.itemIsHere}
-                  accessibilityHint={RETURNS_COPY.itemIsHereHelp}
-                />
-              </View>
 
-              <View style={{ gap: 8 }}>
-                <Eyebrow>NOTES</Eyebrow>
-                <TextInput
-                  value={returnNotes}
-                  onChangeText={setReturnNotes}
-                  placeholder="Optional notes for the approver"
-                  placeholderTextColor={c.ink4}
-                  multiline
-                  editable={!returnSubmitting}
-                  style={{
-                    minHeight: 60,
-                    borderWidth: 1,
-                    borderColor: c.hair,
-                    borderRadius: 10,
-                    padding: 10,
-                    color: c.ink,
-                    fontFamily: FONT.mono,
-                    fontSize: 13,
-                    textAlignVertical: 'top',
-                  }}
-                />
-              </View>
-            </ScrollView>
+                <View style={{ gap: 8 }}>
+                  <Eyebrow>NOTES</Eyebrow>
+                  <TextInput
+                    value={returnNotes}
+                    onChangeText={setReturnNotes}
+                    placeholder="Optional notes for the approver"
+                    placeholderTextColor={c.ink3}
+                    multiline
+                    editable={!returnSubmitting}
+                    style={[
+                      styles.reasonInput,
+                      { minHeight: 60, borderColor: c.hair2, backgroundColor: c.card, color: c.ink },
+                    ]}
+                  />
+                </View>
+              </ScrollView>
 
-            {returnError ? (
-              // Verification L7 (pattern 20): announced to VoiceOver.
-              <Mono size={11} color="#b42318" accessibilityRole="alert">
-                {returnError}
-              </Mono>
-            ) : null}
-            {offline ? (
-              <Body size={12} color={c.ink3}>
-                {READINESS_NEEDS_CONNECTION_COPY}
-              </Body>
-            ) : null}
+              {returnError ? (
+                // Verification L7 (pattern 20): announced to VoiceOver. The
+                // per-mode refusal ink (critText, AA in both modes).
+                <Body size={13} color={c.critText} accessibilityRole="alert">
+                  {returnError}
+                </Body>
+              ) : null}
+              {offline ? (
+                <Body size={12} color={c.ink3}>
+                  {READINESS_NEEDS_CONNECTION_COPY}
+                </Body>
+              ) : null}
 
-            <Pressable
-              onPress={() => void submitReturn()}
-              disabled={returnSubmitting || offline}
-              accessibilityRole="button"
-              accessibilityState={{ disabled: returnSubmitting || offline }}
-              accessibilityHint={offline ? READINESS_NEEDS_CONNECTION_COPY : undefined}
-              style={[
-                styles.addBtn,
-                // The box grows with its capped label (Dynamic Type policy: a
-                // cap always comes with its box fix).
-                { height: undefined, minHeight: 44, paddingVertical: 10 },
-                { backgroundColor: c.ink, opacity: returnSubmitting || offline ? 0.6 : 1 },
-              ]}
-            >
-              {returnSubmitting ? (
-                <ActivityIndicator color={c.paper} />
-              ) : (
-                <Mono size={13} color={c.paper} maxFontSizeMultiplier={capTo(13, TYPE_CEILING.control)}>
-                  Submit return
-                </Mono>
-              )}
-            </Pressable>
+              <Pressable
+                onPress={() => void submitReturn()}
+                disabled={returnSubmitting || offline}
+                accessibilityRole="button"
+                accessibilityState={{ disabled: returnSubmitting || offline }}
+                accessibilityHint={offline ? READINESS_NEEDS_CONNECTION_COPY : undefined}
+                style={[
+                  styles.addBtn,
+                  // The box grows with its capped label (Dynamic Type policy: a
+                  // cap always comes with its box fix).
+                  { height: undefined, minHeight: 44, paddingVertical: 10 },
+                  { backgroundColor: c.ink, opacity: returnSubmitting || offline ? 0.6 : 1 },
+                ]}
+              >
+                {returnSubmitting ? (
+                  <ActivityIndicator color={c.paper} />
+                ) : (
+                  <Text
+                    style={[styles.actionLabel, { color: c.paper }]}
+                    maxFontSizeMultiplier={capTo(13, TYPE_CEILING.control)}
+                  >
+                    Submit return
+                  </Text>
+                )}
+              </Pressable>
+            </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Returns RX-3: the requester's "Return or exchange" (mounted per
@@ -4378,9 +4514,20 @@ export default function OrderDetail() {
          * else took the responder first. Do not re-nest this card inside the
          * scrim. See add-order-items-sheet.tsx.
          */}
-        <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+        {/* The shared sheet shape for VoiceOver (it had none): VoiceOver
+            stays inside, the escape scrub and a double-tap on the "Close"
+            scrim close it, and the X is a named 44pt button (it had no name
+            or role, so VoiceOver read nothing for it). */}
+        <View
+          accessibilityViewIsModal
+          onAccessibilityEscape={() => setDriverOpen(false)}
+          style={{ flex: 1, justifyContent: 'flex-end' }}
+        >
           <Pressable
             onPress={() => setDriverOpen(false)}
+            onAccessibilityTap={() => setDriverOpen(false)}
+            accessibilityRole="button"
+            accessibilityLabel="Close"
             style={[
               StyleSheet.absoluteFill,
               {
@@ -4392,33 +4539,58 @@ export default function OrderDetail() {
             style={{ backgroundColor: c.card, borderTopLeftRadius: 18, borderTopRightRadius: 18, padding: 18, gap: 10 }}
           >
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>Assign delivery</Body>
-              <Pressable onPress={() => setDriverOpen(false)} hitSlop={8}>
-                <X size={18} color={c.ink4} />
+              <Body
+                size={15}
+                color={c.ink}
+                accessibilityRole="header"
+                style={{ flex: 1, fontFamily: FONT.display }}
+              >
+                Assign delivery
+              </Body>
+              <Pressable
+                onPress={() => setDriverOpen(false)}
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+                style={styles.closeFrame}
+              >
+                <X size={18} color={c.ink2} />
               </Pressable>
             </View>
             {drivers === null ? (
               <ActivityIndicator color={c.ink} style={{ marginVertical: 24 }} />
             ) : drivers.length === 0 ? (
-              <Mono size={12} color={c.ink4} style={{ paddingVertical: 16 }}>No team members found.</Mono>
+              <Body size={13} color={c.ink3} style={{ paddingVertical: 16 }}>
+                No team members found.
+              </Body>
             ) : (
               <ScrollView style={{ maxHeight: 360 }}>
                 {drivers.map((d) => {
                   const current = d.id === order?.assignedDeliveryUserId;
                   return (
+                    // A choice: VoiceOver hears a button with the driver's
+                    // name and email (it had no role), at least 44pt.
                     <Pressable
                       key={d.id}
                       onPress={() => {
                         setDriverOpen(false);
                         void act({ action: 'assign_delivery', deliveryUserId: d.id }, 'assign');
                       }}
-                      style={{ paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: c.hair }}
+                      accessibilityRole="button"
+                      style={{
+                        minHeight: MIN_TAP,
+                        justifyContent: 'center',
+                        paddingVertical: 12,
+                        borderBottomWidth: 1,
+                        borderBottomColor: c.hair,
+                      }}
                     >
                       <Body size={14} color={c.ink}>
                         {d.name}
                         {current ? '  · current' : ''}
                       </Body>
-                      <Mono size={11} color={c.ink4}>{d.email}</Mono>
+                      <Mono size={11.5} color={c.ink3}>
+                        {d.email}
+                      </Mono>
                     </Pressable>
                   );
                 })}
@@ -4452,6 +4624,36 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     justifyContent: 'center',
   },
+  // A button's words: the shared Button's display face at 500 (they were
+  // mono); they wrap inside the button, which grows with them.
+  actionLabel: { fontFamily: FONT.display, fontSize: 13, flexShrink: 1, textAlign: 'center' },
+  // An icon button's 44pt frame (a sheet's or dialog's X).
+  closeFrame: {
+    minWidth: MIN_TAP,
+    minHeight: MIN_TAP,
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+  },
+  // A choice chip (Restock / Scrap, Return / Exchange, a reason): the
+  // reference's filter chip in a 44pt frame (DESIGN-SPEC 6.6).
+  choice: {
+    minHeight: MIN_TAP,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  // A typed reason or note: the shared text box's recipe, in the body face.
+  reasonInput: {
+    minHeight: 72,
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 10,
+    fontFamily: FONT.displayRegular,
+    fontSize: 15,
+    textAlignVertical: 'top',
+  },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 4 },
   // Copied VERBATIM from app/maintenance/[id].tsx `copyBox` — the two copy
   // affordances are twins, and mobile vitest cannot reach either .tsx, so
@@ -4468,5 +4670,20 @@ const styles = StyleSheet.create({
   },
   tile: { width: '31%', borderRadius: 10, borderWidth: 1, overflow: 'hidden' },
   tileImg: { width: '100%', height: 90 },
-  tileFoot: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 6 },
+  tileFoot: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingLeft: 8,
+    minHeight: MIN_TAP,
+  },
+  tileDelete: {
+    minWidth: MIN_TAP,
+    minHeight: MIN_TAP,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });
+
+/** A choice chip's words are control chrome (the shared Button's ceiling). */
+const CHIP_CAP = capTo(13, TYPE_CEILING.control);

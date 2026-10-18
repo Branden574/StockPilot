@@ -29,8 +29,9 @@ import {
 import { MIN_TAP } from '@/components/item-verification-card';
 import { Button } from '@/components/ui/button';
 import { Body, Mono } from '@/components/ui/text';
+import { pillTone, type Tone } from '@/components/ui/tones';
 import type { ReplacementReadinessGate } from '@/lib/order-readiness';
-import { ACCENT, TYPE_CEILING, capTo, type ThemeMode } from '@/lib/theme';
+import { TYPE_CEILING, capTo, type Palette } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -60,6 +61,13 @@ import { useTheme } from '@/lib/use-theme';
  * from Staging". Without stock:transfer the line offers nothing (the card
  * says core's sentence once, as on the web page). The button is its own
  * element, a sibling of the state row.
+ *
+ * The redesign look: the state chip is the reference's status label
+ * (DESIGN-SPEC 6.10): ready on the accent wash, a warning on the warning
+ * wash, a refusal on the refusal wash, information as the neutral chip and
+ * anything else as the outline chip, each tone's words and icon at AA on its
+ * own fill in both modes (they were the single-mode amber, red and mint on
+ * the inset fill, under AA in one mode each).
  */
 
 /** The platform icon for core's generic icon key (READINESS_STATES.icon).
@@ -89,23 +97,42 @@ export function ReadinessIcon({
   }
 }
 
-/** Colour for a tone. Supplementary only: the label and icon carry the state. */
+/** Colour for a tone's words and icon on the card or the page, per mode.
+ *  Supplementary only: the label and icon carry the state. */
 export function readinessToneColor(
   tone: ReadinessTone,
-  c: { ink2: string; ink3: string },
-  mode: ThemeMode,
+  c: Pick<Palette, 'accent' | 'warnText' | 'critText' | 'ink2' | 'ink3'>,
 ): string {
   switch (tone) {
     case 'success':
-      return mode === 'dark' ? ACCENT.mintInkDark : ACCENT.mintInk;
+      return c.accent;
     case 'warning':
-      return ACCENT.warn;
+      return c.warnText;
     case 'danger':
-      return ACCENT.crit;
+      return c.critText;
     case 'info':
       return c.ink2;
     default:
       return c.ink3;
+  }
+}
+
+/** The state chip's colours (DESIGN-SPEC 6.10): the shared pill tones for
+ *  ready, warning, refusal and anything else (the outline chip), and the
+ *  reference's neutral chip (ink2 on the recessed fill, the stronger border)
+ *  for information. */
+export function readinessChipTone(tone: ReadinessTone, c: Palette): Tone {
+  switch (tone) {
+    case 'success':
+      return pillTone('ok', c);
+    case 'warning':
+      return pillTone('warn', c);
+    case 'danger':
+      return pillTone('crit', c);
+    case 'info':
+      return { fg: c.ink2, bg: c.sunk, border: c.hair2 };
+    default:
+      return pillTone('default', c);
   }
 }
 
@@ -124,8 +151,9 @@ export function ReadinessStateChip({
   label: string;
   tone: ReadinessTone;
 }) {
-  const { c, mode } = useTheme();
-  const color = readinessToneColor(tone, c, mode);
+  const { c } = useTheme();
+  const chip = readinessChipTone(tone, c);
+  const color = chip.fg;
   return (
     <View
       importantForAccessibility="no-hide-descendants"
@@ -140,8 +168,8 @@ export function ReadinessStateChip({
         paddingVertical: 3,
         borderRadius: 999,
         borderWidth: 1,
-        borderColor: c.hair,
-        backgroundColor: c.paper2,
+        borderColor: chip.border,
+        backgroundColor: chip.bg,
       }}
     >
       <ReadinessIcon icon={icon} size={13} color={color} />
