@@ -45,6 +45,7 @@ import {
   reviewRecordDetail,
   type GroupingIdentity,
 } from '@/lib/display-groups';
+import { footerReservation } from '@/lib/dynamic-type-layout';
 import { isOnline } from '@/lib/sync';
 import { FONT } from '@/lib/theme';
 import {
@@ -114,6 +115,11 @@ export default function UngroupSelectedScreen() {
   const [retryBody, setRetryBody] = React.useState<UngroupSelectedBody | null>(null);
   const pending = React.useRef<{ json: string; body: UngroupSelectedBody } | null>(null);
   const seq = React.useRef(0);
+  // The pinned footer's measured height. A result with Try again, Review
+  // again and Done is three buttons, about 220pt with the home indicator,
+  // which is more than the 170 the list reserved: the last lines of a long
+  // result sat under the footer. 170 stays the floor.
+  const [footerHeight, setFooterHeight] = React.useState<number | null>(null);
 
   // The newest review for these records; an overtaken answer is dropped.
   React.useEffect(() => {
@@ -249,7 +255,13 @@ export default function UngroupSelectedScreen() {
         </View>
       </SafeAreaView>
 
-      <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 170, gap: 16 }}>
+      <ScrollView
+        contentContainerStyle={{
+          paddingHorizontal: 20,
+          paddingBottom: footerReservation(footerHeight, 170),
+          gap: 16,
+        }}
+      >
         {!params ? (
           <Body muted size={13.5}>
             {GROUPING_ERROR_WORDS.invalid}
@@ -322,7 +334,9 @@ export default function UngroupSelectedScreen() {
                         <Body size={14.5} color={c.ink} style={{ fontFamily: FONT.display }}>
                           {r.name}
                         </Body>
-                        <Mono size={11} color={c.ink4} tracking={0.02}>
+                        {/* The record's line: information, so the muted ink
+                            (the faint ink4 held it under AA). */}
+                        <Mono size={11.5} color={c.ink3} tracking={0.02}>
                           {reviewRecordDetail(r, view)}
                         </Mono>
                         {group?.allSelected && firstOfSku.has(rec.id) ? (
@@ -434,7 +448,11 @@ export default function UngroupSelectedScreen() {
         ) : null}
       </ScrollView>
 
-      <SafeAreaView edges={['bottom']} style={[styles.footer, { backgroundColor: c.paper }]}>
+      <SafeAreaView
+        edges={['bottom']}
+        onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
+        style={[styles.footer, { backgroundColor: c.paper, borderTopColor: c.hair }]}
+      >
         {phase === 'done' ? (
           <View style={{ gap: 10 }}>
             {outcome && !outcome.complete ? (
@@ -503,6 +521,7 @@ const styles = StyleSheet.create({
     gap: 10,
     minHeight: 44,
   },
+  // Pinned over the scrolling review, so a hairline marks its top edge.
   footer: {
     position: 'absolute',
     left: 0,
@@ -510,5 +529,6 @@ const styles = StyleSheet.create({
     bottom: 0,
     paddingHorizontal: 20,
     paddingTop: 10,
+    borderTopWidth: 1,
   },
 });
