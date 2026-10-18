@@ -63,7 +63,11 @@ import {
 } from '@stockpilot/core';
 
 import { ExceptionRecountSheet } from '@/components/exception-recount-sheet';
-import { ItemVerificationCard, useItemVerification } from '@/components/item-verification-card';
+import {
+  ItemVerificationCard,
+  MIN_TAP,
+  useItemVerification,
+} from '@/components/item-verification-card';
 import { MoveStockModal } from '@/components/move-stock-modal';
 import { PhotoViewer } from '@/components/photo-viewer';
 import { RemoveFromRackModal } from '@/components/remove-from-rack-modal';
@@ -73,6 +77,7 @@ import { Card, Hair } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { PHOTO_BACKGROUND, pillTone, type PillStatus } from '@/components/ui/tones';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { showWriteCta, showWriteCtaForRole } from '@/lib/cta-gating';
@@ -150,13 +155,12 @@ import {
   formatSerialDate,
   isSerialStatus,
   serialSourceLabel,
-  serialStatusColor,
   validateSerialInput,
 } from '@/lib/serials';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { actorText, isRowPersonDeleted } from '@/lib/deleted-user-labels';
 import { supabase } from '@/lib/supabase';
-import { ACCENT, FONT, SHADOW, TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT, SHADOW, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useRole } from '@/lib/use-role';
 import { useTheme } from '@/lib/use-theme';
@@ -1725,16 +1729,19 @@ export default function ItemDetail() {
           <RefreshControl refreshing={refreshing} onRefresh={() => void onRefresh()} tintColor={c.ink} />
         }
       >
-        {/* Hero */}
+        {/* Hero: the reference's item header (DESIGN-SPEC 6.1) on the phone:
+            the SKU in mono over the 26pt name, then category and barcode. The
+            SKU and the meta line are information, so they read in the muted
+            ink (ink4 held them at 3.2-3.6:1, under AA). */}
         <View style={styles.hero}>
-          <Mono size={9.5} tracking={0.2} upper color={c.ink4}>
+          <Mono size={11.5} tracking={0.12} upper color={c.ink3}>
             — {item.sku}
           </Mono>
           <Display size={26} style={{ marginTop: 6 }}>
             {item.name}
           </Display>
           {item.category_name || item.barcode ? (
-            <Mono size={11.5} tracking={0.04} color={c.ink4} style={{ marginTop: 6 }}>
+            <Mono size={12.5} tracking={0.04} color={c.ink3} style={{ marginTop: 6 }}>
               {[item.category_name, item.barcode].filter(Boolean).join(' · ')}
             </Mono>
           ) : null}
@@ -1773,13 +1780,13 @@ export default function ItemDetail() {
             </View>
           ) : null}
           {item.status === 'archived' && item.auto_archived ? (
-            <Body muted size={11} style={{ marginTop: 8 }}>
+            <Body muted size={12.5} style={{ marginTop: 8 }}>
               The system archived this item automatically after it sat at zero stock past the
               configured dwell window.
             </Body>
           ) : null}
           {item.awaiting_first_receipt ? (
-            <Body muted size={11} style={{ marginTop: 8 }}>
+            <Body muted size={12.5} style={{ marginTop: 8 }}>
               Created from a purchase order — hidden from the default Items list until the first
               units are received. It appears automatically the moment any stock arrives.
             </Body>
@@ -1803,7 +1810,8 @@ export default function ItemDetail() {
                   <RotateCcw size={14} color={c.ink} strokeWidth={1.6} />
                 )
               }
-              style={{ marginTop: 12, alignSelf: 'flex-start' }}
+              // 44pt, not the small Button's 36.
+              style={{ marginTop: 12, alignSelf: 'flex-start', minHeight: MIN_TAP }}
             >
               {restoring ? 'Restoring…' : 'Restore'}
             </Button>
@@ -1830,7 +1838,11 @@ export default function ItemDetail() {
                   overflow: 'hidden',
                   borderWidth: 1,
                   borderColor: c.hair,
-                  backgroundColor: c.paper2,
+                  // A photo sits on white in both modes (DESIGN-SPEC 6.14), so a
+                  // photo shot on white reads the same in light and dark; the
+                  // empty tile is the recessed fill (paper2 is the card colour
+                  // in dark, so it showed nothing there).
+                  backgroundColor: item.imageUrl ? PHOTO_BACKGROUND : c.sunk,
                   justifyContent: 'center',
                   alignItems: 'center',
                 }}
@@ -1843,8 +1855,8 @@ export default function ItemDetail() {
                   />
                 ) : (
                   <View style={{ alignItems: 'center', gap: 8 }}>
-                    <Camera size={28} color={c.ink4} strokeWidth={1.4} />
-                    <Mono size={11} tracking={0.12} upper color={c.ink4}>
+                    <Camera size={28} color={c.ink3} strokeWidth={1.4} />
+                    <Mono size={11} tracking={0.12} upper color={c.ink3}>
                       Tap to add photo
                     </Mono>
                   </View>
@@ -1857,39 +1869,58 @@ export default function ItemDetail() {
                       left: 0,
                       right: 0,
                       bottom: 0,
-                      backgroundColor: 'rgba(0,0,0,0.4)',
                       justifyContent: 'center',
                       alignItems: 'center',
                     }}
                   >
-                    <ActivityIndicator color="#fff" />
+                    {/* The busy mark on its own card chip, so it reads over any
+                        photo in both modes (it was white on a fixed dark wash). */}
+                    <View
+                      style={{
+                        width: MIN_TAP,
+                        height: MIN_TAP,
+                        borderRadius: MIN_TAP / 2,
+                        borderWidth: 1,
+                        borderColor: c.hair2,
+                        backgroundColor: c.card,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <ActivityIndicator color={c.ink} />
+                    </View>
                   </View>
                 ) : null}
               </View>
             </Pressable>
             {item.imageUrl && !photoBusy ? (
+              // Replace sits over the photo as a card chip with the control
+              // border, in the device's mode (it was white words on a fixed dark
+              // wash), and is a real 44pt frame rather than a 26pt pill with
+              // hitSlop.
               <Pressable
                 onPress={openPhotoActions}
                 disabled={photoBusy}
                 accessibilityRole="button"
                 accessibilityLabel="Replace photo"
-                hitSlop={6}
                 style={({ pressed }) => ({
                   position: 'absolute',
                   bottom: 10,
                   right: 10,
-                  backgroundColor: 'rgba(0,0,0,0.55)',
-                  paddingHorizontal: 10,
-                  paddingVertical: 6,
-                  borderRadius: 8,
+                  minHeight: MIN_TAP,
+                  backgroundColor: c.card,
+                  borderWidth: 1,
+                  borderColor: c.hair2,
+                  paddingHorizontal: 12,
+                  borderRadius: 10,
                   flexDirection: 'row',
                   alignItems: 'center',
                   gap: 6,
                   opacity: pressed ? 0.8 : 1,
                 })}
               >
-                <Camera size={12} color="#fff" strokeWidth={1.6} />
-                <Mono size={10} tracking={0.12} upper color="#fff">
+                <Camera size={13} color={c.ink} strokeWidth={1.6} />
+                <Mono size={11} tracking={0.12} upper color={c.ink}>
                   Replace
                 </Mono>
               </Pressable>
@@ -1897,8 +1928,12 @@ export default function ItemDetail() {
           </View>
         </View>
 
-        {/* Tab bar */}
-        <View style={styles.tabsRow}>
+        {/* Tab bar: the reference's segmented switch (DESIGN-SPEC 6.5), a
+            recessed track with the chosen tab on the card. */}
+        <View
+          accessibilityRole="tablist"
+          style={[styles.tabsRow, { backgroundColor: c.sunk, borderColor: c.hair }]}
+        >
           <TabButton
             label="Overview"
             active={tab === 'overview'}
@@ -1934,7 +1969,7 @@ export default function ItemDetail() {
                 >
                   {item.quantity_on_hand}
                 </Mono>
-                <Body size={16} color={c.ink4}>
+                <Body size={16} color={c.ink3}>
                   {item.unit_of_measure}
                 </Body>
                 <View style={{ marginLeft: 'auto' }}>
@@ -1943,17 +1978,20 @@ export default function ItemDetail() {
                   {status === 'crit' ? <Pill status="crit">OUT</Pill> : null}
                 </View>
               </View>
+              {/* The doubt over the number, and what waits in the outbox, in the
+                  mode's warning ink (5.40:1 on the light card, 9.33:1 on the
+                  dark one; the single-mode amber was 3.58:1 on the light card). */}
               {unconfirmed ? (
-                <Mono size={11.5} tracking={0.04} color={ACCENT.warn} style={{ marginTop: 6 }}>
+                <Mono size={11.5} tracking={0.04} color={c.warnText} style={{ marginTop: 6 }}>
                   {unconfirmedOnHandLabel(unconfirmed)}
                 </Mono>
               ) : null}
               {queuedAdjust.count > 0 ? (
-                <Mono size={11.5} tracking={0.04} color={ACCENT.warn} style={{ marginTop: 6 }}>
+                <Mono size={11.5} tracking={0.04} color={c.warnText} style={{ marginTop: 6 }}>
                   {queuedOnHandLabel(queuedAdjust)}
                 </Mono>
               ) : null}
-              <Mono size={11.5} tracking={0.04} color={c.ink4} style={{ marginTop: 6 }}>
+              <Mono size={11.5} tracking={0.04} color={c.ink3} style={{ marginTop: 6 }}>
                 Reorder at {item.reorder_point} · suggested reorder {item.reorder_quantity}
               </Mono>
 
@@ -1962,8 +2000,8 @@ export default function ItemDetail() {
                   <View style={styles.quickAdjust}>
                     <QuickBtn label="−5" onPress={() => void adjust(-5)} disabled={busy} />
                     <QuickBtn label="−1" onPress={() => void adjust(-1)} disabled={busy} />
-                    <QuickBtn label="+1" onPress={() => void adjust(1)} disabled={busy} primary />
-                    <QuickBtn label="+5" onPress={() => void adjust(5)} disabled={busy} primary />
+                    <QuickBtn label="+1" onPress={() => void adjust(1)} disabled={busy} />
+                    <QuickBtn label="+5" onPress={() => void adjust(5)} disabled={busy} />
                   </View>
 
                   <Button
@@ -2048,7 +2086,7 @@ export default function ItemDetail() {
                   on-hand at this item's specific rack/charter, never other
                   placements sharing the same SKU. Copy/UX only, no logic
                   change. */}
-              <Body muted size={11} style={{ marginTop: 10, textAlign: 'center' }}>
+              <Body muted size={12} style={{ marginTop: 10, textAlign: 'center' }}>
                 This placement only — on-hand adjustments here apply just to this rack/charter, not
                 other placements of this SKU.
               </Body>
@@ -2088,7 +2126,7 @@ export default function ItemDetail() {
               // from group for someone who can edit items (the permission alone
               // decides, as for Ungroup; cosmetic, the route refuses on its own).
               <View style={{ gap: 8, alignItems: 'center' }}>
-                <Body muted size={11} style={{ textAlign: 'center' }}>
+                <Body muted size={12.5} style={{ textAlign: 'center' }}>
                   {GROUP_COPY.itemPageInGroup(displayGroup.name ?? DISPLAY_GROUP_FALLBACK_NAME)}
                 </Body>
                 {canMakeOwnItem ? (
@@ -2098,6 +2136,8 @@ export default function ItemDetail() {
                     onPress={onRemoveFromGroup}
                     disabled={groupBusy}
                     leading={groupBusy ? <ActivityIndicator size="small" color={c.ink} /> : undefined}
+                    // 44pt, not the small Button's 36.
+                    style={{ minHeight: MIN_TAP }}
                   >
                     {GROUP_COPY.removeAction}
                   </Button>
@@ -2108,16 +2148,16 @@ export default function ItemDetail() {
               // Ungroup (0399): other records this member can read share the
               // SKU. Say how many, and offer the way to change this one alone.
               <View style={{ gap: 8, alignItems: 'center' }}>
-                <Body muted size={11} style={{ textAlign: 'center' }}>
+                <Body muted size={12.5} style={{ textAlign: 'center' }}>
                   {sharedSkuNoteCopy(skuSiblings, item.sku)}
                 </Body>
                 {canMakeOwnItem ? (
                   item.is_bundle ? (
-                    <Body muted size={11} style={{ textAlign: 'center' }}>
+                    <Body muted size={12.5} style={{ textAlign: 'center' }}>
                       {GROUPING_ERROR_WORDS.kit}
                     </Body>
                   ) : item.group_id ? (
-                    <Body muted size={11} style={{ textAlign: 'center' }}>
+                    <Body muted size={12.5} style={{ textAlign: 'center' }}>
                       {GROUPING_ERROR_WORDS.family}
                     </Body>
                   ) : (
@@ -2127,6 +2167,8 @@ export default function ItemDetail() {
                       onPress={onMakeOwnItem}
                       disabled={ungroupBusy}
                       leading={ungroupBusy ? <ActivityIndicator size="small" color={c.ink} /> : undefined}
+                      // 44pt, not the small Button's 36.
+                      style={{ minHeight: MIN_TAP }}
                     >
                       {UNGROUP_COPY.makeOwnItem}
                     </Button>
@@ -2134,7 +2176,7 @@ export default function ItemDetail() {
                 ) : null}
               </View>
             ) : (
-              <Body muted size={11} style={{ textAlign: 'center' }}>
+              <Body muted size={12.5} style={{ textAlign: 'center' }}>
                 Shared across all placements of this SKU — name, SKU, cost, price, and category update
                 everywhere this item lives when edited on web.
               </Body>
@@ -2190,7 +2232,7 @@ export default function ItemDetail() {
                   {/* Task 4: warehouse/charter/location/rack are PER-PLACEMENT —
                       they describe just this row, not the whole SKU. */}
                   {rows.length > 0 ? (
-                    <Body muted size={11} style={{ textAlign: 'center' }}>
+                    <Body muted size={12} style={{ textAlign: 'center' }}>
                       This placement only — describes just this rack/charter, not other placements
                       of this SKU.
                     </Body>
@@ -2222,12 +2264,17 @@ export default function ItemDetail() {
               </Card>
             ) : null}
 
+            {/* Opens the web edit page in the browser: a link to VoiceOver (it
+                had no role), in a frame at least 44pt tall. */}
             <Pressable
               onPress={openEdit}
+              accessibilityRole="link"
               style={({ pressed }) => ({
                 marginTop: 4,
                 alignItems: 'center',
-                paddingVertical: 14,
+                justifyContent: 'center',
+                minHeight: MIN_TAP,
+                paddingVertical: 10,
                 opacity: pressed ? 0.7 : 1,
               })}
             >
@@ -2244,7 +2291,12 @@ export default function ItemDetail() {
         {tab === 'movements' ? (
           <View style={{ paddingHorizontal: 20 }}>
             {movementsError ? (
-              <Body size={12.5} color={ACCENT.crit} style={{ marginBottom: 12 }}>
+              <Body
+                size={12.5}
+                color={c.critText}
+                accessibilityRole="alert"
+                style={{ marginBottom: 12 }}
+              >
                 {movementsError}
               </Body>
             ) : null}
@@ -2285,7 +2337,12 @@ export default function ItemDetail() {
         {tab === 'activity' ? (
           <View style={{ paddingHorizontal: 20 }}>
             {activityError ? (
-              <Body size={12.5} color={ACCENT.crit} style={{ marginBottom: 12 }}>
+              <Body
+                size={12.5}
+                color={c.critText}
+                accessibilityRole="alert"
+                style={{ marginBottom: 12 }}
+              >
                 {activityError}
               </Body>
             ) : null}
@@ -2418,68 +2475,84 @@ function TabButton({
 }) {
   const { c } = useTheme();
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1, flex: 1 })}>
-      <View
-        style={{
-          paddingVertical: 12,
-          alignItems: 'center',
-          borderBottomWidth: 2,
-          borderBottomColor: active ? c.ink : 'transparent',
-        }}
+    // A tab that says which one is open (it was a bare Pressable with no role
+    // or state, so VoiceOver read three plain words). The open tab sits on the
+    // card colour with a muted-ink ring, at 3:1 or more against the track in
+    // both modes, and its words in full ink and semibold, so which tab is open
+    // never rests on a faint fill or a colour alone.
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="tab"
+      accessibilityState={{ selected: active }}
+      style={({ pressed }) => [
+        styles.tab,
+        {
+          borderColor: active ? c.ink3 : 'transparent',
+          backgroundColor: active ? c.card : 'transparent',
+          opacity: pressed ? 0.7 : 1,
+        },
+      ]}
+    >
+      {/* Chrome cap: three equal `flex: 1` columns with no break opportunity
+          inside a word — uncapped, Movements breaks mid-word at 2x. The
+          control ceiling is the segmented-control policy from lib/theme. */}
+      <Body
+        size={13}
+        numberOfLines={1}
+        maxFontSizeMultiplier={TAB_CAP}
+        color={active ? c.ink : c.ink3}
+        style={{ fontFamily: active ? FONT.displaySemi : FONT.display }}
       >
-        {/* Chrome cap: three equal `flex: 1` columns with no break opportunity
-            inside a word — uncapped, MOVEMENTS breaks mid-word at 2x. The
-            control ceiling is the segmented-control policy from lib/theme. */}
-        <Mono
-          size={11}
-          tracking={0.12}
-          upper
-          numberOfLines={1}
-          maxFontSizeMultiplier={capTo(11, TYPE_CEILING.control)}
-          color={active ? c.ink : c.ink4}
-          style={{ fontFamily: FONT.mono }}
-        >
-          {label}
-        </Mono>
-      </View>
+        {label}
+      </Body>
     </Pressable>
   );
 }
 
+/** The tab labels are segmented-control chrome: 13pt against the control ceiling. */
+const TAB_CAP = capTo(13, TYPE_CEILING.control);
+
+/**
+ * One quick-adjust step (−5 / −1 / +1 / +5): the reference's stepper button,
+ * the card fill with the control border, as the Scan tab's quick adjust draws
+ * it. The four steps are one family; the sign in the label tells them apart
+ * (the ink fill that marked +1 / +5 put two more ink buttons on a screen whose
+ * one ink button commits the Adjust sheet). Announced as a button with its
+ * words, and as dimmed while an adjustment is in flight.
+ */
 function QuickBtn({
   label,
   onPress,
   disabled,
-  primary,
 }: {
   label: string;
   onPress: () => void;
   disabled?: boolean;
-  primary?: boolean;
 }) {
   const { c } = useTheme();
   return (
     <Pressable
       onPress={onPress}
       disabled={disabled}
+      accessibilityRole="button"
       style={({ pressed }) => [
         styles.quickBtn,
         {
-          backgroundColor: primary ? c.ink : c.card,
-          borderColor: primary ? c.ink : c.hair,
+          backgroundColor: c.card,
+          borderColor: c.hair2,
           opacity: disabled ? 0.4 : pressed ? 0.85 : 1,
         },
       ]}
     >
-      {/* Three fixed `flex: 1` columns of pinned chrome — capped at the control
+      {/* Four fixed `flex: 1` columns of pinned chrome — capped at the control
           ceiling, and allowed to ellipsize inside its own button rather than
           shove the neighbouring one off the strip. */}
       <Mono
-        size={15}
+        size={17}
         tracking={-0.012}
         numberOfLines={1}
-        maxFontSizeMultiplier={capTo(15, TYPE_CEILING.control)}
-        color={primary ? c.paper : c.ink}
+        maxFontSizeMultiplier={capTo(17, TYPE_CEILING.control)}
+        color={c.ink}
         style={{ fontFamily: FONT.display, flexShrink: 1 }}
       >
         {label}
@@ -2507,11 +2580,15 @@ function MetaRow({ label, value, dot }: { label: string; value: string; dot?: st
         paddingHorizontal: 16,
       }}
     >
-      <Mono size={10.5} tracking={0.12} upper color={c.ink4} style={{ flexShrink: 1 }}>
+      {/* The label names the value beside it: muted ink, the reference's
+          key colour (ink4 held it under AA). */}
+      <Mono size={10.5} tracking={0.12} upper color={c.ink3} style={{ flexShrink: 1 }}>
         {label}
       </Mono>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 }}>
         {dot ? (
+          // The crate colour's dot, ringed in muted ink so a white or a pale
+          // crate still shows on the card (the hairline ring was 1.1-1.3:1).
           <View
             style={{
               width: 10,
@@ -2519,7 +2596,7 @@ function MetaRow({ label, value, dot }: { label: string; value: string; dot?: st
               borderRadius: 5,
               backgroundColor: dot,
               borderWidth: 1,
-              borderColor: c.hair,
+              borderColor: c.ink3,
             }}
           />
         ) : null}
@@ -2554,7 +2631,10 @@ function MovementCard({
   //    (new rows already carry 'PO {number}').
   const amount = movementAmount(movement);
   const Icon = isAdd ? Plus : movement.quantity_change < 0 ? Minus : RotateCcw;
-  const pipColor = isAdd ? ACCENT.mint : movement.quantity_change < 0 ? ACCENT.crit : ACCENT.warn;
+  // The pip repeats the icon's direction in the mode's tones (the icon is the
+  // non-colour cue): accent for an add, refusal red for a removal, warning
+  // amber for the rest.
+  const pipColor = isAdd ? c.accent : movement.quantity_change < 0 ? c.critText : c.warnText;
   const verb = TYPE_LABEL[movement.movement_type] ?? movement.movement_type;
   const actor = actorText(movement.actor, movement.actor_deleted);
   // Source reference (Unit 3, web parity): what CAUSED this movement — an
@@ -2583,6 +2663,8 @@ function MovementCard({
   return (
     <Card padding={12}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+        {/* The glyph well is recessed (sunk), as the reference's movement
+            thumbnails sit in the row. */}
         <View
           style={{
             width: 32,
@@ -2593,7 +2675,7 @@ function MovementCard({
             alignItems: 'center',
             justifyContent: 'center',
             position: 'relative',
-            backgroundColor: c.card,
+            backgroundColor: c.sunk,
           }}
         >
           <Icon size={14} color={c.ink} strokeWidth={1.6} />
@@ -2614,7 +2696,9 @@ function MovementCard({
             {verb}
             {reasonLabel ? ` · ${reasonLabel}` : ''}
           </Body>
-          <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 3 }}>
+          {/* Who, when and the source, and the route below: information, in
+              the muted ink (ink4 held them under AA). */}
+          <Mono size={10.5} tracking={0.04} color={c.ink3} style={{ marginTop: 3 }}>
             {actor} ·{' '}
             {new Date(movement.created_at).toLocaleString(undefined, {
               month: 'short',
@@ -2633,7 +2717,7 @@ function MovementCard({
             ) : null}
           </Mono>
           {route ? (
-            <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 2 }}>
+            <Mono size={10.5} tracking={0.04} color={c.ink3} style={{ marginTop: 2 }}>
               {route}
             </Mono>
           ) : null}
@@ -2653,13 +2737,15 @@ function MovementCard({
             <Mono
               size={15}
               tracking={-0.012}
+              // An add in the mode's accent, a removal in its refusal red: the
+              // light-only mint ink was 2.5:1 on the dark card.
               color={
                 amount.kind === 'moved'
                   ? c.ink
                   : amount.sign > 0
-                    ? ACCENT.mintInk
+                    ? c.accent
                     : amount.sign < 0
-                      ? ACCENT.crit
+                      ? c.critText
                       : c.ink
               }
               style={{ fontFamily: FONT.display }}
@@ -2667,7 +2753,7 @@ function MovementCard({
               {amount.text}
             </Mono>
           )}
-          <Mono size={9.5} tracking={0.04} color={c.ink4} style={{ marginTop: 2 }}>
+          <Mono size={10.5} tracking={0.04} color={c.ink3} style={{ marginTop: 2 }}>
             {movement.previous_quantity} → {movement.new_quantity}
           </Mono>
         </View>
@@ -2680,6 +2766,8 @@ function MovementCard({
           the RPC refuses to overwrite — never show the affordance for them.
           Opens the inline sheet below, which PATCHes /api/v1/movements/[id]/note. */}
       {canEditNotes && movement.note_editable ? (
+        // A 44pt frame (the words alone were about 15pt tall), its words in
+        // the muted ink.
         <Pressable
           onPress={() => setNoteOpen(true)}
           accessibilityRole="button"
@@ -2689,12 +2777,13 @@ function MovementCard({
             alignItems: 'center',
             gap: 5,
             alignSelf: 'flex-start',
-            marginTop: 8,
+            minHeight: MIN_TAP,
+            paddingRight: 8,
             opacity: pressed ? 0.6 : 1,
           })}
         >
-          <Edit3 size={11} color={c.ink4} strokeWidth={1.6} />
-          <Mono size={9.5} tracking={0.12} upper color={c.ink4}>
+          <Edit3 size={12} color={c.ink3} strokeWidth={1.6} />
+          <Mono size={10.5} tracking={0.12} upper color={c.ink3}>
             {movement.notes ? 'Edit note' : 'Add note'}
           </Mono>
         </Pressable>
@@ -2773,6 +2862,9 @@ function MovementNoteModalContent({
   const [text, setText] = React.useState(initialNote ?? '');
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  // The box's border deepens to ink while it is typed in, as the shared
+  // Field's does.
+  const [focused, setFocused] = React.useState(false);
 
   const hadNote = normalizeMovementNote(initialNote) !== null;
   // Nothing to save when the normalized draft equals the current note (incl.
@@ -2834,17 +2926,10 @@ function MovementNoteModalContent({
             ]}
           >
             <View style={{ alignItems: 'center', marginBottom: 18 }}>
-              <View
-                style={{
-                  width: 36,
-                  height: 5,
-                  borderRadius: 100,
-                  backgroundColor: mode === 'dark' ? 'rgba(250,250,247,0.22)' : 'rgba(14,15,13,0.18)',
-                }}
-              />
+              <View style={[styles.grabber, { backgroundColor: c.ink5 }]} />
             </View>
             <Eyebrow>{hadNote ? 'EDIT NOTE' : 'ADD NOTE'}</Eyebrow>
-            <Body muted size={11.5} style={{ marginTop: 6 }}>
+            <Body muted size={12} style={{ marginTop: 6 }}>
               Notes are the only editable field on a movement — every change is recorded in the
               audit log.
             </Body>
@@ -2854,10 +2939,12 @@ function MovementNoteModalContent({
                 value={text}
                 onChangeText={setText}
                 placeholder="Add context for this movement…"
-                placeholderTextColor={c.ink5}
+                placeholderTextColor={c.ink3}
                 multiline
                 maxLength={MOVEMENT_NOTE_MAX}
                 autoFocus
+                onFocus={() => setFocused(true)}
+                onBlur={() => setFocused(false)}
                 style={{
                   fontFamily: FONT.displayRegular,
                   fontSize: 15,
@@ -2867,15 +2954,15 @@ function MovementNoteModalContent({
                   paddingTop: 12,
                   paddingBottom: 12,
                   borderWidth: 1,
-                  borderColor: c.hair,
+                  borderColor: focused ? c.ink : c.hair2,
                   borderRadius: 8,
                   color: c.ink,
-                  backgroundColor: c.paper2,
+                  backgroundColor: c.sunk,
                   textAlignVertical: 'top',
                 }}
               />
               {error ? (
-                <Body size={12.5} color={ACCENT.crit}>
+                <Body size={12.5} color={c.critText} accessibilityRole="alert">
                   {error}
                 </Body>
               ) : null}
@@ -2917,11 +3004,15 @@ function LoadMoreFooter({
   const { c } = useTheme();
   if (remaining <= 0) return null;
   return (
+    // A button to VoiceOver (it had no role), and dimmed while a page loads.
     <Pressable
       onPress={onPress}
       disabled={loading}
+      accessibilityRole="button"
       style={({ pressed }) => ({
         alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: MIN_TAP,
         paddingVertical: 13,
         opacity: loading ? 0.5 : pressed ? 0.7 : 1,
       })}
@@ -2965,7 +3056,7 @@ function AuditCard({ audit }: { audit: AuditCardModel }) {
             borderColor: c.hair,
             alignItems: 'center',
             justifyContent: 'center',
-            backgroundColor: c.card,
+            backgroundColor: c.sunk,
           }}
         >
           <Edit3 size={14} color={c.ink} strokeWidth={1.6} />
@@ -2974,7 +3065,10 @@ function AuditCard({ audit }: { audit: AuditCardModel }) {
           <Body size={14} color={c.ink} style={{ fontFamily: FONT.display }}>
             {audit.eventLabel}
           </Body>
-          <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 3 }}>
+          {/* Who and when, the fields an edit touched and its before → after
+              rows: information, in the muted ink (ink4 and ink5 held them at
+              1.8-3.7:1). */}
+          <Mono size={10.5} tracking={0.04} color={c.ink3} style={{ marginTop: 3 }}>
             {audit.actorName}
             {relative ? ` · ${relative}` : ''} · {absolute}
           </Mono>
@@ -2992,7 +3086,7 @@ function AuditCard({ audit }: { audit: AuditCardModel }) {
               already nulls this out whenever diffRows is non-empty, so this only
               ever renders for LEGACY rows written before before/after capture. */}
           {audit.changedKeys && audit.changedKeys.length > 0 ? (
-            <Mono size={10} tracking={0.02} color={c.ink4} style={{ marginTop: 6 }}>
+            <Mono size={10.5} tracking={0.02} color={c.ink3} style={{ marginTop: 6 }}>
               Fields on the edit (exact changes not recorded for this entry):{' '}
               {audit.changedKeys.map(humanizeFieldName).join(', ')}
             </Mono>
@@ -3004,12 +3098,12 @@ function AuditCard({ audit }: { audit: AuditCardModel }) {
           {audit.diffRows.length > 0 ? (
             <View style={{ marginTop: 6, gap: 3 }}>
               {audit.diffRows.map((row) => (
-                <Mono key={row.field} size={10.5} tracking={0.02} color={c.ink4}>
+                <Mono key={row.field} size={10.5} tracking={0.02} color={c.ink3}>
                   {humanizeFieldName(row.field)}: {row.before} → {row.after}
                 </Mono>
               ))}
               {audit.diffMoreCount > 0 ? (
-                <Mono size={9.5} tracking={0.04} color={c.ink5}>
+                <Mono size={10.5} tracking={0.04} color={c.ink3}>
                   +{audit.diffMoreCount} more
                 </Mono>
               ) : null}
@@ -3104,6 +3198,9 @@ function AdjustModalContent({
   const { c, mode } = useTheme();
   const [delta, setDelta] = React.useState('');
   const [reason, setReason] = React.useState('');
+  // Which box is being typed in: its border deepens to ink, as the shared
+  // Field's does.
+  const [focusedBox, setFocusedBox] = React.useState<'delta' | 'reason' | null>(null);
 
   const parsedDelta = parseInt(delta, 10);
   const isValid = !Number.isNaN(parsedDelta) && parsedDelta !== 0;
@@ -3171,21 +3268,15 @@ function AdjustModalContent({
             ]}
           >
             <View style={{ alignItems: 'center', marginBottom: 18 }}>
-              <View
-                style={{
-                  width: 36,
-                  height: 5,
-                  borderRadius: 100,
-                  backgroundColor:
-                    mode === 'dark' ? 'rgba(250,250,247,0.22)' : 'rgba(14,15,13,0.18)',
-                }}
-              />
+              <View style={[styles.grabber, { backgroundColor: c.ink5 }]} />
             </View>
             <Eyebrow>ADJUST STOCK</Eyebrow>
             <Display size={24} style={{ marginTop: 10 }}>
               {item.name}
             </Display>
-            <Mono size={11.5} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
+            {/* The base the NEW TOTAL is built on: information, in the muted
+                ink. Field labels below likewise (ink4 held them under AA). */}
+            <Mono size={11.5} tracking={0.04} color={c.ink3} style={{ marginTop: 4 }}>
               on hand {item.quantity_on_hand} {item.unit_of_measure}
               {/* The NEW TOTAL below is built on this number, so when the last
                   adjustment's outcome is unknown the sheet says so too — the
@@ -3200,7 +3291,7 @@ function AdjustModalContent({
 
             <View style={{ marginTop: 20, gap: 14 }}>
               <View style={{ gap: 6 }}>
-                <Mono size={10} tracking={0.12} upper color={c.ink4}>
+                <Mono size={10} tracking={0.12} upper color={c.ink3}>
                   CHANGE (+ ADDS, − REMOVES)
                 </Mono>
                 <TextInput
@@ -3208,12 +3299,16 @@ function AdjustModalContent({
                   onChangeText={setDelta}
                   placeholder="e.g. -3 or 12"
                   accessibilityLabel="Change, plus adds, minus removes"
-                  placeholderTextColor={c.ink5}
+                  placeholderTextColor={c.ink3}
                   keyboardType="numbers-and-punctuation"
                   autoFocus
+                  onFocus={() => setFocusedBox('delta')}
+                  onBlur={() => setFocusedBox(null)}
                   // Dynamic Type: minHeight + padding, not a hard 52pt frame —
                   // this is the box the user types the adjustment INTO, and a
-                  // clipped value or caret here is a stock error.
+                  // clipped value or caret here is a stock error. The box is
+                  // the recessed fill with the control border (paper2 is the
+                  // card colour in dark, so the box did not show there).
                   style={{
                     fontFamily: FONT.display,
                     fontSize: 18,
@@ -3221,15 +3316,15 @@ function AdjustModalContent({
                     paddingHorizontal: 14,
                     paddingVertical: 12,
                     borderWidth: 1,
-                    borderColor: c.hair,
+                    borderColor: focusedBox === 'delta' ? c.ink : c.hair2,
                     borderRadius: 8,
                     color: c.ink,
-                    backgroundColor: c.paper2,
+                    backgroundColor: c.sunk,
                   }}
                 />
               </View>
               <View style={{ gap: 6 }}>
-                <Mono size={10} tracking={0.12} upper color={c.ink4}>
+                <Mono size={10} tracking={0.12} upper color={c.ink3}>
                   REASON (OPTIONAL)
                 </Mono>
                 <TextInput
@@ -3237,10 +3332,12 @@ function AdjustModalContent({
                   onChangeText={setReason}
                   placeholder="Cycle count variance, damage, etc."
                   accessibilityLabel="Reason, optional"
-                  placeholderTextColor={c.ink5}
+                  placeholderTextColor={c.ink3}
                   // The /adjust route refuses a reason over 500 characters;
                   // stop the typing there instead of failing the whole save.
                   maxLength={500}
+                  onFocus={() => setFocusedBox('reason')}
+                  onBlur={() => setFocusedBox(null)}
                   // minHeight for the same reason as the CHANGE box above.
                   style={{
                     fontFamily: FONT.displayRegular,
@@ -3249,10 +3346,10 @@ function AdjustModalContent({
                     paddingHorizontal: 14,
                     paddingVertical: 12,
                     borderWidth: 1,
-                    borderColor: c.hair,
+                    borderColor: focusedBox === 'reason' ? c.ink : c.hair2,
                     borderRadius: 8,
                     color: c.ink,
-                    backgroundColor: c.paper2,
+                    backgroundColor: c.sunk,
                   }}
                 />
               </View>
@@ -3264,13 +3361,15 @@ function AdjustModalContent({
                   marginTop: 4,
                 }}
               >
-                <Mono size={10.5} tracking={0.12} upper color={c.ink4}>
+                <Mono size={10.5} tracking={0.12} upper color={c.ink3}>
                   NEW TOTAL
                 </Mono>
+                {/* Below zero in the mode's refusal red, at zero in its warning
+                    amber (the single-mode values were under AA in one mode). */}
                 <Mono
                   size={28}
                   tracking={-0.022}
-                  color={preview < 0 ? ACCENT.crit : preview === 0 ? ACCENT.warn : c.ink}
+                  color={preview < 0 ? c.critText : preview === 0 ? c.warnText : c.ink}
                   style={{ fontFamily: FONT.display }}
                 >
                   {preview}
@@ -3501,7 +3600,7 @@ function SerialsCard({
         >
           <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8 }}>
             <Eyebrow>SERIALS</Eyebrow>
-            <Mono size={11} tracking={0.04} color={c.ink4}>
+            <Mono size={11} tracking={0.04} color={c.ink3}>
               {total}
             </Mono>
           </View>
@@ -3511,6 +3610,8 @@ function SerialsCard({
               variant="outline"
               onPress={() => setAddOpen(true)}
               leading={<Plus size={13} color={c.ink} strokeWidth={1.6} />}
+              // 44pt, not the small Button's 36.
+              style={{ minHeight: MIN_TAP }}
             >
               Add serials
             </Button>
@@ -3520,7 +3621,8 @@ function SerialsCard({
         {error ? (
           <Body
             size={12.5}
-            color={ACCENT.crit}
+            color={c.critText}
+            accessibilityRole="alert"
             style={{ paddingHorizontal: 16, paddingBottom: 10 }}
           >
             {error}
@@ -3564,7 +3666,7 @@ function SerialsCard({
                       <Mono size={12.5} tracking={-0.012} numberOfLines={1}>
                         {row.serial_number}
                       </Mono>
-                      <Mono size={9.5} tracking={0.04} color={c.ink4} style={{ marginTop: 3 }}>
+                      <Mono size={10.5} tracking={0.04} color={c.ink3} style={{ marginTop: 3 }}>
                         {serialSourceLabel(row.receipt_line_id)} ·{' '}
                         {formatSerialDate(row.created_at)}
                       </Mono>
@@ -3581,8 +3683,11 @@ function SerialsCard({
                 <Pressable
                   onPress={() => void loadMore()}
                   disabled={loadingMore}
+                  accessibilityRole="button"
                   style={({ pressed }) => ({
                     alignItems: 'center',
+                    justifyContent: 'center',
+                    minHeight: MIN_TAP,
                     paddingVertical: 13,
                     opacity: loadingMore ? 0.5 : pressed ? 0.7 : 1,
                   })}
@@ -3601,10 +3706,12 @@ function SerialsCard({
             {canWrite ? (
               <>
                 <Hair inset={16} />
+                {/* How the rows work: information, in the muted ink (ink5 held
+                    it at about 2:1). */}
                 <Mono
-                  size={9.5}
+                  size={10.5}
                   tracking={0.04}
-                  color={c.ink5}
+                  color={c.ink3}
                   style={{ paddingHorizontal: 16, paddingVertical: 10 }}
                 >
                   Tap a serial to change status · long-press to delete manual entries
@@ -3643,7 +3750,25 @@ function SerialsCard({
 }
 
 /**
- * Colored status pill — tones from serialStatusColor (theme tokens).
+ * Which shared pill tone each serial status takes (components/ui/tones.ts
+ * pillTone; integrator decision of 2026-10-18): available on the accent wash,
+ * damaged and rma on the warning wash, rejected on the refusal wash, reserved
+ * and sold the neutral pill. Every pair is at AA or better in both modes
+ * (tones.test.ts measures the recipes; item-screens-structure.test.ts this
+ * map). The old fixed tints from lib/serials.ts serialStatusColor read under
+ * AA (light: damaged 3.36, reserved 1.99, rma 2.36; dark: rejected 2.94).
+ */
+const SERIAL_PILL_STATUS: Record<SerialStatus, PillStatus> = {
+  available: 'ok',
+  reserved: 'default',
+  damaged: 'warn',
+  rejected: 'crit',
+  sold: 'default',
+  rma: 'warn',
+};
+
+/**
+ * A serial's status pill, on the shared pill tones (see SERIAL_PILL_STATUS).
  *
  * Delegates to the shared `Pill` rather than re-rolling it. The hand-rolled
  * copy this replaces had the same `height: 22` frame the shared Pill was fixed
@@ -3651,14 +3776,11 @@ function SerialsCard({
  * border; a duplicate primitive is exactly how a fix fails to reach a screen.
  */
 function SerialStatusPill({ status }: { status: SerialStatus }) {
-  const { mode } = useTheme();
   return (
     // Uppercased at the call site: the shared Pill takes its children verbatim
     // (every other call site passes OK / LOW / OUT), and the copy this replaces
     // rendered these labels through Mono's `upper`.
-    <Pill tone={serialStatusColor(status, mode)}>
-      {SERIAL_STATUS_LABELS[status].toUpperCase()}
-    </Pill>
+    <Pill status={SERIAL_PILL_STATUS[status]}>{SERIAL_STATUS_LABELS[status].toUpperCase()}</Pill>
   );
 }
 
@@ -3717,14 +3839,7 @@ function SerialStatusSheet({
           ]}
         >
           <View style={{ alignItems: 'center', marginBottom: 18 }}>
-            <View
-              style={{
-                width: 36,
-                height: 5,
-                borderRadius: 100,
-                backgroundColor: mode === 'dark' ? 'rgba(250,250,247,0.22)' : 'rgba(14,15,13,0.18)',
-              }}
-            />
+            <View style={[styles.grabber, { backgroundColor: c.ink5 }]} />
           </View>
           <Eyebrow>SET STATUS</Eyebrow>
           <Mono size={14} tracking={-0.012} style={{ marginTop: 8 }} numberOfLines={1}>
@@ -3741,7 +3856,10 @@ function SerialStatusSheet({
             }}
           >
             {SERIAL_STATUSES.map((s, i) => {
-              const tone = serialStatusColor(s, mode);
+              // The dot is the status's pill colour (SERIAL_PILL_STATUS), a mark
+              // at 3:1 or more on the card in both modes; the word beside it
+              // is the status itself, so colour is never the only cue.
+              const tone = pillTone(SERIAL_PILL_STATUS[s], c);
               const current = row?.current_status === s;
               return (
                 <React.Fragment key={s}>
@@ -3750,13 +3868,18 @@ function SerialStatusSheet({
                     onPress={() => onSelect(s)}
                     accessibilityRole="button"
                     accessibilityLabel={`Set status ${SERIAL_STATUS_LABELS[s]}`}
+                    // The name replaces the row's words, so "Current" was never
+                    // read: the current status is announced as selected.
+                    accessibilityState={{ selected: current }}
                     style={({ pressed }) => ({
                       flexDirection: 'row',
                       alignItems: 'center',
                       gap: 10,
+                      minHeight: MIN_TAP,
                       paddingHorizontal: 14,
                       paddingVertical: 13,
-                      backgroundColor: pressed ? c.paper2 : 'transparent',
+                      // The recessed fill: paper2 is the card colour in dark.
+                      backgroundColor: pressed ? c.sunk : 'transparent',
                     })}
                   >
                     <View
@@ -3766,7 +3889,7 @@ function SerialStatusSheet({
                       {SERIAL_STATUS_LABELS[s]}
                     </Body>
                     {current ? (
-                      <Mono size={9.5} tracking={0.12} upper color={c.ink4}>
+                      <Mono size={10.5} tracking={0.12} upper color={c.ink3}>
                         Current
                       </Mono>
                     ) : null}
@@ -3895,6 +4018,8 @@ function AddSerialsModalContent({
   const [text, setText] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [submitError, setSubmitError] = React.useState<string | null>(null);
+  // The box's border deepens to ink while it is typed in.
+  const [focused, setFocused] = React.useState(false);
   // One inline error slot, exactly as before the split: a submit error (fresh
   // per open) or the warehouse-load error from the wrapper's fetch.
   const error = submitError ?? warehousesError;
@@ -3971,31 +4096,28 @@ function AddSerialsModalContent({
             ]}
           >
             <View style={{ alignItems: 'center', marginBottom: 18 }}>
-              <View
-                style={{
-                  width: 36,
-                  height: 5,
-                  borderRadius: 100,
-                  backgroundColor:
-                    mode === 'dark' ? 'rgba(250,250,247,0.22)' : 'rgba(14,15,13,0.18)',
-                }}
-              />
+              <View style={[styles.grabber, { backgroundColor: c.ink5 }]} />
             </View>
             <Eyebrow>ADD SERIALS</Eyebrow>
 
             <View style={{ marginTop: 16, gap: 14 }}>
               <View style={{ gap: 6 }}>
-                <Mono size={10} tracking={0.12} upper color={c.ink4}>
+                <Mono size={10} tracking={0.12} upper color={c.ink3}>
                   SERIAL NUMBERS (ONE PER LINE)
                 </Mono>
                 <TextInput
                   value={text}
                   onChangeText={setText}
                   placeholder={'SN-0001\nSN-0002'}
-                  placeholderTextColor={c.ink5}
+                  // Named for VoiceOver with the label above it; without a name
+                  // it read the placeholder's sample serials.
+                  accessibilityLabel="Serial numbers, one per line"
+                  placeholderTextColor={c.ink3}
                   multiline
                   autoCapitalize="characters"
                   autoCorrect={false}
+                  onFocus={() => setFocused(true)}
+                  onBlur={() => setFocused(false)}
                   style={{
                     fontFamily: FONT.mono,
                     fontSize: 13,
@@ -4005,34 +4127,34 @@ function AddSerialsModalContent({
                     paddingTop: 12,
                     paddingBottom: 12,
                     borderWidth: 1,
-                    borderColor: c.hair,
+                    borderColor: focused ? c.ink : c.hair2,
                     borderRadius: 8,
                     color: c.ink,
-                    backgroundColor: c.paper2,
+                    backgroundColor: c.sunk,
                     textAlignVertical: 'top',
                   }}
                 />
                 {parsed.serials.length > 0 && parsed.errors.length === 0 ? (
-                  <Mono size={10} tracking={0.04} color={c.ink4}>
+                  <Mono size={10.5} tracking={0.04} color={c.ink3}>
                     {parsed.serials.length} {parsed.serials.length === 1 ? 'serial' : 'serials'}{' '}
                     ready
                   </Mono>
                 ) : null}
                 {parsed.errors.map((e) => (
-                  <Body key={e} size={12.5} color={ACCENT.crit}>
+                  <Body key={e} size={12.5} color={c.critText}>
                     {e}
                   </Body>
                 ))}
               </View>
 
               <View style={{ gap: 6 }}>
-                <Mono size={10} tracking={0.12} upper color={c.ink4}>
+                <Mono size={10} tracking={0.12} upper color={c.ink3}>
                   WAREHOUSE
                 </Mono>
                 {warehouses === null ? (
                   <ActivityIndicator color={c.ink} style={{ alignSelf: 'flex-start' }} />
                 ) : warehouses.length === 0 ? (
-                  <Body size={12.5} color={ACCENT.crit}>
+                  <Body size={12.5} color={c.critText}>
                     No active warehouses — create one before adding serials.
                   </Body>
                 ) : (
@@ -4040,18 +4162,22 @@ function AddSerialsModalContent({
                     {warehouses.map((w) => {
                       const selected = w.id === warehouseId;
                       return (
+                        // The reference's chip: the recessed fill with the
+                        // control border, the chosen one in ink; a 44pt target
+                        // (it was 34pt) that says which warehouse is chosen.
                         <Pressable
                           key={w.id}
                           onPress={() => setWarehouseId(w.id)}
                           accessibilityRole="button"
                           accessibilityLabel={`Warehouse ${w.name}`}
+                          accessibilityState={{ selected }}
                           style={({ pressed }) => ({
                             paddingHorizontal: 12,
-                            height: 34,
+                            minHeight: MIN_TAP,
                             borderRadius: 8,
                             borderWidth: 1,
-                            borderColor: selected ? c.ink : c.hair,
-                            backgroundColor: selected ? c.ink : c.card,
+                            borderColor: selected ? c.ink : c.hair2,
+                            backgroundColor: selected ? c.ink : c.sunk,
                             alignItems: 'center',
                             justifyContent: 'center',
                             opacity: pressed ? 0.85 : 1,
@@ -4073,7 +4199,7 @@ function AddSerialsModalContent({
               </View>
 
               {error ? (
-                <Body size={12.5} color={ACCENT.crit}>
+                <Body size={12.5} color={c.critText} accessibilityRole="alert">
                   {error}
                 </Body>
               ) : null}
@@ -4113,27 +4239,53 @@ const styles = StyleSheet.create({
     paddingTop: 9,
     paddingBottom: 8,
   },
+  // The segmented track: padding 3, radius 10, the tabs sharing its width
+  // (DESIGN-SPEC 6.5, the phone's action segments).
   tabsRow: {
     flexDirection: 'row',
+    gap: 4,
+    padding: 3,
+    borderRadius: 10,
+    borderWidth: 1,
     marginTop: 16,
     marginBottom: 16,
     marginHorizontal: 20,
+  },
+  // A 44pt target that grows with its label (minHeight, never height).
+  tab: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: MIN_TAP,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   quickAdjust: {
     flexDirection: 'row',
     gap: 8,
     marginTop: 16,
   },
+  // The sheets' grabber: a decorative mark, drawn in the faint ink as every
+  // phone sheet's is (it was a fixed translucent ink or paper per mode).
+  grabber: {
+    width: 36,
+    height: 5,
+    borderRadius: 100,
+  },
   // Dynamic Type: minHeight so the strip grows with its labels (+1 / −1 /
   // Adjust) instead of clipping them; the labels themselves are capped at the
-  // control ceiling in QuickBtn.
+  // control ceiling in QuickBtn. 52pt and radius 14: the reference's stepper,
+  // as the Scan tab's quick adjust draws it.
   quickBtn: {
     flex: 1,
     minWidth: 0,
-    minHeight: 44,
+    minHeight: 52,
     paddingVertical: 8,
     paddingHorizontal: 6,
-    borderRadius: 10,
+    borderRadius: 14,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
