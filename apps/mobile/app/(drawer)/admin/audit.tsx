@@ -25,6 +25,9 @@ interface AuditRow {
   actor_deleted: boolean;
 }
 
+/** No rows yet (one array, so an empty list keeps one identity). */
+const NO_ROWS: AuditRow[] = [];
+
 export default function AuditLogAdmin() {
   const { orgId } = useOrg();
   const { isAdmin, loading: roleLoading } = useRole();
@@ -36,7 +39,11 @@ export default function AuditLogAdmin() {
   // simply returns no rows for the unauthorized.
   const perms = useEffectivePermissions();
   const canView = isAdmin || perms === undefined || perms.has('activity_logs:read');
-  const [rows, setRows] = React.useState<AuditRow[]>([]);
+  // The rows on screen and the workspace they were read for: a failed read
+  // keeps them only when they are this workspace's (never the last
+  // workspace's rows under "Could not refresh" after a switch).
+  const [list, setList] = React.useState<{ orgId: string; rows: AuditRow[] } | null>(null);
+  const rows = list?.rows ?? NO_ROWS;
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   // The last read failed (set by every read that completes): said as a
@@ -50,6 +57,7 @@ export default function AuditLogAdmin() {
       setLoading(false);
       return;
     }
+    const forOrg = orgId;
     let read;
     try {
       read = await supabase
@@ -65,14 +73,16 @@ export default function AuditLogAdmin() {
       read = null;
     }
     if (!read || read.error) {
+      setList((prev) => (prev !== null && prev.orgId === forOrg ? prev : null));
       setFailed(true);
       setLoading(false);
       return;
     }
     const { data } = read;
     setFailed(false);
-    setRows(
-      (data ?? []).map((row) => {
+    setList({
+      orgId: forOrg,
+      rows: (data ?? []).map((row) => {
         const r = row as Record<string, unknown>;
         const a = r.actor as AuditRow['actor'] | AuditRow['actor'][] | null;
         return {
@@ -86,7 +96,7 @@ export default function AuditLogAdmin() {
           actor_deleted: isRowPersonDeleted(r),
         };
       }),
-    );
+    });
     setLoading(false);
   }, [orgId, canView]);
 

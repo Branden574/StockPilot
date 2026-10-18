@@ -20,6 +20,9 @@ interface CharterRow {
   status: string;
 }
 
+/** No rows yet (one array, so an empty list keeps one identity). */
+const NO_ROWS: CharterRow[] = [];
+
 /**
  * Admin · Charters, read only. A read that fails is said as a failure, never
  * "No charters yet." (D25): with no rows its words stand in for the list,
@@ -29,7 +32,11 @@ interface CharterRow {
 export default function CharterAdmin() {
   const { orgId } = useOrg();
   const { isAdmin, loading: roleLoading } = useRole();
-  const [rows, setRows] = React.useState<CharterRow[]>([]);
+  // The rows on screen and the workspace they were read for: a failed read
+  // keeps them only when they are this workspace's (never the last
+  // workspace's rows under "Could not refresh" after a switch).
+  const [list, setList] = React.useState<{ orgId: string; rows: CharterRow[] } | null>(null);
+  const rows = list?.rows ?? NO_ROWS;
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   // The last read failed (set by every read that completes).
@@ -40,6 +47,7 @@ export default function CharterAdmin() {
       setLoading(false);
       return;
     }
+    const forOrg = orgId;
     let read;
     try {
       read = await supabase
@@ -51,12 +59,13 @@ export default function CharterAdmin() {
       read = null;
     }
     if (!read || read.error) {
+      setList((prev) => (prev !== null && prev.orgId === forOrg ? prev : null));
       setFailed(true);
       setLoading(false);
       return;
     }
     setFailed(false);
-    setRows((read.data ?? []) as CharterRow[]);
+    setList({ orgId: forOrg, rows: (read.data ?? []) as CharterRow[] });
     setLoading(false);
   }, [orgId, isAdmin]);
 

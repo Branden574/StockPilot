@@ -26,6 +26,9 @@ interface MappingRow {
   item: { name: string | null; sku: string | null } | null;
 }
 
+/** No rows yet (one array, so an empty list keeps one identity). */
+const NO_ROWS: MappingRow[] = [];
+
 /**
  * Admin · Vendor mappings (latest 200 by approval), read only. A read that
  * fails is said as a failure, never "No mappings yet." (D25): with no rows
@@ -35,7 +38,11 @@ interface MappingRow {
 export default function VendorMappingsAdmin() {
   const { orgId } = useOrg();
   const { isAdmin, loading: roleLoading } = useRole();
-  const [rows, setRows] = React.useState<MappingRow[]>([]);
+  // The rows on screen and the workspace they were read for: a failed read
+  // keeps them only when they are this workspace's (never the last
+  // workspace's rows under "Could not refresh" after a switch).
+  const [list, setList] = React.useState<{ orgId: string; rows: MappingRow[] } | null>(null);
+  const rows = list?.rows ?? NO_ROWS;
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   // The last read failed (set by every read that completes).
@@ -46,6 +53,7 @@ export default function VendorMappingsAdmin() {
       setLoading(false);
       return;
     }
+    const forOrg = orgId;
     let read;
     try {
       read = await supabase
@@ -63,14 +71,16 @@ export default function VendorMappingsAdmin() {
       read = null;
     }
     if (!read || read.error) {
+      setList((prev) => (prev !== null && prev.orgId === forOrg ? prev : null));
       setFailed(true);
       setLoading(false);
       return;
     }
     const { data } = read;
     setFailed(false);
-    setRows(
-      (data ?? []).map((row) => {
+    setList({
+      orgId: forOrg,
+      rows: (data ?? []).map((row) => {
         const r = row as Record<string, unknown>;
         const v = r.vendor as { name: string | null } | { name: string | null }[] | null;
         const i = r.item as { name: string | null; sku: string | null } | { name: string | null; sku: string | null }[] | null;
@@ -88,7 +98,7 @@ export default function VendorMappingsAdmin() {
           item: Array.isArray(i) ? i[0] ?? null : i,
         };
       }),
-    );
+    });
     setLoading(false);
   }, [orgId, isAdmin]);
 

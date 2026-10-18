@@ -1135,25 +1135,49 @@ describe('Admin lists: a failed read is said, never "No X yet." (D25)', () => {
   });
 
   it.each(ADMIN_LISTS)(
-    '$file: a failed read keeps the rows it had and sets the flag; a good one clears it',
+    "$file: a failed read keeps this workspace's rows, never another's; a good one replaces them",
     (list) => {
       const body = codeOnly(sourceOf(list.file));
       const load = body.slice(
         body.indexOf('const load = React.useCallback('),
         body.indexOf('React.useEffect('),
       );
-      // The failure path returns before any setRows: rows from an earlier read
-      // stay on screen, under the reload note.
-      const failurePath =
-        /if \((!read \|\| read\.error|whResp\.error)\) \{([\s\S]*?)return;\s*\}/.exec(load);
-      expect(failurePath, list.file).not.toBeNull();
-      expect(failurePath![2]).toMatch(/setFailed\((true|'list')\);/);
-      expect(failurePath![2]).not.toContain('setRows(');
+      const keepOnly = 'setList((prev) => (prev !== null && prev.orgId === forOrg ? prev : null));';
+      // Every failure path (a refused read, and a read that threw) sets the
+      // flag and keeps the rows only when they were read for this workspace:
+      // rows from an earlier read stay on screen under the reload note, and
+      // after a workspace switch the last workspace's rows are dropped.
+      const failurePaths = [
+        ...load.matchAll(
+          /if \((?:!read \|\| read\.error|whResp\.error)\) \{([\s\S]*?)return;\s*\}/g,
+        ),
+        ...load.matchAll(/\} catch \{\s*(setList[\s\S]*?)return;\s*\}/g),
+      ].map((m) => m[1]!);
+      expect(failurePaths.length, list.file).toBeGreaterThanOrEqual(1);
+      for (const path of failurePaths) {
+        expect(path).toContain(keepOnly);
+        expect(path).toMatch(/setFailed\((true|'list')\);/);
+        expect(path).not.toContain('setList({');
+      }
       // A thrown read is a failure too, never a spinner that turns forever.
-      expect(load).toMatch(/\} catch \{\s*(read = null;|setFailed\('list'\);)/);
+      expect(load).toMatch(/\} catch \{\s*(read = null;|setList\()/);
+      // Run the screen's own updater: this workspace's rows stay, another's go.
+      const updater = new Function(
+        'prev',
+        'forOrg',
+        `return (${/setList\(\(prev\) => (\([^;]*\))\);/.exec(keepOnly)![1]});`,
+      ) as (prev: { orgId: string; rows: unknown[] } | null, forOrg: string) => unknown;
+      const mine = { orgId: 'org-a', rows: [{}] };
+      expect(updater(mine, 'org-a')).toBe(mine);
+      expect(updater(mine, 'org-b')).toBeNull();
+      expect(updater(null, 'org-a')).toBeNull();
+      // A read that answered replaces the rows, tagged with its workspace.
+      expect(load).toContain('const forOrg = orgId;');
+      expect(load).toMatch(/setList\(\{\s*orgId: forOrg,\s*rows:/);
       expect(load).toMatch(
         /setFailed\((false|chartersFailed && whRows\.length > 0 \? 'charters' : null)\);/,
       );
+      expect(body).toContain('const rows = list?.rows ?? NO_ROWS;');
     },
   );
 

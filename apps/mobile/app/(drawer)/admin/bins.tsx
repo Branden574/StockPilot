@@ -22,6 +22,9 @@ interface BinRow {
   warehouse: { name: string | null; code: string | null } | null;
 }
 
+/** No rows yet (one array, so an empty list keeps one identity). */
+const NO_ROWS: BinRow[] = [];
+
 /**
  * Admin · Bins (latest 200 by code), read only. A read that fails is said as
  * a failure, never "No bins yet." (D25): with no rows its words stand in for
@@ -31,7 +34,11 @@ interface BinRow {
 export default function BinsAdmin() {
   const { orgId } = useOrg();
   const { isAdmin, loading: roleLoading } = useRole();
-  const [rows, setRows] = React.useState<BinRow[]>([]);
+  // The rows on screen and the workspace they were read for: a failed read
+  // keeps them only when they are this workspace's (never the last
+  // workspace's rows under "Could not refresh" after a switch).
+  const [list, setList] = React.useState<{ orgId: string; rows: BinRow[] } | null>(null);
+  const rows = list?.rows ?? NO_ROWS;
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   // The last read failed (set by every read that completes).
@@ -42,6 +49,7 @@ export default function BinsAdmin() {
       setLoading(false);
       return;
     }
+    const forOrg = orgId;
     let read;
     try {
       read = await supabase
@@ -57,14 +65,16 @@ export default function BinsAdmin() {
       read = null;
     }
     if (!read || read.error) {
+      setList((prev) => (prev !== null && prev.orgId === forOrg ? prev : null));
       setFailed(true);
       setLoading(false);
       return;
     }
     const { data } = read;
     setFailed(false);
-    setRows(
-      (data ?? []).map((row) => {
+    setList({
+      orgId: forOrg,
+      rows: (data ?? []).map((row) => {
         const r = row as Record<string, unknown>;
         const wh = r.warehouse as { name: string | null; code: string | null } | { name: string | null; code: string | null }[] | null;
         return {
@@ -77,7 +87,7 @@ export default function BinsAdmin() {
           warehouse: Array.isArray(wh) ? wh[0] ?? null : wh,
         };
       }),
-    );
+    });
     setLoading(false);
   }, [orgId, isAdmin]);
 

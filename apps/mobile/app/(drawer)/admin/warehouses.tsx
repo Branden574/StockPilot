@@ -21,6 +21,9 @@ interface WarehouseRow {
   charter: { name: string | null } | null;
 }
 
+/** No rows yet (one array, so an empty list keeps one identity). */
+const NO_ROWS: WarehouseRow[] = [];
+
 /**
  * Admin · Warehouses with their first charter, read only. A read that fails
  * is said as a failure, never "No warehouses yet." (D25): with no rows its
@@ -33,7 +36,11 @@ interface WarehouseRow {
 export default function WarehousesAdmin() {
   const { orgId } = useOrg();
   const { isAdmin, loading: roleLoading } = useRole();
-  const [rows, setRows] = React.useState<WarehouseRow[]>([]);
+  // The rows on screen and the workspace they were read for: a failed read
+  // keeps them only when they are this workspace's (never the last
+  // workspace's rows under "Could not refresh" after a switch).
+  const [list, setList] = React.useState<{ orgId: string; rows: WarehouseRow[] } | null>(null);
+  const rows = list?.rows ?? NO_ROWS;
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   // The last read failed: 'list' (the warehouses), 'charters' (the list
@@ -45,6 +52,7 @@ export default function WarehousesAdmin() {
       setLoading(false);
       return;
     }
+    const forOrg = orgId;
     // `warehouses.charter_id` was dropped in migration 0008 — charters
     // are now linked through the `warehouse_charters` join table.
     // Selecting the removed column previously errored and zeroed the
@@ -65,6 +73,7 @@ export default function WarehousesAdmin() {
           .eq('organization_id', orgId),
       ]);
     } catch {
+      setList((prev) => (prev !== null && prev.orgId === forOrg ? prev : null));
       setFailed('list');
       setLoading(false);
       return;
@@ -72,6 +81,7 @@ export default function WarehousesAdmin() {
     const [whResp, joinResp] = reads;
     if (whResp.error) {
       console.warn('[admin/warehouses] fetch failed:', whResp.error.message);
+      setList((prev) => (prev !== null && prev.orgId === forOrg ? prev : null));
       setFailed('list');
       setLoading(false);
       return;
@@ -113,8 +123,9 @@ export default function WarehousesAdmin() {
         (charters ?? []).map((c) => [c.id as string, (c.name as string | null) ?? '']),
       );
     }
-    setRows(
-      whRows.map((w) => {
+    setList({
+      orgId: forOrg,
+      rows: whRows.map((w) => {
         const chId = warehouseToCharter.get(w.id);
         return {
           id: w.id,
@@ -125,7 +136,7 @@ export default function WarehousesAdmin() {
           charter: chId ? { name: charterMap.get(chId) ?? null } : null,
         };
       }),
-    );
+    });
     // Missing charters matter only when there are warehouses to name them on.
     setFailed(chartersFailed && whRows.length > 0 ? 'charters' : null);
     setLoading(false);
