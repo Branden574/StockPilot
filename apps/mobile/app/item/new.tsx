@@ -14,6 +14,7 @@ import {
   TextInput,
   View,
   useWindowDimensions,
+  type TextInputProps,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -25,8 +26,10 @@ import {
   sizePlaceholder,
 } from '@stockpilot/core';
 
+import { Button } from '@/components/ui/button';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, FieldLabel, Mono } from '@/components/ui/text';
+import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { useAuth } from '@/lib/auth-context';
 import { listWarehouses, type CachedWarehouse } from '@/lib/db-reads';
 import { resizeForUpload } from '@/lib/image-resize';
@@ -57,7 +60,7 @@ import { checkCreateRack, rackDestinationHint, type CreateRackCheck } from '@/li
 import { sectionLabelText } from '@/lib/section-label';
 import { footerReservation, shouldStackRow } from '@/lib/dynamic-type-layout';
 import { supabase } from '@/lib/supabase';
-import { ACCENT, FONT } from '@/lib/theme';
+import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { useWorkspace } from '@/lib/use-workspace';
 import { loadWarehouseRackNames } from '@/lib/warehouse-racks';
@@ -73,6 +76,11 @@ const HOME_AWAY_OPTIONS: { value: SportsGroupFieldValues['homeAway']; label: str
   { value: 'away', label: 'Away' },
   { value: 'alternate', label: 'Alternate' },
 ];
+
+/** The iOS minimum tap target, in points: every control on this form is a
+ *  real frame at least this tall (never hitSlop). Declared before the module's
+ *  StyleSheets, which read it when the module loads. */
+const MIN_TAP = 44;
 
 /** Maps a file extension to an image MIME type for storage uploads. */
 function mimeForExt(ext: string): string {
@@ -191,11 +199,14 @@ function PhotosSection({
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={{ gap: 10 }}
       >
+        {/* Camera and Library: buttons to VoiceOver (they had no role), the
+            card fill with the control border. */}
         <Pressable
           onPress={fromCamera}
+          accessibilityRole="button"
           style={({ pressed }) => [
             photoStyles.photoBtn,
-            { borderColor: c.hair, opacity: pressed ? 0.7 : 1 },
+            { borderColor: c.hair2, backgroundColor: c.card, opacity: pressed ? 0.7 : 1 },
           ]}
         >
           <Camera size={20} color={c.ink} strokeWidth={1.5} />
@@ -205,9 +216,10 @@ function PhotosSection({
         </Pressable>
         <Pressable
           onPress={fromLibrary}
+          accessibilityRole="button"
           style={({ pressed }) => [
             photoStyles.photoBtn,
-            { borderColor: c.hair, opacity: pressed ? 0.7 : 1 },
+            { borderColor: c.hair2, backgroundColor: c.card, opacity: pressed ? 0.7 : 1 },
           ]}
         >
           <ImageIcon size={20} color={c.ink} strokeWidth={1.5} />
@@ -216,17 +228,28 @@ function PhotosSection({
           </Mono>
         </Pressable>
         {photos.map((p, idx) => (
-          <View key={`${p.uri}-${idx}`} style={photoStyles.photoThumb}>
+          // A staged photo on the photo ground (white in both modes,
+          // DESIGN-SPEC 6.14) with the hairline edge.
+          <View key={`${p.uri}-${idx}`} style={[photoStyles.photoThumb, { borderColor: c.hair }]}>
             <Image source={{ uri: p.uri }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+            {/* Remove: a named button (VoiceOver found an icon with no words)
+                in a 44pt frame in the corner around the same small circle,
+                drawn on the card in the device's mode (it was white on a fixed
+                dark wash, 20pt with hitSlop). */}
             <Pressable
               onPress={() => onRemove(idx)}
+              accessibilityRole="button"
+              accessibilityLabel={`Remove photo ${idx + 1}`}
               style={({ pressed }) => [
-                photoStyles.photoRemove,
+                photoStyles.photoRemoveFrame,
                 { opacity: pressed ? 0.7 : 1 },
               ]}
-              hitSlop={6}
             >
-              <X size={12} color="#fff" strokeWidth={2} />
+              <View
+                style={[photoStyles.photoRemove, { backgroundColor: c.card, borderColor: c.hair2 }]}
+              >
+                <X size={12} color={c.ink} strokeWidth={2} />
+              </View>
             </Pressable>
           </View>
         ))}
@@ -249,17 +272,27 @@ const photoStyles = StyleSheet.create({
     width: 80,
     height: 80,
     borderRadius: 14,
+    borderWidth: 1,
     overflow: 'hidden',
-    backgroundColor: '#e5e5e5',
+    backgroundColor: PHOTO_BACKGROUND,
+  },
+  // The 44pt target in the thumbnail's top-right corner; the visible circle
+  // sits in it where the old 20pt one sat (4pt in from each edge).
+  photoRemoveFrame: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    width: MIN_TAP,
+    height: MIN_TAP,
+    alignItems: 'flex-end',
+    paddingTop: 4,
+    paddingRight: 4,
   },
   photoRemove: {
-    position: 'absolute',
-    top: 4,
-    right: 4,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -979,14 +1012,15 @@ export default function NewItem() {
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
           <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
+          {/* The outline button's recipe (the card with the control border), a
+              real 44pt frame rather than a 30pt pill with hitSlop. */}
           <Pressable
             onPress={() => router.push('/scan')}
             accessibilityRole="button"
             accessibilityLabel="Scan instead"
-            hitSlop={8}
             style={({ pressed }) => [
               styles.scanShortcut,
-              { borderColor: c.hair, opacity: pressed ? 0.7 : 1 },
+              { borderColor: c.hair2, backgroundColor: c.card, opacity: pressed ? 0.7 : 1 },
             ]}
           >
             <Barcode size={14} color={c.ink} strokeWidth={1.6} />
@@ -1009,9 +1043,10 @@ export default function NewItem() {
       >
         <ScrollView
           // Dynamic Type: the reservation under the pinned footer is MEASURED,
-          // not the old hand-tuned 140 (matched to a ~95pt footer). The Create
-          // button's label wraps at accessibility sizes and the footer reaches
-          // ~135pt, which buried the last field under it. 140 stays the floor.
+          // not the old hand-tuned 140 (matched to a ~95pt footer). The footer
+          // grows with the Create button's label (the shared Button grows to
+          // the control ceiling; before it, the label wrapped and the footer
+          // reached ~135pt, which buried the last field). 140 stays the floor.
           contentContainerStyle={{
             paddingHorizontal: 20,
             paddingBottom: footerReservation(footerHeight, 140),
@@ -1030,12 +1065,11 @@ export default function NewItem() {
           <SectionLabel>BASICS</SectionLabel>
 
           <Field label={isBook ? 'TITLE' : 'NAME'}>
-            <TextInput
+            <BoxInput
               value={name}
               onChangeText={setName}
               placeholder={isBook ? 'A Brief History of Time' : 'Wireless mouse'}
-              placeholderTextColor={c.ink4}
-              style={[styles.input, { color: c.ink, borderColor: c.hair }]}
+              accessibilityLabel={isBook ? 'Title' : 'Name'}
             />
           </Field>
 
@@ -1044,10 +1078,13 @@ export default function NewItem() {
               flex
               label="SKU"
               trailing={
+                // Auto fills a suggested SKU: a button to VoiceOver (it had no
+                // role), in a 44pt frame that the field head gives back with
+                // a negative margin, so the label row keeps its height.
                 <Pressable
                   onPress={suggestSku}
-                  hitSlop={8}
-                  style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+                  accessibilityRole="button"
+                  style={({ pressed }) => [styles.autoSku, { opacity: pressed ? 0.6 : 1 }]}
                 >
                   <Mono size={11} tracking={0.06} color={c.ink3}>
                     Auto
@@ -1055,23 +1092,21 @@ export default function NewItem() {
                 </Pressable>
               }
             >
-              <TextInput
+              <BoxInput
                 value={sku}
                 onChangeText={setSku}
                 autoCapitalize="characters"
                 placeholder="SP-AB1234"
-                placeholderTextColor={c.ink4}
-                style={[styles.input, { color: c.ink, borderColor: c.hair }]}
+                accessibilityLabel="SKU"
               />
             </Field>
             <Field flex label={isBook ? 'ISBN' : 'BARCODE'}>
-              <TextInput
+              <BoxInput
                 value={barcode}
                 onChangeText={setBarcode}
                 placeholder={isBook ? '9780553380163' : '012345678905'}
-                placeholderTextColor={c.ink4}
+                accessibilityLabel={isBook ? 'ISBN' : 'Barcode'}
                 keyboardType="numeric"
-                style={[styles.input, { color: c.ink, borderColor: c.hair }]}
               />
             </Field>
           </Row>
@@ -1087,29 +1122,24 @@ export default function NewItem() {
           */}
           {variantsEnabled ? null : (
             <Field label={isBook ? 'AUTHOR' : 'MODEL NUMBER'}>
-              <TextInput
+              <BoxInput
                 value={modelNumber}
                 onChangeText={setModelNumber}
                 placeholder={isBook ? 'Stephen Hawking' : 'MX432LL/A'}
-                placeholderTextColor={c.ink4}
-                style={[styles.input, { color: c.ink, borderColor: c.hair }]}
+                accessibilityLabel={isBook ? 'Author' : 'Model number'}
               />
             </Field>
           )}
 
           <Field label="DESCRIPTION">
-            <TextInput
+            <BoxInput
               value={description}
               onChangeText={setDescription}
               placeholder="Optional notes"
-              placeholderTextColor={c.ink4}
+              accessibilityLabel="Description"
               multiline
               numberOfLines={3}
-              style={[
-                styles.input,
-                styles.multiline,
-                { color: c.ink, borderColor: c.hair },
-              ]}
+              style={styles.multiline}
             />
           </Field>
 
@@ -1138,25 +1168,13 @@ export default function NewItem() {
                 {warehouses.map((w) => {
                   const selected = warehouseId === w.id;
                   return (
-                    <Pressable
+                    <ChoiceChip
                       key={w.id}
+                      label={w.name}
+                      selected={selected}
+                      check
                       onPress={() => setWarehouseId(selected ? null : w.id)}
-                      style={({ pressed }) => [
-                        styles.chip,
-                        {
-                          borderColor: selected ? c.ink : c.hair,
-                          backgroundColor: selected ? c.card : 'transparent',
-                          opacity: pressed ? 0.8 : 1,
-                        },
-                      ]}
-                    >
-                      <Body size={13} color={c.ink} style={{ fontFamily: FONT.display }}>
-                        {w.name}
-                      </Body>
-                      {selected ? (
-                        <Check size={13} color={c.ink} strokeWidth={2} style={{ marginLeft: 6 }} />
-                      ) : null}
-                    </Pressable>
+                    />
                   );
                 })}
               </View>
@@ -1183,39 +1201,44 @@ export default function NewItem() {
 
           <Row>
             <Field flex label="RACK NUMBER">
-              {/* Uncontrolled on purpose (no `value`): see rackNumberRef. */}
-              <TextInput
+              {/* Uncontrolled on purpose (no `value`): see rackNumberRef.
+                  BoxInput passes no value of its own, so it stays uncontrolled. */}
+              <BoxInput
                 onChangeText={(t) => {
                   rackNumberRef.current = t;
                   setRackNumber(t);
                 }}
                 placeholder="38"
-                placeholderTextColor={c.ink4}
+                accessibilityLabel="Rack number"
                 autoCorrect={false}
                 spellCheck={false}
-                style={[styles.input, { color: c.ink, borderColor: c.hair }]}
               />
             </Field>
             <Field flex label="RACK ROW">
-              <TextInput
+              <BoxInput
                 onChangeText={(t) => {
                   rackRowRef.current = t;
                   setRackRow(t);
                 }}
                 placeholder="A"
-                placeholderTextColor={c.ink4}
+                accessibilityLabel="Rack row"
                 autoCapitalize="characters"
                 autoCorrect={false}
                 spellCheck={false}
-                style={[styles.input, { color: c.ink, borderColor: c.hair }]}
               />
             </Field>
           </Row>
           {rackHint ? (
+            // Where the stock will go, in the mode's warning ink for a new or
+            // unchecked rack (the single-mode amber was 3.4:1 on light paper),
+            // the secondary ink for a known one, and the muted ink while it
+            // checks (the faint ink held it under AA).
             <Mono
               size={12}
               tracking={0.02}
-              color={rackHint.tone === 'warn' ? ACCENT.warn : rackHint.tone === 'ok' ? c.ink2 : c.ink4}
+              color={
+                rackHint.tone === 'warn' ? c.warnText : rackHint.tone === 'ok' ? c.ink2 : c.ink3
+              }
               style={{ marginTop: 6 }}
             >
               {rackHint.text}
@@ -1235,21 +1258,22 @@ export default function NewItem() {
           {sportsGroupFieldDefs.length > 0 || sportsHomeAway ? (
             <>
               <SectionLabel>{sportsProfileLabel} DETAILS</SectionLabel>
-              <Mono size={11} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
+              {/* Helper lines in this form are information: the muted ink (the
+                  faint ink held them under AA). */}
+              <Mono size={11} tracking={0.04} color={c.ink3} style={{ marginTop: 4 }}>
                 Optional, but they are what group this style with the same style
                 added anywhere else.
               </Mono>
               {sportsGroupFieldDefs.map((f) => (
                 <Field key={f.key} label={f.label}>
-                  <TextInput
+                  <BoxInput
                     value={sportsGroupFields[f.key]}
                     onChangeText={(v) =>
                       setSportsGroupFields((prev) => ({ ...prev, [f.key]: v }))
                     }
                     placeholder={f.placeholder}
-                    placeholderTextColor={c.ink4}
+                    accessibilityLabel={f.label}
                     autoCapitalize="words"
-                    style={[styles.input, { color: c.ink, borderColor: c.hair }]}
                   />
                 </Field>
               ))}
@@ -1259,24 +1283,14 @@ export default function NewItem() {
                     {HOME_AWAY_OPTIONS.map((opt) => {
                       const selected = sportsGroupFields.homeAway === opt.value;
                       return (
-                        <Pressable
+                        <ChoiceChip
                           key={opt.value || 'none'}
+                          label={opt.label}
+                          selected={selected}
                           onPress={() =>
                             setSportsGroupFields((prev) => ({ ...prev, homeAway: opt.value }))
                           }
-                          style={({ pressed }) => [
-                            styles.chip,
-                            {
-                              borderColor: selected ? c.ink : c.hair,
-                              backgroundColor: selected ? c.card : 'transparent',
-                              opacity: pressed ? 0.8 : 1,
-                            },
-                          ]}
-                        >
-                          <Body size={13} color={c.ink} style={{ fontFamily: FONT.display }}>
-                            {opt.label}
-                          </Body>
-                        </Pressable>
+                        />
                       );
                     })}
                   </View>
@@ -1289,22 +1303,29 @@ export default function NewItem() {
             <>
               <SectionLabel>SIZES & QUANTITIES</SectionLabel>
               {sizesLoading ? (
-                <Mono size={11} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
+                <Mono size={11} tracking={0.04} color={c.ink3} style={{ marginTop: 4 }}>
                   Loading this category&apos;s size scale…
                 </Mono>
               ) : sizeOptions.length === 0 ? (
-                <Mono size={11} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
+                <Mono size={11} tracking={0.04} color={c.ink3} style={{ marginTop: 4 }}>
                   This category has no size scale yet. Saving creates one item.
                 </Mono>
               ) : (
                 <>
-                  <Mono size={11} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
+                  <Mono size={11} tracking={0.04} color={c.ink3} style={{ marginTop: 4 }}>
                     One item per size will be created. Leave a size at 0 to skip it.
                   </Mono>
                   <View style={{ marginTop: 10, gap: 8 }}>
                     {sizeOptions.map((sz) => (
                       <View key={sz} style={styles.sizeRow}>
-                        <View style={[styles.sizeBadge, { borderColor: c.hair }]}>
+                        {/* The size names the box beside it: the recessed fill
+                            with the control border. */}
+                        <View
+                          style={[
+                            styles.sizeBadge,
+                            { borderColor: c.hair2, backgroundColor: c.sunk },
+                          ]}
+                        >
                           {/* One line, always — see styles.sizeBadge. The badge
                               grows to fit rather than breaking the size. */}
                           <Mono
@@ -1317,15 +1338,17 @@ export default function NewItem() {
                             {sz}
                           </Mono>
                         </View>
-                        <TextInput
+                        <BoxInput
                           value={sizeQty[sz] ?? ''}
                           onChangeText={(v) =>
                             setSizeQty((prev) => ({ ...prev, [sz]: v.replace(/[^0-9]/g, '') }))
                           }
                           placeholder="0"
-                          placeholderTextColor={c.ink4}
+                          // The size is beside the box, not in it: named so
+                          // VoiceOver says which size's quantity this is.
+                          accessibilityLabel={`${sz} quantity`}
                           keyboardType="numeric"
-                          style={[styles.input, { color: c.ink, borderColor: c.hair, flex: 1 }]}
+                          style={{ flex: 1 }}
                         />
                       </View>
                     ))}
@@ -1345,21 +1368,19 @@ export default function NewItem() {
           {requiredInputs.size || requiredInputs.sizeSystem || requiredInputs.jerseyNumber ? (
             <>
               <SectionLabel>{sportsProfileLabel} VARIANT</SectionLabel>
-              <Mono size={11} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
+              <Mono size={11} tracking={0.04} color={c.ink3} style={{ marginTop: 4 }}>
                 Required for {sportsProfile?.label ?? 'this category'}.
               </Mono>
               {requiredInputs.size ? (
                 <Field label="SIZE">
-                  <TextInput
+                  <BoxInput
                     value={variantSize}
                     onChangeText={setVariantSize}
                     placeholder={`e.g. ${sizeExample}`}
-                    placeholderTextColor={c.ink4}
                     autoCapitalize="characters"
                     autoCorrect={false}
                     spellCheck={false}
                     accessibilityLabel="Size, required"
-                    style={[styles.input, { color: c.ink, borderColor: c.hair }]}
                   />
                 </Field>
               ) : null}
@@ -1369,27 +1390,14 @@ export default function NewItem() {
                     {SIZE_SYSTEMS.map((sys) => {
                       const selected = variantSizeSystem === sys;
                       return (
-                        <Pressable
+                        <ChoiceChip
                           key={sys}
+                          label={SIZE_SYSTEM_LABELS[sys]}
+                          selected={selected}
                           onPress={() => setVariantSizeSystem(selected ? null : sys)}
-                          accessibilityRole="button"
                           // "US Men's, button" alone did not say what it picks.
                           accessibilityLabel={`Size system: ${SIZE_SYSTEM_LABELS[sys]}`}
-                          accessibilityState={{ selected }}
-                          style={({ pressed }) => [
-                            styles.chip,
-                            styles.chipTall,
-                            {
-                              borderColor: selected ? c.ink : c.hair,
-                              backgroundColor: selected ? c.card : 'transparent',
-                              opacity: pressed ? 0.8 : 1,
-                            },
-                          ]}
-                        >
-                          <Body size={13} color={c.ink} style={{ fontFamily: FONT.display }}>
-                            {SIZE_SYSTEM_LABELS[sys]}
-                          </Body>
-                        </Pressable>
+                        />
                       );
                     })}
                   </View>
@@ -1397,15 +1405,13 @@ export default function NewItem() {
               ) : null}
               {requiredInputs.jerseyNumber ? (
                 <Field label="JERSEY NUMBER">
-                  <TextInput
+                  <BoxInput
                     value={jerseyNumber}
                     onChangeText={setJerseyNumber}
                     placeholder="e.g. 07"
-                    placeholderTextColor={c.ink4}
                     keyboardType="number-pad"
                     maxLength={4}
                     accessibilityLabel="Jersey number, required"
-                    style={[styles.input, { color: c.ink, borderColor: c.hair }]}
                   />
                 </Field>
               ) : null}
@@ -1416,23 +1422,21 @@ export default function NewItem() {
 
           <Row>
             <Field flex label="UNIT COST">
-              <TextInput
+              <BoxInput
                 value={unitCost}
                 onChangeText={setUnitCost}
                 placeholder="0.00"
-                placeholderTextColor={c.ink4}
+                accessibilityLabel="Unit cost"
                 keyboardType="decimal-pad"
-                style={[styles.input, { color: c.ink, borderColor: c.hair }]}
               />
             </Field>
             <Field flex label="RETAIL PRICE">
-              <TextInput
+              <BoxInput
                 value={retailPrice}
                 onChangeText={setRetailPrice}
                 placeholder="0.00"
-                placeholderTextColor={c.ink4}
+                accessibilityLabel="Retail price"
                 keyboardType="decimal-pad"
-                style={[styles.input, { color: c.ink, borderColor: c.hair }]}
               />
             </Field>
           </Row>
@@ -1440,46 +1444,42 @@ export default function NewItem() {
           <Row>
             {variantsEnabled ? null : (
               <Field flex label="ON HAND">
-                <TextInput
+                <BoxInput
                   value={onHand}
                   onChangeText={setOnHand}
                   placeholder="0"
-                  placeholderTextColor={c.ink4}
+                  accessibilityLabel="On hand"
                   keyboardType="numeric"
-                  style={[styles.input, { color: c.ink, borderColor: c.hair }]}
                 />
               </Field>
             )}
             <Field flex label="REORDER AT">
-              <TextInput
+              <BoxInput
                 value={reorderPoint}
                 onChangeText={setReorderPoint}
                 placeholder="0"
-                placeholderTextColor={c.ink4}
+                accessibilityLabel="Reorder at"
                 keyboardType="numeric"
-                style={[styles.input, { color: c.ink, borderColor: c.hair }]}
               />
             </Field>
             <Field flex label="REORDER QTY">
-              <TextInput
+              <BoxInput
                 value={reorderQuantity}
                 onChangeText={setReorderQuantity}
                 placeholder="0"
-                placeholderTextColor={c.ink4}
+                accessibilityLabel="Reorder quantity"
                 keyboardType="numeric"
-                style={[styles.input, { color: c.ink, borderColor: c.hair }]}
               />
             </Field>
           </Row>
 
           <Field label="UNIT OF MEASURE">
-            <TextInput
+            <BoxInput
               value={unitOfMeasure}
               onChangeText={setUnitOfMeasure}
               placeholder="unit"
-              placeholderTextColor={c.ink4}
+              accessibilityLabel="Unit of measure"
               autoCapitalize="none"
-              style={[styles.input, { color: c.ink, borderColor: c.hair }]}
             />
           </Field>
         </ScrollView>
@@ -1489,22 +1489,18 @@ export default function NewItem() {
         style={[styles.footer, { backgroundColor: c.paper, borderTopColor: c.hair }]}
         onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
       >
-        <Pressable
+        {/* Create is this screen's one ink button: it commits the form (the
+            accent fill belongs to New item on the list, which opened it). The
+            shared Button is announced as a button (the bare Pressable had no
+            role) and keeps its words beside the spinner while it saves. */}
+        <Button
+          block
           onPress={save}
           disabled={busy}
-          style={({ pressed }) => [
-            styles.saveBtn,
-            { backgroundColor: c.ink, opacity: pressed || busy ? 0.7 : 1 },
-          ]}
+          leading={busy ? <ActivityIndicator color={c.paper} /> : undefined}
         >
-          {busy ? (
-            <ActivityIndicator color={c.paper} />
-          ) : (
-            <Body size={15} color={c.paper} style={{ fontFamily: FONT.display }}>
-              {isBook ? 'Create book' : 'Create item'}
-            </Body>
-          )}
-        </Pressable>
+          {isBook ? 'Create book' : 'Create item'}
+        </Button>
       </View>
     </View>
   );
@@ -1596,58 +1592,124 @@ function ChipPickerField({
   return (
     <Field label={label}>
       {options.length === 0 ? (
-        <Mono size={11} tracking={0.04} color={c.ink4}>
+        <Mono size={11} tracking={0.04} color={c.ink3}>
           {emptyText ?? 'None available.'}
         </Mono>
       ) : (
         <View style={styles.chipRow}>
           {clearable ? (
-            <Pressable
+            <ChoiceChip
+              label={clearLabel ?? 'None'}
+              selected={valueId === null}
               onPress={() => onChange(null)}
-              style={({ pressed }) => [
-                styles.chip,
-                {
-                  borderColor: valueId === null ? c.ink : c.hair,
-                  backgroundColor: valueId === null ? c.card : 'transparent',
-                  opacity: pressed ? 0.8 : 1,
-                },
-              ]}
-            >
-              <Body size={13} color={c.ink} style={{ fontFamily: FONT.display }}>
-                {clearLabel ?? 'None'}
-              </Body>
-            </Pressable>
+            />
           ) : null}
           {options.map((opt) => {
             const selected = valueId === opt.id;
             return (
-              <Pressable
+              <ChoiceChip
                 key={opt.id}
+                label={opt.name}
+                selected={selected}
+                check
                 // Tapping a selected chip clears it — there's no "X" UI
                 // on a chip, so toggle-to-clear is how the user backs out
                 // of a wrong pick.
                 onPress={() => onChange(selected ? null : opt.id)}
-                style={({ pressed }) => [
-                  styles.chip,
-                  {
-                    borderColor: selected ? c.ink : c.hair,
-                    backgroundColor: selected ? c.card : 'transparent',
-                    opacity: pressed ? 0.8 : 1,
-                  },
-                ]}
-              >
-                <Body size={13} color={c.ink} style={{ fontFamily: FONT.display }}>
-                  {opt.name}
-                </Body>
-                {selected ? (
-                  <Check size={13} color={c.ink} strokeWidth={2} style={{ marginLeft: 6 }} />
-                ) : null}
-              </Pressable>
+              />
             );
           })}
         </View>
       )}
     </Field>
+  );
+}
+
+/**
+ * One choice on the form (warehouse, category, supplier, charter, location,
+ * home / away, size system): the reference's filter chip on the per-mode
+ * palette. Idle is the control border around words in the secondary ink; the
+ * chosen one is the ink fill with words in the page colour (and, where the
+ * row always had one, a check), so the choice never rests on a colour alone.
+ * A button that says whether it is chosen (only the size systems said so
+ * before), in a 44pt frame that grows with its words.
+ */
+function ChoiceChip({
+  label,
+  selected,
+  onPress,
+  check = false,
+  accessibilityLabel,
+}: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+  /** Draws a check beside the words of the chosen chip. */
+  check?: boolean;
+  /** A spoken name when the words alone do not say what the chip picks. */
+  accessibilityLabel?: string;
+}) {
+  const { c } = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      accessibilityState={{ selected }}
+      style={({ pressed }) => [
+        styles.chip,
+        styles.chipTall,
+        {
+          borderColor: selected ? c.ink : c.hair2,
+          backgroundColor: selected ? c.ink : 'transparent',
+          opacity: pressed ? 0.8 : 1,
+        },
+      ]}
+    >
+      <Body size={13} color={selected ? c.paper : c.ink2} style={{ fontFamily: FONT.display }}>
+        {label}
+      </Body>
+      {check && selected ? (
+        <Check size={13} color={c.paper} strokeWidth={2} style={{ marginLeft: 6 }} />
+      ) : null}
+    </Pressable>
+  );
+}
+
+/**
+ * One of the form's typed boxes, on the shared Field's recipe: the card fill
+ * with the control border (a control never rests on a hairline alone), the
+ * border deepening to ink while the box is typed in, the placeholder in the
+ * muted ink (the faint ink held it at 3.0-3.6:1), and the typed text uncapped
+ * (the Dynamic Type policy never caps typed content).
+ *
+ * It forwards every prop to the TextInput it draws and adds only those
+ * colours and the focus handlers: it never passes `value` or `defaultValue`
+ * of its own, so a box its caller leaves UNCONTROLLED stays uncontrolled. The
+ * rack boxes depend on that (see rackNumberRef, the 2026-09-24 "17-B became
+ * 1-B" incident), and item-screens-structure.test.ts pins it.
+ */
+function BoxInput({ style, onFocus, onBlur, ...props }: TextInputProps) {
+  const { c } = useTheme();
+  const [focused, setFocused] = React.useState(false);
+  return (
+    <TextInput
+      {...props}
+      placeholderTextColor={c.ink3}
+      onFocus={(e) => {
+        setFocused(true);
+        onFocus?.(e);
+      }}
+      onBlur={(e) => {
+        setFocused(false);
+        onBlur?.(e);
+      }}
+      style={[
+        styles.input,
+        { color: c.ink, backgroundColor: c.card, borderColor: focused ? c.ink : c.hair2 },
+        style,
+      ]}
+    />
   );
 }
 
@@ -1669,24 +1731,40 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+    minHeight: MIN_TAP,
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderWidth: 1,
-    borderRadius: 999,
+    // The small button's corner (tones.ts BUTTON_RADIUS): the pill shape is
+    // kept for status pills only.
+    borderRadius: 10,
   },
   head: {
     paddingHorizontal: 20,
     paddingTop: 9,
     paddingBottom: 4,
   },
+  // Centred, not baseline: SKU's Auto is a 44pt frame whose negative margins
+  // hand the extra height back, and a frame has no baseline to share.
   fieldHead: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'baseline',
+    alignItems: 'center',
   },
+  // Auto (suggest a SKU): a 44pt target around its word, held at the right
+  // edge, its margins giving back what the label row does not need.
+  autoSku: {
+    minWidth: MIN_TAP,
+    minHeight: MIN_TAP,
+    marginVertical: -14,
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+  },
+  // The shared Field's box (radius 8, the tile radius); the colours are
+  // BoxInput's, per mode.
   input: {
     borderWidth: 1,
-    borderRadius: 10,
+    borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 12,
     fontSize: 15,
@@ -1706,8 +1784,8 @@ const styles = StyleSheet.create({
   // whose own label outgrows the screen — that one runs off the right edge and
   // its tap target with it. maxWidth + flexShrink keep it inside the gutter and
   // let the label wrap within the pill.
-  // The size-system chips sit in a row of their own, so they take the 44 pt
-  // minimum without changing the shared chip everywhere else on this screen.
+  // The 44 pt minimum: first the size-system chips (a row of their own), now
+  // every chip on this screen (ChoiceChip), each a real 44pt target.
   chipTall: {
     minHeight: 44,
   },
@@ -1730,11 +1808,6 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 28,
     borderTopWidth: StyleSheet.hairlineWidth,
-  },
-  saveBtn: {
-    borderRadius: 14,
-    paddingVertical: 16,
-    alignItems: 'center',
   },
   sizeRow: {
     flexDirection: 'row',
