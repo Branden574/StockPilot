@@ -18,6 +18,11 @@ interface ShortcutRow {
   keys: string[];
   description: string;
   section: Section;
+  /**
+   * The keys are pressed TOGETHER (⌘K, ⌘\), shown joined by "+". Without it
+   * they are a sequence (g then i), shown with "then" between them.
+   */
+  chord?: boolean;
 }
 
 interface NavShortcut {
@@ -53,16 +58,27 @@ const SHORTCUT_ROWS: ShortcutRow[] = [
   { keys: ['n', 'i'], description: 'New item', section: 'New things' },
   { keys: ['n', 'p'], description: 'New purchase order', section: 'New things' },
   { keys: ['n', 'c'], description: 'New cycle count', section: 'New things' },
-  { keys: ['⌘', '\\'], description: 'Hide/show the sidebar (Ctrl+\\ on Windows)', section: 'View' },
+  {
+    keys: ['⌘', '\\'],
+    description: 'Hide/show the sidebar (Ctrl+\\ on Windows)',
+    section: 'View',
+    chord: true,
+  },
   { keys: ['?'], description: 'Open this keyboard-shortcuts overlay', section: 'Help' },
   { keys: ['Esc'], description: 'Close the overlay', section: 'Help' },
-  { keys: ['⌘', 'K'], description: 'Open command palette (Ctrl+K on Windows)', section: 'Search' },
+  {
+    keys: ['⌘', 'K'],
+    description: 'Open command palette (Ctrl+K on Windows)',
+    section: 'Search',
+    chord: true,
+  },
 ];
 
 const SECTION_ORDER: Section[] = ['Navigation', 'New things', 'Search', 'View', 'Help'];
 
+/** Key chips: mono 11 on the inset surface, a stronger hairline, radius 4. */
 const KBD = cn(
-  'border-border bg-card rounded border px-1.5 py-px font-mono text-[10.5px] text-foreground',
+  'bg-sunk text-foreground rounded border border-[var(--ed-line-strong)] px-[5px] py-px font-mono text-[11px] leading-4',
 );
 
 /**
@@ -174,10 +190,14 @@ export function KeyboardShortcutsProvider() {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent className="overflow-hidden p-0 sm:max-w-[560px]">
-        <div className="border-border border-b px-5 py-4">
-          <DialogTitle className="text-base font-semibold">Keyboard shortcuts</DialogTitle>
-          <DialogDescription className="mt-1 text-xs">
+      {/* p-0 at every width (the dialog pads itself from sm up): the header
+          and the list carry their own 18px padding. */}
+      <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-[560px] sm:p-0">
+        <div className="border-border border-b px-[18px] py-3.5">
+          <DialogTitle className="font-display text-[17px] font-medium tracking-[-0.01em]">
+            Keyboard shortcuts
+          </DialogTitle>
+          <DialogDescription className="mt-1 text-[12.5px]">
             Press <kbd className={KBD}>?</kbd> anywhere to open this. Sequences like
             <kbd className={cn(KBD, 'mx-1')}>g</kbd>
             then
@@ -186,23 +206,25 @@ export function KeyboardShortcutsProvider() {
           </DialogDescription>
         </div>
 
-        <div className="max-h-[60vh] overflow-y-auto px-5 py-4">
+        <div className="max-h-[60vh] overflow-y-auto px-[18px] py-4">
           {grouped.map(({ section, rows }) => (
             <section key={section} className="mb-5 last:mb-0">
-              <h3 className="text-muted-foreground mb-2 text-[10px] font-semibold uppercase tracking-wider">
+              <h3 className="text-muted-foreground mb-2 text-[11px] font-medium uppercase tracking-[0.06em]">
                 {section}
               </h3>
               <ul className="space-y-1.5">
                 {rows.map((row) => (
                   <li
                     key={`${section}-${row.keys.join('+')}-${row.description}`}
-                    className="flex items-center justify-between gap-4 text-sm"
+                    className="flex items-center justify-between gap-4 text-[13.5px]"
                   >
                     <span className="flex items-center gap-1">
                       {row.keys.map((k, idx) => (
                         <React.Fragment key={`${k}-${idx}`}>
                           {idx > 0 && (
-                            <span className="text-muted-foreground text-[10px]">then</span>
+                            <span className="text-muted-foreground text-[11px]">
+                              {row.chord ? '+' : 'then'}
+                            </span>
                           )}
                           <kbd className={KBD}>{k}</kbd>
                         </React.Fragment>
