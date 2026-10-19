@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { DetailSection } from '@/components/patterns/detail-section';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { Input } from '@/components/ui/input';
@@ -56,6 +57,9 @@ export function VendorMappingsManager({
   const [busy, setBusy] = React.useState(false);
   const [deleteTargetId, setDeleteTargetId] = React.useState<string | null>(null);
   const [deleteBusy, setDeleteBusy] = React.useState(false);
+  // Why the last delete was refused, shown inside the confirm (a toast
+  // alone sits behind the open dialog). Cleared on open and on each try.
+  const [deleteError, setDeleteError] = React.useState<string | null>(null);
 
   async function add() {
     if (!vendorId || !itemId || !vendorItemNumber.trim()) {
@@ -80,15 +84,18 @@ export function VendorMappingsManager({
     router.refresh();
   }
   function remove(id: string) {
+    setDeleteError(null);
     setDeleteTargetId(id);
   }
 
   async function confirmDelete() {
     if (!deleteTargetId) return;
     setDeleteBusy(true);
+    setDeleteError(null);
     const r = await deleteVendorItemMappingAction(deleteTargetId);
     setDeleteBusy(false);
     if (!r.ok) {
+      setDeleteError(r.error.message);
       toast.error(r.error.message);
       return;
     }
@@ -100,14 +107,13 @@ export function VendorMappingsManager({
   const itemMap = new Map(items.map((i) => [i.id, `${i.sku} — ${i.name}`]));
 
   return (
-    <div className="space-y-6">
-      <div className="rounded-xl border bg-card p-4">
-        <h2 className="text-sm font-semibold">Add mapping</h2>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+    <div className="flex flex-col gap-4">
+      <DetailSection title="Add mapping">
+        <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
-            <Label>Vendor</Label>
+            <Label htmlFor="vm-vendor">Vendor</Label>
             <Select value={vendorId} onValueChange={setVendorId}>
-              <SelectTrigger>
+              <SelectTrigger id="vm-vendor">
                 <SelectValue placeholder="Pick vendor" />
               </SelectTrigger>
               <SelectContent>
@@ -120,9 +126,9 @@ export function VendorMappingsManager({
             </Select>
           </div>
           <div className="space-y-1.5">
-            <Label>Internal item</Label>
+            <Label htmlFor="vm-item">Internal item</Label>
             <Select value={itemId} onValueChange={setItemId}>
-              <SelectTrigger>
+              <SelectTrigger id="vm-item">
                 <SelectValue placeholder="Pick item" />
               </SelectTrigger>
               <SelectContent>
@@ -135,41 +141,40 @@ export function VendorMappingsManager({
             </Select>
           </div>
           <div className="space-y-1.5">
-            <Label>Vendor item number</Label>
+            <Label htmlFor="vm-number">Vendor item number</Label>
             <Input
+              id="vm-number"
               placeholder="867474"
               value={vendorItemNumber}
               onChange={(e) => setVendorItemNumber(e.target.value)}
             />
           </div>
           <div className="space-y-1.5">
-            <Label>
+            <Label htmlFor="vm-description">
               Vendor description
-              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+              <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
             </Label>
             <Input
+              id="vm-description"
               placeholder="Duracell Coppertop AA, 24/Pack"
               value={vendorDescription}
               onChange={(e) => setVendorDescription(e.target.value)}
             />
           </div>
         </div>
-        <div className="mt-3 flex justify-end">
-          <Button onClick={add} disabled={busy} variant="gradient">
-            {busy ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Plus className="h-4 w-4" />
-            )}
+        <div className="mt-4 flex justify-end">
+          <Button onClick={add} disabled={busy} variant="gradient" aria-busy={busy}>
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
             Save mapping
           </Button>
         </div>
-      </div>
+      </DetailSection>
 
-      <div className="overflow-x-auto rounded-xl border bg-card">
-        <Table>
+      {/* Scrolls sideways inside its card on a narrow screen. */}
+      <div className="border-border bg-card overflow-hidden rounded-lg border">
+        <Table className="min-w-[560px]">
           <TableHeader>
-            <TableRow>
+            <TableRow className="hover:bg-transparent">
               <TableHead>Vendor</TableHead>
               <TableHead>Vendor item #</TableHead>
               <TableHead>Internal item</TableHead>
@@ -180,10 +185,8 @@ export function VendorMappingsManager({
             {mappings.map((m) => (
               <TableRow key={m.id}>
                 <TableCell>{vendorMap.get(m.vendor_id) ?? m.vendor_id}</TableCell>
-                <TableCell className="font-mono text-xs">
-                  {m.vendor_item_number}
-                </TableCell>
-                <TableCell>{itemMap.get(m.item_id) ?? m.item_id}</TableCell>
+                <TableCell className="font-mono text-[12.5px]">{m.vendor_item_number}</TableCell>
+                <TableCell className="text-ink-2">{itemMap.get(m.item_id) ?? m.item_id}</TableCell>
                 <TableCell className="text-right">
                   <Button
                     variant="ghost"
@@ -209,6 +212,7 @@ export function VendorMappingsManager({
         description="Future PO imports from this vendor will no longer auto-link to the mapped item — operators will need to pick the item manually until you re-add it."
         confirmLabel="Delete"
         pending={deleteBusy}
+        error={deleteError}
         onConfirm={confirmDelete}
       />
     </div>
