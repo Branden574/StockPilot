@@ -118,3 +118,91 @@ describe('DistributeBundleModal — preview spinner lifecycle', () => {
     expect(screen.getByText(/from pre-assembled stock/i)).toBeInTheDocument();
   });
 });
+
+describe('DistributeBundleModal — fields and the shortage confirmation (redesign P4.D2)', () => {
+  const SHORT = {
+    fromPhantom: 0,
+    fromComponents: 2,
+    components: [
+      {
+        itemId: 'i-1',
+        itemName: 'Goggles',
+        itemSku: 'GOG',
+        perBundleQty: 1,
+        isOptional: false,
+        needed: 2,
+        available: 1,
+        drawnFromComponents: 1,
+        shortage: 1,
+      },
+    ],
+    hasShortage: true,
+    totalShortageItems: 1,
+    totalShortageUnits: 1,
+  };
+
+  it('names the Warehouse and Linked event pickers by their labels', async () => {
+    render(
+      <DistributeBundleModal
+        bundleId="b-1"
+        bundleName="Field Kit"
+        warehouses={[{ id: 'w1', name: 'Main' }]}
+        upcomingEvents={[{ id: 'e1', title: 'Science fair', startsAt: '2026-10-20T15:00:00Z' }]}
+      />,
+    );
+    await openAndSettle();
+    expect(screen.getByLabelText('Warehouse')).toHaveTextContent('Main');
+    expect(screen.getByLabelText('Linked event (optional)')).toHaveTextContent('None');
+    expect(screen.getByLabelText('Quantity')).toHaveValue(1);
+    expect(screen.getByLabelText('Notes (optional)')).toBeInTheDocument();
+  });
+
+  it('a shortage turns the button into Distribute with shortage, marks the line with words, and sends allowShortage', async () => {
+    mockPreviewAction.mockResolvedValue({ ok: true, data: SHORT });
+    mockDistributeAction.mockResolvedValue({ ok: true, data: {} });
+    renderModal();
+    await openAndSettle();
+
+    expect(screen.getByText('2 kits from individual components')).toBeInTheDocument();
+    const short = screen.getByText('1 short');
+    // An icon and the words, never the old warning-sign glyph.
+    expect(short.querySelector('svg')).not.toBeNull();
+    expect(short.textContent).not.toContain('⚠');
+    expect(
+      screen.getByText(
+        /Distribution will record 1 missing unit as a shortage marker\. Confirm to proceed\./,
+      ),
+    ).toBeInTheDocument();
+
+    const submit = screen.getByRole('button', { name: 'Distribute with shortage' });
+    expect(submit).toBeEnabled();
+    await act(async () => {
+      fireEvent.click(submit);
+    });
+    expect(mockDistributeAction).toHaveBeenCalledWith({
+      id: 'b-1',
+      quantity: 1,
+      warehouseId: 'w1',
+      scheduleEventId: null,
+      notes: null,
+      allowShortage: true,
+    });
+    expect(mockToast.success).toHaveBeenCalledWith(
+      'Distributed 1 Field Kit kit (with shortage logged).',
+    );
+  });
+
+  it('without a shortage the button reads Distribute N kit(s) and sends allowShortage false', async () => {
+    mockDistributeAction.mockResolvedValue({ ok: true, data: {} });
+    renderModal();
+    await openAndSettle();
+    const submit = screen.getByRole('button', { name: 'Distribute 1 kit' });
+    await act(async () => {
+      fireEvent.click(submit);
+    });
+    expect(mockDistributeAction).toHaveBeenCalledWith(
+      expect.objectContaining({ allowShortage: false }),
+    );
+    expect(mockToast.success).toHaveBeenCalledWith('Distributed 1 Field Kit kit.');
+  });
+});

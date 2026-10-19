@@ -116,13 +116,16 @@ export function AssembleBundleModal({
           </div>
 
           <div className="space-y-1.5">
-            <Label>Warehouse</Label>
+            <Label htmlFor="assemble-warehouse">Warehouse</Label>
             <Select
               value={warehouseId}
               onValueChange={setWarehouseId}
               disabled={busy || Boolean(lockedWarehouseId)}
             >
-              <SelectTrigger>
+              <SelectTrigger
+                id="assemble-warehouse"
+                aria-describedby={lockedWarehouseId ? 'assemble-warehouse-locked' : undefined}
+              >
                 <SelectValue placeholder="Pick a warehouse" />
               </SelectTrigger>
               <SelectContent>
@@ -134,7 +137,7 @@ export function AssembleBundleModal({
               </SelectContent>
             </Select>
             {lockedWarehouseId && (
-              <p className="text-muted-foreground text-[11.5px]">
+              <p id="assemble-warehouse-locked" className="text-muted-foreground text-[12px]">
                 Locked — existing pre-assembled kits live at this warehouse.
               </p>
             )}
@@ -158,7 +161,7 @@ export function AssembleBundleModal({
           <Button variant="ghost" onClick={() => setOpen(false)} disabled={busy}>
             Cancel
           </Button>
-          <Button variant="gradient" onClick={submit} disabled={busy}>
+          <Button onClick={submit} disabled={busy}>
             {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
             Assemble
           </Button>

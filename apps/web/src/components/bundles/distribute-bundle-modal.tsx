@@ -29,7 +29,7 @@ import {
   distributeBundleAction,
   previewBundleDistributionAction,
 } from '@/server/actions/bundles';
-import { formatNumber } from '@/lib/utils';
+import { cn, formatNumber } from '@/lib/utils';
 
 interface Preview {
   fromPhantom: number;
@@ -155,7 +155,9 @@ export function DistributeBundleModal({
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button variant="gradient">
+        {/* The ink primary: distributing commits the work in front of you
+            (DESIGN-SPEC 6.2 hierarchy). */}
+        <Button>
           <Send className="h-3.5 w-3.5" />
           Distribute
         </Button>
@@ -170,7 +172,7 @@ export function DistributeBundleModal({
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="dist-qty">Quantity</Label>
               <Input
@@ -184,9 +186,9 @@ export function DistributeBundleModal({
               />
             </div>
             <div className="space-y-1.5">
-              <Label>Warehouse</Label>
+              <Label htmlFor="dist-warehouse">Warehouse</Label>
               <Select value={warehouseId} onValueChange={setWarehouseId} disabled={busy}>
-                <SelectTrigger>
+                <SelectTrigger id="dist-warehouse">
                   <SelectValue placeholder="Pick a warehouse" />
                 </SelectTrigger>
                 <SelectContent>
@@ -202,13 +204,13 @@ export function DistributeBundleModal({
 
           {upcomingEvents.length > 0 && (
             <div className="space-y-1.5">
-              <Label>Linked event (optional)</Label>
+              <Label htmlFor="dist-event">Linked event (optional)</Label>
               <Select
                 value={scheduleEventId}
                 onValueChange={setScheduleEventId}
                 disabled={busy}
               >
-                <SelectTrigger>
+                <SelectTrigger id="dist-event">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -247,7 +249,7 @@ export function DistributeBundleModal({
             Cancel
           </Button>
           <Button
-            variant={preview?.hasShortage ? 'destructive' : 'gradient'}
+            variant={preview?.hasShortage ? 'destructive' : 'default'}
             onClick={submit}
             disabled={busy || previewing || !preview}
           >
@@ -271,7 +273,7 @@ function PreviewBlock({
 }) {
   if (previewing && !preview) {
     return (
-      <div className="border-border bg-muted/30 rounded-md border p-3 text-xs text-muted-foreground">
+      <div className="border-border bg-sunk text-muted-foreground rounded-md border p-3 text-[12.5px]">
         <Loader2 className="mr-2 inline h-3.5 w-3.5 animate-spin" />
         Calculating preview…
       </div>
@@ -288,7 +290,7 @@ function PreviewBlock({
   return (
     <div className="space-y-2">
       {preview.fromPhantom > 0 && (
-        <div className="border-border bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 flex items-start gap-2 rounded-md border border-emerald-500/30 p-3 text-xs">
+        <div className="bg-success-wash text-success flex items-start gap-2 rounded-md p-3 text-[12.5px]">
           <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
           <div>
             <div className="font-medium">
@@ -300,11 +302,12 @@ function PreviewBlock({
       )}
       {preview.fromComponents > 0 && (
         <div
-          className={`border-border flex items-start gap-2 rounded-md border p-3 text-xs ${
+          className={cn(
+            'flex items-start gap-2 rounded-md p-3 text-[12.5px]',
             preview.hasShortage
-              ? 'bg-destructive/10 text-destructive border-destructive/30'
-              : 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30'
-          }`}
+              ? 'bg-destructive-wash text-destructive'
+              : 'bg-warning-wash text-warning',
+          )}
         >
           {preview.hasShortage ? (
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
@@ -322,7 +325,7 @@ function PreviewBlock({
                   <span className="flex-1 truncate">
                     {c.itemName}
                     {c.isOptional && (
-                      <span className="text-muted-foreground ml-1 text-[10.5px]">
+                      <span className="text-muted-foreground ml-1 text-[11px]">
                         (optional)
                       </span>
                     )}
@@ -331,15 +334,16 @@ function PreviewBlock({
                     -{formatNumber(c.drawnFromComponents)}
                   </span>
                   {c.shortage > 0 && !c.isOptional && (
-                    <span className="text-destructive tabular-nums font-semibold">
-                      ⚠ {formatNumber(c.shortage)} short
+                    <span className="text-destructive inline-flex items-center gap-1 font-semibold tabular-nums">
+                      <AlertTriangle aria-hidden="true" className="h-3 w-3 shrink-0" />
+                      {formatNumber(c.shortage)} short
                     </span>
                   )}
                 </div>
               ))}
             </div>
             {preview.hasShortage && (
-              <p className="mt-2 text-[11.5px] font-medium">
+              <p className="mt-2 text-[12px] font-medium">
                 Distribution will record {formatNumber(preview.totalShortageUnits)}{' '}
                 missing unit{preview.totalShortageUnits === 1 ? '' : 's'} as a
                 shortage marker. Confirm to proceed.
