@@ -1,11 +1,28 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ClientRelease } from '@stockpilot/core';
 
+const nav = vi.hoisted(() => ({ prefetch: vi.fn() }));
+
+vi.mock('next/navigation', () => ({
+  usePathname: () => '/dashboard/inventory',
+  useRouter: () => ({ prefetch: nav.prefetch }),
+}));
+// A plain anchor that records the prefetch it was given (data-prefetch), so a
+// test can read what each link in the drawer asks for.
 vi.mock('next/link', () => ({
-  default: ({ href, children, ...rest }: { href: string; children: React.ReactNode }) => (
-    <a href={href} {...rest}>
+  default: ({
+    href,
+    children,
+    prefetch,
+    ...rest
+  }: {
+    href: string;
+    children: React.ReactNode;
+    prefetch?: boolean | null;
+  }) => (
+    <a href={href} data-prefetch={String(prefetch)} {...rest}>
       {children}
     </a>
   ),
@@ -202,5 +219,66 @@ describe('ReleaseDrawer', () => {
   it('renders nothing when closed', () => {
     setup({ open: false });
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});
+
+/**
+ * NO LINK IN THE DRAWER PREFETCHES ITS PAGE ON SIGHT (PLAN 0.6; P2.3 review
+ * follow-up). A default <Link> prefetches as soon as it is on screen: opening
+ * the drawer fetched every entry's feature page and the history page at once,
+ * two requests each, and the release page (whats-new/[slug]) did the same for
+ * every entry it lists. Each link warms its page when a person comes to it
+ * instead, as the top bar's links do.
+ */
+describe('the drawer warms a page when a person comes to its link, never on sight', () => {
+  // The entry card's feature link and the drawer's own history link.
+  const LINKS = ['/dashboard/inventory/staging', '/dashboard/whats-new'];
+
+  /** A spy's calls with every non-string reduced to its type, safe to print. */
+  const callsOf = (spy: { mock: { calls: unknown[][] } }) =>
+    spy.mock.calls.map((args) => args.map((a) => (typeof a === 'string' ? a : `<${typeof a}>`)));
+
+  beforeEach(() => nav.prefetch.mockReset());
+
+  // Mutation caught: prefetch={false} dropped from the entry link or the
+  // history link, or a new link added to the drawer without it.
+  it('every link in the drawer is rendered with prefetch={false}, and opening it warms nothing', () => {
+    setup();
+    const links = within(screen.getByRole('dialog')).getAllByRole('link');
+    expect(links.map((a) => a.getAttribute('href')).sort()).toEqual([...LINKS].sort());
+    for (const a of links) {
+      expect(a, a.getAttribute('href') ?? '').toHaveAttribute('data-prefetch', 'false');
+    }
+    expect(callsOf(nav.prefetch)).toEqual([]);
+  });
+
+  // Mutation caught: a link left with no warm-up (its click then waits for the
+  // whole page), or a handler that hands the warm-up the event, not the href.
+  it.each([
+    ['hover', (el: Element) => fireEvent.pointerEnter(el)],
+    ['keyboard focus', (el: Element) => fireEvent.focus(el)],
+    ['pointer-down', (el: Element) => fireEvent.pointerDown(el)],
+  ])('%s on the entry link or the history link warms that page', (_label, approach) => {
+    setup();
+    const dialog = screen.getByRole('dialog');
+    for (const href of LINKS) {
+      nav.prefetch.mockClear();
+      const link = within(dialog)
+        .getAllByRole('link')
+        .find((a) => a.getAttribute('href') === href)!;
+      approach(link);
+      expect(callsOf(nav.prefetch), href).toEqual([[href]]);
+    }
+  });
+
+  it('an entry whose link is held back (this tab is behind) has nothing to warm', () => {
+    setup({ refreshRequired: true });
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('Available after you refresh.')).toBeInTheDocument();
+    expect(
+      within(dialog)
+        .getAllByRole('link')
+        .map((a) => a.getAttribute('href')),
+    ).toEqual(['/dashboard/whats-new']);
   });
 });

@@ -484,3 +484,82 @@ describe('the bar warms its pages when a person comes to a link, never on sight'
     }
   });
 });
+
+/**
+ * THE ACCOUNT MENU WARMS A PAGE WHEN A PERSON COMES TO ITS ITEM, NEVER WHEN IT
+ * OPENS (PLAN 0.6; P2.3 review follow-up). A default <Link> prefetches as soon
+ * as it is on screen, so opening the menu fetched Profile, Settings, Help,
+ * Support and Platform at once: two requests each, every one a full dynamic
+ * render. Each item now warms its page on hover, keyboard focus (the arrows
+ * move focus through the menu) or pointer-down, as the bar's links do.
+ */
+describe('the account menu warms its pages on approach, never when it opens', () => {
+  const MENU_LINKS = [
+    '/dashboard/settings/profile',
+    '/dashboard/settings',
+    '/dashboard/help',
+    '/dashboard/support',
+    '/platform',
+  ];
+
+  const callsOf = (spy: { mock: { calls: unknown[][] } }) =>
+    spy.mock.calls.map((args) => args.map((a) => (typeof a === 'string' ? a : `<${typeof a}>`)));
+
+  async function openMenu() {
+    const user = userEvent.setup();
+    render(
+      <UserMenu
+        email="demo@example.com"
+        fullName="Demo User"
+        avatarUrl={null}
+        organizationName="Demo Co"
+        isPlatformAdmin
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: /^Account menu/ }));
+    const menu = await screen.findByRole('menu');
+    return within(menu)
+      .getAllByRole('menuitem')
+      .filter((item) => item.tagName === 'A');
+  }
+
+  // Mutation caught: prefetch={false} dropped from any item, or a new link
+  // added to the menu without it.
+  it('every link in the menu is rendered with prefetch={false}, and opening it warms nothing', async () => {
+    const links = await openMenu();
+    expect(links.map((a) => a.getAttribute('href'))).toEqual(MENU_LINKS);
+    for (const a of links) {
+      expect(a, a.getAttribute('href') ?? '').toHaveAttribute('data-prefetch', 'false');
+    }
+    expect(callsOf(nav.prefetch)).toEqual([]);
+  });
+
+  // Mutation caught: an item left with no warm-up (its click then waits for
+  // the whole page), or a handler that hands the warm-up the event.
+  it.each([
+    ['hover', (el: Element) => fireEvent.pointerEnter(el)],
+    ['keyboard focus', (el: Element) => fireEvent.focus(el)],
+    ['pointer-down', (el: Element) => fireEvent.pointerDown(el)],
+  ])('%s on an item warms exactly that page', async (_label, approach) => {
+    const links = await openMenu();
+    for (const link of links) {
+      const href = link.getAttribute('href')!;
+      nav.prefetch.mockClear();
+      approach(link);
+      expect(callsOf(nav.prefetch), href).toEqual([[href]]);
+    }
+  });
+
+  // P2.2's DropdownMenuLabel writes its content uppercase (the group labels
+  // Theme and Density want that). Mutation caught: the identity block's
+  // normal-case override dropped, which would shout the person's name, email
+  // and organization.
+  it("keeps the person's name, email and organization in their own case", async () => {
+    await openMenu();
+    // The label holds the avatar and a column of name, email and organization.
+    const identity = screen.getByText('demo@example.com').parentElement!.parentElement!;
+    expect(identity).toHaveTextContent(/Demo User\s*demo@example\.com\s*Demo Co/);
+    expect(classesOf(identity)).toContain('normal-case');
+    expect(classesOf(identity)).not.toContain('uppercase');
+  });
+});

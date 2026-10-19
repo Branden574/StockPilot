@@ -6,6 +6,7 @@ import * as React from 'react';
 
 import { RELEASE_CATEGORY_LABELS, type ClientReleaseEntry } from '@stockpilot/core';
 
+import { useWarmRoute } from '@/lib/hooks/use-warm-route';
 import { cn } from '@/lib/utils';
 
 import { TOUCH_TARGET } from './constants';
@@ -47,6 +48,15 @@ export function ReleaseEntryCard({
 }) {
   const [open, setOpen] = React.useState(entry.category === 'action');
   const detailsId = React.useId();
+  // The feature link never prefetches its page on sight (PLAN 0.6): a release
+  // lists several entries, in the drawer and on its own page, and a default
+  // <Link> fetched every one of their pages as soon as it was on screen (two
+  // requests each, a full dynamic render). It warms its page when a person
+  // comes to it instead, as the top bar's links do (lib/hooks/use-warm-route.ts).
+  const warmRoute = useWarmRoute();
+  const warmLink = () => {
+    if (entry.link) warmRoute(entry.link.href);
+  };
 
   return (
     <article className="bg-card rounded-lg border p-4">
@@ -115,6 +125,10 @@ export function ReleaseEntryCard({
           ) : (
             <Link
               href={entry.link.href}
+              prefetch={false}
+              onFocus={warmLink}
+              onPointerEnter={warmLink}
+              onPointerDown={warmLink}
               onClick={() => onLinkClick?.(entry)}
               className={cn(
                 TOUCH_TARGET,
