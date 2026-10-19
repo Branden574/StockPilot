@@ -120,6 +120,8 @@ function ReceiptEntry({
   canReverse: boolean;
 }) {
   const router = useRouter();
+  // The receipt number titles its lines table (a scroll region on a phone).
+  const numberId = React.useId();
   const [reverseOpen, setReverseOpen] = React.useState(false);
   const [reason, setReason] = React.useState('');
   const [busy, setBusy] = React.useState(false);
@@ -149,7 +151,9 @@ function ReceiptEntry({
       tone={STATUS_TONE[receipt.status]}
       title={
         <span className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-          <span className="font-mono text-[13.5px] font-medium">{receipt.receipt_number}</span>
+          <span id={numberId} className="font-mono text-[13.5px] font-medium">
+            {receipt.receipt_number}
+          </span>
           <Badge variant={STATUS_BADGE[receipt.status]}>{receipt.status}</Badge>
           {canReverse && receipt.status === 'posted' && (
             <Button
@@ -189,7 +193,7 @@ function ReceiptEntry({
       }
     >
       <div className="border-border mt-1 overflow-hidden rounded-md border">
-        <Table className="text-[13px]">
+        <Table scrollLabelledBy={numberId} className="text-[13px]">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead className="whitespace-nowrap py-2 first:pl-3">Item</TableHead>

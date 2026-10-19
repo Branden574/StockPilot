@@ -60,6 +60,7 @@ export function RecentActivityWidget({
           <DetailSection
             headingLevel={3}
             title="Low-stock detail"
+            headingId="low-stock-detail-heading"
             className="@min-[936px]:col-span-7"
             aside={
               <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -95,7 +96,7 @@ export function RecentActivityWidget({
                 title="Nothing below reorder point. Quiet shift."
               />
             ) : (
-              <Table className="min-w-[480px]">
+              <Table scrollLabelledBy="low-stock-detail-heading" className="min-w-[480px]">
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
                     {LOW_STOCK_COLUMNS.map((h, i) => (

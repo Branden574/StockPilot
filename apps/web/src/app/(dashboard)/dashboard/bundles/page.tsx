@@ -64,6 +64,7 @@ export default async function BundlesListPage({
     <div className={PAGE}>
       <PageHeader
         title="Bundles"
+        titleId="bundles-title"
         subline={
           isArchivedView
             ? 'Bundles you archived. Restore one to put it back in rotation.'
@@ -148,7 +149,7 @@ export default async function BundlesListPage({
             }
           />
         ) : (
-          <Table className="min-w-[720px]">
+          <Table scrollLabelledBy="bundles-title" className="min-w-[720px]">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead>Name</TableHead>

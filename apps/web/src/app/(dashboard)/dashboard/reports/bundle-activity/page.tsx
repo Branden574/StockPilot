@@ -43,6 +43,7 @@ export default async function BundleActivityPage({
       <PageHeader
         back={<PageHeaderBackLink href="/dashboard/reports">← Back to reports</PageHeaderBackLink>}
         title="Bundle activity"
+        titleId="bundle-activity-title"
         subline={
           <>
             Distributions over the last {days} days, grouped by bundle. Shows how many kits actually
@@ -69,7 +70,7 @@ export default async function BundleActivityPage({
       </StatStrip>
 
       <DetailSection flush>
-        <Table className="min-w-[720px]">
+        <Table scrollLabelledBy="bundle-activity-title" className="min-w-[720px]">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead>Bundle</TableHead>

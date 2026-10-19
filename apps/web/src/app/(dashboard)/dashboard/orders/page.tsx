@@ -141,6 +141,7 @@ export default async function OrdersPage({
       {!loadFailed && <PerfUseful />}
       <PageHeader
         title={canApprove ? 'Order requests' : 'My requests'}
+        titleId="orders-title"
         subline={
           canApprove
             ? 'Review incoming requests and move them through approval, packaging, and delivery.'
@@ -246,7 +247,7 @@ export default async function OrdersPage({
         // sideways inside the card, never the page, when the content area is
         // narrower than its columns.
         <div className="border-border bg-card overflow-hidden rounded-lg border">
-          <Table className="min-w-[860px]">
+          <Table scrollLabelledBy="orders-title" className="min-w-[860px]">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead className="whitespace-nowrap">Order #</TableHead>

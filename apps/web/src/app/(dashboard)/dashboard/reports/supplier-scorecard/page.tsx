@@ -123,8 +123,8 @@ async function SupplierScorecardBody({ days }: { days: number }) {
         <StatStripItem label="Total spend" value={formatCurrency(data.totalSpend)} />
       </StatStrip>
 
-      <DetailSection title="By supplier" flush>
-        <Table className="min-w-[900px]">
+      <DetailSection headingId="scorecard-by-supplier-heading" title="By supplier" flush>
+        <Table scrollLabelledBy="scorecard-by-supplier-heading" className="min-w-[900px]">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead>Supplier</TableHead>

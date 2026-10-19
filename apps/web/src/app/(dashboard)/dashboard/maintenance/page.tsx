@@ -144,6 +144,7 @@ export default async function MaintenancePage({
     <div className={PAGE_BOX}>
       <PageHeader
         title={scope === 'all' ? 'All maintenance requests' : 'My maintenance requests'}
+        titleId="maintenance-title"
         subline={
           // Verbatim, brief section 22 — the list must never imply it
           // reflects current Zendesk/Outlook ticket status. Kept on one
@@ -273,7 +274,7 @@ export default async function MaintenancePage({
         // when the content area is narrower. It stays a real table: the tour
         // spotlights its first body row (`table tbody tr`).
         <div className="border-border bg-card overflow-hidden rounded-lg border">
-          <Table className="min-w-[760px]">
+          <Table scrollLabelledBy="maintenance-title" className="min-w-[760px]">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead>Request</TableHead>

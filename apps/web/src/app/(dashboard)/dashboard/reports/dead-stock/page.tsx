@@ -48,6 +48,7 @@ async function DaysShell({ daysPromise }: { daysPromise: Promise<number> }) {
       <PageHeader
         back={<PageHeaderBackLink href="/dashboard/reports">← Back to reports</PageHeaderBackLink>}
         title="Dead stock"
+        titleId="dead-stock-title"
         subline={
           <>
             On-hand items with no out-movement in the last {days} days, ranked by carrying cost. The
@@ -90,7 +91,7 @@ async function DeadStockBody({ days }: { days: number }) {
       </StatStrip>
 
       <DetailSection flush>
-        <Table className="min-w-[780px]">
+        <Table scrollLabelledBy="dead-stock-title" className="min-w-[780px]">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead>Item</TableHead>

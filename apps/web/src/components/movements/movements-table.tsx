@@ -43,6 +43,12 @@ export interface MovementDisplayRow {
 }
 
 /** The type's words: the same labels the type filter offers (Receive PO, ...). */
+/**
+ * The id the Movements page puts on its h1: the page title names the ledger
+ * table's scroll region in both page modes.
+ */
+export const MOVEMENTS_TITLE_ID = 'movements-title';
+
 const TYPE_LABEL = new Map<string, string>(MOVEMENT_TYPE_OPTIONS.map((o) => [o.value, o.label]));
 
 /**
@@ -121,7 +127,7 @@ export function MovementsTable({
 }) {
   return (
     <div className="border-border bg-card overflow-hidden rounded-lg border">
-      <Table className="min-w-[860px]">
+      <Table scrollLabelledBy={MOVEMENTS_TITLE_ID} className="min-w-[860px]">
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead>When</TableHead>

@@ -38,6 +38,9 @@ type DetailSearchParams = {
   filter?: string;
 };
 
+/** The h1's id: the count's reference names the count table's scroll region. */
+const TITLE_ID = 'cycle-count-title';
+
 export default async function CycleCountDetailPage({
   params,
   searchParams,
@@ -170,6 +173,7 @@ export default async function CycleCountDetailPage({
             'Cycle count'
           )
         }
+        titleId={TITLE_ID}
         titleAside={reference ? <CopyReferenceButton reference={reference} /> : null}
         meta={reference ? null : <span>{CYCLE_COUNT_REFERENCE_UNAVAILABLE}</span>}
         subline={
@@ -211,6 +215,7 @@ export default async function CycleCountDetailPage({
         itemsInScopeCount={itemsInScopeCount}
         timeZone={tz}
         role={ctx.role}
+        titleId={TITLE_ID}
         linkedExceptions={
           // The exceptions a recount linked to this count (F1-2): streamed, so
           // the count never waits for it; a failed read says unavailable.

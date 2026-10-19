@@ -250,8 +250,12 @@ export default async function ItemCostHistoryPage({
         </DetailSection>
       )}
 
-      <DetailSection title={<>All observations ({formatNumber(data.pointCount)})</>} flush>
-        <Table className="min-w-[520px]">
+      <DetailSection
+        headingId="cost-history-observations-heading"
+        title={<>All observations ({formatNumber(data.pointCount)})</>}
+        flush
+      >
+        <Table scrollLabelledBy="cost-history-observations-heading" className="min-w-[520px]">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead>Supplier</TableHead>

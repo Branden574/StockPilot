@@ -63,6 +63,7 @@ export default async function VelocityClassPage({
       <PageHeader
         back={<PageHeaderBackLink href="/dashboard/reports">← Back to reports</PageHeaderBackLink>}
         title="Velocity classes (ABC)"
+        titleId="velocity-class-title"
         subline={
           <>
             Items ranked by dollars-out over the last {days} days. A = your top performers (focus
@@ -95,7 +96,7 @@ export default async function VelocityClassPage({
       </div>
 
       <DetailSection flush>
-        <Table className="min-w-[860px]">
+        <Table scrollLabelledBy="velocity-class-title" className="min-w-[860px]">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead>Class</TableHead>

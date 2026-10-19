@@ -130,8 +130,13 @@ export default async function PlanningPage() {
       {/* Distinct from Reports > Reorder forecast: this ranks by demand
           velocity. Up to PLANNING_MAX_ITEMS rows in one server-rendered table
           that scrolls sideways inside its card on a narrow screen. */}
-      <DetailSection title="Reorder suggestions" flush data-slot="planning-suggestions">
-        <Table className="min-w-[860px]">
+      <DetailSection
+        headingId="planning-suggestions-heading"
+        title="Reorder suggestions"
+        flush
+        data-slot="planning-suggestions"
+      >
+        <Table scrollLabelledBy="planning-suggestions-heading" className="min-w-[860px]">
           <TableHeader>
             <TableRow className="hover:bg-transparent [&>th]:whitespace-nowrap xl:[&>th]:whitespace-normal">
               <TableHead>Item</TableHead>

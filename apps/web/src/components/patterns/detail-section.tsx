@@ -20,6 +20,8 @@ import { cn } from '@/lib/utils';
 export interface DetailSectionProps extends Omit<React.ComponentProps<'section'>, 'title'> {
   title?: React.ReactNode;
   headingLevel?: 2 | 3 | 4;
+  /** id on the title's heading, for an `aria-labelledby` elsewhere (a table's scroll region). */
+  headingId?: string;
   /** Right side of the header: `DetailSectionMeta` text or a `DetailSectionLink`. */
   aside?: React.ReactNode;
   /** A footer bar under the body (totals, the card's commit button). */
@@ -33,6 +35,7 @@ export interface DetailSectionProps extends Omit<React.ComponentProps<'section'>
 export function DetailSection({
   title,
   headingLevel = 2,
+  headingId,
   aside,
   footer,
   flush = false,
@@ -58,7 +61,10 @@ export function DetailSection({
           className="border-border flex min-h-[49px] flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b px-[18px] py-2.5"
         >
           {title != null ? (
-            <Heading className="text-foreground min-w-0 text-[13.5px] font-medium leading-5">
+            <Heading
+              id={headingId}
+              className="text-foreground min-w-0 text-[13.5px] font-medium leading-5"
+            >
               {title}
             </Heading>
           ) : (

@@ -78,6 +78,19 @@ describe('DetailSection', () => {
     expect(container.querySelector('section#physical-count')).not.toBeNull();
   });
 
+  it('puts headingId on the heading, so a table in the card can be named by it', () => {
+    render(
+      <DetailSection title="Reorder suggestions" headingId="planning-suggestions-heading" flush>
+        <div role="region" aria-labelledby="planning-suggestions-heading" />
+      </DetailSection>,
+    );
+    expect(screen.getByRole('heading', { level: 2, name: 'Reorder suggestions' })).toHaveAttribute(
+      'id',
+      'planning-suggestions-heading',
+    );
+    expect(screen.getByRole('region', { name: 'Reorder suggestions' })).toBeInTheDocument();
+  });
+
   it('keeps the header 49 px with a small button aside, level with a text or link header', () => {
     const { container } = render(
       <DetailSection

@@ -75,8 +75,8 @@ async function ReorderForecastBody() {
         <StatStripItem label="Estimated cost" value={formatCurrency(data.totalEstimatedCost)} />
       </StatStrip>
 
-      <DetailSection title="Items below par" flush>
-        <Table className="min-w-[860px]">
+      <DetailSection headingId="reorder-forecast-items-heading" title="Items below par" flush>
+        <Table scrollLabelledBy="reorder-forecast-items-heading" className="min-w-[860px]">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead>Item</TableHead>

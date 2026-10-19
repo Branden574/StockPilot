@@ -23,6 +23,9 @@ export function LotTraceSearch() {
   const [result, setResult] = React.useState<LotTraceResult | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
+  // Each result card's heading names its table's scroll region.
+  const receivedId = React.useId();
+  const pickedId = React.useId();
 
   async function run(e: React.FormEvent) {
     e.preventDefault();
@@ -70,8 +73,12 @@ export function LotTraceSearch() {
       )}
       {result && (
         <>
-          <DetailSection title={<>Received ({result.receipts.length})</>} flush>
-            <Table className="min-w-[560px]">
+          <DetailSection
+            headingId={receivedId}
+            title={<>Received ({result.receipts.length})</>}
+            flush
+          >
+            <Table scrollLabelledBy={receivedId} className="min-w-[560px]">
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
                   <TableHead>Receipt</TableHead>
@@ -100,8 +107,12 @@ export function LotTraceSearch() {
               </TableBody>
             </Table>
           </DetailSection>
-          <DetailSection title={<>Picked / shipped ({result.picks.length})</>} flush>
-            <Table className="min-w-[420px]">
+          <DetailSection
+            headingId={pickedId}
+            title={<>Picked / shipped ({result.picks.length})</>}
+            flush
+          >
+            <Table scrollLabelledBy={pickedId} className="min-w-[420px]">
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
                   <TableHead>Order</TableHead>

@@ -121,6 +121,9 @@ interface Props {
       its LinkedExceptionsBlock here (inside its own Suspense), so the count
       never waits for it. Shown in the side rail beside the count. */
   linkedExceptions?: React.ReactNode;
+  /** The id of the page's h1 (the count's reference), which names the count
+      table's scroll region. */
+  titleId?: string;
 }
 
 /** The count tables' edge cells pad 18 (DESIGN-SPEC 6.9). */
@@ -160,6 +163,7 @@ export function CycleCountDetail({
   timeZone,
   role = 'viewer',
   linkedExceptions,
+  titleId,
 }: Props) {
   const router = useRouter();
   const pathname = usePathname();
@@ -509,7 +513,7 @@ export function CycleCountDetail({
               />
             </div>
 
-            <Table className="min-w-[600px]">
+            <Table scrollLabelledBy={titleId} className="min-w-[600px]">
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
                   <TableHead className={EDGE}>Item</TableHead>

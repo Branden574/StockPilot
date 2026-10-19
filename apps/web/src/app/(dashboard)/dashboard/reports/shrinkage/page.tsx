@@ -79,8 +79,8 @@ export default async function ShrinkagePage({
         <StatStripItem label="Cost impact" value={formatCurrency(data.totalCost)} />
       </StatStrip>
 
-      <DetailSection title="Negative adjustments" flush>
-        <Table className="min-w-[820px]">
+      <DetailSection headingId="shrinkage-adjustments-heading" title="Negative adjustments" flush>
+        <Table scrollLabelledBy="shrinkage-adjustments-heading" className="min-w-[820px]">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead>When</TableHead>

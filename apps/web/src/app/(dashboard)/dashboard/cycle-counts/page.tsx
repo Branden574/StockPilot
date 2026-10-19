@@ -164,6 +164,7 @@ export default async function CycleCountsPage({
       <RememberCycleCountListView q={q} status={status} page={result.page} />
       <PageHeader
         title={heading}
+        titleId="cycle-counts-title"
         subline={
           // A reading width, so the start button keeps its place on the
           // title's line instead of wrapping under a full-width sentence.
@@ -237,7 +238,7 @@ export default async function CycleCountsPage({
             />
           )
         ) : (
-          <Table className="min-w-[760px]">
+          <Table scrollLabelledBy="cycle-counts-title" className="min-w-[760px]">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead className={EDGE}>Count #</TableHead>

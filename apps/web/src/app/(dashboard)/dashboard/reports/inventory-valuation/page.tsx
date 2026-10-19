@@ -103,8 +103,8 @@ async function InventoryValuationBody({ charterId }: { charterId: string | null 
       </StatStrip>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <DetailSection title="By warehouse" flush>
-          <Table className="min-w-[360px]">
+        <DetailSection headingId="valuation-by-warehouse-heading" title="By warehouse" flush>
+          <Table scrollLabelledBy="valuation-by-warehouse-heading" className="min-w-[360px]">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead>Warehouse</TableHead>
@@ -136,8 +136,8 @@ async function InventoryValuationBody({ charterId }: { charterId: string | null 
           </Table>
         </DetailSection>
 
-        <DetailSection title="By category" flush>
-          <Table className="min-w-[360px]">
+        <DetailSection headingId="valuation-by-category-heading" title="By category" flush>
+          <Table scrollLabelledBy="valuation-by-category-heading" className="min-w-[360px]">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead>Category</TableHead>
@@ -170,8 +170,8 @@ async function InventoryValuationBody({ charterId }: { charterId: string | null 
         </DetailSection>
       </div>
 
-      <DetailSection title="All items" flush>
-        <Table className="min-w-[760px]">
+      <DetailSection headingId="valuation-all-items-heading" title="All items" flush>
+        <Table scrollLabelledBy="valuation-all-items-heading" className="min-w-[760px]">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead>Item</TableHead>

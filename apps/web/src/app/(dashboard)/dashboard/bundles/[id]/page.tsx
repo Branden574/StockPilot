@@ -124,7 +124,11 @@ export default async function BundleDetailPage({ params }: { params: Promise<{ i
           rail), one column below. */}
       <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1.7fr)_minmax(280px,1fr)]">
         <div className="flex min-w-0 flex-col gap-4">
-          <DetailSection title={`Components (${detail.components.length})`} flush>
+          <DetailSection
+            headingId="bundle-components-heading"
+            title={`Components (${detail.components.length})`}
+            flush
+          >
             {detail.components.length === 0 ? (
               <StatePanel
                 kind="empty"
@@ -134,7 +138,10 @@ export default async function BundleDetailPage({ params }: { params: Promise<{ i
                 title="No components — edit this bundle to add some."
               />
             ) : (
-              <Table className="sm:min-w-[480px] [&_td]:max-sm:px-2 [&_td]:max-sm:first:pl-4 [&_td]:max-sm:last:pr-4 [&_th]:max-sm:px-2 [&_th]:max-sm:first:pl-4 [&_th]:max-sm:last:pr-4">
+              <Table
+                scrollLabelledBy="bundle-components-heading"
+                className="sm:min-w-[480px] [&_td]:max-sm:px-2 [&_td]:max-sm:first:pl-4 [&_td]:max-sm:last:pr-4 [&_th]:max-sm:px-2 [&_th]:max-sm:first:pl-4 [&_th]:max-sm:last:pr-4"
+              >
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
                     <TableHead>Item</TableHead>
@@ -183,7 +190,11 @@ export default async function BundleDetailPage({ params }: { params: Promise<{ i
             )}
           </DetailSection>
 
-          <DetailSection title="Recent distributions" flush>
+          <DetailSection
+            headingId="bundle-distributions-heading"
+            title="Recent distributions"
+            flush
+          >
             {recent.length === 0 ? (
               <StatePanel
                 kind="empty"
@@ -193,7 +204,7 @@ export default async function BundleDetailPage({ params }: { params: Promise<{ i
                 title="No distributions yet."
               />
             ) : (
-              <Table className="min-w-[560px]">
+              <Table scrollLabelledBy="bundle-distributions-heading" className="min-w-[560px]">
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
                     <TableHead>When</TableHead>

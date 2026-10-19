@@ -43,6 +43,7 @@ export default async function BundleShortagesPage({
       <PageHeader
         back={<PageHeaderBackLink href="/dashboard/reports">← Back to reports</PageHeaderBackLink>}
         title="Bundle shortages"
+        titleId="bundle-shortages-title"
         subline={
           <>
             Items that ran short during a bundle distribution in the last {days} days, grouped by
@@ -72,7 +73,7 @@ export default async function BundleShortagesPage({
       </StatStrip>
 
       <DetailSection flush>
-        <Table className="min-w-[520px]">
+        <Table scrollLabelledBy="bundle-shortages-title" className="min-w-[520px]">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead>Item</TableHead>

@@ -10,7 +10,11 @@ import {
 } from '@/components/movements/movements-export';
 import { MovementsFilterBar } from '@/components/movements/movements-filter-bar';
 import { MovementsInstantTable } from '@/components/movements/movements-instant-table';
-import { MovementsTable, type MovementDisplayRow } from '@/components/movements/movements-table';
+import {
+  MOVEMENTS_TITLE_ID,
+  MovementsTable,
+  type MovementDisplayRow,
+} from '@/components/movements/movements-table';
 import { PageHeader } from '@/components/patterns/page-header';
 import { StatePanel } from '@/components/patterns/state-panel';
 import { PerfUseful } from '@/components/perf/perf-useful';
@@ -262,6 +266,7 @@ export default async function MovementsPage({
         <PerfUseful />
         <PageHeader
           title="Stock movements"
+          titleId={MOVEMENTS_TITLE_ID}
           subline="Every quantity change, audited. The ledger is append-only."
           actions={
             instantLedger ? (

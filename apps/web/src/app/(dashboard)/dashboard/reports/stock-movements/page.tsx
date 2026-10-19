@@ -94,8 +94,8 @@ async function StockMovementsBody({ days }: { days: number }) {
         <StatStripItem label="Items affected" value={formatNumber(data.topMovers.length)} />
       </StatStrip>
 
-      <DetailSection title="By movement type" flush>
-        <Table className="min-w-[420px]">
+      <DetailSection headingId="movement-summary-by-type-heading" title="By movement type" flush>
+        <Table scrollLabelledBy="movement-summary-by-type-heading" className="min-w-[420px]">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead>Type</TableHead>
@@ -134,8 +134,8 @@ async function StockMovementsBody({ days }: { days: number }) {
         </Table>
       </DetailSection>
 
-      <DetailSection title="Top movers" flush>
-        <Table className="min-w-[640px]">
+      <DetailSection headingId="movement-summary-top-movers-heading" title="Top movers" flush>
+        <Table scrollLabelledBy="movement-summary-top-movers-heading" className="min-w-[640px]">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead>Item</TableHead>

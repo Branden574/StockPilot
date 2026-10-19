@@ -130,8 +130,9 @@ describe('ItemSerialsPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: /add serials/i }));
     await screen.findByText('Add serial numbers');
 
-    // Single warehouse pre-selects itself; only the serials are needed.
-    fireEvent.change(screen.getByLabelText('Serial numbers'), {
+    // Single warehouse pre-selects itself; only the serials are needed. (The
+    // serials table's scroll region shares the card heading's name.)
+    fireEvent.change(screen.getByRole('textbox', { name: 'Serial numbers' }), {
       target: { value: 'SN-9\nSN-10' },
     });
     // Live count reflects the parsed lines.

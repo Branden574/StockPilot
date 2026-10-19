@@ -63,6 +63,7 @@ export default async function LotExpiryReportPage() {
     <div className={REPORT_PAGE_CLASS}>
       <PageHeader
         title="Aging & expiry"
+        titleId="lot-expiry-title"
         subline="Lots with remaining quantity, earliest expiry first. Remaining nets recorded FEFO picks out of received quantity."
       />
       {counts.length > 0 && (
@@ -80,7 +81,7 @@ export default async function LotExpiryReportPage() {
         </div>
       )}
       <DetailSection flush>
-        <Table className="min-w-[620px]">
+        <Table scrollLabelledBy="lot-expiry-title" className="min-w-[620px]">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead>Item</TableHead>

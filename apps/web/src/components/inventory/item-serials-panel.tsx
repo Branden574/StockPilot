@@ -148,6 +148,9 @@ export function ItemSerialsPanel({
     });
   }, []);
 
+  // The card's heading names the serials table (a scroll region on a phone).
+  const headingId = React.useId();
+
   // Inline serial-number editing.
   const [editingId, setEditingId] = React.useState<string | null>(null);
   const [editValue, setEditValue] = React.useState('');
@@ -389,6 +392,7 @@ export function ItemSerialsPanel({
           <ScanBarcode className="text-muted-foreground h-4 w-4" aria-hidden /> Serial numbers
         </span>
       }
+      headingId={headingId}
       aside={addSerialsDialog}
       flush
     >
@@ -405,7 +409,7 @@ export function ItemSerialsPanel({
         </p>
       ) : (
         <div className="mt-2">
-          <Table>
+          <Table scrollLabelledBy={headingId}>
             <TableHeader>
               <TableRow>
                 <TableHead>Serial number</TableHead>
