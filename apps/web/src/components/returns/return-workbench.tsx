@@ -1038,27 +1038,27 @@ export function ReturnWorkbench({
             {noSteps ? (
               <p className="text-muted-foreground text-[13px]">No further steps for this return.</p>
             ) : null}
+            {/* The live region's role and name sit on a wrapper so the list
+                stays a list (a role on the <ul> erased its list semantics and
+                left its items without a list: axe aria-allowed-role and
+                listitem). */}
             {showChoiceProblems ? (
-              <ul
-                className="text-destructive space-y-0.5 text-[13px]"
-                role="status"
-                aria-label="Choose a destination"
-              >
-                {choiceProblems.map((p) => (
-                  <li key={p}>{p}</li>
-                ))}
-              </ul>
+              <div role="status" aria-label="Choose a destination">
+                <ul className="text-destructive space-y-0.5 text-[13px]">
+                  {choiceProblems.map((p) => (
+                    <li key={p}>{p}</li>
+                  ))}
+                </ul>
+              </div>
             ) : null}
             {exchangeProblems.length > 0 ? (
-              <ul
-                className="text-destructive space-y-0.5 text-[13px]"
-                role="status"
-                aria-label="Before approving the exchange"
-              >
-                {[...new Set(exchangeProblems)].map((p) => (
-                  <li key={p}>{p}</li>
-                ))}
-              </ul>
+              <div role="status" aria-label="Before approving the exchange">
+                <ul className="text-destructive space-y-0.5 text-[13px]">
+                  {[...new Set(exchangeProblems)].map((p) => (
+                    <li key={p}>{p}</li>
+                  ))}
+                </ul>
+              </div>
             ) : null}
             {showShort ? (
               <div className="space-y-2" role="alert" aria-label="Not in stock">

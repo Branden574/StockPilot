@@ -243,6 +243,33 @@ describe('ReturnWorkbench states', () => {
     });
   });
 
+  // Redesign P4.B3 (axe aria-allowed-role + listitem on the base): the
+  // status's role and name sat on the <ul> itself, which erased its list
+  // semantics and left each sentence a list item without a list.
+  it('the destination problems are a named status that keeps its list of sentences', () => {
+    const failed = {
+      plan: {
+        disposition: 'restock' as const,
+        target: 'original' as const,
+        locationId: null,
+        basis: 'single_source',
+        seq: 4,
+      },
+      offerOriginal: false,
+      sources: [src(R31, '31-C', 1, false, 'archived')],
+    };
+    render(<ReturnWorkbench workbench={bench('received', failed)} />);
+    const status = screen.getByRole('status', { name: 'Choose a destination' });
+    const list = within(status).getByRole('list');
+    expect(
+      within(list)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent),
+    ).toEqual([
+      'Walk New Hire Shirt, M: Original rack is no longer available: 31-C (archived). Choose a destination.',
+    ]);
+  });
+
   it('two lines, one rack gone: Process return stays disabled and names only the gone line (review)', () => {
     const plan = { disposition: 'restock' as const, target: 'original' as const, locationId: null, basis: 'single_source', seq: 4 };
     const good = { ...opts({ returnLineId: 'l1', plan }) };

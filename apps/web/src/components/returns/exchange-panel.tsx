@@ -1068,18 +1068,18 @@ export function ChangeReplacementDialog({
             value={reason}
             onChange={setReason}
           />
+          {/* The alert's role and name sit on a wrapper so the list stays a
+              list (a role on the <ul> erased its list semantics). */}
           {short.length > 0 ? (
-            <ul
-              className="text-destructive space-y-0.5 text-[13px]"
-              role="alert"
-              aria-label="Not in stock"
-            >
-              {short.map((s) => (
-                <li key={s.itemId}>
-                  {replacementShortLine(labelOf(s.itemId), s.available, s.needed)}
-                </li>
-              ))}
-            </ul>
+            <div role="alert" aria-label="Not in stock">
+              <ul className="text-destructive space-y-0.5 text-[13px]">
+                {short.map((s) => (
+                  <li key={s.itemId}>
+                    {replacementShortLine(labelOf(s.itemId), s.available, s.needed)}
+                  </li>
+                ))}
+              </ul>
+            </div>
           ) : null}
           <DialogError error={error} />
         </div>
