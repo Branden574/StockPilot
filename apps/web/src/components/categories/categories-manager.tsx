@@ -6,9 +6,9 @@ import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
-import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import {
   Dialog,
@@ -28,6 +28,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { cn } from '@/lib/utils';
 import {
   archiveCategoryAction,
   createCategoryAction,
@@ -51,6 +52,7 @@ import {
   type TrackingMode,
 } from '@stockpilot/core';
 
+import { CategoriesHeader } from './categories-header';
 import {
   EMPTY_TRACKING_PROFILE_DRAFT,
   isTrackingProfileComplete,
@@ -88,6 +90,15 @@ interface FormValues {
 }
 
 const PRESET_COLORS = ['#6366f1', '#10b981', '#f97316', '#0ea5e9', '#a855f7', '#ec4899', '#64748b', '#eab308'];
+
+/**
+ * A card's Archive button (CONFLICTS D18). It used to be opacity-0 until the
+ * card was hovered, so a phone or tablet never showed it and a keyboard user
+ * tabbed onto an invisible button. Now only a fine pointer (a mouse) hides it
+ * until the card is hovered or holds focus; on touch it always shows.
+ */
+const HOVER_REVEAL =
+  'transition-opacity pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:group-focus-within:opacity-100';
 
 /**
  * Resolves what the Tracking column shows for a row (Task 12). Returns null
@@ -259,39 +270,48 @@ export function CategoriesManager({
     router.refresh();
   }
 
-  function renderCard(row: CategoryRow, parent: CategoryRow | null) {
+  /** One category: its own card, or (`nested`) a line inside its root's card. */
+  function renderCard(row: CategoryRow, parent: CategoryRow | null, nested = false) {
     const tracking = sportsEnabled ? resolveTrackingDisplay(row, parent) : null;
     return (
       <div
         key={row.id}
-        className="group flex items-start gap-3 rounded-xl border bg-card p-4 transition-shadow hover:shadow-md"
+        data-testid="category-card"
+        className={cn(
+          'group flex min-w-0 items-start gap-3 rounded-lg transition-colors',
+          nested
+            ? 'px-0 py-1'
+            : 'border-border bg-card hover:border-line-strong border p-4',
+        )}
       >
         <span
           aria-hidden
-          className="mt-1 h-3 w-3 shrink-0 rounded-full"
+          className="mt-[5px] h-2.5 w-2.5 shrink-0 rounded-full"
           style={{ backgroundColor: row.color ?? '#94a3b8' }}
         />
-        <div className="flex-1 min-w-0">
+        <div className="min-w-0 flex-1">
           {isArchivedView || !canManage ? (
-            <span className="block text-left font-medium">{row.name}</span>
+            <span className="text-foreground block text-left text-[13.5px] font-medium [overflow-wrap:anywhere]">
+              {row.name}
+            </span>
           ) : (
             <button
               type="button"
               onClick={() => openEdit(row)}
-              className="block text-left font-medium transition-colors hover:text-primary"
+              className="text-foreground hover:text-accent block rounded-sm text-left text-[13.5px] font-medium transition-colors [overflow-wrap:anywhere]"
             >
               {row.name}
             </button>
           )}
           {row.description && (
-            <p className="mt-0.5 truncate text-xs text-muted-foreground">{row.description}</p>
+            <p className="text-muted-foreground mt-0.5 truncate text-[12.5px]">{row.description}</p>
           )}
           {tracking && (
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              Tracking: <span className="font-medium text-foreground">{tracking.label}</span>
+            <p className="text-muted-foreground mt-1 text-[12px]">
+              Tracking: <span className="text-foreground font-medium">{tracking.label}</span>
               {tracking.inherited && ' (inherited)'}
               {' · Counting unit: '}
-              <span className="font-medium text-foreground">{tracking.countingUnit}</span>
+              <span className="text-foreground font-medium">{tracking.countingUnit}</span>
             </p>
           )}
           {canManagePublicVisibility && <CategoryVisibilityControl category={row} />}
@@ -305,11 +325,11 @@ export function CategoriesManager({
             <Button
               variant="ghost"
               size="icon"
-              className="opacity-0 transition-opacity group-hover:opacity-100"
+              className={cn('-mr-1 -mt-1', HOVER_REVEAL)}
               onClick={() => setArchiveTarget(row)}
               aria-label={`Archive ${row.name}`}
             >
-              <Trash2 className="h-4 w-4 text-muted-foreground" />
+              <Trash2 className="text-muted-foreground h-4 w-4" />
             </Button>
           ))}
       </div>
@@ -321,25 +341,27 @@ export function CategoriesManager({
 
   return (
     <>
-      <div className="mb-5 flex items-center justify-between gap-2">
-        <ArchiveViewToggle view={view} />
-        <div className="flex items-center gap-2">
-          {sportsEnabled && canManageSports && !isArchivedView && (
+      <CategoriesHeader
+        view={view}
+        actions={
+          sportsEnabled && canManageSports && !isArchivedView ? (
             <Button variant="outline" onClick={handleSetupSports} disabled={setupBusy}>
               {setupBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
               Set up Sports
             </Button>
-          )}
-          {canManage && !isArchivedView && (
+          ) : null
+        }
+        primaryAction={
+          canManage && !isArchivedView ? (
             <Button variant="gradient" onClick={openNewRoot}>
               <Plus className="h-4 w-4" /> New category
             </Button>
-          )}
-        </div>
-      </div>
+          ) : null
+        }
+      />
 
       {canManagePublicVisibility && initial.length > 0 && (
-        <p className="mb-4 text-xs text-muted-foreground">
+        <p className="text-muted-foreground max-w-[760px] text-[12.5px] leading-[18.75px]">
           <span className="text-foreground font-medium">Public visibility:</span>{' '}
           &lsquo;Internal only&rsquo; removes every item in the category from the shared
           public pool on public request links, regardless of the items&apos; own settings.
@@ -370,17 +392,26 @@ export function CategoriesManager({
           {initial.map((row) => renderCard(row, null))}
         </div>
       ) : (
-        <div className="space-y-4">
+        // One card per root, its subcategories as lines under it on a rule,
+        // then Add subcategory: the tree the flat grid becomes once an org
+        // has subcategories.
+        <div className="grid gap-3 lg:grid-cols-2">
           {roots.map((root) => {
             const children = childrenByParent.get(root.id) ?? [];
             return (
-              <div key={root.id} className="rounded-xl border bg-card p-4">
-                {renderCard(root, null)}
-                <div className="mt-3 space-y-2 border-l border-border pl-4">
-                  {children.map((child) => renderCard(child, root))}
-                </div>
+              <div
+                key={root.id}
+                data-testid="category-root"
+                className="border-border bg-card min-w-0 rounded-lg border p-4"
+              >
+                {renderCard(root, null, true)}
+                {children.length > 0 && (
+                  <div className="border-border ml-[5px] mt-2 space-y-1 border-l pl-4">
+                    {children.map((child) => renderCard(child, root, true))}
+                  </div>
+                )}
                 {canManage && (
-                  <div className="mt-2 pl-4">
+                  <div className="mt-3 pl-[21px]">
                     <Button variant="outline" size="sm" onClick={() => openNewSubcategory(root)}>
                       <Plus className="h-3.5 w-3.5" /> Add subcategory
                     </Button>
@@ -558,6 +589,7 @@ function CategoryDialog({
 
   const subcategoryKey = watch('subcategoryKey');
   const isSportsSubcategory = watch('isSportsSubcategory');
+  const supportsSizes = watch('supportsSizes');
   const isCustomSubcategory = subcategoryKey === CUSTOM_SUBCATEGORY;
   const builtInProfile =
     subcategoryKey !== CUSTOM_SUBCATEGORY && subcategoryKey !== NO_SUBCATEGORY
@@ -669,50 +701,57 @@ function CategoryDialog({
               ))}
             </div>
           </div>
-          <label
-            htmlFor="cat-supports-sizes"
-            className="flex items-start gap-3 rounded-md border border-border p-3 cursor-pointer"
-          >
-            <input
+          {/* The shared Checkbox (DESIGN-SPEC 6.21) in place of the native
+              box: its label is the visible words, and a click on the words
+              still toggles it (a label activates the button it names). */}
+          <div className="border-border flex items-start gap-3 rounded-md border p-3">
+            <Checkbox
               id="cat-supports-sizes"
-              type="checkbox"
-              className="mt-0.5 h-4 w-4"
-              {...register('supportsSizes')}
+              checked={supportsSizes}
+              onCheckedChange={(v) => setValue('supportsSizes', v, { shouldDirty: true })}
+              aria-describedby="cat-supports-sizes-help"
             />
-            <div className="space-y-0.5">
-              <span className="block text-sm font-medium">
+            <div className="min-w-0 space-y-0.5">
+              <label
+                htmlFor="cat-supports-sizes"
+                className="block cursor-pointer text-[13px] font-medium leading-5"
+              >
                 Has size variants (S, M, L, XL…)
-              </span>
-              <p className="text-muted-foreground text-xs">
+              </label>
+              <p id="cat-supports-sizes-help" className="text-muted-foreground text-[12px]">
                 When on, items in this category get a Sizes selector on the
                 item form, and saving creates one variant per chosen size.
               </p>
             </div>
-          </label>
+          </div>
 
           {showSportsSection && (
             <div className="space-y-3 rounded-md border border-border p-3">
-              <label
-                htmlFor="is-sports-subcategory"
-                className="flex items-start gap-3 cursor-pointer"
-              >
-                <input
+              <div className="flex items-start gap-3">
+                <Checkbox
                   id="is-sports-subcategory"
-                  type="checkbox"
-                  className="mt-0.5 h-4 w-4"
-                  {...register('isSportsSubcategory')}
+                  checked={isSportsSubcategory}
+                  onCheckedChange={(v) =>
+                    setValue('isSportsSubcategory', v, { shouldDirty: true })
+                  }
+                  aria-describedby="is-sports-subcategory-help"
                 />
-                <div className="space-y-0.5">
-                  <span className="block text-sm font-medium">This is a Sports subcategory</span>
-                  <p className="text-muted-foreground text-xs">
+                <div className="min-w-0 space-y-0.5">
+                  <label
+                    htmlFor="is-sports-subcategory"
+                    className="block cursor-pointer text-[13px] font-medium leading-5"
+                  >
+                    This is a Sports subcategory
+                  </label>
+                  <p id="is-sports-subcategory-help" className="text-muted-foreground text-[12px]">
                     Sports subcategories carry a tracking profile — how items under them are
                     counted, what attributes they take, and whether a serial is required.
                   </p>
                 </div>
-              </label>
+              </div>
 
               {isSportsSubcategory && (
-                <div className="space-y-3 pl-7">
+                <div className="space-y-3 pl-8">
                   <div className="space-y-1.5">
                     <Label htmlFor="subcategory-key">Subcategory type</Label>
                     <Select
