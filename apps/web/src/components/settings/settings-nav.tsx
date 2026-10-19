@@ -305,9 +305,9 @@ export function SettingsIndex({ access }: { access: SettingsNavAccess }) {
                     className="hover:bg-muted group flex min-h-11 items-center gap-3 px-[18px] py-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0"
                   >
                     <span className="min-w-0 flex-1">
-                      <span className="text-foreground block text-[13.5px] font-medium leading-5">
+                      <h3 className="text-foreground block text-[13.5px] font-medium leading-5">
                         {entry.title}
-                      </span>
+                      </h3>
                       <span className="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]">
                         {entry.description}
                       </span>

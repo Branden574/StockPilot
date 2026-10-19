@@ -161,6 +161,17 @@ describe('grouped hub (redesign W-ST-01)', () => {
     expect(prefetch).not.toHaveBeenCalled();
   });
 
+  // At base every tile title was a CardTitle (an h3); the grouped hub keeps one
+  // heading per destination below its group h2, so screen-reader heading
+  // navigation and the e2e hub check (tests/e2e/settings.spec.ts) still find them.
+  it('keeps each destination title as a level-3 heading for the owner', async () => {
+    render(await SettingsPage());
+    expect(screen.getAllByRole('heading', { level: 3 })).toHaveLength(21);
+    for (const name of ['Profile', 'Security', 'Organization', 'Billing']) {
+      expect(screen.getByRole('heading', { level: 3, name })).toBeInTheDocument();
+    }
+  });
+
   it('keeps the one page heading and the tile words', async () => {
     render(await SettingsPage());
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
