@@ -14,13 +14,7 @@ import { restoreProcedureAction } from '@/server/actions/procedures';
  * shape but uses the `primary` tone of the shared DestructiveConfirm
  * primitive — restore isn't destructive, it's an inverse.
  */
-export function RestoreButton({
-  procedureId,
-  title,
-}: {
-  procedureId: string;
-  title: string;
-}) {
+export function RestoreButton({ procedureId, title }: { procedureId: string; title: string }) {
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const [busy, setBusy] = React.useState(false);

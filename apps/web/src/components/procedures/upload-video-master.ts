@@ -20,11 +20,7 @@
  *     upload keeps the fraction it genuinely reached and can never read 100.
  */
 
-import {
-  BatchProgress,
-  uploadWithProgress,
-  type UploadResult,
-} from '@/lib/upload-with-progress';
+import { BatchProgress, uploadWithProgress, type UploadResult } from '@/lib/upload-with-progress';
 
 export interface VideoUploadProgress {
   /** Monotonic clamped 0..1 fraction of transported bytes; 1 only on success. */
