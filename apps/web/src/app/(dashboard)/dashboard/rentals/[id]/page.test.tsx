@@ -321,10 +321,10 @@ describe('rentals/[id]: header and items card', () => {
       '/dashboard/rentals',
     );
     expect(screen.getByRole('heading', { name: 'Items (2)' })).toBeTruthy();
-    // The card title names the table's scroll region.
-    expect(screen.getByRole('region', { name: 'Items (2)' })).toContainElement(
-      screen.getByRole('table'),
-    );
+    // The card title names the table's scroll region, and only that region.
+    const regions = screen.getAllByRole('region', { name: 'Items (2)' });
+    expect(regions).toHaveLength(1);
+    expect(regions[0]).toContainElement(screen.getByRole('table'));
     const headers = screen.getAllByRole('columnheader').map((x) => x.textContent);
     expect(headers).toEqual(['Item', 'SKU', 'Qty', 'Notes']);
     expect(screen.getAllByRole('columnheader')[3]!.className).toMatch(/hidden sm:table-cell/);
@@ -336,6 +336,11 @@ describe('rentals/[id]: header and items card', () => {
     expect(narrow.className).toMatch(/(^|\s)sm:hidden(\s|$)/);
     expect(row.querySelectorAll('td')[1]!.textContent).toBe('TENT-1');
     expect(row.querySelectorAll('td')[3]!.textContent).toBe('Bring stakes');
+    // From sm up the Notes cell wraps anywhere, like the phone line: a long
+    // unbroken link cannot widen the table and squeeze the Item column.
+    expect(row.querySelectorAll('td')[3]!.className).toMatch(
+      /(^|\s)\[overflow-wrap:anywhere\](\s|$)/,
+    );
 
     // The unreadable line keeps its raw id and no narrow notes line.
     const gone = screen.getByText('gone').closest('tr')!;

@@ -189,7 +189,10 @@ export default async function RentalDetailPage({ params }: { params: Promise<{ i
                       <TableCell className="text-right font-mono tabular-nums">
                         {formatNumber(line.quantity)}
                       </TableCell>
-                      <TableCell className="text-muted-foreground hidden sm:table-cell">
+                      {/* Wraps anywhere, like the phone line under the item:
+                          a long unbroken link in the notes would otherwise
+                          widen the table and squeeze the Item column. */}
+                      <TableCell className="text-muted-foreground hidden [overflow-wrap:anywhere] sm:table-cell">
                         {line.notes ?? '—'}
                       </TableCell>
                     </TableRow>
