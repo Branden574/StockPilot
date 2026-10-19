@@ -1,15 +1,19 @@
 'use client';
 
-import { Check, Copy, Loader2, Mail, MoreHorizontal, Send, Trash2, Truck, UserPlus } from 'lucide-react';
+import { Copy, Loader2, Mail, MoreHorizontal, Send, Trash2, Truck, UserPlus } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
+import { DetailSection } from '@/components/patterns/detail-section';
+import { PageHeader } from '@/components/patterns/page-header';
 import { CategoryAccessCard } from '@/components/team/category-access-card';
 import { RoleBadge } from '@/components/team/role-badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Checkbox, CheckboxGlyph } from '@/components/ui/checkbox';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import {
   Dialog,
@@ -29,6 +33,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import {
   Select,
   SelectContent,
@@ -116,6 +121,11 @@ interface TeamManagerProps {
   grantsByUser: Record<string, string[]>;
   charterSingular: string;
   warehouseSingular: string;
+  /** The page heading (the organization's name for Team in the sidebar,
+   *  through effectiveNavLabel on the server page). Defaults to "Team". */
+  title?: React.ReactNode;
+  /** The line under the heading. */
+  subline?: React.ReactNode;
 }
 
 const ASSIGNABLE_ROLES: Role[] = ROLES.filter((r) => r !== 'owner');
@@ -131,76 +141,80 @@ export function TeamManager({
   grantsByUser,
   charterSingular,
   warehouseSingular,
+  title = 'Team',
+  subline,
 }: TeamManagerProps) {
   const [inviteOpen, setInviteOpen] = React.useState(false);
 
   return (
-    <div className="space-y-8">
-      <div className="flex items-center justify-end">
-        {(currentUserRole === 'owner' || currentUserRole === 'admin') && (
-          <Button variant="gradient" onClick={() => setInviteOpen(true)}>
-            <UserPlus className="h-4 w-4" /> Invite member
-          </Button>
-        )}
-      </div>
+    <div className="flex flex-col gap-4">
+      {/* The header lives here, not on the server page, because its one
+          accent action opens this component's invite dialog. The gate is
+          unchanged: the button is for owners and admins only (the page
+          itself is gated on members:invite). */}
+      <PageHeader
+        title={title}
+        subline={subline}
+        primaryAction={
+          currentUserRole === 'owner' || currentUserRole === 'admin' ? (
+            <Button variant="gradient" onClick={() => setInviteOpen(true)}>
+              <UserPlus className="h-4 w-4" /> Invite member
+            </Button>
+          ) : undefined
+        }
+      />
 
-      <section className="space-y-3">
-        <h2 className="text-sm font-semibold text-muted-foreground">Members ({members.length})</h2>
-        <div className="overflow-x-auto rounded-xl border bg-card">
-          <Table>
+      <DetailSection title={`Members (${members.length})`} flush>
+        <Table className="min-w-[760px]">
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead>Person</TableHead>
+              <TableHead>Role</TableHead>
+              <TableHead>{warehouseSingular} access</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead className="text-right">Joined</TableHead>
+              <TableHead className="w-12">
+                <span className="sr-only">Actions</span>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {members.map((m) => (
+              <MemberRow
+                key={m.id}
+                member={m}
+                currentUserRole={currentUserRole}
+                allCategories={allCategories}
+                initiallyGranted={grantsByUser[m.userId] ?? []}
+                charters={charters}
+                warehouses={warehouses}
+                warehouseCharters={warehouseCharters}
+                charterSingular={charterSingular}
+                warehouseSingular={warehouseSingular}
+              />
+            ))}
+          </TableBody>
+        </Table>
+      </DetailSection>
+
+      {pendingInvites.length > 0 && (
+        <DetailSection title={`Pending invites (${pendingInvites.length})`} flush>
+          <Table className="min-w-[640px]">
             <TableHeader>
-              <TableRow>
-                <TableHead>Person</TableHead>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>Email</TableHead>
                 <TableHead>Role</TableHead>
-                <TableHead>{warehouseSingular} access</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="text-right">Joined</TableHead>
-                <TableHead className="w-12"></TableHead>
+                <TableHead>Expires</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {members.map((m) => (
-                <MemberRow
-                  key={m.id}
-                  member={m}
-                  currentUserRole={currentUserRole}
-                  allCategories={allCategories}
-                  initiallyGranted={grantsByUser[m.userId] ?? []}
-                  charters={charters}
-                  warehouses={warehouses}
-                  warehouseCharters={warehouseCharters}
-                  charterSingular={charterSingular}
-                  warehouseSingular={warehouseSingular}
-                />
+              {pendingInvites.map((inv) => (
+                <InviteRow key={inv.id} invite={inv} />
               ))}
             </TableBody>
           </Table>
-        </div>
-      </section>
-
-      {pendingInvites.length > 0 && (
-        <section className="space-y-3">
-          <h2 className="text-sm font-semibold text-muted-foreground">
-            Pending invites ({pendingInvites.length})
-          </h2>
-          <div className="overflow-x-auto rounded-xl border bg-card">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Email</TableHead>
-                  <TableHead>Role</TableHead>
-                  <TableHead>Expires</TableHead>
-                  <TableHead className="w-32 text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {pendingInvites.map((inv) => (
-                  <InviteRow key={inv.id} invite={inv} />
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        </section>
+        </DetailSection>
       )}
 
       <InviteDialog
@@ -372,8 +386,8 @@ function MemberRow({
             <AvatarFallback>{initials}</AvatarFallback>
           </Avatar>
           <div className="min-w-0">
-            <p className="truncate font-medium">{member.fullName ?? member.email}</p>
-            <p className="truncate text-xs text-muted-foreground">{member.email}</p>
+            <p className="text-foreground truncate font-medium">{member.fullName ?? member.email}</p>
+            <p className="text-muted-foreground truncate text-[12px]">{member.email}</p>
           </div>
         </div>
       </TableCell>
@@ -381,31 +395,32 @@ function MemberRow({
         <div className="flex items-center gap-1.5">
           <RoleBadge role={member.role} />
           {member.isDriver && (
-            <span
+            <Badge
+              variant="success"
               title="Delivery driver — appears in the Assign-delivery picker"
-              className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300"
+              className="gap-1"
             >
-              <Truck className="size-3" /> Driver
-            </span>
+              <Truck aria-hidden className="size-3" /> Driver
+            </Badge>
           )}
         </div>
       </TableCell>
-      <TableCell className="text-xs text-muted-foreground">{accessLabel}</TableCell>
-      <TableCell className="text-xs text-muted-foreground">
+      <TableCell className="text-muted-foreground text-[12.5px]">{accessLabel}</TableCell>
+      <TableCell className="text-muted-foreground text-[12.5px]">
         <div className="flex items-center gap-1.5">
           <span>{member.acceptedAt ? 'Active' : 'Invited'}</span>
           {canSeeDisabledStatus && member.disabledAt && (
-            <span
+            <Badge
+              variant="destructive"
               title={`Disabled ${new Date(member.disabledAt).toLocaleString()}`}
-              className="inline-flex items-center rounded-full border border-red-500/30 bg-red-500/10 px-1.5 py-0.5 text-[10px] font-medium text-red-700 dark:text-red-300"
             >
               Disabled
-            </span>
+            </Badge>
           )}
         </div>
       </TableCell>
       <TableCell
-        className="text-right text-xs text-muted-foreground"
+        className="text-muted-foreground text-right text-[12.5px] tabular-nums"
         suppressHydrationWarning
       >
         {member.acceptedAt ? formatRelative(member.acceptedAt) : '—'}
@@ -414,7 +429,7 @@ function MemberRow({
         {canManage && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon">
+              <Button variant="ghost" size="icon" aria-label={`Actions for ${displayName}`}>
                 <MoreHorizontal className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
@@ -578,19 +593,17 @@ function MemberRow({
                   placeholder="Your account password"
                 />
               </div>
-              <label className="flex items-start gap-2 text-xs text-muted-foreground">
-                <input
-                  type="checkbox"
-                  className="mt-0.5"
-                  checked={transferAck}
-                  onChange={(e) => setTransferAck(e.target.checked)}
-                />
+              <Checkbox
+                checked={transferAck}
+                onCheckedChange={setTransferAck}
+                className="text-muted-foreground items-start text-[12.5px] leading-5"
+              >
                 <span>
                   I understand I will be demoted to admin and {displayName} will
                   control billing, role policy, and ownership of this workspace
                   going forward.
                 </span>
-              </label>
+              </Checkbox>
             </div>
             <DialogFooter>
               <Button
@@ -661,16 +674,21 @@ function InviteRow({ invite }: { invite: PendingInvite }) {
   return (
     <TableRow>
       <TableCell>
-        <div className="flex items-center gap-2">
-          <Mail className="h-4 w-4 text-muted-foreground" />
-          <span className="font-medium">{invite.email}</span>
+        <div className="flex min-w-0 items-center gap-2">
+          <Mail aria-hidden className="text-muted-foreground h-4 w-4 shrink-0" />
+          <span className="text-foreground truncate font-medium">{invite.email}</span>
         </div>
       </TableCell>
       <TableCell>
         <RoleBadge role={invite.role} />
       </TableCell>
-      <TableCell className="text-xs text-muted-foreground" suppressHydrationWarning>{formatRelative(invite.expiresAt)}</TableCell>
-      <TableCell className="flex justify-end gap-1">
+      <TableCell className="text-muted-foreground text-[12.5px]" suppressHydrationWarning>
+        {formatRelative(invite.expiresAt)}
+      </TableCell>
+      <TableCell>
+        {/* 8 px between the 28 px buttons, so each keeps its own 44 px
+            touch target on a phone (the Button's hit-area rule). */}
+        <div className="flex items-center justify-end gap-2">
         <Button variant="outline" size="sm" onClick={resend} disabled={resending}>
           {resending ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -682,9 +700,16 @@ function InviteRow({ invite }: { invite: PendingInvite }) {
         <Button variant="outline" size="sm" onClick={copyLink}>
           <Copy className="h-3.5 w-3.5" /> Copy link
         </Button>
-        <Button variant="ghost" size="icon" onClick={() => setRevokeOpen(true)}>
-          <Trash2 className="h-4 w-4 text-muted-foreground" />
+        <Button
+          variant="ghost"
+          size="icon"
+          className="text-muted-foreground"
+          onClick={() => setRevokeOpen(true)}
+          aria-label={`Revoke invite for ${invite.email}`}
+        >
+          <Trash2 className="h-4 w-4" />
         </Button>
+        </div>
         <DestructiveConfirm
           open={revokeOpen}
           onOpenChange={setRevokeOpen}
@@ -705,9 +730,10 @@ function InviteRow({ invite }: { invite: PendingInvite }) {
  * "Charters" editor. Empty selection means "all charters at this warehouse" —
  * the caller renders that hint below.
  *
- * No shared checkbox primitive exists in the repo, so each row is an accessible
- * `<button role="checkbox" aria-checked>` styled like the tag-toggle in
- * inventory/bulk-actions.tsx.
+ * Each row is itself the control, an accessible `<button role="checkbox"
+ * aria-checked>`, and draws the shared CheckboxGlyph inside (the shared
+ * Checkbox must not sit inside another button), so the box looks like every
+ * other checkbox in the app while what a click toggles stays the same.
  */
 function CharterChecklist({
   charters,
@@ -725,7 +751,7 @@ function CharterChecklist({
 }) {
   if (charters.length === 0) {
     return (
-      <div className="rounded-md border border-dashed bg-muted/30 px-3 py-3 text-[11px] text-muted-foreground">
+      <div className="border-line-strong bg-sunk text-muted-foreground rounded-lg border border-dashed px-3 py-3 text-[12px]">
         {emptyHint}
       </div>
     );
@@ -734,8 +760,8 @@ function CharterChecklist({
     <div
       className={
         disabled
-          ? 'max-h-[180px] overflow-y-auto rounded-md border bg-muted/30 opacity-60'
-          : 'max-h-[180px] overflow-y-auto rounded-md border'
+          ? 'border-border bg-sunk max-h-[180px] divide-y divide-border overflow-y-auto rounded-lg border opacity-60'
+          : 'border-border max-h-[180px] divide-y divide-border overflow-y-auto rounded-lg border'
       }
       aria-disabled={disabled}
     >
@@ -749,18 +775,9 @@ function CharterChecklist({
             aria-checked={on}
             disabled={disabled}
             onClick={() => onToggle(c.id)}
-            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:hover:bg-transparent"
+            className="hover:bg-muted focus-visible:ring-ring group flex min-h-10 w-full items-center gap-2.5 px-3 py-2 text-left text-[13.5px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset disabled:cursor-not-allowed disabled:hover:bg-transparent"
           >
-            <span
-              aria-hidden
-              className={
-                on
-                  ? 'flex h-4 w-4 shrink-0 items-center justify-center rounded border border-primary bg-primary text-primary-foreground'
-                  : 'flex h-4 w-4 shrink-0 items-center justify-center rounded border border-input bg-background'
-              }
-            >
-              {on && <Check className="h-3 w-3" />}
-            </span>
+            <CheckboxGlyph checked={on} />
             <span className="truncate">{c.name}</span>
           </button>
         );
@@ -857,7 +874,7 @@ function MemberChartersDialog({
             disabled={busy}
             emptyHint={`This ${warehouseSingular.toLowerCase()} has no ${charterSingular.toLowerCase()}s linked yet. Link some in Admin → ${warehouseSingular}s — this member already sees all stock at this ${warehouseSingular.toLowerCase()}.`}
           />
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-muted-foreground text-[12px]">
             {selected.length > 0
               ? `Scoped to the selected ${charterSingular.toLowerCase()}${selected.length === 1 ? '' : 's'} at this ${warehouseSingular.toLowerCase()}.`
               : `No ${charterSingular.toLowerCase()} picked — they'll see every ${charterSingular.toLowerCase()} this ${warehouseSingular.toLowerCase()} services.`}
@@ -889,9 +906,9 @@ const ALL_VALUE = '__all';
  * trigger); One = flag off + assignments reconciled to exactly that
  * warehouse (removing assignments — and charter scoping — elsewhere).
  *
- * No shared radio primitive exists in the repo, so each option is an
- * accessible `<button role="radio" aria-checked>` mirroring the
- * CharterChecklist checkbox pattern above.
+ * The two options are the shared RadioGroup (native radios under one name,
+ * so the arrow keys move between them), with each option's hint as its
+ * description.
  */
 function MemberWarehouseAccessDialog({
   open,
@@ -970,49 +987,32 @@ function MemberWarehouseAccessDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
-          <div role="radiogroup" aria-label={`${warehouseSingular} access`} className="overflow-hidden rounded-md border">
-            {options.map((opt) => {
-              const on = mode === opt.value;
-              return (
-                <button
-                  key={opt.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={on}
-                  disabled={busy}
-                  onClick={() => setMode(opt.value)}
-                  className="flex w-full items-start gap-2 px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:hover:bg-transparent"
-                >
-                  <span
-                    aria-hidden
-                    className={
-                      on
-                        ? 'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-primary'
-                        : 'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-input bg-background'
-                    }
-                  >
-                    {on && <span className="h-2 w-2 rounded-full bg-primary" />}
-                  </span>
-                  <span className="min-w-0">
-                    <span className="block font-medium">{opt.label}</span>
-                    <span className="block text-[11px] text-muted-foreground">
-                      {opt.hint}
-                    </span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+          <RadioGroup
+            aria-label={`${warehouseSingular} access`}
+            variant="card"
+            value={mode}
+            onValueChange={(v) => setMode(v as 'all' | 'one')}
+            disabled={busy}
+          >
+            {options.map((opt) => (
+              <RadioGroupItem
+                key={opt.value}
+                value={opt.value}
+                label={opt.label}
+                description={opt.hint}
+              />
+            ))}
+          </RadioGroup>
           {mode === 'one' && (
             <div className="space-y-1.5">
-              <Label>{warehouseSingular}</Label>
+              <Label htmlFor="member-warehouse">{warehouseSingular}</Label>
               <Select
                 value={warehouseId || NONE_VALUE}
                 onValueChange={(v: string) =>
                   setWarehouseId(v === NONE_VALUE ? '' : v)
                 }
               >
-                <SelectTrigger>
+                <SelectTrigger id="member-warehouse">
                   <SelectValue placeholder={`Pick a ${whLower}`} />
                 </SelectTrigger>
                 <SelectContent>
@@ -1025,7 +1025,7 @@ function MemberWarehouseAccessDialog({
               </Select>
             </div>
           )}
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-muted-foreground text-[12px]">
             {mode === 'all'
               ? `${charterSingular} scoping does not apply with all-${whLower} access.`
               : `Switching to one ${whLower} removes their assignments at every other ${whLower}, including ${charterSingular.toLowerCase()} scoping there.`}
@@ -1190,17 +1190,17 @@ function InviteDialog({
               placeholder="teammate@company.com"
               {...register('email', { required: true })}
             />
-            {errors.email && <p className="text-xs text-destructive">Email is required.</p>}
+            {errors.email && <p className="text-destructive text-[12px]">Email is required.</p>}
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label>Role</Label>
+              <Label htmlFor="invite-role">Role</Label>
               <Select
                 value={role}
                 onValueChange={(v: string) => setValue('role', v as InviteableRole)}
               >
-                <SelectTrigger>
+                <SelectTrigger id="invite-role">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -1211,13 +1211,13 @@ function InviteDialog({
                   ))}
                 </SelectContent>
               </Select>
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-muted-foreground text-[12px]">
                 {ROLE_LABELS[role].description}
               </p>
             </div>
 
             <div className="space-y-1.5">
-              <Label>
+              <Label htmlFor="invite-warehouse">
                 {warehouseSingular}
                 {!warehouseRequired && (
                   <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
@@ -1229,7 +1229,7 @@ function InviteDialog({
                   setValue('warehouseId', v === NONE_VALUE ? '' : v)
                 }
               >
-                <SelectTrigger>
+                <SelectTrigger id="invite-warehouse">
                   <SelectValue
                     placeholder={
                       warehouseRequired
@@ -1265,11 +1265,11 @@ function InviteDialog({
               <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
             </Label>
             {allSelected ? (
-              <div className="rounded-md border border-dashed bg-muted/30 px-3 py-3 text-[11px] text-muted-foreground">
+              <div className="border-line-strong bg-sunk text-muted-foreground rounded-lg border border-dashed px-3 py-3 text-[12px]">
                 {`All-${warehouseSingular.toLowerCase()} access includes every ${charterSingular.toLowerCase()}. To scope by ${charterSingular.toLowerCase()}, pick a single ${warehouseSingular.toLowerCase()} instead.`}
               </div>
             ) : !warehouseId ? (
-              <div className="rounded-md border border-dashed bg-muted/30 px-3 py-3 text-[11px] text-muted-foreground">
+              <div className="border-line-strong bg-sunk text-muted-foreground rounded-lg border border-dashed px-3 py-3 text-[12px]">
                 {`Pick a ${warehouseSingular.toLowerCase()} above to see its ${charterSingular.toLowerCase()}s.`}
               </div>
             ) : (
@@ -1280,7 +1280,7 @@ function InviteDialog({
                 emptyHint={`This ${warehouseSingular.toLowerCase()} has no ${charterSingular.toLowerCase()}s linked yet. Link some in Admin → ${warehouseSingular}s, or invite without a ${charterSingular.toLowerCase()} (they'll see all stock at this ${warehouseSingular.toLowerCase()}).`}
               />
             )}
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-muted-foreground text-[12px]">
               {allSelected
                 ? `They'll see every ${warehouseSingular.toLowerCase()}, including ones created later.`
                 : !warehouseId

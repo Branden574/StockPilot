@@ -29,6 +29,10 @@ vi.mock('@/lib/auth/session', () => ({
 }));
 vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn(async () => stubRef.current) }));
 vi.mock('@/lib/env', () => ({ env: { NEXT_PUBLIC_APP_URL: 'https://app.test' } }));
+// The heading's nav label reads the request-cached org row; not under test here.
+vi.mock('@/lib/nav-labels', () => ({
+  effectiveNavLabel: vi.fn(async (_href: string, fallback: string) => fallback),
+}));
 
 const viewerId = (i: number) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
 const members = Array.from({ length: 250 }, (_, i) => ({
