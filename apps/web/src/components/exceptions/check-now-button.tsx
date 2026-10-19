@@ -4,6 +4,7 @@ import { RefreshCw } from 'lucide-react';
 import * as React from 'react';
 
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import { requestExceptionCheckAction } from '@/server/actions/exceptions';
 
 import { exceptionCheckNowCopy } from '@stockpilot/core';
@@ -17,6 +18,10 @@ import { exceptionCheckNowCopy } from '@stockpilot/core';
  * The outcome is written inline (role="status", or role="alert" on a failure)
  * rather than only as a toast, which a reader watching the button can miss
  * (recurring pattern #20).
+ *
+ * In the redesign it is the page header's secondary button (DESIGN-SPEC 6.2:
+ * 32 px, outline), with its result under it, right-aligned beside the title
+ * and left-aligned once the header wraps on a phone.
  */
 export function CheckNowButton() {
   const [pending, startTransition] = React.useTransition();
@@ -39,14 +44,17 @@ export function CheckNowButton() {
 
   return (
     <div className="flex flex-col items-start gap-1 sm:items-end">
-      <Button type="button" variant="outline" size="sm" onClick={onClick} disabled={pending}>
-        <RefreshCw className="mr-1.5 size-3.5" aria-hidden />
+      <Button type="button" variant="outline" onClick={onClick} disabled={pending}>
+        <RefreshCw aria-hidden />
         {pending ? 'Starting...' : 'Check now'}
       </Button>
       {message ? (
         <p
           role={message.failed ? 'alert' : 'status'}
-          className={message.failed ? 'text-destructive text-xs' : 'text-muted-foreground text-xs'}
+          className={cn(
+            'max-w-[320px] text-[12px] leading-[18px] sm:text-right',
+            message.failed ? 'text-destructive' : 'text-muted-foreground',
+          )}
         >
           {message.text}
         </p>

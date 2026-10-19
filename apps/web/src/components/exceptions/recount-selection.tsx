@@ -6,6 +6,7 @@ import { recountSelectedLabel, recountSelectionProblem } from '@stockpilot/core'
 
 import { RecountDialog } from '@/components/exceptions/recount-dialog';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 
 /**
  * MULTI-SELECT RECOUNT ON THE EXCEPTIONS LIST (F1-2).
@@ -16,13 +17,27 @@ import { Button } from '@/components/ui/button';
  * offers a checkbox only when the SERVER said that row can be recounted
  * (an open count_variance or over_reserved exception). Everyone else sees the
  * list exactly as before. start_targeted_recount re-checks all of it.
+ *
+ * Look (DESIGN-SPEC 6.21): each row's box is the shared Checkbox (20 x 20,
+ * ink when ticked), and the bar is the bulk bar's card strip, kept in view at
+ * the bottom of the list while anything is ticked: "N selected" in mono, the
+ * reason it cannot start beside it, Clear and the ink-filled recount button
+ * on the right.
  */
-interface SelectionState {
-  selected: ReadonlySet<string>;
+/**
+ * The selection as a small store, so a tick re-renders only the row whose box
+ * changed (and the bar), not every row on the list: the rows read it through
+ * useSyncExternalStore with their own yes / no, and the context value never
+ * changes. With a context holding the Set, every tick re-rendered every
+ * checkbox (201 rows took 30 s in the test; the Open list can hold 1,000).
+ */
+interface SelectionStore {
+  has: (id: string) => boolean;
   toggle: (id: string) => void;
+  subscribe: (listener: () => void) => () => void;
 }
 
-const SelectionContext = React.createContext<SelectionState | null>(null);
+const SelectionContext = React.createContext<SelectionStore | null>(null);
 
 export function RecountSelectionProvider({
   enabled,
@@ -35,37 +50,57 @@ export function RecountSelectionProvider({
 }) {
   const [selected, setSelected] = React.useState<ReadonlySet<string>>(() => new Set());
   const [open, setOpen] = React.useState(false);
-  const toggle = React.useCallback((id: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  // The store's own copy, written before the rows are told, so a row reads
+  // the new value when it re-renders.
+  const current = React.useRef<ReadonlySet<string>>(selected);
+  const listeners = React.useRef(new Set<() => void>());
+  const commit = React.useCallback((next: ReadonlySet<string>) => {
+    current.current = next;
+    setSelected(next);
+    for (const listener of listeners.current) listener();
   }, []);
-  const value = React.useMemo(() => ({ selected, toggle }), [selected, toggle]);
+  const store = React.useMemo<SelectionStore>(
+    () => ({
+      has: (id) => current.current.has(id),
+      toggle: (id) => {
+        const next = new Set(current.current);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        commit(next);
+      },
+      subscribe: (listener) => {
+        listeners.current.add(listener);
+        return () => {
+          listeners.current.delete(listener);
+        };
+      },
+    }),
+    [commit],
+  );
 
   if (!enabled) return <>{children}</>;
 
   const count = selected.size;
   const problem = count > 0 ? recountSelectionProblem(count) : null;
   return (
-    <SelectionContext.Provider value={value}>
+    <SelectionContext.Provider value={store}>
       {children}
       {count > 0 ? (
         <div
-          className="bg-card border-border sticky bottom-4 z-10 mt-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 shadow-md"
+          className="bg-card border-border sticky bottom-4 z-10 mt-4 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-lg border px-3 py-2 shadow-md sm:px-[18px]"
           data-testid="recount-selection-bar"
         >
-          <span className="text-sm tabular-nums">
+          <span className="text-foreground min-w-0 font-mono text-[12.5px] tabular-nums">
             {count} selected
-            {problem ? <span className="text-destructive ml-2 text-xs">{problem}</span> : null}
+            {problem ? (
+              <span className="text-destructive ml-2 font-sans text-xs">{problem}</span>
+            ) : null}
           </span>
-          <div className="flex gap-2">
-            <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="ghost" onClick={() => commit(new Set())}>
               Clear
             </Button>
-            <Button size="sm" onClick={() => setOpen(true)} disabled={problem !== null}>
+            <Button onClick={() => setOpen(true)} disabled={problem !== null}>
               {recountSelectedLabel(count)}
             </Button>
           </div>
@@ -77,7 +112,7 @@ export function RecountSelectionProvider({
         title={`Recount ${count} exception${count === 1 ? '' : 's'}`}
         occurrenceIds={[...selected]}
         timeZone={timeZone}
-        onFinished={() => setSelected(new Set())}
+        onFinished={() => commit(new Set())}
       />
     </SelectionContext.Provider>
   );
@@ -85,15 +120,30 @@ export function RecountSelectionProvider({
 
 /** A row's checkbox. Renders nothing outside an enabled selection. */
 export function RecountCheckbox({ occurrenceId, label }: { occurrenceId: string; label: string }) {
-  const ctx = React.useContext(SelectionContext);
-  if (!ctx) return null;
+  const store = React.useContext(SelectionContext);
+  if (!store) return null;
+  return <RecountCheckboxBox store={store} occurrenceId={occurrenceId} label={label} />;
+}
+
+function RecountCheckboxBox({
+  store,
+  occurrenceId,
+  label,
+}: {
+  store: SelectionStore;
+  occurrenceId: string;
+  label: string;
+}) {
+  const checked = React.useSyncExternalStore(
+    store.subscribe,
+    () => store.has(occurrenceId),
+    () => false,
+  );
   return (
-    <input
-      type="checkbox"
-      className="accent-primary mt-3 size-4 shrink-0"
-      checked={ctx.selected.has(occurrenceId)}
-      onChange={() => ctx.toggle(occurrenceId)}
-      aria-label={`Select ${label} to recount`}
+    <Checkbox
+      checked={checked}
+      onCheckedChange={() => store.toggle(occurrenceId)}
+      label={`Select ${label} to recount`}
       data-testid="recount-checkbox"
     />
   );
