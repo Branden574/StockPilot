@@ -1,6 +1,7 @@
 'use client';
 
 import { usePathname, useSearchParams } from 'next/navigation';
+import * as React from 'react';
 
 import { Tabs, type TabItem } from '@/components/patterns/tabs';
 
@@ -54,6 +55,8 @@ const TABS: ReadonlyArray<{ id: DetailTabId; label: string }> = [
  * page where it is on a tab switch.
  */
 export function ItemDetailTabs({ activeTab }: { activeTab: DetailTabId }) {
+  const markerRef = React.useRef<HTMLSpanElement>(null);
+  useStickyHeaderHeight(markerRef);
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const query = searchParams?.toString() ?? '';
@@ -78,12 +81,44 @@ export function ItemDetailTabs({ activeTab }: { activeTab: DetailTabId }) {
   const items: TabItem[] = TABS.map((t) => ({ id: t.id, label: t.label, href: hrefFor(t.id) }));
 
   return (
-    <Tabs
-      items={items}
-      activeId={activeTab}
-      aria-label="Item detail sections"
-      idPrefix="item-detail"
-      scroll={false}
-    />
+    <>
+      <span ref={markerRef} hidden />
+      <Tabs
+        items={items}
+        activeId={activeTab}
+        aria-label="Item detail sections"
+        idPrefix="item-detail"
+        scroll={false}
+      />
+    </>
   );
+}
+
+/**
+ * The item page's header (back link, title, actions and this tab strip) is
+ * sticky, and its height changes with the width, the title's length and the
+ * shared-SKU note (about 200 to 410 px). A link to `#physical-count` (an order
+ * line's readiness cell) scrolled the card UNDER it, title and all. This keeps
+ * the header's measured height in `--item-detail-header-h` on the page, which
+ * the card's scroll margin reads (with a fallback for the moment before this
+ * runs). It writes one style property and reads no data.
+ */
+function useStickyHeaderHeight(markerRef: React.RefObject<HTMLSpanElement | null>) {
+  React.useEffect(() => {
+    const header = markerRef.current?.closest<HTMLElement>('[data-item-detail-header]');
+    const page = header?.parentElement;
+    if (!header || !page || typeof ResizeObserver === 'undefined') return;
+    const measure = () =>
+      page.style.setProperty(
+        '--item-detail-header-h',
+        `${Math.ceil(header.getBoundingClientRect().height)}px`,
+      );
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(header);
+    return () => {
+      observer.disconnect();
+      page.style.removeProperty('--item-detail-header-h');
+    };
+  }, [markerRef]);
 }

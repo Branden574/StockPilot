@@ -654,6 +654,7 @@ export async function ItemDetail({
           whose hairline is the header's bottom edge. */}
       <div
         data-testid="item-detail-header"
+        data-item-detail-header=""
         className="bg-card sticky top-0 z-20 -mx-4 px-4 pt-4 sm:-mx-8 sm:px-8 sm:pt-5"
       >
         <div className="mb-2">

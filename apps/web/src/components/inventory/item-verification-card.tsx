@@ -95,15 +95,15 @@ export const PHYSICAL_COUNT_ANCHOR = 'physical-count';
  * on it, and its scroll margin clears the item page's sticky header (the
  * title, the actions and the tab strip pin to the top of the scrolling page),
  * so a link to #physical-count lands with the card's title in view instead of
- * under the header. The header is taller on a phone, where the title wraps and
- * the actions take their own row.
+ * under the header: the header's measured height (`--item-detail-header-h`,
+ * kept by the item page's tab strip) plus 12 px, or 26rem until it is known.
  */
 function CardShell({ children, testId }: { children: React.ReactNode; testId: string }) {
   return (
     <DetailSection
       data-testid={testId}
       id={PHYSICAL_COUNT_ANCHOR}
-      className="scroll-mt-72 sm:scroll-mt-60"
+      className="scroll-mt-[calc(var(--item-detail-header-h,25.25rem)+0.75rem)]"
       title={
         <span className="inline-flex items-center gap-2">
           <ClipboardCheck className="text-muted-foreground h-4 w-4" aria-hidden /> Physical count
