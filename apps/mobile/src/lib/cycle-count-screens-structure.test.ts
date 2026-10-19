@@ -182,8 +182,20 @@ function cameraTokens(file: string): Record<string, string> {
 function screenFunctions(
   file: string,
   names: string[],
+  /** Top-level constants the functions read (taken from the same source). */
+  consts: string[] = [],
 ): Record<string, (...args: unknown[]) => unknown> {
   const sf = treeOf(file);
+  const constParts = sf.statements
+    .filter(
+      (st): st is ts.VariableStatement =>
+        ts.isVariableStatement(st) &&
+        st.declarationList.declarations.some(
+          (d) => ts.isIdentifier(d.name) && consts.includes(d.name.text),
+        ),
+    )
+    .map((st) => st.getText(sf));
+  expect(constParts, `${consts.join(', ')} in ${file}`).toHaveLength(consts.length);
   const parts = sf.statements
     .filter(
       (st): st is ts.FunctionDeclaration =>
@@ -191,9 +203,10 @@ function screenFunctions(
     )
     .map((st) => st.getText(sf));
   expect(parts, `${names.join(', ')} in ${file}`).toHaveLength(names.length);
-  const js = ts.transpileModule(`${parts.join('\n')}\n({ ${names.join(', ')} });`, {
-    compilerOptions: { target: ts.ScriptTarget.ES2022 },
-  }).outputText;
+  const js = ts.transpileModule(
+    `${[...constParts, ...parts].join('\n')}\n({ ${names.join(', ')} });`,
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
   return new vm.Script(js).runInNewContext({}) as Record<string, (...args: unknown[]) => unknown>;
 }
 
@@ -465,6 +478,15 @@ describe('count screen: offline capture and the Post rule', () => {
     expect(hasUnsavedCount!({ l1: '', l2: '-' })).toBe(false);
     expect(hasUnsavedCount!({ l1: '', l2: '7' })).toBe(true);
     expect(hasUnsavedCount!({ l1: '0' })).toBe(true);
+  });
+
+  // The live variance reads a box by the same rule, so a negative number
+  // (which the saver never saves) shows no variance it will never apply.
+  it('the live variance reads the box by the saver’s rule', () => {
+    expect(codeOnly(src)).toContain(
+      'const effectiveCounted = isDrafting ? countFromBox(draftVal) : l.counted;',
+    );
+    expect(codeOnly(src)).not.toContain('Number.parseFloat(draftVal)');
   });
 
   it('a typed count is saved on the phone first and queued, never posted from the box', () => {
@@ -1158,8 +1180,43 @@ describe('AI shelf scan: every word, name and step survives the restyle', () => 
     expect(code).toContain('const AI_CONFIDENCE_THRESHOLD = 0.85;');
     const body = functionBody(AI_SCAN, 'onConfirm');
     expect(body).toMatch(
-      /if \(rl\.override !== null\) \{[\s\S]*?continue;\s*\}\s*if \(rl\.result && rl\.result\.confidence >= AI_CONFIDENCE_THRESHOLD\) \{/,
+      /for \(const rl of phase\.reviewLines\) \{\s*const count = lineCountToWrite\(rl\);\s*if \(count !== null\) toWrite\.push\(\{ lineId: rl\.line\.id, count \}\);\s*\}/,
     );
+  });
+
+  // Fix: Number('') is 0, so a box the person emptied (to retype it, or to
+  // drop the AI's number) recorded a count of 0, which a post applies as the
+  // loss of every one expected; the count scanner had the same defect (P3.8).
+  // The screen's own rule, run on each kind of line.
+  it('what Confirm writes per line: their number, else a confident AI count, else nothing; never 0 for an emptied box', () => {
+    const { lineCountToWrite } = screenFunctions(
+      AI_SCAN,
+      ['lineCountToWrite'],
+      ['AI_CONFIDENCE_THRESHOLD'],
+    );
+    const write = (override: string | null, result?: { count: number; confidence: number }) =>
+      lineCountToWrite!({
+        line: { id: 'l1' },
+        override,
+        result: result && { sku: 'S', notes: undefined, ...result },
+      });
+    const sure = { count: 5, confidence: 0.9 };
+    const unsure = { count: 5, confidence: 0.5 };
+    // Left alone: the confident AI count only.
+    expect(write(null, sure)).toBe(5);
+    expect(write(null, unsure)).toBeNull();
+    expect(write(null)).toBeNull();
+    // Typed: the person's number wins, whole units as before.
+    expect(write('7', unsure)).toBe(7);
+    expect(write('0', sure)).toBe(0);
+    expect(write(' 3 ')).toBe(3);
+    expect(write('2.9')).toBe(2);
+    // Emptied, or not a count: nothing at all, never 0 and never the AI's.
+    expect(write('', sure)).toBeNull();
+    expect(write('   ', unsure)).toBeNull();
+    expect(write('', undefined)).toBeNull();
+    expect(write('-1', sure)).toBeNull();
+    expect(write('abc')).toBeNull();
   });
 
   it('Confirm counts is the one ink Button, off while saving', () => {

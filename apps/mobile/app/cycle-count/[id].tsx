@@ -933,14 +933,10 @@ export default function CycleCountDetail() {
             // (the draft while typing, else the persisted count) so the
             // delta updates immediately instead of only after the
             // debounce/sync. Shown for every counted line, including a
-            // zero "matches expected".
-            const parsedDraft =
-              isDrafting && draftVal.trim() !== '' ? Number.parseFloat(draftVal) : NaN;
-            const effectiveCounted = isDrafting
-              ? Number.isFinite(parsedDraft)
-                ? parsedDraft
-                : null
-              : l.counted;
+            // zero "matches expected". The draft is read by the saver's own
+            // rule (countFromBox), so a box the saver will not save (a
+            // negative number) shows no variance it will never apply.
+            const effectiveCounted = isDrafting ? countFromBox(draftVal) : l.counted;
             const variance =
               effectiveCounted !== null ? effectiveCounted - l.expected : null;
             // A count synced from an offline phone was measured against the

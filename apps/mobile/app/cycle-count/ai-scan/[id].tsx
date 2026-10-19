@@ -78,6 +78,27 @@ type Phase =
   | { kind: 'saving' };
 
 /**
+ * What Confirm writes for one review line, or null for nothing:
+ *   • the person's own number, when they typed one (it wins);
+ *   • else the AI's count, when it is confident;
+ *   • else nothing (a low-confidence or undetected line the person left
+ *     alone was never approved).
+ * A box the person emptied holds no number, so nothing is written for it:
+ * Number('') is 0, and an emptied box used to record a count of 0, which a
+ * post then applies as the loss of every one expected (the count scanner's
+ * fix, P3.8; the count screen never saves an empty box either).
+ */
+function lineCountToWrite(rl: ReviewLine): number | null {
+  if (rl.override !== null) {
+    if (rl.override.trim() === '') return null;
+    const n = Number(rl.override);
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+  }
+  if (rl.result && rl.result.confidence >= AI_CONFIDENCE_THRESHOLD) return rl.result.count;
+  return null;
+}
+
+/**
  * AI Shelf Scan capture + review screen.
  *
  * State machine:
@@ -262,23 +283,15 @@ export default function AiScanScreen() {
   async function onConfirm() {
     if (phase.kind !== 'review') return;
 
-    // Decide each line's final count.
-    //   • User override wins.
+    // Decide each line's final count (lineCountToWrite):
+    //   • User override wins (an emptied box writes nothing, never a 0).
     //   • Else high-confidence AI result auto-applies.
     //   • Low-confidence AI without override → SKIP (user didn't approve).
     //   • No AI result + no override → SKIP (user didn't touch the line).
     const toWrite: { lineId: string; count: number }[] = [];
     for (const rl of phase.reviewLines) {
-      if (rl.override !== null) {
-        const n = Number(rl.override);
-        if (Number.isFinite(n) && n >= 0) {
-          toWrite.push({ lineId: rl.line.id, count: Math.floor(n) });
-        }
-        continue;
-      }
-      if (rl.result && rl.result.confidence >= AI_CONFIDENCE_THRESHOLD) {
-        toWrite.push({ lineId: rl.line.id, count: rl.result.count });
-      }
+      const count = lineCountToWrite(rl);
+      if (count !== null) toWrite.push({ lineId: rl.line.id, count });
     }
     if (toWrite.length === 0) {
       Alert.alert(
