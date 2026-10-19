@@ -94,3 +94,53 @@ describe('EditableMovementNote — edit flow', () => {
     expect(screen.getByRole('button', { name: /edit note/i })).toBeInTheDocument();
   });
 });
+
+describe('EditableMovementNote — editor keyboard and limit', () => {
+  it('Enter saves, Escape cancels, and the field takes at most 2,000 characters', async () => {
+    render(<EditableMovementNote movementId={MOVEMENT_ID} note={null} canEdit />);
+
+    fireEvent.click(screen.getByRole('button', { name: /add note/i }));
+    let input = screen.getByRole('textbox', { name: /movement note/i });
+    expect(input).toHaveAttribute('maxLength', '2000');
+    fireEvent.change(input, { target: { value: 'not this one' } });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(screen.queryByRole('textbox', { name: /movement note/i })).not.toBeInTheDocument();
+    expect(mockEdit).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: /add note/i }));
+    input = screen.getByRole('textbox', { name: /movement note/i });
+    fireEvent.change(input, { target: { value: 'saved note' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => {
+      expect(mockEdit).toHaveBeenCalledWith({ movementId: MOVEMENT_ID, note: 'saved note' });
+    });
+  });
+});
+
+describe('EditableMovementNote — editor touch targets', () => {
+  // Below sm and on a coarse pointer every Button grows an invisible 44 px
+  // target around itself, and a later button's target paints over an earlier
+  // one (components/ui/button.tsx). Save and Cancel sat 4 px apart, so on a
+  // touch screen Cancel's target covered Save's right edge: a tap meant to
+  // save closed the editor and dropped the typed note. They now sit 8 px apart,
+  // enough for the 28 px feed buttons ((44 - 28) / 2) and the 32 px table ones
+  // (6 px), and are 44 px buttons themselves on a phone.
+  it.each(['cell', 'inline'] as const)(
+    '%s editor: Save and Cancel sit 8 px apart and are 44 px on a phone',
+    (variant) => {
+      render(
+        <EditableMovementNote movementId={MOVEMENT_ID} note="restock" canEdit variant={variant} />,
+      );
+      fireEvent.click(screen.getByRole('button', { name: /edit note/i }));
+
+      const save = screen.getByRole('button', { name: /save note/i });
+      const cancel = screen.getByRole('button', { name: /cancel edit/i });
+      const row = save.parentElement as HTMLElement;
+      expect(cancel.parentElement).toBe(row);
+      expect(row).toHaveClass('gap-2');
+      expect(row).not.toHaveClass('gap-1');
+      expect(save).toHaveClass('max-sm:size-11');
+      expect(cancel).toHaveClass('max-sm:size-11');
+    },
+  );
+});
