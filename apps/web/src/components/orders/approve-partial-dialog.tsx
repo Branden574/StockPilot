@@ -30,7 +30,10 @@ import {
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { readOrderReadinessAction } from '@/server/actions/order-readiness';
-import { approveOrderPartialAction, resumeFulfillmentAction } from '@/server/actions/order-requests';
+import {
+  approveOrderPartialAction,
+  resumeFulfillmentAction,
+} from '@/server/actions/order-requests';
 
 import { READINESS_TONE_STYLES } from './readiness-view';
 
@@ -128,7 +131,9 @@ export function ApprovePartialDialog({
       setState({
         step: 'preview',
         error: describePartialCommitRefusal(
-          res ? { answered: true, code: res.error.code, message: res.error.message } : { answered: false },
+          res
+            ? { answered: true, code: res.error.code, message: res.error.message }
+            : { answered: false },
         ),
       });
       // Show the order as it is now behind the dialog (it may have moved on:
@@ -143,7 +148,10 @@ export function ApprovePartialDialog({
     } catch {
       reread = null;
     }
-    setState({ step: 'done', result: describePartialResult({ action: preview.action, preview, reread }) });
+    setState({
+      step: 'done',
+      result: describePartialResult({ action: preview.action, preview, reread }),
+    });
     router.refresh();
   }
 
@@ -155,11 +163,17 @@ export function ApprovePartialDialog({
         onOpenChange(v);
       }}
     >
-      <DialogContent className="max-w-lg" data-testid="approve-partial-dialog" data-action={preview.action}>
+      <DialogContent
+        className="max-w-lg"
+        data-testid="approve-partial-dialog"
+        data-action={preview.action}
+      >
         <DialogHeader>
           <DialogTitle>{copy?.title ?? PARTIAL_ACTION_TITLE[preview.action]}</DialogTitle>
           {!showPreview ? null : copy ? (
-            <DialogDescription data-testid="approve-partial-summary">{copy.summary}</DialogDescription>
+            <DialogDescription data-testid="approve-partial-summary">
+              {copy.summary}
+            </DialogDescription>
           ) : (
             <DialogDescription data-testid="approve-partial-unavailable">
               {preview.state === 'unavailable' ? preview.message : null}
@@ -192,7 +206,7 @@ export function ApprovePartialDialog({
         {showPreview && copy && preview.state === 'ok' && (
           <div className="space-y-3">
             <ul
-              className="border-border divide-border max-h-72 divide-y overflow-y-auto rounded-lg border text-sm"
+              className="border-border divide-border max-h-72 divide-y overflow-y-auto rounded-lg border text-[13.5px]"
               data-testid="approve-partial-items"
             >
               {copy.items.map((it) => (
@@ -205,16 +219,22 @@ export function ApprovePartialDialog({
                   <span aria-hidden className="min-w-0 break-words font-medium">
                     {it.label}
                   </span>
-                  <span aria-hidden className="text-muted-foreground shrink-0 tabular-nums">
+                  <span
+                    aria-hidden
+                    className="text-muted-foreground shrink-0 font-mono text-[12.5px] tabular-nums"
+                  >
                     {it.detail}
                   </span>
                 </li>
               ))}
             </ul>
-            <p className="text-muted-foreground text-xs" data-testid="approve-partial-note">
+            <p className="text-muted-foreground text-[12.5px]" data-testid="approve-partial-note">
               {copy.note}
             </p>
-            <p className="text-muted-foreground text-[11px]" data-testid="approve-partial-checked-at">
+            <p
+              className="text-muted-foreground text-[12px]"
+              data-testid="approve-partial-checked-at"
+            >
               {readinessCheckedAtCopy(preview.observedAt, { timeZone })}
             </p>
           </div>
@@ -231,18 +251,18 @@ export function ApprovePartialDialog({
         )}
 
         {state.step === 'preview' && state.error && (
-          <p
-            role="alert"
-            className="text-destructive text-sm"
-            data-testid="approve-partial-error"
-          >
+          <p role="alert" className="text-destructive text-sm" data-testid="approve-partial-error">
             {state.error}
           </p>
         )}
 
         <DialogFooter>
           {state.step === 'done' || !copy || movedOn ? (
-            <Button variant="outline" onClick={() => onOpenChange(false)} data-testid="approve-partial-close">
+            <Button
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              data-testid="approve-partial-close"
+            >
               {PARTIAL_CLOSE_LABEL}
             </Button>
           ) : (
@@ -251,7 +271,7 @@ export function ApprovePartialDialog({
                 {copy.cancelLabel}
               </Button>
               <Button
-                variant="gradient"
+                variant="default"
                 onClick={() => void confirm()}
                 disabled={committing}
                 data-testid="approve-partial-confirm"

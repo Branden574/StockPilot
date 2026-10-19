@@ -75,7 +75,7 @@ export function NeededByChangeButton({ orderId, className }: { orderId: string; 
       type="button"
       variant="outline"
       size="sm"
-      className={cn('h-7 px-2 text-xs', className)}
+      className={className}
       aria-label={NEEDED_BY_CHANGE_ACCESSIBILITY_LABEL}
       aria-haspopup="dialog"
       data-testid="needed-by-change"
@@ -301,7 +301,7 @@ export function ReviseNeededByDialog({
             type="button"
             variant="outline"
             size="sm"
-            className={cn('h-7 px-2 text-xs', triggerClassName)}
+            className={triggerClassName}
             aria-label={NEEDED_BY_CHANGE_ACCESSIBILITY_LABEL}
             data-testid="needed-by-change"
           >
@@ -342,7 +342,7 @@ export function ReviseNeededByDialog({
               aria-live="polite"
               className={cn(
                 'min-h-5 text-sm',
-                draft.kind === 'ok' ? 'font-medium' : 'text-amber-800 dark:text-amber-300',
+                draft.kind === 'ok' ? 'font-medium' : 'text-warning',
               )}
               data-testid="revise-needed-by-preview"
               data-kind={draft.kind}

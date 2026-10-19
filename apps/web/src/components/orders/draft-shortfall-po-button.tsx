@@ -6,7 +6,6 @@ import { SHORTFALL_PO_BUTTON_LABEL } from '@stockpilot/core';
 
 import { Button } from '@/components/ui/button';
 import { openShortfallPo } from '@/lib/orders/shortfall-po';
-import { cn } from '@/lib/utils';
 
 /**
  * "Draft PO for what is short" on the readiness strip (F2-5): opens the dialog
@@ -23,7 +22,7 @@ export function DraftShortfallPoButton({ orderId, className }: { orderId: string
       type="button"
       variant="outline"
       size="sm"
-      className={cn('h-7 px-2 text-xs', className)}
+      className={className}
       aria-haspopup="dialog"
       data-testid="readiness-draft-shortfall-po"
       data-shortfall-po={orderId}

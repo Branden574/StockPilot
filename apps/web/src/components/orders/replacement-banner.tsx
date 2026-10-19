@@ -37,7 +37,10 @@ export function ReplacementBanner({
   });
   return (
     <section
-      className="bg-card border-l-primary mb-4 space-y-1.5 rounded-xl border border-l-4 p-4 text-sm"
+      // The state banner under the header (DESIGN-SPEC 6.7 card, with the
+      // accent rule on its leading edge that marks it as a note about this
+      // order rather than a section of it).
+      className="bg-card border-l-accent space-y-1.5 rounded-lg border border-l-[3px] px-[18px] py-3.5 text-[13.5px] leading-5"
       aria-label="Exchange replacement"
       data-testid="replacement-banner"
     >
@@ -50,7 +53,7 @@ export function ReplacementBanner({
               <p key="title" className="font-medium" data-testid="replacement-banner-title" data-words={line.text}>
                 Exchange replacement for{' '}
                 {replacement.canOpenReturn ? (
-                  <Link href={`/dashboard/returns/${replacement.returnId}`} className="hover:underline">
+                  <Link href={`/dashboard/returns/${replacement.returnId}`} className="font-mono hover:underline">
                     {rma}
                   </Link>
                 ) : (
@@ -60,7 +63,7 @@ export function ReplacementBanner({
                   <>
                     {' · Original order '}
                     {replacement.originalOrderId ? (
-                      <Link href={`/dashboard/orders/${replacement.originalOrderId}`} className="hover:underline">
+                      <Link href={`/dashboard/orders/${replacement.originalOrderId}`} className="font-mono hover:underline">
                         {so}
                       </Link>
                     ) : (
@@ -98,15 +101,15 @@ export function ReplacementBanner({
           case 'rma_link':
             // Someone who can open the RMA: the link alone says where.
             return (
-              <p key="rma_link" className="text-xs">
-                <Link href={`/dashboard/returns/${replacement.returnId}`} className="text-foreground hover:underline">
+              <p key="rma_link" className="text-[12.5px]">
+                <Link href={`/dashboard/returns/${replacement.returnId}`} className="text-accent hover:text-foreground hover:underline">
                   {line.text}
                 </Link>
               </p>
             );
           case 'change':
             return (
-              <p key="change" className="text-muted-foreground text-xs">
+              <p key="change" className="text-muted-foreground text-[12.5px]">
                 {line.text}
               </p>
             );

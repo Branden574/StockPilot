@@ -6,6 +6,8 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { DetailSection } from '@/components/patterns/detail-section';
+import { StatePanel } from '@/components/patterns/state-panel';
 import { Button } from '@/components/ui/button';
 import {
   Select,
@@ -156,18 +158,15 @@ export function OrderAttachmentsPanel({
   }
 
   return (
-    <section className="bg-card rounded-xl border p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-medium">Proof of delivery</h2>
-          <p className="text-muted-foreground mt-0.5 text-xs">
-            Wet signatures, photos of dropped-off items, and where they were left.
-          </p>
-        </div>
-        {canAttach && (
-          <div className="flex items-center gap-2">
+    // A titled card (DESIGN-SPEC 6.7): the kind picker and Add in the header,
+    // the gallery of bounded thumbnails (the ~400 px grid variant) below.
+    <DetailSection
+      title="Proof of delivery"
+      aside={
+        canAttach ? (
+          <div className="flex flex-wrap items-center gap-2">
             <Select value={kind} onValueChange={(v) => setKind(v as OrderAttachmentKind)}>
-              <SelectTrigger className="h-8 w-[160px] text-xs">
+              <SelectTrigger className="h-8 w-[160px] text-[13px]" aria-label="Attachment kind">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -199,17 +198,28 @@ export function OrderAttachmentsPanel({
               Add
             </Button>
           </div>
-        )}
-      </div>
+        ) : undefined
+      }
+    >
+      <p className="text-muted-foreground text-[12.5px]">
+        Wet signatures, photos of dropped-off items, and where they were left.
+      </p>
 
       {attachments.length === 0 ? (
-        <p className="text-muted-foreground mt-4 text-xs">
-          {canAttach
-            ? 'No attachments yet. Add photos or a signed slip as proof of delivery.'
-            : 'No attachments.'}
-        </p>
+        <StatePanel
+          kind="empty"
+          surface="plain"
+          icon={null}
+          headingLevel={null}
+          className="mt-3 p-6"
+          title={
+            canAttach
+              ? 'No attachments yet. Add photos or a signed slip as proof of delivery.'
+              : 'No attachments.'
+          }
+        />
       ) : (
-        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
           {attachments.map((a) => {
             // HEIC/HEIF (iPhone default) is bucket-allowed but most desktop
             // browsers can't decode it — without onError those tiles render
@@ -233,7 +243,7 @@ export function OrderAttachmentsPanel({
               ) : (
                 <div className="text-muted-foreground flex h-28 w-full flex-col items-center justify-center gap-1">
                   <Paperclip className="h-5 w-5" />
-                  <span className="max-w-[90%] truncate px-2 text-[10.5px]">
+                  <span className="max-w-[90%] truncate px-2 text-[11.5px]">
                     {a.fileName ?? 'File'}
                   </span>
                 </div>
@@ -241,7 +251,7 @@ export function OrderAttachmentsPanel({
             return (
               <div
                 key={a.id}
-                className="group bg-background relative overflow-hidden rounded-md border"
+                className="group bg-background border-border relative overflow-hidden rounded-lg border"
               >
                 {isImage ? (
                   // Images open in the shared lightbox (zoom + prev/next across
@@ -264,8 +274,8 @@ export function OrderAttachmentsPanel({
                     {tile}
                   </a>
                 )}
-                <div className="flex items-center justify-between gap-1 px-2 py-1.5">
-                  <span className="text-muted-foreground truncate text-[10.5px]">
+                <div className="border-border flex items-center justify-between gap-1 border-t py-1 pl-2.5 pr-1">
+                  <span className="text-muted-foreground truncate text-[12px]">
                     {KIND_LABELS[a.kind] ?? 'Other'}
                   </span>
                   {canManage && (
@@ -273,7 +283,9 @@ export function OrderAttachmentsPanel({
                       type="button"
                       onClick={() => onDelete(a.id)}
                       disabled={deletingId === a.id}
-                      className="text-muted-foreground hover:text-destructive shrink-0"
+                      // 28 px, so the tile's one control is a real target
+                      // (it was the bare 14 px icon).
+                      className="text-muted-foreground hover:bg-muted hover:text-destructive focus-visible:ring-ring grid size-7 shrink-0 place-items-center rounded-md focus-visible:outline-none focus-visible:ring-2"
                       aria-label="Delete attachment"
                     >
                       {deletingId === a.id ? (
@@ -298,6 +310,6 @@ export function OrderAttachmentsPanel({
           onClose={() => setLightboxIndex(null)}
         />
       )}
-    </section>
+    </DetailSection>
   );
 }

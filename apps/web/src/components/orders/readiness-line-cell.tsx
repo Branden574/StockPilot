@@ -74,7 +74,7 @@ export function ReadinessLineCell({
 }) {
   if (!line) {
     return (
-      <p className="text-muted-foreground text-[11px]" data-testid="readiness-line-unchecked">
+      <p className="text-muted-foreground text-[12px]" data-testid="readiness-line-unchecked">
         Not checked. Check again to see this line.
       </p>
     );
@@ -96,10 +96,10 @@ export function ReadinessLineCell({
       {/* The chip leads its sentence on the same line: compact enough to sit
           under the item's name without a column of its own (the order page's
           lines card is 641 px wide at every viewport). */}
-      <p className="text-muted-foreground text-[11px] leading-snug">
+      <p className="text-muted-foreground text-[12px] leading-[18px]">
         <span
           className={cn(
-            'mr-1.5 inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-1.5 py-px align-[1px] text-[10.5px] font-medium',
+            'mr-1.5 inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-px align-[1px] text-[11px] font-medium',
             tone.chip,
           )}
           aria-hidden
@@ -113,7 +113,7 @@ export function ReadinessLineCell({
       {hold && (
         <p
           className={cn(
-            'text-[10.5px] leading-snug',
+            'text-[11.5px] leading-snug',
             line.hold?.state === 'held'
               ? 'text-muted-foreground'
               : READINESS_TONE_STYLES.warning.text,
@@ -128,7 +128,7 @@ export function ReadinessLineCell({
           <IntentLink
             href={putAwayHref}
             aria-label={putAwayLineAccessibilityLabel(line)}
-            className="inline-flex min-h-6 items-center gap-1 text-[11px] font-medium underline-offset-2 hover:underline"
+            className="text-accent hover:text-foreground inline-flex min-h-6 items-center gap-1 text-[12px] font-medium underline-offset-2 hover:underline"
           >
             <ArrowUpFromLine className="size-3 shrink-0" aria-hidden />
             {PUT_AWAY_LINE_LABEL}
@@ -141,7 +141,7 @@ export function ReadinessLineCell({
         </div>
       )}
       {why && (
-        <details className="group text-[10.5px]" data-testid="readiness-why">
+        <details className="group text-[11.5px]" data-testid="readiness-why">
           <summary className="text-muted-foreground hover:text-foreground cursor-pointer select-none underline-offset-2 hover:underline">
             Why
           </summary>
@@ -153,7 +153,7 @@ export function ReadinessLineCell({
           {linkItem && item && (
             <Link
               href={itemPhysicalCountHref(item.itemId)}
-              className="mt-1 inline-block font-medium underline-offset-2 hover:underline"
+              className="text-accent hover:text-foreground mt-1 inline-block font-medium underline-offset-2 hover:underline"
               data-testid="readiness-last-count"
             >
               Last physical count

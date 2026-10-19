@@ -48,10 +48,26 @@ describe('detail titles have room before their actions share the line', () => {
       expect.arrayContaining([
         'bundles/[id]/page.tsx',
         'maintenance/[id]/page.tsx',
-        'orders/[id]/page.tsx',
         'procedures/[id]/page.tsx',
       ]),
     );
+  });
+
+  // Pages whose title column moved into the shared PageHeader in the
+  // redesign (P4.B1: the order page). PageHeader's title block is not a
+  // flex-1 column: it takes its own width and the actions row wraps under it,
+  // and its h1 wraps instead of truncating, so the title cannot be squeezed
+  // out. This keeps the rule on those pages: the header is PageHeader and no
+  // truncating h1 came back beside it.
+  const MOVED_TO_PAGE_HEADER_P4_B1 = ['orders/[id]/page.tsx'];
+
+  it('the order page renders its title through PageHeader, never a truncating h1', () => {
+    for (const file of MOVED_TO_PAGE_HEADER_P4_B1) {
+      const src = readFileSync(path.join(ROOT, file), 'utf8');
+      expect(src, file).toMatch(/<PageHeader\b/);
+      expect(src, file).not.toMatch(/<h1\b/);
+      expect(titleColumns(src), file).toEqual([]);
+    }
   });
 
   it('every title column asks for 18rem (basis-72)', () => {

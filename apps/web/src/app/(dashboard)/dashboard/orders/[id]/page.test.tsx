@@ -2233,18 +2233,31 @@ describe('orders/[id]: the Dates card prints the needed-by in the org zone', () 
 // flex-1 with a 0 basis, so the actions never wrapped: they kept their width
 // and the title took what was left. jsdom has no layout; the browser walk
 // measures the widths, this pins the rule that gives them.
+//
+// Redesign P4.B1 (look-only update of this test, owner P4.B1): the header is
+// now the shared PageHeader, which keeps the same rule a different way: its
+// title block takes its own width on a wrapping row (it is not a flex-1
+// column), the actions are its sibling on that row and wrap under it, and the
+// h1 wraps instead of truncating, so the number can never be cut to "Or...".
 describe('orders/[id]: the title is never squeezed out by the actions', () => {
-  it('the title column asks for 18rem before the actions share its line, so on a narrow screen they wrap under it', async () => {
+  it('the title sits in the shared page header, never truncated, with the actions wrapping on the same row', async () => {
     orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ order_number: 18 }) }));
     await renderPage();
     const h1 = screen.getByRole('heading', { level: 1 });
     expect(h1).toHaveTextContent('Order request SO-000018');
-    const column = h1.closest('[data-testid="order-title-column"]');
-    expect(column).not.toBeNull();
-    expect(column!.className.split(/\s+/)).toEqual(expect.arrayContaining(['min-w-0', 'flex-1', 'basis-72']));
-    // The actions are the column's sibling on the same wrapping row.
-    const row = column!.parentElement!;
+    // Never truncated: the number wraps onto a new line instead.
+    expect(h1.className.split(/\s+/)).not.toContain('truncate');
+    const header = h1.closest('[data-slot="page-header"]');
+    expect(header).not.toBeNull();
+    const actions = header!.querySelector('[data-slot="page-header-actions"]');
+    expect(actions).not.toBeNull();
+    // The actions are the title block's sibling on the same wrapping row.
+    const row = actions!.parentElement!;
+    expect(row.contains(h1)).toBe(true);
     expect(row.className.split(/\s+/)).toEqual(expect.arrayContaining(['flex', 'flex-wrap']));
+    // The title block asks for no fixed share of the row (no flex-1 squeeze).
+    const titleBlock = Array.from(row.children).find((c) => c.contains(h1))!;
+    expect(titleBlock.className.split(/\s+/)).not.toContain('flex-1');
   });
 });
 

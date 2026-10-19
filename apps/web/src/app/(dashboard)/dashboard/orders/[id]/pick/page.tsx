@@ -1,7 +1,7 @@
-import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 
 import { DigitalPick } from '@/components/orders/digital-pick';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
@@ -16,11 +16,7 @@ import { OrderRequestsService } from '@/server/services/order-requests';
 
 export const dynamic = 'force-dynamic';
 
-export default async function DigitalPickPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
+export default async function DigitalPickPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const ctx = await requireOrgContext();
   // ORDER READINESS (F2-2): the completion confirm projects complete_picking
@@ -66,8 +62,7 @@ export default async function DigitalPickPage({
   // viewer from staring at editable inputs. Mirrors the shared state machine's
   // viewerCanPick gate on the order-detail panel.
   const wa = await getWarehouseAccess(ctx);
-  const hasWhWrite =
-    wa.hasAllAccess || wa.writableIds.includes(detail.request.warehouse_id);
+  const hasWhWrite = wa.hasAllAccess || wa.writableIds.includes(detail.request.warehouse_id);
   const canPick =
     (isManagerOrAbove(ctx.role) ||
       (assignedPickerId !== null && assignedPickerId === ctx.userId)) &&
@@ -81,9 +76,7 @@ export default async function DigitalPickPage({
       .eq('id', assignedPickerId)
       .maybeSingle();
     assignedPickerName = pk
-      ? (pk.full_name as string | null)?.trim() ||
-        (pk.email as string | null) ||
-        null
+      ? (pk.full_name as string | null)?.trim() || (pk.email as string | null) || null
       : null;
   }
 
@@ -98,11 +91,7 @@ export default async function DigitalPickPage({
   let fefoByItemId: Record<string, FefoSuggestion[]> = {};
   if (lotSerialEnabled) {
     const lotItemIds = Array.from(
-      new Set(
-        detail.lines
-          .filter((l) => l.item?.tracking_type === 'lot')
-          .map((l) => l.item!.id),
-      ),
+      new Set(detail.lines.filter((l) => l.item?.tracking_type === 'lot').map((l) => l.item!.id)),
     );
     if (lotItemIds.length > 0) {
       const lotsSvc = await LotsService.forCurrentUser();
@@ -111,22 +100,24 @@ export default async function DigitalPickPage({
     }
   }
 
+  // The workbench page (DESIGN-SPEC 7.7): the shared page header with its
+  // back link, then the pick card. The header is PageHeader's div, never a
+  // <header> (the shell's top bar owns that element).
   return (
-    <div className="mx-auto max-w-2xl px-4 py-6 sm:px-6">
-      <Link
-        href={`/dashboard/orders/${id}`}
-        className="text-muted-foreground hover:text-foreground text-sm"
-      >
-        ← Back to order
-      </Link>
-      <header className="mt-3">
-        <h1 className="font-display text-2xl">Pick slip</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Order #{id.slice(0, 8).toUpperCase()} ·{' '}
-          {detailRequesterName(detail) ?? detail.requesterEmail ?? '—'}
-        </p>
-      </header>
-      <div className="mt-6">
+    <div className="mx-auto flex w-full max-w-[880px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <PageHeader
+        back={
+          <PageHeaderBackLink href={`/dashboard/orders/${id}`}>← Back to order</PageHeaderBackLink>
+        }
+        title="Pick slip"
+        subline={
+          <>
+            Order <span className="font-mono">#{id.slice(0, 8).toUpperCase()}</span> ·{' '}
+            {detailRequesterName(detail) ?? detail.requesterEmail ?? '—'}
+          </>
+        }
+      />
+      <div>
         <DigitalPick
           orderId={id}
           initialLines={detail.lines}

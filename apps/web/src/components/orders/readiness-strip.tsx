@@ -99,7 +99,10 @@ export function ReadinessStrip({
 
   return (
     <div
-      className={cn('border-border border-b px-4 py-2.5 text-xs', tone.band)}
+      className={cn(
+        'border-border border-b px-[18px] py-3 text-[12.5px] leading-[18px]',
+        tone.band,
+      )}
       data-testid="readiness-strip"
       data-mode={view.mode}
       data-failed={view.failed ? 'true' : 'false'}
@@ -109,28 +112,32 @@ export function ReadinessStrip({
           className={cn('flex min-w-0 items-start gap-2 font-medium', tone.text)}
           role={view.failed ? 'alert' : undefined}
         >
-          <ReadinessIcon icon={view.icon} className="mt-px size-3.5 shrink-0" />
+          <ReadinessIcon icon={view.icon} className="mt-0.5 size-3.5 shrink-0" />
           <span data-testid="readiness-headline">
             <span className="sr-only">{view.mode === 'full' ? 'Readiness: ' : 'Stock: '}</span>
             {text}
           </span>
         </p>
-        <div className="flex flex-wrap items-center gap-1.5">
+        {/* 8 px between the 28 px buttons, so their 44 px touch areas (below
+            sm and on coarse pointers) never cover a neighbour. */}
+        <div className="flex flex-wrap items-center gap-2" data-testid="readiness-actions">
           {putAway?.kind === 'link' && (
-            <Button asChild variant="outline" size="sm" className="h-7 px-2 text-xs">
+            <Button asChild variant="outline" size="sm">
               <IntentLink href={putAway.href} data-testid="readiness-put-away">
                 <ArrowUpFromLine className="size-3.5" aria-hidden />
                 {putAway.label}
               </IntentLink>
             </Button>
           )}
-          {shortfallPo?.kind === 'button' && <DraftShortfallPoButton orderId={shortfallPo.orderId} />}
+          {shortfallPo?.kind === 'button' && (
+            <DraftShortfallPoButton orderId={shortfallPo.orderId} />
+          )}
           {holdOrderId && (
             <Button
               type="button"
               variant="outline"
               size="sm"
-              className="h-7 px-2 text-xs"
+
               onClick={() => void holdAvailableStock()}
               disabled={holding || pending}
               data-testid="readiness-hold-stock"
@@ -147,7 +154,7 @@ export function ReadinessStrip({
             type="button"
             variant="outline"
             size="sm"
-            className="h-7 px-2 text-xs"
+
             onClick={() => startTransition(() => router.refresh())}
             disabled={pending}
             data-testid="readiness-recheck"
@@ -206,7 +213,7 @@ export function ReadinessStrip({
         </div>
       )}
       {view.checkedAt && (
-        <p className="text-muted-foreground mt-1 text-[10.5px]" data-testid="readiness-checked-at">
+        <p className="text-muted-foreground mt-1 text-[11.5px]" data-testid="readiness-checked-at">
           {view.checkedAt}
         </p>
       )}

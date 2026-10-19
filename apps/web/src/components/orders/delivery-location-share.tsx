@@ -1,6 +1,7 @@
 'use client';
 import * as React from 'react';
 import { toast } from 'sonner';
+import { DetailSection } from '@/components/patterns/detail-section';
 import { Button } from '@/components/ui/button';
 import { shareDeliveryLocationAction } from '@/server/actions/delivery-tracking';
 
@@ -42,14 +43,20 @@ export function DeliveryLocationShare({ orderId }: { orderId: string }) {
   }
 
   return (
-    <div className="rounded-lg border p-3">
-      <p className="text-sm font-medium">Live delivery tracking</p>
-      <p className="text-muted-foreground mb-2 text-xs">
+    // A titled card (DESIGN-SPEC 6.7), like the order page's other sections.
+    <DetailSection title="Live delivery tracking" data-testid="delivery-location-share">
+      <p className="text-muted-foreground mb-3 text-[12.5px]">
         While on, the customer can see your location on a map until this delivery completes. Foreground only.
       </p>
-      <Button type="button" variant={sharing ? 'outline' : 'gradient'} size="sm" onClick={sharing ? stop : start}>
+      <Button
+        type="button"
+        variant={sharing ? 'outline' : 'default'}
+        size="sm"
+        aria-pressed={sharing}
+        onClick={sharing ? stop : start}
+      >
         {sharing ? 'Stop sharing' : 'Share my location'}
       </Button>
-    </div>
+    </DetailSection>
   );
 }
