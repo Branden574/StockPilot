@@ -70,7 +70,7 @@ select o.id as organization_id,
 
 ## Part 2: data dump (before any write)
 
-Take the data dump the production checklist asks for before any write, for
+Take a data dump before any write, as for any change to production data, for
 example `pnpm exec supabase db dump --linked --data-only -f <file>` from a
 machine linked to production. Keep the file out of the repository. Part 3 also
 records each organization's saved navigation as it was, in the audit row it
