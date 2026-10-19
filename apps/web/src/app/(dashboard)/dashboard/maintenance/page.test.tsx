@@ -578,6 +578,30 @@ describe('redesign structure (P4.F3)', () => {
     ).toBeNull();
   });
 
+  it('the Photos cell sets only the figure in the mono face; an empty row keeps the plain dash like its other cells', async () => {
+    setCtx('staff');
+    list.mockResolvedValueOnce([
+      row({ id: 'r-1', requestNumber: 1, photoCount: 3 }),
+      row({ id: 'r-2', requestNumber: 2, photoCount: 0, siteName: null }),
+    ]);
+    render(await MaintenancePage(args()));
+    const table = screen.getByRole('table');
+    const headers = within(table)
+      .getAllByRole('columnheader')
+      .map((h) => h.textContent);
+    const photosIdx = headers.indexOf('Photos');
+    const siteIdx = headers.indexOf('Site');
+    const [withPhotos, withoutPhotos] = within(table).getAllByRole('row').slice(1);
+    const photoCell = within(withPhotos).getAllByRole('cell')[photosIdx];
+    expect(photoCell).toHaveTextContent('3');
+    expect(photoCell.querySelector('.font-mono')).toHaveTextContent('3');
+    const cells = within(withoutPhotos).getAllByRole('cell');
+    expect(cells[photosIdx]).toHaveTextContent('—');
+    expect(cells[photosIdx].querySelector('.font-mono')).toBeNull();
+    expect(cells[photosIdx]).not.toHaveClass('font-mono');
+    expect(cells[siteIdx]).toHaveTextContent('—');
+  });
+
   it('the pager sits in the table card, after the table (its footer)', async () => {
     setCtx('manager');
     const rows = Array.from({ length: 26 }, (_, i) => row({ id: `r-${i}`, requestNumber: i + 1 }));

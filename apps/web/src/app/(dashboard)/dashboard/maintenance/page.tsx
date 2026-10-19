@@ -307,8 +307,14 @@ export default async function MaintenancePage({
                   {scope === 'all' ? (
                     <TableCell className="text-ink-2">{r.requesterName}</TableCell>
                   ) : null}
-                  <TableCell className="text-right font-mono text-[13px] tabular-nums">
-                    {r.photoCount || '—'}
+                  <TableCell className="text-right tabular-nums">
+                    {/* Mono face for the figure only, so an empty row's dash
+                        matches the sans dash in the other cells. */}
+                    {r.photoCount ? (
+                      <span className="font-mono text-[13px]">{r.photoCount}</span>
+                    ) : (
+                      '—'
+                    )}
                   </TableCell>
                   <TableCell className="text-muted-foreground whitespace-nowrap text-right text-[12.5px]">
                     {formatRelative(r.createdAt)}
