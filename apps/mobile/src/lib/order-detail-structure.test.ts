@@ -17,6 +17,7 @@ import {
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
 import { returnStatusTone } from './returns-view';
+import { createFieldRevealer } from './sheet-field-reveal';
 import { palette, type Palette } from './theme';
 
 /**
@@ -253,7 +254,14 @@ describe('order screen: the order actions keep their tones, and a refusal is nev
   });
 
   // Which action is the ink commit and which is the outline or a refusal:
-  // exactly as before the restyle (mutation caught: a tone moved).
+  // as before the restyle (mutation caught: a tone moved), but for one.
+  // Email delivery request is the outline, as the web's button: it opens a
+  // mail draft and commits nothing, and as the ink it was a second ink
+  // button beside Approve or Complete picking for a requester who also
+  // approves or picks. Every other ink step has its own status (the actions
+  // section's pipeline step, Claim picking in the picking phase, Create
+  // return and the requester's return once handed over), so the screen
+  // shows one ink button at a time.
   it('every action keeps its tone', () => {
     const sf = parseTsx(src, FILES.order);
     const calls: string[] = [];
@@ -290,7 +298,7 @@ describe('order screen: the order actions keep their tones, and a refusal is nev
       "'Resume fulfillment' 'primary'",
       "'Close as delivered-partial' 'default'",
       "cancelOffer.label 'danger'",
-      "'Email delivery request' 'primary'",
+      "'Email delivery request' 'default'",
       "'Copy details' 'default'",
       "'Create return' 'primary'",
       "requesterEntryWords(requester.load) 'primary'",
@@ -300,7 +308,7 @@ describe('order screen: the order actions keep their tones, and a refusal is nev
   it('Deny and Reopen picking confirm in the outline with refusal words, with the same gates', () => {
     const f = flat(code);
     expect(f).toContain(
-      '<Pressable onPress={() => void submitDeny()} disabled={acting !== null} accessibilityRole="button" style={[ styles.addBtn, { ...outlineButton, paddingHorizontal: 18, opacity: acting !== null ? 0.5 : 1 }, ]} > <Text style={[styles.actionLabel, { color: c.critText }]}>Deny</Text>',
+      '<Pressable onPress={() => void submitDeny()} disabled={acting !== null} accessibilityRole="button" style={[ styles.addBtn, { ...outlineButton, paddingHorizontal: 18, opacity: acting !== null ? 0.5 : 1, }, ]} > <Text style={[styles.actionLabel, { color: c.critText }]}>Deny</Text>',
     );
     expect(f).toContain(
       'onPress={() => void reopenPicking()} disabled={!reopenReason.trim() || acting !== null} accessibilityRole="button"',
@@ -626,8 +634,62 @@ describe('order screen: the driver and create-return sheets are the shared sheet
     );
     expect(card && attrText(card.el, 'onResponderRelease', sf)).toBe('returnKb.onTapOutside');
     expect(code).toMatch(
-      /setReturnItemIsHere\(false\); returnKb\.onNoteBlur\(\); setReturnOpen\(true\);/,
+      /setReturnItemIsHere\(false\); returnKb\.onNoteBlur\(\); returnKb\.onBodyScroll\(BODY_AT_TOP\); setReturnOpen\(true\);/,
     );
+  });
+
+  // The defect: the keyboard helper lives with the screen, so a second
+  // opening started from where the last opening's body was scrolled, while
+  // the new body opens at its top. With fewer lines left to return, the note
+  // shows at rest without a scroll; measured from the old offset the helper
+  // took it for still in view once the keyboard had shrunk the body, and the
+  // note stayed under the keyboard. Each opening now tells the helper the
+  // body is at its top. Run through the real revealer, with the screen's own
+  // value. Mutation caught: the reset dropped, or not at the top.
+  it('a second opening starts the keyboard helper at the top of the new body', () => {
+    const code = codeOnly(sourceOf(FILES.order));
+    const decl = code.match(/const BODY_AT_TOP = (\{[\s\S]*?\}) as NativeSyntheticEvent/)?.[1];
+    expect(decl).toBeDefined();
+    const bodyAtTop = new vm.Script(`(${decl})`).runInNewContext({}) as {
+      nativeEvent: { contentOffset: { y: number } };
+    };
+    // The hook's onBodyScroll hands the revealer exactly this offset.
+    expect(sourceOf('src/lib/use-sheet-keyboard.ts')).toContain(
+      'onBodyScroll: (e: NativeSyntheticEvent<NativeScrollEvent>) => revealer.scrolled(e.nativeEvent.contentOffset.y),',
+    );
+
+    const secondOpening = (reset: boolean) => {
+      const moves: number[] = [];
+      const r = createFieldRevealer((y) => moves.push(y));
+      // First opening: three lines to return; the note typed at the foot of
+      // a 700pt body scrolled to 280.
+      r.viewportChanged(420);
+      r.contentChanged(700);
+      r.blockLaid(560, 100);
+      r.fieldLaid(30, 60);
+      r.scrolled(280);
+      r.blur(); // sent: the sheet closed
+      // Second opening, one line left: openReturnSheet, then the new body
+      // lays out at its top (450pt of content in a 420pt window).
+      r.blur();
+      if (reset) r.scrolled(bodyAtTop.nativeEvent.contentOffset.y);
+      r.viewportChanged(420);
+      r.contentChanged(450);
+      r.blockLaid(300, 100);
+      r.fieldLaid(30, 60);
+      moves.length = 0;
+      r.focus(); // in view at rest (0..420): nothing to move
+      r.viewportChanged(220); // the keyboard takes 200pt of the body
+      r.keyboardShown();
+      return moves;
+    };
+    // Without the reset the note (300..400) is left under the keyboard.
+    expect(secondOpening(false)).toEqual([]);
+    // With it the body scrolls the note into the 220pt window, whole.
+    const moves = secondOpening(true);
+    expect(moves).toHaveLength(1);
+    expect(moves[0]! + 220).toBeGreaterThanOrEqual(400);
+    expect(moves[0]!).toBeLessThanOrEqual(300);
   });
 
   it('Restock / Scrap, Return / Exchange and the reasons are radios with their state, in 44pt chips', () => {
@@ -654,6 +716,110 @@ describe('order screen: the driver and create-return sheets are the shared sheet
         expect(contrast(t.knob, t.track), `${mode} ${on}`).toBeGreaterThanOrEqual(AA_UI);
       }
     }
+  });
+});
+
+// The defect: the Deny and Reopen picking dialogs had no keyboard handling.
+// A centred card on a phone, with the reason box focused the keyboard covered
+// the bottom of the card: Deny sat partly under it and the whole of Reopen
+// picking under it (about 366pt of card centred on an 874pt screen, the
+// keyboard's top at about 538pt), and with a multi-line box there was no way
+// to put the keyboard away but closing the dialog, which clears the reason.
+// At the largest text sizes the buttons ran off the screen with no keyboard
+// at all. Each dialog now sits in a keyboard-avoiding wrapper, its words and
+// reason box scroll inside the card within the room measured for them, and
+// the buttons stay outside the scrolling part, so they always show. The
+// centred shape VoiceOver needs is unchanged (sheet-a11y-structure.test.ts).
+describe('order screen: the Deny and Reopen picking dialogs keep their buttons above the keyboard (defect fixed)', () => {
+  const { sf, all } = treeOf(FILES.order);
+  const attrFlat = (el: JsxNode, name: string) => {
+    const t = attrText(el, name, sf);
+    return t === undefined ? undefined : flat(t);
+  };
+  const DIALOGS = [
+    {
+      name: 'Deny',
+      close: 'dismissDenyModal',
+      input: 'denyReason',
+      confirm: '() => void submitDeny()',
+    },
+    {
+      name: 'Reopen picking',
+      close: 'dismissReopenModal',
+      input: 'reopenReason',
+      confirm: '() => void reopenPicking()',
+    },
+  ];
+
+  it.each(DIALOGS)(
+    '$name: above the keyboard, the body scrolls, the buttons stay outside it',
+    (d) => {
+      const containers = all.filter(
+        (n) =>
+          attrText(n.el, 'accessibilityViewIsModal', sf) === 'true' &&
+          attrText(n.el, 'onAccessibilityEscape', sf) === d.close,
+      );
+      expect(containers).toHaveLength(1);
+      const container = containers[0]!;
+      const kav = container.ancestors[container.ancestors.length - 1]!;
+      expect(tagOf(kav, sf)).toBe('KeyboardAvoidingView');
+      expect(attrText(kav, 'behavior', sf)).toBe("Platform.OS === 'ios' ? 'padding' : undefined");
+      expect(attrText(kav, 'style', sf)).toBe('{ flex: 1 }');
+      // The room the keyboard leaves, measured on the container.
+      expect(attrFlat(container.el, 'onLayout')).toBe(
+        '(e) => setReasonRoom(e.nativeEvent.layout.height)',
+      );
+      // The reason box sits in the scrolling body, bounded by the rule below.
+      const inputs = all.filter(
+        (n) => tagOf(n.el, sf) === 'TextInput' && attrText(n.el, 'value', sf) === d.input,
+      );
+      expect(inputs).toHaveLength(1);
+      const body = inputs[0]!.ancestors[inputs[0]!.ancestors.length - 1]!;
+      expect(tagOf(body, sf)).toBe('ScrollView');
+      expect(inputs[0]!.ancestors).toContain(container.el);
+      expect(attrFlat(body, 'style')).toBe(
+        '{ maxHeight: reasonDialogBodyMax(reasonRoom, reasonButtons, sheetInsets.top), }',
+      );
+      expect(attrText(body, 'keyboardDismissMode', sf)).toBe('on-drag');
+      // The confirm button: in the card, outside the scrolling body, in the
+      // measured row that wraps.
+      const confirms = all.filter((n) => attrText(n.el, 'onPress', sf) === d.confirm);
+      expect(confirms).toHaveLength(1);
+      const confirm = confirms[0]!;
+      expect(confirm.ancestors).toContain(container.el);
+      expect(confirm.ancestors).not.toContain(body);
+      const row = confirm.ancestors[confirm.ancestors.length - 1]!;
+      expect(attrText(row, 'style', sf)).toBe('styles.reasonButtons');
+      expect(attrFlat(row, 'onLayout')).toBe(
+        '(e) => setReasonButtons(e.nativeEvent.layout.height)',
+      );
+    },
+  );
+
+  it('the buttons row wraps at the largest text sizes', () => {
+    expect(sourceOf(FILES.order)).toMatch(
+      /\n {2}reasonButtons: \{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'flex-end' \},/,
+    );
+  });
+
+  // The rule the body is bounded by, run from the screen's own source.
+  it('the body takes the room left once the inset, paddings, gap and buttons are taken', () => {
+    const max = (room: number | null, buttons: number | null, top: number) =>
+      runFunction<(r: number | null, b: number | null, t: number) => number | undefined>(
+        FILES.order,
+        'reasonDialogBodyMax',
+        { MIN_TAP: 44 },
+      )(room, buttons, top);
+    // iPhone 17 Pro with the keyboard up: 538pt of room, a 44pt row, 62pt inset.
+    expect(max(538, 44, 62)).toBe(538 - 62 - 48 - 36 - 12 - 44);
+    // So the whole card fits in the room below the inset: the buttons show.
+    const card = 18 + max(538, 44, 62)! + 12 + 44 + 18;
+    expect(card).toBeLessThanOrEqual(538 - 62 - 48);
+    // Not measured yet: no limit (the first frame lays out as before).
+    expect(max(null, 44, 62)).toBeUndefined();
+    expect(max(538, null, 62)).toBeUndefined();
+    // Never less than one 44pt line of the body.
+    expect(max(200, 120, 62)).toBe(44);
   });
 });
 

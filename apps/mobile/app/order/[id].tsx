@@ -31,6 +31,8 @@ import {
   useWindowDimensions,
   View,
   type LayoutChangeEvent,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ApprovePartialSheet } from '@/components/approve-partial-sheet';
@@ -603,6 +605,11 @@ export default function OrderDetail() {
   // picking to fix a miscount. Same reason-required pattern as deny.
   const [reopenOpen, setReopenOpen] = React.useState(false);
   const [reopenReason, setReopenReason] = React.useState('');
+  // The Deny and Reopen picking dialogs, measured: the room the keyboard
+  // leaves them and the height of their buttons' row (one dialog is open at
+  // a time), so the reason's body scrolls and the buttons always show.
+  const [reasonRoom, setReasonRoom] = React.useState<number | null>(null);
+  const [reasonButtons, setReasonButtons] = React.useState<number | null>(null);
   const [driverOpen, setDriverOpen] = React.useState(false);
   const [drivers, setDrivers] = React.useState<OrderDriver[] | null>(null);
   // F2-3: the approve-partial / resume sheet, with the preview it opened on.
@@ -1227,8 +1234,14 @@ export default function OrderDetail() {
     setReturnKey(sheetKey);
     setReturnItemIsHere(false);
     // The keyboard helper lives with the screen, not the sheet: a note that
-    // still had focus when the sheet last closed is not revealed again.
+    // still had focus when the sheet last closed is not revealed again, and
+    // the new body opens at its top. The helper still held where the last
+    // opening's body was scrolled, and measured from there it took a note in
+    // view at rest for one still in view once the keyboard had shrunk the
+    // body, so the note stayed under it (a second return on the same order,
+    // with fewer lines left to return).
     returnKb.onNoteBlur();
+    returnKb.onBodyScroll(BODY_AT_TOP);
     setReturnOpen(true);
   }
 
@@ -3257,7 +3270,17 @@ export default function OrderDetail() {
           {showDeliveryRequest && deliveryPrepared && deliveryRecipients ? (
             <View style={{ gap: 8 }}>
               <Eyebrow>DELIVERY REQUEST</Eyebrow>
-              {actionBtn('Email delivery request', 'delivery-request', handleDeliveryRequestPress)}
+              {/* The outline, as the web's Send delivery request button: it
+                  opens a mail draft and commits nothing, and as the ink it
+                  made a second ink button beside the order's own step for a
+                  requester who also approves or picks (Approve, Complete
+                  picking). */}
+              {actionBtn(
+                'Email delivery request',
+                'delivery-request',
+                handleDeliveryRequestPress,
+                'default',
+              )}
               {connectionNotice}
               {/* Interpolated from the SAME resolved recipients the draft was
                   composed with (per-org email routing), so this sentence can
@@ -3848,70 +3871,100 @@ export default function OrderDetail() {
       {/* Deny-reason capture (the requester sees this reason). */}
       <Modal visible={denyOpen} transparent animationType="fade" onRequestClose={dismissDenyModal}>
         {/* Backdrop is a SIBLING behind the dialog, never its parent — see
-            the Customer signature dialog above. */}
-        <View style={{ flex: 1 }} accessibilityViewIsModal onAccessibilityEscape={dismissDenyModal}>
-          <Pressable
-            onPress={dismissDenyModal}
-            onAccessibilityTap={dismissDenyModal}
-            accessibilityRole="button"
-            accessibilityLabel="Close"
-            style={[
-              StyleSheet.absoluteFill,
-              { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' },
-            ]}
-          />
+            the Customer signature dialog above. The dialog sits in the space
+            the keyboard leaves, and its words and reason box scroll inside
+            it so Cancel and Deny always show (reasonDialogBodyMax): it had
+            no keyboard handling, and Deny sat under the keyboard while the
+            reason was typed, with no way to put the keyboard away but
+            closing the dialog. */}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={{ flex: 1 }}
+        >
           <View
-            style={{ flex: 1, justifyContent: 'center', padding: 24 }}
-            pointerEvents="box-none"
+            style={{ flex: 1 }}
+            accessibilityViewIsModal
+            onAccessibilityEscape={dismissDenyModal}
+            onLayout={(e) => setReasonRoom(e.nativeEvent.layout.height)}
           >
-            <View style={{ backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 }}>
-              <Body
-                size={15}
-                color={c.ink}
-                accessibilityRole="header"
-                style={{ fontFamily: FONT.display }}
-              >
-                Deny this request?
-              </Body>
-              <Body size={13} color={c.ink3}>
-                The requester is notified with the reason you provide.
-              </Body>
-              <TextInput
-                value={denyReason}
-                onChangeText={setDenyReason}
-                placeholder="Reason"
-                placeholderTextColor={c.ink3}
-                multiline
-                style={[
-                  styles.reasonInput,
-                  { borderColor: c.hair2, backgroundColor: c.card, color: c.ink },
-                ]}
-              />
-              {/* Cancel is the outline; Deny the outline with its words in the
-                  per-mode refusal ink (never a full red bar). */}
-              <View style={{ flexDirection: 'row', gap: 10, justifyContent: 'flex-end' }}>
-                <Pressable
-                  onPress={dismissDenyModal}
-                  accessibilityRole="button"
-                  style={[styles.addBtn, { ...outlineButton, paddingHorizontal: 18 }]}
+            <Pressable
+              onPress={dismissDenyModal}
+              onAccessibilityTap={dismissDenyModal}
+              accessibilityRole="button"
+              accessibilityLabel="Close"
+              style={[
+                StyleSheet.absoluteFill,
+                { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' },
+              ]}
+            />
+            <View
+              style={{ flex: 1, justifyContent: 'center', padding: 24 }}
+              pointerEvents="box-none"
+            >
+              <View style={{ backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 }}>
+                <ScrollView
+                  style={{
+                    maxHeight: reasonDialogBodyMax(reasonRoom, reasonButtons, sheetInsets.top),
+                  }}
+                  contentContainerStyle={{ gap: 12 }}
+                  keyboardDismissMode="on-drag"
                 >
-                  <Text style={[styles.actionLabel, { color: c.ink }]}>Cancel</Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => void submitDeny()}
-                  disabled={acting !== null}
-                  accessibilityRole="button"
-                  style={[
-                    styles.addBtn,
-                    { ...outlineButton, paddingHorizontal: 18, opacity: acting !== null ? 0.5 : 1 },
-                  ]}
+                  <Body
+                    size={15}
+                    color={c.ink}
+                    accessibilityRole="header"
+                    style={{ fontFamily: FONT.display }}
+                  >
+                    Deny this request?
+                  </Body>
+                  <Body size={13} color={c.ink3}>
+                    The requester is notified with the reason you provide.
+                  </Body>
+                  <TextInput
+                    value={denyReason}
+                    onChangeText={setDenyReason}
+                    placeholder="Reason"
+                    placeholderTextColor={c.ink3}
+                    multiline
+                    style={[
+                      styles.reasonInput,
+                      { borderColor: c.hair2, backgroundColor: c.card, color: c.ink },
+                    ]}
+                  />
+                </ScrollView>
+                {/* Cancel is the outline; Deny the outline with its words in the
+                    per-mode refusal ink (never a full red bar). */}
+                <View
+                  style={styles.reasonButtons}
+                  onLayout={(e) => setReasonButtons(e.nativeEvent.layout.height)}
                 >
-                  <Text style={[styles.actionLabel, { color: c.critText }]}>Deny</Text>
-                </Pressable>
+                  <Pressable
+                    onPress={dismissDenyModal}
+                    accessibilityRole="button"
+                    style={[styles.addBtn, { ...outlineButton, paddingHorizontal: 18 }]}
+                  >
+                    <Text style={[styles.actionLabel, { color: c.ink }]}>Cancel</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => void submitDeny()}
+                    disabled={acting !== null}
+                    accessibilityRole="button"
+                    style={[
+                      styles.addBtn,
+                      {
+                        ...outlineButton,
+                        paddingHorizontal: 18,
+                        opacity: acting !== null ? 0.5 : 1,
+                      },
+                    ]}
+                  >
+                    <Text style={[styles.actionLabel, { color: c.critText }]}>Deny</Text>
+                  </Pressable>
+                </View>
               </View>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Reopen-picking reason capture — manager override that sends a
@@ -3926,79 +3979,102 @@ export default function OrderDetail() {
         onRequestClose={dismissReopenModal}
       >
         {/* Backdrop is a SIBLING behind the dialog, never its parent — see
-            the Customer signature dialog above. */}
-        <View style={{ flex: 1 }} accessibilityViewIsModal onAccessibilityEscape={dismissReopenModal}>
-          <Pressable
-            onPress={dismissReopenModal}
-            onAccessibilityTap={dismissReopenModal}
-            accessibilityRole="button"
-            accessibilityLabel="Close"
-            style={[
-              StyleSheet.absoluteFill,
-              { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' },
-            ]}
-          />
+            the Customer signature dialog above. Above the keyboard, its body
+            scrolling inside it, as the Deny dialog: on a phone the whole of
+            Reopen picking sat under the keyboard while the reason was typed. */}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={{ flex: 1 }}
+        >
           <View
-            style={{ flex: 1, justifyContent: 'center', padding: 24 }}
-            pointerEvents="box-none"
+            style={{ flex: 1 }}
+            accessibilityViewIsModal
+            onAccessibilityEscape={dismissReopenModal}
+            onLayout={(e) => setReasonRoom(e.nativeEvent.layout.height)}
           >
-            <View style={{ backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 }}>
-              <Body
-                size={15}
-                color={c.ink}
-                accessibilityRole="header"
-                style={{ fontFamily: FONT.display }}
-              >
-                Reopen picking?
-              </Body>
-              <Body size={13} color={c.ink3}>
-                Sends this order back to picking so the count can be corrected. The picked
-                quantities and the assigned picker are kept, but the stock that was picked returns
-                to Unplaced — not necessarily its original rack — and will need to be put away
-                again before it can ship.
-                {order?.status === 'packing_slip_generated'
-                  ? ' The already-generated packing slip will be voided; a new one must be printed after picking finishes.'
-                  : ''}{' '}
-                A signed order can&apos;t be reopened. This is recorded in the audit log.
-              </Body>
-              <TextInput
-                value={reopenReason}
-                onChangeText={setReopenReason}
-                placeholder="Why is this being reopened? (e.g. miscount on line 3)"
-                placeholderTextColor={c.ink3}
-                multiline
-                style={[
-                  styles.reasonInput,
-                  { borderColor: c.hair2, backgroundColor: c.card, color: c.ink },
-                ]}
-              />
-              <View style={{ flexDirection: 'row', gap: 10, justifyContent: 'flex-end' }}>
-                <Pressable
-                  onPress={dismissReopenModal}
-                  accessibilityRole="button"
-                  style={[styles.addBtn, { ...outlineButton, paddingHorizontal: 18 }]}
+            <Pressable
+              onPress={dismissReopenModal}
+              onAccessibilityTap={dismissReopenModal}
+              accessibilityRole="button"
+              accessibilityLabel="Close"
+              style={[
+                StyleSheet.absoluteFill,
+                { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' },
+              ]}
+            />
+            <View
+              style={{ flex: 1, justifyContent: 'center', padding: 24 }}
+              pointerEvents="box-none"
+            >
+              <View style={{ backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 }}>
+                <ScrollView
+                  style={{
+                    maxHeight: reasonDialogBodyMax(reasonRoom, reasonButtons, sheetInsets.top),
+                  }}
+                  contentContainerStyle={{ gap: 12 }}
+                  keyboardDismissMode="on-drag"
                 >
-                  <Text style={[styles.actionLabel, { color: c.ink }]}>Cancel</Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => void reopenPicking()}
-                  disabled={!reopenReason.trim() || acting !== null}
-                  accessibilityRole="button"
-                  style={[
-                    styles.addBtn,
-                    {
-                      ...outlineButton,
-                      paddingHorizontal: 18,
-                      opacity: reopenReason.trim() && acting === null ? 1 : 0.5,
-                    },
-                  ]}
+                  <Body
+                    size={15}
+                    color={c.ink}
+                    accessibilityRole="header"
+                    style={{ fontFamily: FONT.display }}
+                  >
+                    Reopen picking?
+                  </Body>
+                  <Body size={13} color={c.ink3}>
+                    Sends this order back to picking so the count can be corrected. The picked
+                    quantities and the assigned picker are kept, but the stock that was picked
+                    returns to Unplaced — not necessarily its original rack — and will need to be
+                    put away again before it can ship.
+                    {order?.status === 'packing_slip_generated'
+                      ? ' The already-generated packing slip will be voided; a new one must be printed after picking finishes.'
+                      : ''}{' '}
+                    A signed order can&apos;t be reopened. This is recorded in the audit log.
+                  </Body>
+                  <TextInput
+                    value={reopenReason}
+                    onChangeText={setReopenReason}
+                    placeholder="Why is this being reopened? (e.g. miscount on line 3)"
+                    placeholderTextColor={c.ink3}
+                    multiline
+                    style={[
+                      styles.reasonInput,
+                      { borderColor: c.hair2, backgroundColor: c.card, color: c.ink },
+                    ]}
+                  />
+                </ScrollView>
+                <View
+                  style={styles.reasonButtons}
+                  onLayout={(e) => setReasonButtons(e.nativeEvent.layout.height)}
                 >
-                  <Text style={[styles.actionLabel, { color: c.critText }]}>Reopen picking</Text>
-                </Pressable>
+                  <Pressable
+                    onPress={dismissReopenModal}
+                    accessibilityRole="button"
+                    style={[styles.addBtn, { ...outlineButton, paddingHorizontal: 18 }]}
+                  >
+                    <Text style={[styles.actionLabel, { color: c.ink }]}>Cancel</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => void reopenPicking()}
+                    disabled={!reopenReason.trim() || acting !== null}
+                    accessibilityRole="button"
+                    style={[
+                      styles.addBtn,
+                      {
+                        ...outlineButton,
+                        paddingHorizontal: 18,
+                        opacity: reopenReason.trim() && acting === null ? 1 : 0.5,
+                      },
+                    ]}
+                  >
+                    <Text style={[styles.actionLabel, { color: c.critText }]}>Reopen picking</Text>
+                  </Pressable>
+                </View>
               </View>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {order?.replacement ? (
@@ -4666,6 +4742,9 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     borderWidth: 1,
   },
+  // The Deny and Reopen picking dialogs' buttons, outside the scrolling body;
+  // at the largest text sizes the two wrap instead of running off the card.
+  reasonButtons: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'flex-end' },
   // A typed reason or note: the shared text box's recipe, in the body face.
   reasonInput: {
     minHeight: 72,
@@ -4709,3 +4788,28 @@ const styles = StyleSheet.create({
 
 /** A choice chip's words are control chrome (the shared Button's ceiling). */
 const CHIP_CAP = capTo(13, TYPE_CEILING.control);
+
+/** What a sheet body at its top reports as its scroll: where a newly opened
+ *  sheet's body starts, handed to the keyboard helper at each opening. */
+const BODY_AT_TOP = {
+  nativeEvent: { contentOffset: { x: 0, y: 0 } },
+} as NativeSyntheticEvent<NativeScrollEvent>;
+
+/**
+ * The most the body of a centred reason dialog (Deny, Reopen picking: its
+ * title, its sentence and the reason box) may take, so that its buttons
+ * always show: the room the dialog's container has (measured, so the
+ * keyboard's space is already gone), less the top inset (the card stays
+ * clear of the status bar), the layer's 24pt inset and the card's 18pt
+ * padding at each end, the 12pt gap and the buttons' row (measured). The
+ * body scrolls inside it. No limit until both are measured (the first
+ * frame), and never under 44pt.
+ */
+function reasonDialogBodyMax(
+  room: number | null,
+  buttons: number | null,
+  topInset: number,
+): number | undefined {
+  if (room === null || buttons === null) return undefined;
+  return Math.max(MIN_TAP, room - topInset - 2 * 24 - 2 * 18 - 12 - buttons);
+}

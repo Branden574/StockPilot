@@ -76,7 +76,12 @@ describe('the delivery-request draft opens only on a tap (Outlook rule 1)', () =
 
   it('the press handler is wired to the "Email delivery request" button and nothing else', () => {
     expect(count(screen, 'handleDeliveryRequestPress')).toBe(2); // its declaration and the button
-    expect(screen).toMatch(/actionBtn\('Email delivery request', 'delivery-request', handleDeliveryRequestPress\)/);
+    // Re-pinned by the redesign (P5.7a, look only): the button now passes
+    // its tone (the outline, as the web's button), so the call may wrap and
+    // carry that last argument; the same handler on the same button.
+    expect(screen).toMatch(
+      /actionBtn\(\s*'Email delivery request',\s*'delivery-request',\s*handleDeliveryRequestPress,\s*'default',?\s*\)/,
+    );
   });
 
   it('no effect, focus or refresh callback reaches the composer (mutation: open it from an effect)', () => {
