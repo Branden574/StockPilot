@@ -77,11 +77,14 @@ export function EmbeddingsBackfillPanel({ initialRemaining, initialTotal }: Pane
     stopRef.current = true;
   }
 
+  // The bar's name is the "N of M items embedded" line above it.
+  const countId = React.useId();
+
   return (
     <div className="space-y-4">
       <div>
         <div className="text-muted-foreground mb-1.5 flex items-center justify-between gap-3 text-[12.5px]">
-          <span>
+          <span id={countId}>
             <span className="text-foreground font-mono tabular-nums">{done.toLocaleString()}</span>{' '}
             of <span className="font-mono tabular-nums">{total.toLocaleString()}</span> items
             embedded
@@ -93,6 +96,7 @@ export function EmbeddingsBackfillPanel({ initialRemaining, initialTotal }: Pane
         <div
           className="relative h-1 w-full overflow-hidden rounded-[2px] bg-[var(--ed-line-strong)]"
           role="progressbar"
+          aria-labelledby={countId}
           aria-valuenow={pct}
           aria-valuemin={0}
           aria-valuemax={100}

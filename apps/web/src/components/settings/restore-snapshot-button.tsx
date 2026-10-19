@@ -9,6 +9,7 @@ import { Loader2, TriangleAlert } from 'lucide-react';
 import { useStepUp } from '@/components/auth/step-up-modal';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { useHydrated } from '@/lib/use-hydrated';
 import {
   restoreFromPointAction,
   restorePointSkuChangesAction,
@@ -16,6 +17,35 @@ import {
 import type { RestorePointSkuChanges } from '@/server/services/restore-points';
 
 import { RESTORE_SKU_COPY } from './restore-sku-warning-copy';
+
+/**
+ * A restore point's time in words, in the VIEWER's zone and locale, with the
+ * seconds kept: two points taken moments apart (a manual point and its
+ * pre-restore point) must read differently. One formatter for the Backups
+ * table's When column and the row's "roll back to ..." sentence, so the row
+ * never shows the same point two ways.
+ */
+export function formatRestorePointTime(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+/**
+ * The Backups table's When cell (CONFLICTS D13). The page is a server
+ * component, so formatting there printed the server's zone (UTC on Vercel);
+ * the text is added once the page has hydrated, in the viewer's zone.
+ */
+export function RestorePointTime({ iso }: { iso: string }) {
+  const hydrated = useHydrated();
+  if (!hydrated || Number.isNaN(new Date(iso).getTime())) return null;
+  return <span>{formatRestorePointTime(iso)}</span>;
+}
 
 /**
  * Per-row "Restore" — opens an inline confirm where the operator must type
@@ -120,7 +150,7 @@ export function RestoreSnapshotButton({
     );
   }
 
-  const whenText = createdAt ? new Date(createdAt).toLocaleString() : (when ?? '');
+  const whenText = createdAt ? formatRestorePointTime(createdAt) : (when ?? '');
   const changes = skuCheck.state === 'done' ? skuCheck.data.changes : [];
   // PR stage fix round 1 (F3): the check reads at most SKU_CHANGES_SCAN audit
   // rows, and the split rows it leaves out count against that limit, so a

@@ -5,9 +5,11 @@ import { Lock } from 'lucide-react';
 
 import { PageHeader } from '@/components/patterns/page-header';
 import { CreateRestorePointButton } from '@/components/settings/create-restore-point-button';
-import { RestoreSnapshotButton } from '@/components/settings/restore-snapshot-button';
+import {
+  RestorePointTime,
+  RestoreSnapshotButton,
+} from '@/components/settings/restore-snapshot-button';
 import { SettingsPage, SettingsPanel } from '@/components/settings/settings-nav';
-import { LocalDateTime } from '@/components/ui/local-datetime';
 import {
   Table,
   TableBody,
@@ -98,9 +100,9 @@ export default async function RestorePointsPage() {
                 </TableHeader>
                 <TableBody>
                   {snapshots.map((s) => (
-                    <TableRow key={s.id} className="align-top">
+                    <TableRow key={s.id}>
                       <TableCell className="whitespace-nowrap">
-                        <LocalDateTime iso={s.createdAt} />
+                        <RestorePointTime iso={s.createdAt} />
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {KIND_LABEL[s.kind] ?? s.kind}

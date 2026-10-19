@@ -73,10 +73,7 @@ export default async function RecoveryPage() {
         title="Recovery"
         subline="Restore soft-deleted rows. Anything deleted via Archive (or the API equivalent) lives here until you restore it — no time limit. Restoring brings the row back exactly where it was, with its original ID and references intact."
         back={
-          <nav
-            aria-label="Breadcrumb"
-            className="text-muted-foreground flex items-center gap-2 text-[12.5px]"
-          >
+          <div className="text-muted-foreground flex items-center gap-2 text-[12.5px]">
             <Link href="/dashboard/settings" className="hover:text-foreground transition-colors">
               Settings
             </Link>
@@ -84,7 +81,7 @@ export default async function RecoveryPage() {
               /
             </span>
             <span>Recovery</span>
-          </nav>
+          </div>
         }
       />
 

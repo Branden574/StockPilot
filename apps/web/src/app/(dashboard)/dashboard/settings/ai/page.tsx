@@ -47,10 +47,7 @@ export default async function AiSettingsPage() {
         title="AI"
         subline="Configure the AI assistant's knowledge of your inventory."
         back={
-          <nav
-            aria-label="Breadcrumb"
-            className="text-muted-foreground flex items-center gap-2 text-[12.5px]"
-          >
+          <div className="text-muted-foreground flex items-center gap-2 text-[12.5px]">
             <Link href="/dashboard/settings" className="hover:text-foreground transition-colors">
               Settings
             </Link>
@@ -58,7 +55,7 @@ export default async function AiSettingsPage() {
               /
             </span>
             <span>AI</span>
-          </nav>
+          </div>
         }
       />
 

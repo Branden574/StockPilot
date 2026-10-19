@@ -6,7 +6,7 @@ import * as React from 'react';
 
 import { FilterBar } from '@/components/patterns/filter-bar';
 import { StatePanel } from '@/components/patterns/state-panel';
-import { SettingsPanel } from '@/components/settings/settings-panel';
+import { SettingsPanel } from '@/components/settings/settings-nav';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -721,7 +721,7 @@ export function PublicLinkEditor({
               value={availabilityDisplay}
               onValueChange={(v) => setAvailabilityDisplay(v as 'exact' | 'bucket' | 'none')}
             >
-              <SelectTrigger>
+              <SelectTrigger aria-label="Stock shown to the public">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -814,7 +814,7 @@ export function PublicLinkEditor({
               resetToFirstPage();
             }}
           >
-            <SelectTrigger className="w-44">
+            <SelectTrigger className="w-44" aria-label="Filter by category">
               <SelectValue placeholder="Category" />
             </SelectTrigger>
             <SelectContent>
@@ -834,7 +834,7 @@ export function PublicLinkEditor({
               resetToFirstPage();
             }}
           >
-            <SelectTrigger className="w-32">
+            <SelectTrigger className="w-32" aria-label="Filter by type">
               <SelectValue placeholder="Type" />
             </SelectTrigger>
             <SelectContent>
@@ -850,7 +850,7 @@ export function PublicLinkEditor({
               resetToFirstPage();
             }}
           >
-            <SelectTrigger className="w-44">
+            <SelectTrigger className="w-44" aria-label="Filter by warehouse">
               <SelectValue placeholder="Warehouse" />
             </SelectTrigger>
             <SelectContent>
@@ -869,7 +869,7 @@ export function PublicLinkEditor({
               resetToFirstPage();
             }}
           >
-            <SelectTrigger className="w-40">
+            <SelectTrigger className="w-40" aria-label="Filter by link membership">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -884,7 +884,7 @@ export function PublicLinkEditor({
               resetToFirstPage();
             }}
           >
-            <SelectTrigger className="w-40">
+            <SelectTrigger className="w-40" aria-label="Sort by">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>

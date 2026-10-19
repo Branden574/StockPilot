@@ -22,7 +22,7 @@ beforeEach(() => {
 describe('EmbeddingsBackfillPanel', () => {
   it('shows the progress as a progressbar with its values', () => {
     render(<EmbeddingsBackfillPanel initialRemaining={30} initialTotal={120} />);
-    const bar = screen.getByRole('progressbar');
+    const bar = screen.getByRole('progressbar', { name: /items embedded/ });
     expect(bar).toHaveAttribute('aria-valuenow', '75');
     expect(bar).toHaveAttribute('aria-valuemin', '0');
     expect(bar).toHaveAttribute('aria-valuemax', '100');
@@ -50,7 +50,10 @@ describe('EmbeddingsBackfillPanel', () => {
       fireEvent.click(screen.getByRole('button', { name: /Start backfill/ }));
     });
     expect(backfill).toHaveBeenCalledTimes(2);
-    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100');
+    expect(screen.getByRole('progressbar', { name: /items embedded/ })).toHaveAttribute(
+      'aria-valuenow',
+      '100',
+    );
     expect(screen.getByText('This session: 100 embedded')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Re-run backfill/ })).toBeInTheDocument();
   });
