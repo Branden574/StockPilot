@@ -180,26 +180,31 @@ export default async function WarehouseDetailPage({
         }
       />
 
-      {/* The stat strip (DESIGN-SPEC 6.8): the same four figures and foot
-          lines the page always had. "Items on hand" counts active records at
-          this warehouse, not physical units. */}
-      <StatStrip>
+      {/* The record's stat strip (DESIGN-SPEC 6.8, the item page's KPI strip
+          as the matrix names it): the same four figures and foot lines the
+          page always had. "Items on hand" counts active records at this
+          warehouse, not physical units. */}
+      <StatStrip variant="detail">
         <StatStripItem
+          size="detail"
           label="Items on hand"
           value={formatNumber(itemCount)}
           sub="Active items at this warehouse"
         />
         <StatStripItem
+          size="detail"
           label="Charters serviced"
           value={formatNumber(chartersServiced.length)}
           sub={chartersServiced.length === 0 ? 'None assigned yet' : undefined}
         />
         <StatStripItem
+          size="detail"
           label="Completed orders (30d)"
           value={formatNumber(completedOrders30d)}
           sub="Fulfilled out of here"
         />
         <StatStripItem
+          size="detail"
           label="Pending order requests"
           value={formatNumber(pendingOrderCount)}
           sub="Awaiting approval"
