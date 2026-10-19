@@ -213,7 +213,9 @@ export function SupportTicketForm({ userId }: { userId: string }) {
       </div>
 
       <div className="space-y-1.5">
-        <Label htmlFor="support-screenshot">Screenshot (optional)</Label>
+        <Label htmlFor="support-screenshot" className="block">
+          Screenshot (optional)
+        </Label>
         <input
           ref={fileInputRef}
           id="support-screenshot"

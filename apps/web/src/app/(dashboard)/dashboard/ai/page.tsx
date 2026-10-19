@@ -41,7 +41,15 @@ export default async function AiPage() {
           </span>
         }
         title="Ask your inventory"
-        subline="Tool-call-grounded chat — every numeric answer comes from a real query against your Supabase. Most tools are read-only; the assistant can also adjust stock when you explicitly confirm."
+        subline={
+          // Held to a reading width so the Tour trigger stays beside the
+          // title block on a desktop instead of wrapping under it.
+          <span className="block max-w-[680px]">
+            Tool-call-grounded chat — every numeric answer comes from a real query against your
+            Supabase. Most tools are read-only; the assistant can also adjust stock when you
+            explicitly confirm.
+          </span>
+        }
         tour={<PageTour tour={AI_TOUR} />}
       />
       <ChatPanel />

@@ -887,7 +887,7 @@ export function ChatPanel() {
                 uploading ? 'Reading file…' : 'Ask about your stock, suppliers, or recent activity…'
               }
               rows={1}
-              className="placeholder:text-muted-foreground focus-visible:ring-ring max-h-32 min-h-8 flex-1 resize-none rounded-md bg-transparent px-2 py-1.5 text-[13.5px] leading-5 outline-none focus-visible:ring-2 disabled:opacity-60 max-sm:text-base"
+              className="placeholder:text-muted-foreground focus-visible:ring-ring max-h-32 min-h-8 flex-1 resize-none rounded-md bg-transparent px-2 py-1.5 text-[13.5px] leading-5 outline-none focus-visible:ring-2 disabled:opacity-60 max-sm:min-h-[60px] max-sm:text-base"
               disabled={busy || uploading}
               aria-label="Ask the inventory assistant"
             />

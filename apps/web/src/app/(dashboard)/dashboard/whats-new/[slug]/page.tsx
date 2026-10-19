@@ -46,7 +46,9 @@ export default async function WhatsNewReleasePage({ params }: Params) {
             <ArrowLeft className="size-3.5" aria-hidden /> Release history
           </PageHeaderBackLink>
         }
-        title={release.title}
+        // A release title often runs to two lines: a tighter line than the
+        // header's one-line default keeps it reading as one heading.
+        title={<span className="block leading-[1.2]">{release.title}</span>}
         subline={
           <span className="text-[12.5px]">
             {release.version ? `${release.version} · ` : ''}
