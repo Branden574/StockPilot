@@ -199,7 +199,10 @@ export function DigitalPick({
   // the item on the left and the entry on the right (the field right-aligned
   // in mono on the sunk fill, "of N", Save), the lot hint under its line, and
   // the commit in the card's footer. On a phone the entry wraps under the
-  // item. Every word, id, clamp and button is the one the page had.
+  // item. "of N" holds six characters and Save its own width while it
+  // spins, so the fields line up down the card whatever each line asks
+  // for; on a phone Save takes the field's 44 px height. Every word, id,
+  // clamp and button is the one the page had.
   return (
     <div
       className="border-border bg-card overflow-hidden rounded-lg border"
@@ -242,13 +245,14 @@ export function DigitalPick({
                     placeholder="Qty"
                     className="bg-sunk h-8 w-[72px] text-right font-mono tabular-nums"
                   />
-                  <span className="text-muted-foreground font-mono text-[12.5px] tabular-nums">
+                  <span className="text-muted-foreground min-w-[6ch] font-mono text-[12.5px] tabular-nums">
                     of {requested}
                   </span>
                   <Button
                     type="button"
                     size="sm"
                     variant={current === requested ? 'default' : 'outline'}
+                    className="min-w-[72px] max-sm:h-11 max-sm:px-4"
                     disabled={isSaving}
                     onClick={async () => {
                       const ok = await save(line.id, current);

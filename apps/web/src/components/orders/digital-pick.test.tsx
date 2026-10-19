@@ -261,4 +261,20 @@ describe('DigitalPick — the redesigned card and lock notice (P4.B1)', () => {
     const list = card.querySelector('ul')!;
     expect(list.compareDocumentPosition(complete) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
+
+  // The 1280 shots: "of 4" beside "of 10" moved each line's field sideways,
+  // and on a phone a 28 px Save sat beside the 44 px field.
+  it('the fields line up down the card: "of N" holds six characters, Save its width while it spins, and on a phone Save is as tall as the field', () => {
+    renderPick(READY, [line('notebooks', 'Notebook', 4, 4), line('pens', 'Pens', 10, null)]);
+    const rows = screen.getAllByTestId('digital-pick-line');
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      const ofN = within(row).getByRole('spinbutton').nextElementSibling as HTMLElement;
+      expect(ofN.textContent).toMatch(/^of \d+$/);
+      expect(ofN.className).toMatch(/(^|\s)min-w-\[6ch\](\s|$)/);
+      const save = within(row).getByRole('button', { name: 'Save' });
+      expect(save.className).toMatch(/(^|\s)min-w-\[72px\](\s|$)/);
+      expect(save.className).toMatch(/(^|\s)max-sm:h-11(\s|$)/);
+    }
+  });
 });
