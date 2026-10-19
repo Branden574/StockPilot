@@ -28,7 +28,7 @@ const STATUS_VARIANT: Record<string, NonNullable<BadgeProps['variant']>> = {
   ordered: 'secondary',
   partially_received: 'warning',
   received: 'success',
-  cancelled: 'outline',
+  cancelled: 'destructive',
 };
 
 export default async function ReconciliationPage({

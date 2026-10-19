@@ -19,7 +19,23 @@ vi.mock('@/lib/nav-labels', () => ({
   ),
 }));
 
+import { PoStatusBadge } from '@/components/po/po-status-badge';
+import { badgeVariants } from '@/components/ui/badge';
+
 import ReconciliationPage from './page';
+
+// The tone is read from the live Badge recipe (classes all six tones share are
+// ignored), as the PO status badge's own test does, so a restyle of the
+// recipe cannot break the check.
+const TONES = ['default', 'secondary', 'destructive', 'success', 'warning', 'outline'] as const;
+function toneOf(el: Element): string {
+  const own = new Set(el.className.split(/\s+/));
+  const recipes = TONES.map((t) => badgeVariants({ variant: t }).split(/\s+/));
+  const shared = recipes.reduce((a, r) => a.filter((c) => r.includes(c)));
+  return TONES.filter((_, i) => recipes[i]!.every((c) => shared.includes(c) || own.has(c))).join(
+    '|',
+  );
+}
 
 const DATA = {
   totals: { qtyOrdered: 1200, qtyReceived: 700, qtyOpen: 500 },
@@ -107,6 +123,40 @@ describe('/dashboard/admin/reconciliation', () => {
     );
     expect(within(pos!).getByText('partially received')).toBeInTheDocument();
     expect(screen.getByText('Purchase orders (all)')).toBeInTheDocument();
+  });
+
+  // Look-only expectation (review 1b): each status label takes the tone the PO
+  // pages give the same status, so Cancelled reads red here as it does there.
+  // The words stay this page's own (the status with its underscores turned
+  // into spaces).
+  it('draws each PO status on the PO pages’ tone, Cancelled on the destructive tone', async () => {
+    const statuses = [
+      'draft',
+      'expected_inbound',
+      'ordered',
+      'partially_received',
+      'received',
+      'cancelled',
+    ];
+    summary.mockResolvedValueOnce({
+      ...DATA,
+      rows: statuses.map((status, i) => ({
+        ...DATA.rows[0]!,
+        purchase_order_id: `po-${i}`,
+        po_number: `PO-${i}`,
+        status,
+      })),
+    });
+    render(await ReconciliationPage({ searchParams: Promise.resolve({ status: 'all' }) }));
+    const pos = screen.getAllByRole('table')[1]!;
+    for (const status of statuses) {
+      const pill = within(pos).getByText(status.replace(/_/g, ' '));
+      const po = render(<PoStatusBadge status={status} />);
+      const poPagesTone = toneOf(po.container.firstElementChild!);
+      po.unmount();
+      expect(toneOf(pill)).toBe(poPagesTone);
+    }
+    expect(toneOf(within(pos).getByText('cancelled'))).toBe('destructive');
   });
 
   it('keeps both empty words', async () => {
