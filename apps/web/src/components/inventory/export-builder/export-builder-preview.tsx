@@ -62,19 +62,19 @@ export function ExportBuilderPreview({
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="overflow-x-auto rounded-md border border-border">
+      <div className="border-border overflow-x-auto rounded-lg border">
         {preview === null ? (
-          <p className="p-3 text-[13px] text-[var(--ed-ink-4)]">Loading a sample of this export…</p>
+          <p className="text-muted-foreground p-3 text-[13px]">Loading a sample of this export…</p>
         ) : (
           <table aria-label="Export preview" className="w-full text-[12.5px]">
             <thead>
-              <tr className="bg-muted">
+              <tr className="bg-sunk">
                 {fields.map((field) => (
                   <th
                     key={field.key}
                     scope="col"
                     className={cn(
-                      'whitespace-nowrap px-2 py-1 font-medium',
+                      'text-muted-foreground whitespace-nowrap px-2 py-1.5 text-[11px] font-medium uppercase tracking-[0.06em]',
                       alignClass(field.align),
                     )}
                   >
@@ -85,16 +85,13 @@ export function ExportBuilderPreview({
             </thead>
             <tbody>
               {preview.sampleRows.slice(0, 5).map((row) => (
-                <tr key={row.id} className="border-t border-border">
+                <tr key={row.id} className="border-border border-t">
                   {fields.map((field) => {
                     if (field.key === 'image') {
                       return (
                         <td
                           key={field.key}
-                          className={cn(
-                            'px-2 py-1 text-[var(--ed-ink-4)]',
-                            alignClass(field.align),
-                          )}
+                          className={cn('text-muted-foreground px-2 py-1', alignClass(field.align))}
                         >
                           {headingFor(field) === 'Image URL' ? 'Image URL' : 'Image'}
                         </td>
@@ -120,7 +117,7 @@ export function ExportBuilderPreview({
         <div
           role="group"
           aria-label="Export readiness"
-          className="rounded-md border border-border p-2 text-[13px] text-[var(--ed-ink-3)]"
+          className="border-border text-muted-foreground rounded-lg border p-2.5 text-[13px]"
         >
           <p>
             {preview.readiness.withIsbn} of {preview.readiness.rows} {noun} have an ISBN
@@ -144,7 +141,7 @@ export function ExportBuilderPreview({
           ) : null}
           {/* Never a blocker: a missing cover or ISBN is a data gap, not an
               export error, and the file prints a placeholder either way. */}
-          <p className="mt-1 text-[12px] text-[var(--ed-ink-4)]">
+          <p className="text-muted-foreground mt-1 text-[12px]">
             Missing values are left blank in the file. They never stop an export.
           </p>
           {preview.truncated ? (
@@ -154,7 +151,9 @@ export function ExportBuilderPreview({
       ) : null}
 
       {rowCount !== null && preview === null ? (
-        <p className="text-[12.5px] text-[var(--ed-ink-4)]">{rowCount} {noun} on screen.</p>
+        <p className="text-muted-foreground text-[12.5px]">
+          {rowCount} {noun} on screen.
+        </p>
       ) : null}
     </div>
   );

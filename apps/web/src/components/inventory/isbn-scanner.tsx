@@ -266,7 +266,9 @@ export function IsbnScanner({
           </DialogTitle>
         </DialogHeader>
 
-        <div className="bg-muted relative aspect-video w-full overflow-hidden rounded-md">
+        {/* The viewfinder: the scanner's fixed dark surface in both themes
+            (DESIGN-SPEC 2.1, 6.20), so the camera picture reads the same. */}
+        <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-[#0a0b09]">
           <video
             ref={videoRef}
             className="h-full w-full object-cover"
@@ -274,7 +276,7 @@ export function IsbnScanner({
             muted
           />
           {(stage === 'permission' || stage === 'camera' || stage === 'detector') && (
-            <div className="bg-background/70 text-muted-foreground absolute inset-0 flex flex-col items-center justify-center gap-2 text-xs backdrop-blur-sm">
+            <div className="bg-background/90 text-muted-foreground absolute inset-0 flex flex-col items-center justify-center gap-2 text-xs">
               <Loader2 className="h-4 w-4 animate-spin" />
               <span>{STAGE_MESSAGES[stage]}</span>
               <span className="text-[10.5px] opacity-70">
@@ -292,7 +294,7 @@ export function IsbnScanner({
             </div>
           )}
           {stage === 'scanning' && (
-            <div className="pointer-events-none absolute inset-x-6 top-1/2 h-px -translate-y-1/2 bg-emerald-400/80 shadow-[0_0_12px_rgba(52,211,153,0.6)]" />
+            <div className="pointer-events-none absolute inset-x-6 top-1/2 h-0.5 -translate-y-1/2 bg-[hsl(165_45%_64%/0.7)]" />
           )}
         </div>
 

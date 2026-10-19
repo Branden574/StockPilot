@@ -4,6 +4,8 @@ import { Loader2 } from 'lucide-react';
 import Link from 'next/link';
 import * as React from 'react';
 
+import { MissingPhoto } from '@/components/patterns/missing-photo';
+
 import {
   familyStaysListedByName,
   familySkuTogether,
@@ -111,13 +113,10 @@ function RecordLine({ r, view }: { r: GroupingReviewRecord; view: 'items' | 'boo
           alt=""
           width={28}
           height={28}
-          className="border-border h-7 w-7 shrink-0 rounded-[5px] border object-cover"
+          className="border-border h-7 w-7 shrink-0 rounded-[5px] border bg-white object-cover"
         />
       ) : (
-        <span
-          aria-hidden
-          className="border-border bg-muted h-7 w-7 shrink-0 rounded-[5px] border"
-        />
+        <MissingPhoto className="border-border h-7 w-7 shrink-0 rounded-[5px] border" />
       )}
       <span className="min-w-0">
         <span className="block truncate font-medium">{r.name}</span>
