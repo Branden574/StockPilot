@@ -992,7 +992,6 @@ export function PoForm({
   return (
     <DetailSection
       title="PO details"
-      data-slot="po-form"
       footer={
         <>
           {lines.length > 0 ? (

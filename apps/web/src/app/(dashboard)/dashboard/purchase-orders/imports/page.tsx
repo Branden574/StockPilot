@@ -329,7 +329,6 @@ export default async function PoImportsPage({
   return (
     <div className={PAGE}>
       <PageHeader
-        eyebrow="Inventory"
         title={heading}
         subline="Upload a vendor PO PDF or CSV to stage expected inbound. Inventory is not changed until you receive the items."
         tour={<PageTour tour={PO_IMPORTS_TOUR} />}

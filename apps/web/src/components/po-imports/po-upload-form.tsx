@@ -179,7 +179,10 @@ export function PoUploadForm() {
           it freely; the uploaded file keeps its own name.
         </p>
       </div>
-      <Button type="submit" disabled={!file || submitting} variant="gradient">
+      {/* The page's one accent button is the scan card's Extract with AI
+          (DESIGN-SPEC 6.2: at most one accent and one ink per page), so this
+          card commits its file with the ink primary. */}
+      <Button type="submit" disabled={!file || submitting}>
         {submitting ? (
           <Loader2 className="h-4 w-4 animate-spin" />
         ) : (
