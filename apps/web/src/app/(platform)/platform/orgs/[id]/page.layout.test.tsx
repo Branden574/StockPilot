@@ -133,6 +133,20 @@ describe('platform org detail — header, tabs and danger zone', () => {
     expect(screen.getByRole('button', { name: 'Act as this org (Acme)' })).toBeInTheDocument();
   });
 
+  it('puts Act as with the secondary actions, after the billing summary', async () => {
+    await renderTab('billing');
+    // Act as enters a mode; it is not the work in front of you, so it is not
+    // the header's ink primary and the Billing tab's Save billing is the only
+    // one (P5.3 review). Its own outline look is pinned in act-as-button.test.
+    const actions = document.querySelector('[data-slot="page-header-actions"]')!;
+    const summary = actions.querySelector('[data-slot="org-billing-summary"]')!;
+    const actAs = within(actions as HTMLElement).getByRole('button', {
+      name: 'Act as this org (Acme)',
+    });
+    expect(summary.compareDocumentPosition(actAs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(actions.lastElementChild).toBe(actAs);
+  });
+
   it('draws the five ?tab= links as a tab strip, none of them prefetched', async () => {
     await renderTab('inventory');
     const strip = screen.getByRole('tablist', { name: 'Organization' });
@@ -167,6 +181,8 @@ describe('platform org detail — header, tabs and danger zone', () => {
   it('keeps the overview figures, facts and the audit trail link', async () => {
     await renderTab('overview');
     const strip = screen.getByLabelText('Organization totals');
+    // A named group, since a name on a bare div is dropped (aria-prohibited-attr).
+    expect(screen.getByRole('group', { name: 'Organization totals' })).toBe(strip);
     for (const [label, value] of [
       ['Members', '4'],
       ['Items', '12'],

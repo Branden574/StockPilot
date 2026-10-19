@@ -127,24 +127,30 @@ export default async function PlatformOrgDetailPage({
           </span>
         }
         actions={
-          <div data-slot="org-billing-summary" className="text-left sm:text-right">
-            <div className="text-muted-foreground text-[11px] font-medium uppercase tracking-[0.08em]">
-              Billing
-            </div>
-            <div className="text-[13.5px] font-medium">
-              {tierName}
-              {overview.billingArrangement !== 'standard'
-                ? ` · ${overview.billingArrangement}`
-                : ''}
-            </div>
-            {overview.effective.trialDaysRemaining != null ? (
-              <div className="text-warning text-[12px]">
-                Trial — {overview.effective.trialDaysRemaining}d left
+          <>
+            <div data-slot="org-billing-summary" className="text-left sm:text-right">
+              <div className="text-muted-foreground text-[11px] font-medium uppercase tracking-[0.08em]">
+                Billing
               </div>
-            ) : null}
-          </div>
+              <div className="text-[13.5px] font-medium">
+                {tierName}
+                {overview.billingArrangement !== 'standard'
+                  ? ` · ${overview.billingArrangement}`
+                  : ''}
+              </div>
+              {overview.effective.trialDaysRemaining != null ? (
+                <div className="text-warning text-[12px]">
+                  Trial — {overview.effective.trialDaysRemaining}d left
+                </div>
+              ) : null}
+            </div>
+            {/* A record action, so the secondary (outline) button: it enters a
+                mode rather than committing the work in front of you, which
+                leaves the Billing tab's Save billing the page's only ink
+                primary (DESIGN-SPEC 6.2, PageHeader: at most one). */}
+            <ActAsButton organizationId={overview.id} orgName={overview.name} />
+          </>
         }
-        commitAction={<ActAsButton organizationId={overview.id} orgName={overview.name} />}
       />
 
       {/* Tab nav. Every tab is its own URL (?tab=), rendered on the server.
@@ -198,7 +204,7 @@ function OverviewTab({
 }) {
   return (
     <div className="flex flex-col gap-4">
-      <StatStrip variant="detail" aria-label="Organization totals">
+      <StatStrip variant="detail" role="group" aria-label="Organization totals">
         <StatStripItem size="detail" label="Members" value={overview.counts.members} />
         <StatStripItem size="detail" label="Items" value={overview.counts.items} />
         <StatStripItem size="detail" label="Orders" value={overview.counts.orders} />

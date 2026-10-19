@@ -56,8 +56,16 @@ export function ActAsButton({
   return (
     <>
       {stepUp.modal}
-      {/* The ink primary: committing to the work in front of you. */}
-      <Button type="button" onClick={onClick} disabled={pending} className="max-sm:h-11">
+      {/* The secondary (outline) button: Act as is a record action that
+          enters a mode, not the work in front of you, so it never competes
+          with a tab's own ink primary (Save billing). */}
+      <Button
+        type="button"
+        variant="outline"
+        onClick={onClick}
+        disabled={pending}
+        className="max-sm:h-11"
+      >
         {pending ? 'Entering…' : 'Act as this org'}
       </Button>
     </>

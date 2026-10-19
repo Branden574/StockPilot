@@ -118,6 +118,8 @@ describe('platform Organizations directory', () => {
       ),
     ).toBeInTheDocument();
     const totals = screen.getByLabelText('Platform totals');
+    // A named group, since a name on a bare div is dropped (aria-prohibited-attr).
+    expect(screen.getByRole('group', { name: 'Platform totals' })).toBe(totals);
     for (const [label, value] of [
       ['Organizations', '1,234'],
       ['Users', '56'],
