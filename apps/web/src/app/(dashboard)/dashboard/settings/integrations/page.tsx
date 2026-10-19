@@ -2,10 +2,15 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
+import { Info } from 'lucide-react';
+
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { ApiKeysPanel } from '@/components/settings/api-keys-panel';
 import { IntegrationsPanel } from '@/components/settings/integrations-panel';
 import { SageIntacctCard } from '@/components/settings/sage-intacct-card';
+import { SettingsPage, SettingsPanel } from '@/components/settings/settings-panel';
+import { Button } from '@/components/ui/button';
 import { WebhooksPanel } from '@/components/settings/webhooks-panel';
 import { env } from '@/lib/env';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
@@ -39,8 +44,7 @@ export default async function IntegrationsSettingsPage() {
     checkModuleAccess('api_access'),
   ]);
 
-  const showQbo =
-    integrationsAccess.enabled && can(ctx, 'integrations:manage');
+  const showQbo = integrationsAccess.enabled && can(ctx, 'integrations:manage');
   // EasyPost (shipping) is a separate, off-by-default module gated on
   // `shipping:manage`. Only surface its card when the shipping module is on AND
   // the caller can manage it — otherwise hide it entirely (the connect action
@@ -54,11 +58,7 @@ export default async function IntegrationsSettingsPage() {
   // on /dashboard/settings is gated the same way; this redirect is the
   // server-side backstop for a direct URL hit. Reachable if the caller can
   // manage ANY surface.
-  if (
-    !can(ctx, 'integrations:manage') &&
-    !can(ctx, 'shipping:manage') &&
-    !showApiKeys
-  ) {
+  if (!can(ctx, 'integrations:manage') && !can(ctx, 'shipping:manage') && !showApiKeys) {
     redirect('/dashboard');
   }
 
@@ -85,13 +85,13 @@ export default async function IntegrationsSettingsPage() {
     const svc = await ConnectionsService.forCurrentUser();
     const listed = await svc.list();
     health = listed.health;
-    qbo = showQbo ? listed.connections.find((c) => c.providerId === 'quickbooks') ?? null : null;
+    qbo = showQbo ? (listed.connections.find((c) => c.providerId === 'quickbooks') ?? null) : null;
     easypost = showEasyPost
-      ? listed.connections.find((c) => c.providerId === 'easypost') ?? null
+      ? (listed.connections.find((c) => c.providerId === 'easypost') ?? null)
       : null;
     // Sage Intacct shares the QBO gates (integrations module + manage perm).
     intacct = showQbo
-      ? listed.connections.find((c) => c.providerId === 'sage_intacct') ?? null
+      ? (listed.connections.find((c) => c.providerId === 'sage_intacct') ?? null)
       : null;
     // Operator dead-letter view (spans both providers) — only when a card shows.
     if (showQbo || showEasyPost) failedSyncs = (await svc.listFailedSyncs()).rows;
@@ -99,14 +99,11 @@ export default async function IntegrationsSettingsPage() {
 
   // Webhooks & alerts live under the same `integrations` module + manage perm as
   // the QBO card. Only load endpoints when the caller can see the panel.
-  const showWebhooks =
-    integrationsAccess.enabled && can(ctx, 'integrations:manage');
+  const showWebhooks = integrationsAccess.enabled && can(ctx, 'integrations:manage');
   const webhookEndpoints = showWebhooks
     ? await IntegrationEndpointsService.forCurrentUser().then((s) => s.list())
     : [];
-  const apiKeys = showApiKeys
-    ? await ApiKeysService.forCurrentUser().then((s) => s.list())
-    : [];
+  const apiKeys = showApiKeys ? await ApiKeysService.forCurrentUser().then((s) => s.list()) : [];
 
   // A comped organization reaches this page through the comp, with no enabled
   // `integrations` row. It can connect an accounting system, but the export
@@ -123,37 +120,39 @@ export default async function IntegrationsSettingsPage() {
       .eq('module_id', 'integrations')
       .maybeSingle();
     exportsSwitchedOff =
-      !integrationsRowError &&
-      (integrationsRow as { enabled?: boolean } | null)?.enabled !== true;
+      !integrationsRowError && (integrationsRow as { enabled?: boolean } | null)?.enabled !== true;
   }
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href="/dashboard/settings"
-          className="text-muted-foreground hover:text-foreground inline-flex items-center text-sm"
-        >
-          ← Back to settings
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">Integrations</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Connect StockPilot to your accounting tools. Exports are one-way — StockPilot pushes to
-          the integration and never reads your data back.
-        </p>
-      </div>
+    <SettingsPage>
+      <PageHeader
+        title="Integrations"
+        subline="Connect StockPilot to your accounting tools. Exports are one-way — StockPilot pushes to the integration and never reads your data back."
+        back={
+          <PageHeaderBackLink href="/dashboard/settings">← Back to settings</PageHeaderBackLink>
+        }
+      />
 
       {exportsSwitchedOff ? (
-        <div role="note" className="bg-muted/50 mb-6 rounded-md border px-4 py-3 text-sm leading-relaxed">
-          <p className="font-medium">Exports are switched off.</p>
-          <p className="text-muted-foreground mt-1">
-            Integrations is included for your organization, so you can connect an accounting system
-            here. StockPilot only sends it data while Integrations is switched on in{' '}
-            <Link href="/dashboard/settings/modules" className="text-foreground underline">
-              Modules
-            </Link>
-            .
-          </p>
+        <div
+          role="note"
+          className="bg-sunk flex items-start gap-2.5 rounded-lg border px-4 py-3 text-[13px] leading-relaxed"
+        >
+          <Info aria-hidden className="text-muted-foreground mt-0.5 h-4 w-4 shrink-0" />
+          <div className="min-w-0">
+            <p className="font-medium">Exports are switched off.</p>
+            <p className="text-muted-foreground mt-1">
+              Integrations is included for your organization, so you can connect an accounting
+              system here. StockPilot only sends it data while Integrations is switched on in{' '}
+              <Link
+                href="/dashboard/settings/modules"
+                className="text-foreground underline underline-offset-2"
+              >
+                Modules
+              </Link>
+              .
+            </p>
+          </div>
         </div>
       ) : null}
 
@@ -180,7 +179,7 @@ export default async function IntegrationsSettingsPage() {
       />
 
       {showQbo && (
-        <div className="mt-6 space-y-6">
+        <>
           <SageIntacctCard
             warehouses={await loadWritableWarehouses(ctx)}
             status={intacct?.status ?? null}
@@ -191,37 +190,34 @@ export default async function IntegrationsSettingsPage() {
             settings={{
               ...((intacct?.settings.intacct as Record<string, string> | undefined) ?? {}),
               returnCredit:
-                ((intacct?.settings.accountIds as Record<string, string> | undefined)
-                  ?.returnCredit) ?? '',
+                (intacct?.settings.accountIds as Record<string, string> | undefined)
+                  ?.returnCredit ?? '',
               inventoryAsset:
-                ((intacct?.settings.accountIds as Record<string, string> | undefined)
-                  ?.inventoryAsset) ?? '',
+                (intacct?.settings.accountIds as Record<string, string> | undefined)
+                  ?.inventoryAsset ?? '',
             }}
           />
           {/* Migrating off Sage 50 needs no API at all — it's a guided CSV import. */}
-          <div className="rounded-lg border p-4">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <h3 className="text-sm font-medium">Migrate from Sage 50</h3>
-                <p className="text-muted-foreground mt-0.5 text-xs">
-                  Bring your items, stock quantities, and vendors over from Sage 50&apos;s built-in
-                  CSV exports — no API or credentials needed.
-                </p>
-              </div>
-              <Link
-                href="/dashboard/settings/migrate/sage50"
-                className="bg-foreground text-background hover:opacity-90 inline-flex h-8 shrink-0 items-center rounded-md px-3 text-xs font-medium transition-opacity"
-              >
-                Start migration
-              </Link>
-            </div>
-          </div>
-        </div>
+          <SettingsPanel
+            title="Migrate from Sage 50"
+            description={
+              <>
+                Bring your items, stock quantities, and vendors over from Sage 50&apos;s built-in
+                CSV exports — no API or credentials needed.
+              </>
+            }
+            aside={
+              <Button asChild size="sm">
+                <Link href="/dashboard/settings/migrate/sage50">Start migration</Link>
+              </Button>
+            }
+          />
+        </>
       )}
 
       {showWebhooks && <WebhooksPanel endpoints={webhookEndpoints} />}
       {showApiKeys && <ApiKeysPanel apiKeys={apiKeys} />}
-    </div>
+    </SettingsPage>
   );
 }
 

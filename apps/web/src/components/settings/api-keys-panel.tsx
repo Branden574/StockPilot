@@ -5,8 +5,10 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { SettingsPanel } from '@/components/settings/settings-panel';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useHydrated } from '@/lib/use-hydrated';
@@ -77,39 +79,45 @@ export function ApiKeysPanel({ apiKeys }: { apiKeys: PanelApiKey[] }) {
   }
 
   return (
-    <section className="border-border bg-card mt-8 rounded-xl border p-5">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="flex items-center gap-2 text-base font-semibold tracking-tight">
-            <KeyRound className="h-4 w-4" />
-            API keys
-          </h2>
-          <p className="text-muted-foreground mt-1 text-sm">
-            Let other software read your StockPilot data over the public API. Send the key as
-            <code className="bg-muted/60 mx-1 rounded px-1 py-0.5 text-xs">
-              Authorization: Bearer sk_live_…
-            </code>
-            to <code className="text-xs">/api/public/v1/…</code>.
-          </p>
-        </div>
-        {!adding && (
+    <SettingsPanel
+      title={
+        <span className="flex items-center gap-2">
+          <KeyRound aria-hidden className="text-muted-foreground h-4 w-4" />
+          API keys
+        </span>
+      }
+      description={
+        <>
+          Let other software read your StockPilot data over the public API. Send the key as
+          <code className="bg-sunk mx-1 rounded px-1 py-0.5 font-mono text-[11.5px]">
+            Authorization: Bearer sk_live_…
+          </code>
+          to <code className="font-mono text-[11.5px]">/api/public/v1/…</code>.
+        </>
+      }
+      aside={
+        !adding && (
           <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
-            <Plus className="mr-1.5 h-4 w-4" />
+            <Plus className="h-4 w-4" />
             New key
           </Button>
-        )}
-      </div>
-
+        )
+      }
+      bodyClassName="space-y-4"
+    >
       {newKey && (
-        <div className="border-border bg-muted/40 mt-4 rounded-lg border p-3">
-          <p className="text-sm font-medium">Your new API key — copy it now, it won&apos;t be shown again</p>
+        <div className="bg-sunk rounded-lg border p-3">
+          <p className="text-[13px] font-medium">
+            Your new API key — copy it now, it won&apos;t be shown again
+          </p>
           <div className="mt-2 flex items-center gap-2">
-            <code className="bg-background flex-1 overflow-x-auto rounded border px-2 py-1.5 font-mono text-xs">
+            <code className="bg-card min-w-0 flex-1 overflow-x-auto rounded-md border px-2 py-1.5 font-mono text-[12px]">
               {newKey}
             </code>
             <Button
-              size="sm"
+              size="icon"
               variant="outline"
+              aria-label="Copy API key"
               onClick={() => {
                 void navigator.clipboard?.writeText(newKey);
                 toast.success('Copied');
@@ -125,8 +133,8 @@ export function ApiKeysPanel({ apiKeys }: { apiKeys: PanelApiKey[] }) {
       )}
 
       {adding && (
-        <div className="border-border mt-4 space-y-4 rounded-lg border p-4">
-          <div>
+        <div className="space-y-4 rounded-lg border p-4">
+          <div className="space-y-1.5">
             <Label htmlFor="ak-name">Key name</Label>
             <Input
               id="ak-name"
@@ -136,22 +144,24 @@ export function ApiKeysPanel({ apiKeys }: { apiKeys: PanelApiKey[] }) {
               maxLength={80}
             />
           </div>
-          <div>
-            <Label>Scopes</Label>
-            <div className="mt-1 space-y-1.5">
+          <div role="group" aria-labelledby="ak-scopes-label">
+            <Label id="ak-scopes-label">Scopes</Label>
+            <div className="mt-1.5 flex flex-col items-start gap-2">
               {SCOPES.map(([value, label]) => (
-                <label key={value} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={selected.has(value)}
-                    onChange={() => toggle(value)}
-                    className="h-4 w-4"
-                  />
-                  {label} <code className="text-muted-foreground text-xs">{value}</code>
-                </label>
+                <Checkbox
+                  key={value}
+                  checked={selected.has(value)}
+                  onCheckedChange={() => toggle(value)}
+                  className="flex-wrap text-[13px]"
+                >
+                  {label}{' '}
+                  <code className="text-muted-foreground font-mono text-[11.5px]">{value}</code>
+                </Checkbox>
               ))}
             </div>
           </div>
+          {/* 8 px apart: the small buttons' 44 px touch areas (coarse
+              pointers) must not overlap. */}
           <div className="flex justify-end gap-2">
             <Button size="sm" variant="ghost" onClick={() => setAdding(false)} disabled={busy}>
               Cancel
@@ -163,25 +173,29 @@ export function ApiKeysPanel({ apiKeys }: { apiKeys: PanelApiKey[] }) {
         </div>
       )}
 
-      <div className="mt-4 space-y-2">
-        {apiKeys.length === 0 && !adding ? (
-          <p className="text-muted-foreground text-sm">No API keys yet.</p>
-        ) : (
-          apiKeys.map((k) => (
-            <div
+      {apiKeys.length === 0 && !adding ? (
+        <p className="text-muted-foreground text-[13px]">No API keys yet.</p>
+      ) : apiKeys.length > 0 ? (
+        <ul className="divide-border divide-y rounded-lg border">
+          {apiKeys.map((k) => (
+            <li
               key={k.id}
-              className="border-border flex flex-wrap items-center justify-between gap-3 rounded-lg border px-3 py-2.5"
+              className="flex flex-wrap items-center justify-between gap-3 px-3 py-2.5"
             >
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="truncate text-sm font-medium">{k.name}</span>
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="truncate text-[13.5px] font-medium">{k.name}</span>
                   {k.revokedAt ? (
-                    <Badge variant="destructive">Revoked</Badge>
+                    <Badge variant="destructive" dot>
+                      Revoked
+                    </Badge>
                   ) : (
-                    <Badge variant="success">Active</Badge>
+                    <Badge variant="success" dot>
+                      Active
+                    </Badge>
                   )}
                 </div>
-                <div className="text-muted-foreground mt-1 font-mono text-xs">
+                <div className="text-muted-foreground mt-1 font-mono text-[12px] [overflow-wrap:anywhere]">
                   {k.keyPrefix}…··· · {k.scopes.join(', ')}
                   {k.lastUsedAt
                     ? hydrated
@@ -197,14 +211,15 @@ export function ApiKeysPanel({ apiKeys }: { apiKeys: PanelApiKey[] }) {
                   className="text-destructive"
                   onClick={() => void revoke(k.id)}
                   title="Revoke"
+                  aria-label={`Revoke ${k.name}`}
                 >
                   <Trash2 className="h-4 w-4" />
                 </Button>
               )}
-            </div>
-          ))
-        )}
-      </div>
-    </section>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </SettingsPanel>
   );
 }

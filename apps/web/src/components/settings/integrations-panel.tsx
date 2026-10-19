@@ -3,9 +3,10 @@
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { KeyValueList, KeyValueRow } from '@/components/patterns/key-value-row';
+import { SettingsPanel } from '@/components/settings/settings-panel';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useHydrated } from '@/lib/use-hydrated';
@@ -97,9 +98,9 @@ export interface QuickBooksPanelProps {
 
 const STATUS_BADGE: Record<
   ConnectionStatus,
-  { label: string; variant: 'default' | 'secondary' | 'outline' | 'destructive' }
+  { label: string; variant: 'success' | 'secondary' | 'outline' | 'destructive' }
 > = {
-  active: { label: 'Connected', variant: 'default' },
+  active: { label: 'Connected', variant: 'success' },
   pending: { label: 'Connecting…', variant: 'secondary' },
   error: { label: 'Error', variant: 'destructive' },
   disconnected: { label: 'Disconnected', variant: 'outline' },
@@ -180,154 +181,126 @@ export function IntegrationsPanel(props: QuickBooksPanelProps) {
   }
 
   return (
-    <div className="space-y-6">
+    <>
       {showQuickBooks && (
-      <>
-      <Card>
-        <CardHeader>
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <CardTitle className="flex items-center gap-2 text-base">
-                {meta.title}
-                {badge && (
-                  <Badge variant={badge.variant} className="text-[10px] px-1.5 py-0">
-                    {badge.label}
-                  </Badge>
-                )}
-              </CardTitle>
-              <CardDescription>
-                One-way export of posted receipts to QuickBooks Online as Bills, plus a monthly
-                inventory-valuation journal entry. StockPilot never reads data back from QuickBooks.
-              </CardDescription>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-            <div>
-              <dt className="text-muted-foreground text-xs">QuickBooks company</dt>
-              <dd className="font-medium">{props.externalAccountId ?? '—'}</dd>
-            </div>
-            <div>
-              <dt className="text-muted-foreground text-xs">Last connected</dt>
-              <dd className="font-medium">{formatDate(props.lastConnectedAt, hydrated)}</dd>
-            </div>
-            <div>
-              <dt className="text-muted-foreground text-xs">Last synced</dt>
-              <dd className="font-medium">{formatDate(props.lastSyncedAt, hydrated)}</dd>
-            </div>
-            {props.lastError && (
-              <div className="col-span-2">
-                <dt className="text-muted-foreground text-xs">Last error</dt>
-                <dd className="text-destructive font-medium">{props.lastError}</dd>
-              </div>
-            )}
-          </dl>
+        <>
+          <SettingsPanel
+            title={meta.title}
+            description="One-way export of posted receipts to QuickBooks Online as Bills, plus a monthly inventory-valuation journal entry. StockPilot never reads data back from QuickBooks."
+            aside={
+              badge && (
+                <Badge variant={badge.variant} dot>
+                  {badge.label}
+                </Badge>
+              )
+            }
+            flush
+          >
+            <KeyValueList>
+              <KeyValueRow label="QuickBooks company">{props.externalAccountId ?? '—'}</KeyValueRow>
+              <KeyValueRow label="Last connected">
+                {formatDate(props.lastConnectedAt, hydrated)}
+              </KeyValueRow>
+              <KeyValueRow label="Last synced">
+                {formatDate(props.lastSyncedAt, hydrated)}
+              </KeyValueRow>
+              {props.lastError && (
+                <KeyValueRow label="Last error" valueClassName="text-destructive">
+                  {props.lastError}
+                </KeyValueRow>
+              )}
+            </KeyValueList>
 
-          <div className="flex gap-2">
-            {isConnected ? (
-              <>
+            <div className="border-border flex flex-wrap gap-2 border-t px-[18px] py-3.5">
+              {isConnected ? (
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleConnect}
+                    disabled={connecting || disconnecting}
+                  >
+                    {connecting ? 'Reconnecting…' : 'Reconnect'}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    onClick={handleDisconnect}
+                    disabled={disconnecting || connecting}
+                  >
+                    {disconnecting ? 'Disconnecting…' : 'Disconnect'}
+                  </Button>
+                </>
+              ) : (
                 <Button
                   type="button"
-                  variant="outline"
+                  variant="gradient"
                   onClick={handleConnect}
-                  disabled={connecting || disconnecting}
-                  className="focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  disabled={connecting}
                 >
-                  {connecting ? 'Reconnecting…' : 'Reconnect'}
+                  {connecting ? 'Connecting…' : 'Connect QuickBooks'}
                 </Button>
-                <Button
-                  type="button"
-                  variant="destructive"
-                  onClick={handleDisconnect}
-                  disabled={disconnecting || connecting}
-                  className="focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                >
-                  {disconnecting ? 'Disconnecting…' : 'Disconnect'}
-                </Button>
-              </>
-            ) : (
-              <Button
-                type="button"
-                variant="gradient"
-                onClick={handleConnect}
-                disabled={connecting}
-                className="focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-              >
-                {connecting ? 'Connecting…' : 'Connect QuickBooks'}
-              </Button>
-            )}
-          </div>
-        </CardContent>
-      </Card>
+              )}
+            </div>
+          </SettingsPanel>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">QuickBooks account mapping</CardTitle>
-          <CardDescription>
-            Paste the account ids from your QuickBooks Chart of Accounts. Receipts post as Bills
-            against the expense account; the monthly valuation entry posts the delta between the
-            inventory-asset and valuation-offset accounts.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSaveMapping} className="space-y-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="qbo-bill-expense">Expense account ID</Label>
-              <Input
-                id="qbo-bill-expense"
-                value={billExpense}
-                onChange={(e) => setBillExpense(e.target.value)}
-                placeholder="e.g. 54"
-                inputMode="numeric"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="qbo-inventory-asset">Inventory asset account ID</Label>
-              <Input
-                id="qbo-inventory-asset"
-                value={inventoryAsset}
-                onChange={(e) => setInventoryAsset(e.target.value)}
-                placeholder="e.g. 81"
-                inputMode="numeric"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="qbo-valuation-offset">Valuation offset account ID</Label>
-              <Input
-                id="qbo-valuation-offset"
-                value={valuationOffset}
-                onChange={(e) => setValuationOffset(e.target.value)}
-                placeholder="e.g. 90"
-                inputMode="numeric"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="qbo-return-credit">Return credit account ID</Label>
-              <Input
-                id="qbo-return-credit"
-                value={returnCredit}
-                onChange={(e) => setReturnCredit(e.target.value)}
-                placeholder="e.g. 47"
-                inputMode="numeric"
-              />
-              <p className="text-muted-foreground text-xs">
-                Closed returns post a balanced journal entry crediting this
-                account (the offsetting debit uses the inventory-asset account).
-              </p>
-            </div>
-            <Button
-              type="submit"
-              variant="default"
-              disabled={savingMapping}
-              className="focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-            >
-              {savingMapping ? 'Saving…' : 'Save mapping'}
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
-      </>
+          <SettingsPanel
+            title="QuickBooks account mapping"
+            description="Paste the account ids from your QuickBooks Chart of Accounts. Receipts post as Bills against the expense account; the monthly valuation entry posts the delta between the inventory-asset and valuation-offset accounts."
+          >
+            <form onSubmit={handleSaveMapping} className="space-y-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="qbo-bill-expense">Expense account ID</Label>
+                  <Input
+                    id="qbo-bill-expense"
+                    value={billExpense}
+                    onChange={(e) => setBillExpense(e.target.value)}
+                    placeholder="e.g. 54"
+                    inputMode="numeric"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="qbo-inventory-asset">Inventory asset account ID</Label>
+                  <Input
+                    id="qbo-inventory-asset"
+                    value={inventoryAsset}
+                    onChange={(e) => setInventoryAsset(e.target.value)}
+                    placeholder="e.g. 81"
+                    inputMode="numeric"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="qbo-valuation-offset">Valuation offset account ID</Label>
+                  <Input
+                    id="qbo-valuation-offset"
+                    value={valuationOffset}
+                    onChange={(e) => setValuationOffset(e.target.value)}
+                    placeholder="e.g. 90"
+                    inputMode="numeric"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="qbo-return-credit">Return credit account ID</Label>
+                  <Input
+                    id="qbo-return-credit"
+                    value={returnCredit}
+                    onChange={(e) => setReturnCredit(e.target.value)}
+                    placeholder="e.g. 47"
+                    inputMode="numeric"
+                  />
+                  <p className="text-muted-foreground text-[12px]">
+                    Closed returns post a balanced journal entry crediting this account (the
+                    offsetting debit uses the inventory-asset account).
+                  </p>
+                </div>
+              </div>
+              <Button type="submit" variant="default" disabled={savingMapping}>
+                {savingMapping ? 'Saving…' : 'Save mapping'}
+              </Button>
+            </form>
+          </SettingsPanel>
+        </>
       )}
 
       {props.easyPost && <EasyPostCard {...props.easyPost} />}
@@ -335,50 +308,54 @@ export function IntegrationsPanel(props: QuickBooksPanelProps) {
       {props.failedSyncs != null && <DeadLetterCard rows={props.failedSyncs} />}
 
       {showQuickBooks && (
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Recent sync activity</CardTitle>
-          <CardDescription>The most recent export attempts and their status.</CardDescription>
-        </CardHeader>
-        <CardContent>
+        <SettingsPanel
+          title="Recent sync activity"
+          description="The most recent export attempts and their status."
+          flush
+        >
           {props.health.length === 0 ? (
-            <p className="text-muted-foreground text-sm">No sync activity yet.</p>
+            <p className="text-muted-foreground px-[18px] py-4 text-[13px]">
+              No sync activity yet.
+            </p>
           ) : (
-            <ul className="divide-border divide-y rounded-md border">
+            <ul className="divide-border divide-y">
               {props.health.map((row, i) => (
-                <li key={`${row.createdAt}-${i}`} className="flex items-center justify-between gap-4 px-4 py-2.5">
+                <li
+                  key={`${row.createdAt}-${i}`}
+                  className="flex items-center justify-between gap-4 px-[18px] py-2.5"
+                >
                   <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium">{row.topic}</span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-mono text-[12.5px]">{row.topic}</span>
                       <SyncStatusBadge status={row.status} />
                     </div>
                     {row.lastError && (
-                      <p className="text-destructive truncate text-xs">{row.lastError}</p>
+                      <p className="text-destructive truncate text-[12px]">{row.lastError}</p>
                     )}
                   </div>
-                  <span className="text-muted-foreground shrink-0 text-xs">
+                  <span className="text-muted-foreground shrink-0 text-[12px]">
                     {formatDate(row.completedAt ?? row.createdAt, hydrated)}
                   </span>
                 </li>
               ))}
             </ul>
           )}
-        </CardContent>
-      </Card>
+        </SettingsPanel>
       )}
-    </div>
+    </>
   );
 }
 
 function SyncStatusBadge({ status }: { status: SyncHealthRow['status'] }) {
-  const map: Record<SyncHealthRow['status'], 'default' | 'secondary' | 'outline' | 'destructive'> = {
-    success: 'default',
-    pending: 'secondary',
-    error: 'destructive',
-    dead: 'destructive',
-  };
+  const map: Record<SyncHealthRow['status'], 'success' | 'secondary' | 'outline' | 'destructive'> =
+    {
+      success: 'success',
+      pending: 'secondary',
+      error: 'destructive',
+      dead: 'destructive',
+    };
   return (
-    <Badge variant={map[status]} className="text-[10px] px-1.5 py-0 capitalize">
+    <Badge variant={map[status]} dot className="capitalize">
       {status}
     </Badge>
   );
@@ -394,26 +371,23 @@ function SyncStatusBadge({ status }: { status: SyncHealthRow['status'] }) {
  */
 function DeadLetterCard({ rows }: { rows: FailedSyncRow[] }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Failed exports (dead-letter)</CardTitle>
-        <CardDescription>
-          Exports that errored or hit the retry limit — usually a bad account id or an expired
-          token. Fix the cause, then Replay to re-queue the export on the next sync.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        {rows.length === 0 ? (
-          <p className="text-muted-foreground text-sm">No failed exports. Everything is in sync.</p>
-        ) : (
-          <ul className="divide-border divide-y rounded-md border">
-            {rows.map((row) => (
-              <DeadLetterRow key={row.id} row={row} />
-            ))}
-          </ul>
-        )}
-      </CardContent>
-    </Card>
+    <SettingsPanel
+      title="Failed exports (dead-letter)"
+      description="Exports that errored or hit the retry limit — usually a bad account id or an expired token. Fix the cause, then Replay to re-queue the export on the next sync."
+      flush
+    >
+      {rows.length === 0 ? (
+        <p className="text-muted-foreground px-[18px] py-4 text-[13px]">
+          No failed exports. Everything is in sync.
+        </p>
+      ) : (
+        <ul className="divide-border divide-y">
+          {rows.map((row) => (
+            <DeadLetterRow key={row.id} row={row} />
+          ))}
+        </ul>
+      )}
+    </SettingsPanel>
   );
 }
 
@@ -435,20 +409,24 @@ function DeadLetterRow({ row }: { row: FailedSyncRow }) {
   }
 
   return (
-    <li className="flex items-center justify-between gap-4 px-4 py-2.5">
+    <li className="flex items-center justify-between gap-4 px-[18px] py-2.5">
       <div className="min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium">{row.topic}</span>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-mono text-[12.5px]">{row.topic}</span>
           <SyncStatusBadge status={replayed ? 'pending' : row.status} />
-          <span className="text-muted-foreground text-xs">
+          <span className="text-muted-foreground text-[12px]">
             {row.attempts} attempt{row.attempts === 1 ? '' : 's'}
           </span>
         </div>
         {row.externalId && (
-          <p className="text-muted-foreground truncate text-xs">External id: {row.externalId}</p>
+          <p className="text-muted-foreground truncate text-[12px]">
+            External id: {row.externalId}
+          </p>
         )}
-        {row.lastError && <p className="text-destructive truncate text-xs">{row.lastError}</p>}
-        <p className="text-muted-foreground text-xs">{formatDate(row.updatedAt ?? row.createdAt, hydrated)}</p>
+        {row.lastError && <p className="text-destructive truncate text-[12px]">{row.lastError}</p>}
+        <p className="text-muted-foreground text-[12px]">
+          {formatDate(row.updatedAt ?? row.createdAt, hydrated)}
+        </p>
       </div>
       <Button
         type="button"
@@ -456,7 +434,7 @@ function DeadLetterRow({ row }: { row: FailedSyncRow }) {
         size="sm"
         onClick={handleReplay}
         disabled={replaying || replayed}
-        className="shrink-0 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        className="shrink-0"
       >
         {replayed ? 'Re-queued' : replaying ? 'Replaying…' : 'Replay'}
       </Button>
@@ -511,92 +489,86 @@ function EasyPostCard(props: EasyPostPanelProps) {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <CardTitle className="flex items-center gap-2 text-base">
-              {CONNECTOR_REGISTRY.easypost.title}
-              {badge && (
-                <Badge variant={badge.variant} className="text-[10px] px-1.5 py-0">
-                  {badge.label}
-                </Badge>
-              )}
-              {isConnected && props.mode && (
-                <Badge variant="outline" className="text-[10px] px-1.5 py-0 capitalize">
-                  {props.mode}
-                </Badge>
-              )}
-            </CardTitle>
-            <CardDescription>
-              Buy carrier shipping labels and track delivery orders. StockPilot pushes label
-              requests to EasyPost and receives tracking updates — it never changes inventory based
-              on EasyPost data. Your API key is stored encrypted and never shown again.
-            </CardDescription>
+    <SettingsPanel
+      title={CONNECTOR_REGISTRY.easypost.title}
+      description="Buy carrier shipping labels and track delivery orders. StockPilot pushes label requests to EasyPost and receives tracking updates — it never changes inventory based on EasyPost data. Your API key is stored encrypted and never shown again."
+      aside={
+        badge || (isConnected && props.mode) ? (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {badge && (
+              <Badge variant={badge.variant} dot>
+                {badge.label}
+              </Badge>
+            )}
+            {isConnected && props.mode && (
+              <Badge variant="outline" className="capitalize">
+                {props.mode}
+              </Badge>
+            )}
           </div>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-          <div>
-            <dt className="text-muted-foreground text-xs">Last connected</dt>
-            <dd className="font-medium">{formatDate(props.lastConnectedAt, hydrated)}</dd>
-          </div>
-          {props.lastError && (
-            <div className="col-span-2">
-              <dt className="text-muted-foreground text-xs">Last error</dt>
-              <dd className="text-destructive font-medium">{props.lastError}</dd>
-            </div>
-          )}
-        </dl>
+        ) : null
+      }
+      flush
+    >
+      <KeyValueList>
+        <KeyValueRow label="Last connected">
+          {formatDate(props.lastConnectedAt, hydrated)}
+        </KeyValueRow>
+        {props.lastError && (
+          <KeyValueRow label="Last error" valueClassName="text-destructive">
+            {props.lastError}
+          </KeyValueRow>
+        )}
+      </KeyValueList>
 
+      <div className="border-border border-t px-[18px] py-3.5">
         {isConnected ? (
           <Button
             type="button"
             variant="destructive"
             onClick={handleDisconnect}
             disabled={disconnecting}
-            className="focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           >
             {disconnecting ? 'Disconnecting…' : 'Disconnect'}
           </Button>
         ) : (
           <form onSubmit={handleConnect} className="space-y-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="easypost-api-key">EasyPost API key</Label>
-              <Input
-                id="easypost-api-key"
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="EZAK… (production) or EZTK… (test)"
-                autoComplete="off"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="easypost-webhook-secret">
-                Webhook signing secret <span className="text-muted-foreground">(optional)</span>
-              </Label>
-              <Input
-                id="easypost-webhook-secret"
-                type="password"
-                value={webhookSecret}
-                onChange={(e) => setWebhookSecret(e.target.value)}
-                placeholder="Used to verify tracking webhooks"
-                autoComplete="off"
-              />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="easypost-api-key">EasyPost API key</Label>
+                <Input
+                  id="easypost-api-key"
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder="EZAK… (production) or EZTK… (test)"
+                  autoComplete="off"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="easypost-webhook-secret">
+                  Webhook signing secret <span className="text-muted-foreground">(optional)</span>
+                </Label>
+                <Input
+                  id="easypost-webhook-secret"
+                  type="password"
+                  value={webhookSecret}
+                  onChange={(e) => setWebhookSecret(e.target.value)}
+                  placeholder="Used to verify tracking webhooks"
+                  autoComplete="off"
+                />
+              </div>
             </div>
             <Button
               type="submit"
               variant="gradient"
               disabled={connecting || apiKey.trim().length === 0}
-              className="focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             >
               {connecting ? 'Connecting…' : 'Connect EasyPost'}
             </Button>
           </form>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </SettingsPanel>
   );
 }

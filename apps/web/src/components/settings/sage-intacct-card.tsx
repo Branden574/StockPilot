@@ -3,9 +3,10 @@
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { KeyValueList, KeyValueRow } from '@/components/patterns/key-value-row';
+import { SettingsPanel } from '@/components/settings/settings-panel';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -44,8 +45,11 @@ export interface SageIntacctCardProps {
   };
 }
 
-const STATUS_BADGE: Record<ConnectionStatus, { label: string; variant: 'default' | 'secondary' | 'destructive' | 'outline' }> = {
-  active: { label: 'Connected', variant: 'default' },
+const STATUS_BADGE: Record<
+  ConnectionStatus,
+  { label: string; variant: 'success' | 'secondary' | 'destructive' | 'outline' }
+> = {
+  active: { label: 'Connected', variant: 'success' },
   pending: { label: 'Connecting…', variant: 'secondary' },
   error: { label: 'Error', variant: 'destructive' },
   disconnected: { label: 'Disconnected', variant: 'outline' },
@@ -84,13 +88,15 @@ export function SageIntacctCard(props: SageIntacctCardProps) {
   const hydrated = useHydrated();
   const [importing, startImport] = React.useTransition();
   const [importNote, setImportNote] = React.useState<string | null>(null);
-  const [importWarehouseId, setImportWarehouseId] = React.useState(
-    props.warehouses[0]?.id ?? '',
-  );
+  const [importWarehouseId, setImportWarehouseId] = React.useState(props.warehouses[0]?.id ?? '');
 
-  const [poTxnDefinition, setPoTxnDefinition] = React.useState(props.settings.poTxnDefinition ?? '');
+  const [poTxnDefinition, setPoTxnDefinition] = React.useState(
+    props.settings.poTxnDefinition ?? '',
+  );
   const [defaultItemId, setDefaultItemId] = React.useState(props.settings.defaultItemId ?? '');
-  const [defaultVendorId, setDefaultVendorId] = React.useState(props.settings.defaultVendorId ?? '');
+  const [defaultVendorId, setDefaultVendorId] = React.useState(
+    props.settings.defaultVendorId ?? '',
+  );
   const [journalSymbol, setJournalSymbol] = React.useState(props.settings.journalSymbol ?? '');
   const [returnCredit, setReturnCredit] = React.useState(props.settings.returnCredit ?? '');
   const [inventoryAsset, setInventoryAsset] = React.useState(props.settings.inventoryAsset ?? '');
@@ -155,7 +161,12 @@ export function SageIntacctCard(props: SageIntacctCardProps) {
             `Scanned ${s.scanned} Intacct items — ${parts.join(', ')}.`,
             ...s.notes,
             ...(s.errors.length
-              ? [`First errors: ${s.errors.slice(0, 3).map((e) => `${e.sku}: ${e.message}`).join(' | ')}`]
+              ? [
+                  `First errors: ${s.errors
+                    .slice(0, 3)
+                    .map((e) => `${e.sku}: ${e.message}`)
+                    .join(' | ')}`,
+                ]
               : []),
           ].join(' '),
         );
@@ -165,60 +176,66 @@ export function SageIntacctCard(props: SageIntacctCardProps) {
     });
   }
 
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <CardTitle className="flex items-center gap-2 text-base">
-              Sage Intacct
-              {badge ? (
-                <Badge variant={badge.variant} className="px-1.5 py-0 text-[10px]">
-                  {badge.label}
-                </Badge>
-              ) : (
-                !props.credentialsConfigured && (
-                  <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
-                    Awaiting credentials
-                  </Badge>
-                )
-              )}
-            </CardTitle>
-            <CardDescription>
-              Push purchase orders and return value entries to Sage Intacct, and import your
-              Intacct item catalog (with on-hand quantities) into StockPilot.
-            </CardDescription>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {!props.credentialsConfigured ? (
-          <p className="text-muted-foreground text-sm">
-            This connector is built and ready, but Sage Intacct API access requires a{' '}
-            <span className="text-foreground font-medium">Web Services developer license</span>{' '}
-            (sender ID) purchased through a Sage account manager. Once the OAuth app credentials
-            are added to this deployment, the Connect button activates.
-          </p>
-        ) : (
-          <>
-            <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-              <div>
-                <dt className="text-muted-foreground text-xs">Intacct company</dt>
-                <dd className="font-medium">{props.externalAccountId ?? '—'}</dd>
-              </div>
-              <div>
-                <dt className="text-muted-foreground text-xs">Last connected</dt>
-                <dd className="font-medium">{formatDate(props.lastConnectedAt, hydrated)}</dd>
-              </div>
-              {props.lastError && (
-                <div className="col-span-2">
-                  <dt className="text-muted-foreground text-xs">Last error</dt>
-                  <dd className="text-destructive font-medium">{props.lastError}</dd>
-                </div>
-              )}
-            </dl>
+  const field = (
+    id: string,
+    label: string,
+    value: string,
+    set: (v: string) => void,
+    placeholder: string,
+  ) => (
+    <div className="space-y-1.5">
+      <Label htmlFor={id}>{label}</Label>
+      <Input
+        id={id}
+        value={value}
+        onChange={(e) => set(e.target.value)}
+        placeholder={placeholder}
+      />
+    </div>
+  );
 
-            <div className="flex flex-wrap gap-2">
+  return (
+    <SettingsPanel
+      title="Sage Intacct"
+      description="Push purchase orders and return value entries to Sage Intacct, and import your Intacct item catalog (with on-hand quantities) into StockPilot."
+      aside={
+        badge ? (
+          <Badge variant={badge.variant} dot>
+            {badge.label}
+          </Badge>
+        ) : (
+          !props.credentialsConfigured && (
+            <Badge variant="outline" dot>
+              Awaiting credentials
+            </Badge>
+          )
+        )
+      }
+      flush={props.credentialsConfigured}
+    >
+      {!props.credentialsConfigured ? (
+        <p className="text-muted-foreground text-[13px]">
+          This connector is built and ready, but Sage Intacct API access requires a{' '}
+          <span className="text-foreground font-medium">Web Services developer license</span>{' '}
+          (sender ID) purchased through a Sage account manager. Once the OAuth app credentials are
+          added to this deployment, the Connect button activates.
+        </p>
+      ) : (
+        <>
+          <KeyValueList>
+            <KeyValueRow label="Intacct company">{props.externalAccountId ?? '—'}</KeyValueRow>
+            <KeyValueRow label="Last connected">
+              {formatDate(props.lastConnectedAt, hydrated)}
+            </KeyValueRow>
+            {props.lastError && (
+              <KeyValueRow label="Last error" valueClassName="text-destructive">
+                {props.lastError}
+              </KeyValueRow>
+            )}
+          </KeyValueList>
+
+          <div className="border-border space-y-3 border-t px-[18px] py-3.5">
+            <div className="flex flex-wrap items-center gap-2">
               {isConnected ? (
                 <>
                   <Button
@@ -247,7 +264,7 @@ export function SageIntacctCard(props: SageIntacctCardProps) {
                   </Button>
                   {props.warehouses.length > 1 && (
                     <Select value={importWarehouseId} onValueChange={setImportWarehouseId}>
-                      <SelectTrigger className="h-9 w-44" aria-label="Import into warehouse">
+                      <SelectTrigger className="w-44" aria-label="Import into warehouse">
                         <SelectValue placeholder="Into warehouse…" />
                       </SelectTrigger>
                       <SelectContent>
@@ -268,82 +285,73 @@ export function SageIntacctCard(props: SageIntacctCardProps) {
             </div>
 
             {isConnected && props.warehouses.length === 0 && (
-              <p className="text-destructive text-xs">
+              <p className="text-destructive text-[12.5px]">
                 Create a warehouse before importing — items need one to belong to.
               </p>
             )}
-            {importNote && <p className="text-muted-foreground text-xs">{importNote}</p>}
+            {importNote && <p className="text-muted-foreground text-[12.5px]">{importNote}</p>}
+          </div>
 
-            {isConnected && (
-              <form onSubmit={handleSave} className="space-y-3 border-t pt-4">
-                <p className="text-muted-foreground text-xs">
-                  Document + GL configuration. Field values come from your Intacct company
-                  (transaction definition name, item/vendor ids, journal symbol, GL account ids).
-                </p>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <div className="space-y-1">
-                    <Label htmlFor="intacct-txndef" className="text-xs">PO transaction definition</Label>
-                    <Input
-                      id="intacct-txndef"
-                      value={poTxnDefinition}
-                      onChange={(e) => setPoTxnDefinition(e.target.value)}
-                      placeholder="Purchase Order"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label htmlFor="intacct-item" className="text-xs">Default (non-inventory) item id</Label>
-                    <Input
-                      id="intacct-item"
-                      value={defaultItemId}
-                      onChange={(e) => setDefaultItemId(e.target.value)}
-                      placeholder="Required for PO push"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label htmlFor="intacct-vendor" className="text-xs">Default vendor id</Label>
-                    <Input
-                      id="intacct-vendor"
-                      value={defaultVendorId}
-                      onChange={(e) => setDefaultVendorId(e.target.value)}
-                      placeholder="Fallback when no name match"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label htmlFor="intacct-journal" className="text-xs">GL journal symbol</Label>
-                    <Input
-                      id="intacct-journal"
-                      value={journalSymbol}
-                      onChange={(e) => setJournalSymbol(e.target.value)}
-                      placeholder="GJ"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label htmlFor="intacct-return" className="text-xs">Return credit GL account</Label>
-                    <Input
-                      id="intacct-return"
-                      value={returnCredit}
-                      onChange={(e) => setReturnCredit(e.target.value)}
-                      placeholder="Credited on return.closed"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label htmlFor="intacct-asset" className="text-xs">Inventory asset GL account</Label>
-                    <Input
-                      id="intacct-asset"
-                      value={inventoryAsset}
-                      onChange={(e) => setInventoryAsset(e.target.value)}
-                      placeholder="Debited to balance"
-                    />
-                  </div>
-                </div>
-                <Button type="submit" size="sm" disabled={saving}>
-                  {saving ? 'Saving…' : 'Save settings'}
-                </Button>
-              </form>
-            )}
-          </>
-        )}
-      </CardContent>
-    </Card>
+          {isConnected && (
+            <form
+              onSubmit={handleSave}
+              className="border-border space-y-3 border-t px-[18px] py-3.5"
+            >
+              <p className="text-muted-foreground text-[12.5px]">
+                Document + GL configuration. Field values come from your Intacct company
+                (transaction definition name, item/vendor ids, journal symbol, GL account ids).
+              </p>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {field(
+                  'intacct-txndef',
+                  'PO transaction definition',
+                  poTxnDefinition,
+                  setPoTxnDefinition,
+                  'Purchase Order',
+                )}
+                {field(
+                  'intacct-item',
+                  'Default (non-inventory) item id',
+                  defaultItemId,
+                  setDefaultItemId,
+                  'Required for PO push',
+                )}
+                {field(
+                  'intacct-vendor',
+                  'Default vendor id',
+                  defaultVendorId,
+                  setDefaultVendorId,
+                  'Fallback when no name match',
+                )}
+                {field(
+                  'intacct-journal',
+                  'GL journal symbol',
+                  journalSymbol,
+                  setJournalSymbol,
+                  'GJ',
+                )}
+                {field(
+                  'intacct-return',
+                  'Return credit GL account',
+                  returnCredit,
+                  setReturnCredit,
+                  'Credited on return.closed',
+                )}
+                {field(
+                  'intacct-asset',
+                  'Inventory asset GL account',
+                  inventoryAsset,
+                  setInventoryAsset,
+                  'Debited to balance',
+                )}
+              </div>
+              <Button type="submit" disabled={saving}>
+                {saving ? 'Saving…' : 'Save settings'}
+              </Button>
+            </form>
+          )}
+        </>
+      )}
+    </SettingsPanel>
   );
 }
