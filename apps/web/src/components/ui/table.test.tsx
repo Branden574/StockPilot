@@ -94,8 +94,25 @@ describe('Table scroll wrapper', () => {
     expect(screen.getByRole('button', { name: 'Before' })).toHaveFocus();
     await user.tab();
     expect(wrapper).toHaveFocus();
-    // The global ring is drawn inside, so a card's clipped edge cannot hide it.
-    expect(wrapper).toHaveClass('focus-visible:ring-inset', 'focus-visible:ring-offset-0');
+    // The global ring is drawn inside as an outline, so neither a card's
+    // clipped edge nor a row's background or separator can hide it.
+    expect(wrapper).toHaveClass(
+      'focus-visible:outline-solid',
+      'focus-visible:outline-2',
+      'focus-visible:-outline-offset-2',
+      'focus-visible:outline-ring',
+    );
+    // The global :focus-visible box-shadow ring is switched off on the
+    // wrapper (rows paint above an inset shadow), and outline-solid is
+    // present because that rule's outline-none sets the outline style to
+    // none, so a width and colour alone would draw nothing.
+    const focusClasses = wrapper.className
+      .split(/\s+/)
+      .filter((c) => c.startsWith('focus-visible:'));
+    expect(focusClasses).toEqual(
+      expect.arrayContaining(['focus-visible:ring-0', 'focus-visible:ring-offset-0']),
+    );
+    expect(focusClasses).not.toContain('focus-visible:ring-inset');
   });
 
   it('starts and stops being a tab stop when a resize changes the overflow', () => {

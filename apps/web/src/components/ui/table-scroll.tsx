@@ -9,8 +9,11 @@ import * as React from 'react';
  *
  * Keyboard and name (WCAG 2.1.1; axe scrollable-region-focusable): while the
  * table is wider than the wrapper, the wrapper joins the Tab order
- * (tabIndex 0) so the arrow keys scroll it, shows the global focus ring drawn
- * inset (a card's clipped edge cannot hide it) and carries
+ * (tabIndex 0) so the arrow keys scroll it, shows the global focus ring (the
+ * same 2 px in --ring) drawn as an inset outline rather than the usual
+ * box-shadow, so a card's clipped edge cannot hide it and the rows cannot
+ * cover it (a row's hover, selected or footer background and its 1 px
+ * separators paint above an inset shadow, but below an outline), and carries
  * data-overflow="true" for an edge treatment. Overflow is measured after mount
  * and again whenever the wrapper or the table resizes, so the server HTML and
  * the first client render match and nothing moves. With a `label` (or
@@ -50,7 +53,7 @@ export function TableScroll({
   return (
     <div
       ref={ref}
-      className="relative w-full overflow-auto focus-visible:ring-inset focus-visible:ring-offset-0"
+      className="focus-visible:outline-ring focus-visible:outline-solid relative w-full overflow-auto focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:ring-0 focus-visible:ring-offset-0"
       role={named ? 'region' : undefined}
       aria-label={label || undefined}
       aria-labelledby={label ? undefined : labelledBy || undefined}
