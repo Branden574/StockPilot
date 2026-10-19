@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { render } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -24,32 +24,33 @@ const {
   borrowerMembers,
   ceiling,
   rackHoldings,
-} = vi.hoisted(
-  () => ({
-    adminRef: { current: null as unknown },
-    // The caller's OWN client (row level security applies). null: the same
-    // stub as the admin client, i.e. a caller whose RLS view is the full one
-    // (the suites below that are not about scope).
-    callerRef: { current: null as unknown },
-    // The request's org context; the scope suite swaps the role.
-    session: {
-      current: {
-        organizationId: 'org-1',
-        userId: 'u1',
-        role: 'admin',
-        permissions: new Set(['rentals:create']),
-      } as Record<string, unknown>,
-    },
-    rackHoldings: vi.fn(async (..._args: unknown[]) => new Map()),
-    reserved: vi.fn(),
-    formProps: vi.fn(),
-    reportError: vi.fn(async () => {}),
-    thumbMap: vi.fn(),
-    borrowerMembers: vi.fn(async () => [] as Array<Record<string, unknown>>),
-    // The loader's CATALOG_ROW_CEILING, lowered by the ceiling test.
-    ceiling: { value: 10_000 },
-  }),
-);
+  moduleAccess,
+} = vi.hoisted(() => ({
+  // The Rentals module gate's answer; the module-off suite turns it off.
+  moduleAccess: vi.fn(async (_moduleId: string) => ({ enabled: true, canManage: false })),
+  adminRef: { current: null as unknown },
+  // The caller's OWN client (row level security applies). null: the same
+  // stub as the admin client, i.e. a caller whose RLS view is the full one
+  // (the suites below that are not about scope).
+  callerRef: { current: null as unknown },
+  // The request's org context; the scope suite swaps the role.
+  session: {
+    current: {
+      organizationId: 'org-1',
+      userId: 'u1',
+      role: 'admin',
+      permissions: new Set(['rentals:create']),
+    } as Record<string, unknown>,
+  },
+  rackHoldings: vi.fn(async (..._args: unknown[]) => new Map()),
+  reserved: vi.fn(),
+  formProps: vi.fn(),
+  reportError: vi.fn(async () => {}),
+  thumbMap: vi.fn(),
+  borrowerMembers: vi.fn(async () => [] as Array<Record<string, unknown>>),
+  // The loader's CATALOG_ROW_CEILING, lowered by the ceiling test.
+  ceiling: { value: 10_000 },
+}));
 
 vi.mock('next/navigation', () => ({ redirect: vi.fn() }));
 vi.mock('next/link', async () => {
@@ -62,6 +63,7 @@ vi.mock('next/link', async () => {
 vi.mock('@/lib/auth/session', () => ({
   requireOrgContext: vi.fn(async () => session.current),
 }));
+vi.mock('@/lib/modules/module-gate', () => ({ checkModuleAccess: moduleAccess }));
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: () => adminRef.current }));
 // withContext() is the request's service context: its `supabase` is the
 // caller's own cookie client, under row level security.
@@ -159,6 +161,7 @@ async function renderPage() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  moduleAccess.mockResolvedValue({ enabled: true, canManage: false });
   thumbMap.mockResolvedValue({});
   ceiling.value = 10_000;
   callerRef.current = null;
@@ -415,6 +418,65 @@ describe('New rental: photos arrive with the page', () => {
     );
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('thumb map unavailable'));
     warn.mockRestore();
+  });
+});
+
+describe('New rental with the Rentals module off', () => {
+  // The rentals service refuses the borrower read with the module off, and
+  // the page fell to the error screen ("Something broke loading this page",
+  // sign out and back in) instead of saying so (redesign P4.D1 found it on
+  // both the old and the new build). It shows the list's module-off panel.
+  it('shows the module-off panel with the way to turn it on, and reads nothing', async () => {
+    stubWith(() => ({ data: [], error: null }));
+    moduleAccess.mockResolvedValue({ enabled: false, canManage: true });
+
+    render(await NewRentalPage({ searchParams: Promise.resolve({}) }));
+
+    expect(moduleAccess).toHaveBeenCalledWith('rentals');
+    expect(screen.getByRole('heading', { level: 1, name: "Rentals isn't enabled" })).toBeTruthy();
+    expect(
+      screen.getByRole('link', { name: 'Enable in Settings → Modules' }).getAttribute('href'),
+    ).toBe('/dashboard/settings/modules');
+    expect(borrowerMembers).not.toHaveBeenCalled();
+    expect(thumbMap).not.toHaveBeenCalled();
+    expect(reserved).not.toHaveBeenCalled();
+    expect(formProps).not.toHaveBeenCalled();
+  });
+
+  it('a member who cannot turn it on is told to ask an owner or admin', async () => {
+    stubWith(() => ({ data: [], error: null }));
+    moduleAccess.mockResolvedValue({ enabled: false, canManage: false });
+
+    render(await NewRentalPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByText('Ask an owner or admin to enable it.')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Enable in Settings → Modules' })).toBeNull();
+  });
+
+  it('a member without rentals:create is still sent to the list before the module is asked', async () => {
+    stubWith(() => ({ data: [], error: null }));
+    moduleAccess.mockResolvedValue({ enabled: false, canManage: false });
+    session.current = { ...session.current, permissions: new Set<string>() };
+    const { redirect } = await import('next/navigation');
+
+    render(await NewRentalPage({ searchParams: Promise.resolve({}) }));
+
+    expect(redirect).toHaveBeenCalledWith('/dashboard/rentals');
+    // The mocked redirect returns where the real one throws, so the order of
+    // the two calls is what proves the redirect comes first.
+    const redirectAt = vi.mocked(redirect).mock.invocationCallOrder[0]!;
+    const moduleAt = moduleAccess.mock.invocationCallOrder[0]!;
+    expect(redirectAt).toBeLessThan(moduleAt);
+  });
+
+  it('with the module on, the page asks the Rentals gate once and renders the form', async () => {
+    stubWith(() => ({ data: [], error: null }));
+    reserved.mockResolvedValue(new Map());
+
+    await renderPage();
+
+    expect(moduleAccess.mock.calls).toEqual([['rentals']]);
+    expect(formProps).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -134,6 +134,18 @@ function setPermissions(hasSubmit: boolean) {
   ctxHolder.current = { role: 'staff', permissions: perms };
 }
 
+/** Sets the module side of the matrix: the maintenance module as given, with
+ *  the page's own Rentals gate (checkModuleAccess('rentals'), P4.D1) on, so
+ *  these tests reach ReportProblemButton as before. The module-off suite
+ *  below turns Rentals off. */
+function setMaintenanceModule(enabled: boolean) {
+  checkModuleAccessMock.mockImplementation(async (moduleId: unknown) =>
+    moduleId === 'maintenance_requests'
+      ? { enabled, canManage: false }
+      : { enabled: true, canManage: false },
+  );
+}
+
 async function renderPage() {
   return render(await RentalDetailPage({ params: Promise.resolve({ id: RENTAL_ID }) }));
 }
@@ -165,7 +177,7 @@ describe('rentals/[id] host — ReportProblemButton gating (I1, fix wave 2)', ()
 
   it('permission GRANTED + module DISABLED -> canSubmit=true, moduleEnabled=false (SWAP GUARD: a props swap here would report canSubmit=false, moduleEnabled=true — the opposite of this assertion)', async () => {
     setPermissions(true);
-    checkModuleAccessMock.mockResolvedValue({ enabled: false, canManage: false });
+    setMaintenanceModule(false);
     await renderPage();
     expect(reportProblemButtonProps).toHaveBeenCalledWith(
       expect.objectContaining({ canSubmit: true, moduleEnabled: false }),
@@ -179,14 +191,16 @@ describe('rentals/[id] host — ReportProblemButton gating (I1, fix wave 2)', ()
     expect(reportProblemButtonProps).toHaveBeenCalledWith(
       expect.objectContaining({ canSubmit: false, moduleEnabled: false }),
     );
-    // Page-level cost-avoidance behavior (page.tsx:55-57): the module RPC is
-    // only paid for a viewer who could actually use the button.
-    expect(checkModuleAccessMock).not.toHaveBeenCalled();
+    // Page-level cost-avoidance behavior: the maintenance module check is
+    // only paid for a viewer who could actually use the button. The one
+    // module check made is the page's own Rentals gate (P4.D1).
+    expect(checkModuleAccessMock).not.toHaveBeenCalledWith('maintenance_requests');
+    expect(checkModuleAccessMock.mock.calls).toEqual([['rentals']]);
   });
 
   it('permission DENIED + module DISABLED -> canSubmit=false, moduleEnabled=false', async () => {
     setPermissions(false);
-    checkModuleAccessMock.mockResolvedValue({ enabled: false, canManage: false });
+    setMaintenanceModule(false);
     await renderPage();
     expect(reportProblemButtonProps).toHaveBeenCalledWith(
       expect.objectContaining({ canSubmit: false, moduleEnabled: false }),
@@ -198,6 +212,47 @@ describe('rentals/[id] host — ReportProblemButton gating (I1, fix wave 2)', ()
     checkModuleAccessMock.mockResolvedValue({ enabled: true, canManage: false });
     await renderPage();
     expect(checkModuleAccessMock).toHaveBeenCalledWith('maintenance_requests');
+  });
+});
+
+describe('rentals/[id] with the Rentals module off (P4.D1)', () => {
+  // The rentals service refuses the read with the module off, and the page
+  // fell to the error screen ("Something broke loading this page") where the
+  // list shows its module-off panel. Rental emails and maintenance request
+  // emails link here, so an organization that turns Rentals off still gets
+  // visits. The page now shows the same panel.
+  function rentalsOff(canManage: boolean) {
+    checkModuleAccessMock.mockImplementation(async (moduleId: unknown) =>
+      moduleId === 'rentals' ? { enabled: false, canManage } : { enabled: true, canManage },
+    );
+  }
+
+  it('shows the module-off panel with the way to turn it on, and reads nothing', async () => {
+    rentalsOff(true);
+    await renderPage();
+    expect(checkModuleAccessMock).toHaveBeenCalledWith('rentals');
+    expect(screen.getByRole('heading', { level: 1, name: "Rentals isn't enabled" })).toBeTruthy();
+    expect(
+      screen.getByRole('link', { name: 'Enable in Settings → Modules' }).getAttribute('href'),
+    ).toBe('/dashboard/settings/modules');
+    expect(rentalGet).not.toHaveBeenCalled();
+    expect(overdueRemindersOn).not.toHaveBeenCalled();
+    expect(reportProblemButtonProps).not.toHaveBeenCalled();
+    expect(headerProps).not.toHaveBeenCalled();
+  });
+
+  it('a member who cannot turn it on is told to ask an owner or admin', async () => {
+    rentalsOff(false);
+    await renderPage();
+    expect(screen.getByText('Ask an owner or admin to enable it.')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Enable in Settings → Modules' })).toBeNull();
+  });
+
+  it('a member with no rentals permission is still sent to the dashboard, before the module is asked', async () => {
+    rentalsOff(false);
+    ctxHolder.current = { role: 'viewer', permissions: new Set<string>() };
+    await expect(renderPage()).rejects.toThrow('redirect:/dashboard');
+    expect(checkModuleAccessMock).not.toHaveBeenCalled();
   });
 });
 

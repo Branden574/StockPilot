@@ -1,10 +1,12 @@
 import { redirect } from 'next/navigation';
 
+import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { StatePanel } from '@/components/patterns/state-panel';
 import { RentalCreateForm } from '@/components/rentals/rental-create-form';
 import type { AisleSummary, CatalogItem } from '@/components/orders/v2/types';
 import { requireOrgContext } from '@/lib/auth/session';
+import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { createAdminClient } from '@/lib/supabase/admin';
 import {
   CATALOG_ROW_CEILING,
@@ -66,6 +68,16 @@ export default async function NewRentalPage({
   const ctx = await requireOrgContext();
   if (!can(ctx, 'rentals:create')) {
     redirect('/dashboard/rentals');
+  }
+  // With the Rentals module off, the rentals service refuses the borrower
+  // read below, and this page fell to the error screen ("Something broke
+  // loading this page", sign out and back in) instead of saying the module
+  // is off. It now shows the checkouts list's module-off panel. The module
+  // set came with the request's membership, so this costs no extra round
+  // trip; a member without rentals:create is still sent to the list first.
+  const moduleAccess = await checkModuleAccess('rentals');
+  if (!moduleAccess.enabled) {
+    return <ModuleNotEnabled moduleId="rentals" canManage={moduleAccess.canManage} />;
   }
 
   const params = await searchParams;

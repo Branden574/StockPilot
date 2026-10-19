@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 
+import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { DetailSection } from '@/components/patterns/detail-section';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { RentalActionsPanel } from '@/components/rentals/rental-actions-panel';
@@ -33,6 +34,16 @@ export default async function RentalDetailPage({ params }: { params: Promise<{ i
   // viewers reaching a rental by direct URL).
   if (!can(ctx, 'rentals:read') && !can(ctx, 'rentals:create') && !can(ctx, 'rentals:manage')) {
     redirect('/dashboard');
+  }
+  // With the Rentals module off, the rentals service refuses the read below,
+  // and this page (rental emails, maintenance request emails and bookmarks
+  // still link here) fell to the error screen ("Something broke loading this
+  // page") instead of saying the module is off. It now shows the checkouts
+  // list's module-off panel. The module set came with the request's
+  // membership, so this costs no extra round trip.
+  const rentalsModule = await checkModuleAccess('rentals');
+  if (!rentalsModule.enabled) {
+    return <ModuleNotEnabled moduleId="rentals" canManage={rentalsModule.canManage} />;
   }
 
   const [rentalsSvc, inventorySvc, warehousesSvc] = await Promise.all([
