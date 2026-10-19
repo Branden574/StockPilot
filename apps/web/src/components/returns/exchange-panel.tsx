@@ -656,8 +656,9 @@ export function ReleaseEarlyDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             Keep waiting
           </Button>
+          {/* The ink primary: it commits the work in front of you (DESIGN-SPEC 6.2). */}
           <Button
-            variant="gradient"
+            variant="default"
             onClick={() => onConfirm(reason.trim())}
             disabled={busy || !reason.trim()}
           >
@@ -1093,7 +1094,7 @@ export function ChangeReplacementDialog({
                 : RETURNS_COPY.changeReplacementOnBackorder}
             </Button>
           ) : null}
-          <Button variant="gradient" onClick={() => send('refuse')} disabled={!ready}>
+          <Button variant="default" onClick={() => send('refuse')} disabled={!ready}>
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
             {mode === 'issue' ? RETURNS_COPY.issueNewReplacement : RETURNS_COPY.changeReplacement}
           </Button>

@@ -41,7 +41,6 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), message: v
 import { ReturnWorkbench } from './return-workbench';
 
 const R31 = '44444444-4444-4444-8444-444444444444';
-const R32 = '55555555-5555-4555-8555-555555555555';
 
 function src(
   locationId: string,

@@ -217,9 +217,9 @@ export default async function ReturnsPage({
                       </Badge>
                       {r.type === 'exchange' && r.exchangeStatusLabel ? (
                         <span
-                          // At least 10.5rem, so a long exchange status reads in
-                          // two or three lines, not five, in the narrow column.
-                          className="text-muted-foreground min-w-[10.5rem] max-w-[14rem] text-[12px] leading-[18px]"
+                          // At least 9rem, so a long exchange status reads in three
+                          // lines, not five, while the table still fits at 1280.
+                          className="text-muted-foreground min-w-[9rem] max-w-[14rem] text-[12px] leading-[18px]"
                           data-testid="return-row-exchange-status"
                         >
                           {r.exchangeStatusLabel}
@@ -244,7 +244,7 @@ export default async function ReturnsPage({
                           {/* The signed ~200 px thumbnail in the 32 px frame,
                               the hatch when there is none (DESIGN-SPEC 6.14). */}
                           <Thumb size={32} src={it.thumbUrl} alt="" />
-                          <span className="max-w-[13rem] truncate text-[12.5px]">
+                          <span className="max-w-[10rem] truncate text-[12.5px] 2xl:max-w-[13rem]">
                             {it.name ?? 'Item'}
                             {it.variant ? (
                               <span className="text-muted-foreground"> · {it.variant}</span>

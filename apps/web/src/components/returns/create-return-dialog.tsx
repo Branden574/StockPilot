@@ -236,7 +236,9 @@ export function CreateReturnDialog({ orderId, lines, exchangesEnabled = false }:
                     st.selected && 'border-foreground shadow-[0_0_0_1px_hsl(var(--foreground))]',
                   )}
                 >
-                  <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5">
+                  {/* The line takes at least 14rem, so on a phone the quantity
+                      and disposition wrap under its name instead of cutting it. */}
+                  <label className="flex min-w-0 flex-1 basis-56 cursor-pointer items-center gap-2.5">
                     <input
                       type="checkbox"
                       checked={st.selected}
@@ -255,7 +257,7 @@ export function CreateReturnDialog({ orderId, lines, exchangesEnabled = false }:
                       </span>
                     </span>
                   </label>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 max-sm:pl-[26px]">
                     <Input
                       type="number"
                       min={1}
