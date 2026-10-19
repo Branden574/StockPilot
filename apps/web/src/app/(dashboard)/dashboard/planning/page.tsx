@@ -146,19 +146,6 @@ export default async function PlanningPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {suggestions.length === 0 && (
-              <TableRow className="hover:bg-transparent">
-                <TableCell colSpan={9} className="p-0">
-                  <StatePanel
-                    kind="empty"
-                    surface="plain"
-                    headingLevel={null}
-                    icon={null}
-                    title="No active items to plan. Add stock movements to build velocity."
-                  />
-                </TableCell>
-              </TableRow>
-            )}
             {suggestions.map((s) => (
               <TableRow key={s.itemId}>
                 <TableCell className="text-foreground max-w-[200px] truncate font-medium">
@@ -202,6 +189,19 @@ export default async function PlanningPage() {
             ))}
           </TableBody>
         </Table>
+        {/* Outside the table's scroll wrapper, so the line centres in the
+            card's visible width on a phone instead of across 860 px. */}
+        {suggestions.length === 0 ? (
+          <div className="border-border border-t">
+            <StatePanel
+              kind="empty"
+              surface="plain"
+              headingLevel={null}
+              icon={null}
+              title="No active items to plan. Add stock movements to build velocity."
+            />
+          </div>
+        ) : null}
       </DetailSection>
 
       {moduleAccess.canManage && (

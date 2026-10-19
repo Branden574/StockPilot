@@ -138,9 +138,15 @@ describe('Planning page layout (P4.C2 redesign)', () => {
   it('says there is nothing to plan in the table when no item ranks', async () => {
     getReorderSuggestions.mockResolvedValue({ suggestions: [], truncated: false });
     render(await PlanningPage());
-    expect(
-      screen.getByText('No active items to plan. Add stock movements to build velocity.'),
-    ).toBeInTheDocument();
+    const empty = screen.getByText(
+      'No active items to plan. Add stock movements to build velocity.',
+    );
+    expect(empty).toBeInTheDocument();
+    // Outside the wide table, so it centres in the card's visible width on a phone.
+    expect(empty.closest('table')).toBeNull();
+    expect(empty.closest('tr')).toBeNull();
+    // The column headers still show above it.
+    expect(screen.getByRole('columnheader', { name: 'Suggested qty' })).toBeInTheDocument();
   });
 
   it('marks days of cover of 14 or fewer in the caution colour', async () => {
