@@ -2,7 +2,10 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
+import { StatePanel } from '@/components/patterns/state-panel';
 import { PublicLinkEditor } from '@/components/settings/public-link-editor';
+import { SettingsPage } from '@/components/settings/settings-panel';
 import { can } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
@@ -30,22 +33,28 @@ export default async function PublicLinkEditorPage({
 
   if (!can(ctx, 'public_links:manage')) {
     return (
-      <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-        <div className="bg-card rounded-xl border p-8 text-center">
-          <h1 className="text-lg font-semibold">Public request link</h1>
-          <p className="text-muted-foreground mx-auto mt-2 max-w-md text-sm">
-            You need the “Manage public links” permission to edit public
-            request links. Ask an owner or admin to grant it under Settings →
-            Roles &amp; permissions.
-          </p>
-          <Link
-            href="/dashboard/settings"
-            className="text-primary mt-4 inline-block text-sm hover:underline"
-          >
-            ← Back to settings
-          </Link>
-        </div>
-      </div>
+      <SettingsPage>
+        <StatePanel
+          kind="forbidden"
+          size="page"
+          headingLevel={1}
+          title="Public request link"
+          description={
+            <>
+              You need the “Manage public links” permission to edit public request links. Ask an
+              owner or admin to grant it under Settings → Roles &amp; permissions.
+            </>
+          }
+          action={
+            <Link
+              href="/dashboard/settings"
+              className="text-accent hover:text-foreground text-[13px] transition-colors hover:underline"
+            >
+              ← Back to settings
+            </Link>
+          }
+        />
+      </SettingsPage>
     );
   }
 
@@ -77,20 +86,16 @@ export default async function PublicLinkEditorPage({
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://stockpilotusa.com';
 
   return (
-    <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href="/dashboard/settings/public-requests"
-          className="text-muted-foreground hover:text-foreground inline-flex items-center text-sm"
-        >
-          ← Back to public requests
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">{link.name}</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Configure what this link exposes and how requests are limited.
-          Changes go live on the public page immediately.
-        </p>
-      </div>
+    <SettingsPage width="wide">
+      <PageHeader
+        title={link.name}
+        subline="Configure what this link exposes and how requests are limited. Changes go live on the public page immediately."
+        back={
+          <PageHeaderBackLink href="/dashboard/settings/public-requests">
+            ← Back to public requests
+          </PageHeaderBackLink>
+        }
+      />
 
       <PublicLinkEditor
         appUrl={appUrl}
@@ -101,6 +106,6 @@ export default async function PublicLinkEditorPage({
         initialRows={initial.rows}
         initialTotal={initial.total}
       />
-    </div>
+    </SettingsPage>
   );
 }

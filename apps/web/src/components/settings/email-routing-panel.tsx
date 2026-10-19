@@ -1,15 +1,23 @@
 'use client';
 
-import { Loader2, Mail, Wrench } from 'lucide-react';
+import {
+  CircleCheck,
+  CircleDashed,
+  CircleX,
+  Loader2,
+  Mail,
+  TriangleAlert,
+  Wrench,
+} from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
 import { useStepUp } from '@/components/auth/step-up-modal';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { SettingsPanel } from '@/components/settings/settings-panel';
 import { setOrgEmailRoutingAction } from '@/server/actions/email-routing-settings';
 
 import {
@@ -116,34 +124,55 @@ function validateFields(feature: OrgEmailRoutingFeature, fields: Fields): string
   }
 }
 
+/**
+ * The card's status sentence. Each state keeps its exact words; the tone and
+ * an icon beside them say the same thing, so colour is never the only cue.
+ */
 function StatusLine({ routing }: { routing: OrgEmailRoutingReadState }) {
   if (routing.state === 'valid') {
     return (
-      <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
+      <StatusRow icon={CircleCheck} className="text-success">
         Active — members see the email action.
-      </p>
+      </StatusRow>
     );
   }
   if (routing.state === 'invalid') {
     return (
-      <p className="text-destructive text-sm font-medium">
+      <StatusRow icon={CircleX} className="text-destructive">
         {`Invalid: ${routing.reason} The email action is hidden until this is fixed.`}
-      </p>
+      </StatusRow>
     );
   }
   if (routing.state === 'fallback') {
     return (
-      <p className="text-amber-600 dark:text-amber-400 text-sm font-medium">
+      <StatusRow icon={TriangleAlert} className="text-warning">
         Email-routing storage is not available yet (a database migration is pending). The
         release&apos;s built-in recipients are in use until it lands; saving here will work after
         the migration.
-      </p>
+      </StatusRow>
     );
   }
   return (
-    <p className="text-muted-foreground text-sm font-medium">
+    <StatusRow icon={CircleDashed} className="text-muted-foreground">
       Not configured — members do not see the email action.
-    </p>
+    </StatusRow>
+  );
+}
+
+function StatusRow({
+  icon: Icon,
+  className,
+  children,
+}: {
+  icon: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
+  className: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={`flex items-start gap-2 text-[13px] font-medium ${className}`}>
+      <Icon aria-hidden className="mt-0.5 h-4 w-4 shrink-0" />
+      <p>{children}</p>
+    </div>
   );
 }
 
@@ -224,119 +253,104 @@ function FeatureCard({
   const idPrefix = feature.replace('_', '-');
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Icon className="h-4 w-4" /> {copy.title}
-        </CardTitle>
-        <CardDescription>{copy.description}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <StatusLine routing={initial} />
+    <SettingsPanel
+      title={
+        <span className="flex items-center gap-2">
+          <Icon className="text-muted-foreground h-4 w-4" /> {copy.title}
+        </span>
+      }
+      description={copy.description}
+      bodyClassName="space-y-4"
+    >
+      <StatusLine routing={initial} />
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label htmlFor={`${idPrefix}-to`}>To address (required)</Label>
-            <Input
-              id={`${idPrefix}-to`}
-              type="email"
-              value={fields.to}
-              onChange={(e) => set('to', e.target.value)}
-              onBlur={() => setFieldError(validateFields(feature, fields))}
-              placeholder="intake@yourwarehouse.org"
-              disabled={busy}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor={`${idPrefix}-to-name`}>To display name (optional)</Label>
-            <Input
-              id={`${idPrefix}-to-name`}
-              value={fields.toName}
-              onChange={(e) => set('toName', e.target.value)}
-              onBlur={() => setFieldError(validateFields(feature, fields))}
-              placeholder="Warehouse Intake"
-              disabled={busy}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor={`${idPrefix}-cc`}>CC address (required)</Label>
-            <Input
-              id={`${idPrefix}-cc`}
-              type="email"
-              value={fields.cc}
-              onChange={(e) => set('cc', e.target.value)}
-              onBlur={() => setFieldError(validateFields(feature, fields))}
-              placeholder="manager@yourwarehouse.org"
-              disabled={busy}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor={`${idPrefix}-cc-name`}>CC display name (optional)</Label>
-            <Input
-              id={`${idPrefix}-cc-name`}
-              value={fields.ccName}
-              onChange={(e) => set('ccName', e.target.value)}
-              onBlur={() => setFieldError(validateFields(feature, fields))}
-              placeholder="Warehouse Manager"
-              disabled={busy}
-            />
-          </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-1.5">
+          <Label htmlFor={`${idPrefix}-to`}>To address (required)</Label>
+          <Input
+            id={`${idPrefix}-to`}
+            type="email"
+            value={fields.to}
+            onChange={(e) => set('to', e.target.value)}
+            onBlur={() => setFieldError(validateFields(feature, fields))}
+            placeholder="intake@yourwarehouse.org"
+            disabled={busy}
+          />
         </div>
+        <div className="space-y-1.5">
+          <Label htmlFor={`${idPrefix}-to-name`}>To display name (optional)</Label>
+          <Input
+            id={`${idPrefix}-to-name`}
+            value={fields.toName}
+            onChange={(e) => set('toName', e.target.value)}
+            onBlur={() => setFieldError(validateFields(feature, fields))}
+            placeholder="Warehouse Intake"
+            disabled={busy}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor={`${idPrefix}-cc`}>CC address (required)</Label>
+          <Input
+            id={`${idPrefix}-cc`}
+            type="email"
+            value={fields.cc}
+            onChange={(e) => set('cc', e.target.value)}
+            onBlur={() => setFieldError(validateFields(feature, fields))}
+            placeholder="manager@yourwarehouse.org"
+            disabled={busy}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor={`${idPrefix}-cc-name`}>CC display name (optional)</Label>
+          <Input
+            id={`${idPrefix}-cc-name`}
+            value={fields.ccName}
+            onChange={(e) => set('ccName', e.target.value)}
+            onBlur={() => setFieldError(validateFields(feature, fields))}
+            placeholder="Warehouse Manager"
+            disabled={busy}
+          />
+        </div>
+      </div>
 
-        {/* Live preview of the exact sentence members read under the email
-            action — the same pure notice function the surfaces render, so
-            the preview cannot drift from the real screens. */}
-        {preview ? (
-          <p className="text-muted-foreground rounded-md border border-dashed p-2 text-sm">
-            {preview}
-          </p>
-        ) : null}
+      {/* Live preview of the exact sentence members read under the email
+          action — the same pure notice function the surfaces render, so
+          the preview cannot drift from the real screens. */}
+      {preview ? (
+        <p className="bg-sunk text-muted-foreground rounded-md border border-dashed border-[var(--ed-line-strong)] px-3 py-2 text-[13px]">
+          {preview}
+        </p>
+      ) : null}
 
-        {fieldError ? <p className="text-destructive text-sm">{fieldError}</p> : null}
-        {serverError ? <p className="text-destructive text-sm">{serverError}</p> : null}
+      {fieldError ? <p className="text-destructive text-[13px]">{fieldError}</p> : null}
+      {serverError ? <p className="text-destructive text-[13px]">{serverError}</p> : null}
 
-        <div className="flex flex-wrap items-center gap-2">
-          <Button onClick={() => void save()} disabled={busy} size="sm">
-            {busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null}
-            Save routing
-          </Button>
-          {initial.state === 'valid' || initial.state === 'invalid' ? (
-            confirmClear ? (
-              <>
-                <span className="text-muted-foreground text-xs">
-                  Clear routing? Members lose the email action for {copy.title.toLowerCase()}.
-                </span>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={() => void clearRouting()}
-                  disabled={busy}
-                >
-                  Confirm clear
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setConfirmClear(false)}
-                  disabled={busy}
-                >
-                  Cancel
-                </Button>
-              </>
-            ) : (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setConfirmClear(true)}
-                disabled={busy}
-              >
-                Clear routing
+      <div className="flex flex-wrap items-center gap-2">
+        <Button onClick={() => void save()} disabled={busy}>
+          {busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null}
+          Save routing
+        </Button>
+        {initial.state === 'valid' || initial.state === 'invalid' ? (
+          confirmClear ? (
+            <>
+              <span className="text-muted-foreground text-[12.5px]">
+                Clear routing? Members lose the email action for {copy.title.toLowerCase()}.
+              </span>
+              <Button variant="destructive" onClick={() => void clearRouting()} disabled={busy}>
+                Confirm clear
               </Button>
-            )
-          ) : null}
-        </div>
-      </CardContent>
-    </Card>
+              <Button variant="ghost" onClick={() => setConfirmClear(false)} disabled={busy}>
+                Cancel
+              </Button>
+            </>
+          ) : (
+            <Button variant="outline" onClick={() => setConfirmClear(true)} disabled={busy}>
+              Clear routing
+            </Button>
+          )
+        ) : null}
+      </div>
+    </SettingsPanel>
   );
 }
 
@@ -351,7 +365,7 @@ export function EmailRoutingPanel({
   // their open state over a single save.
   const stepUp = useStepUp();
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-4">
       {stepUp.modal}
       <FeatureCard
         feature="delivery_request"
@@ -363,7 +377,7 @@ export function EmailRoutingPanel({
         initial={initialMaintenance}
         stepUpEnsure={stepUp.ensure}
       />
-      <p className="text-muted-foreground text-xs">
+      <p className="text-muted-foreground text-[12.5px]">
         StockPilot opens prefilled drafts in the sender&apos;s own mail app and cannot observe
         whether a message is ultimately sent or received. Configure addresses your organization
         actually monitors.

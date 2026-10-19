@@ -1,7 +1,9 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 
+import { PageHeader } from '@/components/patterns/page-header';
 import { EmailRoutingPanel } from '@/components/settings/email-routing-panel';
+import { SettingsPage } from '@/components/settings/settings-panel';
 import { getOrgEmailRouting } from '@/lib/dashboard/cached-org';
 import { withContext } from '@/server/services/context';
 
@@ -37,20 +39,22 @@ export default async function EmailRoutingSettingsPage() {
   ]);
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Email routing</h1>
-      <p className="text-muted-foreground mt-1 text-sm">
-        Where the delivery-request and maintenance-request email actions address their drafts.
-        Each feature routes independently: members see the email action only for features with a
-        valid To and CC configured here. StockPilot opens drafts in the sender&apos;s own mail
-        app — it never sends anything itself.
-      </p>
-      <div className="mt-8">
-        <EmailRoutingPanel
-          initialDelivery={deliveryRouting}
-          initialMaintenance={maintenanceRouting}
-        />
-      </div>
-    </div>
+    <SettingsPage>
+      <PageHeader
+        title="Email routing"
+        subline={
+          <>
+            Where the delivery-request and maintenance-request email actions address their drafts.
+            Each feature routes independently: members see the email action only for features with a
+            valid To and CC configured here. StockPilot opens drafts in the sender&apos;s own mail
+            app — it never sends anything itself.
+          </>
+        }
+      />
+      <EmailRoutingPanel
+        initialDelivery={deliveryRouting}
+        initialMaintenance={maintenanceRouting}
+      />
+    </SettingsPage>
   );
 }
