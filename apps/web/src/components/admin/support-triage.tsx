@@ -1,16 +1,24 @@
 'use client';
 
+import { ChevronRight, PartyPopper } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { FilterChip } from '@/components/patterns/chip';
+import { StatePanel } from '@/components/patterns/state-panel';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { useHydrated } from '@/lib/use-hydrated';
+import { cn } from '@/lib/utils';
 import { updateSupportTicketAction } from '@/server/actions/support-tickets';
 
-import type { SupportTicketRow, TicketPriority, TicketStatus } from '@/server/services/support-tickets';
+import type {
+  SupportTicketRow,
+  TicketPriority,
+  TicketStatus,
+} from '@/server/services/support-tickets';
 
 // UI option lists (local copy — the canonical enums live in the server-only
 // service, which a client component can't import as values).
@@ -22,12 +30,13 @@ const STATUS_LABEL: Record<TicketStatus, string> = {
   resolved: 'Resolved',
   closed: 'Closed',
 };
-const PRIORITY_BADGE: Record<TicketPriority, 'destructive' | 'warning' | 'secondary' | 'outline'> = {
-  urgent: 'destructive',
-  high: 'warning',
-  normal: 'secondary',
-  low: 'outline',
-};
+const PRIORITY_BADGE: Record<TicketPriority, 'destructive' | 'warning' | 'secondary' | 'outline'> =
+  {
+    urgent: 'destructive',
+    high: 'warning',
+    normal: 'secondary',
+    low: 'outline',
+  };
 const FILTERS: Array<{ key: string; label: string; match: (t: SupportTicketRow) => boolean }> = [
   { key: 'open', label: 'Open', match: (t) => t.status === 'open' || t.status === 'in_progress' },
   { key: 'resolved', label: 'Resolved', match: (t) => t.status === 'resolved' },
@@ -35,8 +44,22 @@ const FILTERS: Array<{ key: string; label: string; match: (t: SupportTicketRow) 
   { key: 'all', label: 'All', match: () => true },
 ];
 
+// The shared field recipe (32 px, stronger hairline, card fill, focus ring;
+// 44 px with 16 px text below sm), kept on native selects so the form posts
+// and keyboard use stay exactly as they were.
 const selectClass =
-  'border-border bg-background h-9 rounded-md border px-2 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+  'bg-card h-8 rounded-md border border-line-strong px-2.5 text-[13px] text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background max-sm:h-11 max-sm:text-base';
+
+/** One ticket's unsaved triage edits. */
+interface TicketDraft {
+  status: TicketStatus;
+  priority: TicketPriority;
+  notes: string;
+}
+
+function draftFrom(ticket: SupportTicketRow): TicketDraft {
+  return { status: ticket.status, priority: ticket.priority, notes: ticket.adminNotes ?? '' };
+}
 
 export function SupportTriage({
   tickets,
@@ -49,36 +72,46 @@ export function SupportTriage({
   const router = useRouter();
   const [filter, setFilter] = React.useState('open');
   const [openId, setOpenId] = React.useState<string | null>(null);
+  // Each card's edits live here, not in the card: switching the filter
+  // unmounts the cards it hides, and their typed notes and picked status or
+  // priority used to vanish with them (CONFLICTS D31). A ticket with no entry
+  // shows what the server has.
+  const [drafts, setDrafts] = React.useState<Record<string, TicketDraft>>({});
 
   const active = FILTERS.find((f) => f.key === filter);
   const visible = active ? tickets.filter(active.match) : tickets;
 
   return (
-    <div>
-      <div className="mb-4 flex flex-wrap gap-2">
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap gap-2">
         {FILTERS.map((f) => {
           const count = tickets.filter(f.match).length;
           return (
-            <button
+            <FilterChip
               key={f.key}
+              pressed={filter === f.key}
+              count={count}
               onClick={() => setFilter(f.key)}
-              className={
-                'rounded-full border px-3 py-1 text-[12.5px] transition-colors ' +
-                (filter === f.key
-                  ? 'border-primary bg-foreground text-background'
-                  : 'border-border text-[var(--ed-ink-3)] hover:bg-muted')
-              }
             >
-              {f.label} <span className="tabular-nums opacity-70">{count}</span>
-            </button>
+              {/* The space keeps the button's name "Open 3", as before. */}
+              {f.label}{' '}
+            </FilterChip>
           );
         })}
       </div>
 
       {visible.length === 0 ? (
-        <p className="text-muted-foreground text-sm">No tickets here. 🎉</p>
+        // The words stay; the celebration emoji became an icon (owner rule:
+        // no emojis in the interface).
+        <StatePanel
+          kind="empty"
+          icon={PartyPopper}
+          headingLevel={null}
+          size="sm"
+          title="No tickets here."
+        />
       ) : (
-        <div className="space-y-2">
+        <div className="flex flex-col gap-2">
           {visible.map((t) => (
             <TicketCard
               key={t.id}
@@ -86,6 +119,8 @@ export function SupportTriage({
               attachmentUrl={attachmentUrls?.[t.id]}
               expanded={openId === t.id}
               onToggle={() => setOpenId((id) => (id === t.id ? null : t.id))}
+              draft={drafts[t.id] ?? draftFrom(t)}
+              onDraftChange={(next) => setDrafts((all) => ({ ...all, [t.id]: next }))}
               onSaved={() => router.refresh()}
             />
           ))}
@@ -100,25 +135,34 @@ function TicketCard({
   attachmentUrl,
   expanded,
   onToggle,
+  draft,
+  onDraftChange,
   onSaved,
 }: {
   ticket: SupportTicketRow;
   attachmentUrl?: string;
   expanded: boolean;
   onToggle: () => void;
+  draft: TicketDraft;
+  onDraftChange: (next: TicketDraft) => void;
   onSaved: () => void;
 }) {
-  const [status, setStatus] = React.useState<TicketStatus>(ticket.status);
-  const [priority, setPriority] = React.useState<TicketPriority>(ticket.priority);
-  const [notes, setNotes] = React.useState(ticket.adminNotes ?? '');
+  const { status, priority, notes } = draft;
   const [busy, setBusy] = React.useState(false);
   // The day it came in is the viewer's; the server's zone (UTC) would print
   // the next day for an evening ticket (React error #418). Printed once hydrated.
   const hydrated = useHydrated();
+  const panelId = `ticket-${ticket.id}-details`;
+  const notesId = `ticket-${ticket.id}-notes`;
 
   async function save() {
     setBusy(true);
-    const res = await updateSupportTicketAction({ id: ticket.id, status, priority, adminNotes: notes });
+    const res = await updateSupportTicketAction({
+      id: ticket.id,
+      status,
+      priority,
+      adminNotes: notes,
+    });
     setBusy(false);
     if (!res.ok) return toast.error(res.error.message);
     toast.success('Ticket updated.');
@@ -126,15 +170,20 @@ function TicketCard({
   }
 
   return (
-    <div className="border-border bg-card rounded-lg border">
+    <div className="border-border bg-card overflow-hidden rounded-lg border">
       <button
+        type="button"
         onClick={onToggle}
-        className="flex w-full items-center gap-3 px-4 py-3 text-left"
+        aria-expanded={expanded}
+        aria-controls={expanded ? panelId : undefined}
+        className="hover:bg-muted flex w-full items-center gap-3 px-[18px] py-3 text-left transition-colors focus-visible:ring-inset focus-visible:ring-offset-0"
       >
         <Badge variant={PRIORITY_BADGE[ticket.priority]}>{ticket.priority}</Badge>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-medium">{ticket.subject}</div>
-          <div className="text-muted-foreground truncate text-xs">
+          <div className="text-foreground truncate text-[13.5px] font-medium leading-5">
+            {ticket.subject}
+          </div>
+          <div className="text-muted-foreground truncate text-[12.5px] leading-[18.75px]">
             {ticket.email} · {ticket.category}
             {hydrated ? ` · ${new Date(ticket.createdAt).toLocaleDateString()}` : null}
           </div>
@@ -142,22 +191,32 @@ function TicketCard({
         <Badge variant={ticket.status === 'open' ? 'success' : 'outline'}>
           {STATUS_LABEL[ticket.status]}
         </Badge>
+        <ChevronRight
+          aria-hidden
+          strokeWidth={1.8}
+          className={cn(
+            'text-muted-foreground h-3.5 w-3.5 shrink-0 transition-transform',
+            expanded && 'rotate-90',
+          )}
+        />
       </button>
 
       {expanded && (
-        <div className="border-border space-y-4 border-t px-4 py-4">
+        <div id={panelId} className="border-border space-y-4 border-t px-[18px] py-4">
           <div>
-            <div className="text-muted-foreground text-[11px] font-medium uppercase tracking-wide">
+            <div className="text-muted-foreground text-[11px] font-medium uppercase tracking-[0.06em]">
               Message {ticket.name ? `· from ${ticket.name}` : ''}
             </div>
-            <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed">{ticket.message}</p>
+            <p className="text-foreground mt-1 whitespace-pre-wrap text-[13.5px] leading-relaxed">
+              {ticket.message}
+            </p>
             {ticket.pageUrl && (
-              <p className="text-muted-foreground mt-2 break-all text-xs">
+              <p className="text-muted-foreground mt-2 break-all text-[12px]">
                 Reported from: {ticket.pageUrl}
               </p>
             )}
             {attachmentUrl && (
-              <p className="mt-2 text-xs">
+              <p className="mt-2 text-[12px]">
                 <a
                   href={attachmentUrl}
                   target="_blank"
@@ -172,35 +231,60 @@ function TicketCard({
           </div>
 
           <div className="flex flex-wrap items-end gap-3">
-            <label className="flex flex-col gap-1 text-[11px] font-medium uppercase tracking-wide text-[var(--ed-ink-4)]">
+            <label className="text-muted-foreground flex flex-col gap-1 text-[11px] font-medium uppercase tracking-[0.06em]">
               Status
-              <select className={selectClass} value={status} onChange={(e) => setStatus(e.target.value as TicketStatus)}>
+              <select
+                className={selectClass}
+                value={status}
+                onChange={(e) =>
+                  onDraftChange({ ...draft, status: e.target.value as TicketStatus })
+                }
+              >
                 {STATUSES.map((s) => (
-                  <option key={s} value={s}>{STATUS_LABEL[s]}</option>
+                  <option key={s} value={s}>
+                    {STATUS_LABEL[s]}
+                  </option>
                 ))}
               </select>
             </label>
-            <label className="flex flex-col gap-1 text-[11px] font-medium uppercase tracking-wide text-[var(--ed-ink-4)]">
+            <label className="text-muted-foreground flex flex-col gap-1 text-[11px] font-medium uppercase tracking-[0.06em]">
               Priority
-              <select className={selectClass} value={priority} onChange={(e) => setPriority(e.target.value as TicketPriority)}>
+              <select
+                className={selectClass}
+                value={priority}
+                onChange={(e) =>
+                  onDraftChange({ ...draft, priority: e.target.value as TicketPriority })
+                }
+              >
                 {PRIORITIES.map((p) => (
-                  <option key={p} value={p}>{p}</option>
+                  <option key={p} value={p}>
+                    {p}
+                  </option>
                 ))}
               </select>
             </label>
-            <a
-              href={`mailto:${ticket.email}?subject=Re: ${encodeURIComponent(ticket.subject)}`}
-              className="border-border hover:bg-muted ml-auto rounded-md border px-3 py-2 text-[13px] font-medium"
-            >
-              Reply by email
-            </a>
+            <Button asChild variant="outline" className="ml-auto">
+              <a href={`mailto:${ticket.email}?subject=Re: ${encodeURIComponent(ticket.subject)}`}>
+                Reply by email
+              </a>
+            </Button>
           </div>
 
           <div>
-            <div className="text-muted-foreground mb-1 text-[11px] font-medium uppercase tracking-wide">
+            <label
+              htmlFor={notesId}
+              className="text-muted-foreground mb-1 block text-[11px] font-medium uppercase tracking-[0.06em]"
+            >
               Internal notes
-            </div>
-            <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} maxLength={4000} placeholder="Triage notes (not shown to the reporter)" />
+            </label>
+            <Textarea
+              id={notesId}
+              value={notes}
+              onChange={(e) => onDraftChange({ ...draft, notes: e.target.value })}
+              rows={2}
+              maxLength={4000}
+              placeholder="Triage notes (not shown to the reporter)"
+            />
           </div>
 
           <div className="flex justify-end">

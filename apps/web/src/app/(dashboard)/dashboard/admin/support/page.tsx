@@ -1,8 +1,8 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { SupportTriage } from '@/components/admin/support-triage';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { currentUserIsPlatformAdmin } from '@/lib/auth/platform-admin';
 import { listSupportTickets } from '@/server/services/support-tickets';
 
@@ -19,21 +19,12 @@ export default async function AdminSupportPage() {
   const open = tickets.filter((t) => t.status === 'open' || t.status === 'in_progress').length;
 
   return (
-    <div className="mx-auto w-full max-w-[1280px] px-8 pb-20 pt-7">
-      <div className="mb-6 border-b border-border pb-4">
-        <Link
-          href="/dashboard/admin"
-          className="text-[var(--ed-ink-4)] hover:text-foreground text-[12px]"
-        >
-          ← Admin
-        </Link>
-        <h1 className="font-display mt-2 text-[28px] font-medium tracking-[-0.025em]">
-          Support tickets
-        </h1>
-        <p className="mt-1 text-[13.5px] text-[var(--ed-ink-3)]">
-          {open} open · {tickets.length} total — submitted from the public support page.
-        </p>
-      </div>
+    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <PageHeader
+        back={<PageHeaderBackLink href="/dashboard/admin">← Admin</PageHeaderBackLink>}
+        title="Support tickets"
+        subline={`${open} open · ${tickets.length} total — submitted from the public support page.`}
+      />
 
       <SupportTriage tickets={tickets} />
     </div>

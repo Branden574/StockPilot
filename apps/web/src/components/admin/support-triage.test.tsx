@@ -5,7 +5,7 @@
  * browser hydrates. An evening ticket in Los Angeles is the next day in UTC,
  * so React threw error #418. The day is printed once the page has hydrated.
  */
-import { within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { hydrateAcrossClockShift, inZone, BROWSER_ZONE } from '@/test/hydration';
@@ -59,5 +59,63 @@ describe('SupportTriage hydrates with the server in UTC and the browser in Los A
     } finally {
       run.unmount();
     }
+  });
+});
+
+describe('SupportTriage keeps each ticket card working in the redesign', () => {
+  const RESOLVED: SupportTicketRow = {
+    ...TICKET,
+    id: 't2',
+    subject: 'Old export question',
+    status: 'resolved',
+  };
+
+  it('keeps a card’s typed notes and picked status when a filter change hides it and brings it back (CONFLICTS D31)', () => {
+    render(<SupportTriage tickets={[TICKET, RESOLVED]} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Scanner stops after one scan/ }));
+    fireEvent.change(screen.getByLabelText('Internal notes'), {
+      target: { value: 'Asked for a video of the scanner.' },
+    });
+    fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'in_progress' } });
+
+    // Resolved hides the open ticket (its card unmounts) ...
+    fireEvent.click(screen.getByRole('button', { name: 'Resolved 1' }));
+    expect(screen.queryByText('Scanner stops after one scan')).toBeNull();
+    // ... and Open brings it back with the edits still there.
+    fireEvent.click(screen.getByRole('button', { name: 'Open 1' }));
+    // The card comes back still expanded (one open card is remembered across
+    // filters, as before).
+    expect(screen.getByRole('button', { name: /Scanner stops after one scan/ })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+    expect(screen.getByLabelText('Internal notes')).toHaveValue(
+      'Asked for a video of the scanner.',
+    );
+    expect(screen.getByLabelText('Status')).toHaveValue('in_progress');
+  });
+
+  it('names each filter chip with its count, marks the pressed one, and says "No tickets here." without an emoji', () => {
+    render(<SupportTriage tickets={[TICKET]} />);
+    expect(screen.getByRole('button', { name: 'Open 1' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'All 1' })).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(screen.getByRole('button', { name: 'Closed 0' }));
+    const empty = screen.getByText('No tickets here.');
+    expect(empty).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/\p{Extended_Pictographic}/u);
+  });
+
+  it('expands one ticket at a time and says so with aria-expanded; the reply link keeps its mailto', () => {
+    render(<SupportTriage tickets={[TICKET]} />);
+    const toggle = screen.getByRole('button', { name: /Scanner stops after one scan/ });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('link', { name: 'Reply by email' })).toHaveAttribute(
+      'href',
+      `mailto:dana@example.com?subject=Re: ${encodeURIComponent('Scanner stops after one scan')}`,
+    );
+    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
   });
 });
