@@ -1,8 +1,16 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
+import { PageHeader } from '@/components/patterns/page-header';
+import { StatePanel } from '@/components/patterns/state-panel';
+import { PlatformPage } from '@/components/platform/platform-page';
+import { PlatformTable } from '@/components/platform/platform-table';
+import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { requirePlatformAdmin } from '@/lib/auth/platform-admin';
-import { platformAuditActorLabel, platformAuditTargetLabel } from '@/lib/people/deleted-person-labels';
+import {
+  platformAuditActorLabel,
+  platformAuditTargetLabel,
+} from '@/lib/people/deleted-person-labels';
 import {
   auditDetailReason,
   auditDetailSuperseded,
@@ -41,101 +49,106 @@ export default async function PlatformAuditPage({
   const rows = await listPlatformAudit({ limit: 200, organizationId: orgFilter });
 
   return (
-    <div className="mx-auto w-full max-w-[1280px] px-6 pb-20 pt-7">
-      <div className="mb-6 border-b border-border pb-4">
-        <h1 className="font-display text-[26px] font-medium tracking-[-0.025em]">Platform audit</h1>
-        <p className="mt-1 text-[13px] text-[var(--ed-ink-3)]">
-          Every god-mode action — who, what, against whom, which org, why, when. Append-only,
-          newest first.
-        </p>
+    <PlatformPage>
+      <PageHeader
+        title="Platform audit"
+        subline="Every god-mode action — who, what, against whom, which org, why, when. Append-only, newest first."
+      >
         {orgFilter ? (
-          <p className="mt-2 text-[12px]">
-            <span className="text-[var(--ed-ink-4)]">Filtered to one organization.</span>{' '}
-            <Link href="/platform/audit" className="font-medium hover:underline">
+          <p className="mt-2 text-[12.5px]">
+            <span className="text-muted-foreground">Filtered to one organization.</span>{' '}
+            <Link
+              href="/platform/audit"
+              className="text-accent hover:text-foreground font-medium transition-colors"
+            >
               Show all
             </Link>
           </p>
         ) : null}
-      </div>
+      </PageHeader>
 
-      <div className="overflow-hidden rounded-[10px] border border-border">
-        <table className="w-full text-[13px]">
-          <thead>
-            <tr className="border-b border-border bg-card text-left text-[11px] uppercase tracking-[0.08em] text-[var(--ed-ink-4)]">
-              <th className="px-4 py-2.5 font-medium">When</th>
-              <th className="px-4 py-2.5 font-medium">Actor</th>
-              <th className="px-4 py-2.5 font-medium">Action</th>
-              {/* A disable is only auditable if you can see WHO it hit and WHY.
-                  Both were already on the row; only the read and this table
-                  were dropping them. */}
-              <th className="px-4 py-2.5 font-medium">Target user</th>
-              <th className="px-4 py-2.5 font-medium">Reason</th>
-              <th className="px-4 py-2.5 font-medium">Target org</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="px-4 py-10 text-center text-[var(--ed-ink-4)]">
-                  No platform-admin actions recorded yet.
-                </td>
-              </tr>
-            ) : (
-              rows.map((r) => {
-                const reason = auditDetailReason(r.detail);
-                // `action` alone reads identically for a real disable and a
-                // press that lost the race to a peer admin's concurrent
-                // transition (account-status.ts CONVERGENCE) — both write
-                // `user_disabled`/`user_reenabled`. Surfacing it here means
-                // an operator scanning this table doesn't have to open the
-                // row's raw detail to tell them apart.
-                const superseded = auditDetailSuperseded(r.detail);
-                return (
-                  <tr key={r.id} className="border-b border-border last:border-0">
-                    <td className="px-4 py-2.5 text-[12px] text-[var(--ed-ink-4)]">
-                      {new Date(r.createdAt).toLocaleString()}
-                    </td>
-                    {/* An admin who deleted their account (0393) keeps the
-                        email the row recorded: "Deleted user · email". */}
-                    <td className="px-4 py-2.5 text-[var(--ed-ink-3)]">{platformAuditActorLabel(r)}</td>
-                    <td className="px-4 py-2.5 font-medium">
-                      {ACTION_LABEL[r.action] ?? r.action}
-                      {superseded ? (
-                        <span className="ml-1.5 text-[11px] font-normal text-[var(--ed-ink-4)]">
-                          (superseded)
-                        </span>
-                      ) : null}
-                    </td>
-                    {/* Email when it resolves, uuid when it does not — never a
-                        blank cell for a row that names a user. */}
-                    <td
-                      className={
-                        r.targetUserEmail
-                          ? 'px-4 py-2.5 text-[var(--ed-ink-3)]'
-                          : 'px-4 py-2.5 font-mono text-[11.5px] text-[var(--ed-ink-4)]'
-                      }
-                      title={r.targetUserId ?? undefined}
-                    >
-                      {platformAuditTargetLabel(r)}
-                    </td>
-                    {/* `title` carries the full text: a reason can run to 500
-                        characters and must not stretch the row. */}
-                    <td
-                      className="max-w-[280px] truncate px-4 py-2.5 text-[var(--ed-ink-3)]"
-                      title={reason ?? undefined}
-                    >
-                      {reason ?? '—'}
-                    </td>
-                    <td className="px-4 py-2.5 font-mono text-[11.5px] text-[var(--ed-ink-4)]">
-                      {r.targetOrganizationId ?? '—'}
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
+      <PlatformTable label="Platform audit" minWidth={980}>
+        <TableHeader>
+          <TableRow className="hover:bg-transparent">
+            <TableHead>When</TableHead>
+            <TableHead>Actor</TableHead>
+            <TableHead>Action</TableHead>
+            {/* A disable is only auditable if you can see WHO it hit and WHY.
+                Both were already on the row; only the read and this table
+                were dropping them. */}
+            <TableHead>Target user</TableHead>
+            <TableHead>Reason</TableHead>
+            <TableHead>Target org</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.length === 0 ? (
+            <TableRow className="hover:bg-transparent">
+              <TableCell colSpan={6} className="p-0">
+                <StatePanel
+                  kind="empty"
+                  surface="plain"
+                  headingLevel={null}
+                  icon={null}
+                  title="No platform-admin actions recorded yet."
+                />
+              </TableCell>
+            </TableRow>
+          ) : (
+            rows.map((r) => {
+              const reason = auditDetailReason(r.detail);
+              // `action` alone reads identically for a real disable and a
+              // press that lost the race to a peer admin's concurrent
+              // transition (account-status.ts CONVERGENCE) — both write
+              // `user_disabled`/`user_reenabled`. Surfacing it here means
+              // an operator scanning this table doesn't have to open the
+              // row's raw detail to tell them apart.
+              const superseded = auditDetailSuperseded(r.detail);
+              return (
+                <TableRow key={r.id}>
+                  <TableCell className="text-muted-foreground whitespace-nowrap text-[12.5px]">
+                    {new Date(r.createdAt).toLocaleString()}
+                  </TableCell>
+                  {/* An admin who deleted their account (0393) keeps the
+                      email the row recorded: "Deleted user · email". */}
+                  <TableCell className="text-ink-2">{platformAuditActorLabel(r)}</TableCell>
+                  <TableCell className="text-foreground whitespace-nowrap font-medium">
+                    {ACTION_LABEL[r.action] ?? r.action}
+                    {superseded ? (
+                      <span className="text-muted-foreground ml-1.5 text-[12px] font-normal">
+                        (superseded)
+                      </span>
+                    ) : null}
+                  </TableCell>
+                  {/* Email when it resolves, uuid when it does not — never a
+                      blank cell for a row that names a user. */}
+                  <TableCell
+                    className={
+                      r.targetUserEmail
+                        ? 'text-ink-2'
+                        : 'text-muted-foreground font-mono text-[12px]'
+                    }
+                    title={r.targetUserId ?? undefined}
+                  >
+                    {platformAuditTargetLabel(r)}
+                  </TableCell>
+                  {/* `title` carries the full text: a reason can run to 500
+                      characters and must not stretch the row. */}
+                  <TableCell
+                    className="text-ink-2 max-w-[280px] truncate"
+                    title={reason ?? undefined}
+                  >
+                    {reason ?? '—'}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground whitespace-nowrap font-mono text-[12px]">
+                    {r.targetOrganizationId ?? '—'}
+                  </TableCell>
+                </TableRow>
+              );
+            })
+          )}
+        </TableBody>
+      </PlatformTable>
+    </PlatformPage>
   );
 }

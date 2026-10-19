@@ -2,12 +2,25 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
+import { DetailSection } from '@/components/patterns/detail-section';
+import { KeyValueList, KeyValueRow } from '@/components/patterns/key-value-row';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
+import { StatePanel } from '@/components/patterns/state-panel';
+import { StatStrip, StatStripItem } from '@/components/patterns/stat-strip';
+import { Tabs } from '@/components/patterns/tabs';
 import { ActAsButton } from '@/components/platform/act-as-button';
 import { BillingPanel } from '@/components/platform/billing-panel';
+import { PlatformPage } from '@/components/platform/platform-page';
+import { PlatformTable } from '@/components/platform/platform-table';
 import { RemoveOrgDialog } from '@/components/platform/remove-org-dialog';
 import { UserActionsMenu } from '@/components/platform/user-actions-menu';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { isPlatformAdmin, requirePlatformAdmin } from '@/lib/auth/platform-admin';
 import { requireSession } from '@/lib/auth/session';
+import { cn } from '@/lib/utils';
 import {
   describeLastActive,
   formatLastActive,
@@ -101,64 +114,60 @@ export default async function PlatformOrgDetailPage({
     overview.effective.tier.charAt(0).toUpperCase() + overview.effective.tier.slice(1);
 
   return (
-    <div className="mx-auto w-full max-w-[1280px] px-6 pb-20 pt-7">
-      <Link href="/platform" className="hover:text-foreground text-[12px] text-[var(--ed-ink-4)]">
-        ← Organizations
-      </Link>
-
-      <div className="border-border mt-2 flex flex-wrap items-start justify-between gap-4 border-b pb-4">
-        <div>
-          <h1 className="font-display text-[26px] font-medium tracking-[-0.025em]">
-            {overview.name}
-          </h1>
-          <p className="mt-1 text-[12.5px] text-[var(--ed-ink-4)]">
-            {overview.slug}
+    <PlatformPage>
+      <PageHeader
+        variant="item"
+        back={<PageHeaderBackLink href="/platform">← Organizations</PageHeaderBackLink>}
+        title={overview.name}
+        meta={
+          <span>
+            <span className="font-mono text-[12px]">{overview.slug}</span>
             {overview.industry ? ` · ${overview.industry}` : ''} · owner{' '}
             {overview.ownerEmail ?? '—'}
-          </p>
-        </div>
-        <div className="flex items-center gap-4">
-          <div className="text-right">
-            <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--ed-ink-4)]">
-              Billing
-            </div>
-            <div className="text-[14px] font-medium">
-              {tierName}
-              {overview.billingArrangement !== 'standard'
-                ? ` · ${overview.billingArrangement}`
-                : ''}
-            </div>
-            {overview.effective.trialDaysRemaining != null ? (
-              <div className="text-[12px] text-amber-600">
-                Trial — {overview.effective.trialDaysRemaining}d left
+          </span>
+        }
+        actions={
+          <>
+            <div data-slot="org-billing-summary" className="text-left sm:text-right">
+              <div className="text-muted-foreground text-[11px] font-medium uppercase tracking-[0.08em]">
+                Billing
               </div>
-            ) : null}
-          </div>
-          <ActAsButton organizationId={overview.id} orgName={overview.name} />
-        </div>
-      </div>
+              <div className="text-[13.5px] font-medium">
+                {tierName}
+                {overview.billingArrangement !== 'standard'
+                  ? ` · ${overview.billingArrangement}`
+                  : ''}
+              </div>
+              {overview.effective.trialDaysRemaining != null ? (
+                <div className="text-warning text-[12px]">
+                  Trial — {overview.effective.trialDaysRemaining}d left
+                </div>
+              ) : null}
+            </div>
+            {/* A record action, so the secondary (outline) button: it enters a
+                mode rather than committing the work in front of you, which
+                leaves the Billing tab's Save billing the page's only ink
+                primary (DESIGN-SPEC 6.2, PageHeader: at most one). */}
+            <ActAsButton organizationId={overview.id} orgName={overview.name} />
+          </>
+        }
+      />
 
-      {/* Tab nav */}
-      <div className="border-border mt-4 flex items-center gap-1 border-b">
-        {TABS.map((t) => {
-          const active = t.key === tab;
-          return (
-            <Link
-              key={t.key}
-              href={`/platform/orgs/${id}?tab=${t.key}`}
-              className={`-mb-px border-b-2 px-3 py-2 text-[13px] font-medium transition-colors ${
-                active
-                  ? 'border-foreground text-foreground'
-                  : 'hover:text-foreground border-transparent text-[var(--ed-ink-4)]'
-              }`}
-            >
-              {t.label}
-            </Link>
-          );
-        })}
-      </div>
+      {/* Tab nav. Every tab is its own URL (?tab=), rendered on the server.
+          No prefetch: rendering Overview or Users WRITES a viewed_org audit
+          row, so a tab may only render when the operator opens it. */}
+      <Tabs
+        aria-label="Organization"
+        activeId={tab}
+        prefetch={false}
+        items={TABS.map((t) => ({
+          id: t.key,
+          label: t.label,
+          href: `/platform/orgs/${id}?tab=${t.key}`,
+        }))}
+      />
 
-      <div className="mt-5">
+      <div className="min-w-0">
         {tab === 'overview' && <OverviewTab overview={overview} />}
         {tab === 'inventory' && (await InventoryTab({ orgId: id }))}
         {tab === 'users' &&
@@ -172,26 +181,19 @@ export default async function PlatformOrgDetailPage({
       </div>
 
       {/* ── Danger zone ──────────────────────────────────────────────── */}
-      <div className="border-destructive/40 bg-card mt-10 rounded-[10px] border p-4 sm:p-5">
-        <h2 className="text-destructive font-display text-[15px] font-medium">Danger zone</h2>
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-          <p className="max-w-xl text-[12.5px] text-[var(--ed-ink-3)]">
+      <DetailSection
+        className="border-destructive/40 mt-6"
+        title={<span className="text-destructive">Danger zone</span>}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-muted-foreground max-w-xl text-[13px]">
             Permanently delete this organization and everything in it. Requires a fresh MFA step-up,
             the global deletion passphrase, and retyping the org name. Irreversible.
           </p>
           <RemoveOrgDialog organizationId={overview.id} orgName={overview.name} />
         </div>
-      </div>
-    </div>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div className="border-border bg-card rounded-[10px] border p-4">
-      <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--ed-ink-4)]">{label}</div>
-      <div className="mt-1 font-mono text-[22px] tabular-nums">{value}</div>
-    </div>
+      </DetailSection>
+    </PlatformPage>
   );
 }
 
@@ -201,23 +203,27 @@ function OverviewTab({
   overview: NonNullable<Awaited<ReturnType<typeof getOrgOverview>>>;
 }) {
   return (
-    <div className="space-y-5">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat label="Members" value={overview.counts.members} />
-        <Stat label="Items" value={overview.counts.items} />
-        <Stat label="Orders" value={overview.counts.orders} />
-        <Stat label="Warehouses" value={overview.counts.warehouses} />
-      </div>
-      <dl className="grid grid-cols-2 gap-x-8 gap-y-2 text-[13px] sm:grid-cols-3">
-        <Meta label="Created" value={new Date(overview.createdAt).toLocaleDateString()} />
-        <Meta label="Timezone" value={overview.timezone ?? '—'} />
-        <Meta label="Currency" value={overview.currency ?? '—'} />
-        <Meta label="Size" value={overview.size ?? '—'} />
-        <Meta label="Plan source" value={overview.effective.source} />
-      </dl>
+    <div className="flex flex-col gap-4">
+      <StatStrip variant="detail" role="group" aria-label="Organization totals">
+        <StatStripItem size="detail" label="Members" value={overview.counts.members} />
+        <StatStripItem size="detail" label="Items" value={overview.counts.items} />
+        <StatStripItem size="detail" label="Orders" value={overview.counts.orders} />
+        <StatStripItem size="detail" label="Warehouses" value={overview.counts.warehouses} />
+      </StatStrip>
+      <DetailSection flush className="max-w-2xl">
+        <KeyValueList>
+          <KeyValueRow label="Created">
+            {new Date(overview.createdAt).toLocaleDateString()}
+          </KeyValueRow>
+          <KeyValueRow label="Timezone">{overview.timezone ?? '—'}</KeyValueRow>
+          <KeyValueRow label="Currency">{overview.currency ?? '—'}</KeyValueRow>
+          <KeyValueRow label="Size">{overview.size ?? '—'}</KeyValueRow>
+          <KeyValueRow label="Plan source">{overview.effective.source}</KeyValueRow>
+        </KeyValueList>
+      </DetailSection>
       <Link
         href={`/platform/audit?org=${overview.id}`}
-        className="inline-block text-[12.5px] font-medium hover:underline"
+        className="text-accent hover:text-foreground self-start text-[13px] font-medium transition-colors"
       >
         View this org&apos;s platform-admin audit trail →
       </Link>
@@ -225,23 +231,18 @@ function OverviewTab({
   );
 }
 
-function Meta({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <dt className="text-[11px] uppercase tracking-[0.08em] text-[var(--ed-ink-4)]">{label}</dt>
-      <dd className="font-medium">{value}</dd>
-    </div>
-  );
-}
-
 async function InventoryTab({ orgId }: { orgId: string }) {
   const items = await getOrgInventory(orgId);
   if (items.length === 0)
-    return <p className="text-[13px] text-[var(--ed-ink-4)]">No items in this organization.</p>;
+    return <StatePanel kind="empty" headingLevel={null} title="No items in this organization." />;
   return (
-    <>
+    <div className="flex flex-col gap-2">
       <PreviewTable
+        label="Inventory"
+        minWidth={640}
         head={['Item', 'SKU', 'On hand', 'Unit cost', 'Status']}
+        numeric={[2, 3]}
+        mono={[1, 2, 3]}
         rows={items.map((i) => [
           i.name,
           i.sku ?? '—',
@@ -251,9 +252,20 @@ async function InventoryTab({ orgId }: { orgId: string }) {
         ])}
       />
       <CapNote count={items.length} />
-    </>
+    </div>
   );
 }
+
+/**
+ * The pager recipe (DESIGN-SPEC 6.2): 28 px, the stronger hairline when it
+ * goes somewhere, the plain hairline and faint words when it does not. The
+ * ends stay plain text, not disabled buttons, as they always were. 44 px on a
+ * phone.
+ */
+const PAGER_BASE =
+  'inline-flex h-7 items-center rounded-md border px-2.5 text-[12.5px] transition-colors max-sm:h-11';
+const PAGER_ENABLED = cn(PAGER_BASE, 'border-line-strong bg-card text-foreground hover:bg-muted');
+const PAGER_DISABLED = cn(PAGER_BASE, 'border-border text-muted-foreground');
 
 /**
  * The Users tab. Unlike its sibling tabs this one is NOT a preview: it is the
@@ -286,29 +298,27 @@ async function UsersTab({
   };
 
   return (
-    <div className="space-y-3">
+    <div className="flex flex-col gap-3">
       {/* Same GET-form pattern as the org directory. The hidden tab field is
           what keeps a submit on this tab; omitting `page` resets to the first
           page of the new result set, which is the only sane landing. */}
-      <form method="GET" className="flex items-center gap-2">
+      <form method="GET" className="flex flex-wrap items-center gap-2">
         <input type="hidden" name="tab" value="users" />
-        <input
+        <Input
           type="search"
           name="q"
+          aria-label="Search members"
           defaultValue={result.search ?? ''}
           placeholder="Search by name or email…"
-          className="border-border bg-background h-9 w-full max-w-sm rounded-md border px-3 text-[13px] outline-none focus:border-[var(--ed-line-strong)]"
+          className="min-w-0 max-w-sm flex-1 basis-56"
         />
-        <button
-          type="submit"
-          className="border-border bg-card h-9 rounded-md border px-3 text-[13px] font-medium hover:border-[var(--ed-line-strong)]"
-        >
+        <Button type="submit" variant="outline" className="max-sm:h-11">
           Search
-        </button>
+        </Button>
         {result.search ? (
           <Link
             href={`/platform/orgs/${orgId}?tab=users`}
-            className="hover:text-foreground text-[12px] text-[var(--ed-ink-4)]"
+            className="text-muted-foreground hover:text-foreground inline-flex h-8 items-center px-1 text-[12.5px] transition-colors max-sm:h-11"
           >
             Clear
           </Link>
@@ -316,9 +326,11 @@ async function UsersTab({
       </form>
 
       {members.length === 0 ? (
-        <p className="text-[13px] text-[var(--ed-ink-4)]">
-          {result.search ? `No members match “${result.search}”.` : 'No members.'}
-        </p>
+        <StatePanel
+          kind={result.search ? 'no-match' : 'empty'}
+          headingLevel={null}
+          title={result.search ? `No members match “${result.search}”.` : 'No members.'}
+        />
       ) : (
         <MembersTable members={members} activityAvailable={result.activityAvailable !== false} />
       )}
@@ -337,7 +349,7 @@ async function UsersTab({
         <div className="flex flex-wrap items-center justify-between gap-3">
           {/* The bound, stated. This tab used to render nothing here at all,
               which is what made 50 unreachable accounts invisible. */}
-          <p className="text-[12px] text-[var(--ed-ink-4)]">
+          <p className="text-muted-foreground text-[12.5px]">
             Showing {first}–{last} of {total} member{total === 1 ? '' : 's'}
             {result.search ? ` matching “${result.search}”` : ''} · page {result.page} of{' '}
             {pageCount}
@@ -345,18 +357,18 @@ async function UsersTab({
           {pageCount > 1 ? (
             <div className="flex items-center gap-2 text-[12.5px]">
               {result.page > 1 ? (
-                <Link href={hrefFor(result.page - 1)} className="font-medium hover:underline">
+                <Link href={hrefFor(result.page - 1)} className={PAGER_ENABLED}>
                   ← Previous
                 </Link>
               ) : (
-                <span className="text-[var(--ed-ink-4)]">← Previous</span>
+                <span className={PAGER_DISABLED}>← Previous</span>
               )}
               {result.page < pageCount ? (
-                <Link href={hrefFor(result.page + 1)} className="font-medium hover:underline">
+                <Link href={hrefFor(result.page + 1)} className={PAGER_ENABLED}>
                   Next →
                 </Link>
               ) : (
-                <span className="text-[var(--ed-ink-4)]">Next →</span>
+                <span className={PAGER_DISABLED}>Next →</span>
               )}
             </div>
           ) : null}
@@ -401,7 +413,7 @@ function LastActiveCell({
 }) {
   if (!available) {
     return (
-      <span className="text-[var(--ed-ink-4)]" title="Activity could not be loaded for this page.">
+      <span className="text-muted-foreground" title="Activity could not be loaded for this page.">
         —
       </span>
     );
@@ -410,7 +422,7 @@ function LastActiveCell({
   const title = describeLastActive(member);
   if (resolved.source === 'never') {
     return (
-      <span className="text-[var(--ed-ink-4)]" title={title}>
+      <span className="text-muted-foreground" title={title}>
         Never
       </span>
     );
@@ -418,17 +430,24 @@ function LastActiveCell({
   const label = formatLastActive(resolved.at, now);
   if (resolved.floor) {
     return (
-      <span className="text-[var(--ed-ink-4)]" title={title}>
+      <span className="text-muted-foreground" title={title}>
         {resolved.source === 'sign_in' ? 'Signed in' : 'Last action'} {lowerFirst(label)}
       </span>
     );
   }
   return (
-    <span className="text-[var(--ed-ink-3)]" title={title}>
+    <span className="text-foreground" title={title}>
       {label}
     </span>
   );
 }
+
+/**
+ * The Actions cell stays on screen while the table scrolls sideways (sticky to
+ * the card's right edge, on the card's own fill, taking the row hover with
+ * it), with a hairline beside it where the table can scroll under it.
+ */
+const ACTIONS_CELL = 'bg-card sticky right-0 max-lg:border-l max-lg:border-border';
 
 function MembersTable({
   members,
@@ -440,115 +459,117 @@ function MembersTable({
   // One clock read per render, so every row on the page ages from the same instant.
   const now = new Date();
   return (
-    <>
+    <div className="flex flex-col gap-2">
       {!activityAvailable ? (
-        <p className="mb-2 text-[12px] text-amber-600">
+        <p className="text-warning text-[12.5px]">
           Activity could not be loaded for this page. Members, status and actions are unaffected.
         </p>
       ) : null}
-      <div className="border-border overflow-hidden rounded-[10px] border">
-        <table className="w-full text-[13px]">
-          <thead>
-            <tr className="border-border bg-card border-b text-left text-[11px] uppercase tracking-[0.08em] text-[var(--ed-ink-4)]">
-              <th className="px-4 py-2.5 font-medium">User</th>
-              <th className="px-4 py-2.5 font-medium">Role</th>
-              <th className="px-4 py-2.5 font-medium">Joined</th>
-              <th
-                className="px-4 py-2.5 font-medium"
-                title="An estimate: the latest of the app reporting them present here, a sign-in renewal (any device, any organization) and a recorded action in this organization."
-              >
-                Last active
-              </th>
-              <th className="px-4 py-2.5 text-right font-medium">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {members.map((m, idx) => (
-              <tr key={m.userId ?? idx} className="border-border border-b last:border-0">
-                <td className="px-4 py-2.5">
-                  <div className="flex items-center gap-2">
-                    <div>
-                      <div className="font-medium">{m.fullName ?? '—'}</div>
-                      <div className="text-[11.5px] text-[var(--ed-ink-4)]">{m.email ?? '—'}</div>
-                    </div>
-                    {m.disabledAt ? (
-                      <span
-                        title={`Disabled ${new Date(m.disabledAt).toLocaleString()}`}
-                        className="inline-flex rounded-full border border-red-500/40 px-2 py-0.5 text-[11px] font-medium text-red-600"
-                      >
-                        Disabled
-                      </span>
-                    ) : null}
+      {/* The Actions column is the only way to disable or re-enable an
+          account, so it is never clipped: the card scrolls sideways on a
+          narrow screen, and the column stays pinned to its right edge. */}
+      <PlatformTable label="Members" minWidth={760}>
+        <TableHeader>
+          <TableRow className="hover:bg-transparent">
+            <TableHead>User</TableHead>
+            <TableHead>Role</TableHead>
+            <TableHead>Joined</TableHead>
+            <TableHead title="An estimate: the latest of the app reporting them present here, a sign-in renewal (any device, any organization) and a recorded action in this organization.">
+              Last active
+            </TableHead>
+            <TableHead className={cn(ACTIONS_CELL, 'text-right')}>Actions</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {members.map((m, idx) => (
+            <TableRow key={m.userId ?? idx} className="group">
+              <TableCell>
+                <div className="flex min-w-0 items-center gap-2">
+                  <div className="min-w-0">
+                    <div className="text-foreground font-medium">{m.fullName ?? '—'}</div>
+                    <div className="text-muted-foreground text-[12px]">{m.email ?? '—'}</div>
                   </div>
-                </td>
-                <td className="px-4 py-2.5 text-[var(--ed-ink-3)]">{m.role}</td>
-                <td className="px-4 py-2.5 text-[12px] text-[var(--ed-ink-4)]">
-                  {m.joinedAt ? new Date(m.joinedAt).toLocaleDateString() : '—'}
-                </td>
-                <td className="px-4 py-2.5 text-[12px]">
-                  <LastActiveCell member={m} available={activityAvailable} now={now} />
-                </td>
-                <td className="px-4 py-2.5 text-right">
-                  {m.userId ? (
-                    <UserActionsMenu
-                      userId={m.userId}
-                      email={m.email}
-                      disabledAt={m.disabledAt}
-                      // COSMETIC ONLY — this decides whether the menu item is
-                      // drawn, never whether the disable is allowed.
-                      //
-                      // It reads user_profiles.email, which is NOT the verified
-                      // auth email the real gate uses: the service resolves the
-                      // target's email from GoTrue (auth.admin.getUserById) and
-                      // refuses a protected admin there. Resolving it here too
-                      // would cost one GoTrue round-trip per row — up to
-                      // DETAIL_PREVIEW_LIMIT (100) per render — and supabase-js
-                      // offers no batched id→email lookup, so this tab reads the
-                      // column instead and accepts a bounded inaccuracy:
-                      //
-                      //   * migration 0177 pins user_profiles.email against any
-                      //     UPDATE, so a member cannot rewrite it to an
-                      //     allowlisted address to make themselves look
-                      //     protected — the escalation this guards against;
-                      //   * the auth→profile sync (0001_init) is INSERT-only, so
-                      //     the two can diverge if an auth email changes later.
-                      //     No product flow changes an auth email today, and
-                      //     GoTrue refuses to move one onto an address already
-                      //     registered, so the reachable divergence is an
-                      //     ex-admin whose profile still shows the old address:
-                      //     Disable is wrongly HIDDEN, never wrongly permitted.
-                      //
-                      // The allowlist itself never crosses to the client — only
-                      // this boolean does.
-                      protectedAdmin={isPlatformAdmin(m.email)}
-                    />
-                  ) : (
-                    <span className="text-[11.5px] text-[var(--ed-ink-4)]">—</span>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <p className="mt-2 max-w-[760px] text-[11.5px] leading-relaxed text-[var(--ed-ink-4)]">
+                  {m.disabledAt ? (
+                    <Badge
+                      variant="destructive"
+                      title={`Disabled ${new Date(m.disabledAt).toLocaleString()}`}
+                    >
+                      Disabled
+                    </Badge>
+                  ) : null}
+                </div>
+              </TableCell>
+              <TableCell className="text-ink-2">{m.role}</TableCell>
+              <TableCell className="text-muted-foreground whitespace-nowrap text-[12.5px]">
+                {m.joinedAt ? new Date(m.joinedAt).toLocaleDateString() : '—'}
+              </TableCell>
+              <TableCell className="text-[12.5px]">
+                <LastActiveCell member={m} available={activityAvailable} now={now} />
+              </TableCell>
+              <TableCell className={cn(ACTIONS_CELL, 'group-hover:bg-muted text-right')}>
+                {m.userId ? (
+                  <UserActionsMenu
+                    userId={m.userId}
+                    email={m.email}
+                    disabledAt={m.disabledAt}
+                    // COSMETIC ONLY — this decides whether the menu item is
+                    // drawn, never whether the disable is allowed.
+                    //
+                    // It reads user_profiles.email, which is NOT the verified
+                    // auth email the real gate uses: the service resolves the
+                    // target's email from GoTrue (auth.admin.getUserById) and
+                    // refuses a protected admin there. Resolving it here too
+                    // would cost one GoTrue round-trip per row — up to
+                    // DETAIL_PREVIEW_LIMIT (100) per render — and supabase-js
+                    // offers no batched id→email lookup, so this tab reads the
+                    // column instead and accepts a bounded inaccuracy:
+                    //
+                    //   * migration 0177 pins user_profiles.email against any
+                    //     UPDATE, so a member cannot rewrite it to an
+                    //     allowlisted address to make themselves look
+                    //     protected — the escalation this guards against;
+                    //   * the auth→profile sync (0001_init) is INSERT-only, so
+                    //     the two can diverge if an auth email changes later.
+                    //     No product flow changes an auth email today, and
+                    //     GoTrue refuses to move one onto an address already
+                    //     registered, so the reachable divergence is an
+                    //     ex-admin whose profile still shows the old address:
+                    //     Disable is wrongly HIDDEN, never wrongly permitted.
+                    //
+                    // The allowlist itself never crosses to the client — only
+                    // this boolean does.
+                    protectedAdmin={isPlatformAdmin(m.email)}
+                  />
+                ) : (
+                  <span className="text-muted-foreground text-[12px]">—</span>
+                )}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </PlatformTable>
+      <p className="text-muted-foreground max-w-[760px] text-[12px] leading-relaxed">
         Last active is an estimate. A plain value is backed by something live: StockPilot reporting
         that the person had it open in this organization, or an open sign-in, which is accurate to
         about an hour and is per person, so it covers every device and every organization they
         belong to. A value prefixed “Signed in” or “Last action” is only the last evidence on
         record, so use after it may be missing. Hover a value for the exact times.
       </p>
-    </>
+    </div>
   );
 }
 
 async function OrdersTab({ orgId }: { orgId: string }) {
   const orders = await getOrgOrders(orgId);
-  if (orders.length === 0) return <p className="text-[13px] text-[var(--ed-ink-4)]">No orders.</p>;
+  if (orders.length === 0)
+    return <StatePanel kind="empty" headingLevel={null} title="No orders." />;
   return (
-    <>
+    <div className="flex flex-col gap-2">
       <PreviewTable
+        label="Orders"
+        minWidth={560}
         head={['Order', 'Status', 'Requester', 'Created']}
+        mono={[0]}
         rows={orders.map((o) => [
           o.id.slice(0, 8),
           o.status,
@@ -557,13 +578,13 @@ async function OrdersTab({ orgId }: { orgId: string }) {
         ])}
       />
       <CapNote count={orders.length} />
-    </>
+    </div>
   );
 }
 
 async function BillingTab({ orgId }: { orgId: string }) {
   const b = await getOrgBillingState(orgId);
-  if (!b) return <p className="text-[13px] text-[var(--ed-ink-4)]">Org not found.</p>;
+  if (!b) return <StatePanel kind="failed" headingLevel={null} title="Org not found." />;
   const tierName = b.effective.tier.charAt(0).toUpperCase() + b.effective.tier.slice(1);
   const effectiveLabel = b.arrangement !== 'standard' ? `${tierName} · ${b.arrangement}` : tierName;
   return (
@@ -584,39 +605,63 @@ async function BillingTab({ orgId }: { orgId: string }) {
   );
 }
 
-function PreviewTable({ head, rows }: { head: string[]; rows: string[][] }) {
+/**
+ * A read-only preview of one org's rows. `numeric` columns are right-aligned
+ * (figures line up), `mono` columns print in the mono face (ids, SKUs,
+ * quantities).
+ */
+function PreviewTable({
+  label,
+  minWidth,
+  head,
+  rows,
+  numeric = [],
+  mono = [],
+}: {
+  label: string;
+  minWidth: number;
+  head: string[];
+  rows: string[][];
+  numeric?: number[];
+  mono?: number[];
+}) {
   return (
-    <div className="border-border overflow-hidden rounded-[10px] border">
-      <table className="w-full text-[13px]">
-        <thead>
-          <tr className="border-border bg-card border-b text-left text-[11px] uppercase tracking-[0.08em] text-[var(--ed-ink-4)]">
-            {head.map((h) => (
-              <th key={h} className="px-4 py-2.5 font-medium">
-                {h}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r, i) => (
-            <tr key={i} className="border-border border-b last:border-0">
-              {r.map((c, j) => (
-                <td key={j} className="px-4 py-2.5 text-[var(--ed-ink-3)]">
-                  {c}
-                </td>
-              ))}
-            </tr>
+    <PlatformTable label={label} minWidth={minWidth}>
+      <TableHeader>
+        <TableRow className="hover:bg-transparent">
+          {head.map((h, j) => (
+            <TableHead key={h} className={numeric.includes(j) ? 'text-right' : undefined}>
+              {h}
+            </TableHead>
           ))}
-        </tbody>
-      </table>
-    </div>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((r, i) => (
+          <TableRow key={i}>
+            {r.map((c, j) => (
+              <TableCell
+                key={j}
+                className={cn(
+                  j === 0 ? 'text-foreground' : 'text-ink-2',
+                  numeric.includes(j) && 'text-right tabular-nums',
+                  mono.includes(j) && 'font-mono text-[12.5px]',
+                )}
+              >
+                {c}
+              </TableCell>
+            ))}
+          </TableRow>
+        ))}
+      </TableBody>
+    </PlatformTable>
   );
 }
 
 function CapNote({ count }: { count: number }) {
   if (count < DETAIL_PREVIEW_LIMIT) return null;
   return (
-    <p className="mt-2 text-[12px] text-[var(--ed-ink-4)]">
+    <p className="text-muted-foreground text-[12.5px]">
       Showing the first {DETAIL_PREVIEW_LIMIT} (preview). Use &ldquo;Act as this org&rdquo; to see
       everything.
     </p>

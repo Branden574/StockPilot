@@ -6,6 +6,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
@@ -106,7 +107,12 @@ export function RemoveOrgDialog({
     <>
       {stepUp.modal}
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <Button type="button" variant="destructive" onClick={() => setOpen(true)}>
+        <Button
+          type="button"
+          variant="destructive"
+          onClick={() => setOpen(true)}
+          className="max-sm:h-11"
+        >
           <Trash2 className="h-4 w-4" />
           Remove organization
         </Button>
@@ -135,7 +141,7 @@ export function RemoveOrgDialog({
                 onChange={(e) => setConfirmName(e.target.value)}
                 disabled={pending}
               />
-              <p className="text-muted-foreground text-[11.5px]">
+              <p className="text-muted-foreground text-[12px]">
                 Must exactly match <span className="text-foreground font-medium">{orgName}</span>.
               </p>
             </div>
@@ -152,19 +158,17 @@ export function RemoveOrgDialog({
               />
             </div>
 
-            <label className="flex items-start gap-2 text-[13px]">
-              <input
-                type="checkbox"
-                className="mt-0.5"
-                checked={alsoDeleteOrphanedUsers}
-                onChange={(e) => setAlsoDeleteOrphanedUsers(e.target.checked)}
-                disabled={pending}
-              />
-              <span>
+            <Checkbox
+              checked={alsoDeleteOrphanedUsers}
+              onCheckedChange={setAlsoDeleteOrphanedUsers}
+              disabled={pending}
+              className="items-start max-sm:min-h-11"
+            >
+              <span className="leading-5">
                 Also delete member accounts that belong <span className="font-medium">only</span> to
                 this org (their sign-in is removed too).
               </span>
-            </label>
+            </Checkbox>
           </div>
 
           <DialogFooter>

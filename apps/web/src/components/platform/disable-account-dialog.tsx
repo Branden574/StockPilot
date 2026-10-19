@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 
+import { PLATFORM_SELECT_CLASS } from '@/components/platform/platform-select';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -13,6 +14,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 
 import {
   DISABLE_REASON_CATEGORIES,
@@ -113,7 +115,7 @@ export function DisableAccountDialog({
               id="disable-reason-category"
               value={category}
               onChange={(e) => setCategory(e.target.value as DisableReasonCategory)}
-              className="border-border bg-background w-full rounded-md border px-3 py-2 text-sm"
+              className={PLATFORM_SELECT_CLASS}
             >
               {DISABLE_REASON_CATEGORIES.map((c) => (
                 <option key={c} value={c}>
@@ -127,13 +129,13 @@ export function DisableAccountDialog({
             <Label htmlFor="disable-reason-notes">
               Notes{category === 'other' ? ' (required)' : ' (optional)'}
             </Label>
-            <textarea
+            <Textarea
               id="disable-reason-notes"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               rows={3}
               maxLength={500}
-              className="border-border bg-background w-full rounded-md border px-3 py-2 text-sm"
+              className="min-h-0"
             />
             {reasonError && <p className="text-destructive text-xs">{reasonError}</p>}
             <p className="text-muted-foreground text-xs">
