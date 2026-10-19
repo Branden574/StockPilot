@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -134,5 +134,34 @@ describe('MaintenanceNotesPanel hydrates across a clock tick', () => {
     } finally {
       run.unmount();
     }
+  });
+});
+
+describe('redesign structure (P4.F3)', () => {
+  it('is a named region with its title as a heading; each note keeps its line breaks', () => {
+    render(
+      <MaintenanceNotesPanel
+        requestId="r1"
+        canManage
+        notes={[
+          {
+            id: 'n9',
+            authorUserId: null,
+            body: 'Line one\nLine two',
+            createdAt: '2026-08-01T00:00:00Z',
+          },
+        ]}
+        authorNames={{}}
+        truncated={false}
+      />,
+    );
+    const region = screen.getByRole('region', { name: 'Internal StockPilot notes' });
+    expect(
+      within(region).getByRole('heading', { level: 2, name: 'Internal StockPilot notes' }),
+    ).toBeInTheDocument();
+    const body = within(region).getByText(
+      (_c, el) => el?.textContent === 'Line one\nLine two' && el.tagName === 'P',
+    );
+    expect(body).toHaveClass('whitespace-pre-wrap');
   });
 });

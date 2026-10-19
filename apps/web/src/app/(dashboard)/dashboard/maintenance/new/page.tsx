@@ -2,6 +2,8 @@ import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
+import { StatePanel } from '@/components/patterns/state-panel';
 import { Button } from '@/components/ui/button';
 import { reportError } from '@/lib/error-reporter';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
@@ -28,6 +30,17 @@ import { EscalateRequestClient } from './escalate-request-client';
 import { NewMaintenanceRequestClient } from './new-request-client';
 
 export const dynamic = 'force-dynamic';
+
+/**
+ * The form page box: the shared page gutters (DESIGN-SPEC 4 and 5.3: 28 / 32 /
+ * 64 padding, 16 px gutters on a phone, 16 px between blocks) around a
+ * reading-width column, centred as before.
+ */
+const FORM_PAGE_BOX =
+  'mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
+
+/** The card a request form sits on (DESIGN-SPEC 6.7). */
+const FORM_CARD = 'border-border bg-card rounded-lg border p-[18px] sm:p-6';
 
 function readUuidParam(value: string | undefined): string | undefined {
   return value && uuidSchema.safeParse(value).success ? value : undefined;
@@ -125,18 +138,20 @@ export default async function NewMaintenanceRequestPage({
   };
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link href="/dashboard/maintenance" className="text-sm text-muted-foreground hover:text-foreground">
-          ← Back to maintenance requests
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">New maintenance request</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Describe the issue and StockPilot will prepare an email to the maintenance team on the next screen.
-        </p>
-      </div>
+    <div className={FORM_PAGE_BOX}>
+      <PageHeader
+        back={
+          <PageHeaderBackLink href="/dashboard/maintenance">
+            ← Back to maintenance requests
+          </PageHeaderBackLink>
+        }
+        title="New maintenance request"
+        subline="Describe the issue and StockPilot will prepare an email to the maintenance team on the next screen."
+      />
 
-      <NewMaintenanceRequestClient defaults={defaults} sites={sites} categories={categories} />
+      <div className={FORM_CARD}>
+        <NewMaintenanceRequestClient defaults={defaults} sites={sites} categories={categories} />
+      </div>
     </div>
   );
 }
@@ -179,34 +194,38 @@ async function escalationPage(ctx: ServiceContext, occurrenceId: string) {
   const occurrence = read.ok ? read.occurrence : null;
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href={`/dashboard/exceptions/${occurrenceId}`}
-          className="text-sm text-muted-foreground hover:text-foreground"
-        >
-          ← Back to the exception
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">{ESCALATE_TO_MAINTENANCE_LABEL}</h1>
-        <p className="mt-1 text-sm text-muted-foreground">{ESCALATE_TO_MAINTENANCE_HELP}</p>
-      </div>
+    <div className={FORM_PAGE_BOX}>
+      <PageHeader
+        back={
+          <PageHeaderBackLink href={`/dashboard/exceptions/${occurrenceId}`}>
+            ← Back to the exception
+          </PageHeaderBackLink>
+        }
+        title={ESCALATE_TO_MAINTENANCE_LABEL}
+        subline={ESCALATE_TO_MAINTENANCE_HELP}
+      />
 
       {occurrence === null ? (
-        <p
-          role="alert"
-          className="border-warning/40 bg-warning/5 rounded-md border px-3 py-2 text-sm"
+        // A failed read offers no form (a plain request would not be
+        // linked): the shared failed state, announced as before.
+        <StatePanel
+          kind="failed"
+          size="sm"
+          headingLevel={null}
+          live="assertive"
+          title={ESCALATION_EXCEPTION_UNAVAILABLE_COPY}
           data-testid="escalation-unavailable"
-        >
-          {ESCALATION_EXCEPTION_UNAVAILABLE_COPY}
-        </p>
+        />
       ) : occurrence.canEscalate ? (
         <>
           <LinkedException occurrence={occurrence} />
-          <EscalateRequestClient
-            occurrenceId={occurrence.id}
-            defaults={escalationDefaults(occurrence, categories)}
-            categories={categories}
-          />
+          <div className={FORM_CARD}>
+            <EscalateRequestClient
+              occurrenceId={occurrence.id}
+              defaults={escalationDefaults(occurrence, categories)}
+              categories={categories}
+            />
+          </div>
         </>
       ) : (
         <NotEscalatable occurrence={occurrence} />
@@ -249,10 +268,10 @@ function LinkedException({ occurrence: o }: { occurrence: ExceptionOccurrence })
   return (
     <section
       aria-label="Linked exception"
-      className="bg-muted/40 mb-6 rounded-md border p-3 text-sm"
+      className="border-border bg-sunk rounded-lg border px-[18px] py-3.5 text-[13.5px] leading-[20.25px]"
       data-testid="escalation-linked-exception"
     >
-      <p className="font-medium" data-testid="escalation-linked-heading">
+      <p className="text-foreground font-medium" data-testid="escalation-linked-heading">
         {lines.heading}
       </p>
       <dl className="mt-2 grid gap-x-3 gap-y-1 sm:grid-cols-[6rem_1fr]">
@@ -273,7 +292,9 @@ function LinkedException({ occurrence: o }: { occurrence: ExceptionOccurrence })
           </>
         ) : null}
       </dl>
-      <p className="text-muted-foreground mt-2">{ESCALATION_FORM_NOTE_COPY}</p>
+      <p className="text-muted-foreground mt-2 text-[12.5px] leading-[18.75px]">
+        {ESCALATION_FORM_NOTE_COPY}
+      </p>
     </section>
   );
 }
@@ -292,7 +313,10 @@ function NotEscalatable({ occurrence: o }: { occurrence: ExceptionOccurrence }) 
       ? `/dashboard/maintenance/${e.requestId}`
       : null;
   return (
-    <div className="space-y-3 rounded-md border p-4 text-sm" data-testid="escalation-not-available">
+    <div
+      className="border-border bg-card space-y-3 rounded-lg border px-[18px] py-4 text-[13.5px] leading-[20.25px]"
+      data-testid="escalation-not-available"
+    >
       <p>{reason}</p>
       {openHref ? (
         <Button asChild variant="outline" size="sm">

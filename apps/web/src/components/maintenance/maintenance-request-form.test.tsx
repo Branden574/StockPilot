@@ -316,3 +316,35 @@ describe('MaintenanceRequestForm with a submit of its own (escalation)', () => {
     expect(submit).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * Redesign (P4.F3) fix: a field's error is tied to its field, so a screen
+ * reader announces it on focus (it used to be a loose paragraph under the
+ * box, and the box never said it was invalid).
+ */
+describe('field errors are tied to their fields (P4.F3)', () => {
+  it('marks the subject and description invalid and points each at its message', async () => {
+    renderForm();
+    await userEvent.type(screen.getByLabelText('What is the issue?'), 'AC');
+    await userEvent.click(screen.getByRole('button', { name: 'Save request' }));
+    const subject = screen.getByLabelText('What is the issue?');
+    await waitFor(() => expect(subject).toHaveAttribute('aria-invalid', 'true'));
+    expect(subject).toHaveAccessibleDescription(expect.stringMatching(/at least 5 characters/i));
+
+    const description = screen.getByLabelText('Describe the maintenance issue');
+    expect(description).toHaveAttribute('aria-invalid', 'true');
+    expect(description.getAttribute('aria-describedby')?.split(' ')).toEqual([
+      'mr-description-help',
+      'mr-description-error',
+    ]);
+    expect(createAction).not.toHaveBeenCalled();
+  });
+
+  it('a valid field is not marked invalid, and the description keeps its help text as its description', () => {
+    renderForm();
+    expect(screen.getByLabelText('What is the issue?')).not.toHaveAttribute('aria-invalid');
+    expect(screen.getByLabelText('Describe the maintenance issue')).toHaveAccessibleDescription(
+      'Explain what is happening, when it started, and anything the maintenance team should know before arriving.',
+    );
+  });
+});
