@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 /**
@@ -55,5 +55,23 @@ describe('RentalsTabs', () => {
     expect(items.getAttribute('aria-selected')).toBe('true');
     expect(activity.getAttribute('aria-selected')).toBe('false');
     expect(activity.getAttribute('href')).toBe('/dashboard/rentals');
+  });
+
+  // Review finding (P4.D1, LOW): pinned as the shared strip draws it today, a
+  // pattern-imposed change recorded for the owner's review (see the component's
+  // note). The current tab links to the address bar as it is and a click on it
+  // is cancelled, so it no longer resets the status view or the filters; the
+  // other tab still links to its fixed URL and its click is left to the link.
+  it('the current tab keeps the URL as it is; the other tab links to its fixed URL', () => {
+    nav.pathname = '/dashboard/rentals/items';
+    nav.search = 'q=tent&page=2';
+    render(<RentalsTabs activeTab="items" />);
+    const items = screen.getByRole('tab', { name: 'Items' });
+    const activity = screen.getByRole('tab', { name: 'Activity' });
+    expect(items.getAttribute('href')).toBe('/dashboard/rentals/items?q=tent&page=2');
+    expect(activity.getAttribute('href')).toBe('/dashboard/rentals');
+    // fireEvent returns false when the handler prevented the default.
+    expect(fireEvent.click(items)).toBe(false);
+    expect(fireEvent.click(activity)).toBe(true);
   });
 });

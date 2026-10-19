@@ -77,6 +77,11 @@ describe('Rentals loading screen', () => {
       expect(cells).toHaveLength(6);
       expect(cells[1]!.className).toMatch(/(^|\s)hidden sm:block(\s|$)/);
       expect(cells[2]!.className).toMatch(/(^|\s)hidden md:block(\s|$)/);
+      // On a phone the Actions track is fixed at the right edge and Return and
+      // Status give way, as the table pins its Actions column below sm.
+      expect(line.className).toContain(
+        'grid-cols-[minmax(150px,1fr)_minmax(0,120px)_minmax(0,88px)_120px]',
+      );
     }
   });
 });

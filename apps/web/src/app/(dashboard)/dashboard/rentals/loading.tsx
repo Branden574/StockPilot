@@ -17,10 +17,12 @@ const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 
 
 /**
  * The table's columns at each width: Borrower, Return, Status and Actions on a
- * phone; Items joins from sm and Checked out from md.
+ * phone; Items joins from sm and Checked out from md. On a phone the table
+ * scrolls inside its card with the Actions column pinned to the right edge,
+ * so Return and Status give way here and Actions keeps its place at the edge.
  */
 const COLUMNS =
-  'grid-cols-[minmax(150px,1fr)_120px_88px_120px] sm:grid-cols-[minmax(150px,1.3fr)_minmax(140px,1.2fr)_minmax(120px,1fr)_88px_220px] md:grid-cols-[minmax(150px,1.3fr)_minmax(140px,1.2fr)_110px_minmax(120px,1fr)_88px_220px]';
+  'grid-cols-[minmax(150px,1fr)_minmax(0,120px)_minmax(0,88px)_120px] sm:grid-cols-[minmax(150px,1.3fr)_minmax(140px,1.2fr)_minmax(120px,1fr)_88px_220px] md:grid-cols-[minmax(150px,1.3fr)_minmax(140px,1.2fr)_110px_minmax(120px,1fr)_88px_220px]';
 
 /** The section tabs' label widths (Activity, Items) at the tabs' 13.5 px. */
 const SECTION_TABS = [48, 35];

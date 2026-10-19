@@ -52,6 +52,18 @@ interface RentalsListTableProps {
 }
 
 const HOUR_MS = 60 * 60 * 1000;
+
+/**
+ * Below sm the borrower and return cells keep a reading width, so the table
+ * scrolls sideways inside its card. The Actions column (header and cells)
+ * stays pinned to the card's right edge there, on the card's own fill with a
+ * divider, so View, Mark returned and Cancel… are always on screen and the
+ * other columns scroll underneath. From sm up the table fits and nothing is
+ * pinned.
+ */
+const ACTIONS_PINNED =
+  'max-sm:sticky max-sm:right-0 max-sm:z-[1] max-sm:bg-card max-sm:border-l max-sm:border-border';
+
 const DAY_MS = 24 * HOUR_MS;
 
 // The pill, the due label and the "Checked out" and "Returned" times are
@@ -305,7 +317,7 @@ export function RentalsListTable({
               <TableHead className="hidden whitespace-nowrap md:table-cell">Checked out</TableHead>
               <TableHead>Return</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
+              <TableHead className={cn('text-right', ACTIONS_PINNED)}>Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -321,7 +333,7 @@ export function RentalsListTable({
                   : firstName;
 
               return (
-                <TableRow key={rental.id}>
+                <TableRow key={rental.id} className="group">
                   {/* Borrower */}
                   <TableCell className="min-w-[150px]">
                     <p className="text-foreground font-medium leading-tight [overflow-wrap:anywhere]">
@@ -408,8 +420,11 @@ export function RentalsListTable({
                       button.tsx): one row from sm up, stacked on a phone. The
                       borrower and return cells keep a reading width there, so
                       a phone scrolls the table inside its card instead of
-                      squeezing the names to a word a line. */}
-                  <TableCell>
+                      squeezing the names to a word a line, and this cell stays
+                      pinned to the card's right edge there (ACTIONS_PINNED) so
+                      View, Mark returned and Cancel… are on screen without
+                      scrolling. */}
+                  <TableCell className={cn(ACTIONS_PINNED, 'max-sm:group-hover:bg-muted')}>
                     <div className="flex flex-col items-end gap-2 sm:flex-row sm:items-center sm:justify-end">
                       <Button asChild variant="ghost" size="sm">
                         <Link href={`/dashboard/rentals/${rental.id}`}>View</Link>

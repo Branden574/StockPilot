@@ -331,6 +331,39 @@ describe('RentalsListTable at narrow widths and empty', () => {
     expect(view.parentElement!.className).toMatch(/(^|\s)gap-2(\s|$)/);
   });
 
+  // Review finding (P4.D1, MEDIUM): with the reading widths below sm the
+  // table scrolls inside its card, and the Actions column used to start past
+  // the card's right edge on a 390 px phone. It is pinned to that edge below
+  // sm (header and every cell), on the card's fill with a divider, and follows
+  // the row hover; from sm up nothing is pinned.
+  it('below sm the Actions header and cells stay pinned to the right edge', () => {
+    render(<RentalsListTable rentals={[rental('a')]} viewerRole="manager" timeZone={PT} />);
+    const pinned = [
+      'max-sm:sticky',
+      'max-sm:right-0',
+      'max-sm:bg-card',
+      'max-sm:border-l',
+      'max-sm:border-border',
+    ];
+    const header = screen.getByRole('columnheader', { name: 'Actions' });
+    const cell = screen.getByRole('link', { name: 'View' }).closest('td')!;
+    for (const el of [header, cell]) {
+      const classes = el.className.split(/\s+/);
+      for (const c of pinned) expect(classes).toContain(c);
+      // Never pinned from sm up.
+      expect(classes.some((c) => /^(sm:|md:|lg:)?sticky$/.test(c))).toBe(false);
+    }
+    expect(cell.className.split(/\s+/)).toContain('max-sm:group-hover:bg-muted');
+    expect(cell.closest('tr')!.className.split(/\s+/)).toContain('group');
+    // Every control stays inside the pinned cell.
+    expect(within(cell).getByRole('button', { name: 'Mark returned' })).toBeTruthy();
+    expect(within(cell).getByRole('button', { name: 'Cancel…' })).toBeTruthy();
+    // The other columns are not pinned.
+    for (const name of ['Borrower', 'Return', 'Status']) {
+      expect(screen.getByRole('columnheader', { name }).className).not.toMatch(/sticky/);
+    }
+  });
+
   it('a viewer sees View only (static role defaults, unchanged)', () => {
     render(<RentalsListTable rentals={[rental('a')]} viewerRole="viewer" timeZone={PT} />);
     expect(screen.getByRole('link', { name: 'View' })).toBeTruthy();
