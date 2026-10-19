@@ -2,6 +2,8 @@
 import { render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { EXCEPTION_RULES } from '@stockpilot/core';
+
 /**
  * The Exception Center list reads STORED occurrences (F1-1). What it must
  * never get wrong:
@@ -42,7 +44,11 @@ vi.mock('next/link', async () => {
   const React = await import('react');
   return {
     default: ({ href, children, ...rest }: { href: string; children: React.ReactNode }) =>
-      React.createElement('a', { href, 'aria-current': (rest as { 'aria-current'?: string })['aria-current'] }, children),
+      React.createElement(
+        'a',
+        { href, 'aria-current': (rest as { 'aria-current'?: string })['aria-current'] },
+        children,
+      ),
   };
 });
 vi.mock('@/server/services/exception-occurrences', () => ({
@@ -75,7 +81,13 @@ const SYNCED = {
   trackingStartedAt: '2026-09-24T15:00:00Z',
   lastEvaluatedAt: '2026-09-24T18:00:00Z',
   lastSyncedAt: '2026-09-24T18:00:02Z',
-  completeRules: ['orphaned_stock', 'over_reserved', 'stale_staging', 'long_unplaced', 'label_mismatch'],
+  completeRules: [
+    'orphaned_stock',
+    'over_reserved',
+    'stale_staging',
+    'long_unplaced',
+    'label_mismatch',
+  ],
   failedRules: [],
   truncatedRules: [],
 };
@@ -122,7 +134,9 @@ function listResult(o: Record<string, unknown> = {}) {
 }
 
 async function renderPage(tab?: string, extra: Record<string, string> = {}) {
-  return render(await ExceptionsPage({ searchParams: Promise.resolve({ ...(tab ? { tab } : {}), ...extra }) }));
+  return render(
+    await ExceptionsPage({ searchParams: Promise.resolve({ ...(tab ? { tab } : {}), ...extra }) }),
+  );
 }
 
 beforeEach(() => vi.clearAllMocks());
@@ -155,7 +169,9 @@ describe('Exceptions list page', () => {
   });
 
   it('names a rule the last check could not complete and withholds the all-clear', async () => {
-    list.mockResolvedValue(listResult({ syncState: { ...SYNCED, failedRules: ['over_reserved'] } }));
+    list.mockResolvedValue(
+      listResult({ syncState: { ...SYNCED, failedRules: ['over_reserved'] } }),
+    );
     await renderPage();
     expect(screen.getByRole('alert')).toHaveTextContent(
       'One check could not complete on the last run: Promised more than is owned. What it would show is unknown, not clean.',
@@ -197,7 +213,10 @@ describe('Exceptions list page', () => {
     list.mockResolvedValue(listResult({ occurrences: [occurrence()] }));
     await renderPage();
     const link = screen.getByRole('link', { name: /EX-000042/ });
-    expect(link).toHaveAttribute('href', '/dashboard/exceptions/11111111-1111-4111-8111-111111111111');
+    expect(link).toHaveAttribute(
+      'href',
+      '/dashboard/exceptions/11111111-1111-4111-8111-111111111111',
+    );
     expect(within(link).getByText(/labelled 40-C, stock is on 39-C/)).toBeInTheDocument();
     expect(within(link).getByTestId('occurrence-state')).toHaveTextContent('Open');
     expect(within(link).getByText('Already present when tracking began')).toBeInTheDocument();
@@ -278,12 +297,16 @@ describe('Exceptions list page', () => {
     expect(syncOrg).not.toHaveBeenCalled();
   });
 
-  it('the Resolved tab reads the resolved list and shows each row\'s reason and time', async () => {
+  it("the Resolved tab reads the resolved list and shows each row's reason and time", async () => {
     list.mockResolvedValue(
       listResult({
         status: 'resolved',
         occurrences: [
-          occurrence({ resolvedAt: '2026-09-24T19:00:00Z', resolvedReason: 'cleared', presentWhenTrackingBegan: false }),
+          occurrence({
+            resolvedAt: '2026-09-24T19:00:00Z',
+            resolvedReason: 'cleared',
+            presentWhenTrackingBegan: false,
+          }),
         ],
       }),
     );
@@ -291,7 +314,10 @@ describe('Exceptions list page', () => {
     expect(list).toHaveBeenCalledWith({ status: 'resolved' });
     expect(screen.getByTestId('occurrence-state')).toHaveTextContent('Resolved: Cleared');
     expect(screen.getByText('Resolved Sep 24, 12:00 PM')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Resolved, last 30 days' })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('link', { name: 'Resolved, last 30 days' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
   });
 
   it('an empty Resolved tab says nothing was resolved in the window', async () => {
@@ -307,8 +333,14 @@ describe('Exceptions list page', () => {
     list.mockResolvedValue(listResult({ status: 'resolved' }));
     await renderPage('resolved');
     const filter = screen.getByRole('navigation', { name: 'Filter resolved exceptions' });
-    expect(within(filter).getByRole('link', { name: 'All' })).toHaveAttribute('href', '/dashboard/exceptions?tab=resolved');
-    expect(within(filter).getByRole('link', { name: 'All' })).toHaveAttribute('aria-current', 'true');
+    expect(within(filter).getByRole('link', { name: 'All' })).toHaveAttribute(
+      'href',
+      '/dashboard/exceptions?tab=resolved',
+    );
+    expect(within(filter).getByRole('link', { name: 'All' })).toHaveAttribute(
+      'aria-current',
+      'true',
+    );
     const confirmed = within(filter).getByRole('link', { name: 'Closed without a second count' });
     expect(confirmed).toHaveAttribute('href', '/dashboard/exceptions?tab=resolved&confirmed=1');
     expect(confirmed).not.toHaveAttribute('aria-current');
@@ -323,7 +355,14 @@ describe('Exceptions list page', () => {
         occurrences: [
           occurrence({
             rule: 'count_variance',
-            facts: { itemName: 'Atlas', cycleCountId: 'cc-35', countNumber: 35, expected: 100, counted: 2, variance: -98 },
+            facts: {
+              itemName: 'Atlas',
+              cycleCountId: 'cc-35',
+              countNumber: 35,
+              expected: 100,
+              counted: 2,
+              variance: -98,
+            },
             resolvedAt: '2026-09-24T19:00:00Z',
             resolvedReason: 'confirmed',
             presentWhenTrackingBegan: false,
@@ -343,16 +382,24 @@ describe('Exceptions list page', () => {
     expect(list).toHaveBeenCalledTimes(1);
     expect(list).toHaveBeenCalledWith({ status: 'resolved', confirmedOnly: true });
     const filter = screen.getByRole('navigation', { name: 'Filter resolved exceptions' });
-    expect(within(filter).getByRole('link', { name: 'Closed without a second count' })).toHaveAttribute('aria-current', 'true');
+    expect(
+      within(filter).getByRole('link', { name: 'Closed without a second count' }),
+    ).toHaveAttribute('aria-current', 'true');
     expect(within(filter).getByRole('link', { name: 'All' })).not.toHaveAttribute('aria-current');
-    expect(screen.getByTestId('occurrence-state')).toHaveTextContent('Resolved: Confirmed by the counter');
-    expect(screen.getByText(/CC-000035 found 2 where 100 was on record \(-98\)/)).toBeInTheDocument();
+    expect(screen.getByTestId('occurrence-state')).toHaveTextContent(
+      'Resolved: Confirmed by the counter',
+    );
+    expect(
+      screen.getByText(/CC-000035 found 2 where 100 was on record \(-98\)/),
+    ).toBeInTheDocument();
   });
 
   it('with the filter on and nothing to list, it says nothing was closed that way, not that nothing was resolved', async () => {
     list.mockResolvedValue(listResult({ status: 'resolved' }));
     await renderPage('resolved', { confirmed: '1' });
-    expect(screen.getByText('Nothing was closed without a second count in the last 30 days.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Nothing was closed without a second count in the last 30 days.'),
+    ).toBeInTheDocument();
     expect(screen.queryByText('Nothing was resolved in the last 30 days.')).not.toBeInTheDocument();
   });
 
@@ -360,7 +407,9 @@ describe('Exceptions list page', () => {
     list.mockResolvedValue(listResult());
     await renderPage(undefined, { confirmed: '1' });
     expect(list).toHaveBeenCalledWith({ status: 'open' });
-    expect(screen.queryByRole('navigation', { name: 'Filter resolved exceptions' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('navigation', { name: 'Filter resolved exceptions' }),
+    ).not.toBeInTheDocument();
   });
 
   it('offers Check now only when the server says the reader may ask for one', async () => {
@@ -405,8 +454,17 @@ describe('Exceptions list page', () => {
       listResult({
         canRecount: true,
         occurrences: [
-          occurrence({ id: 'a0000000-0000-4000-8000-000000000001', reference: 'EX-000001', ...VARIANCE, canRecount: true }),
-          occurrence({ id: 'a0000000-0000-4000-8000-000000000002', reference: 'EX-000002', canRecount: false }),
+          occurrence({
+            id: 'a0000000-0000-4000-8000-000000000001',
+            reference: 'EX-000001',
+            ...VARIANCE,
+            canRecount: true,
+          }),
+          occurrence({
+            id: 'a0000000-0000-4000-8000-000000000002',
+            reference: 'EX-000002',
+            canRecount: false,
+          }),
         ],
       }),
     );
@@ -448,7 +506,9 @@ describe('Exceptions list page', () => {
       }),
     );
     await renderPage();
-    expect(screen.getByTestId('occurrence-state')).toHaveTextContent('Recount in progress (CC-000002)');
+    expect(screen.getByTestId('occurrence-state')).toHaveTextContent(
+      'Recount in progress (CC-000002)',
+    );
     expect(screen.getByTestId('recount-note')).toHaveTextContent('In progress: 0 of 1 counted');
   });
 
@@ -473,7 +533,9 @@ describe('Exceptions list page', () => {
     );
     await renderPage();
     expect(screen.getByTestId('occurrence-state')).toHaveTextContent('Re-checking');
-    expect(screen.getByTestId('recount-note')).toHaveTextContent('Matched the stock on record (21)');
+    expect(screen.getByTestId('recount-note')).toHaveTextContent(
+      'Matched the stock on record (21)',
+    );
   });
 
   // ── F1-5: escalated to maintenance ────────────────────────────────────────
@@ -498,7 +560,11 @@ describe('Exceptions list page', () => {
             canEscalate: false,
             escalateUnavailableReason: 'already_escalated',
           }),
-          occurrence({ id: '55555555-5555-4555-8555-555555555555', reference: 'EX-000044', escalation: null }),
+          occurrence({
+            id: '55555555-5555-4555-8555-555555555555',
+            reference: 'EX-000044',
+            escalation: null,
+          }),
         ],
       }),
     );
@@ -538,6 +604,75 @@ describe('Exceptions list page', () => {
       }),
     );
     await renderPage();
-    expect(screen.getByTestId('escalation-badge')).toHaveTextContent('Escalated: MR-2026-000014 (request cancelled)');
+    expect(screen.getByTestId('escalation-badge')).toHaveTextContent(
+      'Escalated: MR-2026-000014 (request cancelled)',
+    );
+  });
+});
+
+// ── Redesign (P4.A3): the list in the shared patterns ─────────────────────
+describe('Exceptions list page: redesigned layout', () => {
+  it('has one h1 and the two lists as a navigation with the current one marked', async () => {
+    list.mockResolvedValue(listResult({ occurrences: [occurrence()] }));
+    await renderPage();
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Exceptions');
+    const nav = screen.getByRole('navigation', { name: 'Exception lists' });
+    expect(within(nav).getByRole('link', { name: 'Open (1)' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    expect(within(nav).getByRole('link', { name: 'Resolved, last 30 days' })).toHaveAttribute(
+      'href',
+      '/dashboard/exceptions?tab=resolved',
+    );
+  });
+
+  it('each rule is a card titled by the rule, with its severity, count and what to do', async () => {
+    list.mockResolvedValue(
+      listResult({
+        occurrences: [
+          occurrence(),
+          occurrence({ id: '55555555-5555-4555-8555-555555555555', reference: 'EX-000044' }),
+        ],
+      }),
+    );
+    await renderPage();
+    const heading = screen.getByRole('heading', { name: EXCEPTION_RULES.label_mismatch.label });
+    const card = heading.closest('section')!;
+    expect(within(card).getByText('Warning')).toBeInTheDocument();
+    expect(within(card).getByText('2')).toBeInTheDocument();
+    expect(card).toHaveTextContent(EXCEPTION_RULES.label_mismatch.action);
+    expect(within(card).getAllByRole('listitem')).toHaveLength(2);
+  });
+
+  it('the all-clear is the shared state panel, never shown with a banner', async () => {
+    list.mockResolvedValue(listResult());
+    const { container } = await renderPage();
+    const panel = container.querySelector('[data-slot="state-panel"]')!;
+    expect(panel).toHaveAttribute('data-state-kind', 'empty');
+    expect(panel).toHaveTextContent('Nothing needs attention');
+  });
+
+  it('an empty Resolved filter is the shared no-match panel', async () => {
+    list.mockResolvedValue(listResult({ status: 'resolved' }));
+    const { container } = await renderPage('resolved', { confirmed: '1' });
+    expect(container.querySelector('[data-slot="state-panel"]')).toHaveAttribute(
+      'data-state-kind',
+      'no-match',
+    );
+  });
+
+  it("a recountable row's checkbox is the shared checkbox, beside (never inside) the row link", async () => {
+    list.mockResolvedValue(
+      listResult({
+        canRecount: true,
+        occurrences: [occurrence({ reference: 'EX-000001', canRecount: true })],
+      }),
+    );
+    await renderPage();
+    const box = screen.getByRole('checkbox', { name: 'Select EX-000001 to recount' });
+    expect(box).toHaveAttribute('aria-checked', 'false');
+    expect(box.closest('a')).toBeNull();
   });
 });

@@ -93,7 +93,11 @@ const card = vi.hoisted(() => ({ suspend: false, never: new Promise<never>(() =>
 vi.mock('@/components/inventory/item-verification-card', async () => {
   const React = await import('react');
   return {
-    ItemVerificationCard: (props: { itemId: string; movementsHref: string; excludeIssueId?: string | null }) => {
+    ItemVerificationCard: (props: {
+      itemId: string;
+      movementsHref: string;
+      excludeIssueId?: string | null;
+    }) => {
       if (card.suspend) throw card.never;
       return React.createElement('div', {
         'data-testid': 'verification-card',
@@ -155,12 +159,48 @@ function detail(o: Record<string, unknown> = {}, extra: Record<string, unknown> 
   return {
     occurrence: occurrence(o),
     timeline: [
-      { id: 'e1', kind: 'raised', at: '2026-09-24T15:00:00Z', actor: null, note: null, cycleCount: null, maintenanceRequestId: null, evidenceId: null },
-      { id: 'e2', kind: 'note', at: '2026-09-24T16:00:00Z', actor: { id: 'u1', label: 'Dana Lee' }, note: 'checking rack', cycleCount: null, maintenanceRequestId: null, evidenceId: null },
+      {
+        id: 'e1',
+        kind: 'raised',
+        at: '2026-09-24T15:00:00Z',
+        actor: null,
+        note: null,
+        cycleCount: null,
+        maintenanceRequestId: null,
+        evidenceId: null,
+      },
+      {
+        id: 'e2',
+        kind: 'note',
+        at: '2026-09-24T16:00:00Z',
+        actor: { id: 'u1', label: 'Dana Lee' },
+        note: 'checking rack',
+        cycleCount: null,
+        maintenanceRequestId: null,
+        evidenceId: null,
+      },
     ],
     history: [
-      { id: ID, number: 42, reference: 'EX-000042', firstSeenAt: '2026-09-24T15:00:00Z', resolvedAt: null, resolvedReason: null, recurrenceIndex: 1, isCurrent: true },
-      { id: EARLIER, number: 7, reference: 'EX-000007', firstSeenAt: '2026-09-20T15:00:00Z', resolvedAt: '2026-09-21T15:00:00Z', resolvedReason: 'cleared', recurrenceIndex: 0, isCurrent: false },
+      {
+        id: ID,
+        number: 42,
+        reference: 'EX-000042',
+        firstSeenAt: '2026-09-24T15:00:00Z',
+        resolvedAt: null,
+        resolvedReason: null,
+        recurrenceIndex: 1,
+        isCurrent: true,
+      },
+      {
+        id: EARLIER,
+        number: 7,
+        reference: 'EX-000007',
+        firstSeenAt: '2026-09-20T15:00:00Z',
+        resolvedAt: '2026-09-21T15:00:00Z',
+        resolvedReason: 'cleared',
+        recurrenceIndex: 0,
+        isCurrent: false,
+      },
     ],
     historyTruncated: false,
     syncState: SYNCED,
@@ -200,7 +240,10 @@ const imageComplete = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype
 beforeEach(() => {
   vi.clearAllMocks();
   card.suspend = false;
-  Object.defineProperty(HTMLImageElement.prototype, 'complete', { configurable: true, get: () => false });
+  Object.defineProperty(HTMLImageElement.prototype, 'complete', {
+    configurable: true,
+    get: () => false,
+  });
 });
 afterEach(() => {
   if (imageComplete) Object.defineProperty(HTMLImageElement.prototype, 'complete', imageComplete);
@@ -233,14 +276,21 @@ describe('Exception detail page', () => {
     expect(screen.getByTestId('occurrence-state')).toHaveTextContent('Open');
     expect(screen.getByText('Recurred (2nd time)')).toBeInTheDocument();
     expect(screen.getByText(/^Already present when tracking began, Sep 24/)).toBeInTheDocument();
-    for (const e of EXCEPTION_RULES.label_mismatch.explanations) expect(screen.getByText(e)).toBeInTheDocument();
+    for (const e of EXCEPTION_RULES.label_mismatch.explanations)
+      expect(screen.getByText(e)).toBeInTheDocument();
     expect(screen.getByText(EXCEPTION_RULES.label_mismatch.clearedBy)).toBeInTheDocument();
     expect(screen.getByText('Raised by the system check')).toBeInTheDocument();
     expect(screen.getByText('Note from Dana Lee')).toBeInTheDocument();
     expect(screen.getByText('checking rack')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'EX-000007' })).toHaveAttribute('href', `/dashboard/exceptions/${EARLIER}`);
+    expect(screen.getByRole('link', { name: 'EX-000007' })).toHaveAttribute(
+      'href',
+      `/dashboard/exceptions/${EARLIER}`,
+    );
     expect(screen.getByText('(this one)')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Edit label' })).toHaveAttribute('href', '/dashboard/inventory/item-1');
+    expect(screen.getByRole('link', { name: 'Edit label' })).toHaveAttribute(
+      'href',
+      '/dashboard/inventory/item-1',
+    );
     expect(screen.getByText(/^Checked at /)).toBeInTheDocument();
   });
 
@@ -253,7 +303,10 @@ describe('Exception detail page', () => {
 
   it('once acknowledged, only Add note is offered', async () => {
     get.mockResolvedValue(
-      detail({ acknowledgedAt: '2026-09-24T17:00:00Z', acknowledgedBy: { id: 'u1', label: 'Dana Lee' } }),
+      detail({
+        acknowledgedAt: '2026-09-24T17:00:00Z',
+        acknowledgedBy: { id: 'u1', label: 'Dana Lee' },
+      }),
     );
     await renderPage();
     expect(screen.queryByRole('button', { name: 'Acknowledge' })).not.toBeInTheDocument();
@@ -268,7 +321,9 @@ describe('Exception detail page', () => {
     await renderPage();
     expect(screen.queryByRole('button', { name: 'Acknowledge' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Add note' })).not.toBeInTheDocument();
-    expect(screen.getByTestId('act-unavailable')).toHaveTextContent(EXCEPTION_ACT_NOT_PERMITTED_COPY);
+    expect(screen.getByTestId('act-unavailable')).toHaveTextContent(
+      EXCEPTION_ACT_NOT_PERMITTED_COPY,
+    );
   });
 
   it('a resolved occurrence offers no actions and shows its reason', async () => {
@@ -346,7 +401,9 @@ describe('Exception detail page', () => {
     get.mockResolvedValue(detail({ ...VARIANCE, canRecount: false, canAct: false }));
     await renderPage();
     const card = screen.getByTestId('count-variance-clears');
-    expect(card).toHaveTextContent('It clears when a later count of this item matches the stock on record.');
+    expect(card).toHaveTextContent(
+      'It clears when a later count of this item matches the stock on record.',
+    );
     expect(card).toHaveTextContent(
       'Only a manager with permission to assign counts and adjust stock can start a recount.',
     );
@@ -393,7 +450,9 @@ describe('Exception detail page', () => {
     );
     await renderPage();
     const card = screen.getByTestId('count-variance-clears');
-    const link = within(card).getByRole('link', { name: 'Recount CC-000002: In progress: 1 of 3 counted' });
+    const link = within(card).getByRole('link', {
+      name: 'Recount CC-000002: In progress: 1 of 3 counted',
+    });
     expect(link).toHaveAttribute('href', '/dashboard/cycle-counts/cc-2');
     expect(within(card).getByTestId('active-recount')).toBeInTheDocument();
     expect(card).toHaveTextContent(
@@ -406,10 +465,9 @@ describe('Exception detail page', () => {
   it('Recount is filled on an open count difference, and outline while a linked recount is in progress', async () => {
     get.mockResolvedValue(detail({ ...VARIANCE, canRecount: true }));
     const { unmount } = await renderPage();
-    expect(within(screen.getByTestId('count-variance-clears')).getByTestId('recount-button')).toHaveAttribute(
-      'data-variant',
-      'default',
-    );
+    expect(
+      within(screen.getByTestId('count-variance-clears')).getByTestId('recount-button'),
+    ).toHaveAttribute('data-variant', 'default');
     unmount();
     get.mockResolvedValue(
       detail({
@@ -425,10 +483,9 @@ describe('Exception detail page', () => {
       }),
     );
     await renderPage();
-    expect(within(screen.getByTestId('count-variance-clears')).getByTestId('recount-button')).toHaveAttribute(
-      'data-variant',
-      'outline',
-    );
+    expect(
+      within(screen.getByTestId('count-variance-clears')).getByTestId('recount-button'),
+    ).toHaveAttribute('data-variant', 'outline');
   });
 
   // Review 2026-09-29: the Acknowledge help told a manager to recount while
@@ -448,18 +505,20 @@ describe('Exception detail page', () => {
       }),
     );
     await renderPage();
-    const next = 'A newer count of this item was posted and is being checked. This updates at the next check, within 15 minutes.';
+    const next =
+      'A newer count of this item was posted and is being checked. This updates at the next check, within 15 minutes.';
     expect(screen.getByTestId('count-variance-clears')).toHaveTextContent(next);
     expect(
       screen.getByText(
         `CC-000001 found 21 where 20 was on record, and posting it changed the stock on record by +1. Acknowledging tells others this is being looked at. It does not clear this exception. ${next}`,
       ),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/To close it, count it once more with Recount\./)).not.toBeInTheDocument();
-    expect(within(screen.getByTestId('count-variance-clears')).getByTestId('recount-button')).toHaveAttribute(
-      'data-variant',
-      'outline',
-    );
+    expect(
+      screen.queryByText(/To close it, count it once more with Recount\./),
+    ).not.toBeInTheDocument();
+    expect(
+      within(screen.getByTestId('count-variance-clears')).getByTestId('recount-button'),
+    ).toHaveAttribute('data-variant', 'outline');
   });
 
   // ── Count differences: what clears them (owner decision 2026-09-29) ──────
@@ -491,7 +550,9 @@ describe('Exception detail page', () => {
   });
 
   it('with Cycle Counts off, it says so instead of offering a recount', async () => {
-    get.mockResolvedValue(detail({ ...VARIANCE, canRecount: false, recountUnavailableReason: 'module_disabled' }));
+    get.mockResolvedValue(
+      detail({ ...VARIANCE, canRecount: false, recountUnavailableReason: 'module_disabled' }),
+    );
     await renderPage();
     const card = screen.getByTestId('count-variance-clears');
     expect(card).toHaveTextContent(
@@ -516,19 +577,30 @@ describe('Exception detail page', () => {
     );
     expect(screen.getByText(help)).toBeInTheDocument();
     expect(screen.queryByText(EXCEPTION_ACKNOWLEDGE_HELP)).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Acknowledge' })).toHaveAttribute('data-variant', 'outline');
+    expect(screen.getByRole('button', { name: 'Acknowledge' })).toHaveAttribute(
+      'data-variant',
+      'outline',
+    );
   });
 
   it('other rules keep the Acknowledge help and the filled Acknowledge', async () => {
     get.mockResolvedValue(detail());
     await renderPage();
     expect(screen.getByText(EXCEPTION_ACKNOWLEDGE_HELP)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Acknowledge' })).toHaveAttribute('data-variant', 'default');
+    expect(screen.getByRole('button', { name: 'Acknowledge' })).toHaveAttribute(
+      'data-variant',
+      'default',
+    );
   });
 
   it('a resolved count difference has no top card', async () => {
     get.mockResolvedValue(
-      detail({ ...VARIANCE, resolvedAt: '2026-09-24T19:00:00Z', resolvedReason: 'cleared', canAct: false }),
+      detail({
+        ...VARIANCE,
+        resolvedAt: '2026-09-24T19:00:00Z',
+        resolvedReason: 'cleared',
+        canAct: false,
+      }),
     );
     await renderPage();
     expect(screen.queryByTestId('count-variance-clears')).not.toBeInTheDocument();
@@ -566,14 +638,21 @@ describe('Exception detail page', () => {
     expect(confirm).toHaveClass('bg-primary');
     expect(within(card).getByTestId('recount-button')).toHaveAttribute('data-variant', 'outline');
     // Confirm comes first in the card's buttons.
-    expect(confirm.compareDocumentPosition(within(card).getByTestId('recount-button')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      confirm.compareDocumentPosition(within(card).getByTestId('recount-button')) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     expect(screen.queryByTestId('confirm-unavailable')).not.toBeInTheDocument();
   });
 
   // The call site: the page's card opens the dialog, which sends the count
   // and the number the server's block carried, and the page then says so.
   it('Confirm opens the dialog with the numbers, and sends back the count and the number it showed', async () => {
-    confirmExceptionCountAction.mockResolvedValue({ ok: true, replay: false, reference: 'EX-000042' });
+    confirmExceptionCountAction.mockResolvedValue({
+      ok: true,
+      replay: false,
+      reference: 'EX-000042',
+    });
     get.mockResolvedValue(detail({ ...VARIANCE, canRecount: true }, { countConfirm: block() }));
     await renderPage();
     await act(async () => {
@@ -589,14 +668,22 @@ describe('Exception detail page', () => {
     await act(async () => {
       fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm and close' }));
     });
-    expect(confirmExceptionCountAction).toHaveBeenCalledWith(ID, { cycleCountId: 'cc-1', countedQuantity: 21, note: null });
+    expect(confirmExceptionCountAction).toHaveBeenCalledWith(ID, {
+      cycleCountId: 'cc-1',
+      countedQuantity: 21,
+      note: null,
+    });
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent('Count confirmed. EX-000042 is closed.');
     expect(refresh).toHaveBeenCalled();
   });
 
   it('the Acknowledge step tells a reader who can confirm to confirm instead, and carries the typed note', async () => {
-    confirmExceptionCountAction.mockResolvedValue({ ok: true, replay: false, reference: 'EX-000042' });
+    confirmExceptionCountAction.mockResolvedValue({
+      ok: true,
+      replay: false,
+      reference: 'EX-000042',
+    });
     get.mockResolvedValue(detail({ ...VARIANCE, canRecount: true }, { countConfirm: block() }));
     await renderPage();
     const help = countVarianceAcknowledgeHelp({
@@ -610,21 +697,32 @@ describe('Exception detail page', () => {
       'CC-000001 found 21 where 20 was on record, and posting it changed the stock on record by +1. Acknowledging tells others this is being looked at. It does not clear this exception. If you have checked that 21 is right, confirm the count instead.',
     );
     expect(screen.getByText(help)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Acknowledge' })).toHaveAttribute('data-variant', 'outline');
+    expect(screen.getByRole('button', { name: 'Acknowledge' })).toHaveAttribute(
+      'data-variant',
+      'outline',
+    );
     fireEvent.change(screen.getByLabelText(/Note \(optional when acknowledging\)/), {
       target: { value: 'Items recounted' },
     });
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Confirm this count instead' }));
     });
-    expect(within(screen.getByRole('dialog')).getByLabelText('Note (optional)')).toHaveValue('Items recounted');
+    expect(within(screen.getByRole('dialog')).getByLabelText('Note (optional)')).toHaveValue(
+      'Items recounted',
+    );
   });
 
   it('staff who did not count it: no Confirm, and the reason under it names the counter', async () => {
     get.mockResolvedValue(
       detail(
         { ...VARIANCE, canRecount: false },
-        { countConfirm: block({ canConfirm: false, unavailableReason: 'not_counter', readerIsCounter: false }) },
+        {
+          countConfirm: block({
+            canConfirm: false,
+            unavailableReason: 'not_counter',
+            readerIsCounter: false,
+          }),
+        },
       ),
     );
     await renderPage();
@@ -642,7 +740,14 @@ describe('Exception detail page', () => {
     get.mockResolvedValue(
       detail(
         { ...VARIANCE, canRecount: true },
-        { countConfirm: block({ state: 'stock_moved', canConfirm: false, unavailableReason: 'stock_moved', onRecordNow: 25 }) },
+        {
+          countConfirm: block({
+            state: 'stock_moved',
+            canConfirm: false,
+            unavailableReason: 'stock_moved',
+            onRecordNow: 25,
+          }),
+        },
       ),
     );
     await renderPage();
@@ -669,7 +774,13 @@ describe('Exception detail page', () => {
             outcome: { kind: 'in_progress', counted: 0, total: 1 },
           },
         },
-        { countConfirm: block({ state: 'recount_in_progress', canConfirm: false, unavailableReason: 'recount_in_progress' }) },
+        {
+          countConfirm: block({
+            state: 'recount_in_progress',
+            canConfirm: false,
+            unavailableReason: 'recount_in_progress',
+          }),
+        },
       ),
     );
     await renderPage();
@@ -702,7 +813,13 @@ describe('Exception detail page', () => {
     get.mockResolvedValue(
       detail(
         { ...VARIANCE, canRecount: false, canAct: false },
-        { countConfirm: block({ canConfirm: false, unavailableReason: 'not_permitted', readerIsCounter: false }) },
+        {
+          countConfirm: block({
+            canConfirm: false,
+            unavailableReason: 'not_permitted',
+            readerIsCounter: false,
+          }),
+        },
       ),
     );
     await renderPage();
@@ -719,7 +836,12 @@ describe('Exception detail page', () => {
   it('a resolved count difference offers no Confirm, whatever the server sent', async () => {
     get.mockResolvedValue(
       detail(
-        { ...VARIANCE, resolvedAt: '2026-09-24T19:00:00Z', resolvedReason: 'cleared', canAct: false },
+        {
+          ...VARIANCE,
+          resolvedAt: '2026-09-24T19:00:00Z',
+          resolvedReason: 'cleared',
+          canAct: false,
+        },
         { countConfirm: block() },
       ),
     );
@@ -736,8 +858,27 @@ describe('Exception detail page', () => {
         { resolvedAt: '2026-09-24T19:00:00Z', resolvedReason: null, canAct: false },
         {
           history: [
-            { id: ID, number: 42, reference: 'EX-000042', firstSeenAt: '2026-09-24T15:00:00Z', resolvedAt: '2026-09-24T19:00:00Z', resolvedReason: null, recurrenceIndex: 1, isCurrent: true },
-            { id: EARLIER, number: 7, reference: 'EX-000007', firstSeenAt: '2026-09-20T15:00:00Z', resolvedAt: '2026-09-21T15:00:00Z', resolvedReason: 'confirmed', confirmedAs: 'counter', recurrenceIndex: 0, isCurrent: false },
+            {
+              id: ID,
+              number: 42,
+              reference: 'EX-000042',
+              firstSeenAt: '2026-09-24T15:00:00Z',
+              resolvedAt: '2026-09-24T19:00:00Z',
+              resolvedReason: null,
+              recurrenceIndex: 1,
+              isCurrent: true,
+            },
+            {
+              id: EARLIER,
+              number: 7,
+              reference: 'EX-000007',
+              firstSeenAt: '2026-09-20T15:00:00Z',
+              resolvedAt: '2026-09-21T15:00:00Z',
+              resolvedReason: 'confirmed',
+              confirmedAs: 'counter',
+              recurrenceIndex: 0,
+              isCurrent: false,
+            },
           ],
         },
       ),
@@ -745,8 +886,12 @@ describe('Exception detail page', () => {
     await renderPage();
     expect(screen.getByTestId('occurrence-state')).toHaveTextContent(/^Resolved$/);
     expect(document.body.textContent).not.toMatch(/Cleared|undefined/);
-    expect(screen.getByText(/^First seen Sep 20, .*, resolved Sep 21, .*: Confirmed by the counter$/)).toBeInTheDocument();
-    expect(screen.getByText(/^First seen Sep 24, .*, resolved Sep 24, [^:]*:\d\d [AP]M$/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/^First seen Sep 20, .*, resolved Sep 21, .*: Confirmed by the counter$/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/^First seen Sep 24, .*, resolved Sep 24, [^:]*:\d\d [AP]M$/),
+    ).toBeInTheDocument();
   });
 
   it('a count confirmation reads with who confirmed it, on the chip, the facts and the timeline', async () => {
@@ -768,16 +913,38 @@ describe('Exception detail page', () => {
         },
         {
           timeline: [
-            { id: 'e1', kind: 'raised', at: '2026-09-24T15:00:00Z', actor: null, note: null, cycleCount: null, maintenanceRequestId: null, evidenceId: null },
-            { id: 'e2', kind: 'count_confirmed', at: '2026-09-24T19:00:00Z', actor: { id: 'u1', label: 'Dana Lee' }, note: 'counted twice on the floor', cycleCount: { id: 'cc-1', countNumber: 1 }, maintenanceRequestId: null, evidenceId: null },
+            {
+              id: 'e1',
+              kind: 'raised',
+              at: '2026-09-24T15:00:00Z',
+              actor: null,
+              note: null,
+              cycleCount: null,
+              maintenanceRequestId: null,
+              evidenceId: null,
+            },
+            {
+              id: 'e2',
+              kind: 'count_confirmed',
+              at: '2026-09-24T19:00:00Z',
+              actor: { id: 'u1', label: 'Dana Lee' },
+              note: 'counted twice on the floor',
+              cycleCount: { id: 'cc-1', countNumber: 1 },
+              maintenanceRequestId: null,
+              evidenceId: null,
+            },
           ],
         },
       ),
     );
     await renderPage();
-    expect(screen.getByTestId('occurrence-state')).toHaveTextContent('Resolved: Confirmed by the counter');
+    expect(screen.getByTestId('occurrence-state')).toHaveTextContent(
+      'Resolved: Confirmed by the counter',
+    );
     expect(screen.getByText('Count confirmed')).toBeInTheDocument();
-    expect(screen.getByText(/^Dana Lee, who counted it, Sep 24, .*, without a second count$/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/^Dana Lee, who counted it, Sep 24, .*, without a second count$/),
+    ).toBeInTheDocument();
     expect(
       screen.getByText(
         'Count confirmed by Dana Lee, who counted it, without a second count: CC-000001 found 21 where 20 was on record (+1)',
@@ -788,17 +955,53 @@ describe('Exception detail page', () => {
 
   it('a closed recount in the timeline says what it found', async () => {
     get.mockResolvedValue(
-      detail({ ...VARIANCE }, {
-        timeline: [
-          { id: 'e1', kind: 'raised', at: '2026-09-24T15:00:00Z', actor: null, note: null, cycleCount: null, maintenanceRequestId: null, evidenceId: null },
-          { id: 'e2', kind: 'recount_linked', at: '2026-09-24T16:00:00Z', actor: { id: 'u1', label: 'Dana Lee' }, note: null, cycleCount: { id: 'cc-2', countNumber: 2 }, maintenanceRequestId: null, evidenceId: null },
-          { id: 'e3', kind: 'recount_closed', at: '2026-09-24T17:00:00Z', actor: null, note: null, cycleCount: { id: 'cc-2', countNumber: 2, outcome: { kind: 'matched', quantity: 21 } }, maintenanceRequestId: null, evidenceId: null },
-        ],
-      }),
+      detail(
+        { ...VARIANCE },
+        {
+          timeline: [
+            {
+              id: 'e1',
+              kind: 'raised',
+              at: '2026-09-24T15:00:00Z',
+              actor: null,
+              note: null,
+              cycleCount: null,
+              maintenanceRequestId: null,
+              evidenceId: null,
+            },
+            {
+              id: 'e2',
+              kind: 'recount_linked',
+              at: '2026-09-24T16:00:00Z',
+              actor: { id: 'u1', label: 'Dana Lee' },
+              note: null,
+              cycleCount: { id: 'cc-2', countNumber: 2 },
+              maintenanceRequestId: null,
+              evidenceId: null,
+            },
+            {
+              id: 'e3',
+              kind: 'recount_closed',
+              at: '2026-09-24T17:00:00Z',
+              actor: null,
+              note: null,
+              cycleCount: {
+                id: 'cc-2',
+                countNumber: 2,
+                outcome: { kind: 'matched', quantity: 21 },
+              },
+              maintenanceRequestId: null,
+              evidenceId: null,
+            },
+          ],
+        },
+      ),
     );
     await renderPage();
     expect(screen.getByText('Recount CC-000002 linked by Dana Lee')).toBeInTheDocument();
-    expect(screen.getByText('Recount CC-000002 closed: Matched the stock on record (21)')).toBeInTheDocument();
+    expect(
+      screen.getByText('Recount CC-000002 closed: Matched the stock on record (21)'),
+    ).toBeInTheDocument();
   });
 
   it("shows the item's last physical count card, leaving this exception out of its chips", async () => {
@@ -810,7 +1013,7 @@ describe('Exception detail page', () => {
     expect(c).toHaveAttribute('data-exclude', ID);
   });
 
-  it('the card is off the page\'s critical path: while it has not answered, the rest of the page renders around its skeleton', async () => {
+  it("the card is off the page's critical path: while it has not answered, the rest of the page renders around its skeleton", async () => {
     card.suspend = true;
     get.mockResolvedValue(detail());
     await renderPage();
@@ -837,7 +1040,10 @@ describe('Exception detail page', () => {
       }),
     );
     await renderPage();
-    expect(screen.getByRole('link', { name: 'Staging' })).toHaveAttribute('href', '/dashboard/locations/loc-1');
+    expect(screen.getByRole('link', { name: 'Staging' })).toHaveAttribute(
+      'href',
+      '/dashboard/locations/loc-1',
+    );
   });
 
   // ── F1-4: photo evidence ──────────────────────────────────────────────────
@@ -848,7 +1054,9 @@ describe('Exception detail page', () => {
     const panel = screen.getByRole('region', { name: 'Exception photos' });
     expect(panel).toHaveTextContent('Photos (0 of 8)');
     expect(screen.getByRole('button', { name: 'Add photos' })).toBeEnabled();
-    expect(screen.getByLabelText(/^Note \(optional, saved with each photo you add\)/)).toBeInTheDocument();
+    expect(
+      screen.getByLabelText(/^Note \(optional, saved with each photo you add\)/),
+    ).toBeInTheDocument();
     expect(panel).toHaveTextContent(EXCEPTION_EVIDENCE_NONE_COPY);
     expect(panel).toHaveTextContent(EXCEPTION_EVIDENCE_LIMITS_COPY);
     expect(panel).toHaveTextContent(EXCEPTION_EVIDENCE_PRIVACY_COPY);
@@ -858,31 +1066,47 @@ describe('Exception detail page', () => {
   // be offered an upload the server always refuses).
   it('a viewer sees the photos read-only: no Add photos, no note field, no Remove, and why', async () => {
     get.mockResolvedValue(
-      detail({ canAct: false }, { evidence: { ...NO_PHOTOS, photos: [photo()], liveCount: 1, canAdd: false } }),
+      detail(
+        { canAct: false },
+        { evidence: { ...NO_PHOTOS, photos: [photo()], liveCount: 1, canAdd: false } },
+      ),
     );
     await renderPage();
     const panel = screen.getByRole('region', { name: 'Exception photos' });
     expect(screen.queryByRole('button', { name: 'Add photos' })).not.toBeInTheDocument();
     expect(panel.querySelector('input[type="file"]')).toBeNull();
     expect(screen.queryByLabelText(/^Note \(optional, saved/)).not.toBeInTheDocument();
-    expect(screen.getByTestId('photos-add-unavailable')).toHaveTextContent(EXCEPTION_EVIDENCE_NOT_PERMITTED_COPY);
-    expect(screen.getByAltText('Photo 1')).toHaveAttribute('src', 'https://files.example.test/ph-1-thumb.webp');
+    expect(screen.getByTestId('photos-add-unavailable')).toHaveTextContent(
+      EXCEPTION_EVIDENCE_NOT_PERMITTED_COPY,
+    );
+    expect(screen.getByAltText('Photo 1')).toHaveAttribute(
+      'src',
+      'https://files.example.test/ph-1-thumb.webp',
+    );
     expect(panel).toHaveTextContent('Photos (1 of 8)');
     expect(panel).toHaveTextContent('Shelf 39-C, bottom row');
     expect(panel).toHaveTextContent('Added by Dana Lee');
-    expect(panel).toHaveTextContent("Taken 10:02 AM (device's clock) · uploaded 10:40 AM (server's clock)");
+    expect(panel).toHaveTextContent(
+      "Taken 10:02 AM (device's clock) · uploaded 10:40 AM (server's clock)",
+    );
     expect(screen.queryByRole('button', { name: 'Remove Photo 1' })).not.toBeInTheDocument();
   });
 
   it('Remove is offered on the photos the server says this reader may remove, and only those', async () => {
     get.mockResolvedValue(
-      detail({}, {
-        evidence: {
-          ...NO_PHOTOS,
-          photos: [photo({ canRemove: true }), photo({ id: 'ph-2', canRemove: false, note: null })],
-          liveCount: 2,
+      detail(
+        {},
+        {
+          evidence: {
+            ...NO_PHOTOS,
+            photos: [
+              photo({ canRemove: true }),
+              photo({ id: 'ph-2', canRemove: false, note: null }),
+            ],
+            liveCount: 2,
+          },
         },
-      }),
+      ),
     );
     await renderPage();
     expect(screen.getByRole('button', { name: 'Remove Photo 1' })).toBeInTheDocument();
@@ -893,22 +1117,37 @@ describe('Exception detail page', () => {
     get.mockResolvedValue(
       detail(
         { resolvedAt: '2026-09-24T19:00:00Z', resolvedReason: 'cleared', canAct: true },
-        { evidence: { ...NO_PHOTOS, photos: [photo({ canRemove: false })], liveCount: 1, canAdd: false } },
+        {
+          evidence: {
+            ...NO_PHOTOS,
+            photos: [photo({ canRemove: false })],
+            liveCount: 1,
+            canAdd: false,
+          },
+        },
       ),
     );
     await renderPage();
     expect(screen.queryByRole('button', { name: 'Add photos' })).not.toBeInTheDocument();
-    expect(screen.getByTestId('photos-add-unavailable')).toHaveTextContent(EXCEPTION_EVIDENCE_RESOLVED_COPY);
+    expect(screen.getByTestId('photos-add-unavailable')).toHaveTextContent(
+      EXCEPTION_EVIDENCE_RESOLVED_COPY,
+    );
     expect(screen.getByAltText('Photo 1')).toBeInTheDocument();
   });
 
   it('at 8 photos, Add photos is turned off and the cap is stated', async () => {
     const eight = Array.from({ length: 8 }, (_, i) => photo({ id: `ph-${i}` }));
-    get.mockResolvedValue(detail({}, { evidence: { ...NO_PHOTOS, photos: eight, liveCount: 8, canAdd: false } }));
+    get.mockResolvedValue(
+      detail({}, { evidence: { ...NO_PHOTOS, photos: eight, liveCount: 8, canAdd: false } }),
+    );
     await renderPage();
-    expect(screen.getByRole('region', { name: 'Exception photos' })).toHaveTextContent('Photos (8 of 8)');
+    expect(screen.getByRole('region', { name: 'Exception photos' })).toHaveTextContent(
+      'Photos (8 of 8)',
+    );
     expect(screen.getByRole('button', { name: 'Add photos' })).toBeDisabled();
-    expect(screen.getByTestId('photos-add-unavailable')).toHaveTextContent(EXCEPTION_EVIDENCE_CAP_COPY);
+    expect(screen.getByTestId('photos-add-unavailable')).toHaveTextContent(
+      EXCEPTION_EVIDENCE_CAP_COPY,
+    );
   });
 
   // Mutation caught: an unreadable photo block rendered as an empty list.
@@ -926,37 +1165,60 @@ describe('Exception detail page', () => {
 
   it("a photo's timeline entries: who, the two clocks, and the note or the removal's reason", async () => {
     get.mockResolvedValue(
-      detail({}, {
-        timeline: [
-          { id: 'e1', kind: 'raised', at: '2026-09-24T15:00:00Z', actor: null, note: null, cycleCount: null, maintenanceRequestId: null, evidenceId: null, evidence: null },
-          {
-            id: 'e2',
-            kind: 'evidence_added',
-            at: '2026-09-24T17:40:00Z',
-            actor: { id: 'u1', label: 'Dana Lee' },
-            note: 'Shelf 39-C, bottom row',
-            cycleCount: null,
-            maintenanceRequestId: null,
-            evidenceId: 'ph-1',
-            evidence: { capturedAt: '2026-09-24T17:02:00Z', uploadedAt: '2026-09-24T17:40:00Z', removed: true },
-          },
-          {
-            id: 'e3',
-            kind: 'evidence_removed',
-            at: '2026-09-24T18:00:00Z',
-            actor: { id: 'u2', label: 'Sam Reed' },
-            note: 'Blurry',
-            cycleCount: null,
-            maintenanceRequestId: null,
-            evidenceId: 'ph-1',
-            evidence: { capturedAt: '2026-09-24T17:02:00Z', uploadedAt: '2026-09-24T17:40:00Z', removed: true },
-          },
-        ],
-      }),
+      detail(
+        {},
+        {
+          timeline: [
+            {
+              id: 'e1',
+              kind: 'raised',
+              at: '2026-09-24T15:00:00Z',
+              actor: null,
+              note: null,
+              cycleCount: null,
+              maintenanceRequestId: null,
+              evidenceId: null,
+              evidence: null,
+            },
+            {
+              id: 'e2',
+              kind: 'evidence_added',
+              at: '2026-09-24T17:40:00Z',
+              actor: { id: 'u1', label: 'Dana Lee' },
+              note: 'Shelf 39-C, bottom row',
+              cycleCount: null,
+              maintenanceRequestId: null,
+              evidenceId: 'ph-1',
+              evidence: {
+                capturedAt: '2026-09-24T17:02:00Z',
+                uploadedAt: '2026-09-24T17:40:00Z',
+                removed: true,
+              },
+            },
+            {
+              id: 'e3',
+              kind: 'evidence_removed',
+              at: '2026-09-24T18:00:00Z',
+              actor: { id: 'u2', label: 'Sam Reed' },
+              note: 'Blurry',
+              cycleCount: null,
+              maintenanceRequestId: null,
+              evidenceId: 'ph-1',
+              evidence: {
+                capturedAt: '2026-09-24T17:02:00Z',
+                uploadedAt: '2026-09-24T17:40:00Z',
+                removed: true,
+              },
+            },
+          ],
+        },
+      ),
     );
     await renderPage();
     const timeline = screen.getByText('Photo added by Dana Lee').closest('ol')!;
-    expect(timeline).toHaveTextContent("Taken 10:02 AM (device's clock) · uploaded 10:40 AM (server's clock)");
+    expect(timeline).toHaveTextContent(
+      "Taken 10:02 AM (device's clock) · uploaded 10:40 AM (server's clock)",
+    );
     expect(timeline).toHaveTextContent('Shelf 39-C, bottom row');
     expect(screen.getByText('Photo removed by Sam Reed')).toBeInTheDocument();
     expect(screen.getByText('Reason: Blurry')).toBeInTheDocument();
@@ -966,22 +1228,25 @@ describe('Exception detail page', () => {
   // prints "Upload time not available." under an entry that has a time.
   it('when the photos could not be read, a photo entry keeps its headline and guesses no times', async () => {
     get.mockResolvedValue(
-      detail({}, {
-        evidence: { status: 'unavailable' },
-        timeline: [
-          {
-            id: 'e2',
-            kind: 'evidence_added',
-            at: '2026-09-24T17:40:00Z',
-            actor: { id: 'u1', label: 'Dana Lee' },
-            note: null,
-            cycleCount: null,
-            maintenanceRequestId: null,
-            evidenceId: 'ph-1',
-            evidence: null,
-          },
-        ],
-      }),
+      detail(
+        {},
+        {
+          evidence: { status: 'unavailable' },
+          timeline: [
+            {
+              id: 'e2',
+              kind: 'evidence_added',
+              at: '2026-09-24T17:40:00Z',
+              actor: { id: 'u1', label: 'Dana Lee' },
+              note: null,
+              cycleCount: null,
+              maintenanceRequestId: null,
+              evidenceId: 'ph-1',
+              evidence: null,
+            },
+          ],
+        },
+      ),
     );
     await renderPage();
     const entry = screen.getByText('Photo added by Dana Lee').closest('li')!;
@@ -1009,7 +1274,9 @@ describe('Exception detail page', () => {
   }
 
   it('a reader the server says may escalate gets "Escalate to maintenance", opening the form for this exception', async () => {
-    get.mockResolvedValue(detail({ escalation: null, canEscalate: true, escalateUnavailableReason: null }));
+    get.mockResolvedValue(
+      detail({ escalation: null, canEscalate: true, escalateUnavailableReason: null }),
+    );
     await renderPage();
     expect(screen.getByRole('link', { name: 'Escalate to maintenance' })).toHaveAttribute(
       'href',
@@ -1025,9 +1292,13 @@ describe('Exception detail page', () => {
   it.each(['module_disabled', 'not_permitted', 'resolved'])(
     'hidden when the server says %s and nothing was escalated',
     async (reason) => {
-      get.mockResolvedValue(detail({ escalation: null, canEscalate: false, escalateUnavailableReason: reason }));
+      get.mockResolvedValue(
+        detail({ escalation: null, canEscalate: false, escalateUnavailableReason: reason }),
+      );
       await renderPage();
-      expect(screen.queryByRole('link', { name: 'Escalate to maintenance' })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('link', { name: 'Escalate to maintenance' }),
+      ).not.toBeInTheDocument();
       expect(screen.queryByTestId('escalation-card')).not.toBeInTheDocument();
     },
   );
@@ -1035,7 +1306,9 @@ describe('Exception detail page', () => {
   it('escalated, for a reader who can open the request: the badge links to it, the draft state shows, and the action opens it instead of making another', async () => {
     get.mockResolvedValue(
       detail({
-        escalation: escalated({ request: { status: 'draft_opened', draftOpened: true, cancelled: false } }),
+        escalation: escalated({
+          request: { status: 'draft_opened', draftOpened: true, cancelled: false },
+        }),
         canEscalate: false,
         escalateUnavailableReason: 'already_escalated',
       }),
@@ -1055,10 +1328,16 @@ describe('Exception detail page', () => {
 
   it('a draft not opened yet says so, and only that', async () => {
     get.mockResolvedValue(
-      detail({ escalation: escalated(), canEscalate: false, escalateUnavailableReason: 'already_escalated' }),
+      detail({
+        escalation: escalated(),
+        canEscalate: false,
+        escalateUnavailableReason: 'already_escalated',
+      }),
     );
     await renderPage();
-    expect(screen.getByTestId('escalation-request-state')).toHaveTextContent('Email draft not yet opened');
+    expect(screen.getByTestId('escalation-request-state')).toHaveTextContent(
+      'Email draft not yet opened',
+    );
   });
 
   // Mutation caught: the link or the draft line shown on visibleToReader
@@ -1109,8 +1388,12 @@ describe('Exception detail page', () => {
       }),
     );
     await renderPage();
-    expect(screen.getByTestId('escalation-badge')).toHaveTextContent('Escalated: MR-2026-000014 (request cancelled)');
-    expect(screen.getByTestId('escalation-status')).toHaveTextContent('Escalated: MR-2026-000014 (request cancelled)');
+    expect(screen.getByTestId('escalation-badge')).toHaveTextContent(
+      'Escalated: MR-2026-000014 (request cancelled)',
+    );
+    expect(screen.getByTestId('escalation-status')).toHaveTextContent(
+      'Escalated: MR-2026-000014 (request cancelled)',
+    );
     expect(screen.queryByTestId('escalation-request-state')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Escalate to maintenance' })).toBeInTheDocument();
   });
@@ -1139,17 +1422,27 @@ describe('Exception detail page', () => {
 
   it('with the module off, the handle still shows but links nowhere (the request page would say not enabled)', async () => {
     get.mockResolvedValue(
-      detail({ escalation: escalated(), canEscalate: false, escalateUnavailableReason: 'module_disabled' }),
+      detail({
+        escalation: escalated(),
+        canEscalate: false,
+        escalateUnavailableReason: 'module_disabled',
+      }),
     );
     await renderPage();
     expect(screen.getByTestId('escalation-badge')).toHaveTextContent('Escalated: MR-2026-000014');
     expect(screen.getByTestId('escalation-badge').querySelector('a')).toBeNull();
-    expect(screen.queryByRole('link', { name: /Open MR-|Escalate to maintenance/ })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('link', { name: /Open MR-|Escalate to maintenance/ }),
+    ).not.toBeInTheDocument();
   });
 
   it('escalating neither acknowledges nor resolves: the state stays Open and Acknowledge is still offered', async () => {
     get.mockResolvedValue(
-      detail({ escalation: escalated(), canEscalate: false, escalateUnavailableReason: 'already_escalated' }),
+      detail({
+        escalation: escalated(),
+        canEscalate: false,
+        escalateUnavailableReason: 'already_escalated',
+      }),
     );
     await renderPage();
     expect(screen.getByTestId('occurrence-state')).toHaveTextContent('Open');
@@ -1159,27 +1452,182 @@ describe('Exception detail page', () => {
   // Mutation caught: the timeline built without maintenanceRequestReference.
   it('the escalated timeline entry names the request and who escalated it', async () => {
     get.mockResolvedValue(
-      detail({ escalation: escalated(), canEscalate: false, escalateUnavailableReason: 'already_escalated' }, {
-        timeline: [
-          { id: 'e1', kind: 'raised', at: '2026-09-24T15:00:00Z', actor: null, note: null, cycleCount: null, maintenanceRequestId: null, maintenanceRequestReference: null, evidenceId: null },
-          { id: 'e2', kind: 'escalated', at: '2026-09-24T17:00:00Z', actor: { id: 'u1', label: 'Dana Lee' }, note: null, cycleCount: null, maintenanceRequestId: REQ, maintenanceRequestReference: 'MR-2026-000014', evidenceId: null },
-        ],
-      }),
+      detail(
+        {
+          escalation: escalated(),
+          canEscalate: false,
+          escalateUnavailableReason: 'already_escalated',
+        },
+        {
+          timeline: [
+            {
+              id: 'e1',
+              kind: 'raised',
+              at: '2026-09-24T15:00:00Z',
+              actor: null,
+              note: null,
+              cycleCount: null,
+              maintenanceRequestId: null,
+              maintenanceRequestReference: null,
+              evidenceId: null,
+            },
+            {
+              id: 'e2',
+              kind: 'escalated',
+              at: '2026-09-24T17:00:00Z',
+              actor: { id: 'u1', label: 'Dana Lee' },
+              note: null,
+              cycleCount: null,
+              maintenanceRequestId: REQ,
+              maintenanceRequestReference: 'MR-2026-000014',
+              evidenceId: null,
+            },
+          ],
+        },
+      ),
     );
     await renderPage();
-    expect(screen.getByText('Escalated to maintenance request MR-2026-000014 by Dana Lee')).toBeInTheDocument();
+    expect(
+      screen.getByText('Escalated to maintenance request MR-2026-000014 by Dana Lee'),
+    ).toBeInTheDocument();
   });
 
   it('never says "sent" or "ticket" about an escalation', async () => {
     get.mockResolvedValue(
       detail({
-        escalation: escalated({ request: { status: 'draft_opened', draftOpened: true, cancelled: false } }),
+        escalation: escalated({
+          request: { status: 'draft_opened', draftOpened: true, cancelled: false },
+        }),
         canEscalate: false,
         escalateUnavailableReason: 'already_escalated',
       }),
     );
     await renderPage();
-    expect(screen.getByTestId('escalation-card').textContent).not.toMatch(/\bsent\b|ticket|notified/i);
-    expect(screen.getByTestId('escalation-badge').textContent).not.toMatch(/\bsent\b|ticket|notified/i);
+    expect(screen.getByTestId('escalation-card').textContent).not.toMatch(
+      /\bsent\b|ticket|notified/i,
+    );
+    expect(screen.getByTestId('escalation-badge').textContent).not.toMatch(
+      /\bsent\b|ticket|notified/i,
+    );
+  });
+});
+
+// ── Redesign (P4.A3): the detail pattern ──────────────────────────────────
+// The blocks moved into the shared header, the main column and the side rail.
+// What must hold: one h1, the back link's words and target, the rule's action
+// links and Recount in the header's actions, the facts as label / value rows
+// (a description list) after the "What clears this" card, every card titled
+// as before, and the timeline still one ordered list.
+describe('Exception detail page: redesigned layout', () => {
+  it('the shared header holds the back link, the one h1, the reference and rule, and the rule actions', async () => {
+    get.mockResolvedValue(detail());
+    const { container } = await renderPage();
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(screen.getByRole('link', { name: 'Exceptions' })).toHaveAttribute(
+      'href',
+      '/dashboard/exceptions',
+    );
+    const header = container.querySelector('[data-slot="page-header"]')!;
+    expect(header).toHaveTextContent('EX-000042');
+    expect(header).toHaveTextContent(EXCEPTION_RULES.label_mismatch.label);
+    expect(within(header as HTMLElement).getByText('Warning')).toBeInTheDocument();
+    expect(within(header as HTMLElement).getByTestId('occurrence-state')).toHaveTextContent('Open');
+    const actions = container.querySelector('[data-slot="page-header-actions"]')!;
+    expect(
+      within(actions as HTMLElement).getByRole('link', { name: 'Edit label' }),
+    ).toHaveAttribute('href', '/dashboard/inventory/item-1');
+  });
+
+  it("a resolved exception's back link returns to the Resolved tab", async () => {
+    get.mockResolvedValue(
+      detail({ resolvedAt: '2026-09-24T19:00:00Z', resolvedReason: 'cleared', canAct: false }),
+    );
+    await renderPage();
+    expect(screen.getByRole('link', { name: 'Exceptions' })).toHaveAttribute(
+      'href',
+      '/dashboard/exceptions?tab=resolved',
+    );
+  });
+
+  it('over_reserved: Recount sits with the rule actions in the header', async () => {
+    get.mockResolvedValue(
+      detail({
+        rule: 'over_reserved',
+        facts: { itemName: 'Atlas', promised: 5, onHand: 3 },
+        canRecount: true,
+      }),
+    );
+    const { container } = await renderPage();
+    const actions = container.querySelector('[data-slot="page-header-actions"]') as HTMLElement;
+    expect(within(actions).getByTestId('recount-button')).toBeInTheDocument();
+  });
+
+  it('the facts are label / value rows of one description list, after the What clears this card', async () => {
+    get.mockResolvedValue(
+      detail({
+        rule: 'count_variance',
+        facts: {
+          itemName: 'QA Chromebook',
+          sku: 'QA-1',
+          cycleCountId: 'cc-1',
+          countNumber: 1,
+          observedAt: '2026-09-24T17:00:00Z',
+          completedAt: '2026-09-24T17:05:00Z',
+          expected: 20,
+          counted: 21,
+          variance: 1,
+          countedLocationName: null,
+          aiAssisted: false,
+          capturedOfflineAt: null,
+        },
+        canRecount: true,
+      }),
+    );
+    await renderPage();
+    const facts = screen.getByTestId('occurrence-facts');
+    const dl = facts.querySelector('dl')!;
+    expect(within(dl).getByText('Item').tagName).toBe('DT');
+    expect(within(dl).getByText('First seen').tagName).toBe('DT');
+    expect(within(dl).getByText('Last seen by a check').tagName).toBe('DT');
+    const card = screen.getByTestId('count-variance-clears');
+    expect(card.compareDocumentPosition(facts) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The card is still a region named by its title.
+    expect(screen.getByRole('region', { name: 'What clears this' })).toBe(card);
+  });
+
+  it('every card keeps its title as a heading', async () => {
+    get.mockResolvedValue(detail({ canEscalate: true }));
+    await renderPage();
+    for (const name of [
+      'Acknowledge or add a note',
+      'What can cause this',
+      'What clears this',
+      'Timeline',
+      'This condition over time',
+      'Maintenance',
+    ]) {
+      expect(screen.getByRole('heading', { name })).toBeInTheDocument();
+    }
+  });
+
+  it('the timeline is one ordered list, an entry per event with its time', async () => {
+    get.mockResolvedValue(detail());
+    await renderPage();
+    const list = screen.getByText('Raised by the system check').closest('ol')!;
+    const entries = within(list).getAllByRole('listitem');
+    expect(entries).toHaveLength(2);
+    expect(entries[1]).toHaveTextContent('Note from Dana Lee');
+    expect(entries[1]).toHaveTextContent(/Sep 24/);
+    expect(entries[1]).toHaveTextContent('checking rack');
+  });
+
+  it('a failed read keeps the back link and says unavailable, with no heading', async () => {
+    get.mockRejectedValue(new ServiceError('internal_error', 'read failed'));
+    await renderPage();
+    expect(screen.getByRole('link', { name: 'Exceptions' })).toHaveAttribute(
+      'href',
+      '/dashboard/exceptions',
+    );
+    expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument();
   });
 });

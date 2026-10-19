@@ -65,6 +65,10 @@ import { confirmExceptionCountAction } from '@/server/actions/exceptions';
  * row as it now is instead of the Confirm that was just refused.
  *
  * Online only and never queued, like every other exception action.
+ *
+ * Look (redesign, DESIGN-SPEC 6.2 and 6.21 dialogs): the numbers sit on the
+ * inset (sunk) surface, Cancel is the outline secondary and Confirm and close
+ * the ink-filled commit button; the words and the close rules are unchanged.
  */
 
 interface ConfirmCountContextValue {
@@ -311,12 +315,15 @@ function ConfirmCountDialogBody({
         <DialogTitle>{copy.title}</DialogTitle>
       </DialogHeader>
 
-      <div className="space-y-4 text-sm">
+      <div className="space-y-4 text-[13.5px] leading-5">
         {/* The numbers and the consequence are the dialog's description, so a
             screen reader says what is being confirmed as the dialog opens. */}
         <DialogDescription asChild className="text-foreground">
           <div className="space-y-4" data-testid="confirm-count-description">
-            <div className="bg-muted/40 space-y-1.5 rounded-md border p-3" data-testid="confirm-count-numbers">
+            <div
+              className="bg-sunk border-border space-y-1.5 rounded-md border px-3.5 py-3"
+              data-testid="confirm-count-numbers"
+            >
               <ul className="space-y-0.5">
                 {copy.numbers.map((line) => (
                   <li key={line} className="tabular-nums">
@@ -346,7 +353,14 @@ function ConfirmCountDialogBody({
             aria-describedby={counterId}
             aria-invalid={tooLong || undefined}
           />
-          <p id={counterId} className={tooLong ? 'text-destructive text-xs' : 'text-muted-foreground text-xs'}>
+          <p
+            id={counterId}
+            className={
+              tooLong
+                ? 'text-destructive text-[12px] tabular-nums'
+                : 'text-muted-foreground text-[12px] tabular-nums'
+            }
+          >
             {length.toLocaleString('en-US')} / {copy.noteMax.toLocaleString('en-US')}
           </p>
         </div>
@@ -359,7 +373,13 @@ function ConfirmCountDialogBody({
       </div>
 
       <DialogFooter className="gap-2">
-        <Button type="button" variant="ghost" onClick={onCancel} disabled={pending} className="pointer-coarse:min-h-11">
+        <Button
+          type="button"
+          variant="outline"
+          onClick={onCancel}
+          disabled={pending}
+          className="pointer-coarse:min-h-11"
+        >
           {copy.cancelLabel}
         </Button>
         <Button
@@ -399,7 +419,13 @@ export function ConfirmCountButton() {
 /** Confirm this count instead, in the Acknowledge step: opens the same dialog
  *  with the note typed there. Nothing when this reader is not offered
  *  Confirm. */
-export function ConfirmCountInsteadButton({ note, disabled = false }: { note: string; disabled?: boolean }) {
+export function ConfirmCountInsteadButton({
+  note,
+  disabled = false,
+}: {
+  note: string;
+  disabled?: boolean;
+}) {
   const ctx = React.useContext(ConfirmCountContext);
   if (!ctx?.offered) return null;
   return (
@@ -407,7 +433,7 @@ export function ConfirmCountInsteadButton({ note, disabled = false }: { note: st
       type="button"
       variant="link"
       size="sm"
-      className="h-auto px-0 py-1 text-sm pointer-coarse:min-h-11"
+      className="pointer-coarse:min-h-11 h-auto px-0 py-1 text-sm"
       disabled={disabled}
       onClick={(e) => ctx.openConfirm(note, e.currentTarget)}
       data-testid="confirm-count-instead"

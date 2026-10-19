@@ -2,7 +2,7 @@ import Link from 'next/link';
 
 import { ConfirmCountButton } from '@/components/exceptions/confirm-count-dialog';
 import { RecountButton } from '@/components/exceptions/recount-selection';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { DetailSection } from '@/components/patterns/detail-section';
 import type { ExceptionOccurrence } from '@/server/services/exception-occurrences';
 
 import {
@@ -76,47 +76,51 @@ export function CountVarianceClearCard({
   const copy = countVarianceClearCopyFor(o, displayed, countConfirm);
   const titleId = `count-variance-clears-${o.id}`;
   return (
-    <Card role="region" aria-labelledby={titleId} data-testid="count-variance-clears">
-      <CardHeader className="pb-2">
-        <CardTitle id={titleId} className="text-base">
-          {COUNT_VARIANCE_CLEARS_TITLE}
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3 text-sm">
-        <p className="font-medium">{copy.lead}</p>
-        <p>{copy.options}</p>
-        {copy.who ? <p className="text-muted-foreground">{copy.who}</p> : null}
-        {o.recount ? (
-          <p data-testid="active-recount">
-            <Link href={`/dashboard/cycle-counts/${o.recount.cycleCountId}`} className="font-medium hover:underline">
-              {activeRecountCopy(o.recount)}
-            </Link>
-          </p>
-        ) : copy.offerRecount ? (
-          <p className="text-muted-foreground">{RECOUNT_NONE_LINKED_COPY}</p>
-        ) : null}
-        {copy.offerConfirm || copy.offerRecount ? (
-          <div className="flex flex-wrap gap-2">
-            {copy.offerConfirm ? <ConfirmCountButton /> : null}
-            {copy.offerRecount ? (
-              <RecountButton
-                occurrenceId={o.id}
-                reference={o.reference}
-                timeZone={timeZone}
-                variant={copy.recountEmphasis === 'primary' ? 'default' : 'outline'}
-                size="default"
-                className="pointer-coarse:min-h-11"
-              />
-            ) : null}
-          </div>
-        ) : null}
-        {copy.recountLine ? <p className="text-muted-foreground">{copy.recountLine}</p> : null}
-        {copy.reason ? (
-          <p className="text-muted-foreground" data-testid="confirm-unavailable">
-            {copy.reason}
-          </p>
-        ) : null}
-      </CardContent>
-    </Card>
+    // The shared card (DESIGN-SPEC 6.7), named by its own title: a region a
+    // screen reader can jump to, as before.
+    <DetailSection
+      role="region"
+      aria-labelledby={titleId}
+      data-testid="count-variance-clears"
+      title={<span id={titleId}>{COUNT_VARIANCE_CLEARS_TITLE}</span>}
+      bodyClassName="space-y-3 text-[13.5px] leading-5"
+    >
+      <p className="font-medium">{copy.lead}</p>
+      <p>{copy.options}</p>
+      {copy.who ? <p className="text-muted-foreground">{copy.who}</p> : null}
+      {o.recount ? (
+        <p data-testid="active-recount">
+          <Link
+            href={`/dashboard/cycle-counts/${o.recount.cycleCountId}`}
+            className="font-medium hover:underline"
+          >
+            {activeRecountCopy(o.recount)}
+          </Link>
+        </p>
+      ) : copy.offerRecount ? (
+        <p className="text-muted-foreground">{RECOUNT_NONE_LINKED_COPY}</p>
+      ) : null}
+      {copy.offerConfirm || copy.offerRecount ? (
+        <div className="flex flex-wrap gap-2">
+          {copy.offerConfirm ? <ConfirmCountButton /> : null}
+          {copy.offerRecount ? (
+            <RecountButton
+              occurrenceId={o.id}
+              reference={o.reference}
+              timeZone={timeZone}
+              variant={copy.recountEmphasis === 'primary' ? 'default' : 'outline'}
+              size="default"
+              className="pointer-coarse:min-h-11"
+            />
+          ) : null}
+        </div>
+      ) : null}
+      {copy.recountLine ? <p className="text-muted-foreground">{copy.recountLine}</p> : null}
+      {copy.reason ? (
+        <p className="text-muted-foreground" data-testid="confirm-unavailable">
+          {copy.reason}
+        </p>
+      ) : null}
+    </DetailSection>
   );
 }

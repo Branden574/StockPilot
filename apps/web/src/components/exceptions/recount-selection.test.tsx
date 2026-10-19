@@ -82,7 +82,10 @@ describe('RecountSelectionProvider', () => {
   });
 
   it('refuses more than 200 at once', () => {
-    const ids = Array.from({ length: 201 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`);
+    const ids = Array.from(
+      { length: 201 },
+      (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+    );
     render(
       <RecountSelectionProvider enabled timeZone="UTC">
         {ids.map((id) => (
@@ -93,6 +96,25 @@ describe('RecountSelectionProvider', () => {
     for (const id of ids) fireEvent.click(screen.getByLabelText(`Select ${id} to recount`));
     expect(screen.getByRole('button', { name: 'Recount selected (201)' })).toBeDisabled();
     expect(screen.getByTestId('recount-selection-bar')).toHaveTextContent('at most 200');
+  });
+});
+
+describe('RecountCheckbox (the shared checkbox)', () => {
+  // Redesign (P4.A3): the native box became the shared Checkbox. One click is
+  // one toggle, aria-checked follows the selection, and Clear unticks it.
+  it('is a checkbox whose state follows the selection, one toggle per click', () => {
+    render(
+      <RecountSelectionProvider enabled timeZone="UTC">
+        <RecountCheckbox occurrenceId={A} label="EX-000001" />
+      </RecountSelectionProvider>,
+    );
+    const box = screen.getByRole('checkbox', { name: 'Select EX-000001 to recount' });
+    expect(box).toHaveAttribute('aria-checked', 'false');
+    fireEvent.click(box);
+    expect(box).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByTestId('recount-selection-bar')).toHaveTextContent('1 selected');
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(box).toHaveAttribute('aria-checked', 'false');
   });
 });
 
@@ -107,7 +129,11 @@ describe('RecountButton', () => {
 
 describe('CountThisItemButton', () => {
   it('names the item and its recountable open exceptions', async () => {
-    listItemRecountTargetsAction.mockResolvedValue({ ok: true, canRecount: true, occurrenceIds: [A, B] });
+    listItemRecountTargetsAction.mockResolvedValue({
+      ok: true,
+      canRecount: true,
+      occurrenceIds: [A, B],
+    });
     render(<CountThisItemButton itemId={ITEM} />);
     await act(async () => {
       fireEvent.click(screen.getByTestId('count-this-item'));
@@ -151,7 +177,11 @@ describe('CountThisItemButton', () => {
   });
 
   it('the server saying this reader cannot recount blocks it with the reason', async () => {
-    listItemRecountTargetsAction.mockResolvedValue({ ok: true, canRecount: false, occurrenceIds: [] });
+    listItemRecountTargetsAction.mockResolvedValue({
+      ok: true,
+      canRecount: false,
+      occurrenceIds: [],
+    });
     render(<CountThisItemButton itemId={ITEM} />);
     await act(async () => {
       fireEvent.click(screen.getByTestId('count-this-item'));

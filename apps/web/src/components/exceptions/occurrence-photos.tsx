@@ -11,8 +11,8 @@ import {
   type PanelPhoto,
   type PhotoPanelEndpoints,
 } from '@/components/maintenance/maintenance-photos-panel';
+import { DetailSection } from '@/components/patterns/detail-section';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   finalizeExceptionEvidenceAction,
   removeExceptionEvidenceAction,
@@ -199,19 +199,14 @@ export function OccurrencePhotos({
 
   if (evidence.status !== 'ok') {
     return (
-      <Card data-testid="occurrence-photos">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">Photos</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          <p role="alert" className="text-muted-foreground text-sm">
-            {EXCEPTION_EVIDENCE_UNAVAILABLE_COPY}
-          </p>
-          <Button type="button" variant="outline" size="sm" onClick={() => router.refresh()}>
-            Try again
-          </Button>
-        </CardContent>
-      </Card>
+      <DetailSection title="Photos" data-testid="occurrence-photos" bodyClassName="space-y-3">
+        <p role="alert" className="text-muted-foreground text-[13.5px]">
+          {EXCEPTION_EVIDENCE_UNAVAILABLE_COPY}
+        </p>
+        <Button type="button" variant="outline" onClick={() => router.refresh()}>
+          Try again
+        </Button>
+      </DetailSection>
     );
   }
 
@@ -239,46 +234,50 @@ export function OccurrencePhotos({
   }));
 
   return (
-    <Card data-testid="occurrence-photos">
-      <CardContent className="pt-6">
-        <MaintenancePhotosPanel
-          endpoints={endpoints}
-          photos={photos}
-          onChange={() => router.refresh()}
-          variant="card"
-          ariaLabel="Exception photos"
-          maxPhotos={EXCEPTION_EVIDENCE_MAX_PHOTOS}
-          countLabel={exceptionEvidenceCountLabel(evidence.liveCount)}
-          capMessage={EXCEPTION_EVIDENCE_CAP_COPY}
-          readOnly={readOnly}
-          addDisabledReason={addDisabledReason}
-          noteField={{
-            label: 'Note (optional, saved with each photo you add)',
-            max: EXCEPTION_EVIDENCE_NOTE_MAX,
-            placeholder: 'What the photo shows',
-          }}
-          removal={{
-            title: 'Remove this photo?',
-            description: EXCEPTION_EVIDENCE_REMOVE_COPY,
-            reasonLabel: 'Reason (optional)',
-            reasonMax: EXCEPTION_EVIDENCE_NOTE_MAX,
-            confirmLabel: 'Remove photo',
-          }}
-          emptyText={EXCEPTION_EVIDENCE_NONE_COPY}
-          removeDisabledReason={online ? null : EXCEPTION_EVIDENCE_REMOVE_OFFLINE_COPY}
-          // Links live an hour: an expired one says so, and Try again reads
-          // the exception again for fresh ones.
-          photoLoadFailure={{
-            message: EXCEPTION_EVIDENCE_PHOTO_FAILED_COPY,
-            onRetry: () => router.refresh(),
-          }}
-          footnote={
-            readOnly
-              ? [EXCEPTION_EVIDENCE_PRIVACY_COPY]
-              : [EXCEPTION_EVIDENCE_LIMITS_COPY, EXCEPTION_EVIDENCE_PRIVACY_COPY]
-          }
-        />
-      </CardContent>
-    </Card>
+    // The shared card's surface (DESIGN-SPEC 6.7: hairline, radius 8, 18 px
+    // padding) as a plain box: the panel inside is the region and draws its
+    // own "Photos (N of 8)" heading.
+    <div
+      data-testid="occurrence-photos"
+      className="border-border bg-card text-card-foreground min-w-0 rounded-lg border p-[18px]"
+    >
+      <MaintenancePhotosPanel
+        endpoints={endpoints}
+        photos={photos}
+        onChange={() => router.refresh()}
+        variant="card"
+        ariaLabel="Exception photos"
+        maxPhotos={EXCEPTION_EVIDENCE_MAX_PHOTOS}
+        countLabel={exceptionEvidenceCountLabel(evidence.liveCount)}
+        capMessage={EXCEPTION_EVIDENCE_CAP_COPY}
+        readOnly={readOnly}
+        addDisabledReason={addDisabledReason}
+        noteField={{
+          label: 'Note (optional, saved with each photo you add)',
+          max: EXCEPTION_EVIDENCE_NOTE_MAX,
+          placeholder: 'What the photo shows',
+        }}
+        removal={{
+          title: 'Remove this photo?',
+          description: EXCEPTION_EVIDENCE_REMOVE_COPY,
+          reasonLabel: 'Reason (optional)',
+          reasonMax: EXCEPTION_EVIDENCE_NOTE_MAX,
+          confirmLabel: 'Remove photo',
+        }}
+        emptyText={EXCEPTION_EVIDENCE_NONE_COPY}
+        removeDisabledReason={online ? null : EXCEPTION_EVIDENCE_REMOVE_OFFLINE_COPY}
+        // Links live an hour: an expired one says so, and Try again reads
+        // the exception again for fresh ones.
+        photoLoadFailure={{
+          message: EXCEPTION_EVIDENCE_PHOTO_FAILED_COPY,
+          onRetry: () => router.refresh(),
+        }}
+        footnote={
+          readOnly
+            ? [EXCEPTION_EVIDENCE_PRIVACY_COPY]
+            : [EXCEPTION_EVIDENCE_LIMITS_COPY, EXCEPTION_EVIDENCE_PRIVACY_COPY]
+        }
+      />
+    </div>
   );
 }
