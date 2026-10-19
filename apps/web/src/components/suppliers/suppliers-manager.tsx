@@ -1,11 +1,12 @@
 'use client';
 
-import { History, Loader2, Plus, RotateCcw, Trash2, Truck } from 'lucide-react';
+import { Archive, History, Loader2, Plus, RotateCcw, Truck } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
+import { PageHeader } from '@/components/patterns/page-header';
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
@@ -34,6 +35,8 @@ import {
   restoreSupplierAction,
   updateSupplierAction,
 } from '@/server/actions/suppliers';
+
+import { supplierMailtoUrl } from './supplier-mailto';
 
 interface SupplierRow {
   id: string;
@@ -103,20 +106,28 @@ export function SuppliersManager({
 
   return (
     <>
-      <div className="mb-5 flex items-center justify-between gap-2">
-        <ArchiveViewToggle view={view} />
-        {canManage && !isArchivedView && (
-          <Button
-            variant="gradient"
-            onClick={() => {
-              setEditing(null);
-              setOpen(true);
-            }}
-          >
-            <Plus className="h-4 w-4" /> New supplier
-          </Button>
-        )}
-      </div>
+      <PageHeader
+        title="Suppliers"
+        subline={
+          isArchivedView
+            ? 'Suppliers you archived. Restore one to bring it back into pick lists.'
+            : 'Vendors, contacts, and where to reorder from.'
+        }
+        actions={<ArchiveViewToggle view={view} />}
+        primaryAction={
+          canManage && !isArchivedView ? (
+            <Button
+              variant="gradient"
+              onClick={() => {
+                setEditing(null);
+                setOpen(true);
+              }}
+            >
+              <Plus className="h-4 w-4" /> New supplier
+            </Button>
+          ) : null
+        }
+      />
 
       {initial.length === 0 ? (
         isArchivedView ? (
@@ -133,10 +144,13 @@ export function SuppliersManager({
           />
         )
       ) : (
-        <div className="overflow-x-auto rounded-xl border bg-card">
-          <Table>
+        <div
+          data-slot="suppliers-table"
+          className="border-border bg-card min-w-0 overflow-hidden rounded-lg border"
+        >
+          <Table className="min-w-[640px]">
             <TableHeader>
-              <TableRow>
+              <TableRow className="hover:bg-transparent">
                 <TableHead>Name</TableHead>
                 <TableHead>Contact</TableHead>
                 <TableHead>Email</TableHead>
@@ -145,54 +159,71 @@ export function SuppliersManager({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {initial.map((row) => (
-                <TableRow key={row.id}>
-                  <TableCell className="font-medium">{row.name}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{row.contact_name ?? '—'}</TableCell>
-                  <TableCell className="text-sm">
-                    {row.email ? (
-                      <a href={`mailto:${row.email}`} className="text-primary hover:underline">
-                        {row.email}
-                      </a>
-                    ) : (
-                      <span className="text-muted-foreground">—</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{row.phone ?? '—'}</TableCell>
-                  <TableCell className="flex justify-end gap-2">
-                    {canManage && (isArchivedView ? (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setRestoreTarget(row)}
-                      >
-                        <RotateCcw className="h-3.5 w-3.5" /> Restore
-                      </Button>
-                    ) : (
-                      <>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => {
-                            setEditing(row);
-                            setOpen(true);
-                          }}
-                        >
-                          Edit
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => setArchiveTarget(row)}
-                          aria-label={`Archive ${row.name}`}
-                        >
-                          <Trash2 className="h-4 w-4 text-muted-foreground" />
-                        </Button>
-                      </>
-                    ))}
-                  </TableCell>
-                </TableRow>
-              ))}
+              {initial.map((row) => {
+                // A link only for one plain address; any other stored text is
+                // shown as it is, never as a link (supplierMailtoUrl).
+                const mailto = supplierMailtoUrl(row.email);
+                return (
+                  <TableRow key={row.id}>
+                    <TableCell className="text-foreground font-medium">{row.name}</TableCell>
+                    <TableCell className="text-ink-2">{row.contact_name ?? '—'}</TableCell>
+                    <TableCell className="[overflow-wrap:anywhere]">
+                      {row.email ? (
+                        mailto ? (
+                          <a
+                            href={mailto}
+                            className="text-accent hover:text-foreground underline-offset-4 hover:underline"
+                          >
+                            {row.email}
+                          </a>
+                        ) : (
+                          <span className="text-ink-2">{row.email}</span>
+                        )
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-ink-2 whitespace-nowrap font-mono text-[12.5px]">
+                      {row.phone ?? '—'}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center justify-end gap-2">
+                        {canManage &&
+                          (isArchivedView ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setRestoreTarget(row)}
+                            >
+                              <RotateCcw className="h-3.5 w-3.5" /> Restore
+                            </Button>
+                          ) : (
+                            <>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  setEditing(row);
+                                  setOpen(true);
+                                }}
+                              >
+                                Edit
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => setArchiveTarget(row)}
+                                aria-label={`Archive ${row.name}`}
+                              >
+                                <Archive className="text-muted-foreground h-4 w-4" />
+                              </Button>
+                            </>
+                          ))}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         </div>
@@ -208,8 +239,8 @@ export function SuppliersManager({
         title={archiveTarget ? `Archive "${archiveTarget.name}"?` : 'Archive supplier?'}
         description={
           <>
-            The supplier is hidden from pick lists and new purchase orders. Existing items and
-            POs that reference this supplier keep working. You can restore it from the{' '}
+            The supplier is hidden from pick lists and new purchase orders. Existing items and POs
+            that reference this supplier keep working. You can restore it from the{' '}
             <strong>Archived view</strong>.
           </>
         }
@@ -298,37 +329,41 @@ function SupplierDialog({
         <form onSubmit={onSubmit} className="space-y-4" noValidate>
           <div className="space-y-1.5">
             <Label htmlFor="name">Name</Label>
-            <Input id="name" placeholder="Acme Supplies Co" {...register('name', { required: true })} />
-            {errors.name && <p className="text-xs text-destructive">Name is required.</p>}
+            <Input
+              id="name"
+              placeholder="Acme Supplies Co"
+              {...register('name', { required: true })}
+            />
+            {errors.name && <p className="text-destructive text-xs">Name is required.</p>}
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="contactName">
                 Contact name
-                <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+                <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
               </Label>
               <Input id="contactName" {...register('contactName')} />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="phone">
                 Phone
-                <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+                <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
               </Label>
               <Input id="phone" {...register('phone')} />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="email">
                 Email
-                <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+                <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
               </Label>
               <Input id="email" type="email" {...register('email')} />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="website">
                 Website
-                <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+                <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
               </Label>
               <Input id="website" placeholder="https://" {...register('website')} />
             </div>
@@ -336,12 +371,17 @@ function SupplierDialog({
           <div className="space-y-1.5">
             <Label htmlFor="notes">
               Notes
-              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+              <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
             </Label>
             <Textarea id="notes" rows={3} {...register('notes')} />
           </div>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              disabled={isSubmitting}
+            >
               Cancel
             </Button>
             <Button type="submit" variant="gradient" disabled={isSubmitting}>
