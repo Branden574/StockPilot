@@ -1540,7 +1540,10 @@ export default async function OrderDetailPage({
               <Table className="[&_td:first-child]:pl-[18px] [&_td:last-child]:pr-[18px] [&_th:first-child]:pl-[18px] [&_th:last-child]:pr-[18px]">
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
-                    <TableHead>Item</TableHead>
+                    {/* The item takes the room the numbers leave (they keep their
+                        own width), so readiness under the name reads in
+                        lines, not a word at a time. */}
+                    <TableHead className="w-full">Item</TableHead>
                     <TableHead className="whitespace-nowrap text-right">Requested</TableHead>
                     <TableHead className="whitespace-nowrap text-right">
                       <span className="inline-flex items-center gap-1">
