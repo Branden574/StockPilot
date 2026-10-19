@@ -287,7 +287,7 @@ function GroupRow({
       <div
         data-slot="product-group-row"
         className={cn(
-          'hover:bg-muted/60 flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-3 transition-colors sm:flex-nowrap',
+          'hover:bg-muted flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-3 transition-colors sm:flex-nowrap',
           expanded && 'bg-sunk hover:bg-sunk',
         )}
       >
@@ -429,7 +429,7 @@ function GroupRow({
                   const columns = showSerialColumn ? 6 : 5;
                   return (
                     <React.Fragment key={v.id}>
-                      <tr className="border-border hover:bg-muted/60 border-b transition-colors last:border-0">
+                      <tr className="border-border hover:bg-muted border-b transition-colors last:border-0">
                         <td className="py-2 pl-4 pr-3 sm:pl-[52px]">
                           <Link
                             href={`/dashboard/inventory/${v.id}`}

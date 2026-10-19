@@ -268,7 +268,7 @@ function FamilyCard({
                   key={m.id}
                   className={cn(
                     'border-border border-b transition-colors last:border-0',
-                    d.selected ? 'bg-success-wash' : 'hover:bg-muted/60',
+                    d.selected ? 'bg-success-wash' : 'hover:bg-muted',
                   )}
                 >
                   <td className="py-2 pl-[18px] pr-2">
