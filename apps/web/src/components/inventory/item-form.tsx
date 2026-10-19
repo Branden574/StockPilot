@@ -1600,7 +1600,10 @@ export function ItemForm({
         );
         if (control && (control as HTMLButtonElement).type !== 'submit') touchedRef.current = true;
       }}
-      className="space-y-6"
+      // The form's own width decides its layout (DESIGN-SPEC 8: "base layout
+      // on the space after navigation, not on the viewport"): beside the
+      // sidebar on a tablet the card is far narrower than the window.
+      className="@container/item-form space-y-6"
       noValidate
     >
       {isEdit && sharedSkuBanner ? (
@@ -1631,7 +1634,7 @@ export function ItemForm({
           </p>
 
           {staged.length > 0 && (
-            <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
+            <div className="@min-[480px]/fields:grid-cols-5 grid grid-cols-3 gap-2">
               {staged.map((s, idx) => (
                 <div
                   key={s.previewUrl}
@@ -2330,7 +2333,7 @@ export function ItemForm({
             />
           </Field>
         </div>
-        <div className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-3">
+        <div className={FIELD_GRID_3}>
           {(() => {
             const sizedFlowActive =
               !isEdit && Boolean(selectedCategory?.supports_sizes) && selectedSizes.length > 0;
@@ -2610,7 +2613,10 @@ export function ItemForm({
         return (
           <div
             data-slot="item-form-add-sizes"
-            className="border-border bg-sunk flex flex-wrap items-center justify-between gap-3 rounded-md border px-3 py-2.5 text-[13px]"
+            className={cn(
+              'border-border bg-sunk flex flex-wrap items-center justify-between gap-3 rounded-md border px-3 py-2.5 text-[13px]',
+              UNDER_FIELDS,
+            )}
           >
             <div className="min-w-0">
               <p className="font-medium">Add sibling sizes from this item</p>
@@ -2646,14 +2652,16 @@ export function ItemForm({
 
       {/* Create-only, for the same reason the fields above are; never on rentals. */}
       {sportsGrouping && (
-        <GroupingPreview
-          groupName={groupNamePreview}
-          variantLabel={variantLabel}
-          mode={effectiveMode}
-          countingUnit={countingUnit}
-          candidates={linkedGroup ? [] : groupCandidates}
-          onUseCandidate={handleUseGroupCandidate}
-        />
+        <div className={UNDER_FIELDS}>
+          <GroupingPreview
+            groupName={groupNamePreview}
+            variantLabel={variantLabel}
+            mode={effectiveMode}
+            countingUnit={countingUnit}
+            candidates={linkedGroup ? [] : groupCandidates}
+            onUseCandidate={handleUseGroupCandidate}
+          />
+        </div>
       )}
 
       {/* The card's footer bar (the shared form pattern): it spans the card
@@ -2735,8 +2743,22 @@ export function ItemForm({
 
 /** One field: label above its control, the hint or error under it. */
 const FIELD = 'space-y-1.5';
-/** Two fields side by side from the small breakpoint, stacked on a phone. */
-const FIELD_GRID = 'grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2';
+/**
+ * Two fields side by side once the section's field column (the `fields`
+ * container, see Section) is 480 px wide, stacked below that. The column's own
+ * width decides, not the window's: a tablet that shows the sidebar beside the
+ * form has a 768 px window but only about 440 px of field column, where two
+ * columns left the barcode box no room beside Scan and Lookup.
+ */
+const FIELD_GRID = 'grid grid-cols-1 gap-x-4 gap-y-3 @min-[480px]/fields:grid-cols-2';
+/** The same for the three stock figures (On hand, Reorder at, Reorder qty). */
+const FIELD_GRID_3 = 'grid grid-cols-1 gap-x-4 gap-y-3 @min-[480px]/fields:grid-cols-3';
+/**
+ * A panel that belongs to the whole form (Add sibling sizes, the grouping
+ * preview) lines up with the fields column once the sections split: the title
+ * column (176) plus the gap (32).
+ */
+const UNDER_FIELDS = '@min-[880px]/item-form:ml-[208px]';
 /** The quiet line under a field. */
 const HINT = 'text-muted-foreground text-[12px] leading-[17px]';
 /** A recessed note (which fields are shared, which belong to this placement). */
@@ -2760,18 +2782,24 @@ function OptionalMark() {
 
 /**
  * A section of the form (the shared form pattern): its title in a column of
- * its own on a wide screen and above its fields on a narrow one, the sections
- * divided by hairlines. The heading stays the section's first child, inside
- * the one element that also holds the section's notes and fields.
+ * its own once the form is 880 px wide and above its fields when it is
+ * narrower, the sections divided by hairlines. The width is the form's own
+ * (the `item-form` container), so a form beside the sidebar on a tablet stacks
+ * instead of squeezing its fields into what is left of a 768 px window. The
+ * heading stays the section's first child, inside the one element that also
+ * holds the section's notes and fields; the fields column is the `fields`
+ * container the field grids measure.
  */
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div
       data-slot="item-form-section"
-      className="border-border space-y-3 border-t pt-6 first:border-t-0 first:pt-0 md:grid md:grid-cols-[176px_minmax(0,1fr)] md:gap-x-8 md:space-y-0"
+      className="border-border @min-[880px]/item-form:grid @min-[880px]/item-form:grid-cols-[176px_minmax(0,1fr)] @min-[880px]/item-form:gap-x-8 @min-[880px]/item-form:space-y-0 space-y-3 border-t pt-6 first:border-t-0 first:pt-0"
     >
-      <h3 className="text-foreground text-[13.5px] font-medium leading-5 md:pt-1.5">{title}</h3>
-      <div className="min-w-0 space-y-4">{children}</div>
+      <h3 className="text-foreground @min-[880px]/item-form:pt-1.5 text-[13.5px] font-medium leading-5">
+        {title}
+      </h3>
+      <div className="@container/fields min-w-0 space-y-4">{children}</div>
     </div>
   );
 }

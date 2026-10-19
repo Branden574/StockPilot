@@ -324,3 +324,23 @@ describe('ProductGroupRollupList — archive', () => {
     expect(screen.queryByRole('button', { name: /^restore/i })).not.toBeInTheDocument();
   });
 });
+
+describe('ProductGroupRollupList — layout follows the card, not the window', () => {
+  // Redesign (P4.A1): beside the sidebar on a 768 px tablet the card is about
+  // 476 px wide. A window breakpoint kept the roll-up and the action on the
+  // name's line there and squeezed the name to a few letters; the row now
+  // splits on the card's own width (the `groups` size container).
+  it('makes the card the size container its rows and open groups measure', async () => {
+    const user = userEvent.setup();
+    const { container } = render(<ProductGroupRollupList groups={[group()]} />);
+    const card = container.querySelector('[data-slot="product-group-list"]')!;
+    expect(card).toHaveClass('@container/groups');
+    const row = container.querySelector('[data-slot="product-group-row"]')!;
+    expect(row).toHaveClass('flex-wrap', '@min-[560px]/groups:flex-nowrap');
+    expect(row.className).not.toMatch(/(^|\s)sm:/);
+
+    await user.click(screen.getByRole('button', { name: /expand nike pegasus 41/i }));
+    const variantHeader = await screen.findByRole('columnheader', { name: 'Variant' });
+    expect(variantHeader).toHaveClass('pl-4', '@min-[560px]/groups:pl-[52px]');
+  });
+});

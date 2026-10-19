@@ -119,10 +119,13 @@ export function ProductGroupRollupList({
 
   return (
     // The table-card language (DESIGN-SPEC 6.9 and 6.21): one card, a row per
-    // group in the group-header recipe, hairlines between.
+    // group in the group-header recipe, hairlines between. The card is the
+    // `groups` size container: a row keeps its roll-up and action on its own
+    // line only when the card is 560 px wide (DESIGN-SPEC 8, the space after
+    // navigation), so beside the sidebar on a tablet the name is not squeezed.
     <div
       data-slot="product-group-list"
-      className="border-border bg-card divide-border divide-y overflow-hidden rounded-lg border"
+      className="border-border bg-card divide-border @container/groups divide-y overflow-hidden rounded-lg border"
     >
       {groups.map((g) => (
         <GroupRow
@@ -287,7 +290,7 @@ function GroupRow({
       <div
         data-slot="product-group-row"
         className={cn(
-          'hover:bg-muted flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-3 transition-colors sm:flex-nowrap',
+          'hover:bg-muted @min-[560px]/groups:flex-nowrap flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-3 transition-colors',
           expanded && 'bg-sunk hover:bg-sunk',
         )}
       >
@@ -321,19 +324,18 @@ function GroupRow({
               </span>
             )}
           </div>
-          {identity && (
-            <p className="text-muted-foreground truncate text-[12px]">{identity}</p>
-          )}
+          {identity && <p className="text-muted-foreground truncate text-[12px]">{identity}</p>}
         </div>
-        {/* On a phone the roll-up and the action drop under the name,
-            indented to it; from sm up they sit on the row's right. */}
-        <div className="ml-9 min-w-0 text-left sm:ml-0 sm:shrink-0 sm:text-right">
+        {/* In a narrow card (a phone, or a tablet with the sidebar open) the
+            roll-up and the action drop under the name, indented to it; once
+            the card is 560 px wide they sit on the row's right. */}
+        <div className="@min-[560px]/groups:ml-0 @min-[560px]/groups:shrink-0 @min-[560px]/groups:text-right ml-9 min-w-0 text-left">
           <p className="text-[13px] font-medium tabular-nums">{rollup}</p>
           <p className="text-muted-foreground text-[12px]">
             Added up from this group&rsquo;s variants
           </p>
         </div>
-        <div className="ml-auto shrink-0 sm:ml-0">
+        <div className="@min-[560px]/groups:ml-0 ml-auto shrink-0">
           {archived ? (
             <Button
               type="button"
@@ -361,7 +363,7 @@ function GroupRow({
       </div>
 
       {archiving && (
-        <div className="border-border bg-sunk border-t py-3 pl-4 pr-4 sm:pl-[52px]">
+        <div className="border-border bg-sunk @min-[560px]/groups:pl-[52px] border-t py-3 pl-4 pr-4">
           <ArchiveRow
             groupName={group.name}
             blocked={archiving.blocked}
@@ -381,7 +383,7 @@ function GroupRow({
             loadError ? (
               <div
                 role="alert"
-                className="text-destructive flex flex-wrap items-center gap-2 py-3 pl-4 pr-4 text-[12.5px] sm:pl-[52px]"
+                className="text-destructive @min-[560px]/groups:pl-[52px] flex flex-wrap items-center gap-2 py-3 pl-4 pr-4 text-[12.5px]"
               >
                 <span>{loadError}</span>
                 <Button type="button" variant="outline" size="sm" onClick={load}>
@@ -391,20 +393,22 @@ function GroupRow({
             ) : (
               <p
                 role="status"
-                className="text-muted-foreground py-3 pl-4 pr-4 text-[12.5px] sm:pl-[52px]"
+                className="text-muted-foreground @min-[560px]/groups:pl-[52px] py-3 pl-4 pr-4 text-[12.5px]"
               >
                 Loading variants…
               </p>
             )
           ) : variants.length === 0 ? (
-            <p className="text-muted-foreground py-3 pl-4 pr-4 text-[12.5px] sm:pl-[52px]">
+            <p className="text-muted-foreground @min-[560px]/groups:pl-[52px] py-3 pl-4 pr-4 text-[12.5px]">
               No items are linked to this group yet.
             </p>
           ) : (
             <table className="w-full min-w-[640px] text-[13px]">
               <thead className="text-muted-foreground">
                 <tr className="border-border border-b">
-                  <th className={cn(TH, 'pl-4 text-left sm:pl-[52px]')}>Variant</th>
+                  <th className={cn(TH, '@min-[560px]/groups:pl-[52px] pl-4 text-left')}>
+                    Variant
+                  </th>
                   <th className={cn(TH, 'text-left')}>SKU</th>
                   <th className={cn(TH, 'text-left')}>Tracking</th>
                   {/* Rendered ONLY when a variant genuinely has serials. */}
@@ -430,7 +434,7 @@ function GroupRow({
                   return (
                     <React.Fragment key={v.id}>
                       <tr className="border-border hover:bg-muted border-b transition-colors last:border-0">
-                        <td className="py-2 pl-4 pr-3 sm:pl-[52px]">
+                        <td className="@min-[560px]/groups:pl-[52px] py-2 pl-4 pr-3">
                           <Link
                             href={`/dashboard/inventory/${v.id}`}
                             prefetch={false}
@@ -449,7 +453,9 @@ function GroupRow({
                             </span>
                           )}
                         </td>
-                        <td className="text-muted-foreground px-3 font-mono text-[12px]">{v.sku}</td>
+                        <td className="text-muted-foreground px-3 font-mono text-[12px]">
+                          {v.sku}
+                        </td>
                         <td className="text-muted-foreground px-3">
                           {TRACKING_TYPE_LABELS[v.trackingType]}
                         </td>
@@ -492,7 +498,10 @@ function GroupRow({
                       </tr>
                       {unlinking === v.id && (
                         <tr className="border-border bg-sunk border-b last:border-0">
-                          <td colSpan={columns} className="py-2.5 pl-4 pr-4 sm:pl-[52px]">
+                          <td
+                            colSpan={columns}
+                            className="@min-[560px]/groups:pl-[52px] py-2.5 pl-4 pr-4"
+                          >
                             <UnlinkRow
                               label={label}
                               pending={pending}

@@ -146,6 +146,31 @@ describe('ItemForm (redesign): sections', () => {
     expect(within(pricing).getByLabelText('Unit cost')).toBeInTheDocument();
   });
 
+  it('lays the sections and field pairs out by the form’s own width, not the window’s', () => {
+    // Beside the sidebar on a 768 px tablet the form is about 440 px wide: a
+    // window breakpoint split it into a title column and two field columns
+    // anyway, leaving the barcode box no room beside Scan and Lookup. The
+    // split now follows the form (`item-form`) and each section's field
+    // column (`fields`), which the browser measures as size containers.
+    const { container } = renderForm();
+    const form = container.querySelector('form')!;
+    expect(form).toHaveClass('@container/item-form');
+    const sections = container.querySelectorAll('[data-slot="item-form-section"]');
+    expect(sections.length).toBeGreaterThan(0);
+    for (const section of sections) {
+      expect(section).toHaveClass('@min-[880px]/item-form:grid');
+      expect(section.className).not.toMatch(/(^|\s)(sm|md|lg):grid/);
+      expect(section.lastElementChild).toHaveClass('@container/fields');
+    }
+    const pricing = screen.getByRole('heading', { name: 'Pricing & stock' }).parentElement!;
+    const grids = Array.from(pricing.querySelectorAll<HTMLElement>('.grid'));
+    expect(grids.length).toBeGreaterThan(0);
+    for (const grid of grids) {
+      expect(grid.className).toMatch(/@min-\[480px\]\/fields:grid-cols-[23]/);
+      expect(grid.className).not.toMatch(/(^|\s)sm:grid-cols-/);
+    }
+  });
+
   it('puts Cancel and the submit button in the form’s footer bar', () => {
     renderForm({ returnHref: '/dashboard/inventory' });
     const footer = screen.getByRole('button', { name: 'Create item' }).parentElement!;

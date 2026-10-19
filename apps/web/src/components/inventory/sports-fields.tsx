@@ -229,12 +229,14 @@ export function SportsFields({
   return (
     <div
       // A recessed panel inside the Classification section; its inputs keep
-      // their card surface, so they read as controls on the well.
-      className="border-border bg-sunk space-y-3 rounded-md border p-3"
+      // their card surface, so they read as controls on the well. The panel
+      // is its own size container: the fields pair up when the panel itself
+      // has room (440 px), whatever the window's width.
+      className="border-border bg-sunk @container space-y-3 rounded-md border p-3"
       data-testid="sports-fields"
     >
       <p className="text-foreground text-[12.5px] font-medium">{profile.label} details</p>
-      <div className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
+      <div className="@min-[440px]:grid-cols-2 grid grid-cols-1 gap-x-4 gap-y-3">
         {hasGroup('brand') && (
           <div className="space-y-1.5">
             <FieldLabel htmlFor={idFor('brand')} required={required('brand')}>
