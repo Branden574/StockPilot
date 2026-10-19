@@ -41,20 +41,22 @@ describe('deriveRentalStatus', () => {
 });
 
 describe('RentalStatusBadge', () => {
+  // The tone is one of the shared Badge variants (DESIGN-SPEC 6.10), read from
+  // data-tone rather than from the Badge's own class names, which belong to
+  // the Badge primitive and may change without changing the tone.
   const cases: Array<[RentalStatusDisplay, string, string]> = [
-    ['out', 'Out', 'bg-sunk'],
-    ['overdue', 'Overdue', 'text-destructive'],
-    ['returned', 'Returned', 'text-success'],
-    ['cancelled', 'Cancelled', 'text-muted-foreground'],
+    ['out', 'Out', 'secondary'],
+    ['overdue', 'Overdue', 'destructive'],
+    ['returned', 'Returned', 'success'],
+    ['cancelled', 'Cancelled', 'outline'],
   ];
 
-  it.each(cases)('%s prints "%s" on its token tone', (status, word, toneClass) => {
+  it.each(cases)('%s prints "%s" on its token tone', (status, word, tone) => {
     render(<RentalStatusBadge status={status} />);
     const badge = screen.getByText(word);
     expect(badge.textContent).toBe(word);
     expect(badge.getAttribute('data-rental-status')).toBe(status);
-    // Look-only: the tone comes from the shared Badge variants.
-    expect(badge.className).toContain(toneClass);
+    expect(badge.getAttribute('data-tone')).toBe(tone);
     expect(badge.className).not.toMatch(/\b(blue|red|emerald|gray)-\d/);
   });
 

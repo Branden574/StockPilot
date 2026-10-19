@@ -55,6 +55,7 @@ export function RentalStatusBadge({
     <Badge
       variant={TONES[status]}
       data-rental-status={status}
+      data-tone={TONES[status]}
       className={className}
       suppressHydrationWarning
     >

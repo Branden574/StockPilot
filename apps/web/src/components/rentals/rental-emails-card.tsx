@@ -21,11 +21,12 @@ const TONE_ICON: Record<RentalEmailTone, typeof Mail> = {
 
 // Token tones (DESIGN-SPEC 6.10) in place of the old emerald / blue / amber
 // palette. Each line keeps its own icon and its words, so the colour is never
-// the only cue.
+// the only cue. An email still to come is the neutral ink, not the accent: the
+// accent is the "recorded" (already sent) tone, and the two must not read alike.
 const TONE_CLASS: Record<RentalEmailTone, string> = {
   recorded: 'text-success',
   rule: 'text-muted-foreground',
-  upcoming: 'text-accent',
+  upcoming: 'text-ink-2',
   none: 'text-ink-4',
   warn: 'text-warning',
 };
