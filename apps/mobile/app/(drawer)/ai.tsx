@@ -63,7 +63,7 @@ export default function AIAssistantScreen() {
           </View>
         </View>
         <View style={styles.head}>
-          <Eyebrow>WORKSPACE · BETA</Eyebrow>
+          <Eyebrow>INSIGHTS · BETA</Eyebrow>
           <Display size={34} style={{ marginTop: 12 }}>
             AI <Em>assistant.</Em>
           </Display>

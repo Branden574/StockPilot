@@ -43,6 +43,9 @@ export default async function NavigationSettingsPage() {
       href: it.href,
       label: it.label,
       iconName: it.iconName,
+      // The editor orders by core's rule, which reads an order saved before
+      // the 2026-10-19 regroup by each link's module.
+      moduleId: it.moduleId,
     })),
   }));
 

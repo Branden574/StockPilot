@@ -1,13 +1,23 @@
 import { describe, expect, it } from 'vitest';
+import type { Role } from '../constants/roles';
+import { MODULE_REGISTRY, type ModuleId } from '../modules/registry';
+import {
+  resolveSurface,
+  SECTION_ORDER,
+  type ResolvedNavItem,
+  type ResolvedNavSection,
+} from '../modules/resolve';
 import {
   applyNavOverrides,
   DASHBOARD_WIDGETS,
   isSafeNavHref,
+  NAV_FORMER_SECTION,
+  NAV_SECTIONS_SPLIT_FROM,
+  orderNavSectionItems,
   resolveDashboardWidgets,
   type NavOverrides,
   type DashboardLayout,
 } from './index';
-import type { ResolvedNavItem, ResolvedNavSection } from '../modules/resolve';
 
 // --- helpers ---------------------------------------------------------------
 
@@ -199,6 +209,413 @@ describe('applyNavOverrides', () => {
       for (const it of sec.items) {
         const isCustom = String(it.moduleId).startsWith('custom:');
         if (!isCustom) expect(originalHrefs.has(it.href)).toBe(true);
+      }
+    }
+  });
+});
+
+// --- the 2026-10-19 regroup: saved orders carry over ------------------------
+//
+// OWNER DECISION 2026-10-19: Fulfillment, Purchasing and Insights split out of
+// Inventory and Workspace. An org's saved order stays in the database under
+// the old keys; these pin that the sidebar reads it at resolve time, so every
+// link keeps its place relative to the links around it.
+
+describe('applyNavOverrides after the 2026-10-19 regroup', () => {
+  const EVERY_MODULE = new Set(Object.keys(MODULE_REGISTRY) as ModuleId[]);
+  /** The real web sidebar, every module on. */
+  const sidebar = (role: Role = 'admin') =>
+    resolveSurface('web_sidebar', { role, enabledModules: EVERY_MODULE });
+  const linksOf = (secs: ResolvedNavSection[], section: string) =>
+    secs.find((s) => s.section === section)?.items.map((i) => i.href);
+
+  // An order saved from the editor before the regroup: the whole Inventory
+  // section as the admin arranged it (Orders and Purchase orders pulled up,
+  // Locations ahead of Movements) and the whole Workspace section (Briefing
+  // above AI Assistant).
+  const OLD_INVENTORY = [
+    '/dashboard/orders',
+    '/dashboard/purchase-orders',
+    '/dashboard/inventory',
+    '/dashboard/inventory/staging',
+    '/dashboard/exceptions',
+    '/dashboard/books',
+    '/dashboard/product-groups',
+    '/dashboard/categories',
+    '/dashboard/tags',
+    '/dashboard/locations',
+    '/dashboard/movements',
+    '/dashboard/rentals',
+    '/dashboard/bundles',
+    '/dashboard/returns',
+    '/dashboard/cycle-counts',
+    '/dashboard/procedures',
+    '/dashboard/purchase-orders/recurring',
+    '/dashboard/planning',
+    '/dashboard/purchase-orders/imports',
+    '/dashboard/suppliers',
+    '/dashboard/reports',
+  ];
+  const OLD_WORKSPACE = [
+    '/dashboard/insights',
+    '/dashboard/ai',
+    '/dashboard/schedule',
+    '/dashboard/notifications',
+    '/dashboard/team',
+    '/dashboard/support',
+    '/dashboard/settings',
+    '/dashboard/customers',
+    '/dashboard/maintenance',
+    '/dashboard/zendesk',
+  ];
+
+  it("the owner's example: order.inventory = [Orders, Items] puts Orders first in Fulfillment and Items first in Inventory", () => {
+    const out = applyNavOverrides(sidebar(), {
+      v: 1,
+      order: { inventory: ['/dashboard/orders', '/dashboard/inventory'] },
+    });
+    expect(linksOf(out, 'fulfillment')).toEqual([
+      '/dashboard/orders',
+      // Not in the list: after it, in default order, as they were.
+      '/dashboard/rentals',
+      '/dashboard/bundles',
+      '/dashboard/returns',
+    ]);
+    expect(linksOf(out, 'inventory')?.[0]).toBe('/dashboard/inventory');
+    // Orders is in Fulfillment only: the moved link is skipped in Inventory.
+    expect(linksOf(out, 'inventory')).not.toContain('/dashboard/orders');
+    expect(linksOf(out, 'inventory')).toEqual(linksOf(sidebar(), 'inventory'));
+  });
+
+  it('a whole saved section carries over: every link keeps its place relative to the others', () => {
+    const out = applyNavOverrides(sidebar(), {
+      v: 1,
+      order: { inventory: OLD_INVENTORY, workspace: OLD_WORKSPACE },
+    });
+    expect(linksOf(out, 'inventory')).toEqual([
+      '/dashboard/inventory',
+      '/dashboard/inventory/staging',
+      '/dashboard/exceptions',
+      '/dashboard/books',
+      '/dashboard/product-groups',
+      '/dashboard/categories',
+      '/dashboard/tags',
+      '/dashboard/locations',
+      '/dashboard/movements',
+      '/dashboard/cycle-counts',
+      '/dashboard/procedures',
+    ]);
+    expect(linksOf(out, 'fulfillment')).toEqual([
+      '/dashboard/orders',
+      '/dashboard/rentals',
+      '/dashboard/bundles',
+      '/dashboard/returns',
+    ]);
+    expect(linksOf(out, 'purchasing')).toEqual([
+      '/dashboard/purchase-orders',
+      '/dashboard/purchase-orders/recurring',
+      '/dashboard/planning',
+      '/dashboard/purchase-orders/imports',
+      '/dashboard/suppliers',
+    ]);
+    // Reports came from Inventory, which was drawn above Workspace, so it stays
+    // above the two links that came from Workspace, which keep their own order.
+    expect(linksOf(out, 'insights')).toEqual([
+      '/dashboard/reports',
+      '/dashboard/insights',
+      '/dashboard/ai',
+    ]);
+    expect(linksOf(out, 'workspace')).toEqual([
+      '/dashboard/schedule',
+      '/dashboard/notifications',
+      '/dashboard/team',
+      '/dashboard/support',
+      '/dashboard/settings',
+      '/dashboard/customers',
+      '/dashboard/maintenance',
+      '/dashboard/zendesk',
+    ]);
+  });
+
+  it('Insights from a saved Workspace list alone: Reports still leads, then the saved order', () => {
+    const out = applyNavOverrides(sidebar(), {
+      v: 1,
+      order: { workspace: ['/dashboard/insights', '/dashboard/schedule'] },
+    });
+    expect(linksOf(out, 'insights')).toEqual([
+      '/dashboard/reports',
+      '/dashboard/insights',
+      '/dashboard/ai',
+    ]);
+    expect(linksOf(out, 'workspace')?.[0]).toBe('/dashboard/schedule');
+  });
+
+  it('Insights from a saved Inventory list alone: Reports, then AI Assistant and Briefing in default order', () => {
+    const out = applyNavOverrides(sidebar(), {
+      v: 1,
+      order: { inventory: ['/dashboard/reports', '/dashboard/inventory'] },
+    });
+    expect(linksOf(out, 'insights')).toEqual([
+      '/dashboard/reports',
+      '/dashboard/ai',
+      '/dashboard/insights',
+    ]);
+  });
+
+  it("a section's own saved list beats the list it came from", () => {
+    const out = applyNavOverrides(sidebar(), {
+      v: 1,
+      order: {
+        inventory: OLD_INVENTORY,
+        fulfillment: ['/dashboard/bundles', '/dashboard/returns'],
+        insights: ['/dashboard/ai'],
+      },
+    });
+    expect(linksOf(out, 'fulfillment')).toEqual([
+      '/dashboard/bundles',
+      '/dashboard/returns',
+      '/dashboard/rentals',
+      '/dashboard/orders',
+    ]);
+    expect(linksOf(out, 'insights')).toEqual([
+      '/dashboard/ai',
+      '/dashboard/reports',
+      '/dashboard/insights',
+    ]);
+    // Purchasing has no list of its own, so it still carries the old one over.
+    expect(linksOf(out, 'purchasing')?.[0]).toBe('/dashboard/purchase-orders');
+    expect(linksOf(out, 'purchasing')?.[2]).toBe('/dashboard/planning');
+  });
+
+  it('with no saved list, or an empty or garbage one, every section keeps its default order', () => {
+    const base = sidebar();
+    for (const order of [
+      undefined,
+      {},
+      { inventory: [] },
+      { inventory: 'nope' },
+      { workspace: null },
+      { admin: ['/dashboard/audit'] },
+    ]) {
+      const out = applyNavOverrides(base, { v: 1, order } as unknown as NavOverrides);
+      for (const section of ['inventory', 'fulfillment', 'purchasing', 'insights', 'workspace']) {
+        expect(linksOf(out, section), `${JSON.stringify(order)} ${section}`).toEqual(
+          linksOf(base, section),
+        );
+      }
+    }
+  });
+
+  it('hidden and renamed moved links still apply, by href, in their new sections', () => {
+    const out = applyNavOverrides(sidebar(), {
+      v: 1,
+      hidden: ['/dashboard/orders', '/dashboard/ai'],
+      labels: { '/dashboard/purchase-orders': 'Buying', '/dashboard/reports': 'Analytics' },
+      order: { inventory: OLD_INVENTORY, workspace: OLD_WORKSPACE },
+    });
+    expect(linksOf(out, 'fulfillment')).toEqual([
+      '/dashboard/rentals',
+      '/dashboard/bundles',
+      '/dashboard/returns',
+    ]);
+    expect(linksOf(out, 'insights')).toEqual(['/dashboard/reports', '/dashboard/insights']);
+    const label = (href: string) => out.flatMap((s) => s.items).find((i) => i.href === href)?.label;
+    expect(label('/dashboard/purchase-orders')).toBe('Buying');
+    expect(label('/dashboard/reports')).toBe('Analytics');
+    expect(out.find((s) => s.section === 'purchasing')?.items[0]?.label).toBe('Buying');
+  });
+
+  it('a role that sees fewer links keeps the same relative order', () => {
+    const order = { inventory: OLD_INVENTORY, workspace: OLD_WORKSPACE };
+    const admin = applyNavOverrides(sidebar('admin'), { v: 1, order });
+    for (const role of ['manager', 'staff', 'viewer'] as const) {
+      const out = applyNavOverrides(sidebar(role), { v: 1, order });
+      for (const sec of out) {
+        const adminLinks = linksOf(admin, sec.section) ?? [];
+        const places = sec.items.map((i) => adminLinks.indexOf(i.href));
+        expect(places, `${role} ${sec.section}`).toEqual([...places].sort((a, b) => a - b));
+        expect(places, `${role} ${sec.section}`).not.toContain(-1);
+      }
+    }
+  });
+
+  it('a custom link keeps the section it was saved under, old or new', () => {
+    const out = applyNavOverrides(sidebar(), {
+      v: 1,
+      order: { inventory: OLD_INVENTORY },
+      custom: [
+        // Saved under Inventory before the regroup, pointing at an order page:
+        // it stays in Inventory, last.
+        {
+          id: 'old',
+          label: 'Rush orders',
+          href: '/dashboard/orders?status=rush',
+          section: 'inventory',
+          iconName: 'ShoppingCart',
+        },
+        {
+          id: 'f',
+          label: 'Carrier',
+          href: 'https://carrier.example.com',
+          section: 'fulfillment',
+          iconName: 'Truck',
+        },
+        {
+          id: 'p',
+          label: 'Price list',
+          href: '/dashboard/suppliers?tab=prices',
+          section: 'purchasing',
+          iconName: 'Tags',
+        },
+        {
+          id: 'i',
+          label: 'Board pack',
+          href: 'https://bi.example.com',
+          section: 'insights',
+          iconName: 'BarChart3',
+        },
+      ],
+    });
+    expect(linksOf(out, 'inventory')?.at(-1)).toBe('/dashboard/orders?status=rush');
+    expect(linksOf(out, 'fulfillment')?.at(-1)).toBe('https://carrier.example.com');
+    expect(linksOf(out, 'purchasing')?.at(-1)).toBe('/dashboard/suppliers?tab=prices');
+    expect(linksOf(out, 'insights')?.at(-1)).toBe('https://bi.example.com');
+  });
+
+  it('a custom link in a new section a role has no links in still draws that section, in its place', () => {
+    // A viewer has no Insights links of their own.
+    const out = applyNavOverrides(sidebar('viewer'), {
+      v: 1,
+      custom: [
+        {
+          id: 'i',
+          label: 'Board pack',
+          href: 'https://bi.example.com',
+          section: 'insights',
+          iconName: 'BarChart3',
+        },
+      ],
+    });
+    expect(out.map((s) => s.section)).toEqual([
+      'overview',
+      'inventory',
+      'fulfillment',
+      'purchasing',
+      'insights',
+      'workspace',
+    ]);
+    expect(linksOf(out, 'insights')).toEqual(['https://bi.example.com']);
+  });
+
+  it('the regroup surfaces nothing: an old list naming a module that is off cannot bring it back', () => {
+    const noFulfillment = new Set(
+      [...EVERY_MODULE].filter((m) => !['orders', 'rentals', 'bundles', 'returns'].includes(m)),
+    );
+    const out = applyNavOverrides(
+      resolveSurface('web_sidebar', { role: 'admin', enabledModules: noFulfillment }),
+      { v: 1, order: { inventory: OLD_INVENTORY, fulfillment: ['/dashboard/orders'] } },
+    );
+    expect(out.map((s) => s.section)).not.toContain('fulfillment');
+    expect(hrefs(out)).not.toContain('/dashboard/orders');
+  });
+});
+
+describe('orderNavSectionItems', () => {
+  const at = (href: string, moduleId: string) => ({ href, moduleId });
+
+  it('places each item by its own href alone, so hiding one never moves the others', () => {
+    const items = [
+      at('/dashboard/reports', 'reports'),
+      at('/dashboard/ai', 'ai'),
+      at('/dashboard/insights', 'ai'),
+    ];
+    const order = { workspace: ['/dashboard/insights', '/dashboard/ai'] };
+    expect(orderNavSectionItems('insights', items, order).map((i) => i.href)).toEqual([
+      '/dashboard/reports',
+      '/dashboard/insights',
+      '/dashboard/ai',
+    ]);
+    for (let skip = 0; skip < items.length; skip += 1) {
+      const fewer = items.filter((_, i) => i !== skip);
+      const full = orderNavSectionItems('insights', items, order).map((i) => i.href);
+      expect(orderNavSectionItems('insights', fewer, order).map((i) => i.href)).toEqual(
+        full.filter((h) => h !== items[skip]!.href),
+      );
+    }
+  });
+
+  it('an item no old section held counts as one the first old list does not name', () => {
+    const items = [
+      at('/dashboard/rentals', 'rentals'),
+      at('/dashboard/packing', 'packing'),
+      at('/dashboard/orders', 'orders'),
+    ];
+    expect(
+      orderNavSectionItems('fulfillment', items, { inventory: ['/dashboard/orders'] }).map(
+        (i) => i.href,
+      ),
+    ).toEqual(['/dashboard/orders', '/dashboard/rentals', '/dashboard/packing']);
+  });
+
+  it('leaves sections the regroup did not create to their own list only', () => {
+    const items = [at('/dashboard/schedule', 'schedule'), at('/dashboard/team', 'team')];
+    expect(
+      orderNavSectionItems('workspace', items, { inventory: ['/dashboard/team'] }).map(
+        (i) => i.href,
+      ),
+    ).toEqual(['/dashboard/schedule', '/dashboard/team']);
+  });
+
+  it('never mutates the items it is given', () => {
+    const items = [at('/dashboard/rentals', 'rentals'), at('/dashboard/orders', 'orders')];
+    const copy = [...items];
+    orderNavSectionItems('fulfillment', items, { inventory: ['/dashboard/orders'] });
+    expect(items).toEqual(copy);
+  });
+});
+
+describe('the regroup map matches the registry', () => {
+  it('every link in a regrouped section belongs to a module mapped to one of its old sections', () => {
+    const wrong: string[] = [];
+    for (const def of Object.values(MODULE_REGISTRY)) {
+      for (const p of def.placements) {
+        const from = NAV_SECTIONS_SPLIT_FROM[p.section];
+        if (!from) continue;
+        const former = NAV_FORMER_SECTION[def.id];
+        if (!former || !from.includes(former)) wrong.push(`${def.id} ${p.surface} ${p.label}`);
+      }
+    }
+    expect(wrong).toEqual([]);
+  });
+
+  it('every mapped module now sits only in regrouped sections, and the old keys stay valid', () => {
+    for (const [id, former] of Object.entries(NAV_FORMER_SECTION)) {
+      const def = MODULE_REGISTRY[id as ModuleId];
+      expect(def.placements.length, id).toBeGreaterThan(0);
+      for (const p of def.placements)
+        expect(NAV_SECTIONS_SPLIT_FROM[p.section], id).toContain(former);
+    }
+    for (const [section, from] of Object.entries(NAV_SECTIONS_SPLIT_FROM)) {
+      expect(SECTION_ORDER, section).toContain(section);
+      for (const key of from ?? []) expect(SECTION_ORDER, section).toContain(key);
+    }
+  });
+
+  // The editor saves an Inventory list of Inventory links only, and no list
+  // for a section left in its default order; the next draw must then give that
+  // default back. It does only while each regrouped section's default order
+  // puts the links from Inventory above the links from Workspace (Reports
+  // above AI Assistant and Briefing), as the old sidebar drew them.
+  it('old lists that name none of a regrouped section’s links leave its default order, for every role', () => {
+    const everyModule = new Set(Object.keys(MODULE_REGISTRY) as ModuleId[]);
+    for (const surface of ['web_sidebar', 'mobile_drawer'] as const) {
+      for (const role of ['owner', 'admin', 'manager', 'staff', 'viewer'] as const) {
+        const base = resolveSurface(surface, { role, enabledModules: everyModule });
+        const out = applyNavOverrides(base, {
+          v: 1,
+          order: { inventory: ['/dashboard/nothing'], workspace: ['/dashboard/nothing'] },
+        });
+        expect(hrefs(out), `${surface} ${role}`).toEqual(hrefs(base));
       }
     }
   });

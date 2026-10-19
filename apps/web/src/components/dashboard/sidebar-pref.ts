@@ -61,9 +61,12 @@ export function isTypingTarget(el: Element | null): boolean {
 }
 
 // ── Collapsed nav sections ────────────────────────────────────────────────
-// The registry's section keys (overview, inventory, workspace, tools, admin)
-// are the identity: labels can be renamed per org, keys never change, so a
-// saved choice keeps meaning the same section.
+// The registry's section keys (overview, inventory, fulfillment, purchasing,
+// insights, workspace, tools, admin: core's SECTION_ORDER) are the identity:
+// labels can be renamed per org, keys never change, so a saved choice keeps
+// meaning the same section. Fulfillment, Purchasing and Insights (the regroup
+// of 2026-10-19) start open for everyone, so someone who had folded Inventory
+// or Workspace finds the links that moved out of them in an open section.
 
 /** Cookie listing the nav sections this viewer has collapsed, joined by ".". */
 export const NAV_COLLAPSED_COOKIE = 'sp_nav_collapsed';
@@ -71,7 +74,8 @@ export const NAV_COLLAPSED_COOKIE = 'sp_nav_collapsed';
 /**
  * The sections that start collapsed before the viewer has chosen: Admin, for
  * owners and admins (a long group of rarely used setup pages under the daily
- * Inventory and Workspace links). Everyone else starts with every section open.
+ * Inventory, Fulfillment, Purchasing, Insights and Workspace links). Everyone
+ * else starts with every section open.
  */
 export function defaultCollapsedSections(role: Role): NavSectionKey[] {
   return isAdminRole(role) ? ['admin'] : [];

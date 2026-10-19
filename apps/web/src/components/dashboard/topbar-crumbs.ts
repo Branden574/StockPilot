@@ -9,8 +9,9 @@
  * (`organizations.nav_overrides.labels`, keyed by the item's canonical HREF).
  * Every crumb below that corresponds to a sidebar nav item carries that same
  * canonical href, so `applyNavLabelsToCrumbs` can swap in the org's renamed
- * label. Section headers ("Inventory", "Workspace", "Admin") and sub-page
- * tails ("Edit", "Detail", "New", …) carry `href: null` and NEVER rename.
+ * label. Section headers ("Inventory", "Fulfillment", "Purchasing",
+ * "Insights", "Workspace", "Admin") and sub-page tails ("Edit", "Detail",
+ * "New", …) carry `href: null` and NEVER rename.
  */
 
 import { BOOK_REPORT_TITLE } from '@stockpilot/core';
@@ -23,7 +24,12 @@ export interface Crumb {
   href: string | null;
 }
 
+// The sidebar's section headers (nav.ts SECTION_LABEL). Fulfillment,
+// Purchasing and Insights are the owner's regroup of 2026-10-19.
 const SECTION_INVENTORY: Crumb = { label: 'Inventory', href: null };
+const SECTION_FULFILLMENT: Crumb = { label: 'Fulfillment', href: null };
+const SECTION_PURCHASING: Crumb = { label: 'Purchasing', href: null };
+const SECTION_INSIGHTS: Crumb = { label: 'Insights', href: null };
 const SECTION_WORKSPACE: Crumb = { label: 'Workspace', href: null };
 const SECTION_ADMIN: Crumb = { label: 'Admin', href: null };
 const OVERVIEW: Crumb = { label: 'Overview', href: '/dashboard' };
@@ -190,18 +196,18 @@ const CRUMBS: Array<[RegExp, Crumb[]]> = [
 
   // Rentals: the checkouts list and its Items tab, each with their own pages.
   // The fixed /new and /items paths precede the /[^/]+ detail catch-all.
-  [/^\/dashboard\/rentals\/new$/, [SECTION_INVENTORY, RENTALS_LIST, tail('New')]],
+  [/^\/dashboard\/rentals\/new$/, [SECTION_FULFILLMENT, RENTALS_LIST, tail('New')]],
   [
     /^\/dashboard\/rentals\/items\/new$/,
-    [SECTION_INVENTORY, RENTALS_LIST, RENTAL_ITEMS_LIST, tail('New')],
+    [SECTION_FULFILLMENT, RENTALS_LIST, RENTAL_ITEMS_LIST, tail('New')],
   ],
   [
     /^\/dashboard\/rentals\/items\/[^/]+$/,
-    [SECTION_INVENTORY, RENTALS_LIST, RENTAL_ITEMS_LIST, tail('Detail')],
+    [SECTION_FULFILLMENT, RENTALS_LIST, RENTAL_ITEMS_LIST, tail('Detail')],
   ],
-  [/^\/dashboard\/rentals\/items$/, [SECTION_INVENTORY, RENTALS_LIST, RENTAL_ITEMS_LIST]],
-  [/^\/dashboard\/rentals\/[^/]+$/, [SECTION_INVENTORY, RENTALS_LIST, tail('Detail')]],
-  [/^\/dashboard\/rentals$/, [SECTION_INVENTORY, RENTALS_LIST]],
+  [/^\/dashboard\/rentals\/items$/, [SECTION_FULFILLMENT, RENTALS_LIST, RENTAL_ITEMS_LIST]],
+  [/^\/dashboard\/rentals\/[^/]+$/, [SECTION_FULFILLMENT, RENTALS_LIST, tail('Detail')]],
+  [/^\/dashboard\/rentals$/, [SECTION_FULFILLMENT, RENTALS_LIST]],
 
   // Cycle counts
   [
@@ -215,39 +221,42 @@ const CRUMBS: Array<[RegExp, Crumb[]]> = [
   [/^\/dashboard\/cycle-counts$/, [SECTION_INVENTORY, CYCLE_COUNTS_LIST]],
 
   // Bundles
-  [/^\/dashboard\/bundles\/new$/, [SECTION_INVENTORY, BUNDLES_LIST, { label: 'New', href: null }]],
+  [
+    /^\/dashboard\/bundles\/new$/,
+    [SECTION_FULFILLMENT, BUNDLES_LIST, { label: 'New', href: null }],
+  ],
   [
     /^\/dashboard\/bundles\/[^/]+\/edit$/,
-    [SECTION_INVENTORY, BUNDLES_LIST, { label: 'Edit', href: null }],
+    [SECTION_FULFILLMENT, BUNDLES_LIST, { label: 'Edit', href: null }],
   ],
   [
     /^\/dashboard\/bundles\/[^/]+$/,
-    [SECTION_INVENTORY, BUNDLES_LIST, { label: 'Detail', href: null }],
+    [SECTION_FULFILLMENT, BUNDLES_LIST, { label: 'Detail', href: null }],
   ],
-  [/^\/dashboard\/bundles$/, [SECTION_INVENTORY, BUNDLES_LIST]],
+  [/^\/dashboard\/bundles$/, [SECTION_FULFILLMENT, BUNDLES_LIST]],
 
   // Orders (order requests). The /new and /[id]/print patterns MUST come
   // before the bare /[^/]+$ detail catch-all.
-  [/^\/dashboard\/orders\/new$/, [SECTION_INVENTORY, ORDERS_LIST, { label: 'New', href: null }]],
+  [/^\/dashboard\/orders\/new$/, [SECTION_FULFILLMENT, ORDERS_LIST, { label: 'New', href: null }]],
   [
     /^\/dashboard\/orders\/[^/]+\/print$/,
-    [SECTION_INVENTORY, ORDERS_LIST, { label: 'Print', href: null }],
+    [SECTION_FULFILLMENT, ORDERS_LIST, { label: 'Print', href: null }],
   ],
   // The pick slip of one order.
-  [/^\/dashboard\/orders\/[^/]+\/pick$/, [SECTION_INVENTORY, ORDERS_LIST, tail('Pick')]],
+  [/^\/dashboard\/orders\/[^/]+\/pick$/, [SECTION_FULFILLMENT, ORDERS_LIST, tail('Pick')]],
   [
     /^\/dashboard\/orders\/[^/]+\/edit$/,
-    [SECTION_INVENTORY, ORDERS_LIST, { label: 'Edit', href: null }],
+    [SECTION_FULFILLMENT, ORDERS_LIST, { label: 'Edit', href: null }],
   ],
   [
     /^\/dashboard\/orders\/[^/]+$/,
-    [SECTION_INVENTORY, ORDERS_LIST, { label: 'Detail', href: null }],
+    [SECTION_FULFILLMENT, ORDERS_LIST, { label: 'Detail', href: null }],
   ],
-  [/^\/dashboard\/orders$/, [SECTION_INVENTORY, ORDERS_LIST]],
+  [/^\/dashboard\/orders$/, [SECTION_FULFILLMENT, ORDERS_LIST]],
 
   // Returns: the list, then one return's workbench.
-  [/^\/dashboard\/returns\/[^/]+$/, [SECTION_INVENTORY, RETURNS_LIST, tail('Detail')]],
-  [/^\/dashboard\/returns$/, [SECTION_INVENTORY, RETURNS_LIST]],
+  [/^\/dashboard\/returns\/[^/]+$/, [SECTION_FULFILLMENT, RETURNS_LIST, tail('Detail')]],
+  [/^\/dashboard\/returns$/, [SECTION_FULFILLMENT, RETURNS_LIST]],
 
   // Procedures. /new precedes the /[^/]+ detail catch-all.
   [/^\/dashboard\/procedures\/new$/, [SECTION_INVENTORY, PROCEDURES_LIST, tail('New')]],
@@ -259,30 +268,30 @@ const CRUMBS: Array<[RegExp, Crumb[]]> = [
   // detail pattern, otherwise "imports" matches as if it were a PO id.
   [
     /^\/dashboard\/purchase-orders\/new$/,
-    [SECTION_INVENTORY, POS_LIST, { label: 'New', href: null }],
+    [SECTION_PURCHASING, POS_LIST, { label: 'New', href: null }],
   ],
   [
     /^\/dashboard\/purchase-orders\/recurring$/,
-    [SECTION_INVENTORY, POS_LIST, { label: 'Recurring', href: null }],
+    [SECTION_PURCHASING, POS_LIST, { label: 'Recurring', href: null }],
   ],
   [
     /^\/dashboard\/purchase-orders\/imports\/new$/,
-    [SECTION_INVENTORY, POS_LIST, PO_IMPORTS_LIST, { label: 'New', href: null }],
+    [SECTION_PURCHASING, POS_LIST, PO_IMPORTS_LIST, { label: 'New', href: null }],
   ],
   [
     /^\/dashboard\/purchase-orders\/imports\/[^/]+$/,
-    [SECTION_INVENTORY, POS_LIST, PO_IMPORTS_LIST, { label: 'Detail', href: null }],
+    [SECTION_PURCHASING, POS_LIST, PO_IMPORTS_LIST, { label: 'Detail', href: null }],
   ],
-  [/^\/dashboard\/purchase-orders\/imports$/, [SECTION_INVENTORY, POS_LIST, PO_IMPORTS_LIST]],
-  [/^\/dashboard\/purchase-orders\/[^/]+\/edit$/, [SECTION_INVENTORY, POS_LIST, tail('Edit')]],
+  [/^\/dashboard\/purchase-orders\/imports$/, [SECTION_PURCHASING, POS_LIST, PO_IMPORTS_LIST]],
+  [/^\/dashboard\/purchase-orders\/[^/]+\/edit$/, [SECTION_PURCHASING, POS_LIST, tail('Edit')]],
   [
     /^\/dashboard\/purchase-orders\/[^/]+$/,
-    [SECTION_INVENTORY, POS_LIST, { label: 'Detail', href: null }],
+    [SECTION_PURCHASING, POS_LIST, { label: 'Detail', href: null }],
   ],
-  [/^\/dashboard\/purchase-orders$/, [SECTION_INVENTORY, POS_LIST]],
+  [/^\/dashboard\/purchase-orders$/, [SECTION_PURCHASING, POS_LIST]],
   [
     /^\/dashboard\/planning$/,
-    [SECTION_INVENTORY, { label: 'Reorder Planning', href: '/dashboard/planning' }],
+    [SECTION_PURCHASING, { label: 'Reorder Planning', href: '/dashboard/planning' }],
   ],
 
   // One location's page (F1-3).
@@ -300,21 +309,23 @@ const CRUMBS: Array<[RegExp, Crumb[]]> = [
   ],
   [
     /^\/dashboard\/suppliers$/,
-    [SECTION_INVENTORY, { label: 'Suppliers', href: '/dashboard/suppliers' }],
+    [SECTION_PURCHASING, { label: 'Suppliers', href: '/dashboard/suppliers' }],
   ],
-  // Reports: the hub, then each report under it by its own name.
+
+  // Insights. Reports: the hub, then each report under it by its own name.
   ...REPORT_PAGES.map(([segment, label]): [RegExp, Crumb[]] => [
     new RegExp(`^/dashboard/reports/${segment}$`),
-    [SECTION_INVENTORY, REPORTS_LIST, tail(label)],
+    [SECTION_INSIGHTS, REPORTS_LIST, tail(label)],
   ]),
-  [/^\/dashboard\/reports$/, [SECTION_INVENTORY, REPORTS_LIST]],
-
-  // Workspace
-  [/^\/dashboard\/ai$/, [SECTION_WORKSPACE, { label: 'AI Assistant', href: '/dashboard/ai' }]],
+  [/^\/dashboard\/reports$/, [SECTION_INSIGHTS, REPORTS_LIST]],
+  [/^\/dashboard\/ai$/, [SECTION_INSIGHTS, { label: 'AI Assistant', href: '/dashboard/ai' }]],
+  // The Briefing page's route is /dashboard/insights; its section is Insights too.
   [
     /^\/dashboard\/insights$/,
-    [SECTION_WORKSPACE, { label: 'Briefing', href: '/dashboard/insights' }],
+    [SECTION_INSIGHTS, { label: 'Briefing', href: '/dashboard/insights' }],
   ],
+
+  // Workspace
   [
     /^\/dashboard\/schedule\/new$/,
     [SECTION_WORKSPACE, SCHEDULE_LIST, { label: 'New', href: null }],

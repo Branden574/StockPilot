@@ -536,7 +536,9 @@ describe('AI launcher: the footer says what is true (D28)', () => {
   it('keeps every word and the Back that honours ?return=', () => {
     const words = wordsOf(AI);
     for (const w of [
-      'WORKSPACE · BETA',
+      // The drawer section the screen sits in: WORKSPACE until the owner's
+      // regroup of 2026-10-19 moved AI Assistant to INSIGHTS.
+      'INSIGHTS · BETA',
       'AI',
       'assistant.',
       'BETA · NATIVE',

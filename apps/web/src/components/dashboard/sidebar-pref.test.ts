@@ -94,7 +94,27 @@ describe('collapsed nav sections', () => {
     expect(parseCollapsedSections('')).toEqual([]);
     expect(parseCollapsedSections('admin')).toEqual(['admin']);
     expect(parseCollapsedSections('inventory.admin.inventory')).toEqual(['inventory', 'admin']);
-    expect(parseCollapsedSections('admin.fulfillment.<script>')).toEqual(['admin']);
+    // 'devices' is the Claude design's group that the app does not have.
+    expect(parseCollapsedSections('admin.devices.<script>')).toEqual(['admin']);
+  });
+
+  // OWNER DECISION 2026-10-19: Fulfillment, Purchasing and Insights are real
+  // sections now (this test used 'fulfillment' as its unknown key before), so
+  // folding one is remembered like any other; the old keys keep their meaning.
+  it('keeps the sections the regroup added, beside the old ones', () => {
+    expect(parseCollapsedSections('fulfillment.purchasing.insights')).toEqual([
+      'fulfillment',
+      'purchasing',
+      'insights',
+    ]);
+    expect(parseCollapsedSections('workspace.insights.admin')).toEqual([
+      'workspace',
+      'insights',
+      'admin',
+    ]);
+    expect(collapsedSectionsCookieString(['purchasing', 'admin'])).toContain(
+      `${NAV_COLLAPSED_COOKIE}=purchasing.admin;`,
+    );
   });
 
   it('persists the keys for a year, joined by "." (a cookie value may not hold a comma)', () => {

@@ -96,7 +96,6 @@ describe('setNavOverridesAction', () => {
         {
           id: 'evil',
           label: 'Evil',
-          // eslint-disable-next-line no-script-url
           href: 'javascript:alert(1)',
           section: 'tools',
           iconName: 'BookOpen',
@@ -193,6 +192,84 @@ describe('setNavOverridesAction', () => {
     expect(payload.nav_overrides.v).toBe(1);
     expect(audit).toHaveBeenCalledTimes(1);
     expect(vi.mocked(audit).mock.calls[0]?.[0].event).toBe('nav_overrides.updated');
+  });
+
+  // OWNER DECISION 2026-10-19: the sections the regroup added are valid keys
+  // for an order list and for a custom link; a save shaped before the regroup
+  // (from a tab opened before the deploy) is still accepted as it is.
+  it('accepts order lists and custom links under Fulfillment, Purchasing and Insights', async () => {
+    const { stub, updateSpy } = stubWithUpdateSpy();
+    stubHolder.stub = stub;
+
+    const overrides: NavOverrides = {
+      v: 1,
+      order: {
+        inventory: ['/dashboard/inventory', '/dashboard/books'],
+        fulfillment: ['/dashboard/orders', '/dashboard/rentals'],
+        purchasing: ['/dashboard/suppliers'],
+        insights: ['/dashboard/insights', '/dashboard/reports'],
+      },
+      custom: [
+        {
+          id: 'bi',
+          label: 'Board pack',
+          href: 'https://bi.example.com',
+          section: 'insights',
+          iconName: 'BarChart3',
+        },
+        {
+          id: 'carrier',
+          label: 'Carrier',
+          href: '/dashboard/orders?carrier=1',
+          section: 'fulfillment',
+          iconName: 'Truck',
+        },
+      ],
+    };
+
+    const result = await setNavOverridesAction(overrides);
+    expect(result.ok).toBe(true);
+    const payload = updateSpy.mock.calls[0]?.[0] as { nav_overrides: NavOverrides };
+    expect(payload.nav_overrides.order).toEqual(overrides.order);
+    expect(payload.nav_overrides.custom?.map((c) => c.section)).toEqual([
+      'insights',
+      'fulfillment',
+    ]);
+  });
+
+  it('still accepts a save shaped before the regroup (moved links in order.inventory)', async () => {
+    const { stub, updateSpy } = stubWithUpdateSpy();
+    stubHolder.stub = stub;
+
+    const result = await setNavOverridesAction({
+      v: 1,
+      order: {
+        inventory: ['/dashboard/orders', '/dashboard/inventory', '/dashboard/purchase-orders'],
+        workspace: ['/dashboard/insights', '/dashboard/ai'],
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(updateSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a section key no sidebar has (the design-only Devices group)', async () => {
+    const { stub, updateSpy } = stubWithUpdateSpy();
+    stubHolder.stub = stub;
+
+    for (const overrides of [
+      { v: 1, order: { devices: ['/dashboard/inventory'] } },
+      {
+        v: 1,
+        custom: [
+          { id: 'x', label: 'Scanner', href: '/dashboard', section: 'devices', iconName: 'X' },
+        ],
+      },
+    ]) {
+      const result = await setNavOverridesAction(overrides as unknown as NavOverrides);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('validation_error');
+    }
+    expect(updateSpy).not.toHaveBeenCalled();
   });
 
   it('reset (null) clears the override and audits', async () => {

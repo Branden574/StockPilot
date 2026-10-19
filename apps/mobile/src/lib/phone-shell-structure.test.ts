@@ -605,18 +605,34 @@ describe('drawer content: the registry, as the reference sidebar', () => {
     // Every label and section header is the registry's: none is typed here.
     expect(code).toContain('{section.label}');
     expect(code).toContain('{item.label}');
-    for (const typed of ['INVENTORY', 'WORKSPACE', 'TOOLS', 'ADMIN', 'Purchase orders', 'Items']) {
+    for (const typed of [
+      'INVENTORY',
+      'FULFILLMENT',
+      'PURCHASING',
+      'INSIGHTS',
+      'WORKSPACE',
+      'TOOLS',
+      'ADMIN',
+      'Purchase orders',
+      'Items',
+    ]) {
       expect(wordsOf(DRAWER)).not.toContain(typed);
     }
   });
 
   // Section keys are data (CONFLICTS N2): the drawer keeps the registry's
   // sections and their order, the overview section without a header.
+  // OWNER DECISION 2026-10-19: FULFILLMENT, PURCHASING and INSIGHTS split out
+  // of INVENTORY and WORKSPACE, as on the web sidebar (this list was
+  // INVENTORY, WORKSPACE, TOOLS, ADMIN before).
   it('an owner with every module sees the same sections, in the same order', () => {
     const sections = drawerSectionsFor('owner', ALL_MODULES);
     expect(sections.map((s) => s.label)).toEqual([
       undefined,
       'INVENTORY',
+      'FULFILLMENT',
+      'PURCHASING',
+      'INSIGHTS',
       'WORKSPACE',
       'TOOLS',
       'ADMIN',

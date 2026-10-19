@@ -52,10 +52,17 @@ export interface ResolvedNavSection {
 
 /** Canonical section render order. Exported so a guard test can assert it
  *  covers every section any placement uses (a new section omitted here would
- *  silently never render). */
+ *  silently never render). It is also the list of valid section keys: custom
+ *  links (customization), the Navigation editor and its server action, and the
+ *  sidebar's folded-sections cookie all accept exactly these. Fulfillment,
+ *  Purchasing and Insights sit between Inventory and Workspace, where their
+ *  links were drawn before the 2026-10-19 regroup. */
 export const SECTION_ORDER: NavSectionKey[] = [
   'overview',
   'inventory',
+  'fulfillment',
+  'purchasing',
+  'insights',
   'workspace',
   'tools',
   'admin',

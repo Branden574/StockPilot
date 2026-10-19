@@ -215,6 +215,83 @@ describe('MODULE_REGISTRY', () => {
     expect(mob?.requires).toBe('items:read');
     expect(mob?.iconName).toBe('AlertTriangle');
   });
+
+  // OWNER DECISION 2026-10-19 (sidebar sub-categories): which links sit in the
+  // three sections the regroup created, on each surface, and the rule that a
+  // module's web link and its phone twin always move together.
+  describe('the 2026-10-19 regroup', () => {
+    const placementsIn = (surface: 'web_sidebar' | 'mobile_drawer', section: string) =>
+      Object.values(MODULE_REGISTRY)
+        .flatMap((m) => m.placements)
+        .filter((p) => p.surface === surface && p.section === section)
+        .map((p) => p.label)
+        .sort();
+
+    it.each([
+      [
+        'fulfillment',
+        ['Bundles', 'Orders', 'Rentals', 'Returns'],
+        ['Bundles', 'Orders', 'Rentals', 'Returns'],
+      ],
+      [
+        'purchasing',
+        ['PO imports', 'Purchase orders', 'Recurring POs', 'Reorder Planning', 'Suppliers'],
+        // The phone has no Reorder Planning screen; Receive POs is phone only.
+        ['PO imports', 'Purchase orders', 'Receive POs', 'Recurring POs', 'Suppliers'],
+      ],
+      ['insights', ['AI Assistant', 'Briefing', 'Reports'], ['AI Assistant', 'Reports']],
+    ])('%s holds exactly these links (web, then phone)', (section, web, phone) => {
+      expect(placementsIn('web_sidebar', section)).toEqual(web);
+      expect(placementsIn('mobile_drawer', section)).toEqual(phone);
+    });
+
+    it('a module with a link on both surfaces puts both in the same section', () => {
+      const apart: string[] = [];
+      for (const def of Object.values(MODULE_REGISTRY)) {
+        const web = def.placements.filter((p) => p.surface === 'web_sidebar');
+        const phone = def.placements.filter((p) => p.surface === 'mobile_drawer');
+        for (const p of phone) {
+          // The twin is the web link with the same label (Items and Items,
+          // Audit log and Audit log), when the module has one.
+          const twin = web.find((w) => w.label === p.label);
+          if (twin && twin.section !== p.section) {
+            apart.push(`${def.id}: ${p.label} web ${twin.section}, phone ${p.section}`);
+          }
+        }
+      }
+      expect(apart).toEqual([]);
+    });
+
+    it('every moved twin keeps its sort order, gate and icon', () => {
+      for (const id of [
+        'rentals',
+        'bundles',
+        'orders',
+        'returns',
+        'purchase_orders',
+        'po_imports',
+        'suppliers',
+        'reports',
+        'ai',
+      ] as const) {
+        const { placements } = MODULE_REGISTRY[id];
+        for (const p of placements.filter((x) => x.surface === 'mobile_drawer')) {
+          const twin = placements.find((w) => w.surface === 'web_sidebar' && w.label === p.label);
+          expect(twin, `${id}: ${p.label}`).toBeDefined();
+          for (const key of [
+            'section',
+            'defaultSortOrder',
+            'requires',
+            'requiresAnyOf',
+            'iconName',
+          ] as const) {
+            expect(p[key], `${id}: ${p.label} ${key}`).toEqual(twin?.[key]);
+          }
+        }
+      }
+    });
+  });
+
   it('every mobile drawer href resolves to a real Expo route', () => {
     const EXPO_ROUTES = new Set([
       '/',

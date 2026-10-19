@@ -13,7 +13,13 @@ import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
 import { setNavOverridesAction } from '@/server/actions/nav-settings';
 
-import { isSafeNavHref, type NavOverrides, type NavSectionKey } from '@stockpilot/core';
+import {
+  isSafeNavHref,
+  orderNavSectionItems,
+  SECTION_ORDER,
+  type NavOverrides,
+  type NavSectionKey,
+} from '@stockpilot/core';
 
 // ---------------------------------------------------------------------------
 // Types passed from the server page.
@@ -23,6 +29,12 @@ interface BaseItem {
   href: string;
   label: string;
   iconName: string;
+  /**
+   * The registry module behind the item. It tells the order rule which old
+   * section a link sat in before the 2026-10-19 regroup, so an order saved
+   * then opens here as the sidebar draws it.
+   */
+  moduleId: string;
 }
 
 interface BaseSection {
@@ -40,12 +52,21 @@ interface NavCustomizerProps {
 const SECTION_LABELS: Record<NavSectionKey, string> = {
   overview: 'Overview',
   inventory: 'Inventory',
+  fulfillment: 'Fulfillment',
+  purchasing: 'Purchasing',
+  insights: 'Insights',
   workspace: 'Workspace',
   tools: 'Tools',
   admin: 'Admin',
 };
 
-const SECTION_OPTIONS: NavSectionKey[] = ['overview', 'inventory', 'workspace', 'tools', 'admin'];
+/**
+ * Every section, in the sidebar's order: core's own list, so a section added
+ * there is offered for custom links and saved here without a change. (Saving
+ * walks this list; a section missing from it would drop its order, hides and
+ * renames on the next save.)
+ */
+const SECTION_OPTIONS: readonly NavSectionKey[] = SECTION_ORDER;
 
 const ICON_NAMES = Object.keys(NAV_ICONS).sort();
 
@@ -68,6 +89,7 @@ interface EditableItem {
   /** Current (possibly renamed) label. */
   label: string;
   iconName: string;
+  moduleId: string;
   hidden: boolean;
 }
 
@@ -87,7 +109,6 @@ function buildInitialState(
 ): SectionState {
   const hidden = new Set(overrides?.hidden ?? []);
   const labels = overrides?.labels ?? {};
-  const order = overrides?.order ?? {};
 
   const state = {} as SectionState;
   for (const sec of SECTION_OPTIONS) state[sec] = [];
@@ -100,28 +121,17 @@ function buildInitialState(
         defaultLabel: it.label,
         label: typeof override === 'string' ? override : it.label,
         iconName: it.iconName,
+        moduleId: it.moduleId,
         hidden: hidden.has(it.href),
       };
     });
 
-    // Apply saved order: hrefs in order[section] first (in that order), rest after.
-    const wanted = order[base.section];
-    if (Array.isArray(wanted) && wanted.length > 0) {
-      const byHref = new Map(items.map((it) => [it.href, it]));
-      const seen = new Set<string>();
-      const front: EditableItem[] = [];
-      for (const href of wanted) {
-        const it = byHref.get(href);
-        if (it && !seen.has(href)) {
-          front.push(it);
-          seen.add(href);
-        }
-      }
-      const rest = items.filter((it) => !seen.has(it.href));
-      state[base.section] = [...front, ...rest];
-    } else {
-      state[base.section] = items;
-    }
+    // The sidebar's own order rule (applyNavOverrides step (c)): the hrefs in
+    // order[section] first, in that order, the rest after; a section the
+    // 2026-10-19 regroup created follows the old lists it came from until a
+    // save here writes its own. So the editor opens on the order members see,
+    // and saving without moving anything keeps it.
+    state[base.section] = orderNavSectionItems(base.section, items, overrides?.order);
   }
 
   return state;
@@ -142,8 +152,12 @@ export function NavCustomizer({ baseSections, initialOverrides }: NavCustomizerP
   const [newSection, setNewSection] = React.useState<NavSectionKey>('tools');
   const [newIcon, setNewIcon] = React.useState<string>(ICON_NAMES[0] ?? 'Boxes');
 
-  // Which sections actually have base items (so we don't render empty groups).
-  const presentSections = SECTION_OPTIONS.filter((s) => sections[s].length > 0);
+  // The sections with base items or custom links (so we don't render empty
+  // groups, and a custom link put in any section, Tools or a section whose
+  // modules are off, can be seen and removed).
+  const presentSections = SECTION_OPTIONS.filter(
+    (s) => sections[s].length > 0 || custom.some((c) => c.section === s),
+  );
 
   function toggleHidden(section: NavSectionKey, href: string) {
     setSections((prev) => ({

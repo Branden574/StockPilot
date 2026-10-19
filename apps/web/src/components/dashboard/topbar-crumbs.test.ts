@@ -170,8 +170,9 @@ describe('fixed pages have their own crumb, never a catch-all Detail', () => {
       'Items',
       'Labels',
     ]);
+    // Purchasing since the owner's regroup of 2026-10-19 (it was Inventory).
     expect(crumbsForPathname('/dashboard/purchase-orders/recurring').map((c) => c.label)).toEqual([
-      'Inventory',
+      'Purchasing',
       'Purchase orders',
       'Recurring',
     ]);
@@ -258,36 +259,52 @@ describe('every dashboard route has a breadcrumb trail', () => {
         labels: { '/dashboard/returns': 'RMAs', '/dashboard/reports': 'Analytics' },
       }),
     );
+    // The section crumbs follow the owner's regroup of 2026-10-19 (both
+    // trails read Inventory before it); the rename still reaches the item.
     expect(
       applyNavLabelsToCrumbs(crumbsForPathname('/dashboard/returns/abc-123'), map).map(
         (c) => c.label,
       ),
-    ).toEqual(['Inventory', 'RMAs', 'Detail']);
+    ).toEqual(['Fulfillment', 'RMAs', 'Detail']);
     expect(
       applyNavLabelsToCrumbs(crumbsForPathname('/dashboard/reports/dead-stock'), map).map(
         (c) => c.label,
       ),
-    ).toEqual(['Inventory', 'Analytics', 'Dead stock']);
+    ).toEqual(['Insights', 'Analytics', 'Dead stock']);
   });
 
+  // Rows naming Fulfillment, Purchasing or Insights read Inventory or
+  // Workspace before the owner's regroup of 2026-10-19.
   it.each([
     ['/dashboard/help', ['Help & Learning']],
     ['/dashboard/support', ['Workspace', 'Support']],
-    ['/dashboard/insights', ['Workspace', 'Briefing']],
+    // The Briefing page's route is /dashboard/insights: page and section share the word.
+    ['/dashboard/insights', ['Insights', 'Briefing']],
+    ['/dashboard/ai', ['Insights', 'AI Assistant']],
+    ['/dashboard/reports', ['Insights', 'Reports']],
     ['/dashboard/customers', ['Workspace', 'Accounts']],
     ['/dashboard/maintenance/new', ['Workspace', 'Maintenance', 'New']],
     ['/dashboard/exceptions/abc-123', ['Inventory', 'Exceptions', 'Detail']],
     ['/dashboard/product-groups/link', ['Inventory', 'Product groups', 'Review product families']],
-    ['/dashboard/rentals/items/abc-123', ['Inventory', 'Rentals', 'Items', 'Detail']],
-    ['/dashboard/orders/abc-123/pick', ['Inventory', 'Orders', 'Pick']],
-    ['/dashboard/purchase-orders/abc-123/edit', ['Inventory', 'Purchase orders', 'Edit']],
+    ['/dashboard/locations/abc-123', ['Inventory', 'Locations', 'Detail']],
+    ['/dashboard/rentals/items/abc-123', ['Fulfillment', 'Rentals', 'Items', 'Detail']],
+    ['/dashboard/bundles/new', ['Fulfillment', 'Bundles', 'New']],
+    ['/dashboard/orders/abc-123/pick', ['Fulfillment', 'Orders', 'Pick']],
+    ['/dashboard/returns', ['Fulfillment', 'Returns']],
+    ['/dashboard/purchase-orders/abc-123/edit', ['Purchasing', 'Purchase orders', 'Edit']],
+    [
+      '/dashboard/purchase-orders/imports/new',
+      ['Purchasing', 'Purchase orders', 'PO imports', 'New'],
+    ],
+    ['/dashboard/planning', ['Purchasing', 'Reorder Planning']],
+    ['/dashboard/suppliers', ['Purchasing', 'Suppliers']],
     ['/dashboard/settings/roles', ['Workspace', 'Settings', 'Roles & permissions']],
     ['/dashboard/settings/migrate/sage50', ['Workspace', 'Settings', 'Migrate from Sage 50']],
     [
       '/dashboard/settings/public-requests/abc-123',
       ['Workspace', 'Settings', 'Public requests', 'Detail'],
     ],
-    ['/dashboard/reports/book-order-totals', ['Inventory', 'Reports', 'Book Order Totals']],
+    ['/dashboard/reports/book-order-totals', ['Insights', 'Reports', 'Book Order Totals']],
     ['/dashboard/warehouses/abc-123', ['Admin', 'Warehouses', 'Detail']],
     ['/dashboard/admin/support', ['Admin', 'Admin overview', 'Support tickets']],
   ])('%s reads %j', (pathname, labels) => {

@@ -15,8 +15,14 @@ import { Sidebar } from './sidebar';
  * The redesigned sidebar keeps the WHOLE role-aware navigation (CONFLICTS N1,
  * N2): every destination navForRole gives a person is a link in their sidebar,
  * under the registry's own sections, and nothing else (no "More" control, no
- * mockup groups). Sections fold away; Admin starts folded for admins; the
- * section holding the page on screen always shows its link.
+ * mockup groups the app has no pages for). Sections fold away; Admin starts
+ * folded for admins; the section holding the page on screen always shows its
+ * link.
+ *
+ * OWNER DECISION 2026-10-19 (it replaces N2's "no regrouping"): the sections
+ * follow the Claude design's sub-categories. Fulfillment, Purchasing and
+ * Insights split out of Inventory and Workspace in the registry itself, with
+ * saved org orders carried over in core, so they are real sections here.
  */
 
 let currentPathname = '/dashboard';
@@ -75,6 +81,21 @@ function sectionButton(label: string): HTMLElement {
   return screen.getByRole('button', { name: label });
 }
 
+/** The section headers of the nav, top to bottom (Overview has none). */
+function sectionHeaders(): string[] {
+  return within(screen.getByRole('navigation'))
+    .getAllByRole('button')
+    .map((b) => b.textContent ?? '');
+}
+
+/** The links under one section header, top to bottom. */
+function linksUnder(label: string): string[] {
+  const list = document.getElementById(sectionButton(label).getAttribute('aria-controls') ?? '');
+  return within(list!)
+    .getAllByRole('link')
+    .map((a) => a.textContent ?? '');
+}
+
 beforeEach(() => {
   currentPathname = '/dashboard';
 });
@@ -121,11 +142,14 @@ describe('every destination a role has is in its sidebar, and nothing more', () 
     expect(navHrefs()).toHaveLength(count);
   });
 
-  it('has no "More" control and none of the mockup groups', () => {
+  // 'Fulfillment' left this list on the owner's decision of 2026-10-19: it is
+  // a real section now. The design's Devices group and its Mobile scanner
+  // entry stay out (the app has no such page).
+  it('has no "More" control and none of the mockup groups the app has no pages for', () => {
     render(<Sidebar {...props('owner', { collapsedSections: [], onToggleSection: () => {} })} />);
     expect(screen.queryByText(/^More$/i)).toBeNull();
     expect(screen.queryByRole('button', { name: /more/i })).toBeNull();
-    for (const mockupGroup of ['Fulfillment', 'Devices', 'Mobile scanner']) {
+    for (const mockupGroup of ['Devices', 'Mobile scanner']) {
       expect(screen.queryByText(mockupGroup)).toBeNull();
     }
   });
@@ -182,10 +206,160 @@ describe('every destination a role has is in its sidebar, and nothing more', () 
   });
 });
 
+/**
+ * OWNER DECISION 2026-10-19: the headers each role sees, in order, and the
+ * links under the three new ones. An empty section draws no header.
+ */
+describe('the sub-categories, per role', () => {
+  const NEW_HEADERS = ['Inventory', 'Fulfillment', 'Purchasing', 'Insights', 'Workspace'];
+
+  it.each([
+    ['owner', [...NEW_HEADERS, 'Admin']],
+    ['admin', [...NEW_HEADERS, 'Admin']],
+    // A manager's Admin holds the Audit log alone.
+    ['manager', [...NEW_HEADERS, 'Admin']],
+    ['staff', NEW_HEADERS],
+    // A viewer reads no reports and uses no AI, so no Insights.
+    ['viewer', ['Inventory', 'Fulfillment', 'Purchasing', 'Workspace']],
+  ] as const)('%s, every module on: the headers, in order', (role, headers) => {
+    render(
+      <Sidebar
+        {...props(role, {
+          enabledModules: ALL_MODULES,
+          collapsedSections: [],
+          onToggleSection: () => {},
+        })}
+      />,
+    );
+    expect(sectionHeaders()).toEqual(headers);
+  });
+
+  it('owner, every module on: the links under Fulfillment, Purchasing and Insights', () => {
+    render(
+      <Sidebar
+        {...props('owner', {
+          enabledModules: ALL_MODULES,
+          collapsedSections: [],
+          onToggleSection: () => {},
+        })}
+      />,
+    );
+    expect(linksUnder('Fulfillment')).toEqual(['Rentals', 'Bundles', 'Orders', 'Returns']);
+    expect(linksUnder('Purchasing')).toEqual([
+      'Purchase orders',
+      'Recurring POs',
+      'Reorder Planning',
+      'PO imports',
+      'Suppliers',
+    ]);
+    // The badges are part of each link's text.
+    expect(linksUnder('Insights').map((t) => t.replace(/(Beta|New)$/, ''))).toEqual([
+      'Reports',
+      'AI Assistant',
+      'Briefing',
+    ]);
+    expect(linksUnder('Inventory')).not.toContain('Orders');
+    expect(linksUnder('Workspace').some((t) => t.startsWith('AI Assistant'))).toBe(false);
+  });
+
+  it.each<[Role, string[]]>([
+    ['owner', ['Inventory', 'Insights', 'Workspace', 'Admin']],
+    ['staff', ['Inventory', 'Insights', 'Workspace']],
+    ['viewer', ['Inventory', 'Workspace']],
+  ])(
+    '%s with only the core modules: no Fulfillment or Purchasing header, Insights holds Reports',
+    (role, headers) => {
+      render(
+        <Sidebar
+          {...props(role, { enabledModules: [], collapsedSections: [], onToggleSection: () => {} })}
+        />,
+      );
+      expect(sectionHeaders()).toEqual(headers);
+      if (headers.includes('Insights')) expect(linksUnder('Insights')).toEqual(['Reports']);
+    },
+  );
+
+  it("an org's order saved before the regroup carries over: Orders first in Fulfillment, Items first in Inventory", () => {
+    render(
+      <Sidebar
+        {...props('admin', {
+          collapsedSections: [],
+          onToggleSection: () => {},
+          navOverrides: {
+            v: 1,
+            order: { inventory: ['/dashboard/orders', '/dashboard/inventory'] },
+            labels: { '/dashboard/orders': 'Sales orders' },
+          },
+        })}
+      />,
+    );
+    expect(linksUnder('Fulfillment')).toEqual(['Sales orders', 'Rentals', 'Bundles']);
+    expect(linksUnder('Inventory')[0]).toBe('Items');
+  });
+
+  it('a custom link saved under a new section is drawn there', () => {
+    render(
+      <Sidebar
+        {...props('viewer', {
+          collapsedSections: [],
+          onToggleSection: () => {},
+          navOverrides: {
+            v: 1,
+            custom: [
+              {
+                id: 'bi',
+                label: 'Board pack',
+                href: 'https://bi.example.com',
+                section: 'insights',
+                iconName: 'BarChart3',
+              },
+            ],
+          },
+        })}
+      />,
+    );
+    expect(sectionHeaders()).toEqual([
+      'Inventory',
+      'Fulfillment',
+      'Purchasing',
+      'Insights',
+      'Workspace',
+    ]);
+    expect(linksUnder('Insights')).toEqual(['Board pack']);
+  });
+
+  it('a new section folds by its own key, and starts open', () => {
+    const onToggleSection = vi.fn<(key: NavSectionKey, collapse: boolean) => void>();
+    const view = render(
+      <Sidebar {...props('owner', { collapsedSections: [], onToggleSection })} />,
+    );
+    for (const label of ['Fulfillment', 'Purchasing', 'Insights']) {
+      expect(sectionButton(label)).toHaveAttribute('aria-expanded', 'true');
+    }
+    fireEvent.click(sectionButton('Purchasing'));
+    expect(onToggleSection).toHaveBeenLastCalledWith('purchasing', true);
+    view.rerender(
+      <Sidebar {...props('owner', { collapsedSections: ['purchasing'], onToggleSection })} />,
+    );
+    expect(sectionButton('Purchasing')).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('link', { name: 'Suppliers' })).toBeNull();
+    // Inventory and Fulfillment stay as they were.
+    expect(sectionButton('Fulfillment')).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('link', { name: 'Orders' })).toBeInTheDocument();
+  });
+});
+
 describe('sections fold away', () => {
   it('each labelled section is a disclosure button that controls its list', () => {
     render(<Sidebar {...props('owner', { collapsedSections: [], onToggleSection: () => {} })} />);
-    for (const label of ['Inventory', 'Workspace', 'Admin']) {
+    for (const label of [
+      'Inventory',
+      'Fulfillment',
+      'Purchasing',
+      'Insights',
+      'Workspace',
+      'Admin',
+    ]) {
       const button = sectionButton(label);
       expect(button).toHaveAttribute('aria-expanded', 'true');
       const list = document.getElementById(button.getAttribute('aria-controls') ?? '');

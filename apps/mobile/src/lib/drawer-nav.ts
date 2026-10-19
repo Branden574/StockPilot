@@ -1,6 +1,7 @@
 import {
   MODULE_REGISTRY,
   type ModuleId,
+  type NavSectionKey,
   type Permission,
   resolveSurface,
   type Role,
@@ -37,10 +38,16 @@ export interface DrawerNavSection {
 }
 
 // Mobile uses UPPERCASE section headers (matches today's drawer). The overview
-// section renders with no header.
-const SECTION_LABEL: Record<string, string | undefined> = {
+// section renders with no header. FULFILLMENT, PURCHASING and INSIGHTS are the
+// owner's regroup of 2026-10-19, the same sections as the web sidebar. Typed
+// by the registry's own key list, so a section added there fails to compile
+// here until it has a header, instead of drawing its links under none.
+const SECTION_LABEL: Record<NavSectionKey, string | undefined> = {
   overview: undefined,
   inventory: 'INVENTORY',
+  fulfillment: 'FULFILLMENT',
+  purchasing: 'PURCHASING',
+  insights: 'INSIGHTS',
   workspace: 'WORKSPACE',
   tools: 'TOOLS',
   admin: 'ADMIN',

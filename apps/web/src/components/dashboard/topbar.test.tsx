@@ -438,7 +438,7 @@ describe('Density in the account menu', () => {
  * when a person comes to it instead, as the sidebar's links are.
  */
 describe('the bar warms its pages when a person comes to a link, never on sight', () => {
-  // A trail with two parent links: Inventory / Purchase orders / PO imports / New.
+  // A trail with two parent links: Purchasing / Purchase orders / PO imports / New.
   const PATH = '/dashboard/purchase-orders/imports/new';
   const LINKS = [
     '/dashboard/purchase-orders',

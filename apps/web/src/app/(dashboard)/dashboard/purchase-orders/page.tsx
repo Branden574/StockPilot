@@ -404,7 +404,7 @@ export default async function PurchaseOrdersPage({
   return (
     <div className={PAGE}>
       <PageHeader
-        eyebrow="Inventory"
+        eyebrow="Purchasing"
         title={heading}
         subline={
           <span className="tabular-nums">

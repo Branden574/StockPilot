@@ -151,7 +151,7 @@ export const DASHBOARD_TOUR: TourDefinition = {
     {
       target: '#dashboard-sidebar',
       title: 'Everything lives here',
-      body: 'The sidebar is grouped into Inventory, Workspace, Tools, and Admin. You only see what your role can access — and admins can rename labels, so your words may differ from ours.',
+      body: 'The sidebar is grouped into Inventory, Fulfillment, Purchasing, Insights, Workspace, and Admin. You only see what your role can access — and admins can rename labels, so your words may differ from ours.',
     },
     {
       target: '#dashboard-sidebar nav a[href="/dashboard/inventory"]',

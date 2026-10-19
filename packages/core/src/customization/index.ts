@@ -15,7 +15,7 @@
  * nav / default layout.
  */
 
-import type { NavSectionKey } from '../modules/registry';
+import type { ModuleId, NavSectionKey } from '../modules/registry';
 import type { ResolvedNavItem, ResolvedNavSection } from '../modules/resolve';
 import { SECTION_ORDER } from '../modules/resolve';
 
@@ -43,7 +43,9 @@ export interface CustomNavLink {
  * Per-org nav customization. Versioned (`v: 1`) so future shapes can migrate.
  *  - hidden:  hrefs to drop from the derived nav.
  *  - labels:  href -> replacement label.
- *  - order:   section -> ordered list of hrefs that should come first.
+ *  - order:   section -> ordered list of hrefs that should come first. Lists
+ *             saved before the 2026-10-19 regroup still sit under the old
+ *             keys and are read as they are (see orderNavSectionItems).
  *  - custom:  extra links to append (validated; unsafe/badly-typed dropped).
  */
 export interface NavOverrides {
@@ -132,6 +134,121 @@ export function isSafeNavHref(href: unknown): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Section order: one rule for the sidebar and the Navigation editor
+// ---------------------------------------------------------------------------
+
+/**
+ * The sections the owner's regroup of 2026-10-19 created, each with the old
+ * sections its links came from, in the order the old sidebar drew those.
+ * Orgs that saved an order before the regroup keep it under the old keys
+ * (order.inventory, order.workspace): nothing rewrites nav_overrides in the
+ * database, so a rollback still reads every save. orderNavSectionItems reads
+ * the old lists for a new section until an admin saves the editor again,
+ * which writes the new keys.
+ */
+export const NAV_SECTIONS_SPLIT_FROM: Readonly<
+  Partial<Record<NavSectionKey, readonly NavSectionKey[]>>
+> = {
+  fulfillment: ['inventory'],
+  purchasing: ['inventory'],
+  insights: ['inventory', 'workspace'],
+};
+
+/**
+ * The section each module the regroup moved sat in before it. Every placement
+ * of these modules, web and phone, moved together, so the module decides.
+ */
+export const NAV_FORMER_SECTION: Readonly<Partial<Record<ModuleId, NavSectionKey>>> = {
+  rentals: 'inventory',
+  bundles: 'inventory',
+  orders: 'inventory',
+  returns: 'inventory',
+  purchase_orders: 'inventory',
+  receiving: 'inventory',
+  po_imports: 'inventory',
+  suppliers: 'inventory',
+  planning: 'inventory',
+  reports: 'inventory',
+  ai: 'workspace',
+};
+
+// Map lookups, so a module id or key can never match an Object prototype name.
+const SPLIT_FROM = new Map(Object.entries(NAV_SECTIONS_SPLIT_FROM)) as ReadonlyMap<
+  string,
+  readonly NavSectionKey[]
+>;
+const FORMER_SECTION = new Map(Object.entries(NAV_FORMER_SECTION)) as ReadonlyMap<
+  string,
+  NavSectionKey
+>;
+
+/** The saved order list for `section`, or null when there is none to apply. */
+function savedOrder(order: unknown, section: NavSectionKey): readonly unknown[] | null {
+  if (!order || typeof order !== 'object') return null;
+  const list = (order as Partial<Record<NavSectionKey, unknown>>)[section];
+  return Array.isArray(list) && list.length > 0 ? list : null;
+}
+
+/**
+ * Where an item lands when `list` orders its section: at its first place in
+ * the list, or, when the list does not name it, after every place the list
+ * holds, in default order.
+ */
+function placeIn(list: readonly unknown[] | null, href: string, defaultIndex: number): number {
+  const at = list ? list.indexOf(href) : -1;
+  return at >= 0 ? at : (list?.length ?? 0) + defaultIndex;
+}
+
+function sortedBy<T>(items: readonly T[], key: (item: T, index: number) => [number, number]): T[] {
+  return items
+    .map((item, index) => ({ item, key: key(item, index) }))
+    .sort((a, b) => a.key[0] - b.key[0] || a.key[1] - b.key[1])
+    .map(({ item }) => item);
+}
+
+/**
+ * Order one section's items by the org's saved order: step (c) of
+ * applyNavOverrides, exported so Settings > Navigation opens on exactly the
+ * order the sidebar draws (and saves it, not the default, when nothing moved).
+ *
+ * `items` come in their default (resolved) order. When the org saved a list
+ * for this section, the hrefs it names come first, in its order, and the rest
+ * keep their default order; hrefs it names that are not in the section (a
+ * link the regroup moved, a module turned off) are skipped.
+ *
+ * A section the regroup created has no list of its own until an admin saves
+ * the editor again, so it reads the lists of the sections it came from and
+ * draws its items in the order the old sidebar drew them: by old section
+ * (Inventory above Workspace), then by place in that section's list, the
+ * items a list does not name after the ones it names, in default order. So
+ * order.inventory = [Orders, Items] puts Orders first in Fulfillment and
+ * Items first in Inventory. The section's own list, once saved, always wins.
+ *
+ * Every item's place depends only on its own href and default index, never on
+ * which other items are present, so hiding items (the sidebar drops them, the
+ * editor keeps them) and a role seeing fewer links never reorder the rest.
+ */
+export function orderNavSectionItems<T extends { href: string; moduleId: string }>(
+  section: NavSectionKey,
+  items: readonly T[],
+  order: NavOverrides['order'] | null | undefined,
+): T[] {
+  const own = savedOrder(order, section);
+  if (own) return sortedBy(items, (it, index) => [0, placeIn(own, it.href, index)]);
+
+  const from = SPLIT_FROM.get(section) ?? [];
+  if (!from.some((key) => savedOrder(order, key))) return [...items];
+  return sortedBy(items, (it, index) => {
+    // The old section the item sat in. A link none of them held (a module
+    // put in this section after the regroup) counts as one the first old
+    // section's list does not name, like a module turned on after a save.
+    const former = FORMER_SECTION.get(it.moduleId);
+    const rank = former && from.includes(former) ? from.indexOf(former) : 0;
+    return [rank, placeIn(savedOrder(order, from[rank] ?? section), it.href, index)];
+  });
+}
+
+// ---------------------------------------------------------------------------
 // applyNavOverrides — pure post-filter over resolveSurface output
 // ---------------------------------------------------------------------------
 
@@ -146,9 +263,12 @@ function isValidOverrides(o: unknown): o is NavOverrides {
  *   (a) drop items whose href is in `hidden`
  *   (b) rename via `labels` (href -> new label)
  *   (c) within each section reorder so hrefs in `order[section]` come first
- *       (in that order); remaining items keep their resolved order
+ *       (in that order); remaining items keep their resolved order. A section
+ *       the 2026-10-19 regroup created, with no list of its own, follows the
+ *       lists of the sections it came from (orderNavSectionItems)
  *   (d) append `custom` links to their section (validated; unsafe/badly-typed
- *       dropped) — these are the ONLY new items ever added.
+ *       dropped) — these are the ONLY new items ever added. A link keeps the
+ *       section it was saved under.
  *
  * Unknown hrefs (in hidden/labels/order) are ignored, never error. A
  * null/garbage `overrides` returns `sections` unchanged (fail-closed).
@@ -213,24 +333,10 @@ export function applyNavOverrides(
       });
 
     // (c) reorder: hrefs listed in order[section] first (in that order), then
-    // the rest keeping their resolved order. Unknown hrefs in the list are
+    // the rest keeping their resolved order; a regrouped section with no list
+    // of its own follows its old sections' lists. Unknown hrefs in a list are
     // ignored (no matching item).
-    const wanted = order[sec.section];
-    if (Array.isArray(wanted) && wanted.length > 0) {
-      const byHref = new Map<string, ResolvedNavItem>();
-      for (const it of items) byHref.set(it.href, it);
-      const seen = new Set<string>();
-      const front: ResolvedNavItem[] = [];
-      for (const href of wanted) {
-        const it = byHref.get(href);
-        if (it && !seen.has(href)) {
-          front.push(it);
-          seen.add(href);
-        }
-      }
-      const rest = items.filter((it) => !seen.has(it.href));
-      items = [...front, ...rest];
-    }
+    items = orderNavSectionItems(sec.section, items, order);
 
     // (d) append validated custom links for this section.
     const customs = customBySection.get(sec.section);

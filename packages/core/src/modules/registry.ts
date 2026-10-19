@@ -17,7 +17,24 @@ import type { PlanId } from '../constants/plans';
 
 export type ModuleTier = 'core' | 'optional' | 'premium';
 export type NavSurface = 'web_sidebar' | 'mobile_drawer' | 'mobile_tab';
-export type NavSectionKey = 'overview' | 'inventory' | 'workspace' | 'tools' | 'admin';
+/**
+ * A nav section's identity. Orgs save their nav order per section key
+ * (nav_overrides.order) and put custom links under one, and the sidebar
+ * remembers a folded section by its key, so a key is never renamed and never
+ * changes meaning: new sections get new keys. fulfillment, purchasing and
+ * insights came from the owner's regroup of 2026-10-19, which moved their
+ * links out of inventory and workspace; orders saved before it carry over at
+ * resolve time (customization/index.ts, orderNavSectionItems).
+ */
+export type NavSectionKey =
+  | 'overview'
+  | 'inventory'
+  | 'fulfillment'
+  | 'purchasing'
+  | 'insights'
+  | 'workspace'
+  | 'tools'
+  | 'admin';
 export type DomainPack =
   | 'charter_school'
   | 'distribution'
@@ -195,8 +212,10 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     ownsTables: [],
     defaultOnFor: [],
     placements: [
-      { surface: 'web_sidebar', section: 'inventory', label: 'Reports', href: '/dashboard/reports', iconName: 'BarChart3', defaultSortOrder: 150, requires: 'reports:read' },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Reports', href: '/reports', iconName: 'BarChart3', defaultSortOrder: 150, requires: 'reports:read' },
+      // First in Insights, above AI Assistant and Briefing (160, 161), as it sat
+      // above them when it ended Inventory and they began Workspace.
+      { surface: 'web_sidebar', section: 'insights', label: 'Reports', href: '/dashboard/reports', iconName: 'BarChart3', defaultSortOrder: 150, requires: 'reports:read' },
+      { surface: 'mobile_drawer', section: 'insights', label: 'Reports', href: '/reports', iconName: 'BarChart3', defaultSortOrder: 150, requires: 'reports:read' },
     ],
   },
   notifications: {
@@ -359,8 +378,8 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     // rentals:create/manage at the page level. Staff/manager/admin hold
     // rentals:read by default (mirrored from rentals:create) — zero change.
     placements: [
-      { surface: 'web_sidebar', section: 'inventory', label: 'Rentals', href: '/dashboard/rentals', iconName: 'PackageOpen', defaultSortOrder: 60, requiresAnyOf: ['rentals:read', 'rentals:create'] },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Rentals', href: '/rentals', iconName: 'PackageOpen', defaultSortOrder: 60, requiresAnyOf: ['rentals:read', 'rentals:create'] },
+      { surface: 'web_sidebar', section: 'fulfillment', label: 'Rentals', href: '/dashboard/rentals', iconName: 'PackageOpen', defaultSortOrder: 60, requiresAnyOf: ['rentals:read', 'rentals:create'] },
+      { surface: 'mobile_drawer', section: 'fulfillment', label: 'Rentals', href: '/rentals', iconName: 'PackageOpen', defaultSortOrder: 60, requiresAnyOf: ['rentals:read', 'rentals:create'] },
     ],
   },
   bundles: {
@@ -374,8 +393,8 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     ownsTables: ['bundles', 'bundle_lines', 'bundle_distributions'],
     defaultOnFor: ['charter_school', 'distribution'],
     placements: [
-      { surface: 'web_sidebar', section: 'inventory', label: 'Bundles', href: '/dashboard/bundles', iconName: 'Package', defaultSortOrder: 70, requiresAnyOf: ['bundles:read', 'bundles:distribute'] },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Bundles', href: '/bundles', iconName: 'Package', defaultSortOrder: 70, requiresAnyOf: ['bundles:read', 'bundles:distribute'] },
+      { surface: 'web_sidebar', section: 'fulfillment', label: 'Bundles', href: '/dashboard/bundles', iconName: 'Package', defaultSortOrder: 70, requiresAnyOf: ['bundles:read', 'bundles:distribute'] },
+      { surface: 'mobile_drawer', section: 'fulfillment', label: 'Bundles', href: '/bundles', iconName: 'Package', defaultSortOrder: 70, requiresAnyOf: ['bundles:read', 'bundles:distribute'] },
     ],
   },
   orders: {
@@ -389,8 +408,8 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     ownsTables: ['order_requests', 'order_request_lines', 'stock_reservations'],
     defaultOnFor: ['charter_school', 'distribution', 'light_3pl'],
     placements: [
-      { surface: 'web_sidebar', section: 'inventory', label: 'Orders', href: '/dashboard/orders', iconName: 'ShoppingCart', defaultSortOrder: 80, requires: 'orders:request' },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Orders', href: '/orders', iconName: 'ShoppingCart', defaultSortOrder: 80, requires: 'orders:request' },
+      { surface: 'web_sidebar', section: 'fulfillment', label: 'Orders', href: '/dashboard/orders', iconName: 'ShoppingCart', defaultSortOrder: 80, requires: 'orders:request' },
+      { surface: 'mobile_drawer', section: 'fulfillment', label: 'Orders', href: '/orders', iconName: 'ShoppingCart', defaultSortOrder: 80, requires: 'orders:request' },
     ],
   },
   cycle_counts: {
@@ -436,12 +455,12 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     ownsTables: ['purchase_orders', 'purchase_order_lines'],
     defaultOnFor: ['charter_school', 'distribution', 'agriculture_food', 'light_3pl'],
     placements: [
-      { surface: 'web_sidebar', section: 'inventory', label: 'Purchase orders', href: '/dashboard/purchase-orders', iconName: 'ClipboardList', defaultSortOrder: 110, requires: 'purchase_orders:read' },
-      { surface: 'web_sidebar', section: 'inventory', label: 'Recurring POs', href: '/dashboard/purchase-orders/recurring', iconName: 'RefreshCw', defaultSortOrder: 111, requires: 'purchase_orders:manage' },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Purchase orders', href: '/purchase-orders', iconName: 'ClipboardList', defaultSortOrder: 110, requires: 'purchase_orders:read' },
+      { surface: 'web_sidebar', section: 'purchasing', label: 'Purchase orders', href: '/dashboard/purchase-orders', iconName: 'ClipboardList', defaultSortOrder: 110, requires: 'purchase_orders:read' },
+      { surface: 'web_sidebar', section: 'purchasing', label: 'Recurring POs', href: '/dashboard/purchase-orders/recurring', iconName: 'RefreshCw', defaultSortOrder: 111, requires: 'purchase_orders:manage' },
+      { surface: 'mobile_drawer', section: 'purchasing', label: 'Purchase orders', href: '/purchase-orders', iconName: 'ClipboardList', defaultSortOrder: 110, requires: 'purchase_orders:read' },
       // Mobile twin of the web Recurring POs surface (parity rule: every web
       // feature ships native too). Same manage-permission gate as the web link.
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Recurring POs', href: '/recurring-pos', iconName: 'RefreshCw', defaultSortOrder: 111, requires: 'purchase_orders:manage' },
+      { surface: 'mobile_drawer', section: 'purchasing', label: 'Recurring POs', href: '/recurring-pos', iconName: 'RefreshCw', defaultSortOrder: 111, requires: 'purchase_orders:manage' },
     ],
   },
   receiving: {
@@ -455,10 +474,11 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     ownsTables: ['receipts', 'receipt_lines'],
     defaultOnFor: ['charter_school', 'distribution', 'agriculture_food', 'light_3pl'],
     placements: [
-      // 105 keeps Receive POs between Procedures (100) and Purchase orders (110),
-      // matching the mobile drawer's historical order. (receiving has no
+      // 105 puts Receive POs first in Purchasing, just above Purchase orders
+      // (110), where it sat in the mobile drawer's historical order (then
+      // between Procedures and Purchase orders in Inventory). (receiving has no
       // web_sidebar placement, so the web sidebar is unaffected.)
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Receive POs', href: '/receive', iconName: 'Truck', defaultSortOrder: 105, mobileTabEligible: true },
+      { surface: 'mobile_drawer', section: 'purchasing', label: 'Receive POs', href: '/receive', iconName: 'Truck', defaultSortOrder: 105, mobileTabEligible: true },
     ],
   },
   po_imports: {
@@ -472,8 +492,8 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     ownsTables: ['po_imports'],
     defaultOnFor: ['charter_school'],
     placements: [
-      { surface: 'web_sidebar', section: 'inventory', label: 'PO imports', href: '/dashboard/purchase-orders/imports', iconName: 'Upload', defaultSortOrder: 120, requires: 'purchase_orders:manage' },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'PO imports', href: '/po-imports', iconName: 'Upload', defaultSortOrder: 120, requires: 'purchase_orders:manage' },
+      { surface: 'web_sidebar', section: 'purchasing', label: 'PO imports', href: '/dashboard/purchase-orders/imports', iconName: 'Upload', defaultSortOrder: 120, requires: 'purchase_orders:manage' },
+      { surface: 'mobile_drawer', section: 'purchasing', label: 'PO imports', href: '/po-imports', iconName: 'Upload', defaultSortOrder: 120, requires: 'purchase_orders:manage' },
     ],
   },
   suppliers: {
@@ -487,8 +507,8 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     ownsTables: ['suppliers'],
     defaultOnFor: ['charter_school', 'distribution', 'agriculture_food', 'light_3pl'],
     placements: [
-      { surface: 'web_sidebar', section: 'inventory', label: 'Suppliers', href: '/dashboard/suppliers', iconName: 'Truck', defaultSortOrder: 140, requires: 'suppliers:read' },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Suppliers', href: '/suppliers', iconName: 'Truck', defaultSortOrder: 140, requires: 'suppliers:read' },
+      { surface: 'web_sidebar', section: 'purchasing', label: 'Suppliers', href: '/dashboard/suppliers', iconName: 'Truck', defaultSortOrder: 140, requires: 'suppliers:read' },
+      { surface: 'mobile_drawer', section: 'purchasing', label: 'Suppliers', href: '/suppliers', iconName: 'Truck', defaultSortOrder: 140, requires: 'suppliers:read' },
     ],
   },
   schedule: {
@@ -516,10 +536,14 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     apiPrefixes: ['/api/v1/ai', '/api/ai'],
     ownsTables: [],
     defaultOnFor: ['charter_school'],
+    // In Insights since the 2026-10-19 regroup (they began Workspace before,
+    // at 0 and 1). 160 and 161 keep them below Reports (150) and AI Assistant
+    // above Briefing: the order they were drawn in when Reports ended
+    // Inventory just above them.
     placements: [
-      { surface: 'web_sidebar', section: 'workspace', label: 'AI Assistant', href: '/dashboard/ai', iconName: 'Sparkles', defaultSortOrder: 0, requires: 'items:update', badge: 'Beta' },
-      { surface: 'web_sidebar', section: 'workspace', label: 'Briefing', href: '/dashboard/insights', iconName: 'Sparkles', defaultSortOrder: 1, requires: 'items:update', badge: 'New' },
-      { surface: 'mobile_drawer', section: 'workspace', label: 'AI Assistant', href: '/ai', iconName: 'Sparkles', defaultSortOrder: 0, requires: 'items:update' },
+      { surface: 'web_sidebar', section: 'insights', label: 'AI Assistant', href: '/dashboard/ai', iconName: 'Sparkles', defaultSortOrder: 160, requires: 'items:update', badge: 'Beta' },
+      { surface: 'web_sidebar', section: 'insights', label: 'Briefing', href: '/dashboard/insights', iconName: 'Sparkles', defaultSortOrder: 161, requires: 'items:update', badge: 'New' },
+      { surface: 'mobile_drawer', section: 'insights', label: 'AI Assistant', href: '/ai', iconName: 'Sparkles', defaultSortOrder: 160, requires: 'items:update' },
     ],
   },
   public_requests: {
@@ -584,15 +608,15 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     // off-by-default `returns` module enabled AND the role holds
     // `returns:manage` (resolveSurface filters on both), mirroring how other
     // optional modules surface their nav. Sits just after Orders (80) in the
-    // Inventory section.
+    // Fulfillment section.
     defaultOnFor: [],
     // Returns RX-1: the phone has its own list (app/(drawer)/returns.tsx) and
     // RMA workbench (app/returns/[id].tsx), so the drawer carries the entry
     // too, gated exactly like the sidebar (module on, returns:read or
-    // returns:manage). Sits just after Orders (80).
+    // returns:manage). Sits just after Orders (80) in Fulfillment.
     placements: [
-      { surface: 'web_sidebar', section: 'inventory', label: 'Returns', href: '/dashboard/returns', iconName: 'Undo2', defaultSortOrder: 85, requiresAnyOf: ['returns:read', 'returns:manage'] },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Returns', href: '/returns', iconName: 'Undo2', defaultSortOrder: 85, requiresAnyOf: ['returns:read', 'returns:manage'] },
+      { surface: 'web_sidebar', section: 'fulfillment', label: 'Returns', href: '/dashboard/returns', iconName: 'Undo2', defaultSortOrder: 85, requiresAnyOf: ['returns:read', 'returns:manage'] },
+      { surface: 'mobile_drawer', section: 'fulfillment', label: 'Returns', href: '/returns', iconName: 'Undo2', defaultSortOrder: 85, requiresAnyOf: ['returns:read', 'returns:manage'] },
     ],
   },
 
@@ -643,9 +667,9 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     // On by default for the supply-heavy packs that buy to replenish.
     defaultOnFor: ['distribution', 'agriculture_food', 'light_3pl'],
     placements: [
-      // Sits just below Purchase orders (110) in the Inventory section, ahead
-      // of PO imports (120).
-      { surface: 'web_sidebar', section: 'inventory', label: 'Reorder Planning', href: '/dashboard/planning', iconName: 'TrendingUp', defaultSortOrder: 115, requires: 'purchase_orders:manage' },
+      // Sits just below Purchase orders (110) and Recurring POs (111) in the
+      // Purchasing section, ahead of PO imports (120).
+      { surface: 'web_sidebar', section: 'purchasing', label: 'Reorder Planning', href: '/dashboard/planning', iconName: 'TrendingUp', defaultSortOrder: 115, requires: 'purchase_orders:manage' },
     ],
   },
 

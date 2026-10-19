@@ -34,12 +34,17 @@ export interface NavSection {
 
 /**
  * Maps the registry's section keys to the human-readable section headers
- * the sidebar renders. The `overview` section has no header (it's the
- * bare top group), matching the original static nav.
+ * the sidebar renders (in capitals, by CSS). The `overview` section has no
+ * header (it's the bare top group), matching the original static nav.
+ * Fulfillment, Purchasing and Insights are the owner's regroup of 2026-10-19.
+ * The breadcrumb's section crumbs (topbar-crumbs.ts) use these same words.
  */
 const SECTION_LABEL: Record<NavSectionKey, string | undefined> = {
   overview: undefined,
   inventory: 'Inventory',
+  fulfillment: 'Fulfillment',
+  purchasing: 'Purchasing',
+  insights: 'Insights',
   workspace: 'Workspace',
   tools: 'Tools',
   admin: 'Admin',
