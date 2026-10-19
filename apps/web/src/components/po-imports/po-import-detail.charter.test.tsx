@@ -175,14 +175,10 @@ function getSelectTrigger(text: RegExp): HTMLElement {
 }
 
 /** The two charter Selects both start as "No charter" — disambiguate by the
- *  field label they sit next to instead of by trigger text. */
+ *  field label tied to each trigger (its accessible name) instead of by
+ *  trigger text. */
 function getSelectTriggerByLabel(labelText: RegExp): HTMLElement {
-  const label = screen.getByText(labelText);
-  const container = label.parentElement;
-  if (!container) throw new Error(`No container for label matching ${String(labelText)}`);
-  const trigger = within(container).queryByRole('combobox');
-  if (!trigger) throw new Error(`No select trigger under label ${String(labelText)}`);
-  return trigger;
+  return screen.getByRole('combobox', { name: labelText });
 }
 
 async function pickFromTrigger(

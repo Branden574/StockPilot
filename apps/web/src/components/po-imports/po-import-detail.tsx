@@ -605,11 +605,10 @@ export function PoImportDetail({
                 )}
               </div>
               <div className="min-w-0 space-y-1.5">
-                <Label
-                  htmlFor={fieldId('item-charter')}
-                  className={cn(FIELD_LABEL, 'inline-flex items-center gap-1')}
-                >
-                  Charter for items (ownership)
+                <div className="inline-flex items-center gap-1">
+                  <Label htmlFor={fieldId('item-charter')} className={FIELD_LABEL}>
+                    Charter for items (ownership)
+                  </Label>
                   <HelpTip label="Charter for items">
                     <p>
                       Sets who <strong>owns</strong> the stock: items created from these lines are
@@ -622,7 +621,7 @@ export function PoImportDetail({
                       ownership at all.
                     </p>
                   </HelpTip>
-                </Label>
+                </div>
                 <Select
                   value={charterId || CHARTER_KEEP}
                   onValueChange={(v) => setCharterId(v === CHARTER_KEEP ? '' : v)}
@@ -728,11 +727,10 @@ export function PoImportDetail({
               not who can see it.
             </p>
             <div className="min-w-0 space-y-1.5">
-              <Label
-                htmlFor={fieldId('bill-to')}
-                className={cn(FIELD_LABEL, 'inline-flex items-center gap-1')}
-              >
-                Bill to charter (optional)
+              <div className="inline-flex items-center gap-1">
+                <Label htmlFor={fieldId('bill-to')} className={FIELD_LABEL}>
+                  Bill to charter (optional)
+                </Label>
                 <HelpTip label="Bill to charter">
                   <p>
                     Sets who is <strong>billed</strong> on the purchase-order document itself. It
@@ -740,7 +738,7 @@ export function PoImportDetail({
                     under Operational placement.
                   </p>
                 </HelpTip>
-              </Label>
+              </div>
               <Select
                 value={billToCharterId || '__none'}
                 onValueChange={(v) => setBillToCharterId(v === '__none' ? '' : v)}

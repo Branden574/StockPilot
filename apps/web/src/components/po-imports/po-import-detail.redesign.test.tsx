@@ -218,12 +218,19 @@ describe('PoImportDetail placement sections and preview (redesign)', () => {
     ]) {
       expect(screen.getByRole('combobox', { name })).toBeInTheDocument();
     }
+    // Exact names: the help button beside each label must not join the field's name.
     expect(
-      screen.getByRole('combobox', { name: /Charter for items \(ownership\)/ }),
+      screen.getByRole('combobox', { name: 'Charter for items (ownership)' }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole('combobox', { name: /Bill to charter \(optional\)/ }),
+      screen.getByRole('combobox', { name: 'Bill to charter (optional)' }),
     ).toBeInTheDocument();
+    // jsdom's name algorithm skips a nested button's aria-label, but browsers add it
+    // ("... What is Charter for items?"), so the help buttons must sit beside the
+    // labels, never inside them.
+    for (const name of ['What is Charter for items?', 'What is Bill to charter?']) {
+      expect(screen.getByRole('button', { name }).closest('label')).toBeNull();
+    }
     expect(screen.getByLabelText('Expected delivery (optional)')).toHaveAttribute('type', 'date');
     // Never pre-seeded: the warehouse starts unpicked and the location waits for it.
     expect(screen.getByRole('combobox', { name: 'Destination warehouse' })).toHaveTextContent(
