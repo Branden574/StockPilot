@@ -14,12 +14,13 @@ import {
   TrendingUp,
   Truck,
 } from 'lucide-react';
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { BOOK_REPORT_CARD_DESCRIPTION, BOOK_REPORT_TITLE, can } from '@stockpilot/core';
 
+import { PageHeader } from '@/components/patterns/page-header';
 import { PdfDownloadDropdown } from '@/components/reports/pdf-download-dropdown';
+import { IntentLink } from '@/components/ui/intent-link';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { reportModules, type ReportSlug } from '@/lib/reports/report-access';
@@ -134,40 +135,54 @@ export default async function ReportsPage() {
   const reports = all.filter((r) => reportModules(r.slug).every((m) => enabled.has(m)));
 
   return (
-    <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
-      <div className="border-border mb-6 flex flex-wrap items-end justify-between gap-3 border-b pb-4 sm:gap-6">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Reports</h1>
-          <p className="text-muted-foreground mt-1 text-sm">
-            {reports.length} pre-baked reports.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <PageTour tour={REPORTS_TOUR} />
-          <PdfDownloadDropdown baseUrl="/api/reports/inventory-snapshot/pdf" />
-        </div>
-      </div>
+    <div className={REPORT_PAGE_CLASS}>
+      <PageHeader
+        title="Reports"
+        subline={<>{reports.length} pre-baked reports.</>}
+        tour={<PageTour tour={REPORTS_TOUR} />}
+        actions={<PdfDownloadDropdown baseUrl="/api/reports/inventory-snapshot/pdf" />}
+      />
 
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+      {/* One tile per report, each to its own route. IntentLink, not Link: a
+          page of tiles that prefetch on sight was 26 requests for 13 tiles
+          (components/ui/intent-link.tsx); a tile is warmed when someone
+          reaches for it instead. The REPORTS_TOUR's second step targets
+          `main a[href^="/dashboard/reports/"]`, which these stay. */}
+      <ul role="list" className="grid grid-cols-1 gap-3 md:grid-cols-2">
         {reports.map((r) => (
-          <Link
-            key={r.slug}
-            href={`/dashboard/reports/${r.slug}`}
-            className="border-border bg-card hover:border-foreground/30 group flex items-start gap-3 rounded-lg border p-4 transition-colors"
-          >
-            <div className="bg-muted rounded-md p-2">
-              <r.icon className="h-4 w-4" strokeWidth={1.5} />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center justify-between">
-                <div className="font-medium">{r.name}</div>
-                <ChevronRight className="text-muted-foreground h-3.5 w-3.5 opacity-0 transition-opacity group-hover:opacity-100" />
-              </div>
-              <p className="text-muted-foreground mt-1 text-xs">{r.desc}</p>
-            </div>
-          </Link>
+          <li key={r.slug} className="min-w-0">
+            <IntentLink
+              href={`/dashboard/reports/${r.slug}`}
+              className="border-border bg-card hover:bg-muted group flex h-full min-w-0 items-start gap-3 rounded-lg border px-[18px] py-4 transition-colors hover:border-[var(--ed-line-strong)]"
+            >
+              <span
+                aria-hidden
+                className="border-border bg-sunk text-ink-2 flex size-8 shrink-0 items-center justify-center rounded-md border"
+              >
+                <r.icon className="h-4 w-4" strokeWidth={1.75} />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center justify-between gap-2">
+                  <span className="text-foreground text-[13.5px] font-medium leading-5">
+                    {r.name}
+                  </span>
+                  <ChevronRight
+                    aria-hidden
+                    className="text-muted-foreground h-3.5 w-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+                  />
+                </span>
+                <span className="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18.75px]">
+                  {r.desc}
+                </span>
+              </span>
+            </IntentLink>
+          </li>
         ))}
-      </div>
+      </ul>
     </div>
   );
 }
+
+/** The report pages' frame: the redesign's list-page gutters and width. */
+const REPORT_PAGE_CLASS =
+  'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';

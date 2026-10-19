@@ -1,10 +1,14 @@
 import { Suspense } from 'react';
 import { Download } from 'lucide-react';
-import Link from 'next/link';
 
+import { DetailSection } from '@/components/patterns/detail-section';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
+import { SegmentedTabs } from '@/components/patterns/segmented-tabs';
+import { StatStrip, StatStripItem } from '@/components/patterns/stat-strip';
 import { ReportBodySkeleton } from '@/components/reports/report-body-skeleton';
 import { PdfDownloadDropdown } from '@/components/reports/pdf-download-dropdown';
 import { Button } from '@/components/ui/button';
+import { IntentLink } from '@/components/ui/intent-link';
 import {
   Table,
   TableBody,
@@ -15,8 +19,14 @@ import {
 } from '@/components/ui/table';
 import { ReportsService } from '@/server/services/reports';
 import { formatCurrency, formatNumber } from '@/lib/utils';
-import { cn } from '@/lib/utils';
 import { reportPageGate } from '@/lib/reports/report-page-gate';
+
+/** The report pages' frame: the redesign's list-page gutters and width. */
+const REPORT_PAGE_CLASS =
+  'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
+
+/** The picker's options; the URL itself accepts any whole number of days from 30 to 365. */
+const DAY_OPTIONS = [30, 60, 90, 180, 365] as const;
 
 export default async function DeadStockPage({
   searchParams,
@@ -27,33 +37,25 @@ export default async function DeadStockPage({
   if (blocked) return blocked;
   const daysPromise = searchParams.then((params) => clampDays(params.days));
 
-  return (
-    <DaysShell daysPromise={daysPromise} />
-  );
+  return <DaysShell daysPromise={daysPromise} />;
 }
 
 async function DaysShell({ daysPromise }: { daysPromise: Promise<number> }) {
   const days = await daysPromise;
 
   return (
-    <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href="/dashboard/reports"
-          className="text-muted-foreground hover:text-foreground text-sm"
-        >
-          ← Back to reports
-        </Link>
-        <div className="mt-2 flex flex-wrap items-end justify-between gap-3 sm:gap-4">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Dead stock</h1>
-            <p className="text-muted-foreground mt-1 text-sm">
-              On-hand items with no out-movement in the last {days} days,
-              ranked by carrying cost. The biggest dollar targets to clear,
-              donate, or write down.
-            </p>
-          </div>
-          <div className="flex gap-2">
+    <div className={REPORT_PAGE_CLASS}>
+      <PageHeader
+        back={<PageHeaderBackLink href="/dashboard/reports">← Back to reports</PageHeaderBackLink>}
+        title="Dead stock"
+        subline={
+          <>
+            On-hand items with no out-movement in the last {days} days, ranked by carrying cost. The
+            biggest dollar targets to clear, donate, or write down.
+          </>
+        }
+        actions={
+          <>
             <DaysPicker current={days} />
             <Button asChild variant="outline">
               <a href={`/api/reports/dead-stock/csv?days=${days}`}>
@@ -61,9 +63,9 @@ async function DaysShell({ daysPromise }: { daysPromise: Promise<number> }) {
               </a>
             </Button>
             <PdfDownloadDropdown baseUrl={`/api/reports/dead-stock/pdf?days=${days}`} />
-          </div>
-        </div>
-      </div>
+          </>
+        }
+      />
 
       <Suspense fallback={<ReportBodySkeleton />}>
         <DeadStockBody days={days} />
@@ -78,19 +80,19 @@ async function DeadStockBody({ days }: { days: number }) {
 
   return (
     <>
-      <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <Stat label="Stagnant items" value={formatNumber(data.itemCount)} />
-        <Stat
+      <StatStrip>
+        <StatStripItem label="Stagnant items" value={formatNumber(data.itemCount)} />
+        <StatStripItem
           label="Carrying value at risk"
           value={formatCurrency(data.totalCarryingValue)}
-          tone="warn"
+          valueTone="warning"
         />
-      </div>
+      </StatStrip>
 
-      <div className="bg-card overflow-x-auto rounded-xl border">
-        <Table>
+      <DetailSection flush>
+        <Table className="min-w-[780px]">
           <TableHeader>
-            <TableRow>
+            <TableRow className="hover:bg-transparent">
               <TableHead>Item</TableHead>
               <TableHead>Warehouse</TableHead>
               <TableHead>Category</TableHead>
@@ -102,8 +104,11 @@ async function DeadStockBody({ days }: { days: number }) {
           </TableHeader>
           <TableBody>
             {data.rows.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={7} className="text-muted-foreground py-8 text-center text-sm">
+              <TableRow className="hover:bg-transparent">
+                <TableCell
+                  colSpan={7}
+                  className="text-muted-foreground py-10 text-center text-[13px]"
+                >
                   No dead stock — every item has moved out in the last {days} days. Nice.
                 </TableCell>
               </TableRow>
@@ -111,18 +116,19 @@ async function DeadStockBody({ days }: { days: number }) {
             {data.rows.map((r) => (
               <TableRow key={r.itemId}>
                 <TableCell>
-                  <Link
+                  {/* The one real drill-down: the item's own page. */}
+                  <IntentLink
                     href={`/dashboard/inventory/${r.itemId}`}
-                    className="hover:underline"
+                    className="group/item block min-w-0"
                   >
-                    <div className="font-medium">{r.name}</div>
-                    <div className="text-muted-foreground font-mono text-[11px]">{r.sku}</div>
-                  </Link>
+                    <div className="text-foreground font-medium group-hover/item:underline">
+                      {r.name}
+                    </div>
+                    <div className="text-muted-foreground font-mono text-[11.5px]">{r.sku}</div>
+                  </IntentLink>
                 </TableCell>
-                <TableCell className="text-muted-foreground text-xs">
-                  {r.warehouseName ?? '—'}
-                </TableCell>
-                <TableCell className="text-muted-foreground text-xs">
+                <TableCell className="text-ink-2 text-[12.5px]">{r.warehouseName ?? '—'}</TableCell>
+                <TableCell className="text-ink-2 text-[12.5px]">
                   {r.categoryName ?? 'Uncategorized'}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
@@ -134,14 +140,14 @@ async function DeadStockBody({ days }: { days: number }) {
                 <TableCell className="text-right font-medium tabular-nums">
                   {formatCurrency(r.carryingValue)}
                 </TableCell>
-                <TableCell className="text-right tabular-nums text-muted-foreground">
+                <TableCell className="text-muted-foreground text-right tabular-nums">
                   {r.ageDays}
                 </TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
-      </div>
+      </DetailSection>
     </>
   );
 }
@@ -152,49 +158,19 @@ function clampDays(raw: string | undefined): number {
   return Math.min(Math.max(Math.floor(n), 30), 365);
 }
 
-function Stat({
-  label,
-  value,
-  tone = 'default',
-}: {
-  label: string;
-  value: string;
-  tone?: 'default' | 'warn';
-}) {
-  return (
-    <div className="border-border bg-card rounded-md border px-4 py-3">
-      <div className="text-muted-foreground text-xs uppercase tracking-[0.06em]">{label}</div>
-      <div
-        className={cn(
-          'mt-1 font-mono text-xl font-semibold tabular-nums',
-          tone === 'warn' && 'text-warning',
-        )}
-      >
-        {value}
-      </div>
-    </div>
-  );
-}
-
 function DaysPicker({ current }: { current: number }) {
-  const opts = [30, 60, 90, 180, 365];
   return (
-    <div className="border-border bg-background flex items-center gap-1 rounded-md border p-0.5">
-      {opts.map((d) => (
-        <Link
-          key={d}
-          href={`/dashboard/reports/dead-stock?days=${d}`}
-          scroll={false}
-          className={cn(
-            'rounded-sm px-2 py-1 text-xs',
-            d === current
-              ? 'bg-foreground text-background'
-              : 'hover:bg-muted',
-          )}
-        >
-          {d}d
-        </Link>
-      ))}
-    </div>
+    <SegmentedTabs
+      size="sm"
+      semantics="nav"
+      aria-label="Date range"
+      activeId={String(current)}
+      items={DAY_OPTIONS.map((d) => ({
+        id: String(d),
+        label: `${d}d`,
+        href: `/dashboard/reports/dead-stock?days=${d}`,
+        scroll: false,
+      }))}
+    />
   );
 }
