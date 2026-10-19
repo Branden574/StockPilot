@@ -177,6 +177,10 @@ describe('returns list (redesign)', () => {
   it('draws every column, the thumbnails in their 32 px frame (the hatch without a photo), "+N" more and the waiting prompt', async () => {
     listPage.mockResolvedValueOnce(answer());
     const { container } = await renderPage();
+    // The page title names the table's scroll region.
+    expect(screen.getByRole('region', { name: 'Returns' })).toContainElement(
+      screen.getByRole('table'),
+    );
     const headers = screen.getAllByRole('columnheader').map((h) => h.textContent);
     expect(headers).toEqual([
       'RMA',

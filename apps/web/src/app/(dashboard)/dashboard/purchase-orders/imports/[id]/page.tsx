@@ -97,6 +97,7 @@ export default async function PoImportDetailPage({ params }: { params: Promise<{
           </PageHeaderBackLink>
         }
         title={header.display_name ?? header.file_name}
+        titleId="po-import-title"
         titleAside={
           <PoImportRenameButton
             poImportId={header.id}

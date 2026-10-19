@@ -117,6 +117,7 @@ export default async function ReturnsPage({
     <div className={PAGE_BOX}>
       <PageHeader
         title={heading}
+        titleId="returns-title"
         subline={
           <p className="max-w-3xl">
             RMAs against handed-over orders. Approving moves nothing; processing a received return
@@ -186,7 +187,7 @@ export default async function ReturnsPage({
         // least 860 px wide (the reference's Orders and Movements minimum)
         // and scrolling sideways inside the card, never the page.
         <div className="border-border bg-card overflow-hidden rounded-lg border">
-          <Table className="min-w-[860px]">
+          <Table scrollLabelledBy="returns-title" className="min-w-[860px]">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead>RMA</TableHead>

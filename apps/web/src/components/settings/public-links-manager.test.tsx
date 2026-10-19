@@ -5,7 +5,7 @@
  * evening in Los Angeles is the next day in UTC, so React threw error #418.
  * The days are printed once the page has hydrated.
  */
-import { within } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import type * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -54,6 +54,15 @@ const LINK: PublicLinkRow = {
   updated_at: CREATED_AT,
   entry_count: 3,
 };
+
+describe('PublicLinksManager table', () => {
+  it('names the scroll region by the card title', () => {
+    render(<PublicLinksManager appUrl="https://stockpilotusa.com" links={[LINK]} />);
+    const scroll = screen.getByRole('table').parentElement;
+    expect(scroll).toHaveAttribute('role', 'region');
+    expect(scroll).toHaveAccessibleName('Public request links');
+  });
+});
 
 describe('PublicLinksManager hydrates with the server in UTC and the browser in Los Angeles', () => {
   it("prints the viewer's expiry and creation days once hydrated, never the server's, with no hydration error", async () => {

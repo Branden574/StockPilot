@@ -321,6 +321,10 @@ describe('rentals/[id]: header and items card', () => {
       '/dashboard/rentals',
     );
     expect(screen.getByRole('heading', { name: 'Items (2)' })).toBeTruthy();
+    // The card title names the table's scroll region.
+    expect(screen.getByRole('region', { name: 'Items (2)' })).toContainElement(
+      screen.getByRole('table'),
+    );
     const headers = screen.getAllByRole('columnheader').map((x) => x.textContent);
     expect(headers).toEqual(['Item', 'SKU', 'Qty', 'Notes']);
     expect(screen.getAllByRole('columnheader')[3]!.className).toMatch(/hidden sm:table-cell/);

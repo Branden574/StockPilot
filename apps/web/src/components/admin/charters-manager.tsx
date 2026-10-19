@@ -143,6 +143,7 @@ export function ChartersManager({
       <PageHeader
         eyebrow={eyebrow}
         title={title}
+        titleId="charters-title"
         subline={subline}
         actions={<ArchiveViewToggle view={view} />}
         primaryAction={
@@ -178,7 +179,7 @@ export function ChartersManager({
         // The table scrolls sideways inside its card on a narrow screen, so
         // the Actions column is always reachable and never pushed off the page.
         <div className="border-border bg-card overflow-hidden rounded-lg border">
-          <Table className="min-w-[760px]">
+          <Table scrollLabelledBy="charters-title" className="min-w-[760px]">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead>Name</TableHead>

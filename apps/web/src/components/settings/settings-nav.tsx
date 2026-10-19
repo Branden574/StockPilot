@@ -506,6 +506,8 @@ export function SettingsPage({
 
 export interface SettingsPanelProps {
   title: React.ReactNode;
+  /** id on the title's heading, for an `aria-labelledby` elsewhere (a table's scroll region). */
+  headingId?: string;
   description?: React.ReactNode;
   /** Right side of the header: a badge, a status, a small button. */
   aside?: React.ReactNode;
@@ -525,6 +527,7 @@ export interface SettingsPanelProps {
  */
 export function SettingsPanel({
   title,
+  headingId: headingIdProp,
   description,
   aside,
   tone = 'default',
@@ -533,7 +536,8 @@ export function SettingsPanel({
   bodyClassName,
   children,
 }: SettingsPanelProps) {
-  const headingId = React.useId();
+  const autoHeadingId = React.useId();
+  const headingId = headingIdProp ?? autoHeadingId;
   return (
     <section
       data-slot="settings-panel"

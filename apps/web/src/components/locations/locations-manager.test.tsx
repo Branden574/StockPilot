@@ -115,6 +115,10 @@ describe('LocationsManager — header, groups and archive guard (redesign)', () 
     render(<LocationsManager initial={ROWS} canManage />);
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Locations');
+    // The page title names the table's scroll region.
+    expect(screen.getByRole('region', { name: 'Locations' })).toContainElement(
+      screen.getByRole('table'),
+    );
     expect(
       screen.getByText('Warehouses, rooms, shelves, vehicles, job sites — wherever stock lives.'),
     ).toBeInTheDocument();

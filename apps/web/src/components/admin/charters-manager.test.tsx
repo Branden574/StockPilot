@@ -74,6 +74,10 @@ describe('ChartersManager', () => {
   it('uses the org terminology in the heading and the New button', () => {
     renderManager();
     expect(screen.getByRole('heading', { level: 1, name: 'Regions' })).toBeInTheDocument();
+    // The page title names the table's scroll region.
+    expect(screen.getByRole('region', { name: 'Regions' })).toContainElement(
+      screen.getByRole('table'),
+    );
     expect(screen.getByRole('button', { name: 'New region' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Active' })).toHaveAttribute('aria-selected', 'true');
   });

@@ -99,6 +99,11 @@ describe('Staging table, redesigned', () => {
   it('keeps the tour anchors and draws selection with the shared checkbox', () => {
     const { container } = renderTable();
     expect(container.querySelector('table')).not.toBeNull();
+    // The Staging page title (titleId="staging-title") names the scroll region.
+    expect(container.querySelector('table')!.parentElement).toHaveAttribute(
+      'aria-labelledby',
+      'staging-title',
+    );
     const header = container.querySelector(
       '[role="checkbox"][aria-label="Select all placeable rows"]',
     );

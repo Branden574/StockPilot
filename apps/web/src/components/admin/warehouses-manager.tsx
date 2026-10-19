@@ -121,6 +121,7 @@ export function WarehousesManager({
       <PageHeader
         eyebrow={eyebrow}
         title={title}
+        titleId="warehouses-title"
         subline={subline}
         actions={<ArchiveViewToggle view={view} />}
         primaryAction={
@@ -156,7 +157,7 @@ export function WarehousesManager({
         // Scrolls sideways inside its card on a narrow screen, so Actions
         // stay reachable and never push the page wider.
         <div className="border-border bg-card overflow-hidden rounded-lg border">
-          <Table className="min-w-[760px]">
+          <Table scrollLabelledBy="warehouses-title" className="min-w-[760px]">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead>Name</TableHead>

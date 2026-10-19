@@ -176,7 +176,8 @@ export function VendorMappingsManager({
           its card; a phone keeps the auto layout it had, so every column stays
           in view, and Delete is pinned to the card's right edge below md. */}
       <div className="border-border bg-card overflow-hidden rounded-lg border">
-        <Table className="sm:min-w-[560px]">
+        {/* Named by the page title (titleId="vendor-mappings-title" on the page). */}
+        <Table scrollLabelledBy="vendor-mappings-title" className="sm:min-w-[560px]">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead>Vendor</TableHead>

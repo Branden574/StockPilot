@@ -97,6 +97,9 @@ describe('/dashboard/admin/reconciliation', () => {
       expect(screen.getAllByText(value).length).toBeGreaterThan(0);
     }
     const [vendors, pos] = screen.getAllByRole('table');
+    // Each table's scroll region is named by its card title.
+    expect(screen.getByRole('region', { name: 'Vendor performance' })).toContainElement(vendors!);
+    expect(screen.getByRole('region', { name: 'Purchase orders (all)' })).toContainElement(pos!);
     expect(
       within(vendors!)
         .getAllByRole('columnheader')

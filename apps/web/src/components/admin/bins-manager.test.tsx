@@ -84,6 +84,8 @@ describe('BinsManager', () => {
     render(<BinsManager warehouses={WAREHOUSES} bins={BINS} />);
     const north = screen.getByRole('heading', { level: 3, name: 'North DC' }).closest('section')!;
     const table = within(north).getByRole('table');
+    // The warehouse's card title names the table's scroll region.
+    expect(screen.getByRole('region', { name: 'North DC' })).toContainElement(table);
     expect(table).toHaveClass('sm:min-w-[520px]', 'sm:table-fixed');
     expect(table).not.toHaveClass('min-w-[520px]');
     expect(table).not.toHaveClass('table-fixed');

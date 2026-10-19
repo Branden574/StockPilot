@@ -174,7 +174,7 @@ export function PublicLinksManager({ appUrl, links }: { appUrl: string; links: P
           }
         />
       ) : (
-        <Table className="min-w-[760px]">
+        <Table scrollLabelledBy="public-links-heading" className="min-w-[760px]">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead>Name</TableHead>

@@ -33,6 +33,7 @@ export default async function VendorMappingsPage() {
     <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
       <PageHeader
         title={title}
+        titleId="vendor-mappings-title"
         subline="Map vendor product numbers (e.g. Staples #867474) to your internal items so future PO uploads auto-resolve."
       />
       <VendorMappingsManager

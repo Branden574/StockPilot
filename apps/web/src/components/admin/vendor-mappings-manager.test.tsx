@@ -44,6 +44,9 @@ describe('VendorMappingsManager', () => {
       expect(screen.getByLabelText(label)).toBeInTheDocument();
     }
     const table = screen.getByRole('table');
+    // The page's title (titleId="vendor-mappings-title") names the table's scroll region.
+    expect(table.parentElement).toHaveAttribute('role', 'region');
+    expect(table.parentElement).toHaveAttribute('aria-labelledby', 'vendor-mappings-title');
     expect(
       within(table)
         .getAllByRole('columnheader')

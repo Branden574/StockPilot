@@ -311,7 +311,9 @@ export function RentalsListTable({
           reader never hears them twice). The cells keep their order:
           Borrower, Items, Checked out, Return, Status, Actions. */}
       <div className="border-border bg-card overflow-hidden rounded-lg border">
-        <Table aria-label="Rentals">
+        {/* The scroll region is named by the page title (titleId="rentals-title"
+            on the Rentals page); the table keeps its own name. */}
+        <Table scrollLabelledBy="rentals-title" aria-label="Rentals">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead>Borrower</TableHead>

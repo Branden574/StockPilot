@@ -2839,6 +2839,10 @@ describe('orders/[id]: the record layout keeps every section (P4.B1)', () => {
       expect(heading.closest('section'), title).toHaveAttribute('data-slot', 'detail-section');
     }
     expect(screen.getByText('No lines on this request.')).toBeInTheDocument();
+    // The Lines card title names the line table's scroll region.
+    expect(screen.getByRole('region', { name: 'Lines (0)' })).toContainElement(
+      screen.getByText('No lines on this request.'),
+    );
     expect(screen.getByText('For room 4')).toBeInTheDocument();
     expect(screen.getByText('Over the term budget')).toBeInTheDocument();
 

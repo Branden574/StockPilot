@@ -193,6 +193,7 @@ export function LocationsManager({
     <>
       <PageHeader
         title={title}
+        titleId="locations-title"
         subline={
           isArchivedView
             ? 'Locations you archived. Restore one to bring it back into pick lists.'
@@ -249,7 +250,7 @@ export function LocationsManager({
             />
           ) : (
             <div className="border-border bg-card min-w-0 overflow-hidden rounded-lg border">
-              <Table className="min-w-[640px]">
+              <Table scrollLabelledBy="locations-title" className="min-w-[640px]">
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
                     <TableHead>Name</TableHead>

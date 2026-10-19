@@ -75,6 +75,7 @@ export default async function RestorePointsPage() {
           </SettingsPanel>
 
           <SettingsPanel
+            headingId="restore-points-snapshots-heading"
             title="Snapshots"
             description={`The most recent ${snapshots.length} kept (older ones are pruned automatically).`}
             flush
@@ -88,7 +89,7 @@ export default async function RestorePointsPage() {
               // The table scrolls inside the card on narrow screens (it was
               // clipped by overflow-hidden before); the page never scrolls
               // sideways.
-              <Table className="min-w-[600px]">
+              <Table scrollLabelledBy="restore-points-snapshots-heading" className="min-w-[600px]">
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
                     <TableHead>When</TableHead>

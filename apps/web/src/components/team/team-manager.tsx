@@ -164,8 +164,8 @@ export function TeamManager({
         }
       />
 
-      <DetailSection title={`Members (${members.length})`} flush>
-        <Table className="min-w-[760px]">
+      <DetailSection headingId="team-members-heading" title={`Members (${members.length})`} flush>
+        <Table scrollLabelledBy="team-members-heading" className="min-w-[760px]">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead>Person</TableHead>
@@ -198,8 +198,12 @@ export function TeamManager({
       </DetailSection>
 
       {pendingInvites.length > 0 && (
-        <DetailSection title={`Pending invites (${pendingInvites.length})`} flush>
-          <Table className="min-w-[640px]">
+        <DetailSection
+          headingId="team-invites-heading"
+          title={`Pending invites (${pendingInvites.length})`}
+          flush
+        >
+          <Table scrollLabelledBy="team-invites-heading" className="min-w-[640px]">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead>Email</TableHead>

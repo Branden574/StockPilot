@@ -65,6 +65,7 @@ export default async function StagingPage({
     <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
       <PageHeader
         title="Staging"
+        titleId="staging-title"
         tour={<PageTour tour={STAGING_TOUR} />}
         subline="Stock waiting to be placed into a rack or crate — received from POs (staged) or on hand but never placed (unplaced)."
       />

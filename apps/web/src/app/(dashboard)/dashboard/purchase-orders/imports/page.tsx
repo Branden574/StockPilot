@@ -241,7 +241,7 @@ export default async function PoImportsPage({
       // the redesign; on a phone the rows scroll sideways inside it, never the
       // page.
       <div className="border-border bg-card min-w-0 overflow-hidden rounded-lg border">
-        <Table>
+        <Table scrollLabelledBy="po-imports-title">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead>Name</TableHead>
@@ -331,6 +331,7 @@ export default async function PoImportsPage({
     <div className={PAGE}>
       <PageHeader
         title={heading}
+        titleId="po-imports-title"
         subline="Upload a vendor PO PDF or CSV to stage expected inbound. Inventory is not changed until you receive the items."
         tour={<PageTour tour={PO_IMPORTS_TOUR} />}
         primaryAction={

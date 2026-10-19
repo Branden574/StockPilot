@@ -137,6 +137,10 @@ describe('PO imports list (redesign)', () => {
       container.querySelector('a[href="/dashboard/purchase-orders/imports/new"]'),
     ).toHaveTextContent('+ New import');
     expect(container.querySelector('table')).not.toBeNull();
+    // The page title names the table's scroll region.
+    expect(screen.getByRole('region', { name: 'PO imports' })).toContainElement(
+      container.querySelector('table'),
+    );
     expect(
       screen.getByText(
         'Upload a vendor PO PDF or CSV to stage expected inbound. Inventory is not changed until you receive the items.',

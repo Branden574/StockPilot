@@ -183,6 +183,10 @@ describe('/dashboard/audit redesign (P5.2): same console, the redesign look', ()
     auditList.mockResolvedValueOnce({ rows: [ROW], total: 1 } as never);
     const { container } = render(await AuditLogPage({ searchParams: Promise.resolve({}) }));
     expect(screen.getByRole('table')).toBeInTheDocument();
+    // The page title names the table's scroll region.
+    expect(screen.getByRole('region', { name: 'Audit log' })).toContainElement(
+      screen.getByRole('table'),
+    );
     expect(screen.getAllByRole('columnheader').map((th) => th.textContent)).toEqual([
       'Time',
       'Actor',

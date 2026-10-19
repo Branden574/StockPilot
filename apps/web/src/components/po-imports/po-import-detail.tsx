@@ -811,7 +811,8 @@ export function PoImportDetail({
           stays available (an import with no lines keeps all its headers in
           view). */}
       <div className="border-border bg-card min-w-0 overflow-hidden rounded-lg border">
-        <Table>
+        {/* Named by the import's page title (titleId="po-import-title" on the page). */}
+        <Table scrollLabelledBy="po-import-title">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead className="w-12">#</TableHead>

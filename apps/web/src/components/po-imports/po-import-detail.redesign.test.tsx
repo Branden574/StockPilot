@@ -246,5 +246,10 @@ describe('PoImportDetail placement sections and preview (redesign)', () => {
     for (const label of ['Items affected', 'Units inbound', 'Unmapped', 'Total cost']) {
       expect(within(section).getByText(label)).toBeInTheDocument();
     }
+    // Its heading names the preview table's scroll region; the import's page
+    // title (titleId="po-import-title") names the lines table's.
+    const [lines, preview] = screen.getAllByRole('table');
+    expect(preview!.parentElement).toHaveAttribute('aria-labelledby', heading.id);
+    expect(lines!.parentElement).toHaveAttribute('aria-labelledby', 'po-import-title');
   });
 });

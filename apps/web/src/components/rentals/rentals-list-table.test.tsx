@@ -62,6 +62,10 @@ describe('RentalsListTable reminder marks', () => {
   it('renders as before when no marks are given', () => {
     render(<RentalsListTable rentals={[rental('a')]} viewerRole="staff" timeZone={PT} />);
     expect(screen.queryByTestId('reminder-mark')).toBeNull();
+    // The Rentals page title (titleId="rentals-title") names the scroll
+    // region; the table keeps its own name.
+    const table = screen.getByRole('table', { name: 'Rentals' });
+    expect(table.parentElement).toHaveAttribute('aria-labelledby', 'rentals-title');
   });
 });
 

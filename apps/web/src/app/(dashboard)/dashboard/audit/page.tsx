@@ -184,6 +184,7 @@ export default async function AuditLogPage({
     <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
       <PageHeader
         title={title}
+        titleId="audit-title"
         subline="Read-only record of every privileged action across the org — invites, role changes, stock adjustments, transfers."
       />
 
@@ -289,7 +290,7 @@ export default async function AuditLogPage({
         // The ledger table (DESIGN-SPEC 6.9): it scrolls sideways inside its
         // card on a narrow screen instead of widening the page.
         <div className="border-border bg-card overflow-hidden rounded-lg border">
-          <Table className="min-w-[860px]">
+          <Table scrollLabelledBy="audit-title" className="min-w-[860px]">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead>Time</TableHead>

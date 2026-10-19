@@ -313,7 +313,7 @@ export function StockImpactPreview({
           empty message wraps inside a phone's width instead of running off
           the card's edge. */}
       <div className="border-border bg-card min-w-0 overflow-hidden rounded-lg border">
-        <Table>
+        <Table scrollLabelledBy={headingId}>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead className="w-12">#</TableHead>

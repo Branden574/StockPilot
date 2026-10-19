@@ -792,6 +792,7 @@ export function PublicLinkEditor({
 
       {/* ── Catalog editor ────────────────────────────────────────────────── */}
       <SettingsPanel
+        headingId="public-link-catalog-heading"
         title="Catalog"
         description="Pick exactly which items and books this link exposes. Select rows, then add or remove them in bulk — nothing changes until you confirm."
         flush
@@ -936,7 +937,7 @@ export function PublicLinkEditor({
           </p>
         ) : null}
 
-        <Table className="min-w-[860px] border-t">
+        <Table scrollLabelledBy="public-link-catalog-heading" className="min-w-[860px] border-t">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead className="w-10">

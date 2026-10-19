@@ -161,6 +161,10 @@ describe('Team page header and cards', () => {
     expect(
       screen.getByRole('heading', { level: 2, name: 'Pending invites (1)' }),
     ).toBeInTheDocument();
+    // Each card title names its table's scroll region.
+    const [members, invites] = screen.getAllByRole('table');
+    expect(screen.getByRole('region', { name: 'Members (2)' })).toContainElement(members!);
+    expect(screen.getByRole('region', { name: 'Pending invites (1)' })).toContainElement(invites!);
   });
 
   it('names the icon-only row menu and the revoke button, and never shows a menu on the owner row', () => {

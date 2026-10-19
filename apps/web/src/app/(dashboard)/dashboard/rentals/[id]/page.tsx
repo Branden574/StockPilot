@@ -140,6 +140,7 @@ export default async function RentalDetailPage({ params }: { params: Promise<{ i
         {/* Lines table. Notes hides below sm, as before; there it rides as a
             quiet line under the item's name instead. */}
         <DetailSection
+          headingId="rental-items-heading"
           title={`Items (${rental.lines.length})`}
           flush
           className="lg:col-start-1 lg:row-start-2"
@@ -149,7 +150,7 @@ export default async function RentalDetailPage({ params }: { params: Promise<{ i
               No items on this rental.
             </p>
           ) : (
-            <Table>
+            <Table scrollLabelledBy="rental-items-heading">
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
                   <TableHead>Item</TableHead>

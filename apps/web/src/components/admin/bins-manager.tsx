@@ -179,6 +179,7 @@ export function BinsManager({
           <DetailSection
             key={w.id}
             headingLevel={3}
+            headingId={`bins-${w.id}-heading`}
             title={w.name}
             aside={
               <DetailSectionMeta>
@@ -191,7 +192,10 @@ export function BinsManager({
                 with the next. A phone keeps the auto layout it had, so Code, Name,
                 Type and the Default tick stay in view, and Archive is pinned to
                 the card's right edge if the row is still too wide. */}
-            <Table className="sm:min-w-[520px] sm:table-fixed">
+            <Table
+              scrollLabelledBy={`bins-${w.id}-heading`}
+              className="sm:min-w-[520px] sm:table-fixed"
+            >
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
                   <TableHead className="sm:w-[22%]">Code</TableHead>

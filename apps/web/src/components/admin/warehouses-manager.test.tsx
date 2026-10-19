@@ -85,6 +85,10 @@ describe('WarehousesManager', () => {
 
   it('keeps every column, the detail link and the row actions; the actions sit in a box inside a real cell', () => {
     renderManager();
+    // The page title names the table's scroll region.
+    expect(screen.getByRole('region', { name: 'Depots' })).toContainElement(
+      screen.getByRole('table'),
+    );
     expect(screen.getAllByRole('columnheader').map((th) => th.textContent)).toEqual([
       'Name',
       'Code',

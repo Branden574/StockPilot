@@ -636,7 +636,8 @@ export function StagingTable({
           data-slot="staging-table-card"
           className="border-border bg-card min-w-0 overflow-hidden rounded-lg border"
         >
-          <Table className="min-w-[760px]">
+          {/* Named by the page title (titleId="staging-title" on the Staging page). */}
+          <Table scrollLabelledBy="staging-title" className="min-w-[760px]">
             <TableHeader>
               <TableRow className="hover:bg-transparent [&>th]:whitespace-nowrap">
                 {canPlace && (

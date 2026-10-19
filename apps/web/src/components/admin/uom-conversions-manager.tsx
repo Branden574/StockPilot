@@ -229,7 +229,8 @@ export function UomConversionsManager({
           Rounding stay in view, and Delete is pinned to the card's right edge
           below md. */}
       <div className="border-border bg-card overflow-hidden rounded-lg border">
-        <Table className="sm:min-w-[600px]">
+        {/* Named by the page title (titleId="uom-conversions-title" on the page). */}
+        <Table scrollLabelledBy="uom-conversions-title" className="sm:min-w-[600px]">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead>Item</TableHead>

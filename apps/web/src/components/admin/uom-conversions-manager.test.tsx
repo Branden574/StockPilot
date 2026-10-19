@@ -46,6 +46,9 @@ describe('UomConversionsManager', () => {
     expect(screen.getByLabelText(/Numerator/)).toHaveValue(24);
     expect(screen.getByLabelText('Denominator')).toHaveValue(1);
     const table = screen.getByRole('table');
+    // The page's title (titleId="uom-conversions-title") names the table's scroll region.
+    expect(table.parentElement).toHaveAttribute('role', 'region');
+    expect(table.parentElement).toHaveAttribute('aria-labelledby', 'uom-conversions-title');
     expect(
       within(table)
         .getAllByRole('columnheader')

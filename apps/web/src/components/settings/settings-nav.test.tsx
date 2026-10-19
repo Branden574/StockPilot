@@ -17,6 +17,7 @@ vi.mock('next/navigation', () => ({
 
 import {
   SETTINGS_NAV_GROUPS,
+  SettingsPanel,
   SettingsSubNav,
   activeSettingsEntry,
   visibleSettingsGroups,
@@ -82,6 +83,23 @@ describe('settings gate table', () => {
       'Integrations',
     );
     expect(activeSettingsEntry(groups, '/dashboard/settings')).toBeNull();
+  });
+});
+
+describe('SettingsPanel', () => {
+  it('puts headingId on the heading, so a table in the card can be named by it', () => {
+    const { container } = render(
+      <SettingsPanel title="Snapshots" headingId="snapshots-heading" flush>
+        <div role="region" aria-labelledby="snapshots-heading" />
+      </SettingsPanel>,
+    );
+    expect(screen.getByRole('heading', { level: 2, name: 'Snapshots' })).toHaveAttribute(
+      'id',
+      'snapshots-heading',
+    );
+    // The card itself stays named by the same heading.
+    expect(container.querySelector('section')).toHaveAccessibleName('Snapshots');
+    expect(container.querySelector('div[role="region"]')).toHaveAccessibleName('Snapshots');
   });
 });
 

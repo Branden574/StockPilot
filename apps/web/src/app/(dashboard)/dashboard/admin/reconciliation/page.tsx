@@ -79,8 +79,8 @@ export default async function ReconciliationPage({
         <StatStripItem label="Qty open" value={data.totals.qtyOpen.toLocaleString()} />
       </StatStrip>
 
-      <DetailSection title="Vendor performance" flush>
-        <Table className="min-w-[560px]">
+      <DetailSection headingId="reconciliation-vendors-heading" title="Vendor performance" flush>
+        <Table scrollLabelledBy="reconciliation-vendors-heading" className="min-w-[560px]">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead>Vendor</TableHead>
@@ -118,8 +118,12 @@ export default async function ReconciliationPage({
         </Table>
       </DetailSection>
 
-      <DetailSection title={`Purchase orders (${status})`} flush>
-        <Table className="min-w-[860px]">
+      <DetailSection
+        headingId="reconciliation-pos-heading"
+        title={`Purchase orders (${status})`}
+        flush
+      >
+        <Table scrollLabelledBy="reconciliation-pos-heading" className="min-w-[860px]">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead>PO #</TableHead>

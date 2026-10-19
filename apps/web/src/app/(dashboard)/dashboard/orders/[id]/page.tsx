@@ -1343,6 +1343,7 @@ export default async function OrderDetailPage({
         <div className="@min-[856px]:grid-cols-[minmax(0,1.7fr)_minmax(280px,1fr)] grid items-start gap-4">
           <div className="flex min-w-0 flex-col gap-4">
             <DetailSection
+              headingId="order-lines-heading"
               title={`Lines (${lines.length})`}
               flush
               data-testid="order-lines"
@@ -1537,7 +1538,10 @@ export default async function OrderDetailPage({
                 6.9): uppercase quiet headers, the 18 px card gutter at both
                 edges, the numbers right-aligned in mono. Rows are not links,
                 so they take no hover fill. */}
-              <Table className="[&_td:first-child]:pl-[18px] [&_td:last-child]:pr-[18px] [&_th:first-child]:pl-[18px] [&_th:last-child]:pr-[18px]">
+              <Table
+                scrollLabelledBy="order-lines-heading"
+                className="[&_td:first-child]:pl-[18px] [&_td:last-child]:pr-[18px] [&_th:first-child]:pl-[18px] [&_th:last-child]:pr-[18px]"
+              >
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
                     {/* The item takes the room the numbers leave (they keep their

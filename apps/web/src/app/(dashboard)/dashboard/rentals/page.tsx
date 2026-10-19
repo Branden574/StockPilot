@@ -121,6 +121,7 @@ export default async function RentalsPage({
     <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
       <PageHeader
         title="Rentals"
+        titleId="rentals-title"
         subline="Track items checked out to staff, vendors, and event coordinators."
         primaryAction={
           canCreate ? (
