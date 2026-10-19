@@ -395,7 +395,7 @@ export function CategoriesManager({
         // One card per root, its subcategories as lines under it on a rule,
         // then Add subcategory: the tree the flat grid becomes once an org
         // has subcategories.
-        <div className="grid gap-3 lg:grid-cols-2">
+        <div className="grid items-start gap-3 lg:grid-cols-2">
           {roots.map((root) => {
             const children = childrenByParent.get(root.id) ?? [];
             return (
