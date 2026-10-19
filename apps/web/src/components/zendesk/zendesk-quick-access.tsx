@@ -45,51 +45,51 @@ export function ZendeskQuickAccess({
   return (
     <div className="space-y-3">
       {agentUrl ? (
-        <a
-          href={agentUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium"
-        >
-          Open my Zendesk
-          <ExternalLink className="h-4 w-4" />
-        </a>
+        <Button asChild>
+          <a href={agentUrl} target="_blank" rel="noopener noreferrer">
+            Open my Zendesk
+            <ExternalLink className="h-4 w-4" />
+          </a>
+        </Button>
       ) : (
-        <p className="text-muted-foreground text-sm">
+        <p className="text-muted-foreground text-[13.5px]">
           No Zendesk subdomain set yet{canManage ? ' — add it below.' : '. Ask an admin to set it.'}
         </p>
       )}
 
       {canManage ? (
         <div className="flex flex-wrap items-end gap-2">
-          <label className="text-sm">
-            <span className="text-muted-foreground text-xs">Your Zendesk subdomain</span>
-            <span className="mt-1 flex items-center">
+          <label className="text-[13px]">
+            <span className="text-muted-foreground text-[12.5px]">Your Zendesk subdomain</span>
+            {/* One field with its fixed suffix. The input itself draws no
+                outline, so the whole field shows the focus ring (it had no
+                visible focus at all before). */}
+            <span className="border-input bg-card focus-within:ring-ring focus-within:ring-offset-background mt-1.5 flex items-stretch overflow-hidden rounded-md border focus-within:ring-2 focus-within:ring-offset-2">
               <input
                 value={value}
                 onChange={(e) => setValue(e.target.value)}
                 placeholder="learn4life"
-                className="border-border bg-background w-44 rounded-l-md border px-3 py-2 text-sm outline-none"
+                className="placeholder:text-muted-foreground h-[30px] w-44 min-w-0 bg-transparent px-2.5 text-[13px] outline-none max-sm:h-[42px] max-sm:text-base"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') void save();
                 }}
               />
-              <span className="border-border bg-muted text-muted-foreground rounded-r-md border border-l-0 px-2 py-2 text-sm">
+              <span className="border-border bg-sunk text-muted-foreground flex items-center border-l px-2.5 text-[13px] max-sm:text-base">
                 .zendesk.com
               </span>
             </span>
           </label>
           <Button
+            variant="outline"
             onClick={() => void save()}
             disabled={saving || !value.trim() || value.trim() === (subdomain ?? '')}
-            size="sm"
           >
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}
           </Button>
         </div>
       ) : null}
 
-      <p className="text-muted-foreground text-xs">
+      <p className="text-muted-foreground text-[12.5px]">
         Opens your real Zendesk in a new tab — you stay signed in with your normal
         Zendesk login (SSO). No API key or admin setup needed.
       </p>
