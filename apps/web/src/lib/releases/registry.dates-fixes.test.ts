@@ -595,7 +595,9 @@ describe('the dates fixes release says what a reader saw, in every US zone', () 
     const calendar = source('apps/web/src/components/schedule/schedule-calendar.tsx');
     expect(calendar).toContain('return new Date(year, month - 1, 1 - day);');
     expect(calendar).toContain('for (let i = 0; i < 42; i++) {');
-    expect(calendar).toContain("!inMonth && 'bg-muted/20',");
+    // The out-of-month shade moved to the redesign's sunk token (P4.F2, W-WS-04); the
+    // day is still only shaded, never hidden, so its events still show.
+    expect(calendar).toContain("!inMonth && 'bg-sunk',");
     const page = source('apps/web/src/app/(dashboard)/dashboard/schedule/page.tsx');
     expect(page).toContain('const events = await svc.listInRange(gridStart, gridEnd);');
     expect(entry('calendar-current-month').whyItMatters).toBe(
