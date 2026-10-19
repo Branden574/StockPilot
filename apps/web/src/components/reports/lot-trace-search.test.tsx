@@ -56,14 +56,40 @@ describe('LotTraceSearch — picked/shipped Order column', () => {
   it('falls back to the order id prefix when there is no order number', async () => {
     traceMock.mockResolvedValue(result({ orderNumber: null }));
     await trace();
-    expect(
-      await screen.findByText(ORDER_ID.slice(0, 8).toUpperCase()),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(ORDER_ID.slice(0, 8).toUpperCase())).toBeInTheDocument();
   });
 
   it('renders an em dash for a pick with no order at all', async () => {
     traceMock.mockResolvedValue(result({ orderRequestId: null, orderNumber: null }));
     await trace();
     expect(await screen.findByText('—')).toBeInTheDocument();
+  });
+});
+
+describe('LotTraceSearch — the field and a failed call', () => {
+  it('names the lot field with its own words', () => {
+    render(<LotTraceSearch />);
+    expect(screen.getByRole('textbox', { name: 'Lot number (partial ok)' })).toBeInTheDocument();
+  });
+
+  it("shows the action's refusal and lets the person search again", async () => {
+    traceMock.mockResolvedValue({
+      ok: false,
+      error: { code: 'validation_error', message: 'Enter a lot number.' },
+    });
+    render(<LotTraceSearch />);
+    await userEvent.click(screen.getByRole('button', { name: 'Trace' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Enter a lot number.');
+    expect(screen.getByRole('button', { name: 'Trace' })).toBeEnabled();
+  });
+
+  // The call itself can reject (the network dropped). The button used to stay
+  // on "Searching…" and disabled until the page was reloaded.
+  it('comes back from a call that rejects, with the reason shown', async () => {
+    traceMock.mockRejectedValue(new Error('Failed to fetch'));
+    await trace();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to fetch');
+    expect(screen.getByRole('button', { name: 'Trace' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Searching…' })).toBeNull();
   });
 });

@@ -1,6 +1,6 @@
 'use client';
 
-import { FileText, Image as ImageIcon, FileX2 } from 'lucide-react';
+import { ChevronDown, FileText, Image as ImageIcon, FileX2 } from 'lucide-react';
 import * as React from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -13,7 +13,10 @@ import {
 } from '@/components/ui/dropdown-menu';
 
 /**
- * Two-option PDF download button. Used on every report page. Clicking
+ * Two-option PDF download button. Used on every report page. It is the
+ * redesign's secondary export button with a trailing chevron (DESIGN-SPEC
+ * 6.21, "Export"): the words, the two files and the controlled open state
+ * below are unchanged. Clicking
  * "PDF" pops open a small dropdown with:
  *
  *   • With images  — default rich render. Pulls each row's primary
@@ -86,7 +89,7 @@ export function PdfDownloadDropdown({
         <Button variant="outline" disabled aria-describedby={reasonId}>
           <FileText className="h-4 w-4" /> PDF
         </Button>
-        <p id={reasonId} className="text-muted-foreground text-xs">
+        <p id={reasonId} className="text-muted-foreground text-[12px] leading-[18px]">
           {disabledReason}
         </p>
       </div>
@@ -106,11 +109,12 @@ export function PdfDownloadDropdown({
           className={busy ? 'pointer-events-none opacity-50' : undefined}
         >
           <FileText className="h-4 w-4" /> PDF
+          <ChevronDown aria-hidden className="text-muted-foreground -mr-0.5 !size-3.5" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className={note ? 'w-64' : 'w-56'}>
         {note ? (
-          <DropdownMenuLabel className="text-muted-foreground text-xs font-normal">
+          <DropdownMenuLabel className="text-muted-foreground text-[12px] font-normal leading-[18px]">
             {note}
           </DropdownMenuLabel>
         ) : null}
@@ -126,7 +130,7 @@ export function PdfDownloadDropdown({
             className="cursor-pointer"
             onClick={intercept(baseUrl)}
           >
-            <ImageIcon className="mr-2 h-4 w-4" />
+            <ImageIcon className="text-ink-2 mr-2 h-4 w-4" />
             <span className="flex-1">{labels?.withImages ?? 'With images'}</span>
           </a>
         </DropdownMenuItem>
@@ -138,12 +142,10 @@ export function PdfDownloadDropdown({
             className="cursor-pointer"
             onClick={intercept(noPhotosUrl)}
           >
-            <FileX2 className="mr-2 h-4 w-4" />
+            <FileX2 className="text-ink-2 mr-2 h-4 w-4 self-start" />
             <div className="flex-1">
               <div>{labels?.withoutImages ?? 'Without images'}</div>
-              <div className="text-muted-foreground text-[11px]">
-                Faster · smaller file
-              </div>
+              <div className="text-muted-foreground text-[11.5px]">Faster · smaller file</div>
             </div>
           </a>
         </DropdownMenuItem>

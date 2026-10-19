@@ -1,11 +1,9 @@
 import 'server-only';
 
-import { ShieldAlert } from 'lucide-react';
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
-import { Button } from '@/components/ui/button';
+import { ReportMfaCard } from '@/components/reports/report-mfa-state';
 import { isModuleEnabled, withContext } from '@/server/services/context';
 
 import { can } from '@stockpilot/core';
@@ -51,27 +49,14 @@ export async function reportPageGate(report: ReportSlug): Promise<React.ReactEle
 export function ReportMfaState({ enrolled, report }: { enrolled: boolean; report: ReportSlug }) {
   const here = `/dashboard/reports/${report}`;
   return (
-    <div className="container mx-auto max-w-2xl px-4 py-12 sm:px-6">
-      <div
-        role="alert"
-        className="border-warning/40 bg-warning/10 flex items-start gap-3 rounded-md border p-4"
-      >
-        <ShieldAlert aria-hidden className="text-warning mt-0.5 h-5 w-5 shrink-0" />
-        <div className="space-y-3">
-          <p className="text-sm">{enrolled ? REPORT_MFA_VERIFY : REPORT_MFA_ENROLL}</p>
-          <Button asChild size="sm">
-            <Link
-              href={
-                enrolled
-                  ? `/signin/mfa?redirect=${encodeURIComponent(here)}`
-                  : '/dashboard/settings/security?enroll=1'
-              }
-            >
-              {enrolled ? 'Verify now' : 'Set up two-step verification'}
-            </Link>
-          </Button>
-        </div>
-      </div>
-    </div>
+    <ReportMfaCard
+      message={enrolled ? REPORT_MFA_VERIFY : REPORT_MFA_ENROLL}
+      href={
+        enrolled
+          ? `/signin/mfa?redirect=${encodeURIComponent(here)}`
+          : '/dashboard/settings/security?enroll=1'
+      }
+      actionLabel={enrolled ? 'Verify now' : 'Set up two-step verification'}
+    />
   );
 }

@@ -18,9 +18,32 @@ vi.mock('next/navigation', () => ({
   redirect: vi.fn((url: string) => {
     throw new Error(`redirect:${url}`);
   }),
+  // The tiles are IntentLinks, which warm a route through the router.
+  usePathname: () => '/dashboard/reports',
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn(), prefetch: vi.fn() }),
+}));
+// next/link as a recorder: the prefetch each link was given is asserted below.
+const linkProps = vi.hoisted(() => [] as Array<{ href: string; prefetch: unknown }>);
+vi.mock('next/link', () => ({
+  default: ({
+    href,
+    prefetch,
+    children,
+    ...rest
+  }: { href: string; prefetch?: unknown; children: React.ReactNode } & Record<string, unknown>) => {
+    linkProps.push({ href, prefetch });
+    return (
+      <a href={href} {...rest}>
+        {children}
+      </a>
+    );
+  },
 }));
 vi.mock('@/lib/modules/module-gate', () => ({
-  checkModuleAccess: vi.fn(async (id: string) => ({ enabled: modules.on.has(id), canManage: false })),
+  checkModuleAccess: vi.fn(async (id: string) => ({
+    enabled: modules.on.has(id),
+    canManage: false,
+  })),
 }));
 vi.mock('@/components/onboarding/page-tour', () => ({ PageTour: () => null }));
 vi.mock('@/components/reports/pdf-download-dropdown', () => ({ PdfDownloadDropdown: () => null }));
@@ -30,6 +53,7 @@ import ReportsPage from './page';
 beforeEach(() => {
   vi.clearAllMocks();
   modules.on = new Set(['orders', 'books']);
+  linkProps.length = 0;
 });
 
 describe('Reports hub: Book Order Totals card', () => {
@@ -102,5 +126,51 @@ describe('Reports hub: every card follows the modules its report reads', () => {
     ]) {
       expect(screen.getByRole('link', { name })).toBeInTheDocument();
     }
+  });
+});
+
+describe('Reports hub: the redesigned page', () => {
+  const ALL = ['orders', 'books', 'bundles', 'purchase_orders', 'lot_serial'];
+
+  it('keeps the heading and the count line', async () => {
+    modules.on = new Set(ALL);
+    render(await ReportsPage());
+    expect(screen.getByRole('heading', { level: 1, name: 'Reports' })).toBeInTheDocument();
+    expect(screen.getByText('13 pre-baked reports.')).toBeInTheDocument();
+  });
+
+  // A page of tiles that prefetch on sight was 26 requests for 13 tiles in
+  // production (components/ui/intent-link.tsx). Every tile is an IntentLink:
+  // no viewport prefetch, warmed when someone reaches for it.
+  it('renders every tile as a link that never prefetches on its own', async () => {
+    modules.on = new Set(ALL);
+    render(await ReportsPage());
+    const tiles = linkProps.filter((l) => l.href.startsWith('/dashboard/reports/'));
+    expect(tiles).toHaveLength(13);
+    for (const tile of tiles) expect(tile.prefetch).toBe(false);
+  });
+
+  it('keeps each report on its own route, in the order the hub has always listed them', async () => {
+    modules.on = new Set(ALL);
+    render(await ReportsPage());
+    const hrefs = screen
+      .getAllByRole('link')
+      .map((a) => a.getAttribute('href'))
+      .filter((h): h is string => h != null && h.startsWith('/dashboard/reports/'));
+    expect(hrefs).toEqual([
+      '/dashboard/reports/inventory-valuation',
+      '/dashboard/reports/stock-movements',
+      '/dashboard/reports/reorder-forecast',
+      '/dashboard/reports/shrinkage',
+      '/dashboard/reports/supplier-scorecard',
+      '/dashboard/reports/velocity-class',
+      '/dashboard/reports/dead-stock',
+      '/dashboard/reports/bundle-activity',
+      '/dashboard/reports/bundle-shortages',
+      '/dashboard/reports/item-cost-history',
+      '/dashboard/reports/book-order-totals',
+      '/dashboard/reports/lot-expiry',
+      '/dashboard/reports/lot-trace',
+    ]);
   });
 });

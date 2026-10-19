@@ -38,7 +38,7 @@ export function CharterFilterSelect({
 
   return (
     <Select value={current ?? 'all'} onValueChange={onChange}>
-      <SelectTrigger className="h-9 w-[220px]" aria-label="Filter by charter">
+      <SelectTrigger className="w-[220px] max-w-full" aria-label="Filter by charter">
         <SelectValue placeholder="All charters" />
       </SelectTrigger>
       <SelectContent>
