@@ -36,7 +36,12 @@ import { SuppliersService } from '@/server/services/suppliers';
 import { WarehousesService } from '@/server/services/warehouses';
 import { formatCurrency, formatRelative } from '@/lib/utils';
 
-import { can, dbPermissionRefusedCopy, formatCalendarDate, isManagerOrAbove } from '@stockpilot/core';
+import {
+  can,
+  dbPermissionRefusedCopy,
+  formatCalendarDate,
+  isManagerOrAbove,
+} from '@stockpilot/core';
 
 /** The page area (DESIGN-SPEC 5.3 and 4): max 1320, 28 / 32 / 64, 16 px gutters on a phone. */
 const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
@@ -54,7 +59,15 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
     return <PoAccessDenied />;
   }
 
-  const [poSvc, inventorySvc, suppliersSvc, locationsSvc, receivingSvc, warehousesSvc, poAttachSvc] = await Promise.all([
+  const [
+    poSvc,
+    inventorySvc,
+    suppliersSvc,
+    locationsSvc,
+    receivingSvc,
+    warehousesSvc,
+    poAttachSvc,
+  ] = await Promise.all([
     PurchaseOrdersService.forCurrentUser(),
     InventoryService.forCurrentUser(),
     SuppliersService.forCurrentUser(),
@@ -112,14 +125,11 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
   // Receipts post against a warehouse. Derive it from the destination
   // location's warehouse_id. If the PO has no destination, the receive button
   // is disabled with a helpful tooltip.
-  const warehouseId =
-    (location?.warehouse_id as string | null | undefined) ?? null;
+  const warehouseId = (location?.warehouse_id as string | null | undefined) ?? null;
 
   const status = po.status as string;
   const receivableHere =
-    (status === 'ordered' ||
-      status === 'expected_inbound' ||
-      status === 'partially_received') &&
+    (status === 'ordered' || status === 'expected_inbound' || status === 'partially_received') &&
     warehouseId !== null;
   // Receiving and reversing a receipt ask stock:adjust (ReceivingService
   // asserts it; since 0395 the database's receipt functions refuse a direct
@@ -130,7 +140,8 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
   // to, where the receiving hint would be.
   const canAdjustStock = can(ctx, 'stock:adjust');
   const canReceive = receivableHere && canAdjustStock;
-  const receiveRefusal = receivableHere && !canAdjustStock ? dbPermissionRefusedCopy('receipt_post') : null;
+  const receiveRefusal =
+    receivableHere && !canAdjustStock ? dbPermissionRefusedCopy('receipt_post') : null;
   const canReverse = isManagerOrAbove(ctx.role) && canAdjustStock;
 
   const lineRows = lines.map((l) => {
@@ -145,10 +156,7 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
       unitCost: l.unit_cost as number,
       lineTotal: l.line_total as number,
       trackingType: (item?.tracking_type ?? 'none') as
-        | 'none'
-        | 'lot'
-        | 'serial'
-        | 'serial_optional',
+        'none' | 'lot' | 'serial' | 'serial_optional',
       // Sports variant identity (0298) — NULL on every line in every
       // non-sports org, which keeps the receive dialog's flat renderer the
       // default path.
