@@ -51,6 +51,12 @@ const TYPE_LABEL = new Map<string, string>(MOVEMENT_TYPE_OPTIONS.map((o) => [o.v
  * bundle_distribution and bundle_shortage, which the filter does not offer)
  * core's own fallback, the code title-cased ("Bundle assembly"), so a row never
  * prints a raw code or nothing. These used to print as the raw code in capitals.
+ *
+ * A deliberate word change, recorded for the integrator and the owner: DESIGN-SPEC
+ * 6.10 names these filter labels as the movement type's words, and the row now
+ * reads the same as the chip that is pressed. The page's Export CSV keeps the
+ * raw code (movement_type), as the stock movement report keeps its codes in its
+ * CSV and PDF (CONFLICTS RP9), so the screen and the file use different words.
  */
 export function movementTypeLabel(type: string): string {
   return TYPE_LABEL.get(type) ?? movementTitle(type);
