@@ -109,12 +109,12 @@ export function DeliveryMap({ orderId, token, email }: { orderId: string; token:
 
   if (!payload) return null;
   if (!payload.available) {
-    return <p className="text-muted-foreground mt-3 text-sm">Live location isn&apos;t available right now.</p>;
+    return <p className="text-muted-foreground mt-3 text-[13.5px]">Live location isn&apos;t available right now.</p>;
   }
   return (
     <div className="mt-4">
-      <div ref={mapRef} className="h-64 w-full overflow-hidden rounded-lg border" />
-      <p className="text-muted-foreground mt-2 text-sm">
+      <div ref={mapRef} className="border-border h-64 w-full overflow-hidden rounded-lg border" />
+      <p className="text-muted-foreground mt-2 text-[13.5px]">
         {payload.distanceMiles != null ? `Driver is about ${payload.distanceMiles} mi away` : 'Driver en route'}
         {payload.driver ? ` · updated ${new Date(payload.driver.recordedAt).toLocaleTimeString()}` : ''}
       </p>

@@ -16,7 +16,7 @@ export const metadata: Metadata = { title: 'Account disabled' };
  * — outside the (dashboard) group, outside the proxy matcher, and calling no
  * session helper. The destination of a blocking redirect must itself be exempt
  * from that redirect, which is the lesson the MFA gate learned the hard way.
- * Living inside the group only buys the shared AuthLayout chrome (mesh
+ * Living inside the group only buys the shared AuthLayout chrome (flat
  * background, mark, theme toggle) that every standalone auth surface uses.
  *
  * It reveals nothing: no reason, no actor, no date, no support ticket id. The
@@ -29,7 +29,7 @@ export default function AccountDisabledPage() {
   return (
     <AuthCard eyebrow="Account status" title={ACCOUNT_DISABLED_TITLE} description={ACCOUNT_DISABLED_MESSAGE}>
       <form action={signOutAction}>
-        <Button type="submit" variant="outline" className="w-full">
+        <Button type="submit" variant="outline" className="h-11 w-full text-[14px]">
           Sign out
         </Button>
       </form>
