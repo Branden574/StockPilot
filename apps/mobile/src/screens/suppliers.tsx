@@ -186,7 +186,8 @@ function supplierMailtoUrl(email: string | null): string | null {
  * one plain phone number (the card then shows the text, not a link). Plain is
  * an allow-list that fails closed. The text, with its outer spaces trimmed and
  * any non-breaking space read as a space, holds only ASCII digits, spaces,
- * dots, dashes and round brackets, with at most one '+' and only at the start.
+ * dots, dashes and round brackets, with at most one '+', only at the start
+ * and followed straight away by a digit from 1 to 9.
  * Without a '+', and after '+1', the text must be grouped as one North
  * American number: 555-0100, (555) 010-0100, 555.010.0100 or 1-555-010-0100,
  * never a number with a trailing group such as '555-0100 123'. After '+7' it
@@ -202,12 +203,14 @@ function supplierMailtoUrl(email: string | null): string | null {
  */
 function supplierTelUrl(phone: string | null): string | null {
   const text = (phone ?? '').replace(/[\u00a0\u2007\u202f]/g, ' ').trim();
-  if (!/^\+?[0-9 .()-]+$/.test(text)) return null;
+  // A '+' must be followed straight away by a country code's first digit, so
+  // '+ 1 ...' or '+(1) ...' cannot step around the +1 rule below.
+  if (!/^(?:\+(?=[1-9]))?[0-9 .()-]+$/.test(text)) return null;
   const digits = (t: string) => t.replace(/[^0-9]/g, '');
   // North American shapes: a 7-digit local number, a 10-digit one with its
   // area code, and the 10-digit one after a leading 1 or +1.
   const local = '[0-9]{3}[ .-]?[0-9]{4}';
-  const withArea = `(?:\\([0-9]{3}\\) ?|[0-9]{3}[ .-]?)${local}`;
+  const withArea = `(?:\\([0-9]{3}\\)[ .-]?|[0-9]{3}[ .-]?)${local}`;
   if (!text.startsWith('+')) {
     const northAmerican = new RegExp(`^(?:${local}|${withArea}|1[ .-]?${withArea})$`);
     return northAmerican.test(text) ? `tel:${digits(text)}` : null;

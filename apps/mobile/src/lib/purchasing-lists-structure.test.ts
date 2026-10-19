@@ -729,6 +729,8 @@ describe('security: a supplier link opens only what the card shows', () => {
     expect(tel('+44 20 7946 0958')).toBe('tel:+442079460958');
     expect(tel('+49 30 1234567')).toBe('tel:+49301234567');
     expect(tel('+7 495 123-45-67')).toBe('tel:+74951234567');
+    expect(tel('(555)-010-0100')).toBe('tel:5550100100');
+    expect(tel('+1 (555)-010-0100')).toBe('tel:+15550100100');
     // A bracketed trunk 0 after the country code is not dialled.
     expect(tel('+44 (0)20 7946 0958')).toBe('tel:+442079460958');
     expect(tel('+49 (0)30 1234567')).toBe('tel:+49301234567');
@@ -782,6 +784,18 @@ describe('security: a supplier link opens only what the card shows', () => {
       '+1 555-0100',
       '+7 555 0100 555 0101',
       '011 44 20 7946 0958',
+      // Anything between the '+' and the country code would step around the
+      // +1 rule (two numbers joined, a trailing group) or the trunk-0 rule.
+      '+ 1 555 0100 555 0199',
+      '+(1) 555 0100 555 0199',
+      '+.1.555.0100.555.0199',
+      '+ 1 555-0100 123',
+      '+-1-555-0100-123',
+      '+(1)5550100',
+      '+ 44 (0)20 7946 0958',
+      '+0 20 7946 0958',
+      '+(0)20 7946 0958',
+      '(555)--010-0100',
     ]) {
       expect(tel(phone), JSON.stringify(phone)).toBeNull();
     }
