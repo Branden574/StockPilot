@@ -105,7 +105,11 @@ export function EditableMovementNote({
   if (editing) {
     return (
       <span className="inline-flex flex-col gap-1">
-        <span className="inline-flex items-center gap-1">
+        {/* 8 px between the Save and Cancel buttons: below sm and on a coarse
+            pointer each grows an invisible 44 px target, and at 4 px apart a
+            tap on Save's right edge pressed Cancel and dropped the note. On a
+            phone they are 44 px themselves, beside the 44 px field. */}
+        <span className="inline-flex items-center gap-2">
           <Input
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
@@ -113,7 +117,10 @@ export function EditableMovementNote({
               if (e.key === 'Enter') void save();
               if (e.key === 'Escape') cancelEdit();
             }}
-            className="h-7 w-48 text-xs"
+            // The table's field is 160 px so the field and both buttons fit the
+            // Note column (240 px at 1280): wider, the open editor pushed the
+            // table past its card and Save and Cancel scrolled out of sight.
+            className={inline ? 'h-7 w-48 text-xs' : 'w-40'}
             maxLength={2000}
             autoFocus
             placeholder="Add a note"
@@ -122,7 +129,7 @@ export function EditableMovementNote({
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 w-7 shrink-0 p-0"
+            className={cn('shrink-0 p-0 max-sm:size-11', inline ? 'size-7' : 'size-8')}
             onClick={() => void save()}
             disabled={saving}
             aria-label="Save note"
@@ -132,7 +139,7 @@ export function EditableMovementNote({
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 w-7 shrink-0 p-0"
+            className={cn('shrink-0 p-0 max-sm:size-11', inline ? 'size-7' : 'size-8')}
             onClick={cancelEdit}
             disabled={saving}
             aria-label="Cancel edit"
@@ -141,7 +148,7 @@ export function EditableMovementNote({
           </Button>
         </span>
         {error && (
-          <span role="alert" className="text-destructive text-[11px]">
+          <span role="alert" className="text-destructive text-[12px] leading-[18px]">
             {error}
           </span>
         )}

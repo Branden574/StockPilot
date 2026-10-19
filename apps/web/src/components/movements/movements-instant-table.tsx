@@ -1,50 +1,20 @@
 'use client';
 
-import { ArrowLeftRight, Download } from 'lucide-react';
 import * as React from 'react';
 
-import { Button } from '@/components/ui/button';
-import { EmptyState } from '@/components/ui/empty-state';
+import { StatePanel } from '@/components/patterns/state-panel';
 import { Pagination } from '@/components/ui/pagination';
+import type { MovementsFilterQuery } from '@/lib/movements-filters';
+
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-import { LocalDateTime } from '@/components/ui/local-datetime';
-import { formatNumber, formatRelative } from '@/lib/utils';
-import { buildMovementsQueryString, type MovementsFilterQuery } from '@/lib/movements-filters';
-
-import { EditableMovementNote } from './editable-movement-note';
+  MovementsExportButton,
+  movementsExportHref,
+  useInstantMovementsFilters,
+} from './movements-export';
 import { MovementsFilterBar } from './movements-filter-bar';
+import { MovementsTable, type MovementDisplayRow } from './movements-table';
 
-export interface MovementDisplayRow {
-  id: string;
-  movementType: string;
-  quantityChange: number;
-  newQuantity: number;
-  movedQuantity: number | null;
-  /** Read-only "why" (stock_movements.reason), shown as the note fallback. */
-  reason: string | null;
-  /** Where that reason points (an order), or null for "plain text". */
-  reasonHref: string | null;
-  /** Editable free-text note (stock_movements.notes). null when unset. */
-  note: string | null;
-  /**
-   * Per-row gate: false for pre-0231 'receipt_line' rows whose note is a
-   * system-managed machine reference (the RPC rejects editing it). Combined
-   * with the table-wide `canEditNotes` permission to decide the affordance.
-   */
-  noteEditable: boolean;
-  createdAt: string;
-  itemName: string | null;
-  itemSku: string | null;
-  actorLabel: string;
-  actorEmail: string | null;
-}
+export type { MovementDisplayRow } from './movements-table';
 
 const PAGE_SIZE = 50;
 const EMPTY_FILTERS: MovementsFilterQuery = { q: '', type: '', from: '', to: '' };
@@ -59,6 +29,11 @@ const EMPTY_FILTERS: MovementsFilterQuery = { q: '', type: '', from: '', to: '' 
  * buildMovementsQueryString) rather than dumping what's already in memory,
  * so a single export code path (the route + MovementsService.exportRows)
  * stays the source of truth for both page modes.
+ *
+ * Inside the page's MovementsInstantFiltersProvider the filters are shared
+ * with the page header, whose Export CSV follows them; on its own (no
+ * provider) the table keeps them itself and prints Export CSV beside its
+ * pager, as it always did.
  */
 export function MovementsInstantTable({
   rows,
@@ -68,7 +43,10 @@ export function MovementsInstantTable({
   /** Managers+/granted users get the add/edit-note affordance on each row. */
   canEditNotes?: boolean;
 }) {
-  const [filters, setFilters] = React.useState<MovementsFilterQuery>(EMPTY_FILTERS);
+  const shared = useInstantMovementsFilters();
+  const [ownFilters, setOwnFilters] = React.useState<MovementsFilterQuery>(EMPTY_FILTERS);
+  const filters = shared ? shared.filters : ownFilters;
+  const setFilters = shared ? shared.setFilters : setOwnFilters;
   const [page, setPage] = React.useState(1);
 
   const filtered = React.useMemo(() => {
@@ -108,137 +86,55 @@ export function MovementsInstantTable({
     setPage(1);
   }
 
-  const exportQs = buildMovementsQueryString(filters);
-  const exportHref = exportQs ? `/api/movements/export.csv?${exportQs}` : '/api/movements/export.csv';
-
   return (
-    <div>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <MovementsFilterBar mode="client" initial={EMPTY_FILTERS} onChange={updateFilters} />
-        <div className="flex items-center gap-3">
-          <Button asChild variant="outline" size="sm">
-            <a href={exportHref} download aria-label="Export movements to CSV">
-              <Download className="mr-1.5 h-3.5 w-3.5" />
-              Export CSV
-            </a>
-          </Button>
-          <Pagination
-            page={safePage}
-            pageSize={PAGE_SIZE}
-            total={filtered.length}
-            onPageChange={setPage}
-          />
-        </div>
-      </div>
+    <div className="flex min-w-0 flex-col gap-4">
+      <MovementsFilterBar
+        mode="client"
+        // The filters in effect (the bar reads them once, when it mounts):
+        // with the page's provider they can outlive this table, so a bar
+        // mounted again must show the filters the rows and the header's
+        // Export CSV still use, never blank ones.
+        initial={filters}
+        onChange={updateFilters}
+        trailing={
+          <>
+            {shared ? null : <MovementsExportButton href={movementsExportHref(filters)} />}
+            <Pagination
+              page={safePage}
+              pageSize={PAGE_SIZE}
+              total={filtered.length}
+              onPageChange={setPage}
+              className="flex-wrap"
+            />
+          </>
+        }
+      />
 
       {visible.length === 0 ? (
-        <EmptyState
-          icon={ArrowLeftRight}
+        <StatePanel
+          kind="no-match"
           title="No movements match"
           description="Nothing found for the current filters. Try a different search, type, or date range."
         />
       ) : (
-        <div className="overflow-x-auto rounded-xl border bg-card">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>When</TableHead>
-                <TableHead>Item</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead className="text-right">Δ</TableHead>
-                <TableHead className="text-right">After</TableHead>
-                <TableHead>By</TableHead>
-                <TableHead>Note</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {visible.map((m) => {
-                // Amount rule, mirroring packages/core movement-history.ts
-                // formatHistoryMovement: show the signed delta whenever there
-                // IS one, otherwise the physical moved qty, otherwise nothing.
-                // Deliberately NOT keyed off movementType === 'transfer'.
-                // adjust_stock writes an order pick (0306 complete_picking) and
-                // a manager reopen-reversal (0289) as movement_type='transfer'
-                // with a real signed quantity_change and NO moved_quantity —
-                // only transfer_stock (0231/0327) stamps moved_quantity. The
-                // old type-keyed cell therefore rendered '—' for every pick
-                // while the After column visibly dropped, hiding five units
-                // leaving the building on an audit surface.
-                const change = m.quantityChange;
-                const hasDelta = change !== 0;
-                const moved = m.movedQuantity;
-                return (
-                  <TableRow key={m.id}>
-                    <TableCell className="text-muted-foreground text-xs">
-                      <div suppressHydrationWarning>{formatRelative(m.createdAt)}</div>
-                      <LocalDateTime iso={m.createdAt} className="text-[11px] opacity-80" />
-                    </TableCell>
-                    <TableCell className="font-medium">{m.itemName ?? '—'}</TableCell>
-                    <TableCell className="text-muted-foreground text-xs uppercase tracking-wider">
-                      {m.movementType}
-                    </TableCell>
-                    <TableCell
-                      className={
-                        'text-right font-mono tabular-nums ' +
-                        // Colour follows the DELTA, so a pick reads red and a
-                        // reopen reads green; a net-zero location move keeps
-                        // the neutral tone it has always had.
-                        (hasDelta ? (change > 0 ? 'text-success' : 'text-destructive') : '')
-                      }
-                    >
-                      {hasDelta ? (
-                        <>
-                          {change > 0 ? '+' : ''}
-                          {formatNumber(change)}
-                        </>
-                      ) : moved != null ? (
-                        formatNumber(moved)
-                      ) : (
-                        '—'
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatNumber(m.newQuantity)}
-                    </TableCell>
-                    <TableCell className="text-xs">
-                      <div className="font-medium">{m.actorLabel}</div>
-                      {m.actorEmail && (
-                        <div className="text-muted-foreground text-[11px]">{m.actorEmail}</div>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground text-xs">
-                      <EditableMovementNote
-                        movementId={m.id}
-                        note={m.note}
-                        reason={m.reason}
-                        reasonHref={m.reasonHref}
-                        // receipt_line rows are system-managed (RPC rejects the
-                        // edit) — read-only regardless of the caller's perm.
-                        canEdit={canEditNotes && m.noteEditable}
-                      />
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </div>
-      )}
-
-      {/* Bottom pager. The server-mode page (dashboard/movements/page.tsx)
-          renders one above AND below the table; instant mode only had the top
-          one, so on any ledger under MOVEMENTS_INSTANT_CAP — i.e. most of the
-          time — you scrolled to the end of a full page and had to go back up to
-          advance. Same props as the top instance so both stay in lockstep. */}
-      {visible.length > 0 && (
-        <div className="mt-4 flex items-center justify-end">
-          <Pagination
-            page={safePage}
-            pageSize={PAGE_SIZE}
-            total={filtered.length}
-            onPageChange={setPage}
-          />
-        </div>
+        <MovementsTable
+          rows={visible}
+          canEditNotes={canEditNotes}
+          // Bottom pager. The server-mode page (dashboard/movements/page.tsx)
+          // renders one above AND below the table; instant mode only had the
+          // top one, so on any ledger under MOVEMENTS_INSTANT_CAP — i.e. most
+          // of the time — you scrolled to the end of a full page and had to go
+          // back up to advance. Same props as the top instance so both stay in
+          // lockstep.
+          footer={
+            <Pagination
+              page={safePage}
+              pageSize={PAGE_SIZE}
+              total={filtered.length}
+              onPageChange={setPage}
+            />
+          }
+        />
       )}
     </div>
   );
