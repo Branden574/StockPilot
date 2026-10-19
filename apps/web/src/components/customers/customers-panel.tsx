@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { ChevronRight, Loader2, Mail, Plus, Tag, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 
+import { StatePanel } from '@/components/patterns/state-panel';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -81,12 +82,12 @@ const CARD_TOGGLE =
 const LIST = 'divide-border border-border divide-y rounded-lg border';
 const LIST_ROW = 'flex min-h-10 items-center gap-2 px-3 py-1.5 text-[13.5px]';
 /** The native select's look: the Input's box (32 px, 44 px with 16 px text on
- *  a phone), with the focus ring. Native, so the browser's picker stays. */
+ *  a phone) on its own line under the label, with the control border (the
+ *  stronger hairline the shared Input and Select draw; the plain hairline
+ *  nearly vanished on the dark card) and the focus ring. Native, so the
+ *  browser's picker stays. */
 const NATIVE_SELECT =
-  'border-input bg-card text-foreground focus-visible:ring-ring h-8 w-full max-w-sm rounded-md border px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:h-11 max-sm:text-base';
-/** The quiet "nothing here yet" box. */
-const EMPTY =
-  'border-line-strong bg-sunk text-muted-foreground rounded-lg border border-dashed p-8 text-center text-[13.5px]';
+  'border-line-strong bg-card text-foreground focus-visible:ring-ring block h-8 w-full max-w-sm rounded-md border px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:h-11 max-sm:text-base';
 
 function Chevron({ open }: { open: boolean }) {
   return (
@@ -159,9 +160,15 @@ export function CustomersPanel({
         </div>
 
         {customers.length === 0 ? (
-          <div className={EMPTY}>
-            No customers yet. Create one, assign a price list, and invite their first portal user.
-          </div>
+          <StatePanel
+            kind="empty"
+            size="sm"
+            headingLevel={3}
+            title="No customers yet."
+            description={
+              <p>Create one, assign a price list, and invite their first portal user.</p>
+            }
+          />
         ) : (
           <div className="space-y-2">
             {customers.map((c) => (
@@ -551,10 +558,18 @@ function PriceListsSection({
       </div>
 
       {priceLists.length === 0 ? (
-        <div className={EMPTY}>
-          No price lists yet. Prices are explicit-only: an item with no price on a customer&apos;s
-          list never appears in their portal.
-        </div>
+        <StatePanel
+          kind="empty"
+          size="sm"
+          headingLevel={3}
+          title="No price lists yet."
+          description={
+            <p>
+              Prices are explicit-only: an item with no price on a customer&apos;s list never
+              appears in their portal.
+            </p>
+          }
+        />
       ) : (
         <div className="space-y-2">
           {priceLists.map((pl) => (
@@ -743,11 +758,13 @@ function PriceListCard({
 /**
  * A match row in the item picker. The hover is the neutral fill with ink text
  * (DESIGN-SPEC 2.3): the accent fill it used read 3.48:1 for the name and
- * 1.21:1 for the SKU on the light teal (1.62 and 1.51 in dark). Exported for
- * the test that pins it.
+ * 1.21:1 for the SKU on the light teal (1.62 and 1.51 in dark). The keyboard
+ * focus ring is drawn inside the row: the list clips its rows to its rounded
+ * corners, which cut the global ring (drawn 2 px outside) down to one edge.
+ * Exported for the test that pins it.
  */
 export const ITEM_MATCH_ROW =
-  'hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:outline-none flex min-h-10 w-full items-center gap-2 px-3 py-2 text-left text-[13.5px] transition-colors';
+  'hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:ring-ring flex min-h-10 w-full items-center gap-2 px-3 py-2 text-left text-[13.5px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-offset-0';
 
 function ItemSearchAdd({
   items,

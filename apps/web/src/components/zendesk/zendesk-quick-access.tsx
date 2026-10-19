@@ -61,10 +61,12 @@ export function ZendeskQuickAccess({
         <div className="flex flex-wrap items-end gap-2">
           <label className="text-[13px]">
             <span className="text-muted-foreground text-[12.5px]">Your Zendesk subdomain</span>
-            {/* One field with its fixed suffix. The input itself draws no
-                outline, so the whole field shows the focus ring (it had no
-                visible focus at all before). */}
-            <span className="border-input bg-card focus-within:ring-ring focus-within:ring-offset-background mt-1.5 flex items-stretch overflow-hidden rounded-md border focus-within:ring-2 focus-within:ring-offset-2">
+            {/* One field with its fixed suffix, edged with the control border
+                the shared Input draws (the plain hairline nearly vanished on
+                the dark card). The input itself draws no outline, so the whole
+                field shows the focus ring (it had no visible focus at all
+                before). */}
+            <span className="border-line-strong bg-card focus-within:ring-ring focus-within:ring-offset-background mt-1.5 flex items-stretch overflow-hidden rounded-md border focus-within:ring-2 focus-within:ring-offset-2">
               <input
                 value={value}
                 onChange={(e) => setValue(e.target.value)}

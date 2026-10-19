@@ -3,7 +3,10 @@
 // buttons have names, the item picker keeps its 8-match list over the items
 // the page passed (the page reads at most 1,000; nothing here downloads the
 // catalog), and its match rows hover on the neutral fill (the accent fill read
-// 3.48:1 for the name and 1.21:1 for the SKU in light; P2.1 hand-off).
+// 3.48:1 for the name and 1.21:1 for the SKU in light; P2.1 hand-off). The
+// review fixes: the match rows' focus ring is drawn inside the clipped list, the
+// price-list select has the control border, and an empty list says so through
+// the shared StatePanel with its words unchanged.
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -132,6 +135,85 @@ describe('CustomersPanel', () => {
       expect.arrayContaining(['hover:bg-muted', 'hover:text-foreground']),
     );
     expect(ITEM_MATCH_ROW).not.toMatch(/bg-accent/);
+  });
+
+  // The match list clips its rows to its rounded corners (overflow-hidden),
+  // and the global :focus-visible ring is drawn 2 px OUTSIDE the focused
+  // element, so a keyboard-focused row showed only a sliver of its ring. The
+  // row draws its own ring inside its box instead, as the card toggles do.
+  it('a keyboard-focused match row draws its ring inside the row, where the list cannot clip it', async () => {
+    expect(ITEM_MATCH_ROW.split(/\s+/)).toEqual(
+      expect.arrayContaining([
+        'focus-visible:ring-2',
+        'focus-visible:ring-inset',
+        'focus-visible:ring-offset-0',
+        'focus-visible:ring-ring',
+      ]),
+    );
+    const user = userEvent.setup();
+    renderPanel();
+    await user.click(screen.getByRole('button', { name: /Westfield Academy/ }));
+    await user.type(
+      screen.getByPlaceholderText("Add an item to this customer's catalog…"),
+      'notebook 1',
+    );
+    const row = screen.getAllByRole('button').find((b) => b.className === ITEM_MATCH_ROW)!;
+    expect(row).toHaveTextContent('Notebook 1');
+    await user.tab();
+    expect(row).toHaveFocus();
+  });
+
+  // DESIGN-SPEC 2.4 item 3: a form control is never edged by the hairline
+  // alone. The native price-list select drew --border, where the shared Input
+  // and Select draw the stronger --ed-line-strong; it also stacks under its
+  // label as the other fields do.
+  it('the price-list select has the control border and sits under its label', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await user.click(screen.getByRole('button', { name: /Westfield Academy/ }));
+    const select = screen.getByLabelText('Price list');
+    expect(select.tagName).toBe('SELECT');
+    expect(select).toHaveClass('border', 'border-line-strong', 'block');
+    expect(select).not.toHaveClass('border-input');
+  });
+
+  it('says there are no customers and no price lists through the shared empty state, with the same words', () => {
+    const { container } = render(
+      <CustomersPanel
+        customers={[]}
+        priceLists={[]}
+        items={ITEMS}
+        usersByCustomer={{}}
+        catalogByCustomer={{}}
+        pricesByList={{}}
+        entitled
+      />,
+    );
+    const panels = container.querySelectorAll('[data-slot="state-panel"]');
+    expect(panels).toHaveLength(2);
+    expect(Array.from(panels).map((p) => p.getAttribute('data-state-kind'))).toEqual([
+      'empty',
+      'empty',
+    ]);
+    // h3s under the section h2s.
+    expect(
+      screen.getByRole('heading', { level: 3, name: 'No customers yet.' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Create one, assign a price list, and invite their first portal user.'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { level: 3, name: 'No price lists yet.' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Prices are explicit-only: an item with no price on a customer's list never appears in their portal.",
+      ),
+    ).toBeInTheDocument();
+    // The section headings and their actions are unchanged.
+    expect(screen.getByRole('heading', { level: 2, name: 'Customers · 0' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: 'Price lists · 0' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /New customer/ })).toBeEnabled();
   });
 
   it('keeps New customer and Invite off without the Business plan', async () => {

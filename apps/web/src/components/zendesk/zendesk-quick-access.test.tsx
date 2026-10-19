@@ -38,4 +38,14 @@ describe('ZendeskQuickAccess', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(h.save).toHaveBeenCalledWith({ subdomain: 'learn4life' }));
   });
+
+  // DESIGN-SPEC 2.4 item 3: a form control is never edged by the hairline
+  // alone. The field drew --border (1.13:1 against the dark card), where the
+  // shared Input draws the stronger --ed-line-strong (1.30:1).
+  it('edges the subdomain field with the control border the shared Input uses', () => {
+    render(<ZendeskQuickAccess subdomain="acme" canManage />);
+    const field = screen.getByRole('textbox', { name: /Your Zendesk subdomain/ }).parentElement!;
+    expect(field).toHaveClass('border', 'border-line-strong');
+    expect(field).not.toHaveClass('border-input');
+  });
 });
