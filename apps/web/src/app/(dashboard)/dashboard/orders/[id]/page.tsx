@@ -1542,10 +1542,13 @@ export default async function OrderDetailPage({
                   <TableRow className="hover:bg-transparent">
                     {/* The item takes the room the numbers leave (they keep their
                         own width), so readiness under the name reads in
-                        lines, not a word at a time. */}
+                        lines, not a word at a time. The four number columns
+                        pad 8 px a side and the actions column 4 px on its
+                        left (the recipe's 12 left the item 168 px of a 612 px
+                        card at 1280; now about 208). */}
                     <TableHead className="w-full">Item</TableHead>
-                    <TableHead className="whitespace-nowrap text-right">Requested</TableHead>
-                    <TableHead className="whitespace-nowrap text-right">
+                    <TableHead className="whitespace-nowrap px-2 text-right">Requested</TableHead>
+                    <TableHead className="whitespace-nowrap px-2 text-right">
                       <span className="inline-flex items-center gap-1">
                         Fulfilled
                         <HelpTip label="Fulfilled vs Owed">
@@ -1562,8 +1565,8 @@ export default async function OrderDetailPage({
                         </HelpTip>
                       </span>
                     </TableHead>
-                    <TableHead className="whitespace-nowrap text-right">Owed</TableHead>
-                    <TableHead className="whitespace-nowrap text-right">On hand</TableHead>
+                    <TableHead className="whitespace-nowrap px-2 text-right">Owed</TableHead>
+                    <TableHead className="whitespace-nowrap px-2 text-right">On hand</TableHead>
                     {/* A trailing actions column rather than a click-the-number
                       affordance on Requested. The complaint that produced this
                       was "theres no way to" — a hover-to-reveal editor gives no
@@ -1575,7 +1578,7 @@ export default async function OrderDetailPage({
                       reason instead of vanishing. Header is sr-only because an
                       icon column needs no visible label. */}
                     {canEditLines && (
-                      <TableHead className="w-px">
+                      <TableHead className="w-px pl-1">
                         <span className="sr-only">Line actions</span>
                       </TableHead>
                     )}
@@ -1629,12 +1632,17 @@ export default async function OrderDetailPage({
                                   {l.item.sku}
                                 </div>
                               </Link>
+                              {/* A pill on one line (radius half its 20 px
+                                height); a name longer than the column wraps
+                                into a rounded box with the icon on its first
+                                line, never a two-line stadium. */}
                               {l.item.charter_name && (
                                 <div
-                                  className="border-accent/30 bg-success-wash text-accent mt-1 inline-flex items-center gap-1 rounded-full border px-2 font-mono text-[11px] leading-[18px]"
+                                  className="border-accent/30 bg-success-wash text-accent mt-1 inline-flex items-start gap-1 rounded-[10px] border px-2 font-mono text-[11px] leading-[18px]"
                                   title={`Earmarked for ${l.item.charter_name}${l.item.charter_code ? ` (${l.item.charter_code})` : ''}`}
+                                  data-testid="order-line-charter"
                                 >
-                                  <Landmark className="size-3" aria-hidden />
+                                  <Landmark className="mt-[3px] size-3 shrink-0" aria-hidden />
                                   {l.item.charter_name}
                                 </div>
                               )}
@@ -1676,10 +1684,10 @@ export default async function OrderDetailPage({
                             />
                           )}
                         </TableCell>
-                        <TableCell className="text-right font-mono text-[13px] font-medium tabular-nums">
+                        <TableCell className="px-2 text-right font-mono text-[13px] font-medium tabular-nums">
                           {formatNumber(l.quantity_requested)}
                         </TableCell>
-                        <TableCell className="text-muted-foreground text-right font-mono text-[13px] tabular-nums">
+                        <TableCell className="text-muted-foreground px-2 text-right font-mono text-[13px] tabular-nums">
                           {formatNumber(l.quantity_fulfilled)}
                           {/* The shipped number stays the number. A return is
                             appended BENEATH it as its own labelled figure —
@@ -1705,15 +1713,15 @@ export default async function OrderDetailPage({
                           )}
                         </TableCell>
                         <TableCell
-                          className={`text-right font-mono text-[13px] tabular-nums ${owed > 0 ? 'text-warning font-medium' : 'text-muted-foreground'}`}
+                          className={`px-2 text-right font-mono text-[13px] tabular-nums ${owed > 0 ? 'text-warning font-medium' : 'text-muted-foreground'}`}
                         >
                           {formatNumber(owed)}
                         </TableCell>
-                        <TableCell className="text-muted-foreground text-right font-mono text-[13px] tabular-nums">
+                        <TableCell className="text-muted-foreground px-2 text-right font-mono text-[13px] tabular-nums">
                           {l.item ? formatNumber(l.item.quantity_on_hand) : '—'}
                         </TableCell>
                         {canEditLines && (
-                          <TableCell className="py-1 text-right align-middle">
+                          <TableCell className="py-1 pl-1 text-right align-middle">
                             {/* itemName is the same label the Item cell shows
                               (core orderLineItemName), so the confirmation
                               names what the viewer is looking at. */}

@@ -93,13 +93,15 @@ export function ReadinessLineCell({
       <span className="sr-only" data-testid="readiness-sr-label">
         {readinessLineAccessibilityLabel(position ? { ...line, position } : line, { replacementGate })}.
       </span>
-      {/* The chip leads its sentence on the same line: compact enough to sit
-          under the item's name without a column of its own (the order page's
-          lines card is 641 px wide at every viewport). */}
-      <p className="text-muted-foreground text-[12px] leading-[18px]">
+      {/* The chip leads its sentence: compact enough to sit under the item's
+          name without a column of its own. The two wrap as blocks, so a
+          sentence that does not fit beside the chip starts on the next line
+          whole instead of breaking after its first word (the item column is
+          about 210 px of the lines card at 1280). */}
+      <p className="text-muted-foreground flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[12px] leading-[18px]">
         <span
           className={cn(
-            'mr-1.5 inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-px align-[1px] text-[11px] font-medium',
+            'inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-px text-[11px] font-medium',
             tone.chip,
           )}
           aria-hidden

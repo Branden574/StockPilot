@@ -2858,4 +2858,51 @@ describe('orders/[id]: the record layout keeps every section (P4.B1)', () => {
     expect(aside).toHaveTextContent('Internal');
     expect(aside).toHaveTextContent('Main DC');
   });
+
+  // The 1280 shots: in the 612 px lines card the recipe's 12 px padding left
+  // the item 168 px, so names wrapped and a charter pill broke into a
+  // two-line stadium.
+  it('the line table leaves the item its room: the numbers pad 8 px a side, Line actions 4 px on its left, and a charter pill wraps into a rounded box', async () => {
+    ctxHolder.current = {
+      role: 'manager',
+      permissions: new Set(['orders:read', 'orders:approve']),
+    };
+    orderGet.mockResolvedValue(
+      detailFixture({
+        request: requestFixture({ status: 'pending_approval' }),
+        lines: [
+          {
+            ...DELIVERY_LINE,
+            item: {
+              ...DELIVERY_LINE.item,
+              charter_name: 'Valley Learning Center',
+              charter_code: 'VLC',
+            },
+          },
+        ],
+      }),
+    );
+    await renderPage();
+    const heads = screen.getAllByRole('columnheader');
+    expect(heads.map((h) => h.textContent?.trim())).toEqual([
+      'Item',
+      'Requested',
+      'Fulfilled',
+      'Owed',
+      'On hand',
+      'Line actions',
+    ]);
+    const row = screen.getByText('Google Chrome Book').closest('tr')!;
+    for (const i of [1, 2, 3, 4]) {
+      expect(heads[i]!.className, heads[i]!.textContent!).toMatch(/(^|\s)px-2(\s|$)/);
+      expect(row.cells[i]!.className, heads[i]!.textContent!).toMatch(/(^|\s)px-2(\s|$)/);
+    }
+    expect(heads[5]!.className).toMatch(/(^|\s)pl-1(\s|$)/);
+    expect(row.cells[5]!.className).toMatch(/(^|\s)pl-1(\s|$)/);
+    const charter = within(row.cells[0]!).getByTestId('order-line-charter');
+    expect(charter).toHaveTextContent('Valley Learning Center');
+    expect(charter).toHaveAttribute('title', 'Earmarked for Valley Learning Center (VLC)');
+    expect(charter.className).toMatch(/(^|\s)rounded-\[10px\](\s|$)/);
+    expect(charter.className).not.toMatch(/rounded-full/);
+  });
 });

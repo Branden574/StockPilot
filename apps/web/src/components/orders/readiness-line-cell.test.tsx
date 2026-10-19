@@ -140,6 +140,22 @@ describe('ReadinessLineCell', () => {
     expect(within(cell).queryByTestId('readiness-hold')).toBeNull();
   });
 
+  // Redesign P4.B1: in the item column (about 210 px at 1280) a sentence that
+  // ran on after the chip broke after its first word ("24 on" / "the shelf").
+  it('the chip and its sentence wrap as two blocks in one row, the chip first', () => {
+    const cell = renderLine(
+      'pending_approval',
+      [{ lineId: 'L1', itemId: 'a', requested: 24 }],
+      [visibleItemFacts('a', { here: { rack: 30 } })],
+    );
+    const chip = within(cell).getByTestId('readiness-chip');
+    const sentence = within(cell).getByTestId('readiness-sentence');
+    const row = chip.parentElement!;
+    expect(Array.from(row.children)).toEqual([chip, sentence]);
+    expect(row.className).toMatch(/(^|\s)flex-wrap(\s|$)/);
+    expect(chip.className).not.toMatch(/(^|\s)mr-/);
+  });
+
   it('needs put-away: the screen-reader label names the line, the state and the number', () => {
     const cell = renderLine(
       'approved',
