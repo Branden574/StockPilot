@@ -266,11 +266,13 @@ describe('the PO page lines', () => {
     expect(regions[0]).toContainElement(table);
   });
 
-  it('lets a line break after the SKU, so a long SKU does not widen the table', async () => {
+  it('puts the space after the SKU’s separator outside its no-wrap span, so the line can break there', async () => {
     await renderPage();
     const [polo] = screen.getAllByTestId('po-line');
     // The SKU and its separator stay together; the space after them sits
-    // outside the no-wrap span, where the line may break.
+    // outside the no-wrap span, where the line may break. This checks the
+    // markup, not the widths: a long SKU can still widen the table (see
+    // LineItems), which is why its scroll area is named.
     const sku = within(polo!).getByText('POLO-M ·');
     expect(sku).toHaveClass('whitespace-nowrap');
     expect(sku.textContent).toBe('POLO-M ·');
