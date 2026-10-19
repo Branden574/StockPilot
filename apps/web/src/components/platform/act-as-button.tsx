@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 
 import { useStepUp } from '@/components/auth/step-up-modal';
+import { Button } from '@/components/ui/button';
 import { startActingAsAction } from '@/server/actions/platform/impersonation';
 
 /**
@@ -55,14 +56,10 @@ export function ActAsButton({
   return (
     <>
       {stepUp.modal}
-      <button
-        type="button"
-        onClick={onClick}
-        disabled={pending}
-        className="bg-foreground text-background rounded-md px-3 py-1.5 text-[12.5px] font-medium hover:opacity-90 disabled:opacity-50"
-      >
+      {/* The ink primary: committing to the work in front of you. */}
+      <Button type="button" onClick={onClick} disabled={pending} className="max-sm:h-11">
         {pending ? 'Entering…' : 'Act as this org'}
-      </button>
+      </Button>
     </>
   );
 }
