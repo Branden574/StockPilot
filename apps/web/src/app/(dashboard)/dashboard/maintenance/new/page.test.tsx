@@ -328,3 +328,31 @@ describe('a plain request', () => {
     expect(props.defaults.relatedLocationId).toBeUndefined();
   });
 });
+
+/**
+ * Redesign (P4.F3): both forms sit under the shared page header (one h1,
+ * the back link above it) and a failed exception read is the shared failed
+ * state, still announced as an alert.
+ */
+describe('redesign structure (P4.F3)', () => {
+  it('the plain form page has one h1 under its back link', async () => {
+    await renderPage({});
+    expect(screen.getAllByRole('heading', { level: 1 }).map((h) => h.textContent)).toEqual([
+      'New maintenance request',
+    ]);
+    expect(screen.getByRole('link', { name: '← Back to maintenance requests' })).toHaveAttribute(
+      'href',
+      '/dashboard/maintenance',
+    );
+    expect(document.querySelector('[data-slot="page-header"]')).not.toBeNull();
+  });
+
+  it('a failed exception read is the shared failed state panel, announced as an alert', async () => {
+    getOccurrence.mockRejectedValue(new ServiceError('internal_error', 'read failed'));
+    await renderPage({ exceptionOccurrenceId: OCC });
+    const panel = screen.getByTestId('escalation-unavailable');
+    expect(panel).toHaveAttribute('data-state-kind', 'failed');
+    expect(panel).toHaveAttribute('role', 'alert');
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+  });
+});

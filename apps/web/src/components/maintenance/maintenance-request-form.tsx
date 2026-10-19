@@ -153,28 +153,47 @@ export function MaintenanceRequestForm({
   }
 
   return (
-    <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6" noValidate>
+    <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5" noValidate>
       <div className="space-y-2">
         <Label htmlFor="mr-subject">What is the issue?</Label>
         <Input
           id="mr-subject"
           placeholder="Example: Air conditioner is not working in Room 204"
+          aria-invalid={form.formState.errors.subject ? true : undefined}
+          aria-describedby={form.formState.errors.subject ? 'mr-subject-error' : undefined}
           {...form.register('subject')}
         />
         {form.formState.errors.subject ? (
-          <p className="text-destructive text-sm">{form.formState.errors.subject.message}</p>
+          <p id="mr-subject-error" className="text-destructive text-[12.5px]">
+            {form.formState.errors.subject.message}
+          </p>
         ) : null}
       </div>
 
       <div className="space-y-2">
         <Label htmlFor="mr-description">Describe the maintenance issue</Label>
-        <p className="text-muted-foreground text-sm">
+        <p
+          id="mr-description-help"
+          className="text-muted-foreground text-[12.5px] leading-[18.75px]"
+        >
           Explain what is happening, when it started, and anything the maintenance team should know
           before arriving.
         </p>
-        <Textarea id="mr-description" rows={6} {...form.register('description')} />
+        <Textarea
+          id="mr-description"
+          rows={6}
+          aria-invalid={form.formState.errors.description ? true : undefined}
+          aria-describedby={
+            form.formState.errors.description
+              ? 'mr-description-help mr-description-error'
+              : 'mr-description-help'
+          }
+          {...form.register('description')}
+        />
         {form.formState.errors.description ? (
-          <p className="text-destructive text-sm">{form.formState.errors.description.message}</p>
+          <p id="mr-description-error" className="text-destructive text-[12.5px]">
+            {form.formState.errors.description.message}
+          </p>
         ) : null}
       </div>
 
@@ -204,7 +223,7 @@ export function MaintenanceRequestForm({
               id="mr-site"
               value={form.watch('charterId') ?? ''}
               onChange={(e) => form.setValue('charterId', e.target.value || null)}
-              className="border-input bg-background focus-visible:ring-ring focus-visible:ring-offset-background flex h-10 w-full rounded-md border px-3 py-2 text-base shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 sm:text-sm"
+              className="border-line-strong bg-card focus-visible:ring-ring focus-visible:ring-offset-background flex h-8 w-full rounded-md border px-2 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 max-sm:h-11 max-sm:text-base"
             >
               <option value="">Select a site</option>
               {sites.map((s) => (
@@ -253,7 +272,7 @@ export function MaintenanceRequestForm({
             </SelectContent>
           </Select>
           {priority === 'urgent' ? (
-            <p className="text-muted-foreground rounded-md border border-dashed p-2 text-sm">
+            <p className="border-warning/30 bg-warning-wash text-foreground rounded-md border px-3 py-2 text-[12.5px] leading-[18.75px]">
               For emergencies that put people in danger, follow your site emergency procedures
               first. StockPilot does not replace them.
             </p>
@@ -292,7 +311,7 @@ export function MaintenanceRequestForm({
       )}
 
       {hasLinkedRecord ? (
-        <p className="text-muted-foreground rounded-md border border-dashed p-2 text-sm">
+        <p className="border-border bg-sunk text-muted-foreground rounded-md border px-3 py-2 text-[13px] leading-[19.5px]">
           {/* M3: this banner only reflects what was LAUNCHED WITH, never
               what the server actually kept — create() re-derives the id
               against this org (resolveRelatedId) and silently drops it to
@@ -306,7 +325,11 @@ export function MaintenanceRequestForm({
       ) : null}
 
       {submitError ? (
-        <p role="alert" className="text-destructive text-sm" data-testid="maintenance-form-error">
+        <p
+          role="alert"
+          className="border-destructive/30 bg-destructive-wash text-destructive rounded-md border px-3 py-2 text-[13px]"
+          data-testid="maintenance-form-error"
+        >
           {submitError}
         </p>
       ) : null}
