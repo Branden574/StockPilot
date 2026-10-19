@@ -16,7 +16,6 @@ import {
   Landmark,
   Minus,
   Plus,
-  Search,
   Sparkles,
 } from 'lucide-react';
 import Image from 'next/image';
@@ -31,6 +30,9 @@ import {
   STOREFRONT_NOTHING_MATCHES_HINT_COPY,
   storefrontNothingMatchesCopy,
 } from '@stockpilot/core';
+
+import { StatePanel } from '@/components/patterns/state-panel';
+import { Button } from '@/components/ui/button';
 
 import type { CatalogItem } from '../v2/types';
 
@@ -572,16 +574,21 @@ export function EmptyResults({
   query: string;
   onClear: () => void;
 }) {
+  // The shared no-match panel (P2.6 StatePanel), with the storefront's own
+  // words and its one way out, as a heading at the level of the catalog's
+  // section headings.
   return (
-    <div className="sf-empty">
-      <div className="big">
-        <Search size={24} />
-      </div>
-      <h4>{storefrontNothingMatchesCopy(query)}</h4>
-      <p>{STOREFRONT_NOTHING_MATCHES_HINT_COPY}</p>
-      <button type="button" className="sf-btn-ghost" onClick={onClear}>
-        {STOREFRONT_CLEAR_SEARCH_AND_FILTERS_COPY}
-      </button>
-    </div>
+    <StatePanel
+      kind="no-match"
+      className="sf-empty"
+      headingLevel={3}
+      title={storefrontNothingMatchesCopy(query)}
+      description={STOREFRONT_NOTHING_MATCHES_HINT_COPY}
+      action={
+        <Button type="button" variant="outline" onClick={onClear}>
+          {STOREFRONT_CLEAR_SEARCH_AND_FILTERS_COPY}
+        </Button>
+      }
+    />
   );
 }

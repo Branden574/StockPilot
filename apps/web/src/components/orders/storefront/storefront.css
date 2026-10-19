@@ -1,42 +1,59 @@
 /* ==================================================================
-   StockPilot Storefront — "Place an Order" redesign.
+   StockPilot Storefront: the "Place an order" page.
    Every rule is scoped under .sp-storefront so nothing leaks into the
-   rest of the app. Rule bodies are from the design handoff
-   (design_handoff_storefront_order_page/design/storefront.css) and
-   reference only the --sf-* tokens below.
+   rest of the app. The same file also styles the public order page
+   /r/<token> (.sp-storefront.sf-public, with public-orders.css on top),
+   the B2B portal's .sf-grid and the delivery-request dialogs that borrow
+   .sp-storefront.sf-embedded.
 
-   THEMING (owner request 2026-07-08): the handoff shipped dark-only
-   tokens, so the page ignored light mode. The default token set below
-   is the LIGHT palette (mirrors the app's --ed-* light theme in
-   globals.css); `.dark .sp-storefront` restores the handoff's dark
-   values verbatim. Keep the two blocks in 1:1 key parity.
+   TOKENS (redesign 2026-10, P4.B2): every --sf-* colour is the shared
+   semantic token of globals.css (P2.1), read through var(), so the page
+   follows the app's light and dark values exactly and can never drift
+   from them (the old block carried its own hex and oklch copies, with
+   a mint accent the redesign retired). The theme switch happens in
+   globals.css (`.dark`), so there is no dark block here any more; the
+   key set below is the whole contract, and storefront-tokens.guard.test.ts
+   pins it. The look follows DESIGN-SPEC: hairlines, radius 6 controls
+   and radius 8 cards, no shadows on cards, no blur, wash-and-dot pills.
    ================================================================== */
 
 .sp-storefront {
-  /* ---- design tokens (light theme — mirrors --ed-* light) ---- */
-  --sf-bg: #fafaf7;
-  --sf-bg-elev: #ffffff;
-  --sf-bg-sunk: #f4f3ee;
-  --sf-ink: #0e0f0d;
-  --sf-ink-2: #2a2c28;
-  --sf-ink-3: #5a5d56;
-  --sf-ink-4: #8b8e85;
-  --sf-ink-5: #b8baad;
-  --sf-line: #e7e5dd;
-  --sf-line-2: #edece5;
-  --sf-line-strong: #d4d2c8;
-  --sf-accent: oklch(0.74 0.12 165);
-  --sf-on-accent: oklch(0.24 0.05 165);
-  --sf-warn: oklch(0.72 0.13 75);
-  --sf-warn-text: oklch(0.52 0.11 75);
-  --sf-crit: oklch(0.55 0.17 25);
-  --sf-crit-text: oklch(0.5 0.16 25);
-  --sf-crit-wash: oklch(0.94 0.03 25);
+  /* ---- design tokens: the shared semantic tokens (globals.css) ---- */
+  --sf-bg: var(--ed-bg);
+  --sf-bg-elev: var(--ed-bg-elev);
+  --sf-bg-sunk: var(--ed-bg-sunk);
+  --sf-ink: var(--ed-ink);
+  --sf-ink-2: var(--ed-ink-2);
+  --sf-ink-3: var(--ed-ink-3);
+  /* ink-4 and ink-5 are for glyphs, separators and disabled controls only
+     (under 4.5:1); words use ink-3 or stronger. */
+  --sf-ink-4: var(--ed-ink-4);
+  --sf-ink-5: var(--ed-ink-5);
+  --sf-line: var(--ed-line);
+  /* Inner separators and the hover fill share the reference's --hover. */
+  --sf-line-2: hsl(var(--muted));
+  --sf-line-strong: var(--ed-line-strong);
+  --sf-hover: hsl(var(--muted));
+  --sf-accent: hsl(var(--accent));
+  --sf-on-accent: hsl(var(--accent-ink));
+  --sf-accent-wash: hsl(var(--success-wash));
+  --sf-warn: hsl(var(--warning));
+  --sf-warn-text: hsl(var(--warning));
+  --sf-warn-wash: hsl(var(--warning-wash));
+  --sf-crit: hsl(var(--destructive));
+  --sf-crit-text: hsl(var(--destructive));
+  --sf-crit-wash: hsl(var(--destructive-wash));
+  /* The ink-filled button (committing the work in front of you). */
+  --sf-btn: hsl(var(--primary));
+  --sf-btn-ink: hsl(var(--primary-foreground));
 
-  --sf-shadow-1: 0 1px 0 rgba(14, 15, 13, 0.05);
-  --sf-shadow-2: 0 4px 12px -4px rgba(14, 15, 13, 0.12);
-  --sf-shadow-pop:
-    0 24px 48px -16px rgba(14, 15, 13, 0.2), 0 8px 16px -8px rgba(14, 15, 13, 0.06);
+  /* Cards are flat (DESIGN-SPEC 4, elevation). A popover keeps the quiet
+     shadow of the shared Popover; the review modal and the quick view keep
+     the shared Dialog's. */
+  --sf-shadow-1: none;
+  --sf-shadow-2: none;
+  --sf-shadow-pop: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --sf-shadow-dialog: 0 10px 30px rgba(0, 0, 0, 0.25);
 
   /* App shell topbar is 56px tall and lives OUTSIDE the scrolling
      <main>, so sticky offsets inside the page are relative to the
@@ -65,60 +82,40 @@
    (the viewport less the top bar) stretched the order page's "Send delivery
    request" dialog and the email Preview to the full window height, with the
    buttons floating mid-way (owner report 2026-09-28). Embedded hosts add
-   .sf-embedded to size to their content. */
+   .sf-embedded to size to their content. A dialog surface is the card
+   colour, as every shared Dialog is. */
 .sp-storefront.sf-embedded {
   min-height: 0;
+  background: var(--sf-bg-elev);
 }
 
-/* Dark theme — the design handoff's original token values, verbatim
-   (styles.css dark tokens). Applies when next-themes sets .dark on
-   <html>. Key set must mirror the light block above exactly. */
-.dark .sp-storefront {
-  --sf-bg: #0c0d0a;
-  --sf-bg-elev: #131410;
-  --sf-bg-sunk: #08090a;
-  --sf-ink: #f0efe8;
-  --sf-ink-2: #d8d6cc;
-  --sf-ink-3: #9a9b91;
-  --sf-ink-4: #6a6b62;
-  --sf-ink-5: #44453e;
-  --sf-line: #1f201b;
-  --sf-line-2: #1a1b16;
-  --sf-line-strong: #2a2b25;
-  --sf-accent: oklch(0.82 0.13 165);
-  --sf-on-accent: oklch(0.2 0.05 165);
-  --sf-warn: oklch(0.78 0.13 75);
-  --sf-warn-text: oklch(0.85 0.13 75);
-  --sf-crit: oklch(0.62 0.16 25);
-  --sf-crit-text: oklch(0.72 0.14 25);
-  --sf-crit-wash: oklch(0.22 0.06 25);
-
-  --sf-shadow-1: 0 1px 0 rgba(0, 0, 0, 0.4);
-  --sf-shadow-2: 0 4px 12px -4px rgba(0, 0, 0, 0.5);
-  --sf-shadow-pop:
-    0 24px 48px -16px rgba(0, 0, 0, 0.7), 0 8px 16px -8px rgba(0, 0, 0, 0.08);
-}
-
-/* Neutralize app-level button/input resets inside the storefront so
-   the prototype's markup-level styling holds. */
-.sp-storefront button {
-  font: inherit;
-  color: inherit;
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 0;
-  letter-spacing: inherit;
-}
-.sp-storefront input,
-.sp-storefront textarea {
-  font: inherit;
-  color: inherit;
-}
-.sp-storefront :focus-visible {
-  outline: 2px solid var(--sf-ink);
-  outline-offset: 2px;
-  border-radius: 4px;
+/* Neutralize the browser's button and input looks inside the storefront so
+   the sf-* rules hold. These sit in the BASE cascade layer, beside
+   Tailwind's own preflight, so the shared primitives rendered inside the
+   page (the page header's Tour button, a dialog's close button, the
+   no-match panel's button) keep their utility classes: unlayered, this
+   reset outranked every utility and stripped their padding, border and
+   fill. The sf-* rules below are unlayered and still win over it. */
+@layer base {
+  .sp-storefront button {
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    letter-spacing: inherit;
+  }
+  .sp-storefront input,
+  .sp-storefront textarea {
+    font: inherit;
+    color: inherit;
+  }
+  .sp-storefront :focus-visible {
+    outline: 2px solid var(--sf-ink);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
 }
 /* Icon wrapper spans (search, chips, pills, setup values) align svgs
    the way the prototype's raw inline <svg class="icon"> did. */
@@ -129,26 +126,27 @@
 
 /* ---- Page frame -------------------------------------------- */
 .sp-storefront .sf-page {
-  padding: 26px 32px 90px;
-  max-width: 1560px;
+  padding: 28px 32px 90px;
+  max-width: 1320px;
   width: 100%;
   margin: 0 auto;
 }
 
 .sp-storefront .sf-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 20px;
+  gap: 16px;
+  margin-bottom: 16px;
 }
 .sp-storefront .sf-back {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--sf-ink-4);
-  margin-bottom: 10px;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--sf-ink-3);
+  margin-bottom: 8px;
   transition: color 0.12s;
   cursor: pointer;
   text-decoration: none;
@@ -158,24 +156,29 @@
 }
 .sp-storefront .sf-title {
   font-family: var(--sf-font-display);
-  font-size: 30px;
+  font-size: 28px;
   font-weight: 500;
   letter-spacing: -0.025em;
   margin: 0;
-  line-height: 1.1;
+  line-height: 1.5;
 }
 .sp-storefront .sf-sub {
   color: var(--sf-ink-3);
   font-size: 13.5px;
-  margin-top: 6px;
+  margin-top: 2px;
+}
+/* The New order page's head is the shared PageHeader (it carries its own
+   type); this only spaces it from the setup bar, as .sf-head does. */
+.sp-storefront .sf-page-head {
+  margin-bottom: 16px;
 }
 
 /* ---- Flow indicator ----------------------------------------- */
 .sp-storefront .sf-flow {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0;
-  padding-bottom: 4px;
+  row-gap: 8px;
 }
 .sp-storefront .sf-flow-step {
   display: flex;
@@ -191,21 +194,22 @@
   place-items: center;
   color: transparent;
   background: var(--sf-bg-elev);
-  transition: all 0.2s;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s;
 }
 .sp-storefront .sf-flow-step .flabel {
-  font-family: var(--sf-font-mono);
-  font-size: 10px;
-  letter-spacing: 0.09em;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--sf-ink-4);
-  transition: color 0.2s;
+  color: var(--sf-ink-3);
+  transition: color 0.15s;
 }
 .sp-storefront .sf-flow-step[data-state='active'] .fdot {
   border-color: var(--sf-accent);
   background: var(--sf-accent);
   color: var(--sf-on-accent);
-  box-shadow: 0 0 0 4px color-mix(in oklab, var(--sf-accent) 18%, transparent);
 }
 .sp-storefront .sf-flow-step[data-state='active'] .flabel {
   color: var(--sf-ink);
@@ -213,13 +217,13 @@
 .sp-storefront .sf-flow-step[data-state='done'] .fdot {
   border-color: var(--sf-accent);
   color: var(--sf-accent);
-  background: color-mix(in oklab, var(--sf-accent) 12%, var(--sf-bg-elev));
+  background: var(--sf-accent-wash);
 }
 .sp-storefront .sf-flow-step[data-state='done'] .flabel {
   color: var(--sf-ink-3);
 }
 .sp-storefront .sf-flow-sep {
-  width: 26px;
+  width: 24px;
   height: 1px;
   background: var(--sf-line-strong);
   margin: 0 8px;
@@ -231,9 +235,8 @@
   align-items: stretch;
   background: var(--sf-bg-elev);
   border: 1px solid var(--sf-line);
-  border-radius: 12px;
-  box-shadow: var(--sf-shadow-1);
-  margin-bottom: 22px;
+  border-radius: 8px;
+  margin-bottom: 16px;
   position: relative;
 }
 .sp-storefront .sf-setup-cell {
@@ -241,23 +244,23 @@
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 11px;
-  padding: 13px 18px;
+  gap: 12px;
+  padding: 12px 18px;
   position: relative;
   cursor: pointer;
-  transition: background 0.12s;
+  transition: background-color 0.12s;
   text-align: left;
 }
 .sp-storefront .sf-setup-cell + .sf-setup-cell,
 .sp-storefront .sf-seg-wrap + .sf-setup-cell,
 .sp-storefront .sf-setup-cell + .sf-seg-wrap {
-  border-left: 1px solid var(--sf-line-2);
+  border-left: 1px solid var(--sf-line);
 }
 .sp-storefront .sf-setup-cell:first-child {
-  border-radius: 12px 0 0 12px;
+  border-radius: 8px 0 0 8px;
 }
 .sp-storefront .sf-setup-cell:hover {
-  background: color-mix(in oklab, var(--sf-bg-sunk) 55%, transparent);
+  background: var(--sf-hover);
 }
 .sp-storefront .sf-setup-cell.static {
   cursor: default;
@@ -268,19 +271,19 @@
 .sp-storefront .sf-setup-ic {
   width: 32px;
   height: 32px;
-  border-radius: 8px;
+  border-radius: 6px;
   flex-shrink: 0;
   background: var(--sf-bg-sunk);
-  border: 1px solid var(--sf-line-2);
+  border: 1px solid var(--sf-line);
   display: grid;
   place-items: center;
   color: var(--sf-ink-3);
 }
 .sp-storefront .sf-setup-cell .lb {
-  font-size: 10.5px;
-  letter-spacing: 0.07em;
+  font-size: 11px;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--sf-ink-4);
+  color: var(--sf-ink-3);
   font-weight: 500;
 }
 .sp-storefront .sf-setup-cell .vl {
@@ -296,57 +299,64 @@
   text-overflow: ellipsis;
 }
 .sp-storefront .sf-setup-cell .vl .icon {
-  color: var(--sf-ink-4);
+  color: var(--sf-ink-3);
   flex-shrink: 0;
 }
 .sp-storefront .sf-setup-cell .hint {
-  font-size: 11px;
-  color: var(--sf-ink-4);
+  font-size: 12px;
+  color: var(--sf-ink-3);
   margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* segmented pickup/delivery */
 .sp-storefront .sf-seg-wrap {
   display: flex;
   align-items: center;
-  padding: 0 16px;
+  padding: 12px 18px;
   gap: 12px;
 }
 .sp-storefront .sf-seg-wrap .lb {
-  font-size: 10.5px;
-  letter-spacing: 0.07em;
+  font-size: 11px;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--sf-ink-4);
+  color: var(--sf-ink-3);
   font-weight: 500;
-  margin-bottom: 5px;
+  margin-bottom: 6px;
 }
 .sp-storefront .sf-seg {
   display: inline-flex;
   padding: 3px;
   gap: 2px;
   background: var(--sf-bg-sunk);
-  border: 1px solid var(--sf-line-2);
-  border-radius: 10px;
+  border: 1px solid var(--sf-line);
+  border-radius: 8px;
 }
 .sp-storefront .sf-seg button {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  padding: 7px 14px;
-  border-radius: 7px;
-  font-size: 12.5px;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 5px;
+  font-size: 13px;
   font-weight: 500;
   color: var(--sf-ink-3);
-  transition: all 0.15s;
+  white-space: nowrap;
+  transition:
+    background-color 0.12s,
+    color 0.12s;
 }
 .sp-storefront .sf-seg button:hover {
   color: var(--sf-ink);
 }
 .sp-storefront .sf-seg button[data-active='true'] {
-  background: var(--sf-accent);
-  color: var(--sf-on-accent);
-  font-weight: 600;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  background: var(--sf-bg-elev);
+  color: var(--sf-ink);
+  box-shadow: 0 0 0 1px var(--sf-line-strong);
 }
 
 /* ---- Popovers ------------------------------------------------ */
@@ -355,18 +365,16 @@
 }
 .sp-storefront .sf-pop {
   position: absolute;
-  top: calc(100% + 8px);
+  top: calc(100% + 6px);
   left: 12px;
   min-width: 264px;
   z-index: 60;
   background: var(--sf-bg-elev);
   border: 1px solid var(--sf-line-strong);
-  border-radius: 12px;
+  border-radius: 8px;
   box-shadow: var(--sf-shadow-pop);
-  padding: 6px;
-  animation: sf-pop-in 0.16s cubic-bezier(0.2, 0.8, 0.2, 1);
-  /* Long option lists (15+ delivery sites) scroll INSIDE the popover;
-     overscroll-behavior stops the wheel from chaining to the page. */
+  padding: 4px;
+  animation: sf-pop-in 0.14s ease-out;
   max-height: min(340px, 60vh);
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -394,52 +402,54 @@
 .sp-storefront .sf-pop .srch input {
   width: 100%;
   height: 32px;
-  border-radius: 8px;
-  border: 1px solid var(--sf-line);
-  background: var(--sf-bg);
+  border-radius: 6px;
+  border: 1px solid var(--sf-line-strong);
+  background: var(--sf-bg-elev);
   padding: 0 10px 0 30px;
-  font-size: 12.5px;
+  font-size: 13px;
   outline: none;
 }
 .sp-storefront .sf-pop .srch input::placeholder {
-  color: var(--sf-ink-4);
+  color: var(--sf-ink-3);
 }
 .sp-storefront .sf-pop .srch .icon {
   position: absolute;
   left: 9px;
   top: 50%;
   transform: translateY(-50%);
-  color: var(--sf-ink-4);
+  color: var(--sf-ink-3);
 }
 .sp-storefront .sf-pop .plain-input {
   width: 100%;
   height: 32px;
-  border-radius: 8px;
-  border: 1px solid var(--sf-line);
-  background: var(--sf-bg);
+  border-radius: 6px;
+  border: 1px solid var(--sf-line-strong);
+  background: var(--sf-bg-elev);
   padding: 0 10px;
-  font-size: 12.5px;
+  font-size: 13px;
   outline: none;
 }
 .sp-storefront .sf-pop .plain-input::placeholder {
-  color: var(--sf-ink-4);
+  color: var(--sf-ink-3);
 }
 .sp-storefront .sf-pop .plain-input:focus {
-  border-color: color-mix(in oklab, var(--sf-accent) 55%, var(--sf-line));
+  border-color: var(--sf-accent);
+  box-shadow: 0 0 0 1px var(--sf-accent);
 }
 .sp-storefront .sf-opt {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 10px;
-  border-radius: 8px;
+  min-height: 32px;
+  padding: 6px 8px;
+  border-radius: 6px;
   cursor: pointer;
-  transition: background 0.1s;
+  transition: background-color 0.1s;
   width: 100%;
   text-align: left;
 }
 .sp-storefront .sf-opt:hover {
-  background: var(--sf-bg-sunk);
+  background: var(--sf-hover);
 }
 .sp-storefront .sf-opt .nm {
   font-size: 13px;
@@ -447,12 +457,12 @@
   font-weight: 500;
 }
 .sp-storefront .sf-opt .sb {
-  font-size: 11px;
-  color: var(--sf-ink-4);
+  font-size: 12px;
+  color: var(--sf-ink-3);
 }
 .sp-storefront .sf-opt .tick {
   margin-left: auto;
-  color: var(--sf-accent);
+  color: var(--sf-ink);
   opacity: 0;
 }
 .sp-storefront .sf-opt[data-on='true'] .tick {
@@ -461,49 +471,28 @@
 .sp-storefront .sf-opt .ct {
   margin-left: auto;
   font-family: var(--sf-font-mono);
-  font-size: 10.5px;
-  color: var(--sf-ink-4);
+  font-size: 11px;
+  color: var(--sf-ink-3);
 }
 .sp-storefront .sf-pop-label {
-  padding: 6px 10px 4px;
-  font-size: 10px;
-  letter-spacing: 0.09em;
+  padding: 6px 8px 4px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--sf-ink-4);
+  color: var(--sf-ink-3);
   font-weight: 500;
 }
 
 /* checkbox (availability popover) */
 .sp-storefront .sf-cb {
-  width: 14px;
-  height: 14px;
-  border: 1px solid var(--sf-line-strong);
-  border-radius: 3px;
-  background: var(--sf-bg-elev);
-  display: inline-grid;
-  place-items: center;
-  cursor: pointer;
-  transition: all 0.1s;
   flex-shrink: 0;
-}
-.sp-storefront .sf-cb[data-checked='true'] {
-  background: var(--sf-ink);
-  border-color: var(--sf-ink);
-}
-.sp-storefront .sf-cb[data-checked='true']::after {
-  content: '';
-  width: 7px;
-  height: 4px;
-  border-left: 1.5px solid var(--sf-bg);
-  border-bottom: 1.5px solid var(--sf-bg);
-  transform: rotate(-45deg) translateY(-1px);
 }
 
 /* ---- Shell: catalog + cart ----------------------------------- */
 .sp-storefront .sf-shell {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 372px;
-  gap: 24px;
+  gap: 16px;
   align-items: start;
 }
 @media (max-width: 1280px) {
@@ -517,11 +506,9 @@
   position: sticky;
   top: 0;
   z-index: 15;
-  background: color-mix(in oklab, var(--sf-bg) 88%, transparent);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  margin: 0 -8px 6px;
-  padding: 10px 8px 0;
+  background: var(--sf-bg);
+  margin: 0 -8px 4px;
+  padding: 8px 8px 0;
 }
 .sp-storefront .sf-tools {
   display: flex;
@@ -535,120 +522,123 @@
 }
 .sp-storefront .sf-search input {
   width: 100%;
-  height: 40px;
+  height: 34px;
   border: 1px solid var(--sf-line);
-  border-radius: 10px;
+  border-radius: 6px;
   background: var(--sf-bg-elev);
-  padding: 0 36px 0 38px;
-  font-size: 13.5px;
+  padding: 0 34px 0 32px;
+  font-size: 13px;
   color: var(--sf-ink);
   outline: none;
-  transition: border-color 0.15s, box-shadow 0.15s;
-  box-shadow: var(--sf-shadow-1);
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
 }
 .sp-storefront .sf-search input::placeholder {
-  color: var(--sf-ink-4);
+  color: var(--sf-ink-3);
 }
 .sp-storefront .sf-search input:focus {
-  border-color: color-mix(in oklab, var(--sf-accent) 55%, var(--sf-line));
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--sf-accent) 14%, transparent);
+  border-color: var(--sf-accent);
+  box-shadow: 0 0 0 1px var(--sf-accent);
 }
 .sp-storefront .sf-search > .icon {
   position: absolute;
-  left: 13px;
+  left: 10px;
   top: 50%;
   transform: translateY(-50%);
-  color: var(--sf-ink-4);
+  color: var(--sf-ink-3);
   pointer-events: none;
 }
 .sp-storefront .sf-search .clear {
   position: absolute;
-  right: 8px;
+  right: 6px;
   top: 50%;
   transform: translateY(-50%);
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
   display: grid;
   place-items: center;
-  color: var(--sf-ink-4);
-  background: var(--sf-bg-sunk);
+  color: var(--sf-ink-3);
 }
 .sp-storefront .sf-search .clear:hover {
   color: var(--sf-ink);
+  background: var(--sf-hover);
 }
 
 .sp-storefront .sf-tool-btn {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  height: 40px;
-  padding: 0 14px;
+  gap: 6px;
+  height: 34px;
+  padding: 0 10px;
   border: 1px solid var(--sf-line);
-  border-radius: 10px;
+  border-radius: 6px;
   background: var(--sf-bg-elev);
   color: var(--sf-ink-2);
-  font-size: 12.5px;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 400;
   cursor: pointer;
-  transition: border-color 0.12s, color 0.12s;
+  transition:
+    border-color 0.12s,
+    color 0.12s;
   position: relative;
   white-space: nowrap;
-  box-shadow: var(--sf-shadow-1);
 }
 .sp-storefront .sf-tool-btn:hover {
   border-color: var(--sf-line-strong);
   color: var(--sf-ink);
 }
 .sp-storefront .sf-tool-btn[data-on='true'] {
-  border-color: color-mix(in oklab, var(--sf-accent) 60%, var(--sf-line));
+  border-color: var(--sf-line-strong);
   color: var(--sf-ink);
 }
 .sp-storefront .sf-tool-btn .bdg {
   font-family: var(--sf-font-mono);
-  font-size: 10px;
-  font-weight: 600;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
+  font-size: 11px;
+  font-weight: 500;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
   border-radius: 999px;
-  background: var(--sf-accent);
-  color: var(--sf-on-accent);
+  background: var(--sf-ink);
+  color: var(--sf-bg);
   display: grid;
   place-items: center;
 }
 .sp-storefront .sf-viewseg {
   display: inline-flex;
-  padding: 3px;
+  padding: 2px;
   gap: 2px;
-  background: var(--sf-bg-elev);
+  background: var(--sf-bg-sunk);
   border: 1px solid var(--sf-line);
-  border-radius: 10px;
-  box-shadow: var(--sf-shadow-1);
+  border-radius: 6px;
 }
 .sp-storefront .sf-viewseg button {
-  width: 34px;
-  height: 32px;
-  border-radius: 7px;
+  width: 30px;
+  height: 28px;
+  border-radius: 4px;
   display: grid;
   place-items: center;
-  color: var(--sf-ink-4);
-  transition: all 0.12s;
+  color: var(--sf-ink-3);
+  transition:
+    background-color 0.12s,
+    color 0.12s;
 }
 .sp-storefront .sf-viewseg button:hover {
   color: var(--sf-ink);
 }
 .sp-storefront .sf-viewseg button[data-active='true'] {
-  background: var(--sf-bg-sunk);
+  background: var(--sf-bg-elev);
   color: var(--sf-ink);
-  box-shadow: inset 0 0 0 1px var(--sf-line);
+  box-shadow: 0 0 0 1px var(--sf-line-strong);
 }
 
 /* category pills */
 .sp-storefront .sf-pills {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   overflow-x: auto;
   padding: 12px 2px;
   scrollbar-width: none;
@@ -660,21 +650,24 @@
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  height: 34px;
-  padding: 0 15px;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
   border-radius: 999px;
-  border: 1px solid var(--sf-line);
-  background: var(--sf-bg-elev);
-  color: var(--sf-ink-3);
-  font-size: 12.5px;
-  font-weight: 500;
+  border: 1px solid var(--sf-line-strong);
+  background: transparent;
+  color: var(--sf-ink-2);
+  font-size: 13px;
+  font-weight: 400;
   cursor: pointer;
   white-space: nowrap;
-  transition: all 0.13s;
+  transition:
+    background-color 0.12s,
+    color 0.12s,
+    border-color 0.12s;
 }
 .sp-storefront .sf-pill:hover {
-  border-color: var(--sf-line-strong);
+  background: var(--sf-hover);
   color: var(--sf-ink);
 }
 .sp-storefront .sf-pill[data-active='true'] {
@@ -684,8 +677,8 @@
 }
 .sp-storefront .sf-pill .ct {
   font-family: var(--sf-font-mono);
-  font-size: 10.5px;
-  opacity: 0.7;
+  font-size: 11px;
+  opacity: 0.75;
 }
 .sp-storefront .sf-pill .icon {
   opacity: 0.8;
@@ -702,18 +695,18 @@
 .sp-storefront .sf-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  height: 26px;
-  padding: 0 6px 0 10px;
+  gap: 4px;
+  height: 28px;
+  padding: 0 4px 0 10px;
   border-radius: 999px;
-  background: color-mix(in oklab, var(--sf-accent) 12%, var(--sf-bg-elev));
-  border: 1px solid color-mix(in oklab, var(--sf-accent) 35%, var(--sf-line));
-  font-size: 11.5px;
-  color: var(--sf-ink);
+  background: var(--sf-bg-sunk);
+  border: 1px solid var(--sf-line-strong);
+  font-size: 12.5px;
+  color: var(--sf-ink-2);
 }
 .sp-storefront .sf-chip button {
-  width: 16px;
-  height: 16px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   display: grid;
   place-items: center;
@@ -721,13 +714,13 @@
 }
 .sp-storefront .sf-chip button:hover {
   color: var(--sf-ink);
-  background: color-mix(in oklab, var(--sf-ink) 12%, transparent);
+  background: var(--sf-hover);
 }
 .sp-storefront .sf-chips .clear-all {
-  font-size: 11.5px;
-  color: var(--sf-ink-4);
+  font-size: 12.5px;
+  color: var(--sf-ink-3);
   cursor: pointer;
-  margin-left: 2px;
+  margin-left: 4px;
 }
 .sp-storefront .sf-chips .clear-all:hover {
   color: var(--sf-ink);
@@ -735,7 +728,7 @@
 
 /* ---- Featured carousel --------------------------------------- */
 .sp-storefront .sf-feat {
-  margin: 4px 0 30px;
+  margin: 4px 0 28px;
 }
 .sp-storefront .sf-sec-head {
   display: flex;
@@ -745,7 +738,7 @@
 }
 .sp-storefront .sf-sec-head h3 {
   font-family: var(--sf-font-display);
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 500;
   letter-spacing: -0.015em;
   margin: 0;
@@ -756,19 +749,19 @@
 .sp-storefront .sf-sec-head .ct {
   font-family: var(--sf-font-mono);
   font-size: 11px;
-  color: var(--sf-ink-4);
+  color: var(--sf-ink-3);
   font-weight: 500;
 }
 .sp-storefront .sf-sec-head .sub {
   font-size: 12px;
-  color: var(--sf-ink-4);
+  color: var(--sf-ink-3);
 }
 .sp-storefront .sf-sec-head .spacer {
   flex: 1;
 }
 .sp-storefront .sf-sec-head .see {
-  font-size: 12px;
-  color: var(--sf-ink-3);
+  font-size: 12.5px;
+  color: var(--sf-accent);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -785,17 +778,19 @@
 .sp-storefront .sf-arrows button {
   width: 28px;
   height: 28px;
-  border-radius: 8px;
-  border: 1px solid var(--sf-line);
+  border-radius: 6px;
+  border: 1px solid var(--sf-line-strong);
   background: var(--sf-bg-elev);
   display: grid;
   place-items: center;
-  color: var(--sf-ink-3);
-  transition: all 0.12s;
+  color: var(--sf-ink-2);
+  transition:
+    background-color 0.12s,
+    color 0.12s;
 }
 .sp-storefront .sf-arrows button:hover {
   color: var(--sf-ink);
-  border-color: var(--sf-line-strong);
+  background: var(--sf-hover);
 }
 
 .sp-storefront .sf-feat-track {
@@ -826,20 +821,19 @@
 .sp-storefront .sf-feat-card {
   flex: 0 0 186px;
   scroll-snap-align: start;
-  background: var(--sf-bg-elev);
+  background: var(--sf-bg);
   border: 1px solid var(--sf-line);
-  border-radius: 12px;
+  border-radius: 8px;
   overflow: hidden;
-  transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+  transition: border-color 0.12s;
   position: relative;
 }
 .sp-storefront .sf-feat-card:hover {
-  border-color: var(--sf-line-strong);
-  transform: translateY(-2px);
-  box-shadow: var(--sf-shadow-2);
+  border-color: var(--sf-ink-4);
 }
 .sp-storefront .sf-feat-card[data-in-cart='true'] {
-  border-color: color-mix(in oklab, var(--sf-accent) 70%, var(--sf-line));
+  border-color: var(--sf-accent);
+  box-shadow: 0 0 0 1px var(--sf-accent);
 }
 .sp-storefront .sf-feat-card .bd {
   padding: 10px 12px 12px;
@@ -848,16 +842,15 @@
   gap: 8px;
 }
 .sp-storefront .sf-feat-card .nm {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
-  line-height: 1.3;
+  line-height: 1.35;
   color: var(--sf-ink);
-  letter-spacing: -0.004em;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  min-height: 31px;
+  min-height: 2.7em;
 }
 .sp-storefront .sf-feat-card .ft {
   display: flex;
@@ -867,8 +860,8 @@
 }
 .sp-storefront .sf-feat-card .av {
   font-family: var(--sf-font-mono);
-  font-size: 10px;
-  color: var(--sf-ink-4);
+  font-size: 11.5px;
+  color: var(--sf-ink-3);
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -891,15 +884,12 @@
   left: 8px;
   z-index: 2;
   font-family: var(--sf-font-mono);
-  font-size: 9.5px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 1px 8px;
   border-radius: 999px;
-  background: color-mix(in oklab, var(--sf-bg) 72%, transparent);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  border: 1px solid color-mix(in oklab, var(--sf-line-strong) 70%, transparent);
+  background: var(--sf-bg-elev);
+  border: 1px solid var(--sf-line-strong);
   color: var(--sf-ink-2);
 }
 
@@ -908,24 +898,20 @@
   position: relative;
   overflow: hidden;
   background:
-    repeating-linear-gradient(
-      135deg,
-      color-mix(in oklab, var(--sf-line) 55%, transparent) 0 1px,
-      transparent 1px 9px
-    ),
-    var(--sf-bg-sunk);
-  border-bottom: 1px solid var(--sf-line-2);
+    repeating-linear-gradient(45deg, var(--sf-line) 0 1px, transparent 1px 6px), var(--sf-bg-sunk);
+  border-bottom: 1px solid var(--sf-line);
 }
 .sp-storefront .sf-ph img {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
+  background: #fff;
   display: block;
-  transition: transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .sp-storefront .sf-ph img.lqip {
+  object-fit: cover;
   filter: blur(6px);
   transform: scale(1.06);
 }
@@ -934,20 +920,12 @@
   inset: 0;
   display: grid;
   place-items: center;
-  font-family: var(--sf-font-serif);
-  font-size: 44px;
-  color: var(--sf-ink-5);
+  font-family: var(--sf-font-display);
+  font-weight: 500;
+  font-size: 36px;
+  color: var(--sf-ink-4);
   letter-spacing: -0.03em;
   line-height: 1;
-}
-.sp-storefront .sf-ph::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.03),
-    inset 0 -18px 24px -18px rgba(0, 0, 0, 0.35);
 }
 
 /* availability pill (over photo) */
@@ -959,36 +937,33 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 3px 9px 3px 7px;
+  padding: 1px 8px;
   border-radius: 999px;
-  background: color-mix(in oklab, var(--sf-bg) 74%, transparent);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border: 1px solid color-mix(in oklab, var(--sf-line-strong) 70%, transparent);
-  font-family: var(--sf-font-mono);
-  font-size: 10.5px;
-  color: var(--sf-ink-2);
+  background: var(--sf-accent-wash);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  color: var(--sf-accent);
 }
 .sp-storefront .sf-avail .d {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
-  background: var(--sf-accent);
-  box-shadow: 0 0 6px color-mix(in oklab, var(--sf-accent) 70%, transparent);
+  background: currentColor;
 }
 .sp-storefront .sf-avail.low {
   color: var(--sf-warn-text);
+  background: var(--sf-warn-wash);
 }
 .sp-storefront .sf-avail.low .d {
-  background: var(--sf-warn);
-  box-shadow: 0 0 6px color-mix(in oklab, var(--sf-warn) 60%, transparent);
+  background: currentColor;
 }
 .sp-storefront .sf-avail.out {
   color: var(--sf-crit-text);
+  background: var(--sf-crit-wash);
 }
 .sp-storefront .sf-avail.out .d {
-  background: var(--sf-crit);
-  box-shadow: none;
+  background: currentColor;
 }
 
 /* ---- Product grid --------------------------------------------- */
@@ -1001,38 +976,29 @@
 .sp-storefront .sf-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 14px;
+  gap: 12px;
 }
 
 .sp-storefront .sf-card {
-  background: var(--sf-bg-elev);
+  background: var(--sf-bg);
   border: 1px solid var(--sf-line);
-  border-radius: 12px;
+  border-radius: 8px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
   position: relative;
-  transition:
-    border-color 0.15s,
-    transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1),
-    box-shadow 0.18s;
+  transition: border-color 0.12s;
 }
 .sp-storefront .sf-card:hover {
-  border-color: var(--sf-line-strong);
-  transform: translateY(-2px);
-  box-shadow: var(--sf-shadow-2);
-}
-.sp-storefront .sf-card:hover .sf-ph img {
-  transform: scale(1.045);
-}
-.sp-storefront .sf-card:hover .sf-ph img.lqip {
-  transform: scale(1.1);
+  border-color: var(--sf-ink-4);
 }
 .sp-storefront .sf-card[data-in-cart='true'] {
-  border-color: color-mix(in oklab, var(--sf-accent) 65%, var(--sf-line));
+  border-color: var(--sf-accent);
+  box-shadow: 0 0 0 1px var(--sf-accent);
 }
 .sp-storefront .sf-card[data-out='true'] .sf-ph img {
-  filter: grayscale(0.85) brightness(0.72);
+  filter: grayscale(0.85);
+  opacity: 0.7;
 }
 .sp-storefront .sf-card[data-out='true'] .sf-ph .glyph {
   opacity: 0.4;
@@ -1051,66 +1017,63 @@
   top: 8px;
   right: 8px;
   z-index: 3;
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
   display: grid;
   place-items: center;
-  background: color-mix(in oklab, var(--sf-bg) 78%, transparent);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border: 1px solid color-mix(in oklab, var(--sf-line-strong) 70%, transparent);
+  background: var(--sf-bg-elev);
+  border: 1px solid var(--sf-line-strong);
   color: var(--sf-ink-2);
   opacity: 0;
-  transform: translateY(-3px);
-  transition: all 0.16s;
+  transition: opacity 0.12s;
 }
 .sp-storefront .sf-card:hover .sf-qv,
 .sp-storefront .sf-feat-card:hover .sf-qv,
 .sp-storefront .sf-qv:focus-visible {
   opacity: 1;
-  transform: none;
 }
 .sp-storefront .sf-qv:hover {
   color: var(--sf-ink);
-  border-color: var(--sf-line-strong);
+  background: var(--sf-hover);
 }
 
 .sp-storefront .sf-card-bd {
-  padding: 12px 13px 13px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 8px;
   flex: 1;
 }
 .sp-storefront .sf-card-nm {
-  font-family: var(--sf-font-display);
+  font-family: var(--sf-font-body);
   font-size: 13.5px;
   font-weight: 500;
-  letter-spacing: -0.006em;
+  letter-spacing: -0.005em;
   line-height: 1.32;
   color: var(--sf-ink);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  min-height: 35px;
+  min-height: 2.64em;
 }
 .sp-storefront .sf-card-meta {
   display: flex;
   align-items: center;
   gap: 6px;
   font-family: var(--sf-font-mono);
-  font-size: 10.5px;
-  color: var(--sf-ink-4);
+  font-size: 11.5px;
+  color: var(--sf-ink-3);
   white-space: nowrap;
   overflow: hidden;
 }
 .sp-storefront .sf-card-meta .sep {
-  color: var(--sf-ink-5);
+  color: var(--sf-ink-4);
 }
 .sp-storefront .sf-card-meta .cat {
-  color: var(--sf-ink-3);
+  font-family: var(--sf-font-body);
+  color: var(--sf-ink-2);
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -1124,23 +1087,22 @@
 .sp-storefront .sf-charter {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
   max-width: 100%;
   align-self: flex-start;
-  padding: 1px 7px 1px 5px;
+  padding: 0 7px 0 6px;
   border-radius: 999px;
-  border: 1px solid color-mix(in oklab, var(--sf-accent) 32%, var(--sf-line));
-  background: color-mix(in oklab, var(--sf-accent) 11%, var(--sf-bg-elev));
+  border: 1px solid var(--sf-line-strong);
+  background: transparent;
   color: var(--sf-ink-3);
-  font-family: var(--sf-font-mono);
-  font-size: 10px;
-  line-height: 1.5;
+  font-size: 11px;
+  line-height: 18px;
   margin-top: 2px;
   white-space: nowrap;
   overflow: hidden;
 }
 .sp-storefront .sf-charter svg {
-  color: var(--sf-accent);
+  color: var(--sf-ink-3);
   flex: none;
 }
 .sp-storefront .sf-charter-nm {
@@ -1151,30 +1113,25 @@
 /* Add button / stepper */
 .sp-storefront .sf-add {
   width: 100%;
-  height: 33px;
+  height: 32px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
-  border-radius: 9px;
+  gap: 6px;
+  border-radius: 6px;
   border: 1px solid var(--sf-line-strong);
-  background: transparent;
+  background: var(--sf-bg-elev);
   color: var(--sf-ink);
-  font-size: 12.5px;
-  font-weight: 550;
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
-  transition: all 0.14s;
+  transition: background-color 0.12s;
 }
 .sp-storefront .sf-add:hover {
-  background: var(--sf-ink);
-  color: var(--sf-bg);
-  border-color: var(--sf-ink);
-}
-.sp-storefront .sf-add:active {
-  transform: scale(0.985);
+  background: var(--sf-hover);
 }
 .sp-storefront .sf-add[disabled] {
-  border-color: var(--sf-line-2);
+  border-color: var(--sf-line);
   color: var(--sf-ink-4);
   background: transparent;
   cursor: not-allowed;
@@ -1185,14 +1142,14 @@
 
 .sp-storefront .sf-step {
   width: 100%;
-  height: 33px;
+  height: 32px;
   display: grid;
-  grid-template-columns: 33px 1fr 33px;
+  grid-template-columns: 32px 1fr 32px;
   align-items: stretch;
-  border-radius: 9px;
+  border-radius: 6px;
   overflow: hidden;
-  background: color-mix(in oklab, var(--sf-accent) 14%, var(--sf-bg));
-  border: 1px solid color-mix(in oklab, var(--sf-accent) 55%, var(--sf-line));
+  background: var(--sf-bg-elev);
+  border: 1px solid var(--sf-line-strong);
 }
 .sp-storefront .sf-step button {
   display: grid;
@@ -1201,7 +1158,7 @@
   transition: background 0.1s;
 }
 .sp-storefront .sf-step button:hover {
-  background: color-mix(in oklab, var(--sf-accent) 22%, transparent);
+  background: var(--sf-hover);
 }
 .sp-storefront .sf-step button[disabled] {
   color: var(--sf-ink-4);
@@ -1216,17 +1173,17 @@
   justify-content: center;
   min-width: 0;
   font-family: var(--sf-font-mono);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 500;
   color: var(--sf-ink);
-  letter-spacing: 0.02em;
 }
 .sp-storefront .sf-step .q .in-lbl {
-  font-size: 9px;
+  font-family: var(--sf-font-body);
+  font-size: 10.5px;
   font-weight: 500;
   color: var(--sf-ink-3);
-  letter-spacing: 0.08em;
-  margin-left: 5px;
+  letter-spacing: 0.06em;
+  margin-left: 6px;
   flex: none;
 }
 /* Typeable quantity: styled to be indistinguishable from the static
@@ -1247,16 +1204,21 @@
   appearance: textfield;
 }
 .sp-storefront .sf-step .q .qi:focus-visible {
-  outline: none; /* the stepper's accent border is the focus affordance */
+  outline: none; /* the stepper's focus ring (:focus-within below) shows it */
 }
 .sp-storefront .sf-step .q .qi::selection {
-  background: color-mix(in oklab, var(--sf-accent) 35%, transparent);
+  background: var(--sf-accent-wash);
+}
+/* The typed quantity's focus shows on the whole stepper. */
+.sp-storefront .sf-step:focus-within {
+  border-color: var(--sf-accent);
+  box-shadow: 0 0 0 1px var(--sf-accent);
 }
 .sp-storefront .sf-step.mini {
-  height: 26px;
-  grid-template-columns: 26px 1fr 26px;
-  border-radius: 999px;
-  min-width: 86px;
+  height: 28px;
+  grid-template-columns: 28px 1fr 28px;
+  border-radius: 6px;
+  min-width: 88px;
   width: auto;
 }
 
@@ -1264,22 +1226,22 @@
 .sp-storefront .sf-add-mini {
   width: 28px;
   height: 28px;
-  border-radius: 999px;
+  border-radius: 6px;
   border: 1px solid var(--sf-line-strong);
+  background: var(--sf-bg-elev);
   display: grid;
   place-items: center;
   color: var(--sf-ink);
-  transition: all 0.13s;
+  transition: background-color 0.12s;
   flex-shrink: 0;
 }
 .sp-storefront .sf-add-mini:hover {
-  background: var(--sf-ink);
-  color: var(--sf-bg);
-  border-color: var(--sf-ink);
+  background: var(--sf-hover);
 }
 .sp-storefront .sf-add-mini[disabled] {
   color: var(--sf-ink-4);
-  border-color: var(--sf-line-2);
+  border-color: var(--sf-line);
+  background: transparent;
   cursor: not-allowed;
 }
 .sp-storefront .sf-add-mini[disabled]:hover {
@@ -1288,24 +1250,27 @@
 
 /* ---- Category sections ---------------------------------------- */
 .sp-storefront .sf-cat-sec {
-  margin-bottom: 30px;
+  margin-bottom: 28px;
 }
 .sp-storefront .sf-cat-sec .sf-sec-head {
-  border-bottom: 1px solid var(--sf-line-2);
+  border-bottom: 1px solid var(--sf-line);
   padding-bottom: 10px;
   margin-bottom: 14px;
 }
 .sp-storefront .sf-cat-sec .fold {
   width: 24px;
   height: 24px;
-  border-radius: 7px;
+  border-radius: 6px;
   display: grid;
   place-items: center;
-  color: var(--sf-ink-4);
-  transition: transform 0.18s, color 0.12s;
+  color: var(--sf-ink-3);
+  transition:
+    transform 0.15s,
+    background-color 0.12s;
 }
 .sp-storefront .sf-cat-sec .fold:hover {
   color: var(--sf-ink);
+  background: var(--sf-hover);
 }
 .sp-storefront .sf-cat-sec[data-open='false'] .fold {
   transform: rotate(-90deg);
@@ -1314,7 +1279,7 @@
 /* A kit card is an .sf-card: the same grid column, photo box and add control
    as an item card, so a kit never stretches (see .sf-grid above). */
 .sp-storefront .sf-kits {
-  margin: 4px 0 30px;
+  margin: 4px 0 28px;
 }
 /* The Kits row is ONE horizontal strip at every width, like Frequently ordered
    (verify 2026-09-27): as a wrapping grid its height grew with the number of
@@ -1395,7 +1360,7 @@
   grid-template-columns: 1fr 1fr;
   grid-template-rows: 1fr 1fr;
   gap: 1px;
-  background: var(--sf-line-2);
+  background: var(--sf-line);
 }
 .sp-storefront .sf-kit-mosaic .cell {
   position: relative;
@@ -1417,18 +1382,16 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 8px 2px 6px;
+  padding: 1px 8px 1px 6px;
   border-radius: 999px;
-  background: color-mix(in oklab, var(--sf-bg) 74%, transparent);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border: 1px solid color-mix(in oklab, var(--sf-accent) 45%, var(--sf-line));
-  font-family: var(--sf-font-mono);
-  font-size: 10.5px;
+  background: var(--sf-bg-elev);
+  border: 1px solid var(--sf-line-strong);
+  font-size: 11.5px;
+  line-height: 18px;
   color: var(--sf-ink-2);
 }
 .sp-storefront .sf-kit-tag svg {
-  color: var(--sf-accent);
+  color: var(--sf-ink-3);
 }
 /* The item list and, for a kit that is out, the out-of-stock line share one
    block of fixed height: two lines of items in stock; one line of items and
@@ -1481,7 +1444,7 @@
   font-size: 11.5px;
   line-height: 1.45;
   color: var(--sf-ink-3);
-  border-top: 1px solid var(--sf-line-2);
+  border-top: 1px solid var(--sf-line);
   padding-top: 7px;
 }
 .sp-storefront .sf-kit-details ul {
@@ -1511,7 +1474,7 @@
   flex-basis: 100%;
   font-family: var(--sf-font-mono);
   font-size: 10.5px;
-  color: var(--sf-ink-4);
+  color: var(--sf-ink-3);
 }
 .sp-storefront .sf-kit-details .lim {
   margin: 7px 0 0;
@@ -1519,7 +1482,7 @@
 }
 .sp-storefront .sf-kit-details .note {
   margin: 4px 0 0;
-  color: var(--sf-ink-4);
+  color: var(--sf-ink-3);
 }
 /* The Kits row's reserved place while it streams (KitsRowSkeleton): the real
    row's classes, with its words invisible, so the real row lands on the same
@@ -1560,21 +1523,22 @@
   height: 2.8em;
 }
 .sp-storefront .sf-kit-sk-ctl {
-  height: 33px;
-  border-radius: 9px;
+  height: 32px;
+  border-radius: 6px;
 }
 .sp-storefront .sf-kits-pending {
   margin: 4px 0 24px;
-  font-size: 12px;
-  color: var(--sf-ink-4);
+  font-size: 12.5px;
+  color: var(--sf-ink-3);
 }
 .sp-storefront .sf-kits-error {
   margin: 4px 0 24px;
-  padding: 10px 12px;
-  border: 1px dashed var(--sf-line-strong);
-  border-radius: 10px;
-  font-size: 12px;
-  color: var(--sf-ink-3);
+  padding: 10px 14px;
+  border: 1px solid var(--sf-line);
+  border-radius: 8px;
+  background: var(--sf-bg-elev);
+  font-size: 12.5px;
+  color: var(--sf-ink-2);
 }
 
 /* result meta line */
@@ -1586,36 +1550,36 @@
 }
 .sp-storefront .sf-result-line .n {
   font-family: var(--sf-font-display);
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 500;
   letter-spacing: -0.015em;
 }
 .sp-storefront .sf-result-line .m {
-  font-size: 12px;
-  color: var(--sf-ink-4);
+  font-size: 12.5px;
+  color: var(--sf-ink-3);
 }
 
 /* ---- Compact (list) view --------------------------------------- */
 .sp-storefront .sf-rows {
   background: var(--sf-bg-elev);
   border: 1px solid var(--sf-line);
-  border-radius: 12px;
+  border-radius: 8px;
   overflow: hidden;
 }
 .sp-storefront .sf-row {
   display: grid;
   grid-template-columns: 46px minmax(0, 1fr) 150px 118px 128px;
-  gap: 14px;
+  gap: 12px;
   align-items: center;
-  padding: 9px 14px;
-  border-bottom: 1px solid var(--sf-line-2);
-  transition: background 0.1s;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--sf-line);
+  transition: background-color 0.1s;
 }
 .sp-storefront .sf-row:last-child {
   border-bottom: none;
 }
 .sp-storefront .sf-row:hover {
-  background: color-mix(in oklab, var(--sf-bg-sunk) 55%, transparent);
+  background: var(--sf-hover);
 }
 .sp-storefront .sf-row[data-out='true'] {
   opacity: 0.62;
@@ -1623,10 +1587,10 @@
 .sp-storefront .sf-row .th {
   width: 46px;
   height: 46px;
-  border-radius: 9px;
+  border-radius: 6px;
   overflow: hidden;
   position: relative;
-  border: 1px solid var(--sf-line-2);
+  border: 1px solid var(--sf-line);
 }
 .sp-storefront .sf-row .th .sf-ph {
   position: absolute;
@@ -1637,7 +1601,7 @@
   font-size: 20px;
 }
 .sp-storefront .sf-row .nm {
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 500;
   color: var(--sf-ink);
   line-height: 1.3;
@@ -1647,42 +1611,48 @@
 }
 .sp-storefront .sf-row .sk2 {
   font-family: var(--sf-font-mono);
-  font-size: 10.5px;
-  color: var(--sf-ink-4);
+  font-size: 11.5px;
+  color: var(--sf-ink-3);
   margin-top: 2px;
 }
 .sp-storefront .sf-row .cat {
-  font-size: 11.5px;
-  color: var(--sf-ink-3);
+  font-size: 13px;
+  color: var(--sf-ink-2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .sp-storefront .sf-row .avl {
-  font-family: var(--sf-font-mono);
-  font-size: 11px;
+  font-size: 12px;
   display: inline-flex;
   align-items: center;
+  justify-self: start;
   gap: 6px;
-  color: var(--sf-ink-2);
+  padding: 1px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  color: var(--sf-accent);
+  background: var(--sf-accent-wash);
 }
 .sp-storefront .sf-row .avl .d {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
-  background: var(--sf-accent);
+  background: currentColor;
 }
 .sp-storefront .sf-row .avl.low {
   color: var(--sf-warn-text);
+  background: var(--sf-warn-wash);
 }
 .sp-storefront .sf-row .avl.low .d {
-  background: var(--sf-warn);
+  background: currentColor;
 }
 .sp-storefront .sf-row .avl.out {
   color: var(--sf-crit-text);
+  background: var(--sf-crit-wash);
 }
 .sp-storefront .sf-row .avl.out .d {
-  background: var(--sf-crit);
+  background: currentColor;
 }
 @media (max-width: 1100px) {
   .sp-storefront .sf-row {
@@ -1694,35 +1664,6 @@
 }
 
 /* ---- Empty search state ----------------------------------------- */
-.sp-storefront .sf-empty {
-  padding: 64px 24px;
-  text-align: center;
-  border: 1px dashed var(--sf-line-strong);
-  border-radius: 14px;
-  color: var(--sf-ink-3);
-}
-.sp-storefront .sf-empty .big {
-  width: 64px;
-  height: 64px;
-  margin: 0 auto 16px;
-  border-radius: 18px;
-  background: var(--sf-bg-elev);
-  border: 1px solid var(--sf-line);
-  display: grid;
-  place-items: center;
-  color: var(--sf-ink-4);
-}
-.sp-storefront .sf-empty h4 {
-  font-family: var(--sf-font-display);
-  font-size: 16px;
-  font-weight: 500;
-  margin: 0 0 4px;
-  color: var(--sf-ink);
-}
-.sp-storefront .sf-empty p {
-  font-size: 12.5px;
-  margin: 0 0 16px;
-}
 
 /* ---- Cart rail ---------------------------------------------------- */
 .sp-storefront .sf-rail {
@@ -1751,47 +1692,44 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
   min-width: 0;
   background: var(--sf-bg-elev);
   border: 1px solid var(--sf-line);
-  border-radius: 14px;
+  border-radius: 8px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  box-shadow: var(--sf-shadow-1);
 }
 .sp-storefront .sf-cart-head {
-  padding: 15px 16px 13px;
+  padding: 14px 18px;
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   border-bottom: 1px solid var(--sf-line);
 }
 .sp-storefront .sf-cart-head .ttl {
-  font-family: var(--sf-font-display);
-  font-size: 14.5px;
-  font-weight: 550;
-  letter-spacing: -0.01em;
+  font-size: 13.5px;
+  font-weight: 500;
 }
 .sp-storefront .sf-cart-head .cnt {
   font-family: var(--sf-font-mono);
-  font-size: 10.5px;
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 500;
   min-width: 20px;
-  height: 20px;
+  height: 18px;
   padding: 0 6px;
   border-radius: 999px;
-  background: var(--sf-accent);
-  color: var(--sf-on-accent);
+  background: var(--sf-accent-wash);
+  color: var(--sf-accent);
   display: grid;
   place-items: center;
 }
 .sp-storefront .sf-cart-head .cnt[data-zero='true'] {
   background: var(--sf-bg-sunk);
-  color: var(--sf-ink-4);
-  border: 1px solid var(--sf-line);
+  color: var(--sf-ink-3);
+  box-shadow: inset 0 0 0 1px var(--sf-line-strong);
 }
 .sp-storefront .sf-cart-head .clr {
   margin-left: auto;
-  font-size: 11.5px;
-  color: var(--sf-ink-4);
+  font-size: 12.5px;
+  color: var(--sf-ink-3);
   cursor: pointer;
 }
 .sp-storefront .sf-cart-head .clr:hover {
@@ -1803,23 +1741,23 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--sf-line-2);
-  background: color-mix(in oklab, var(--sf-bg-sunk) 45%, transparent);
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--sf-line);
 }
 .sp-storefront .sf-ctx-chip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
-  color: var(--sf-ink-3);
-  padding: 3px 9px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--sf-ink-2);
+  padding: 1px 8px;
   border-radius: 999px;
-  border: 1px solid var(--sf-line);
-  background: var(--sf-bg-elev);
+  border: 1px solid var(--sf-line-strong);
+  background: var(--sf-bg-sunk);
 }
 .sp-storefront .sf-ctx-chip .icon {
-  color: var(--sf-ink-4);
+  color: var(--sf-ink-3);
 }
 
 .sp-storefront .sf-cart-list {
@@ -1830,37 +1768,29 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
 }
 
 .sp-storefront .sf-cart-empty {
-  padding: 34px 26px 38px;
+  padding: 28px 18px 24px;
   text-align: center;
 }
 .sp-storefront .sf-cart-empty .ring {
-  width: 72px;
-  height: 72px;
-  margin: 0 auto 14px;
+  width: 44px;
+  height: 44px;
+  margin: 0 auto 12px;
   border-radius: 50%;
-  background:
-    radial-gradient(
-      closest-side,
-      color-mix(in oklab, var(--sf-accent) 9%, transparent),
-      transparent 78%
-    ),
-    var(--sf-bg-sunk);
-  border: 1px dashed var(--sf-line-strong);
+  background: var(--sf-bg-sunk);
   display: grid;
   place-items: center;
-  color: var(--sf-ink-4);
+  color: var(--sf-ink-3);
 }
 .sp-storefront .sf-cart-empty h5 {
-  font-family: var(--sf-font-display);
   font-size: 14px;
   font-weight: 500;
   margin: 0 0 4px;
   color: var(--sf-ink);
 }
 .sp-storefront .sf-cart-empty p {
-  font-size: 12px;
-  color: var(--sf-ink-4);
-  line-height: 1.55;
+  font-size: 13px;
+  color: var(--sf-ink-3);
+  line-height: 1.5;
   margin: 0 0 16px;
 }
 .sp-storefront .sf-sugg {
@@ -1869,10 +1799,10 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
   gap: 6px;
 }
 .sp-storefront .sf-sugg-lbl {
-  font-size: 10px;
-  letter-spacing: 0.09em;
+  font-size: 11px;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--sf-ink-4);
+  color: var(--sf-ink-3);
   font-weight: 500;
   margin-bottom: 2px;
 }
@@ -1880,19 +1810,21 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 10px;
-  border-radius: 9px;
+  min-height: 32px;
+  padding: 6px 10px;
+  border-radius: 6px;
   border: 1px solid var(--sf-line);
-  background: var(--sf-bg);
-  font-size: 12px;
+  background: var(--sf-bg-elev);
+  font-size: 13px;
   color: var(--sf-ink-2);
   text-align: left;
-  transition: all 0.12s;
+  transition:
+    background-color 0.12s,
+    color 0.12s;
 }
 .sp-storefront .sf-sugg button:hover {
-  border-color: var(--sf-line-strong);
   color: var(--sf-ink);
-  background: var(--sf-bg-elev);
+  background: var(--sf-hover);
 }
 .sp-storefront .sf-sugg .sugg-nm {
   overflow: hidden;
@@ -1901,36 +1833,29 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
 }
 .sp-storefront .sf-sugg .plus {
   margin-left: auto;
-  color: var(--sf-ink-4);
+  color: var(--sf-ink-3);
   flex-shrink: 0;
   display: inline-flex;
 }
 
 .sp-storefront .sf-line {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) auto;
-  gap: 11px;
-  padding: 11px 16px;
-  border-bottom: 1px solid var(--sf-line-2);
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--sf-line);
   position: relative;
-  animation: sf-line-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-@keyframes sf-line-in {
-  from {
-    opacity: 0;
-    transform: translateX(6px);
-  }
 }
 .sp-storefront .sf-line:last-child {
   border-bottom: none;
 }
 .sp-storefront .sf-line .th {
-  width: 44px;
-  height: 44px;
-  border-radius: 9px;
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
   overflow: hidden;
   position: relative;
-  border: 1px solid var(--sf-line-2);
+  border: 1px solid var(--sf-line);
 }
 .sp-storefront .sf-line .th .sf-ph {
   position: absolute;
@@ -1938,10 +1863,10 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
   border-bottom: none;
 }
 .sp-storefront .sf-line .th .glyph {
-  font-size: 19px;
+  font-size: 15px;
 }
 .sp-storefront .sf-line .nm {
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 500;
   line-height: 1.3;
   color: var(--sf-ink);
@@ -1952,8 +1877,8 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
 }
 .sp-storefront .sf-line .sk2 {
   font-family: var(--sf-font-mono);
-  font-size: 10px;
-  color: var(--sf-ink-4);
+  font-size: 11.5px;
+  color: var(--sf-ink-3);
   margin-top: 2px;
 }
 .sp-storefront .sf-line .rt {
@@ -1963,14 +1888,17 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
   gap: 5px;
 }
 .sp-storefront .sf-line .rm {
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   border-radius: 6px;
   display: grid;
   place-items: center;
-  color: var(--sf-ink-4);
+  color: var(--sf-ink-3);
   opacity: 0;
-  transition: all 0.12s;
+  transition:
+    opacity 0.12s,
+    background-color 0.12s,
+    color 0.12s;
 }
 .sp-storefront .sf-line:hover .rm,
 .sp-storefront .sf-line .rm:focus-visible {
@@ -1985,11 +1913,10 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--sf-warn-text);
-  background: color-mix(in oklab, var(--sf-warn) 10%, transparent);
-  border: 1px solid color-mix(in oklab, var(--sf-warn) 30%, transparent);
-  border-radius: 7px;
+  background: var(--sf-warn-wash);
+  border-radius: 6px;
   padding: 5px 9px;
   margin-top: 2px;
 }
@@ -2003,8 +1930,8 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 12px 16px;
-  font-size: 12.5px;
+  padding: 12px 18px;
+  font-size: 13px;
   font-weight: 500;
   color: var(--sf-ink-2);
   cursor: pointer;
@@ -2014,14 +1941,14 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
   color: var(--sf-ink);
 }
 .sp-storefront .sf-notes-head .opt {
-  font-size: 10.5px;
-  color: var(--sf-ink-4);
+  font-size: 12px;
+  color: var(--sf-ink-3);
   font-weight: 400;
 }
 .sp-storefront .sf-notes-head .chev {
   margin-left: auto;
-  color: var(--sf-ink-4);
-  transition: transform 0.18s;
+  color: var(--sf-ink-3);
+  transition: transform 0.15s;
   display: inline-flex;
 }
 .sp-storefront .sf-notes[data-open='true'] .sf-notes-head .chev {
@@ -2039,85 +1966,79 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
 }
 .sp-storefront .sf-notes textarea {
   display: block;
-  width: calc(100% - 32px);
-  margin: 0 16px 14px;
+  width: calc(100% - 36px);
+  margin: 0 18px 14px;
   min-height: 68px;
   resize: vertical;
-  border: 1px solid var(--sf-line);
-  border-radius: 9px;
-  background: var(--sf-bg);
+  border: 1px solid var(--sf-line-strong);
+  border-radius: 6px;
+  background: var(--sf-bg-elev);
   color: var(--sf-ink);
-  padding: 9px 11px;
-  font-size: 12.5px;
+  padding: 8px 10px;
+  font-size: 13px;
   line-height: 1.5;
   outline: none;
-  transition: border-color 0.12s;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
 }
 .sp-storefront .sf-notes textarea:focus {
-  border-color: color-mix(in oklab, var(--sf-accent) 55%, var(--sf-line));
+  border-color: var(--sf-accent);
+  box-shadow: 0 0 0 1px var(--sf-accent);
 }
 .sp-storefront .sf-notes textarea::placeholder {
-  color: var(--sf-ink-4);
+  color: var(--sf-ink-3);
 }
 
 /* cart foot */
 .sp-storefront .sf-cart-foot {
   border-top: 1px solid var(--sf-line);
-  padding: 13px 16px 16px;
+  padding: 12px 18px 16px;
   display: flex;
   flex-direction: column;
-  gap: 11px;
-  background: color-mix(in oklab, var(--sf-bg-sunk) 40%, transparent);
+  gap: 10px;
 }
 .sp-storefront .sf-tot {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--sf-ink-3);
 }
 .sp-storefront .sf-tot .v {
   font-family: var(--sf-font-mono);
   color: var(--sf-ink);
-  font-size: 12px;
+  font-size: 13.5px;
+  font-weight: 500;
 }
 .sp-storefront .sf-submit {
-  height: 42px;
+  height: 36px;
   width: 100%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  border-radius: 11px;
-  background: var(--sf-accent);
-  color: var(--sf-on-accent);
-  font-size: 13.5px;
-  font-weight: 650;
-  letter-spacing: -0.005em;
-  transition: all 0.15s;
-  box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.12) inset,
-    0 6px 16px -8px color-mix(in oklab, var(--sf-accent) 60%, transparent);
+  border-radius: 6px;
+  border: 1px solid var(--sf-btn);
+  background: var(--sf-btn);
+  color: var(--sf-btn-ink);
+  font-size: 13px;
+  font-weight: 500;
+  transition: opacity 0.12s;
 }
 .sp-storefront .sf-submit:hover {
-  filter: brightness(1.06);
-  transform: translateY(-1px);
-}
-.sp-storefront .sf-submit:active {
-  transform: none;
+  opacity: 0.9;
 }
 .sp-storefront .sf-submit[disabled] {
   background: var(--sf-bg-sunk);
   color: var(--sf-ink-4);
-  box-shadow: none;
+  border-color: var(--sf-line);
+  opacity: 1;
   cursor: not-allowed;
-  border: 1px solid var(--sf-line);
-  transform: none;
-  filter: none;
 }
 .sp-storefront .sf-cart-foot .fine {
-  font-size: 11px;
-  color: var(--sf-ink-4);
+  font-size: 12px;
+  color: var(--sf-ink-3);
   text-align: center;
   line-height: 1.5;
 }
@@ -2126,7 +2047,7 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
 .sp-storefront .sf-drawer-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: rgba(0, 0, 0, 0.5);
   z-index: 50;
   animation: sf-fade 0.15s ease;
 }
@@ -2141,13 +2062,14 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
   right: 0;
   bottom: 0;
   width: min(430px, 94vw);
-  background: var(--sf-bg);
+  background: var(--sf-bg-elev);
   border-left: 1px solid var(--sf-line);
+  border-radius: 8px 0 0 8px;
   z-index: 51;
   display: flex;
   flex-direction: column;
-  animation: sf-slide-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
-  box-shadow: var(--sf-shadow-pop);
+  animation: sf-slide-in 0.2s ease-out;
+  box-shadow: var(--sf-shadow-dialog);
 }
 @keyframes sf-slide-in {
   from {
@@ -2156,7 +2078,7 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
   }
 }
 .sp-storefront .sf-drawer-head {
-  padding: 16px 22px;
+  padding: 14px 18px;
   border-bottom: 1px solid var(--sf-line);
   display: flex;
   align-items: center;
@@ -2165,10 +2087,10 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
 .sp-storefront .sf-drawer-body {
   flex: 1;
   overflow-y: auto;
-  padding: 22px;
+  padding: 18px;
 }
 .sp-storefront .sf-drawer-foot {
-  padding: 14px 22px;
+  padding: 14px 18px;
   border-top: 1px solid var(--sf-line);
   background: var(--sf-bg-elev);
 }
@@ -2176,32 +2098,34 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  color: var(--sf-ink-4);
+  color: var(--sf-ink-3);
   font-weight: 500;
   margin-bottom: 2px;
 }
 .sp-storefront .sf-drawer-title {
   font-family: var(--sf-font-display);
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 500;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.015em;
 }
 .sp-storefront .sf-icon-btn {
-  height: 30px;
-  width: 30px;
+  height: 32px;
+  width: 32px;
   display: grid;
   place-items: center;
   border-radius: 6px;
-  color: var(--sf-ink-3);
-  transition: background 0.1s, color 0.1s;
+  color: var(--sf-ink-2);
+  transition:
+    background-color 0.12s,
+    color 0.12s;
   flex-shrink: 0;
 }
 .sp-storefront .sf-icon-btn:hover {
-  background: var(--sf-bg-sunk);
+  background: var(--sf-hover);
   color: var(--sf-ink);
 }
 .sp-storefront .sf-qv-photo {
-  border-radius: 12px;
+  border-radius: 8px;
   overflow: hidden;
   position: relative;
   aspect-ratio: 4 / 3;
@@ -2219,23 +2143,23 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 1px;
-  background: var(--sf-line-2);
-  border: 1px solid var(--sf-line-2);
-  border-radius: 10px;
+  background: var(--sf-line);
+  border: 1px solid var(--sf-line);
+  border-radius: 8px;
   overflow: hidden;
   margin: 16px 0;
 }
 .sp-storefront .sf-spec > div {
   background: var(--sf-bg-elev);
-  padding: 10px 13px;
+  padding: 9px 14px;
 }
 .sp-storefront .sf-spec .k {
-  font-size: 10px;
-  letter-spacing: 0.08em;
+  font-size: 11px;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--sf-ink-4);
+  color: var(--sf-ink-3);
   font-weight: 500;
-  margin-bottom: 3px;
+  margin-bottom: 2px;
 }
 .sp-storefront .sf-spec .v {
   font-size: 12.5px;
@@ -2254,9 +2178,7 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
   position: fixed;
   inset: 0;
   z-index: 90;
-  background: rgba(4, 5, 4, 0.6);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
+  background: rgba(0, 0, 0, 0.5);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2267,16 +2189,16 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
   width: min(720px, 100%);
   max-height: min(84vh, 760px);
   background: var(--sf-bg-elev);
-  border: 1px solid var(--sf-line-strong);
-  border-radius: 16px;
-  box-shadow: var(--sf-shadow-pop);
+  border: 1px solid var(--sf-line);
+  border-radius: 8px;
+  box-shadow: var(--sf-shadow-dialog);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  animation: sf-pop-in 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+  animation: sf-pop-in 0.16s ease-out;
 }
 .sp-storefront .sf-modal-head {
-  padding: 18px 22px 14px;
+  padding: 14px 18px;
   border-bottom: 1px solid var(--sf-line);
   display: flex;
   align-items: center;
@@ -2284,14 +2206,14 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
 }
 .sp-storefront .sf-modal-head h3 {
   font-family: var(--sf-font-display);
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 500;
   margin: 0;
   letter-spacing: -0.015em;
 }
 .sp-storefront .sf-modal-head .sub {
-  font-size: 12px;
-  color: var(--sf-ink-4);
+  font-size: 12.5px;
+  color: var(--sf-ink-3);
 }
 .sp-storefront .sf-modal-head .x {
   margin-left: auto;
@@ -2300,33 +2222,33 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 18px 22px;
+  padding: 18px;
 }
 .sp-storefront .sf-rev-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 1px;
-  background: var(--sf-line-2);
-  border: 1px solid var(--sf-line-2);
-  border-radius: 11px;
+  background: var(--sf-line);
+  border: 1px solid var(--sf-line);
+  border-radius: 8px;
   overflow: hidden;
   margin-bottom: 16px;
 }
 .sp-storefront .sf-rev-grid > div {
-  background: var(--sf-bg);
-  padding: 11px 14px;
+  background: var(--sf-bg-elev);
+  padding: 10px 14px;
   min-width: 0;
 }
 .sp-storefront .sf-rev-grid .k {
-  font-size: 10px;
-  letter-spacing: 0.08em;
+  font-size: 11px;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--sf-ink-4);
+  color: var(--sf-ink-3);
   font-weight: 500;
-  margin-bottom: 3px;
+  margin-bottom: 2px;
 }
 .sp-storefront .sf-rev-grid .v {
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 500;
   color: var(--sf-ink);
   overflow: hidden;
@@ -2336,10 +2258,10 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
 .sp-storefront .sf-rev-line {
   display: grid;
   grid-template-columns: 36px 1fr auto;
-  gap: 10px;
+  gap: 12px;
   align-items: center;
   padding: 8px 0;
-  border-bottom: 1px solid var(--sf-line-2);
+  border-bottom: 1px solid var(--sf-line);
 }
 .sp-storefront .sf-rev-line:last-child {
   border-bottom: none;
@@ -2347,10 +2269,10 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
 .sp-storefront .sf-rev-line .th {
   width: 36px;
   height: 36px;
-  border-radius: 8px;
+  border-radius: 6px;
   overflow: hidden;
   position: relative;
-  border: 1px solid var(--sf-line-2);
+  border: 1px solid var(--sf-line);
 }
 .sp-storefront .sf-rev-line .th .sf-ph {
   position: absolute;
@@ -2361,34 +2283,36 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
   font-size: 15px;
 }
 .sp-storefront .sf-rev-line .nm {
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 500;
 }
 .sp-storefront .sf-rev-line .sk2 {
   font-family: var(--sf-font-mono);
-  font-size: 10px;
-  color: var(--sf-ink-4);
+  font-size: 11.5px;
+  color: var(--sf-ink-3);
 }
 .sp-storefront .sf-rev-line .q {
   font-family: var(--sf-font-mono);
-  font-size: 12px;
+  font-size: 13.5px;
+  font-weight: 500;
   color: var(--sf-ink);
 }
 .sp-storefront .sf-rev-notes {
   margin-top: 14px;
-  padding: 11px 14px;
-  border: 1px dashed var(--sf-line-strong);
-  border-radius: 10px;
-  font-size: 12.5px;
+  padding: 10px 14px;
+  border: 1px solid var(--sf-line);
+  border-radius: 8px;
+  background: var(--sf-bg-sunk);
+  font-size: 13px;
   color: var(--sf-ink-2);
   line-height: 1.55;
   white-space: pre-wrap;
 }
 .sp-storefront .sf-rev-notes .k {
-  font-size: 10px;
-  letter-spacing: 0.08em;
+  font-size: 11px;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--sf-ink-4);
+  color: var(--sf-ink-3);
   font-weight: 500;
   margin-bottom: 4px;
 }
@@ -2396,12 +2320,12 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
    alone: each block carries its words (and the alert an icon). */
 .sp-storefront .sf-rev-alert {
   margin-top: 14px;
-  padding: 11px 14px;
+  padding: 10px 14px;
   border: 1px solid var(--sf-crit);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--sf-crit-wash);
   color: var(--sf-crit-text);
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.55;
   display: flex;
   gap: 8px;
@@ -2413,10 +2337,10 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
 }
 .sp-storefront .sf-rev-notice {
   margin-top: 14px;
-  padding: 11px 14px;
+  padding: 10px 14px;
   border: 1px solid var(--sf-line-strong);
-  border-radius: 10px;
-  font-size: 12.5px;
+  border-radius: 8px;
+  font-size: 13px;
   color: var(--sf-ink-2);
   line-height: 1.55;
 }
@@ -2424,10 +2348,10 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
   margin-top: 14px;
   padding: 12px 14px;
   border: 1px solid var(--sf-warn);
-  border-radius: 10px;
-  background: color-mix(in oklab, var(--sf-warn) 12%, transparent);
+  border-radius: 8px;
+  background: var(--sf-warn-wash);
   color: var(--sf-ink-2);
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.55;
 }
 .sp-storefront .sf-rev-unconfirmed .k {
@@ -2442,65 +2366,73 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 16px;
+  padding: 8px 18px;
   border-bottom: 1px solid var(--sf-line);
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--sf-ink-2);
 }
 .sp-storefront .sf-cart-confirm span {
   flex: 1;
 }
 .sp-storefront .sf-modal-foot {
-  padding: 14px 22px;
+  padding: 14px 18px;
   border-top: 1px solid var(--sf-line);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  background: color-mix(in oklab, var(--sf-bg-sunk) 40%, transparent);
+  gap: 8px;
+  background: var(--sf-bg-elev);
 }
 .sp-storefront .sf-modal-foot .grow2 {
   flex: 1;
-  font-size: 11.5px;
-  color: var(--sf-ink-4);
+  font-size: 12.5px;
+  color: var(--sf-ink-3);
 }
 .sp-storefront .sf-btn-ghost {
-  height: 36px;
-  padding: 0 16px;
-  border-radius: 9px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 6px;
   border: 1px solid var(--sf-line-strong);
-  font-size: 12.5px;
+  background: var(--sf-bg-elev);
+  font-size: 13px;
   font-weight: 500;
-  color: var(--sf-ink-2);
+  color: var(--sf-ink);
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+  text-decoration: none;
+  transition: background-color 0.12s;
 }
 .sp-storefront .sf-btn-ghost:hover {
-  color: var(--sf-ink);
-  background: var(--sf-bg-sunk);
+  background: var(--sf-hover);
 }
 .sp-storefront .sf-btn-ghost[disabled] {
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 .sp-storefront .sf-btn-go {
-  height: 36px;
-  padding: 0 18px;
-  border-radius: 9px;
-  background: var(--sf-accent);
-  color: var(--sf-on-accent);
-  font-size: 12.5px;
-  font-weight: 650;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 6px;
+  border: 1px solid var(--sf-btn);
+  background: var(--sf-btn);
+  color: var(--sf-btn-ink);
+  font-size: 13px;
+  font-weight: 500;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+  transition: opacity 0.12s;
 }
 .sp-storefront .sf-btn-go:hover {
-  filter: brightness(1.06);
+  opacity: 0.9;
 }
 .sp-storefront .sf-btn-go[disabled] {
-  filter: none;
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
@@ -2510,16 +2442,15 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
   text-align: center;
 }
 .sp-storefront .sf-success .ok {
-  width: 68px;
-  height: 68px;
-  margin: 0 auto 18px;
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 16px;
   border-radius: 50%;
-  background: color-mix(in oklab, var(--sf-accent) 15%, var(--sf-bg));
-  border: 1px solid color-mix(in oklab, var(--sf-accent) 50%, var(--sf-line));
+  background: var(--sf-accent-wash);
   color: var(--sf-accent);
   display: grid;
   place-items: center;
-  animation: sf-ok-in 0.4s cubic-bezier(0.2, 0.9, 0.3, 1.4);
+  animation: sf-ok-in 0.3s ease-out;
 }
 @keyframes sf-ok-in {
   from {
@@ -2536,12 +2467,12 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
 }
 .sp-storefront .sf-success .ref {
   font-family: var(--sf-font-mono);
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--sf-ink-3);
   margin-bottom: 10px;
 }
 .sp-storefront .sf-success p {
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--sf-ink-3);
   line-height: 1.6;
   max-width: 380px;
@@ -2570,7 +2501,7 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
   position: relative;
   overflow: hidden;
   background: var(--sf-bg-sunk);
-  border-radius: 8px;
+  border-radius: 6px;
 }
 .sp-storefront .sf-sk::after {
   content: '';
@@ -2591,15 +2522,15 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
   }
 }
 .sp-storefront .sf-sk-card {
-  background: var(--sf-bg-elev);
+  background: var(--sf-bg);
   border: 1px solid var(--sf-line);
-  border-radius: 12px;
+  border-radius: 8px;
   overflow: hidden;
 }
 .sp-storefront .sf-sk-card .ph {
   aspect-ratio: 4 / 3;
   border-radius: 0;
-  border-bottom: 1px solid var(--sf-line-2);
+  border-bottom: 1px solid var(--sf-line);
 }
 .sp-storefront .sf-sk-card.feat {
   flex: 0 0 186px;
@@ -2610,7 +2541,7 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
   height: 112px;
 }
 .sp-storefront .sf-sk-card .bd {
-  padding: 12px 13px 14px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -2620,19 +2551,19 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
 .sp-storefront .sf-fab {
   display: none;
   position: fixed;
-  right: 22px;
+  right: 16px;
   bottom: 22px;
   z-index: 40;
-  height: 46px;
-  padding: 0 20px;
+  height: 44px;
+  padding: 0 18px;
   border-radius: 999px;
-  background: var(--sf-accent);
-  color: var(--sf-on-accent);
+  background: var(--sf-btn);
+  color: var(--sf-btn-ink);
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 500;
   align-items: center;
-  gap: 9px;
-  box-shadow: 0 12px 28px -8px rgba(0, 0, 0, 0.5);
+  gap: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
 }
 @media (max-width: 1280px) {
   .sp-storefront .sf-fab[data-show='true'] {
@@ -2684,8 +2615,8 @@ html[data-sp-update-card] .sp-storefront .sf-fab {
 /* Needed-by deadline field (cart rail) — approval auto-creates a Schedule
    event + reminders from this value (mig 0255). */
 .sp-storefront .sf-needed-by {
-  padding: 10px 14px;
-  border-top: 1px solid var(--sf-line-2);
+  padding: 12px 18px;
+  border-top: 1px solid var(--sf-line);
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -2694,14 +2625,15 @@ html[data-sp-update-card] .sp-storefront .sf-fab {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-family: var(--sf-font-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.04em;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--sf-ink-3);
 }
 .sp-storefront .sf-needed-by label .opt {
-  color: var(--sf-ink-5);
+  color: var(--sf-ink-3);
+  font-weight: 400;
   text-transform: none;
   letter-spacing: 0;
 }
@@ -2709,16 +2641,16 @@ html[data-sp-update-card] .sp-storefront .sf-fab {
   height: 32px;
   padding: 0 10px;
   border: 1px solid var(--sf-line-strong);
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--sf-bg-elev);
   color: var(--sf-ink);
-  font-size: 12.5px;
+  font-size: 13px;
   color-scheme: light dark;
 }
 .sp-storefront .sf-needed-by .hint {
   margin: 0;
-  font-size: 11px;
-  color: var(--sf-ink-4);
+  font-size: 12px;
+  color: var(--sf-ink-3);
 }
 
 /* Delivery-request assistant: the popup-blocked fallback panel. Lives inside
@@ -2728,7 +2660,7 @@ html[data-sp-update-card] .sp-storefront .sf-fab {
   flex-basis: 100%;
   margin-top: 10px;
   padding: 10px 12px;
-  border: 1px solid var(--sf-line, rgba(0, 0, 0, 0.12));
+  border: 1px solid var(--sf-line);
   border-radius: 8px;
   text-align: left;
   font-size: 13px;
@@ -2743,11 +2675,12 @@ html[data-sp-update-card] .sp-storefront .sf-fab {
   width: 100%;
   margin-top: 8px;
   padding: 8px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--sf-font-mono);
   font-size: 12px;
   line-height: 1.45;
-  border: 1px solid var(--sf-line, rgba(0, 0, 0, 0.12));
+  border: 1px solid var(--sf-line-strong);
   border-radius: 6px;
+  background: var(--sf-bg-elev);
   resize: vertical;
 }
 
@@ -2765,9 +2698,9 @@ html[data-sp-update-card] .sp-storefront .sf-fab {
 
 .sf-recip-h {
   font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  opacity: 0.7;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: hsl(var(--muted-foreground));
   margin-bottom: 6px;
 }
 
@@ -2784,20 +2717,20 @@ html[data-sp-update-card] .sp-storefront .sf-fab {
 }
 
 .sf-recip dt {
-  font-weight: 600;
-  opacity: 0.75;
+  font-weight: 500;
+  color: hsl(var(--muted-foreground));
 }
 
 .sf-recip dd {
   margin: 0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono, ui-monospace, monospace);
 }
 
 .sf-recip-note {
   margin: 8px 0 0;
-  font-size: 12px;
+  font-size: 12.5px;
   line-height: 1.5;
-  opacity: 0.8;
+  color: hsl(var(--muted-foreground));
 }
 
 /* Delivery-request assistant notices. There is no ui/alert.tsx in this repo
@@ -2806,16 +2739,216 @@ html[data-sp-update-card] .sp-storefront .sf-fab {
 .sf-note {
   flex-basis: 100%;
   margin: 8px 0 0;
-  font-size: 12px;
+  font-size: 12.5px;
   line-height: 1.5;
   text-align: left;
-  opacity: 0.85;
+  color: hsl(var(--muted-foreground));
 }
 
 .sf-note-warn {
   padding: 8px 10px;
-  border: 1px solid rgba(180, 83, 9, 0.4);
-  background: rgba(180, 83, 9, 0.08);
+  border: 1px solid hsl(var(--warning) / 0.4);
+  background: hsl(var(--warning-wash));
+  color: hsl(var(--foreground));
   border-radius: 6px;
-  opacity: 1;
+}
+
+/* ---- Narrow screens (redesign 2026-10, P4.B2) ------------------------
+   Below 1024 px the setup bar's four cells sit two by two, and below
+   640 px one per line; before, the bar kept four squeezed columns and at
+   390 px drew its labels on top of each other, the head wrapped a word
+   per line and the toolbar ran off the right edge. Below 640 px the page
+   keeps the shell's 16 px gutter, every control the finger uses is 44 px
+   tall (the shared rule for filter triggers, chips and segmented tabs),
+   and text boxes are 16 px so iOS does not zoom into them. The cells are
+   always four (Ship from, For, Pickup or delivery, Pick up at or Deliver
+   to). */
+@media (max-width: 1023.98px) {
+  .sp-storefront .sf-setup {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+  .sp-storefront .sf-setup > .sf-setup-cell,
+  .sp-storefront .sf-setup > .sf-seg-wrap {
+    border-left: 0;
+    border-radius: 0;
+  }
+  .sp-storefront .sf-setup > :nth-child(even) {
+    border-left: 1px solid var(--sf-line);
+  }
+  .sp-storefront .sf-setup > :nth-child(n + 3) {
+    border-top: 1px solid var(--sf-line);
+  }
+  .sp-storefront .sf-setup > :first-child {
+    border-radius: 8px 0 0 0;
+  }
+  .sp-storefront .sf-setup > :nth-child(2) {
+    border-radius: 0 8px 0 0;
+  }
+}
+@media (max-width: 639.98px) {
+  .sp-storefront .sf-page {
+    padding: 24px 16px 90px;
+  }
+  .sp-storefront .sf-setup {
+    grid-template-columns: 1fr;
+  }
+  .sp-storefront .sf-setup > :nth-child(even) {
+    border-left: 0;
+  }
+  .sp-storefront .sf-setup > :nth-child(n + 2) {
+    border-top: 1px solid var(--sf-line);
+  }
+  .sp-storefront .sf-setup > :first-child {
+    border-radius: 8px 8px 0 0;
+  }
+  .sp-storefront .sf-setup > :nth-child(2) {
+    border-radius: 0;
+  }
+  .sp-storefront .sf-setup-cell,
+  .sp-storefront .sf-seg-wrap {
+    min-height: 56px;
+    padding: 10px 16px;
+  }
+  .sp-storefront .sf-seg-wrap > div {
+    flex: 1;
+  }
+  .sp-storefront .sf-seg {
+    display: flex;
+  }
+  .sp-storefront .sf-seg button {
+    flex: 1;
+    height: 38px;
+  }
+  .sp-storefront .sf-flow-sep {
+    width: 12px;
+    margin: 0 6px;
+  }
+  .sp-storefront .sf-tools {
+    flex-wrap: wrap;
+  }
+  .sp-storefront .sf-search {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+  .sp-storefront .sf-search input,
+  .sp-storefront .sf-pop .srch input,
+  .sp-storefront .sf-pop .plain-input,
+  .sp-storefront .sf-notes textarea,
+  .sp-storefront .sf-needed-by input {
+    font-size: 16px;
+  }
+  .sp-storefront .sf-search input,
+  .sp-storefront .sf-pop .plain-input,
+  .sp-storefront .sf-needed-by input,
+  .sp-storefront .sf-tool-btn,
+  .sp-storefront .sf-pill,
+  .sp-storefront .sf-chip,
+  .sp-storefront .sf-add,
+  .sp-storefront .sf-step,
+  .sp-storefront .sf-btn-ghost,
+  .sp-storefront .sf-btn-go,
+  .sp-storefront .sf-submit,
+  .sp-storefront .sf-opt {
+    min-height: 44px;
+  }
+  .sp-storefront .sf-step {
+    grid-template-columns: 44px 1fr 44px;
+  }
+  .sp-storefront .sf-step.mini {
+    min-height: 0;
+    height: 36px;
+    grid-template-columns: 36px 1fr 36px;
+  }
+  .sp-storefront .sf-add-mini,
+  .sp-storefront .sf-arrows button,
+  .sp-storefront .sf-cat-sec .fold,
+  .sp-storefront .sf-icon-btn,
+  .sp-storefront .sf-line .rm,
+  .sp-storefront .sf-qv,
+  .sp-storefront .sf-search .clear {
+    min-width: 36px;
+    min-height: 36px;
+  }
+  .sp-storefront .sf-chip button {
+    width: 32px;
+    height: 32px;
+  }
+  .sp-storefront .sf-viewseg button {
+    width: 40px;
+    height: 38px;
+  }
+  .sp-storefront .sf-tool-btn,
+  .sp-storefront .sf-viewseg {
+    flex: 0 0 auto;
+  }
+  .sp-storefront .sf-tools > .sf-popwrap {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .sp-storefront .sf-tools > .sf-popwrap > .sf-tool-btn {
+    width: 100%;
+    justify-content: center;
+  }
+  .sp-storefront .sf-feat .sf-sec-head {
+    flex-wrap: wrap;
+  }
+  .sp-storefront .sf-feat .sf-sec-head .sub {
+    order: 5;
+    flex-basis: 100%;
+  }
+  /* The compact row: photo, name and control on the first line, the
+     availability under the name (category is already hidden below 1100). */
+  .sp-storefront .sf-row {
+    grid-template-columns: 46px minmax(0, 1fr) auto;
+    padding: 8px 12px;
+    row-gap: 4px;
+  }
+  .sp-storefront .sf-row > .th {
+    grid-row: span 2;
+  }
+  .sp-storefront .sf-row > .avl {
+    grid-column: 2;
+    grid-row: 2;
+  }
+  .sp-storefront .sf-row > :last-child {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+  }
+  .sp-storefront .sf-modal-bk {
+    padding: 12px;
+  }
+  .sp-storefront .sf-rev-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .sp-storefront .sf-success {
+    padding: 32px 16px 28px;
+  }
+  .sp-storefront .sf-pop {
+    min-width: min(264px, calc(100vw - 48px));
+    max-width: calc(100vw - 32px);
+  }
+}
+
+/* Hover-only controls (the quick view eye, a cart line's remove) are always
+   shown where there is no hover, so a finger can find them. */
+@media (hover: none) {
+  .sp-storefront .sf-qv,
+  .sp-storefront .sf-line .rm {
+    opacity: 1;
+  }
+}
+
+/* Motion is kept to colour changes for anyone who asks for less. */
+@media (prefers-reduced-motion: reduce) {
+  .sp-storefront .sf-pop,
+  .sp-storefront .sf-drawer,
+  .sp-storefront .sf-drawer-backdrop,
+  .sp-storefront .sf-modal,
+  .sp-storefront .sf-modal-bk,
+  .sp-storefront .sf-success .ok,
+  .sp-storefront .sf-cart-head .cnt.pulse,
+  .sp-storefront .sf-sk::after {
+    animation: none;
+  }
 }

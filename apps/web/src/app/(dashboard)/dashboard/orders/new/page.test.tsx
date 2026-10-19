@@ -1,4 +1,4 @@
-import { render } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -99,5 +99,28 @@ describe('New order page: the Orders module gate (L96)', () => {
 
     expect(m.notEnabledProps).not.toHaveBeenCalled();
     expect(m.storefrontProps).toHaveBeenCalledWith(expect.objectContaining({ warehouseId: 'wh-1' }));
+  });
+});
+
+describe('New order page: no active warehouses (redesign P4.B2)', () => {
+  it('keeps its words, the back link and the h1 in the shared page header and empty state, and reads no catalog', async () => {
+    m.checkModuleAccess.mockResolvedValue({ enabled: true, canManage: false });
+    m.getWarehousesForRequest.mockResolvedValue([]);
+
+    const { container } = render(await callPage());
+
+    expect(screen.getAllByRole('heading', { level: 1 }).map((h) => h.textContent)).toEqual([
+      'Place an order',
+    ]);
+    expect(screen.getByRole('link', { name: '← Back to orders' }).getAttribute('href')).toBe(
+      '/dashboard/orders',
+    );
+    const panel = container.querySelector('[data-slot="state-panel"]');
+    expect(panel?.getAttribute('data-state-kind')).toBe('empty');
+    expect(panel?.textContent).toBe(
+      'No active warehouses are configured.Ask an admin to add one before placing an order request.',
+    );
+    expect(m.storefrontProps).not.toHaveBeenCalled();
+    expect(m.loadCatalogBundle).not.toHaveBeenCalled();
   });
 });
