@@ -38,6 +38,13 @@ vi.mock('@/lib/modules/module-gate', () => ({
 }));
 
 vi.mock('@/components/onboarding/page-tour', () => ({ PageTour: () => null }));
+// The tiles are IntentLinks (real anchors warmed on intent), which read the
+// router; the hub never prefetches them on sight.
+const prefetch = vi.hoisted(() => vi.fn());
+vi.mock('next/navigation', () => ({
+  usePathname: () => '/dashboard/settings',
+  useRouter: () => ({ prefetch, push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
+}));
 vi.mock('@/lib/onboarding/tours', () => ({ SETTINGS_TOUR: {} }));
 
 import SettingsPage from './page';
@@ -66,10 +73,12 @@ describe('Maintenance requests hub tile', () => {
     render(await SettingsPage());
     const link = screen.getByRole('link', { name: /Maintenance requests/ });
     expect(link).toHaveAttribute('href', '/dashboard/settings/maintenance');
-    expect(screen.getByText('Categories, notification audiences, and photo link settings.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Categories, notification audiences, and photo link settings.'),
+    ).toBeInTheDocument();
   });
 
-  it('is visible to an admin who holds an explicit configure override (Andrew\'s real grant path, in reverse)', async () => {
+  it("is visible to an admin who holds an explicit configure override (Andrew's real grant path, in reverse)", async () => {
     setCtx('admin', [
       'maintenance_requests:submit',
       'maintenance_requests:read_all',
@@ -104,5 +113,61 @@ describe('Email routing hub tile (per-org email routing, migration 0337)', () =>
     moduleAccess.current = { enabled: false, canManage: false };
     render(await SettingsPage());
     expect(screen.getByRole('link', { name: /Email routing/ })).toBeInTheDocument();
+  });
+});
+
+// The redesign groups the hub (W-ST-01). The visibility matrix stays the
+// tiles' own (owner decision O3: unchanged); these pin it per role and pin
+// that every tile is still a real link the Settings tour can target.
+describe('grouped hub (redesign W-ST-01)', () => {
+  const linkHrefs = () => screen.getAllByRole('link').map((a) => a.getAttribute('href'));
+
+  it('shows a staff member the five base destinations in Account, Workspace and Access', async () => {
+    setCtx('staff');
+    render(await SettingsPage());
+    expect(new Set(linkHrefs())).toEqual(
+      new Set([
+        '/dashboard/settings/profile',
+        '/dashboard/settings/security',
+        '/dashboard/settings/notifications',
+        '/dashboard/settings/organization',
+        '/dashboard/settings/roles',
+      ]),
+    );
+    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
+      'Account',
+      'Workspace',
+      'Access',
+    ]);
+  });
+
+  it('adds Public requests and the Audit log for a manager, and nothing else', async () => {
+    setCtx('manager');
+    render(await SettingsPage());
+    expect(linkHrefs()).toHaveLength(7);
+    expect(linkHrefs()).toEqual(
+      expect.arrayContaining(['/dashboard/settings/public-requests', '/dashboard/audit']),
+    );
+  });
+
+  it('shows the owner all 21 destinations once each, as plain anchors that are never prefetched on sight', async () => {
+    render(await SettingsPage());
+    const hrefs = linkHrefs();
+    expect(hrefs).toHaveLength(21);
+    expect(new Set(hrefs).size).toBe(21);
+    for (const tour of ['navigation', 'modules', 'roles', 'order-statuses']) {
+      expect(document.querySelector(`a[href="/dashboard/settings/${tour}"]`)).not.toBeNull();
+    }
+    expect(prefetch).not.toHaveBeenCalled();
+  });
+
+  it('keeps the one page heading and the tile words', async () => {
+    render(await SettingsPage());
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Settings');
+    expect(screen.getByText('Manage your workspace and account.')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /^Billing/ })).toHaveTextContent(
+      'Plan, invoices, payment method.',
+    );
   });
 });
