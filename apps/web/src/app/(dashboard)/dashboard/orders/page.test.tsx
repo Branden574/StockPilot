@@ -1,8 +1,11 @@
 import { render, within } from '@testing-library/react';
 import type * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { DELETED_REQUESTER_LABEL } from '@stockpilot/core';
 
 import { OrderStatusConfigProvider } from '@/components/orders/order-status-config-provider';
+import { summaryRequesterLabel } from '@/components/orders/requester-label';
+import type { OrderRequestSummary } from '@/server/services/order-requests';
 
 /**
  * The Orders list in the redesign (P3.5, DESIGN-SPEC 7.6, CONFLICTS R1-R6):
@@ -337,6 +340,67 @@ describe('Orders page: the table keeps every column', () => {
     expect(cells[8]).toHaveTextContent('Leo Fairbanks');
     expect(cells[9]).toHaveTextContent('2 hours ago');
     expect(cells[10]).toHaveTextContent('5 minutes ago');
+  });
+
+  it('draws the requester as the name over the organisation, while the link keeps the label as its words and name', async () => {
+    const rows = [
+      row({ requesterName: 'Tomas Reyes', requesterOrgLabel: 'Ridge PTA' }),
+      row({ requesterName: 'Pat Lee', requesterOrgLabel: null }),
+      row({
+        requesterName: null,
+        requesterOrgLabel: 'Ridge PTA',
+        requesterEmail: 'sam@example.com',
+      }),
+      row({ requesterName: null, requesterEmail: null, requesterUserId: 'u-7' }),
+      row({
+        requesterName: null,
+        requesterEmail: null,
+        requesterUserId: null,
+        requesterDeleted: true,
+      }),
+      row({
+        requesterName: null,
+        requesterEmail: null,
+        requesterUserId: null,
+        source: 'public_link',
+      }),
+    ];
+    m.list.mockResolvedValue(rows);
+    const view = await renderPage({ status: 'all_active' });
+    const bodyRows = view.getAllByRole('row').slice(1);
+    expect(bodyRows).toHaveLength(rows.length);
+
+    const links = bodyRows.map((tr) =>
+      within(within(tr).getAllByRole('cell')[1]!).getByRole('link'),
+    );
+    // The words of every link are summaryRequesterLabel's, branch by branch.
+    expect(links.map((a) => a.textContent)).toEqual([
+      'Tomas Reyes · Ridge PTA',
+      'Pat Lee',
+      'sam@example.com',
+      'Team member',
+      DELETED_REQUESTER_LABEL,
+      'External requester',
+    ]);
+    rows.forEach((r, i) => {
+      expect(links[i]!.textContent).toBe(
+        summaryRequesterLabel(r as unknown as OrderRequestSummary),
+      );
+    });
+    expect(links[0]).toHaveAccessibleName('Tomas Reyes · Ridge PTA');
+
+    // Name and organisation are two lines; only the separator is hidden, and
+    // only from sight.
+    const [name, separator, org] = Array.from(links[0]!.children);
+    expect(name).toHaveTextContent(/^Tomas Reyes$/);
+    expect(separator).toHaveClass('sr-only');
+    expect(separator!.textContent).toBe(' · ');
+    expect(org).toHaveTextContent(/^Ridge PTA$/);
+    // Every other label is the one line it was.
+    for (const a of links.slice(1)) expect(a.children).toHaveLength(0);
+    // The Public badge sits beside the requester, outside the link.
+    const publicCell = within(bodyRows[5]!).getAllByRole('cell')[1]!;
+    expect(within(publicCell).getByText('Public').closest('a')).toBeNull();
   });
 
   it('shows the driver only on a delivery, a dash where nobody is assigned, and no Public badge on an internal order', async () => {

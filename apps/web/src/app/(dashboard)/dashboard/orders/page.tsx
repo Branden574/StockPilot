@@ -241,11 +241,12 @@ export default async function OrdersPage({
           />
         )
       ) : (
-        // The table card (DESIGN-SPEC 6.9): every column kept, the table
-        // scrolling sideways inside the card (never the page) when the
-        // content area is narrower than the columns.
+        // The table card (DESIGN-SPEC 6.9): every column kept, the table at
+        // least 860 px wide (the reference's Orders minimum) and scrolling
+        // sideways inside the card, never the page, when the content area is
+        // narrower than its columns.
         <div className="border-border bg-card overflow-hidden rounded-lg border">
-          <Table>
+          <Table className="min-w-[860px]">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead className="whitespace-nowrap">Order #</TableHead>
@@ -273,14 +274,18 @@ export default async function OrdersPage({
                     </Link>
                   </TableCell>
                   <TableCell>
-                    <div className="flex min-w-40 flex-wrap items-center gap-x-2 gap-y-1">
+                    <div className="flex min-w-44 items-start gap-2">
                       <Link
                         href={`/dashboard/orders/${r.id}`}
-                        className="text-foreground font-medium underline-offset-2 hover:underline"
+                        className="text-foreground min-w-0 underline-offset-2 hover:underline"
                       >
-                        {summaryRequesterLabel(r)}
+                        <RequesterLabel row={r} />
                       </Link>
-                      {r.source === 'public_link' && <Badge variant="outline">Public</Badge>}
+                      {r.source === 'public_link' && (
+                        <Badge variant="outline" className="shrink-0">
+                          Public
+                        </Badge>
+                      )}
                     </div>
                   </TableCell>
                   <TableCell className="text-ink-2">{r.warehouseName ?? '—'}</TableCell>
@@ -344,6 +349,28 @@ export default async function OrdersPage({
       )}
       {!showTable && pager}
     </div>
+  );
+}
+
+/**
+ * The requester as the reference draws it (DESIGN-SPEC 7.6): the name, then
+ * the requester's organisation on a quieter 12 px line. The words are
+ * summaryRequesterLabel's own, so the row link's text and name stay exactly
+ * the label ("Pat Lee · Ridge PTA"): the separator is kept for screen readers
+ * and copying, and only the line break is visual. Any other label (an email,
+ * "Team member", a deleted or external requester) is one line, as before.
+ */
+function RequesterLabel({ row }: { row: OrderRequestSummary }) {
+  const label = summaryRequesterLabel(row);
+  const name = row.requesterName;
+  const org = row.requesterOrgLabel;
+  if (!name || !org || label !== `${name} · ${org}`) return <>{label}</>;
+  return (
+    <>
+      <span className="block">{name}</span>
+      <span className="sr-only"> · </span>
+      <span className="text-muted-foreground block text-[12px] leading-[18px]">{org}</span>
+    </>
   );
 }
 
