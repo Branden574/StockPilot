@@ -1,6 +1,7 @@
 import { render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { MovementsBreakdownWidget } from './movements-breakdown';
 import { NeedsAttentionWidget } from './needs-attention';
 import { RecentActivityWidget } from './recent-activity';
 import { ShiftCommandWidget } from './shift-command';
@@ -377,6 +378,31 @@ describe("Recent activity: today's activity", () => {
     expect(
       screen.getByText('No movements yet. Adjust stock from any item to see entries here.'),
     ).toBeInTheDocument();
+  });
+});
+
+describe('Movements breakdown', () => {
+  it('lets a long type wrap only after its underscore, keeping the label whole', () => {
+    render(
+      <MovementsBreakdownWidget
+        {...makeProps({
+          barValues: [1, 2, 3],
+          breakdownRows: [
+            { label: 'Bundle_assembly', share: 0.5, val: 10 },
+            { label: 'Receive', share: 0.5, val: 10 },
+          ],
+        })}
+      />,
+    );
+    const label = screen.getByText('Bundle_assembly');
+    expect(label.textContent).toBe('Bundle_assembly');
+    // The only break opportunity sits right after the underscore.
+    const wbrs = label.querySelectorAll('wbr');
+    expect(wbrs).toHaveLength(1);
+    expect(wbrs[0]!.previousSibling?.textContent).toBe('_');
+    expect(label.innerHTML).toBe('Bundle_<wbr>assembly');
+    expect(label.className).not.toContain('overflow-wrap:anywhere');
+    expect(screen.getByText('Receive').querySelector('wbr')).toBeNull();
   });
 });
 
