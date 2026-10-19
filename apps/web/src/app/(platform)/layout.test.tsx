@@ -7,7 +7,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * never revealed), it draws only its own top bar (no org shell parts), and the
  * top bar WRAPS. At a 390 px viewport the old single row ('flex items-center
  * gap-4', ~578 px) scrolled the whole console sideways (hand-off from P2.1c);
- * the row now wraps and the nav scrolls inside itself. jsdom cannot measure,
+ * the row now wraps, and so does the nav (it used to scroll inside itself,
+ * which cut the Platform admin marker and the focus ring). jsdom cannot measure,
  * so the layout contract is pinned here and the width is measured in the lab
  * (scrollWidth 390 at 390, P5.3 note).
  */
@@ -67,9 +68,13 @@ describe('platform console shell', () => {
     const row = header.querySelector('[data-slot="platform-topbar-row"]')!;
     expect(row.className).toMatch(/\bflex-wrap\b/);
     expect(row.className).toMatch(/\bmin-w-0\b/);
-    // The nav row scrolls inside itself on a phone, never the page.
+    // The nav row wraps on a phone, never the page. Look-only change (P5.3
+    // review): this expected overflow-x-auto while the nav scrolled inside
+    // itself, which cut off the Platform admin marker at 390 and clipped the
+    // links' focus ring; it now wraps and must not scroll.
     const nav = screen.getByRole('navigation', { name: 'Platform' });
-    expect(nav.className).toMatch(/\boverflow-x-auto\b/);
+    expect(nav.className).toMatch(/\bflex-wrap\b/);
+    expect(nav.className).not.toMatch(/\boverflow-x-auto\b/);
     // No blur anywhere in the shell (PLAN 0.6), and no org-shell parts.
     expect(container.innerHTML).not.toMatch(/backdrop-blur/);
     expect(container.querySelector('[data-slot="impersonation-banner"]')).toBeNull();

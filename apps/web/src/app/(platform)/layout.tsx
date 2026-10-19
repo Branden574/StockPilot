@@ -17,9 +17,10 @@ import { cn } from '@/lib/utils';
  * The top bar is the redesign's topbar (56 px, an opaque surface, no blur).
  * It WRAPS instead of overflowing: on a wide screen the mark, the console nav
  * and the operator's email with the way back to the workspace share one row;
- * below `lg` the nav takes a row of its own, and on a phone that row scrolls
- * inside itself, so the page never scrolls sideways (it used to be ~578 px
- * wide at a 390 px viewport) and "My workspace" is always on screen.
+ * below `lg` the nav takes a row of its own, and on a phone that row wraps
+ * too (the "Platform admin" marker drops under the four links), so the page
+ * never scrolls sideways (it used to be ~578 px wide at a 390 px viewport),
+ * nothing in the bar is cut off, and "My workspace" is always on screen.
  */
 export default async function PlatformLayout({ children }: { children: ReactNode }) {
   const session = await requirePlatformAdmin();

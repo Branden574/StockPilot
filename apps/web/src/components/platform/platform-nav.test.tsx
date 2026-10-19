@@ -49,6 +49,27 @@ describe('PlatformNav', () => {
     expect(current()).toEqual([label]);
   });
 
+  it('draws every link focus ring inside its own edge, so no container clips it', () => {
+    render(<PlatformNav />);
+    const links = screen.getAllByRole('link');
+    expect(links).toHaveLength(4);
+    for (const a of links) {
+      expect(a).toHaveClass('focus-visible:ring-inset', 'focus-visible:ring-offset-0');
+    }
+  });
+
+  it('wraps instead of scrolling, so the Platform admin marker is drawn whole', () => {
+    render(<PlatformNav />);
+    const nav = screen.getByRole('navigation', { name: 'Platform' });
+    expect(nav).toHaveClass('flex-wrap');
+    expect(nav).not.toHaveClass('overflow-x-auto');
+    const marker = nav.querySelector('[data-slot="platform-admin-marker"]');
+    expect(marker).not.toBeNull();
+    expect(marker).toHaveTextContent('Platform admin');
+    // On a phone the marker starts its own line under the four links.
+    expect(marker).toHaveClass('max-sm:ml-0');
+  });
+
   it('never lights two destinations, and a lookalike path lights none', () => {
     expect(isPlatformNavActive('/platform/auditors', '/platform/audit')).toBe(false);
     expect(isPlatformNavActive('/platform/audit', '/platform')).toBe(false);
