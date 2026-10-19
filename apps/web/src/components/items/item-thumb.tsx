@@ -2,8 +2,9 @@
 
 import * as React from 'react';
 
+import { MissingPhoto } from '@/components/patterns/missing-photo';
+import { Thumb, type ThumbSize } from '@/components/patterns/thumb';
 import { ImageHoverPreview } from '@/components/ui/image-hover-preview';
-import { cn } from '@/lib/utils';
 
 /**
  * Renders a thumbnail when the item has a primary image, falling back to
@@ -21,13 +22,15 @@ import { cn } from '@/lib/utils';
  * signed URL serves the original upload, not a crop, so the preview is
  * genuinely sharp rather than a stretched 28px frame.
  *
- * Look (DESIGN-SPEC 4 and 6.14): a hairline (--line) box, the photo cropped to
- * fill it on a white tile in both themes (a cut-out photo shot on white reads
- * the same in either theme, and a dark one does not vanish into a dark tile);
- * no photo is the hatch in the line colour on sunk, the same placeholder the
- * Items table draws. When this branch rebases onto P2.6, the tile and the
- * hatch render through patterns/thumb.tsx and patterns/missing-photo.tsx and
- * the local HATCH goes (PLAN P2.4).
+ * Look (DESIGN-SPEC 4 and 6.14): the frame is the shared Thumb pattern (a
+ * hairline box on a white tile) and the no-photo placeholder is the shared
+ * MissingPhoto hatch (line strokes on sunk), the same frame and hatch the
+ * Items table, the grid card and the item cell draw. The photo is this
+ * component's own <img> in that frame, so a failed load still swaps to the
+ * hatch and drops the hover preview of a broken image, and the retry below
+ * still reaches a photo that failed before hydration. The photo carries its
+ * own white tile too, so a cut-out photo stays on white in both themes
+ * whatever the frame draws.
  */
 interface Props {
   /** Small tile source (a ~200px thumb where available) — kept lightweight so
@@ -51,9 +54,13 @@ interface Props {
   previewMeta?: React.ReactNode;
 }
 
-/** The missing-photo hatch: 1px lines in the line colour every 6px (drawn
- *  over the tile's sunk fill). */
-const HATCH = 'repeating-linear-gradient(45deg, var(--ed-line) 0 1px, transparent 1px 6px)';
+/** The Thumb frame for each size. sm is Thumb's own 28px frame (radius 5).
+ *  Thumb's declared sizes stop at 34 below the 56 and 64 media, so md keeps
+ *  ItemThumb's 40px box on the 32px frame and its 6px radius. */
+const FRAME: Record<NonNullable<Props['size']>, { size: ThumbSize; className?: string }> = {
+  sm: { size: 28 },
+  md: { size: 32, className: 'size-10' },
+};
 
 export function ItemThumb({
   imageUrl,
@@ -89,32 +96,7 @@ export function ItemThumb({
     if (src) img.src = src;
   }, [imageUrl, itemId]);
 
-  // 28px tiles take the 5px radius of the other 28px thumbnails; 40px the 6px.
-  const boxClass = cn(
-    'shrink-0 border border-border',
-    size === 'sm' ? 'size-7 rounded-[5px]' : 'size-10 rounded-md',
-  );
-
-  const inner =
-    imageUrl && !failed ? (
-      // eslint-disable-next-line @next/next/no-img-element
-      <img
-        ref={imgRef}
-        src={imageUrl}
-        alt={alt}
-        loading="lazy"
-        decoding="async"
-        onError={() => setFailed(true)}
-        className={cn(boxClass, 'bg-white object-cover')}
-      />
-    ) : (
-      <div
-        className={cn(boxClass, 'bg-sunk')}
-        style={{ backgroundImage: HATCH }}
-        aria-hidden="true"
-        data-testid="item-thumb-placeholder"
-      />
-    );
+  const frame = FRAME[size];
 
   return (
     <ImageHoverPreview
@@ -125,7 +107,22 @@ export function ItemThumb({
       meta={previewMeta ?? null}
       className="shrink-0"
     >
-      {inner}
+      <Thumb size={frame.size} className={frame.className}>
+        {imageUrl && !failed ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            ref={imgRef}
+            src={imageUrl}
+            alt={alt}
+            loading="lazy"
+            decoding="async"
+            onError={() => setFailed(true)}
+            className="absolute inset-0 h-full w-full bg-white object-cover"
+          />
+        ) : (
+          <MissingPhoto className="absolute inset-0" data-testid="item-thumb-placeholder" />
+        )}
+      </Thumb>
     </ImageHoverPreview>
   );
 }
