@@ -16,6 +16,8 @@ vi.mock('next/link', async () => {
   };
 });
 
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+
 vi.mock('@/server/actions/locations', () => ({
   archiveLocationAction: vi.fn(),
   createLocationAction: vi.fn(),
@@ -99,5 +101,88 @@ describe('LocationsManager rows open the location page (F1-3)', () => {
   it('archived rows link too (the page shows them as archived)', () => {
     render(<LocationsManager initial={[ROWS[0]!]} view="archived" canManage />);
     expect(screen.getByRole('link', { name: 'DC4' })).toHaveAttribute('href', '/dashboard/locations/site-1');
+  });
+});
+
+/**
+ * The redesign (W-BK-12): the shared page header carries the Active /
+ * Archived toggle and New location; the three groups are the shared
+ * segmented control with their counts; the archive confirm keeps the stock
+ * guard's words and "Archive anyway".
+ */
+describe('LocationsManager — header, groups and archive guard (redesign)', () => {
+  it('one h1, the subline, the toggle and New location for a manager', () => {
+    render(<LocationsManager initial={ROWS} canManage />);
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Locations');
+    expect(
+      screen.getByText('Warehouses, rooms, shelves, vehicles, job sites — wherever stock lives.'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('tablist', { name: 'View filter' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /New location/ })).toBeInTheDocument();
+  });
+
+  it('a reader without locations:manage gets no New, Edit or Archive', () => {
+    render(<LocationsManager initial={ROWS} canManage={false} />);
+    expect(screen.queryByRole('button', { name: /New location/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /archive dc4/i })).not.toBeInTheDocument();
+  });
+
+  it('the groups keep their counts and say which is shown (aria-pressed)', async () => {
+    const user = userEvent.setup();
+    render(<LocationsManager initial={ROWS} canManage />);
+    const group = screen.getByRole('group', { name: 'Location groups' });
+    const sites = within(group).getByRole('button', { name: /Sites/ });
+    const racks = within(group).getByRole('button', { name: /Racks & shelves/ });
+    const system = within(group).getByRole('button', { name: /System/ });
+    expect(sites).toHaveTextContent('Sites1');
+    expect(racks).toHaveTextContent('Racks & shelves0');
+    expect(system).toHaveTextContent('System2');
+    expect(sites).toHaveAttribute('aria-pressed', 'true');
+    await user.click(racks);
+    expect(racks).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('No racks or shelves yet')).toBeInTheDocument();
+  });
+
+  it('the archived view says so and offers Restore', () => {
+    render(<LocationsManager initial={[ROWS[0]!]} view="archived" canManage />);
+    expect(
+      screen.getByText('Locations you archived. Restore one to bring it back into pick lists.'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Restore/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /New location/ })).not.toBeInTheDocument();
+  });
+
+  it('archive: a stock refusal shows the guard words in the dialog and the button becomes Archive anyway', async () => {
+    const { archiveLocationAction } = await import('@/server/actions/locations');
+    vi.mocked(archiveLocationAction)
+      .mockResolvedValueOnce({
+        ok: false,
+        error: {
+          code: 'conflict',
+          message: '12 units of 3 items are still here.',
+          details: { locationHoldsStock: true },
+        },
+      } as never)
+      .mockResolvedValueOnce({ ok: true, data: undefined } as never);
+    const user = userEvent.setup();
+    render(<LocationsManager initial={ROWS} canManage />);
+    await user.click(screen.getByRole('button', { name: /archive dc4/i }));
+    await user.click(await screen.findByRole('button', { name: 'Archive' }));
+    expect(await screen.findByText('12 units of 3 items are still here.')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Archive anyway' }));
+    expect(vi.mocked(archiveLocationAction).mock.calls.map((c) => c[1])).toEqual([
+      { acknowledgeStock: false },
+      { acknowledgeStock: true },
+    ]);
+  });
+
+  it('the action buttons sit in a flex row inside the cell, not a flex cell', () => {
+    render(<LocationsManager initial={ROWS} canManage />);
+    const siteRow = screen.getByRole('link', { name: 'DC4' }).closest('tr')!;
+    const edit = within(siteRow as HTMLElement).getByRole('button', { name: 'Edit' });
+    const cell = edit.closest('td')!;
+    expect(cell.className.split(/\s+/)).not.toContain('flex');
   });
 });

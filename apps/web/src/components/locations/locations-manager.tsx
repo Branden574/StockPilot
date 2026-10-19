@@ -7,7 +7,8 @@ import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
 import { isSystemLocation, locationGroup, type LocationGroup } from '@/lib/locations/groups';
-import { cn } from '@/lib/utils';
+import { PageHeader } from '@/components/patterns/page-header';
+import { SegmentedTabs } from '@/components/patterns/segmented-tabs';
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
@@ -186,14 +187,22 @@ export function LocationsManager({
 
   return (
     <>
-      <div className="mb-5 flex items-center justify-between gap-2">
-        <ArchiveViewToggle view={view} />
-        {canManage && !isArchivedView && (
-          <Button variant="gradient" onClick={openNew}>
-            <Plus className="h-4 w-4" /> New location
-          </Button>
-        )}
-      </div>
+      <PageHeader
+        title="Locations"
+        subline={
+          isArchivedView
+            ? 'Locations you archived. Restore one to bring it back into pick lists.'
+            : 'Warehouses, rooms, shelves, vehicles, job sites — wherever stock lives.'
+        }
+        actions={<ArchiveViewToggle view={view} />}
+        primaryAction={
+          canManage && !isArchivedView ? (
+            <Button variant="gradient" onClick={openNew}>
+              <Plus className="h-4 w-4" /> New location
+            </Button>
+          ) : null
+        }
+      />
 
       {initial.length === 0 ? (
         isArchivedView ? (
@@ -213,26 +222,20 @@ export function LocationsManager({
         <>
           {/* Sites vs Racks & shelves vs System are three different kinds of
               place — keep them on separate tabs instead of one flat list. */}
-          <div className="mb-4 flex flex-wrap gap-1 border-b">
-            {TAB_ORDER.map((key) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setTab(key)}
-                className={cn(
-                  'relative -mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors',
-                  tab === key
-                    ? 'border-primary text-foreground'
-                    : 'border-transparent text-muted-foreground hover:text-foreground',
-                )}
-              >
-                {TAB_META[key].label}
-                <span className="ml-1.5 text-xs tabular-nums text-muted-foreground">
-                  {grouped[key].length}
-                </span>
-              </button>
-            ))}
-          </div>
+          {/* The three groups as the shared segmented control (DESIGN-SPEC
+              6.5), each with its count. Client state, as before (not in the
+              URL); toggle buttons with aria-pressed. */}
+          <SegmentedTabs
+            semantics="nav"
+            aria-label="Location groups"
+            activeId={tab}
+            onSelect={(id) => setTab(id as LocationGroup)}
+            items={TAB_ORDER.map((key) => ({
+              id: key,
+              label: TAB_META[key].label,
+              count: grouped[key].length,
+            }))}
+          />
 
           {rows.length === 0 ? (
             <EmptyState
@@ -241,10 +244,10 @@ export function LocationsManager({
               description={activeTab.emptyDescription}
             />
           ) : (
-            <div className="overflow-x-auto rounded-xl border bg-card">
-              <Table>
+            <div className="border-border bg-card min-w-0 overflow-hidden rounded-lg border">
+              <Table className="min-w-[640px]">
                 <TableHeader>
-                  <TableRow>
+                  <TableRow className="hover:bg-transparent">
                     <TableHead>Name</TableHead>
                     <TableHead>Type</TableHead>
                     <TableHead>Warehouse</TableHead>
@@ -255,26 +258,30 @@ export function LocationsManager({
                 <TableBody>
                   {rows.map((row) => (
                     <TableRow key={row.id}>
-                      <TableCell className="font-medium">
+                      <TableCell className="text-foreground font-medium">
                         {/* The location's own page (F1-3): what is held here
                             and when each item was last counted. */}
                         <Link
                           href={`/dashboard/locations/${row.id}`}
-                          className="hover:underline underline-offset-4"
+                          className="underline-offset-4 [overflow-wrap:anywhere] hover:underline"
                         >
                           {row.name}
                         </Link>
                       </TableCell>
-                      <TableCell className="text-xs uppercase tracking-wider text-muted-foreground">
+                      <TableCell className="text-muted-foreground whitespace-nowrap text-[11px] uppercase tracking-[0.06em]">
                         {row.type ?? '—'}
                       </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
+                      <TableCell className="text-ink-2 whitespace-nowrap">
                         {row.warehouseName ?? '—'}
                       </TableCell>
-                      <TableCell className="max-w-xs truncate text-sm text-muted-foreground">
+                      <TableCell className="text-muted-foreground max-w-xs truncate">
                         {row.notes ?? '—'}
                       </TableCell>
-                      <TableCell className="flex justify-end gap-2">
+                      <TableCell className="text-right">
+                        {/* The buttons sit in their own flex row: a flex <td>
+                            leaves the table's cell layout. 8 px apart, the
+                            gap their 44 px touch areas need. */}
+                        <div className="flex items-center justify-end gap-2">
                         {canManage && (isArchivedView ? (
                           <Button
                             variant="outline"
@@ -288,7 +295,7 @@ export function LocationsManager({
                           // receiving flow; editing or archiving one breaks
                           // put-away. The service refuses too — this just
                           // keeps the footgun out of the UI.
-                          <span className="self-center text-xs uppercase tracking-wider text-muted-foreground">
+                          <span className="text-muted-foreground whitespace-nowrap text-[11px] uppercase tracking-[0.06em]">
                             Auto-managed
                           </span>
                         ) : (
@@ -309,6 +316,7 @@ export function LocationsManager({
                             </Button>
                           </>
                         ))}
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}

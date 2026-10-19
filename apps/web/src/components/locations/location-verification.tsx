@@ -1,5 +1,6 @@
-import { AlertTriangle, ArrowLeft, Lock } from 'lucide-react';
+import { ArrowLeft, Lock } from 'lucide-react';
 import Link from 'next/link';
+import type * as React from 'react';
 
 import {
   formatStockQuantity,
@@ -17,8 +18,10 @@ import {
 import { exceptionTime, FirstCheckPending } from '@/components/exceptions/occurrence-display';
 import { VerificationIssueChips } from '@/components/inventory/item-verification-card';
 import { LocationRecountButton } from '@/components/locations/location-recount-button';
+import { DetailSection } from '@/components/patterns/detail-section';
+import { PageHeader } from '@/components/patterns/page-header';
+import { StatePanel } from '@/components/patterns/state-panel';
 import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Pagination } from '@/components/ui/pagination';
 import type { LocationVerification, LocationVerificationRow } from '@/server/services/verification';
 
@@ -69,9 +72,9 @@ export function LocationBackLink({ archived = false }: { archived?: boolean }) {
   return (
     <Link
       href={archived ? '/dashboard/locations?view=archived' : '/dashboard/locations'}
-      className="text-muted-foreground hover:text-foreground mb-4 inline-flex items-center gap-1 text-sm"
+      className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 text-[13px] transition-colors"
     >
-      <ArrowLeft className="size-4" aria-hidden />
+      <ArrowLeft className="size-3.5" aria-hidden />
       Locations
     </Link>
   );
@@ -87,123 +90,166 @@ export function LocationVerificationUnavailable({
 }: {
   refusal?: VerificationRefusal | null;
 }) {
+  // The shared state panel (failed kind), announced as an alert as before.
+  // It is the page's only heading when it shows, so it is the h1.
   return (
-    <div
-      role="alert"
-      className="border-warning/40 bg-warning/5 flex items-start gap-2 rounded-md border px-3 py-2 text-sm"
-    >
-      <AlertTriangle className="text-warning mt-0.5 size-4 shrink-0" aria-hidden />
-      {refusal ? (
-        <div className="space-y-1">
-          <p className="font-medium">{VERIFICATION_UNAVAILABLE_COPY}</p>
+    <StatePanel
+      kind="failed"
+      live="assertive"
+      headingLevel={1}
+      title={VERIFICATION_UNAVAILABLE_COPY}
+      description={
+        refusal ? (
           <p data-testid="location-refusal">{verificationRefusalCopy(refusal, 'location')}</p>
-        </div>
-      ) : (
-        <p>{VERIFICATION_UNAVAILABLE_COPY}. Reload the page to try again.</p>
-      )}
-    </div>
+        ) : (
+          <p>Reload the page to try again.</p>
+        )
+      }
+    />
   );
 }
 
 export function LocationVerificationView({
   data,
   canOpenCounts,
+  back,
 }: {
   data: LocationVerification;
   /** The reader can open a count's page (cycle_counts:read or stock:adjust). */
   canOpenCounts: boolean;
+  /** The back link (LocationBackLink), drawn above the title. */
+  back?: React.ReactNode;
 }) {
   const loc = data.location;
   const kindLabel = locationKindLabel(loc.kind, loc.type);
   return (
-    <div className="space-y-6">
-      <header className="space-y-1">
-        <p className="text-muted-foreground text-sm" data-testid="location-kind">
-          {kindLabel}
-          {loc.warehouseName ? ` · ${loc.warehouseName}` : ''}
-        </p>
-        <div className="flex flex-wrap items-center gap-2">
-          <h1 className="break-words text-2xl font-semibold tracking-tight">{loc.name}</h1>
-          {loc.archived ? <Badge variant="outline">Archived</Badge> : null}
+    <>
+      {/* The record's header (DESIGN-SPEC 6.1): the kind and warehouse as the
+          eyebrow, the name as the h1 with Archived beside it. */}
+      <PageHeader
+        back={back}
+        eyebrow={
+          <span data-testid="location-kind">
+            {kindLabel}
+            {loc.warehouseName ? ` · ${loc.warehouseName}` : ''}
+          </span>
+        }
+        title={loc.name}
+        titleAside={loc.archived ? <Badge variant="outline">Archived</Badge> : null}
+      />
+
+      {/* Stock here beside Open issues here once the content area holds both
+          (about 2 x 420 + 16 px, measured on the content, as on a purchase
+          order's page); one column below that, Open issues here first as
+          before. */}
+      <div className="@container min-w-0">
+        <div className="@min-[856px]:grid-cols-[minmax(0,1.7fr)_minmax(280px,1fr)] grid items-start gap-4">
+          <OpenIssuesHere
+            data={data}
+            className="@min-[856px]:col-start-2 @min-[856px]:row-start-1"
+          />
+          <StockHere
+            data={data}
+            canOpenCounts={canOpenCounts}
+            className="@min-[856px]:col-start-1 @min-[856px]:row-start-1"
+          />
         </div>
-      </header>
-
-      <OpenIssuesHere data={data} />
-
-      <Card>
-        <CardHeader className="pb-3">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div className="min-w-0 space-y-1">
-              <CardTitle className="text-base">Stock here</CardTitle>
-              {data.holdingsVisible && data.totals ? (
-                <p className="text-sm" data-testid="location-totals">
-                  {locationVerificationTotalsCopy(data.totals, {
-                    locationKind: loc.kind,
-                    locationType: loc.type,
-                  })}
-                </p>
-              ) : null}
-              {data.truncated ? (
-                <p className="text-warning text-xs" data-testid="location-truncated">
-                  {LOCATION_HOLDINGS_TRUNCATED_COPY}
-                </p>
-              ) : null}
-            </div>
-            {data.holdingsVisible && data.canRecount ? (
-              <LocationRecountButton
-                itemIds={data.recountItemIds}
-                // The server's reason, else the same rule on this page: a
-                // partial holdings read is never recounted as "the items
-                // here" (the phone applies the same core rule).
-                problem={locationRecountProblemOf(data)}
-                timeZone={data.timeZone}
-              />
-            ) : null}
-          </div>
-        </CardHeader>
-        <CardContent className="pt-0">
-          {!data.holdingsVisible ? (
-            <p
-              role="status"
-              className="bg-muted/40 flex items-start gap-2 rounded-md border px-3 py-2 text-sm"
-              data-testid="location-out-of-scope"
-            >
-              <Lock className="text-muted-foreground mt-0.5 size-4 shrink-0" aria-hidden />
-              {LOCATION_HOLDINGS_OUT_OF_SCOPE_COPY}
-            </p>
-          ) : data.rows.length === 0 ? null : (
-            <>
-              <ul className="divide-border divide-y" data-testid="location-rows">
-                {data.rows.map((row) => (
-                  <LocationRow
-                    key={row.itemId}
-                    row={row}
-                    locationId={loc.id}
-                    locationKind={loc.kind}
-                    locationType={loc.type}
-                    timeZone={data.timeZone}
-                    canOpenCounts={canOpenCounts}
-                  />
-                ))}
-              </ul>
-              {data.pageCount > 1 ? (
-                <Pagination
-                  className="mt-4"
-                  page={data.page}
-                  pageSize={data.pageSize}
-                  total={data.totalRows}
-                  basePath={`/dashboard/locations/${loc.id}`}
-                />
-              ) : null}
-            </>
-          )}
-        </CardContent>
-      </Card>
-    </div>
+      </div>
+    </>
   );
 }
 
-function OpenIssuesHere({ data }: { data: LocationVerification }) {
+function StockHere({
+  data,
+  canOpenCounts,
+  className,
+}: {
+  data: LocationVerification;
+  canOpenCounts: boolean;
+  className?: string;
+}) {
+  const loc = data.location;
+  const showList = data.holdingsVisible && data.rows.length > 0;
+  return (
+    <DetailSection
+      title="Stock here"
+      className={className}
+      aside={
+        data.holdingsVisible && data.canRecount ? (
+          <LocationRecountButton
+            itemIds={data.recountItemIds}
+            // The server's reason, else the same rule on this page: a
+            // partial holdings read is never recounted as "the items
+            // here" (the phone applies the same core rule).
+            problem={locationRecountProblemOf(data)}
+            timeZone={data.timeZone}
+          />
+        ) : undefined
+      }
+      flush
+      footer={
+        showList && data.pageCount > 1 ? (
+          <Pagination
+            className="w-full"
+            page={data.page}
+            pageSize={data.pageSize}
+            total={data.totalRows}
+            basePath={`/dashboard/locations/${loc.id}`}
+          />
+        ) : undefined
+      }
+    >
+      {(data.holdingsVisible && data.totals) || data.truncated ? (
+        <div className="border-border space-y-1 border-b px-[18px] py-3">
+          {data.holdingsVisible && data.totals ? (
+            <p
+              className="text-foreground text-[13.5px] leading-[20.25px]"
+              data-testid="location-totals"
+            >
+              {locationVerificationTotalsCopy(data.totals, {
+                locationKind: loc.kind,
+                locationType: loc.type,
+              })}
+            </p>
+          ) : null}
+          {data.truncated ? (
+            <p className="text-warning text-[12.5px]" data-testid="location-truncated">
+              {LOCATION_HOLDINGS_TRUNCATED_COPY}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+      {!data.holdingsVisible ? (
+        <div className="p-[18px]">
+          <p
+            role="status"
+            className="border-border bg-sunk flex items-start gap-2 rounded-md border px-3 py-2 text-[13.5px]"
+            data-testid="location-out-of-scope"
+          >
+            <Lock className="text-muted-foreground mt-0.5 size-4 shrink-0" aria-hidden />
+            {LOCATION_HOLDINGS_OUT_OF_SCOPE_COPY}
+          </p>
+        </div>
+      ) : showList ? (
+        <ul className="divide-border divide-y" data-testid="location-rows">
+          {data.rows.map((row) => (
+            <LocationRow
+              key={row.itemId}
+              row={row}
+              locationId={loc.id}
+              locationKind={loc.kind}
+              locationType={loc.type}
+              timeZone={data.timeZone}
+              canOpenCounts={canOpenCounts}
+            />
+          ))}
+        </ul>
+      ) : null}
+    </DetailSection>
+  );
+}
+
+function OpenIssuesHere({ data, className }: { data: LocationVerification; className?: string }) {
   // Read under the reader's RLS: "none" only when nothing here is hidden.
   const empty = locationOpenIssuesEmptyCopy({
     holdingsVisible: data.holdingsVisible,
@@ -211,14 +257,13 @@ function OpenIssuesHere({ data }: { data: LocationVerification }) {
     checkedAt: data.checkedAt,
   });
   return (
-    <section
+    <DetailSection
       aria-labelledby="open-issues-here"
-      className="border-border bg-card space-y-2 rounded-xl border px-4 py-3"
+      title={<span id="open-issues-here">Open issues here</span>}
+      className={className}
+      bodyClassName="space-y-2"
       data-testid="location-open-issues"
     >
-      <h2 id="open-issues-here" className="text-sm font-semibold">
-        Open issues here
-      </h2>
       {data.openIssues.length > 0 ? (
         <VerificationIssueChips issues={data.openIssues} />
       ) : empty.kind === 'first_check_pending' ? (
@@ -226,28 +271,28 @@ function OpenIssuesHere({ data }: { data: LocationVerification }) {
       ) : empty.kind === 'out_of_scope' ? (
         <p
           role="status"
-          className="bg-muted/40 flex items-start gap-2 rounded-md border px-3 py-2 text-sm"
+          className="border-border bg-sunk flex items-start gap-2 rounded-md border px-3 py-2 text-[13.5px]"
           data-testid="location-issues-out-of-scope"
         >
           <Lock className="text-muted-foreground mt-0.5 size-4 shrink-0" aria-hidden />
           {empty.text}
         </p>
       ) : (
-        <p className="text-muted-foreground text-sm" data-testid="location-no-open-issues">
+        <p className="text-muted-foreground text-[13.5px]" data-testid="location-no-open-issues">
           {empty.text}
         </p>
       )}
       {data.openIssuesTruncated ? (
-        <p className="text-muted-foreground text-xs">
+        <p className="text-muted-foreground text-[12px]">
           More open exceptions exist than are shown here.
         </p>
       ) : null}
       {data.checkedAt ? (
-        <p className="text-muted-foreground text-xs">
+        <p className="text-muted-foreground text-[12px]">
           Checked at {exceptionTime(data.checkedAt, data.timeZone)}.
         </p>
       ) : null}
-    </section>
+    </DetailSection>
   );
 }
 
@@ -273,21 +318,30 @@ function LocationRow({
   });
   const itemHref = `/dashboard/inventory/${row.itemId}`;
   return (
-    <li className="py-3" data-testid="location-row">
+    <li className="px-[18px] py-3" data-testid="location-row">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <Link href={itemHref} className="break-words text-sm font-medium hover:underline">
+          <Link
+            href={itemHref}
+            className="text-foreground text-[13.5px] font-medium [overflow-wrap:anywhere] hover:underline"
+          >
             {row.name}
           </Link>
           {row.sku ? (
-            <p className="text-muted-foreground break-all font-mono text-xs">{row.sku}</p>
+            <p className="text-muted-foreground break-all font-mono text-[11.5px]">{row.sku}</p>
           ) : null}
         </div>
-        <p className="shrink-0 text-sm tabular-nums" data-testid="location-row-quantity">
-          <span className="font-semibold">{formatStockQuantity(row.quantity)}</span> here
+        <p
+          className="text-muted-foreground shrink-0 text-[13px] tabular-nums"
+          data-testid="location-row-quantity"
+        >
+          <span className="text-foreground font-mono text-[13.5px] font-medium">
+            {formatStockQuantity(row.quantity)}
+          </span>{' '}
+          here
         </p>
       </div>
-      <div className="mt-1 space-y-0.5 text-xs">
+      <div className="text-ink-2 mt-1 space-y-0.5 text-[12.5px] leading-[18.75px]">
         <p
           className={row.summary === null ? 'text-warning' : undefined}
           data-testid="location-row-count"
@@ -297,7 +351,10 @@ function LocationRow({
         {copy.movementsSince ? (
           <p className="text-muted-foreground">
             {row.summary?.movementsSince != null ? (
-              <Link href={`${itemHref}?tab=movements`} className="hover:underline">
+              <Link
+                href={`${itemHref}?tab=movements`}
+                className="hover:text-foreground hover:underline"
+              >
                 {copy.movementsSince}
               </Link>
             ) : (
@@ -310,7 +367,7 @@ function LocationRow({
             {canOpenCounts ? (
               <Link
                 href={`/dashboard/cycle-counts/${copy.beingCounted.cycleCountId}`}
-                className="hover:underline"
+                className="text-accent hover:text-foreground hover:underline"
               >
                 {copy.beingCounted.text}
               </Link>

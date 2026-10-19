@@ -14,6 +14,9 @@ import { uuidSchema, verificationRefusalOf, type VerificationRefusal } from '@st
 
 export const metadata = { title: 'Location' };
 
+/** The page area (DESIGN-SPEC 4 and 5.3), the same box the other pages use. */
+const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
+
 /**
  * ONE LOCATION (F1-3): its name, kind and warehouse, the open exceptions
  * recorded here, and every item held here with when it was last physically
@@ -79,12 +82,20 @@ export default async function LocationPage({
   }
 
   return (
-    <div className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-6 sm:py-8">
-      <LocationBackLink archived={data?.location.archived ?? false} />
+    <div className={PAGE}>
       {data === null ? (
-        <LocationVerificationUnavailable />
+        <>
+          <div>
+            <LocationBackLink />
+          </div>
+          <LocationVerificationUnavailable />
+        </>
       ) : (
-        <LocationVerificationView data={data} canOpenCounts={canOpenCountPage(ctx)} />
+        <LocationVerificationView
+          data={data}
+          canOpenCounts={canOpenCountPage(ctx)}
+          back={<LocationBackLink archived={data.location.archived} />}
+        />
       )}
     </div>
   );
@@ -92,8 +103,10 @@ export default async function LocationPage({
 
 function Refused({ refusal }: { refusal: VerificationRefusal }) {
   return (
-    <div className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-6 sm:py-8">
-      <LocationBackLink />
+    <div className={PAGE}>
+      <div>
+        <LocationBackLink />
+      </div>
       <LocationVerificationUnavailable refusal={refusal} />
     </div>
   );
