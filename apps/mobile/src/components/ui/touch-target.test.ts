@@ -214,7 +214,8 @@ describe('Button size sm: a 44pt target round the 36pt button', () => {
     expect(face.minHeight).toBe(44); // the 44pt button those screens drew stays 44pt
     expect(face.marginTop).toBeUndefined();
     expect(face.alignSelf).toBeUndefined();
-    // recurring-pos.tsx styles.delete.
+    // recurring-pos.tsx styles.delete as it was before P5.4b (it now passes
+    // no minHeight: the frame alone is its 44pt target).
     const del = splitButtonStyle({
       minHeight: 44,
       alignSelf: 'flex-start',

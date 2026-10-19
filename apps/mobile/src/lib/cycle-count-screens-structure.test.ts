@@ -1044,8 +1044,10 @@ describe('Counts tab: words, the filters and the offline view', () => {
     expect(wordsOf(COUNTS_TAB)).toContain(word);
   });
 
-  // The shared Chip is 36pt; the filter chips are the reference's (6.6) at
-  // 44pt, with the same role, state and words.
+  // The shared Chip has a 44pt frame too since P2.5c, but draws the picker
+  // chip (mono 12.5, radius 8, the sunk fill); the status filters stay the
+  // reference's filter chip (6.6) at 44pt, with the same role, state and
+  // words.
   it('the status filters are 44pt chips: All and every status, each a button with its selected state', () => {
     expect(code).toMatch(
       /\{\[null, \.\.\.CYCLE_COUNT_STATUSES\]\.map\(\(s\) => \(\s*<FilterChip\s+key=\{s \?\? 'all'\}\s+label=\{s \? CYCLE_COUNT_STATUS_LABELS\[s\] : 'All'\}\s+active=\{view\.status === s\}\s+onPress=\{\(\) => setStatus\(s\)\}/,
