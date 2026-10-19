@@ -95,6 +95,23 @@ describe('/p/items/[id]', () => {
     expect(panel.className).not.toMatch(/text-warning-foreground|bg-warning\/5/);
   });
 
+  it('a 120-character category wraps inside the column instead of pushing a phone page sideways (the Badge never wraps by default)', async () => {
+    // categories.ts allows names up to 120 characters.
+    const long =
+      'Athletics and outdoor field equipment for the north campus gym, spare kit room A, shelves 1 to 4 and the overflow cage B';
+    expect(long).toHaveLength(120);
+    getPublicItem.mockResolvedValue(item({ category: long }));
+    await open();
+    const badge = screen.getByText(long);
+    const classes = badge.className.split(/\s+/);
+    expect(classes).toEqual(
+      expect.arrayContaining(['whitespace-normal', 'max-w-full', '[overflow-wrap:anywhere]']),
+    );
+    expect(classes).not.toContain('whitespace-nowrap');
+    // The type label keeps the plain pill.
+    expect(screen.getByText('Product').className.split(/\s+/)).toContain('whitespace-nowrap');
+  });
+
   it('lists the four book fields as label and value pairs, for books only', async () => {
     getPublicItem.mockResolvedValue(
       item({

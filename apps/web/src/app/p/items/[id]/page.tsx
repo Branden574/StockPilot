@@ -108,9 +108,20 @@ export default async function PublicItemPage({
         {item.name}
       </h1>
 
+      {/* A category name can run to 120 characters: its pill may wrap inside
+          the column (the Badge never wraps by default), so a long one cannot
+          push the public page wider than a phone. The type labels are short. */}
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <Badge variant="outline">{typeLabel[item.itemType]}</Badge>
-        {item.category ? <Badge variant="outline">{item.category}</Badge> : null}
+        {item.category ? (
+          <Badge
+            variant="outline"
+            data-slot="public-category"
+            className="max-w-full whitespace-normal text-left [overflow-wrap:anywhere]"
+          >
+            {item.category}
+          </Badge>
+        ) : null}
       </div>
 
       {/* On-hand quantity — the main reason a warehouse staffer
