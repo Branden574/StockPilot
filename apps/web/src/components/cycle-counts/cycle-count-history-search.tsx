@@ -80,15 +80,19 @@ export function CycleCountHistorySearch({
         e.preventDefault();
         apply(q);
       }}
-      className="flex w-full flex-col gap-1.5 sm:max-w-md"
+      className="w-full sm:w-[280px]"
     >
-      <label htmlFor="cycle-count-search" className="text-muted-foreground text-xs font-medium">
+      {/* The toolbar search of the redesign (DESIGN-SPEC 6.3): the field's
+          words stay its accessible name; the search icon and the placeholder
+          say what it is on screen. */}
+      <label htmlFor="cycle-count-search" className="sr-only">
         Search cycle counts
       </label>
       <div className="relative">
         <Search
           aria-hidden
-          className="text-muted-foreground pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+          className="text-muted-foreground pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+          strokeWidth={1.8}
         />
         <Input
           ref={inputRef}
@@ -102,9 +106,9 @@ export function CycleCountHistorySearch({
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="Search count #, warehouse, or notes…"
-          className="h-9 pl-8 pr-16 text-[13px] [&::-webkit-search-cancel-button]:hidden"
+          className="pl-8 pr-[72px] [&::-webkit-search-cancel-button]:hidden"
         />
-        <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-1">
+        <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-1">
           {pending ? (
             <Loader2 aria-hidden className="text-muted-foreground h-3.5 w-3.5 animate-spin" />
           ) : null}
@@ -116,7 +120,7 @@ export function CycleCountHistorySearch({
                 apply('');
                 inputRef.current?.focus();
               }}
-              className="text-muted-foreground hover:text-foreground focus-visible:ring-ring rounded p-1 focus-visible:outline-none focus-visible:ring-2"
+              className="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring inline-flex h-6 w-6 items-center justify-center rounded focus-visible:outline-none focus-visible:ring-2 max-sm:h-9 max-sm:w-9"
               aria-label="Clear search"
             >
               <X aria-hidden className="h-3.5 w-3.5" />
