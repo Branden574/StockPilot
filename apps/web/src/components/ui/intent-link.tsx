@@ -49,8 +49,15 @@ import { useWarmRoute } from '@/lib/hooks/use-warm-route';
  *
  * Use it for any link that is one of many on a page. A single primary next
  * step (a lone "New order" button, a "Back to list" link) can stay a plain
- * <Link>; the guard in lib/perf/link-prefetch.guard.test.ts enforces the rule
- * for links rendered inside .map() and for the files that opted in.
+ * <Link>. What is enforced, and where: intent-link.test.tsx pins this
+ * component's own contract (next/link gets prefetch={false}, rendering warms
+ * nothing, the dwell and pointer-down rules), and
+ * components/inventory/inventory-table.intent.test.tsx pins the Items and Books
+ * rows. Nothing yet checks that other list-rendered links use IntentLink: the
+ * repository-wide analyser described when this component was written
+ * (lib/perf/link-prefetch.guard.test.ts, commit b9b9199f7 on the unmerged
+ * branch perf/no-prefetch-storms) never reached main, so that rule is kept by
+ * review.
  */
 export const INTENT_DWELL_MS = 65;
 

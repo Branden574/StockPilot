@@ -82,9 +82,11 @@ export function Pagination({
     [onPageChange, linkForPage, router],
   );
 
-  // Row-range text ("Showing 51–100 of 350") when we know the totals.
+  // Row-range text ("Showing 51–100 of 350") when we know the totals and
+  // there is at least one row: a total of 0 prints no range (it read
+  // "Showing 1–0 of 0").
   const range =
-    total != null && pageSize ? (
+    total != null && total > 0 && pageSize ? (
       <span>
         Showing <span className="text-foreground font-medium">{(safePage - 1) * pageSize + 1}</span>–
         <span className="text-foreground font-medium">{Math.min(safePage * pageSize, total)}</span>{' '}

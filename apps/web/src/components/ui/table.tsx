@@ -2,6 +2,19 @@ import * as React from 'react';
 
 import { cn } from '@/lib/utils';
 
+import { TableScroll } from './table-scroll';
+
+export interface TableProps extends React.HTMLAttributes<HTMLTableElement> {
+  /**
+   * Names the scroll wrapper as a `region` ("Orders"), so a screen reader
+   * says which table the scroll area holds. The table's own attributes
+   * (`aria-label` included) still go to the <table>.
+   */
+  scrollLabel?: string;
+  /** The id of a visible heading that names the scroll wrapper (instead of `scrollLabel`). */
+  scrollLabelledBy?: string;
+}
+
 /**
  * Table (DESIGN-SPEC 6.9): header cells 11 px / 500, uppercase, +0.06em in the
  * muted ink; body cells pad by the density variable (--row-py: 11 px
@@ -9,16 +22,20 @@ import { cn } from '@/lib/utils';
  * on the first and last cell; the whole row takes the neutral hover fill. A
  * wide table scrolls inside its own wrapper, never the page. A cell holding a
  * checkbox keeps no right padding, so the checkbox column stays narrow.
+ *
+ * While the table is wider than the wrapper, the wrapper is a Tab stop so the
+ * arrow keys can scroll it (TableScroll, the one client part; rows and cells
+ * stay server-renderable). Pass `scrollLabel` or `scrollLabelledBy` to name it.
  */
-export const Table = React.forwardRef<HTMLTableElement, React.HTMLAttributes<HTMLTableElement>>(
-  ({ className, ...props }, ref) => (
-    <div className="relative w-full overflow-auto">
+export const Table = React.forwardRef<HTMLTableElement, TableProps>(
+  ({ className, scrollLabel, scrollLabelledBy, ...props }, ref) => (
+    <TableScroll label={scrollLabel} labelledBy={scrollLabelledBy}>
       <table
         ref={ref}
         className={cn('w-full caption-bottom text-[13.5px]', className)}
         {...props}
       />
-    </div>
+    </TableScroll>
   ),
 );
 Table.displayName = 'Table';

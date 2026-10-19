@@ -30,9 +30,10 @@ SheetOverlay.displayName = DialogPrimitive.Overlay.displayName;
 
 // The dialog surface on a screen edge: the elevated card colour, one quiet
 // shadow, and radius 8 on the corners that face the page (a right sheet fills
-// a phone's width, so it rounds from sm).
+// a phone's width, so it rounds from sm). Its edge is the stronger hairline
+// that menus and popovers draw (--ed-line-strong).
 const sheetVariants = cva(
-  'fixed z-50 gap-4 bg-card text-card-foreground shadow-[0_10px_30px_rgba(0,0,0,0.25)] transition ease-out data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:duration-300 data-[state=open]:duration-500',
+  'fixed z-50 gap-4 border-[var(--ed-line-strong)] bg-card text-card-foreground shadow-[0_10px_30px_rgba(0,0,0,0.25)] transition ease-out data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:duration-300 data-[state=open]:duration-500',
   {
     variants: {
       side: {
