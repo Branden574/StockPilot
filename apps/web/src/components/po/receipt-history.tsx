@@ -192,10 +192,12 @@ function ReceiptEntry({
         <Table className="text-[13px]">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="py-2 first:pl-3">Item</TableHead>
-              <TableHead className="py-2 text-right">Received</TableHead>
-              <TableHead className="py-2 text-right">Accepted</TableHead>
-              <TableHead className="py-2 text-right last:pr-3">Rejected</TableHead>
+              <TableHead className="whitespace-nowrap py-2 first:pl-3">Item</TableHead>
+              <TableHead className="whitespace-nowrap py-2 text-right">Received</TableHead>
+              <TableHead className="whitespace-nowrap py-2 text-right">Accepted</TableHead>
+              <TableHead className="whitespace-nowrap py-2 text-right last:pr-3">
+                Rejected
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -203,7 +205,9 @@ function ReceiptEntry({
               const item = items[l.item_id];
               return (
                 <TableRow key={l.id} className="hover:bg-transparent">
-                  <TableCell className="py-2 first:pl-3">
+                  {/* The item keeps a readable width; on a phone the table
+                      scrolls inside its own box instead of breaking names. */}
+                  <TableCell className="min-w-36 py-2 first:pl-3">
                     <p className="text-foreground font-medium leading-5 [overflow-wrap:anywhere]">
                       {item?.name ?? 'Unknown item'}
                     </p>

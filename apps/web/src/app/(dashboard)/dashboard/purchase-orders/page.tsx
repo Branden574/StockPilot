@@ -230,6 +230,9 @@ export default async function PurchaseOrdersPage({
       semantics="nav"
       aria-label="Filter by status"
       activeId={tab}
+      // Six tabs do not fit a phone's width; they wrap to a second line there
+      // instead of scrolling the current one out of sight.
+      className="max-sm:flex-wrap"
       items={TAB_ORDER.map((t) => ({
         id: t,
         label: TAB_LABELS[t],

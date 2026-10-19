@@ -241,7 +241,9 @@ describe('the PO page lines', () => {
     expect(within(polo!).getByText('L4L Polo — Men’s')).toBeInTheDocument();
     expect(polo!.textContent).toContain('POLO-M · ');
     // What the eye reads, and what a screen reader hears, for the money.
-    expect(within(polo!).getByText('$18.00 ea · $3,600.00')).toHaveAttribute('aria-hidden', 'true');
+    const money = within(polo!).getByTestId('po-line-money');
+    expect(money).toHaveTextContent(/^\$18\.00 ea · \$3,600\.00$/);
+    expect(money).toHaveAttribute('aria-hidden', 'true');
     expect(within(polo!).getByText('Unit cost $18.00, total $3,600.00')).toHaveClass('sr-only');
     expect(polo!.textContent).toContain('Received 120');
     expect(polo!.textContent).toContain('of 200 ordered');

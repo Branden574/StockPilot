@@ -283,7 +283,7 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
               <LineItems rows={lineRows} />
             </DetailSection>
 
-            <DetailSection title="Receipts">
+            <DetailSection title="Receipts" bodyClassName="max-sm:px-3">
               <ReceiptHistory
                 receipts={receiptData.receipts}
                 lines={receiptData.lines}
@@ -365,7 +365,9 @@ function LineItems({ rows }: { rows: LineRow[] }) {
             <span className="sr-only">Image</span>
           </TableHead>
           <TableHead className="pl-0">Item</TableHead>
-          <TableHead className="w-[148px] text-right last:pr-[18px]">Received / ordered</TableHead>
+          <TableHead className="text-right last:pr-[18px] sm:w-[168px] sm:whitespace-nowrap">
+            Received / ordered
+          </TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -388,9 +390,10 @@ function LineItems({ rows }: { rows: LineRow[] }) {
                   {l.name}
                 </p>
                 <p className="text-muted-foreground mt-0.5 font-mono text-[12px] tabular-nums leading-[18px]">
-                  {l.sku ? <span>{l.sku} · </span> : null}
-                  <span aria-hidden="true">
-                    {unitCost} ea · {lineTotal}
+                  {l.sku ? <span className="whitespace-nowrap">{l.sku} · </span> : null}
+                  <span aria-hidden="true" data-testid="po-line-money">
+                    <span className="whitespace-nowrap">{unitCost} ea</span> ·{' '}
+                    <span className="whitespace-nowrap">{lineTotal}</span>
                   </span>
                   <span className="sr-only">
                     Unit cost {unitCost}, total {lineTotal}
@@ -398,7 +401,7 @@ function LineItems({ rows }: { rows: LineRow[] }) {
                 </p>
               </TableCell>
               <TableCell className="py-2.5 last:pr-[18px]">
-                <div className="ml-auto w-[120px] max-w-full">
+                <div className="ml-auto w-24 max-w-full sm:w-[120px]">
                   <div className="flex items-baseline justify-between gap-2 font-mono text-[12px] tabular-nums">
                     <span className="text-foreground">
                       <span className="sr-only">Received </span>

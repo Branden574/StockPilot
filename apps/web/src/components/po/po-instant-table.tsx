@@ -112,15 +112,14 @@ export function PoListTable({
             const placedText = placedDay(placed);
             const expectedText = expectedDay(po.expected_at);
             const supplier = supplierName(po.supplier_id);
-            // One text, so it reads as one line; the Placed day joins it once
-            // the viewer's zone is known, like the column.
+            // The Placed day joins the line once the viewer's zone is known,
+            // like the column. A date never breaks across two lines; a long
+            // supplier name may wrap.
             const folded = [
-              supplier === '—' ? null : supplier,
-              placed && placedText ? `Placed ${placedText}` : null,
-              `Expected ${expectedText}`,
-            ]
-              .filter(Boolean)
-              .join(' · ');
+              supplier === '—' ? null : { text: supplier, keep: false },
+              placed && placedText ? { text: `Placed ${placedText}`, keep: true } : null,
+              { text: `Expected ${expectedText}`, keep: true },
+            ].filter((part): part is { text: string; keep: boolean } => part !== null);
             return (
               <TableRow key={po.id} className="group">
                 <TableCell>
@@ -141,7 +140,14 @@ export function PoListTable({
                       'text-muted-foreground mt-0.5 text-[12.5px] leading-[18.75px]',
                     )}
                   >
-                    {folded}
+                    {folded.map((part, i) => (
+                      <React.Fragment key={i}>
+                        {i > 0 ? ' · ' : null}
+                        <span className={part.keep ? 'whitespace-nowrap' : undefined}>
+                          {part.text}
+                        </span>
+                      </React.Fragment>
+                    ))}
                   </p>
                 </TableCell>
                 <TableCell className={cn(WIDE, 'text-ink-2')}>{supplier}</TableCell>

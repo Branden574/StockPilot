@@ -109,9 +109,10 @@ describe('PoListTable', () => {
   it('folds the supplier and the dates under the number, and the line count under the total', () => {
     render(<PoListTable rows={ROWS} supplierNames={{ 'sup-1': 'Lantern Peak School Supply' }} />);
     const ordered = rowOf('PO-2026-0029');
-    expect(
-      within(ordered).getByText('Lantern Peak School Supply · Placed Oct 18 · Expected Oct 22'),
-    ).toBeInTheDocument();
+    const folded = within(ordered).getByText('Expected Oct 22').closest('p');
+    expect(folded).toHaveTextContent(
+      /^Lantern Peak School Supply · Placed Oct 18 · Expected Oct 22$/,
+    );
     expect(within(ordered).getByText('4 lines')).toBeInTheDocument();
     // The status label beside the number as well as in its own column.
     expect(within(ordered).getAllByText('Ordered')).toHaveLength(2);
