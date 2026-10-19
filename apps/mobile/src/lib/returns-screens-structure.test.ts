@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import * as vm from 'node:vm';
 
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
@@ -38,14 +39,17 @@ import { palette, type Palette } from './theme';
  *   - statuses on the shared pill tones, photos on the white photo ground,
  *     no fixed colours, no single-mode accents, no word in the faint inks,
  *     and the colours each screen names measured in both modes;
- *   - a defect fixed: a pull to refresh sent before an action could paint
- *     the RMA back to how it was (Receive offered again) when its answer
- *     came in after the action's.
+ *   - two defects fixed: the list said "No returns match this view." while
+ *     the read for the chip or search on screen was still on its way (Try
+ *     again after a failed first read, a chip just tapped), and a pull to
+ *     refresh sent before an action could paint the RMA back to how it was
+ *     (Receive offered again) when its answer came in after the action's.
  *
  * The behaviour stays pinned where it was: returns-screen-wiring,
  * returns-exchange-wiring, requester-returns-wiring, returns-view.still-
  * waiting and exception-sheets-keyboard-wiring. The mobile suite has no React
- * Native renderer, so the screens are read with the TypeScript parser.
+ * Native renderer, so the screens are read with the TypeScript parser, and
+ * the pure rules the screens define are run in a sandbox.
  */
 
 const MOBILE_ROOT = path.resolve(__dirname, '../..');
@@ -120,6 +124,23 @@ function wordsOf(file: string): string[] {
   };
   visit(sf);
   return out;
+}
+
+/**
+ * A top-level function of a screen, compiled from the repository's own
+ * source (never from input) and run in an empty context: the pure rules
+ * whose answers are the behaviour.
+ */
+function screenFunction(file: string, name: string): (...args: unknown[]) => unknown {
+  const sf = treeOf(file);
+  const fn = sf.statements.find(
+    (st): st is ts.FunctionDeclaration => ts.isFunctionDeclaration(st) && st.name?.text === name,
+  );
+  expect(fn, `${name} in ${file}`).toBeDefined();
+  const js = ts.transpileModule(`${fn!.getText(sf)}\n${name};`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  return new vm.Script(js).runInNewContext({}) as (...args: unknown[]) => unknown;
 }
 
 describe('the per-mode palette on every returns screen', () => {
@@ -315,6 +336,50 @@ describe('Returns list', () => {
     );
     expect(code).toContain('{loadError && rows.length === 0 ? (');
     expect(code).toContain('loadError && rows.length > 0 ? (');
+  });
+
+  // The defect: Try again after a failed first read, or a chip tapped on an
+  // empty list, said "No returns match this view." before the read answered.
+  describe('the empty words wait for the read on screen to answer (defect fix)', () => {
+    // Compiled inside each test, so a missing rule fails these tests and not the file.
+    const emptyState = (answered: string | null, shown: string) =>
+      (screenFunction(LIST, 'returnsEmptyState') as (a: string | null, s: string) => string)(
+        answered,
+        shown,
+      );
+    const key = (filter: string, q: string) =>
+      (screenFunction(LIST, 'returnsQueryKey') as (f: string, q: string) => string)(filter, q);
+
+    it('nothing answered yet (the first read failed, Try again is on its way): the spinner', () => {
+      expect(emptyState(null, key('all', ''))).toBe('reading');
+    });
+
+    it('the read for this chip and search answered with no rows: the empty words', () => {
+      expect(emptyState(key('closed', 'SO-12'), key('closed', 'SO-12'))).toBe('empty');
+    });
+
+    it('another chip or another search on screen than the one answered: the spinner', () => {
+      expect(emptyState(key('all', ''), key('closed', ''))).toBe('reading');
+      expect(emptyState(key('all', ''), key('all', 'RMA'))).toBe('reading');
+      // The key keeps the two apart, whatever is typed.
+      expect(key('a', 'b|c')).not.toBe(key('a|b', 'c'));
+    });
+
+    it('the screen records the answered read only when it is the newest, and the list asks the rule', () => {
+      expect(code).toContain(
+        'if (!guard.isCurrent(seq)) return; setRows(page.rows); setCursor(page.nextCursor); setAnswered(returnsQueryKey(filter, q));',
+      );
+      expect(code.match(/setAnswered\(/g)).toHaveLength(1);
+      expect(code).toContain(
+        'const emptyState = returnsEmptyState(answered, returnsQueryKey(filter, q));',
+      );
+      expect(code).toContain(
+        "ListEmptyComponent={ emptyState === 'empty' ? ( <View style={styles.empty}>",
+      );
+      expect(code).toContain(
+        ') : ( <ActivityIndicator color={c.ink} style={{ marginTop: 32 }} /> ) } ListFooterComponent=',
+      );
+    });
   });
 });
 

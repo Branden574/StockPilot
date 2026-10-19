@@ -65,13 +65,31 @@ import { showWriteCta } from '@/lib/cta-gating';
  * with its status on the shared pill tones and its photos on the white photo
  * ground (6.14); on the iPad the chosen RMA carries the accent rail of the
  * reference's master-detail list (6.18). A failed read says so in its own
- * words with the warning glyph.
+ * words with the warning glyph, and the empty words wait for the read on
+ * screen to answer (returnsEmptyState).
  */
 const SEARCH_DEBOUNCE_MS = 250;
 /** From this window width the list keeps the RMA beside it (iPad split view). */
 const SPLIT_MIN_WIDTH = 900;
 /** The filter chips' words are control labels: the control ceiling. */
 const CONTROL_CAP = capTo(13, TYPE_CEILING.control);
+
+/** The read one page of the list answers: the chosen filter and the search typed. */
+function returnsQueryKey(filter: string, q: string): string {
+  return JSON.stringify([filter, q]);
+}
+
+/**
+ * What an empty list shows. "No returns match this view." is an answer, so
+ * it shows only once the read for the filter and search on screen has
+ * answered with no rows. Until then (Try again after a failed first read, a
+ * filter chip or a search that just changed) the list shows the spinner:
+ * before, it said "No returns match this view." while the read was still on
+ * its way.
+ */
+function returnsEmptyState(answeredKey: string | null, shownKey: string): 'empty' | 'reading' {
+  return answeredKey === shownKey ? 'empty' : 'reading';
+}
 
 export default function ReturnsListScreen() {
   const { c } = useTheme();
@@ -95,6 +113,8 @@ export default function ReturnsListScreen() {
   const [loadingMore, setLoadingMore] = React.useState(false);
   const [refreshing, setRefreshing] = React.useState(false);
   const [loadError, setLoadError] = React.useState<string | null>(null);
+  // The filter and search the last first-page read answered for.
+  const [answered, setAnswered] = React.useState<string | null>(null);
   const [scheduler] = React.useState(() => createDebouncedScheduler(SEARCH_DEBOUNCE_MS));
   const [guard] = React.useState(() => createSequenceGuard());
   // Page loads: a fresh first-page load invalidates any page still loading.
@@ -114,6 +134,7 @@ export default function ReturnsListScreen() {
       if (!guard.isCurrent(seq)) return;
       setRows(page.rows);
       setCursor(page.nextCursor);
+      setAnswered(returnsQueryKey(filter, q));
     } catch (e) {
       if (!guard.isCurrent(seq)) return;
       setLoadError(describeReturnError(e));
@@ -158,6 +179,7 @@ export default function ReturnsListScreen() {
     else router.replace('/');
   };
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
+  const emptyState = returnsEmptyState(answered, returnsQueryKey(filter, q));
 
   return (
     <View style={[styles.root, { backgroundColor: c.paper }]}>
@@ -323,15 +345,19 @@ export default function ReturnsListScreen() {
                   />
                 }
                 ListEmptyComponent={
-                  <View style={styles.empty}>
-                    <Undo2
-                      size={32}
-                      color={c.ink4}
-                      strokeWidth={1.3}
-                      style={{ marginBottom: 12 }}
-                    />
-                    <Display size={18}>{RETURNS_COPY.listEmpty}</Display>
-                  </View>
+                  emptyState === 'empty' ? (
+                    <View style={styles.empty}>
+                      <Undo2
+                        size={32}
+                        color={c.ink4}
+                        strokeWidth={1.3}
+                        style={{ marginBottom: 12 }}
+                      />
+                      <Display size={18}>{RETURNS_COPY.listEmpty}</Display>
+                    </View>
+                  ) : (
+                    <ActivityIndicator color={c.ink} style={{ marginTop: 32 }} />
+                  )
                 }
                 ListFooterComponent={
                   loadingMore ? (
