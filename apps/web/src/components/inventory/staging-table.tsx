@@ -240,9 +240,22 @@ const AGE_OPTIONS: ReadonlyArray<{ value: StagingAgeFilter; label: string }> = [
  *  sentinel of its own (distinct from NO_PO = the "unattributed rows" option). */
 const ALL_POS = '__all__';
 
-/** A filter select in the toolbar: full width on a phone, its own width from
- *  sm, the quiet label then the value, and the chevron at the far end. */
-const FILTER_SELECT = 'w-full justify-start gap-1.5 sm:w-auto [&>svg]:ml-auto';
+/**
+ * A filter select drawn as the filter trigger in its "Label: value" form
+ * (DESIGN-SPEC 6.4 and 6.21, as the Items toolbar's Sort): sized to its
+ * words, the quiet label then the value in ink at 500, the hairline border
+ * that strengthens on hover, while its menu is open and while the filter is
+ * set, and the 11 px chevron. It stays the Select it was (role, name and keys
+ * unchanged); below sm the primitive makes it 44 px tall with 16 px words,
+ * and the row wraps instead of stacking one per line. (Radix's SelectValue
+ * takes no className, so the value's ink and weight are the trigger's and
+ * the label sets its own.)
+ */
+const FILTER_SELECT =
+  'border-border text-foreground hover:border-line-strong data-[active]:border-line-strong data-[state=open]:border-line-strong w-auto max-w-full shrink-0 justify-start gap-1.5 whitespace-nowrap font-medium [&>svg]:size-[11px]';
+
+/** `data-active` while the filter is set, as FilterTrigger marks it. */
+const filterActive = (active: boolean) => (active ? '' : undefined);
 
 // Per-row selection identity. Neither field is unique on its own: one item can
 // hold stock in BOTH staging and unplaced (two rows, same itemId), and one
@@ -312,6 +325,9 @@ export function StagingTable({
     [visibleRows, canPlace],
   );
   const selectedRows = visibleRows.filter((r) => selectedKeys.has(rowKey(r)));
+  // The bulk-place bar: only for people who may place, only while VISIBLE
+  // rows are ticked (as before).
+  const showBulkBar = canPlace && selectedRows.length > 0;
   const allSelected =
     placeableKeys.length > 0 && placeableKeys.every((k) => selectedKeys.has(k));
   function toggleRow(key: string) {
@@ -368,7 +384,7 @@ export function StagingTable({
           />
         }
       >
-        <div className="relative w-full sm:w-[264px]">
+        <div className="relative w-full sm:w-[240px]">
           <Search
             aria-hidden
             className="text-muted-foreground pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
@@ -406,7 +422,8 @@ export function StagingTable({
           onValueChange={(v) => updateFilters({ poNumber: v === ALL_POS ? null : v })}
         >
           <SelectTrigger
-            className={cn(FILTER_SELECT, 'sm:w-[220px]')}
+            className={FILTER_SELECT}
+            data-active={filterActive(filters.poNumber !== null)}
             aria-label="Filter by purchase order"
           >
             <FilterSelectLabel>PO</FilterSelectLabel>
@@ -431,7 +448,11 @@ export function StagingTable({
           value={filters.source}
           onValueChange={(v) => updateFilters({ source: v as StagingSourceFilter })}
         >
-          <SelectTrigger className={cn(FILTER_SELECT, 'sm:w-[176px]')} aria-label="Filter by source">
+          <SelectTrigger
+            className={FILTER_SELECT}
+            data-active={filterActive(filters.source !== 'all')}
+            aria-label="Filter by source"
+          >
             <FilterSelectLabel>Source</FilterSelectLabel>
             <SelectValue />
           </SelectTrigger>
@@ -448,7 +469,11 @@ export function StagingTable({
           value={filters.age}
           onValueChange={(v) => updateFilters({ age: v as StagingAgeFilter })}
         >
-          <SelectTrigger className={cn(FILTER_SELECT, 'sm:w-[204px]')} aria-label="Filter by age">
+          <SelectTrigger
+            className={FILTER_SELECT}
+            data-active={filterActive(filters.age !== 'all')}
+            aria-label="Filter by age"
+          >
             <FilterSelectLabel>Age</FilterSelectLabel>
             <SelectValue />
           </SelectTrigger>
@@ -462,52 +487,124 @@ export function StagingTable({
         </Select>
       </FilterBar>
 
-      {/* The active filters (chips that each remove one) and the live count. */}
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
-        {filtersActive && (
-          <div className="flex min-w-0 flex-wrap items-center gap-2" data-testid="staging-active-filters">
-            {normalizeStagingText(filters.query) !== '' && (
-              <ActiveFilterChip
-                label={`Search: ${filters.query.trim()}`}
-                onRemove={() => updateFilters({ query: '' })}
-              />
-            )}
-            {filters.poNumber !== null && (
-              <ActiveFilterChip
-                label={`PO: ${poChipLabel}`}
-                onRemove={() => updateFilters({ poNumber: null })}
-              />
-            )}
-            {filters.source !== 'all' && (
-              <ActiveFilterChip
-                label={`Source: ${sourceChipLabel}`}
-                onRemove={() => updateFilters({ source: 'all' })}
-              />
-            )}
-            {ageChipLabel && (
-              <ActiveFilterChip
-                label={`Age: ${ageChipLabel}`}
-                onRemove={() => updateFilters({ age: 'all' })}
-              />
-            )}
+      {/* The active filters: chips that each remove one, then Clear filters.
+          Shown only while a filter is set, and still there while rows are
+          ticked, so a filter can be taken off at any time. */}
+      {filtersActive && (
+        <div
+          className="flex min-w-0 flex-wrap items-center gap-2"
+          data-testid="staging-active-filters"
+        >
+          {normalizeStagingText(filters.query) !== '' && (
+            <ActiveFilterChip
+              label={`Search: ${filters.query.trim()}`}
+              onRemove={() => updateFilters({ query: '' })}
+            />
+          )}
+          {filters.poNumber !== null && (
+            <ActiveFilterChip
+              label={`PO: ${poChipLabel}`}
+              onRemove={() => updateFilters({ poNumber: null })}
+            />
+          )}
+          {filters.source !== 'all' && (
+            <ActiveFilterChip
+              label={`Source: ${sourceChipLabel}`}
+              onRemove={() => updateFilters({ source: 'all' })}
+            />
+          )}
+          {ageChipLabel && (
+            <ActiveFilterChip
+              label={`Age: ${ageChipLabel}`}
+              onRemove={() => updateFilters({ age: 'all' })}
+            />
+          )}
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={clearFilters}
+            className="text-muted-foreground font-normal"
+          >
+            <X aria-hidden /> Clear filters
+          </Button>
+        </div>
+      )}
+
+      {/* The selection band (DESIGN-SPEC 6.21, the zero-shift swap of the
+          Items bar). The live count and the bulk-place bar share ONE grid
+          cell that always holds the bar's height, so ticking the first row
+          swaps the bar in over the count instead of inserting it above the
+          table: no row moves under the pointer, and the next click lands on
+          the checkbox the person aimed at. (Before, the bar appeared as a new
+          strip on top of the table and pushed every row down by its height,
+          the "select-all vanished / 3-4 clicks" defect fixed on Items.) The
+          bar shows only while VISIBLE rows are ticked; the count comes back
+          when the selection is cleared. */}
+      <div data-slot="staging-selection-band" className="grid min-w-0">
+        <div
+          data-slot="staging-count-layer"
+          className={cn(
+            'col-start-1 row-start-1 flex min-h-[38px] min-w-0 items-center justify-end max-sm:min-h-[46px]',
+            showBulkBar && 'invisible',
+          )}
+        >
+          <span
+            className="text-muted-foreground text-[12.5px] tabular-nums"
+            aria-live="polite"
+            data-testid="staging-count"
+          >
+            {formatStagingCount(visibleRows.length, rows.length)}
+          </span>
+        </div>
+        {showBulkBar && (
+          // The Items bar's strip: a card at the band's height, the count in
+          // mono, the ink commit button, and Clear at the far end. 4 px
+          // between actions on a mouse; 8 px below sm and on coarse
+          // pointers, where each grows a 44 px touch area.
+          <div
+            data-slot="staging-bulk-bar"
+            className="border-border bg-card col-start-1 row-start-1 flex min-h-9 min-w-0 flex-wrap items-center gap-1 rounded-lg border px-3 py-1 pointer-coarse:gap-2 max-sm:gap-2 max-sm:py-2"
+          >
+            <span className="text-foreground mr-1 font-mono text-[12.5px] tabular-nums">
+              {selectedRows.length} selected
+            </span>
+            <BulkPlaceDialog
+              // itemType and bookStorage travel WITH the row. Dropping them was
+              // why the bulk dialog could not tell a book from a Chromebook —
+              // and therefore could neither offer a crate nor warn that it was
+              // about to overwrite one.
+              rows={selectedRows.map((r) => ({
+                itemId: r.itemId,
+                name: r.name,
+                itemType: r.itemType,
+                sourceLocationId: r.sourceLocationId,
+                quantity: r.quantity,
+                warehouseId: r.warehouseId,
+                bookStorage: r.bookStorage,
+              }))}
+              destinationsMap={destinationsMap}
+              warehouseNames={warehouseNames}
+              canMintDestination={canMintDestination}
+              onPlaced={clearSelection}
+              trigger={
+                <Button size="sm" className="h-7 px-2.5 text-[13px] [&_svg]:size-3.5">
+                  <PackageCheck aria-hidden strokeWidth={1.6} />
+                  Place selected
+                </Button>
+              }
+            />
             <Button
               type="button"
               variant="ghost"
               size="sm"
-              onClick={clearFilters}
-              className="text-muted-foreground font-normal"
+              onClick={clearSelection}
+              className="text-muted-foreground ml-auto h-7 px-2 text-[13px] font-normal [&_svg]:size-3.5"
             >
-              <X aria-hidden /> Clear filters
+              <X aria-hidden strokeWidth={1.6} /> Clear
             </Button>
           </div>
         )}
-        <span
-          className="text-muted-foreground ml-auto text-[12.5px] tabular-nums"
-          aria-live="polite"
-          data-testid="staging-count"
-        >
-          {formatStagingCount(visibleRows.length, rows.length)}
-        </span>
       </div>
 
       {rows.length === 0 ? (
@@ -535,54 +632,10 @@ export function StagingTable({
           }
         />
       ) : (
-        <div className="border-border bg-card min-w-0 overflow-hidden rounded-lg border">
-          {/* Bulk-place bar (DESIGN-SPEC 6.21) — appears when VISIBLE rows are
-              selected, as a strip at the top of the table card. */}
-          {canPlace && selectedRows.length > 0 && (
-            <div
-              data-slot="staging-bulk-bar"
-              className="border-border bg-sunk flex flex-wrap items-center gap-2 border-b px-4 py-2"
-            >
-              <span className="text-foreground font-mono text-[12.5px] tabular-nums">
-                {selectedRows.length} selected
-              </span>
-              <BulkPlaceDialog
-                // itemType and bookStorage travel WITH the row. Dropping them was
-                // why the bulk dialog could not tell a book from a Chromebook —
-                // and therefore could neither offer a crate nor warn that it was
-                // about to overwrite one.
-                rows={selectedRows.map((r) => ({
-                  itemId: r.itemId,
-                  name: r.name,
-                  itemType: r.itemType,
-                  sourceLocationId: r.sourceLocationId,
-                  quantity: r.quantity,
-                  warehouseId: r.warehouseId,
-                  bookStorage: r.bookStorage,
-                }))}
-                destinationsMap={destinationsMap}
-                warehouseNames={warehouseNames}
-                canMintDestination={canMintDestination}
-                onPlaced={clearSelection}
-                trigger={
-                  <Button size="sm">
-                    <PackageCheck aria-hidden />
-                    Place selected
-                  </Button>
-                }
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={clearSelection}
-                className="text-muted-foreground ml-auto font-normal"
-              >
-                Clear
-              </Button>
-            </div>
-          )}
-
+        <div
+          data-slot="staging-table-card"
+          className="border-border bg-card min-w-0 overflow-hidden rounded-lg border"
+        >
           <Table className="min-w-[760px]">
             <TableHeader>
               <TableRow className="hover:bg-transparent [&>th]:whitespace-nowrap">
@@ -795,7 +848,7 @@ export function StagingTable({
  *  filter-trigger recipe's "Label: value" form (DESIGN-SPEC 6.4, 6.21). */
 function FilterSelectLabel({ children }: { children: React.ReactNode }) {
   return (
-    <span aria-hidden className="text-muted-foreground shrink-0">
+    <span aria-hidden className="text-muted-foreground shrink-0 font-normal">
       {children}:
     </span>
   );

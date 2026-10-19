@@ -12,12 +12,20 @@
  *   `main table` anchors still resolve, a selected row carries the selected
  *   tint, and a row without a warehouse cannot be ticked.
  * - The two empty states are the shared state panel, with their words.
+ * - The bulk-place bar swaps in over the live count, in a band that always
+ *   holds the bar's height, instead of appearing on top of the table: the
+ *   table no longer moves down when the first row is ticked (the Items
+ *   "zero-shift swap"; before, every row slid down by the bar's height and
+ *   the next click missed its checkbox). The filters and chips stay usable.
+ * - PO, Source and Age are filter triggers sized to their words, marked
+ *   data-active while set, and still the same named comboboxes.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import userEvent from '@testing-library/user-event';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 const router = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
 vi.mock('next/navigation', () => ({
@@ -26,6 +34,13 @@ vi.mock('next/navigation', () => ({
 }));
 
 import { StagingTable, type StagingTableProps } from './staging-table';
+
+// Radix Select needs pointer-capture APIs happy-dom doesn't implement.
+beforeAll(() => {
+  Element.prototype.hasPointerCapture ??= () => false;
+  Element.prototype.setPointerCapture ??= () => {};
+  Element.prototype.releasePointerCapture ??= () => {};
+});
 
 type Row = StagingTableProps['rows'][number];
 
@@ -152,5 +167,121 @@ describe('Staging files keep the neutral hover (P2.1 hand-off)', () => {
     const source = readFileSync(path.join(__dirname, file), 'utf8');
     expect(source).not.toMatch(/(hover|focus|focus-visible):bg-accent\b/);
     expect(source).not.toMatch(/(hover|focus|focus-visible):text-accent-foreground\b/);
+  });
+});
+
+describe('Staging selection band (the zero-shift bulk bar)', () => {
+  const slot = (container: HTMLElement, name: string) =>
+    container.querySelector<HTMLElement>(`[data-slot="${name}"]`);
+
+  it('ticking a row swaps the bar in over the count, in the band above the table, so the table does not move', () => {
+    const { container } = renderTable({
+      rows: [row('a', 'Book A'), row('c', 'Book C', { sourcePoNumber: 'PO-200' })],
+    });
+    const band = slot(container, 'staging-selection-band')!;
+    const card = slot(container, 'staging-table-card')!;
+    const countLayer = slot(container, 'staging-count-layer')!;
+    expect(band).not.toBeNull();
+    // The band sits straight above the table card and holds the live count.
+    expect(band.nextElementSibling).toBe(card);
+    expect(countLayer.parentElement).toBe(band);
+    expect(countLayer).toContainElement(screen.getByTestId('staging-count'));
+    expect(countLayer).not.toHaveClass('invisible');
+    // It already holds the bar's height (38 px; 46 px below sm, where the
+    // bar pads 8 px), so the bar has room before anything is ticked.
+    expect(countLayer).toHaveClass('min-h-[38px]', 'max-sm:min-h-[46px]');
+    expect(slot(container, 'staging-bulk-bar')).toBeNull();
+    const firstRowBefore = card.querySelector('tbody tr');
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select Book A' }));
+
+    const bar = slot(container, 'staging-bulk-bar')!;
+    expect(bar).toHaveTextContent('1 selected');
+    // The bar lives in the band's one grid cell, over the count layer...
+    expect(bar.parentElement).toBe(band);
+    expect(bar).toHaveClass('col-start-1', 'row-start-1');
+    expect(countLayer).toHaveClass('col-start-1', 'row-start-1', 'invisible');
+    // ...never inside the table card or as a new block before it.
+    expect(card).not.toContainElement(bar);
+    expect(band.nextElementSibling).toBe(card);
+    expect(card.querySelector('tbody tr')).toBe(firstRowBefore);
+    expect(card.firstElementChild?.querySelector('table')).not.toBeNull();
+
+    // Clear: the bar goes and the count is back in the same place.
+    fireEvent.click(within(bar).getByRole('button', { name: 'Clear' }));
+    expect(slot(container, 'staging-bulk-bar')).toBeNull();
+    expect(countLayer).not.toHaveClass('invisible');
+    expect(screen.getByTestId('staging-count')).toHaveTextContent('2 items');
+  });
+
+  it('keeps the search, the filters and the chips usable while rows are ticked', () => {
+    const { container } = renderTable({
+      rows: [row('a', 'Book A'), row('c', 'Book C', { sourcePoNumber: 'PO-200' })],
+    });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select Book A' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select Book C' }));
+    expect(slot(container, 'staging-bulk-bar')).toHaveTextContent('2 selected');
+
+    // Nothing the person filters with is hidden by the swap.
+    const search = screen.getByRole('searchbox', { name: 'Search staging items' });
+    for (const control of [
+      search,
+      screen.getByRole('combobox', { name: 'Filter by purchase order' }),
+      screen.getByRole('combobox', { name: 'Filter by source' }),
+      screen.getByRole('combobox', { name: 'Filter by age' }),
+    ]) {
+      expect(control.closest('.invisible')).toBeNull();
+    }
+
+    // Filtering while ticked still prunes the hidden row (the kept rule),
+    // and the chip that says so is outside the band and stays reachable.
+    fireEvent.change(search, { target: { value: 'Book C' } });
+    expect(slot(container, 'staging-bulk-bar')).toHaveTextContent('1 selected');
+    const chips = screen.getByTestId('staging-active-filters');
+    expect(chips.closest('[data-slot="staging-selection-band"]')).toBeNull();
+    expect(chips.closest('.invisible')).toBeNull();
+    fireEvent.click(within(chips).getByRole('button', { name: 'Remove filter Search: Book C' }));
+    expect(screen.queryByTestId('staging-active-filters')).not.toBeInTheDocument();
+    // Book A was dropped when it was hidden, and does not come back ticked.
+    expect(screen.getByRole('checkbox', { name: 'Select Book A' })).toHaveAttribute(
+      'aria-checked',
+      'false',
+    );
+    expect(slot(container, 'staging-bulk-bar')).toHaveTextContent('1 selected');
+  });
+
+  it('draws PO, Source and Age as filter triggers marked active while set, under their names', async () => {
+    const user = userEvent.setup();
+    renderTable({
+      rows: [row('a', 'Book A'), row('c', 'Book C', { sourcePoNumber: 'PO-200' })],
+    });
+    const po = screen.getByRole('combobox', { name: 'Filter by purchase order' });
+    const source = screen.getByRole('combobox', { name: 'Filter by source' });
+    const age = screen.getByRole('combobox', { name: 'Filter by age' });
+    for (const trigger of [po, source, age]) expect(trigger).not.toHaveAttribute('data-active');
+    // The quiet label and the value, as before.
+    expect(po).toHaveTextContent('PO:All POs');
+    expect(source).toHaveTextContent('Source:All sources');
+    expect(age).toHaveTextContent('Age:Any age');
+
+    // Click-to-filter from a row sets the PO filter: its trigger is active.
+    fireEvent.click(screen.getAllByRole('button', { name: 'PO-200' })[0]!);
+    expect(po).toHaveAttribute('data-active');
+    expect(po).toHaveTextContent('PO-200');
+
+    await user.click(source);
+    await user.click(
+      within(await screen.findByRole('listbox')).getByRole('option', { name: 'Unplaced' }),
+    );
+    expect(source).toHaveAttribute('data-active');
+    expect(age).not.toHaveAttribute('data-active');
+
+    // Clear filters: every trigger is idle again.
+    fireEvent.click(
+      within(screen.getByTestId('staging-active-filters')).getByRole('button', {
+        name: 'Clear filters',
+      }),
+    );
+    for (const trigger of [po, source, age]) expect(trigger).not.toHaveAttribute('data-active');
   });
 });
