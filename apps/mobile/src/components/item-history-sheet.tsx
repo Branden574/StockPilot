@@ -481,12 +481,19 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 12,
   },
-  // (44 - 18) / 2: above, below and to the right the frame takes up the X's
-  // 18pt, as before, so the header and the X stay where they were.
+  // The frame keeps the X's 18pt in the layout, so the header and the X stay
+  // where they were. Below, it reaches only the header's 8pt bottom padding,
+  // ending where the item name (a later sibling, which would win the tap)
+  // starts; the other 18pt go above, into the header's top padding and the
+  // grabber row's empty right side, where nothing is tappable. The equal
+  // padding keeps the X centred where it was; to the right, (44 - 18) / 2.
   close: {
     minWidth: MIN_TAP,
     minHeight: MIN_TAP,
-    marginVertical: -13,
+    marginTop: -18,
+    marginBottom: -8,
+    paddingTop: 18,
+    paddingBottom: 8,
     marginRight: -13,
     alignItems: 'center',
     justifyContent: 'center',

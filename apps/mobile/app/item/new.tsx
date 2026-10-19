@@ -1073,7 +1073,7 @@ export default function NewItem() {
             />
           </Field>
 
-          <Row>
+          <Row marginTop={SKU_ROW_GAP}>
             <Field
               flex
               label="SKU"
@@ -1566,10 +1566,23 @@ function Field({
  * they are typing into. Past the threshold the row becomes one column, which
  * reflows instead of clamping.
  */
-function Row({ children }: { children: React.ReactNode }) {
+function Row({ children, marginTop }: { children: React.ReactNode; marginTop?: number }) {
   const stacked = useStackedRow();
-  return <View style={{ flexDirection: stacked ? 'column' : 'row', gap: 10 }}>{children}</View>;
+  return (
+    <View style={{ flexDirection: stacked ? 'column' : 'row', gap: 10, marginTop }}>
+      {children}
+    </View>
+  );
 }
+
+/**
+ * The SKU / BARCODE row's extra room above: SKU's Auto is a 44pt frame that
+ * reaches up from the label row, and with this gap it runs exactly from the
+ * NAME box's bottom (14 + 8 above the label row) to the SKU box's top (the
+ * 16pt label row and Field's 6pt gap), so it overlaps neither box. A later
+ * sibling wins a tap where frames overlap, so an overlap would be lost to it.
+ */
+const SKU_ROW_GAP = 8;
 
 function ChipPickerField({
   label,
@@ -1752,11 +1765,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   // Auto (suggest a SKU): a 44pt target around its word, held at the right
-  // edge, its margins giving back what the label row does not need.
+  // edge. Its margins give back all but the 16pt label row: 22pt above reach
+  // the NAME box's bottom (SKU_ROW_GAP) and 6pt below the SKU box's top, so
+  // no later sibling covers any of the frame. The equal padding keeps the
+  // word centred in the label row, where it was.
   autoSku: {
     minWidth: MIN_TAP,
     minHeight: MIN_TAP,
-    marginVertical: -14,
+    marginTop: -22,
+    marginBottom: -6,
+    paddingTop: 22,
+    paddingBottom: 6,
     alignItems: 'flex-end',
     justifyContent: 'center',
   },

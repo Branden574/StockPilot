@@ -9,9 +9,9 @@ import { Mono } from '@/components/ui/text';
 import { useTheme } from '@/lib/use-theme';
 
 /**
- * Full-screen photo viewer — a transparent Modal over a near-black backdrop
- * with pinch-zoom via the classic iOS ScrollView zoom (maximumZoomScale +
- * a single viewport-sized child). No new dependencies.
+ * Full-screen photo viewer — a transparent Modal over the page colour of the
+ * device's mode, with pinch-zoom via the classic iOS ScrollView zoom
+ * (maximumZoomScale + a single viewport-sized child). No new dependencies.
  *
  * The image goes in as the master signed URL via CachedImage, so the viewer
  * hits the same disk cache entry the list rows and the detail hero already
