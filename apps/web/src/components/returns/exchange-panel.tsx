@@ -93,7 +93,8 @@ export function ExchangeRail({ rail }: { rail: RailStep[] }) {
               also said in words, so no state rests on colour or a dash. */}
           <span
             className={cn(
-              'inline-flex h-6 items-center whitespace-nowrap rounded-full border px-2.5 leading-none',
+              // inline-block, not flex: a flex item would drop the space before "·".
+              'inline-block whitespace-nowrap rounded-full border px-2.5 py-[3px] leading-4',
               s.state === 'done' && 'bg-sunk text-ink-2 border-line-strong',
               s.state === 'current' && 'border-foreground text-foreground bg-card font-medium',
               s.state === 'stopped' &&
@@ -503,7 +504,8 @@ export function ReplacementOrderSection({
   return (
     <DetailSection
       aria-label={RETURNS_COPY.replacementOrderHeading}
-      title={RETURNS_COPY.exchangeStatusHeading}
+      // Core's words are capitals: drawn as the card label recipe, like RETURNING.
+      title={<span className={eyebrowClass}>{RETURNS_COPY.exchangeStatusHeading}</span>}
       aside={<Badge variant="outline">{exchange.statusLabel}</Badge>}
       bodyClassName="space-y-3"
     >

@@ -339,7 +339,7 @@ describe('the return label', () => {
 });
 
 describe('History', () => {
-  it('lists the chain in order as the shared timeline, each with who and a machine-readable time', () => {
+  it('lists the chain in order as activity rows, each with who and a machine-readable time', () => {
     const chain = [
       {
         at: '2026-10-01T00:00:00Z',

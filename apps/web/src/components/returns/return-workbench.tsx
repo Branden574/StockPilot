@@ -26,7 +26,7 @@ import { DetailSection } from '@/components/patterns/detail-section';
 import { KeyValueList, KeyValueRow } from '@/components/patterns/key-value-row';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { PatternPhoto } from '@/components/patterns/photo';
-import { Timeline, TimelineEntry } from '@/components/patterns/timeline';
+import { Timeline } from '@/components/patterns/timeline';
 import { ReturnStatusBadge } from '@/components/returns/return-status-badge';
 import { RestockDestinationPicker } from '@/components/returns/restock-destination-picker';
 import { cardClass, eyebrowClass } from '@/components/returns/returns-ui';
@@ -1296,39 +1296,39 @@ export function ReturnWorkbench({
         />
       ) : null}
 
-      {/* The chain: the decision log as the shared timeline, newest last as
-          the service orders it. */}
-      <DetailSection title="History" aria-label="History">
-        <Timeline>
+      {/* The chain, oldest first as the service sorts it: the activity-row
+          recipe of the shared timeline (DESIGN-SPEC 6.16, the reference's
+          Movement history card), what happened and who on the left, when on
+          the right. A long decision sentence wraps, never cut. */}
+      <DetailSection title="History" aria-label="History" flush>
+        <Timeline variant="rows">
           {wb.chain.map((e, i) => (
-            <TimelineEntry
+            <li
               key={`${e.at}-${i}`}
-              tone={i === wb.chain.length - 1 ? 'accent' : 'muted'}
-              title={
-                <>
-                  {e.label}
-                  {e.actorName ? (
-                    <span className="text-muted-foreground"> · {e.actorName}</span>
-                  ) : null}
-                </>
-              }
-              meta={
-                <time
-                  dateTime={e.at}
-                  className="tabular-nums"
-                  title={e.at}
-                  // The server renders this before the browser hydrates it; a
-                  // minute between the two changes the words ("3 minutes ago"
-                  // to "4"). Tolerate it instead of React error #418.
-                  suppressHydrationWarning
-                >
-                  {formatRelative(e.at)}
-                </time>
-              }
-            />
+              data-slot="timeline-row"
+              className="border-border grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-4 border-b px-[18px] py-2.5 text-[13.5px] leading-5 last:border-b-0"
+            >
+              <span className="min-w-0 [overflow-wrap:anywhere]">
+                {e.label}
+                {e.actorName ? (
+                  <span className="text-muted-foreground"> · {e.actorName}</span>
+                ) : null}
+              </span>
+              <time
+                dateTime={e.at}
+                className="text-muted-foreground whitespace-nowrap text-[12px] tabular-nums leading-5"
+                title={e.at}
+                // The server renders this before the browser hydrates it; a
+                // minute between the two changes the words ("3 minutes ago"
+                // to "4"). Tolerate it instead of React error #418.
+                suppressHydrationWarning
+              >
+                {formatRelative(e.at)}
+              </time>
+            </li>
           ))}
           {wb.chain.length === 0 ? (
-            <li className="text-muted-foreground text-[13.5px]">No history yet.</li>
+            <li className="text-muted-foreground px-[18px] py-3 text-[13.5px]">No history yet.</li>
           ) : null}
         </Timeline>
       </DetailSection>

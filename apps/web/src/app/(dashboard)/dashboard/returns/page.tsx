@@ -5,7 +5,6 @@ import type { ReactNode } from 'react';
 
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { FilterChipLink } from '@/components/patterns/chip';
-import { FilterBar } from '@/components/patterns/filter-bar';
 import { PageHeader } from '@/components/patterns/page-header';
 import { StatePanel } from '@/components/patterns/state-panel';
 import { Thumb } from '@/components/patterns/thumb';
@@ -55,8 +54,8 @@ const PAGE_BOX =
  * Visibility follows returns:read (or manage); the lifecycle actions live on
  * the workbench and in the database functions.
  *
- * Redesign (P4.B3): the shared page header, the nine filters as filter chips
- * beside the search in one wrapping row, and the table drawn as the Orders
+ * Redesign (P4.B3): the shared page header, the search leading the toolbar,
+ * the nine filters as filter chips, and the table drawn as the Orders
  * and Movements tables are (a card that scrolls sideways inside itself, the
  * pager in its footer). Every filter, URL, word and gate is the same.
  */
@@ -117,52 +116,49 @@ export default async function ReturnsPage({
         }
       />
 
-      {/* The nine filters as filter chips (DESIGN-SPEC 6.6, the Movements
-          type chips) and the search beside them: one row that wraps. The
-          chips stay links in a navigation landmark named "Return filters"
-          with aria-current on the open one; the search is the same GET form,
-          so it works without script and keeps the open filter. */}
-      <FilterBar
-        leading={
-          <nav className="flex min-w-0 flex-wrap gap-2" aria-label="Return filters">
-            {filters.map((f) => {
-              const isActive = filter === f.id;
-              return (
-                <FilterChipLink
-                  key={f.id}
-                  href={hrefFor({ filter: f.id, cursor: null })}
-                  aria-current={isActive ? 'page' : undefined}
-                  active={isActive}
-                  size="md"
-                >
-                  {f.label}
-                </FilterChipLink>
-              );
-            })}
-          </nav>
-        }
+      {/* The search leads the toolbar, as on Items (DESIGN-SPEC 6.3): the
+          same GET form as before, so it works without script and keeps the
+          open filter. Full width on a phone, as it was, 288 px from sm up. */}
+      <form
+        action="/dashboard/returns"
+        method="get"
+        className="relative w-full sm:w-72"
+        role="search"
       >
-        <form
-          action="/dashboard/returns"
-          method="get"
-          className="relative w-full sm:w-72"
-          role="search"
-        >
-          {filter !== 'all' ? <input type="hidden" name="filter" value={filter} /> : null}
-          <Search
-            aria-hidden
-            className="text-muted-foreground pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
-          />
-          <Input
-            type="search"
-            name="q"
-            defaultValue={page.q}
-            placeholder={RETURNS_COPY.listSearchPlaceholder}
-            aria-label={RETURNS_COPY.listSearchPlaceholder}
-            className="pl-8"
-          />
-        </form>
-      </FilterBar>
+        {filter !== 'all' ? <input type="hidden" name="filter" value={filter} /> : null}
+        <Search
+          aria-hidden
+          className="text-muted-foreground pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+        />
+        <Input
+          type="search"
+          name="q"
+          defaultValue={page.q}
+          placeholder={RETURNS_COPY.listSearchPlaceholder}
+          aria-label={RETURNS_COPY.listSearchPlaceholder}
+          className="pl-8"
+        />
+      </form>
+
+      {/* The nine filters as filter chips (DESIGN-SPEC 6.6, the Movements
+          type chips), wrapping. They stay links in a navigation landmark
+          named "Return filters" with aria-current on the open one. */}
+      <nav className="flex min-w-0 flex-wrap gap-2" aria-label="Return filters">
+        {filters.map((f) => {
+          const isActive = filter === f.id;
+          return (
+            <FilterChipLink
+              key={f.id}
+              href={hrefFor({ filter: f.id, cursor: null })}
+              aria-current={isActive ? 'page' : undefined}
+              active={isActive}
+              size="md"
+            >
+              {f.label}
+            </FilterChipLink>
+          );
+        })}
+      </nav>
 
       {!showTable ? (
         <StatePanel
@@ -221,7 +217,9 @@ export default async function ReturnsPage({
                       </Badge>
                       {r.type === 'exchange' && r.exchangeStatusLabel ? (
                         <span
-                          className="text-muted-foreground max-w-[14rem] text-[12px] leading-[18px]"
+                          // At least 10.5rem, so a long exchange status reads in
+                          // two or three lines, not five, in the narrow column.
+                          className="text-muted-foreground min-w-[10.5rem] max-w-[14rem] text-[12px] leading-[18px]"
                           data-testid="return-row-exchange-status"
                         >
                           {r.exchangeStatusLabel}
@@ -246,7 +244,7 @@ export default async function ReturnsPage({
                           {/* The signed ~200 px thumbnail in the 32 px frame,
                               the hatch when there is none (DESIGN-SPEC 6.14). */}
                           <Thumb size={32} src={it.thumbUrl} alt="" />
-                          <span className="max-w-[10rem] truncate text-[12.5px]">
+                          <span className="max-w-[13rem] truncate text-[12.5px]">
                             {it.name ?? 'Item'}
                             {it.variant ? (
                               <span className="text-muted-foreground"> · {it.variant}</span>
