@@ -39,9 +39,11 @@ describe('BigChart — single-series back-compat', () => {
     // Three points → three path commands.
     expect(pointsOf(lines[0]!.getAttribute('d')!)).toHaveLength(3);
 
-    // Area fill present in single-series mode (the accent band under the line).
+    // Area fill present in single-series mode (the band under the line).
+    // Locator updated for the redesign (P3.1, look only): the band is now the
+    // reference's accent wash, --success-wash, where it was the accent at 0.1.
     const area = Array.from(container.querySelectorAll('path')).find(
-      (p) => p.getAttribute('fill') === 'hsl(var(--accent))',
+      (p) => p.getAttribute('fill') === 'hsl(var(--success-wash))',
     );
     expect(area).toBeTruthy();
 
@@ -87,9 +89,10 @@ describe('BigChart — multi-series', () => {
     // One swatch per series.
     expect(legend!.querySelectorAll('li')).toHaveLength(2);
 
-    // Multi-series drops the area fill for a clean overlay.
+    // Multi-series drops the area fill for a clean overlay (no filled path
+    // of any colour: every path is a line).
     const area = Array.from(container.querySelectorAll('path')).find(
-      (p) => p.getAttribute('fill') === 'hsl(var(--accent))',
+      (p) => p.getAttribute('fill') !== 'none',
     );
     expect(area).toBeUndefined();
   });

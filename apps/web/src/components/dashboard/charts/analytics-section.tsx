@@ -10,13 +10,10 @@ import type { AnalyticsGridProps } from './analytics-grid';
 // AFTER, with the skeleton holding the layout so nothing jumps. This keeps
 // the recently-optimized Suspense-streamed dashboard load off the Recharts
 // critical path — the server never imports Recharts.
-const AnalyticsGrid = dynamic(
-  () => import('./analytics-grid').then((m) => m.AnalyticsGrid),
-  {
-    ssr: false,
-    loading: () => <AnalyticsSkeleton />,
-  },
-);
+const AnalyticsGrid = dynamic(() => import('./analytics-grid').then((m) => m.AnalyticsGrid), {
+  ssr: false,
+  loading: () => <AnalyticsSkeleton />,
+});
 
 /**
  * Client entry point for the dashboard Analytics section. Receives
@@ -30,11 +27,13 @@ export function AnalyticsSection(props: AnalyticsGridProps) {
 }
 
 function AnalyticsSkeleton() {
+  // The grid's own shape (analytics-grid.tsx): value over time beside the
+  // breakdown once the widget is wide enough, the movement volume under both.
   return (
-    <div className="grid animate-pulse grid-cols-1 gap-3.5 lg:grid-cols-12">
-      <div className="bg-card border-border h-[360px] rounded-lg border lg:col-span-8" />
-      <div className="bg-card border-border h-[360px] rounded-lg border lg:col-span-4" />
-      <div className="bg-card border-border h-[300px] rounded-lg border lg:col-span-12" />
+    <div className="@min-[936px]:grid-cols-12 grid animate-pulse grid-cols-1 gap-4">
+      <div className="bg-card border-border @min-[936px]:col-span-8 h-[380px] rounded-lg border" />
+      <div className="bg-card border-border @min-[936px]:col-span-4 h-[380px] rounded-lg border" />
+      <div className="bg-card border-border @min-[936px]:col-span-12 h-[320px] rounded-lg border" />
     </div>
   );
 }

@@ -1,11 +1,12 @@
 'use client';
 
-import { cn } from '@/lib/utils';
+import { SegmentedTabs } from '@/components/patterns/segmented-tabs';
 
 /**
- * Tiny segmented toggle shared by the analytics chart widgets. Local to the
- * charts dir so the widgets stay self-contained (the repo has no shared
- * toggle/tabs primitive yet). Keyboard + a11y friendly via real <button>s.
+ * Tiny segmented toggle shared by the analytics chart widgets, drawn by the
+ * shared SegmentedTabs (the sunk track, the active segment on the card colour
+ * with the stronger ring). Same semantics as before: a named `role="group"`
+ * of real `<button>`s that carry `aria-pressed`, every one in the Tab order.
  * Renders nothing when there are fewer than two options.
  */
 export function ToggleGroup({
@@ -21,30 +22,13 @@ export function ToggleGroup({
 }) {
   if (options.length < 2) return null;
   return (
-    <div
-      role="group"
+    <SegmentedTabs
+      semantics="nav"
+      size="sm"
       aria-label={ariaLabel}
-      className="border-border bg-background inline-flex items-center rounded-md border p-0.5"
-    >
-      {options.map((opt) => {
-        const active = opt.value === value;
-        return (
-          <button
-            key={opt.value}
-            type="button"
-            aria-pressed={active}
-            onClick={() => onChange(opt.value)}
-            className={cn(
-              'rounded-[5px] px-2 py-0.5 text-[11.5px] font-medium transition-colors',
-              active
-                ? 'bg-card text-foreground shadow-[0_1px_2px_rgba(14,15,13,0.08)]'
-                : 'text-[var(--ed-ink-3)] hover:text-foreground',
-            )}
-          >
-            {opt.label}
-          </button>
-        );
-      })}
-    </div>
+      activeId={value}
+      onSelect={(id) => onChange(id)}
+      items={options.map((opt) => ({ id: opt.value, label: opt.label }))}
+    />
   );
 }

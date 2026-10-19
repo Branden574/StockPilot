@@ -29,5 +29,5 @@ export function CostTrendIsland(props: CostTrendWidgetProps) {
 }
 
 function CostTrendSkeleton() {
-  return <div className="bg-muted/40 h-[240px] w-full animate-pulse rounded-md" />;
+  return <div className="bg-muted h-[240px] w-full animate-pulse rounded-md" />;
 }

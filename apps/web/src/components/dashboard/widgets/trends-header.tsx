@@ -1,12 +1,13 @@
+import { StatStrip, StatStripItem } from '@/components/patterns/stat-strip';
 import { formatCurrency, formatNumber } from '@/lib/utils';
 
-import { StatusMetric } from './shared';
+import { WidgetHeading } from './shared';
 import type { DashboardWidgetProps } from './types';
 
 /**
  * Section header for the 30-day-trends block + the four status readouts
- * (health / critical / avg value-per-SKU / 7-day activity) that ride along
- * its right edge on >= sm.
+ * (health / critical / avg value-per-SKU / 7-day activity), drawn as the
+ * reference's stat strip (DESIGN-SPEC 6.8) under the heading.
  */
 export function TrendsHeaderWidget({
   healthRate,
@@ -16,28 +17,27 @@ export function TrendsHeaderWidget({
   movements7d,
 }: DashboardWidgetProps) {
   return (
-    <div className="mb-4 flex items-end justify-between gap-3 border-b border-border pb-2">
-      <div className="min-w-0">
-        <h2 className="font-display text-[18px] font-medium tracking-[-0.015em]">
-          30-day trends
-        </h2>
-        <p className="text-[12px] text-[var(--ed-ink-3)]">
-          Inventory value, on-hand counts, and movement velocity over the last month.
-        </p>
-      </div>
-      {/* Inline readouts only appear when there's real horizontal room (>=lg);
-          on narrower windows they'd cramp/clip, and the same numbers live in
-          the stat cards + attention hero anyway. */}
-      <div className="hidden grid-cols-4 gap-2 lg:grid lg:max-w-xl lg:flex-1">
-        <StatusMetric
+    <div className="flex min-w-0 flex-col gap-3">
+      <WidgetHeading
+        title="30-day trends"
+        description="Inventory value, on-hand counts, and movement velocity over the last month."
+      />
+      {/* The readouts show from lg up, as they always have: below it the same
+          numbers live in the key stats and the attention list. */}
+      <StatStrip data-widget-part="trend-readouts" className="hidden lg:block">
+        <StatStripItem
           label="Health"
           value={`${healthRate}%`}
-          tone={attentionStockCount > 0 ? 'warn' : 'good'}
+          valueTone={attentionStockCount > 0 ? 'warning' : 'accent'}
         />
-        <StatusMetric label="Critical" value={formatNumber(outOfStockCount)} tone="danger" />
-        <StatusMetric label="Avg value / SKU" value={formatCurrency(valuePerSku)} />
-        <StatusMetric label="Activity (7d)" value={formatNumber(movements7d)} />
-      </div>
+        <StatStripItem
+          label="Critical"
+          value={formatNumber(outOfStockCount)}
+          valueTone="destructive"
+        />
+        <StatStripItem label="Avg value / SKU" value={formatCurrency(valuePerSku)} />
+        <StatStripItem label="Activity (7d)" value={formatNumber(movements7d)} />
+      </StatStrip>
     </div>
   );
 }

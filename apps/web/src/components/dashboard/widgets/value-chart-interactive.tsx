@@ -4,6 +4,9 @@ import { Loader2, X } from 'lucide-react';
 import * as React from 'react';
 
 import { BigChart } from '@/components/dashboard/big-chart';
+import { ChartCard } from '@/components/dashboard/charts/chart-card';
+import { FilterTrigger } from '@/components/patterns/filter-bar';
+import { SegmentedTabs } from '@/components/patterns/segmented-tabs';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -12,9 +15,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { cn } from '@/lib/utils';
+import { cn, formatCurrency } from '@/lib/utils';
 
-import { Card, CardHead } from './shared';
+import { percentDelta } from './deltas';
+import { TrendDelta } from './shared';
+import type { DeltaToken } from './types';
 
 /**
  * Interactive island for the dashboard "Inventory value" card (Unit C).
@@ -33,6 +38,14 @@ import { Card, CardHead } from './shared';
  * That same fetch backs the "Previous period" comparison, so the two share a
  * cache entry. Comparisons overlay via BigChart's multi-series `series` prop
  * (Unit B) with the primary line first so it keeps the accent colour + legend.
+ *
+ * THE FIGURE (the reference value card's 30 px number and its "vs. 30 days
+ * ago" delta) always describes the primary line on screen: in the default
+ * view the key stats' own value and delta; after a change of basis or
+ * location, that line's last point and its first-to-last delta; with a
+ * comparison, the primary line of the overlay (the current period, or the
+ * chosen basis). "By location" has no single primary line and a failed view
+ * draws a fallback line, so neither shows a figure.
  */
 
 type Basis = 'cost' | 'retail';
@@ -74,7 +87,14 @@ interface ValueChartInteractiveProps {
   warehouses: Warehouse[];
   /** Topbar warehouse filter the seed was computed for (null = all locations). */
   initialWarehouseId: string | null;
-  /** Applied to the outer Card so the page grid keeps `lg:col-span-9`. */
+  /**
+   * The key stats' inventory value and delta for the default view (the seed's
+   * scope, cost basis), so the card's figure and the stat strip never
+   * disagree. Absent: read off the seed line's last point.
+   */
+  initialValue?: number;
+  initialDelta?: DeltaToken;
+  /** Applied to the outer card (the renderer's cell makes it fill the row). */
   className?: string;
 }
 
@@ -106,7 +126,11 @@ function primaryLabelFor(mode: CompareMode, basis: Basis): string | null {
 }
 
 /** Move the primary line to index 0 so BigChart paints it in the accent hue. */
-function orderForDisplay(mode: CompareMode, basis: Basis, series: FetchedSeries[]): FetchedSeries[] {
+function orderForDisplay(
+  mode: CompareMode,
+  basis: Basis,
+  series: FetchedSeries[],
+): FetchedSeries[] {
   const label = primaryLabelFor(mode, basis);
   if (!label) return series;
   const i = series.findIndex((s) => s.label === label);
@@ -130,6 +154,8 @@ export function ValueChartInteractive({
   initialSeries,
   warehouses,
   initialWarehouseId,
+  initialValue,
+  initialDelta,
   className,
 }: ValueChartInteractiveProps) {
   const initialPoints = React.useMemo<ChartPoint[]>(
@@ -155,8 +181,7 @@ export function ValueChartInteractive({
   // combination is instant and issues no second fetch.
   const cacheRef = React.useRef<Map<string, ValueSeriesResponse>>(new Map());
 
-  const isDefault =
-    compareMode === null && basis === 'cost' && warehouseId === initialWarehouseId;
+  const isDefault = compareMode === null && basis === 'cost' && warehouseId === initialWarehouseId;
 
   React.useEffect(() => {
     // DEFAULT view renders from the SSR seed (derived below) — nothing to fetch
@@ -229,6 +254,20 @@ export function ValueChartInteractive({
   const displayLoading = !isDefault && loading;
   const displayError = isDefault ? null : error;
 
+  // The figure: the primary line on screen (see the file comment).
+  const primaryLabel = showCompare ? primaryLabelFor(compareMode, basis) : null;
+  const primaryLine: ChartPoint[] | null = chartSeries
+    ? (chartSeries.find((s) => primaryLabel !== null && s.label === primaryLabel)?.data ?? null)
+    : singlePoints;
+  let figure: { value: number; delta: DeltaToken } | null = null;
+  if (!displayError && primaryLine && primaryLine.length > 0) {
+    const values = primaryLine.map((p) => p.value);
+    figure =
+      isDefault && initialValue != null
+        ? { value: initialValue, delta: initialDelta ?? percentDelta(values) }
+        : { value: values[values.length - 1]!, delta: percentDelta(values) };
+  }
+
   const locationName = warehouseId
     ? (warehouses.find((w) => w.id === warehouseId)?.name ?? 'Selected location')
     : 'All locations';
@@ -236,14 +275,14 @@ export function ValueChartInteractive({
   const basisLabel = basis === 'retail' ? 'retail basis (approx.)' : 'cost basis';
   const subtitle = `USD · ${basisLabel} · ${subtitleLocation}`;
 
+  // 32 px controls 8 px apart: below sm and on coarse pointers each grows an
+  // invisible 44 px target, which this gap keeps from overlapping.
   const controls = (
-    <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+    <>
       {/* Location filter */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="sm" className="h-7 gap-1 px-2.5 text-[11.5px]">
-            {locationName}
-          </Button>
+          <FilterTrigger label={locationName} active={warehouseId !== null} />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="max-h-72 overflow-y-auto">
           <DropdownMenuItem
@@ -264,48 +303,32 @@ export function ValueChartInteractive({
         </DropdownMenuContent>
       </DropdownMenu>
 
-      {/* Basis toggle (segmented). Retail is flagged approximate. */}
-      <div
-        role="group"
+      {/* Basis toggle (segmented, aria-pressed buttons in a named group).
+          Retail is flagged approximate. */}
+      <SegmentedTabs
+        semantics="nav"
+        size="sm"
         aria-label="Value basis"
-        className="border-border inline-flex h-7 items-center overflow-hidden rounded-full border"
-      >
-        {(['cost', 'retail'] as Basis[]).map((b) => (
-          <button
-            key={b}
-            type="button"
-            aria-pressed={basis === b}
-            title={
-              b === 'retail'
-                ? 'Approximate — retail price held constant across past days'
-                : undefined
-            }
-            onClick={() => setBasis(b)}
-            className={cn(
-              'h-full px-2.5 text-[11.5px] transition-colors',
-              basis === b
-                ? 'bg-background text-foreground font-medium'
-                : 'text-[var(--ed-ink-3)] hover:text-foreground',
-            )}
-          >
-            {b === 'retail' ? 'Retail' : 'Cost'}
-          </button>
-        ))}
-      </div>
+        activeId={basis}
+        onSelect={(id) => setBasis(id as Basis)}
+        items={[
+          { id: 'cost', label: 'Cost' },
+          {
+            id: 'retail',
+            label: 'Retail',
+            title: 'Approximate — retail price held constant across past days',
+          },
+        ]}
+      />
 
       {/* Compare menu */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button
-            variant="outline"
-            size="sm"
-            className={cn(
-              'h-7 px-2.5 text-[11.5px]',
-              compareMode ? 'border-solid' : 'border-dashed text-[var(--ed-ink-3)]',
-            )}
-          >
-            {compareMode ? COMPARE_LABEL[compareMode] : '+ Compare'}
-          </Button>
+          <FilterTrigger
+            label={compareMode ? COMPARE_LABEL[compareMode] : '+ Compare'}
+            active={compareMode !== null}
+            className={cn(!compareMode && 'text-muted-foreground border-dashed')}
+          />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           {COMPARE_OPTIONS.map((o) => (
@@ -329,48 +352,70 @@ export function ValueChartInteractive({
       </DropdownMenu>
 
       {compareMode && (
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="icon"
           aria-label="Clear comparison"
           onClick={() => setCompareMode(null)}
-          className="border-border text-[var(--ed-ink-3)] hover:text-foreground inline-flex h-7 w-7 items-center justify-center rounded-full border"
+          className="text-muted-foreground"
         >
-          <X className="h-3.5 w-3.5" />
-        </button>
+          <X className="size-3.5" />
+        </Button>
       )}
 
       {displayLoading && (
         <Loader2
           aria-label="Loading"
           role="status"
-          className="h-3.5 w-3.5 animate-spin text-[var(--ed-ink-3)]"
+          className="text-muted-foreground size-3.5 animate-spin"
         />
       )}
-    </div>
+    </>
   );
 
   return (
-    <Card className={className}>
-      <CardHead title="Inventory value · 30 days" subtitle={subtitle} action={controls} />
+    <ChartCard
+      title="Inventory value · 30 days"
+      subtitle={subtitle}
+      controls={controls}
+      className={className}
+    >
       <div
         className={cn(
-          'transition-opacity duration-200',
+          'flex min-w-0 flex-1 flex-col transition-opacity duration-200',
           displayLoading && 'opacity-50',
         )}
         aria-busy={displayLoading}
       >
-        {chartSeries ? (
-          <BigChart series={chartSeries} height={300} />
-        ) : (
-          <BigChart data={singlePoints} height={300} />
-        )}
+        {figure ? (
+          <div
+            data-slot="value-figure"
+            className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 px-[18px] pt-2"
+          >
+            <span className="text-foreground font-display text-[30px] font-medium tabular-nums leading-[45px] tracking-[-0.025em]">
+              {formatCurrency(figure.value)}
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-[12.5px]">
+              <TrendDelta delta={figure.delta} className="text-[12.5px]" />
+              <span className="text-muted-foreground">vs. 30 days ago</span>
+            </span>
+          </div>
+        ) : null}
+        <div className="mt-auto pt-2">
+          {chartSeries ? (
+            <BigChart series={chartSeries} height={200} />
+          ) : (
+            <BigChart data={singlePoints} height={200} />
+          )}
+        </div>
       </div>
       {displayError ? (
-        <div className="px-5 pb-3.5 pt-1 text-[12px] text-[hsl(var(--destructive))]" role="alert">
+        <div className="text-destructive px-[18px] pb-3.5 pt-1 text-[12.5px]" role="alert">
           {displayError}
         </div>
       ) : (
-        <div className="flex justify-between px-5 pb-3.5 font-mono text-[11px] text-[var(--ed-ink-4)]">
+        <div className="text-muted-foreground flex justify-between gap-x-1 px-[18px] pb-3.5 pt-1 font-mono text-[10px] sm:gap-x-3 sm:text-[11px]">
           <span>30 days ago</span>
           <span>3 weeks ago</span>
           <span>2 weeks ago</span>
@@ -378,6 +423,6 @@ export function ValueChartInteractive({
           <span>Today</span>
         </div>
       )}
-    </Card>
+    </ChartCard>
   );
 }

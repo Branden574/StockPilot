@@ -57,7 +57,7 @@ export function MovementVolumeWidget({ bars, className, height = 240 }: Movement
             />
             <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
             <ChartTooltip content={<ChartTooltipContent nameKey="label" hideLabel />} />
-            <Bar dataKey="count" fill="var(--color-count)" radius={[4, 4, 0, 0]} maxBarSize={56} />
+            <Bar dataKey="count" fill="var(--color-count)" radius={[3, 3, 0, 0]} maxBarSize={56} />
           </BarChart>
         </ChartContainer>
       )}
