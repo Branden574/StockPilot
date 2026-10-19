@@ -42,13 +42,13 @@ export interface MovementDisplayRow {
   actorEmail: string | null;
 }
 
-/** The type's words: the same labels the type filter offers (Receive PO, ...). */
 /**
  * The id the Movements page puts on its h1: the page title names the ledger
  * table's scroll region in both page modes.
  */
 export const MOVEMENTS_TITLE_ID = 'movements-title';
 
+/** The type's words: the same labels the type filter offers (Receive PO, ...). */
 const TYPE_LABEL = new Map<string, string>(MOVEMENT_TYPE_OPTIONS.map((o) => [o.value, o.label]));
 
 /**
