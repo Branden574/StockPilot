@@ -1,7 +1,8 @@
-import Link from 'next/link';
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 
 import { CsvImport } from '@/components/inventory/csv-import';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { requireOrgContext } from '@/lib/auth/session';
 import { forcedWarehouseId } from '@/lib/auth/warehouse';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
@@ -9,6 +10,15 @@ import { createClient } from '@/lib/supabase/server';
 import { WarehousesService } from '@/server/services/warehouses';
 
 import { can, resolveTerminology } from '@stockpilot/core';
+
+// A tab title of its own (CONFLICTS D16): the page used to inherit the
+// dashboard's.
+export const metadata: Metadata = { title: 'Import items' };
+
+/** The page area (DESIGN-SPEC 4 and 5.3), the same box every redesigned page
+ *  draws; the import steps keep to a reading width inside it. */
+const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
+const STEPS_WIDTH = 'w-full max-w-[960px]';
 
 export default async function ImportPage() {
   const ctx = await requireOrgContext();
@@ -40,22 +50,21 @@ export default async function ImportPage() {
     (orgRow.data?.terminology as Partial<{ warehouse_singular: string }> | null) ?? null,
   );
   return (
-    <div className="container mx-auto max-w-4xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link href="/dashboard/inventory" className="text-sm text-muted-foreground hover:text-foreground">
-          ← Back to inventory
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">Import items</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Upload a CSV. We'll validate every row and show errors before anything goes into your inventory.
-        </p>
-      </div>
-      <CsvImport
-        sportsEnabled={sportsEnabled}
-        warehouses={warehouses.map((w) => ({ id: w.id, name: w.name }))}
-        forcedWarehouseId={forced}
-        warehouseLabel={term.warehouse_singular}
+    <div className={PAGE}>
+      <PageHeader
+        className={STEPS_WIDTH}
+        back={<PageHeaderBackLink href="/dashboard/inventory">← Back to inventory</PageHeaderBackLink>}
+        title="Import items"
+        subline="Upload a CSV. We'll validate every row and show errors before anything goes into your inventory."
       />
+      <div className={STEPS_WIDTH}>
+        <CsvImport
+          sportsEnabled={sportsEnabled}
+          warehouses={warehouses.map((w) => ({ id: w.id, name: w.name }))}
+          forcedWarehouseId={forced}
+          warehouseLabel={term.warehouse_singular}
+        />
+      </div>
     </div>
   );
 }

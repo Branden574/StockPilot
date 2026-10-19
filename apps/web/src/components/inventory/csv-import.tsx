@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Download,
   FileSpreadsheet,
+  ListChecks,
   Loader2,
   Upload,
 } from 'lucide-react';
@@ -21,8 +22,10 @@ import {
   type AmbiguousColumnMeaning,
 } from '@stockpilot/core';
 
+import { DetailSection } from '@/components/patterns/detail-section';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import {
   Select,
@@ -72,9 +75,16 @@ const templateHeader = itemCsvTemplateHeader;
 
 /** The columns a row's value actually reaches the created item through. */
 const BASE_APPLIED_COLUMNS = [
-  'name', 'sku', 'barcode', 'description',
-  'unit_cost', 'retail_price', 'quantity_on_hand',
-  'reorder_point', 'reorder_quantity', 'unit_of_measure',
+  'name',
+  'sku',
+  'barcode',
+  'description',
+  'unit_cost',
+  'retail_price',
+  'quantity_on_hand',
+  'reorder_point',
+  'reorder_quantity',
+  'unit_of_measure',
   // Applied since the live-verification fix: it resolves ORG-SCOPED by name and
   // overrides the destination picked below, per row. It sat in this template
   // being validated and then ignored while every row failed for want of a
@@ -83,8 +93,13 @@ const BASE_APPLIED_COLUMNS = [
 ];
 
 const SPORTS_APPLIED_COLUMNS = [
-  'size', 'size_system', 'width', 'fit', 'color',
-  'jersey_number', 'player_name',
+  'size',
+  'size_system',
+  'width',
+  'fit',
+  'color',
+  'jersey_number',
+  'player_name',
 ];
 
 /** The plain sample row every org gets. */
@@ -167,9 +182,11 @@ export function CsvImport({
   const inputRef = React.useRef<HTMLInputElement>(null);
   const [parsing, setParsing] = React.useState(false);
   const [importing, setImporting] = React.useState(false);
-  const [parsed, setParsed] = React.useState<
-    { header: string[]; rows: Record<string, string>[]; fileName: string } | null
-  >(null);
+  const [parsed, setParsed] = React.useState<{
+    header: string[];
+    rows: Record<string, string>[];
+    fileName: string;
+  } | null>(null);
   /**
    * The finished import, and ONLY a finished one.
    *
@@ -341,304 +358,318 @@ export function CsvImport({
     (duplicate != null && !acknowledgeDuplicate);
 
   return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <FileSpreadsheet className="h-4 w-4" />
+    <div className="space-y-4">
+      <DetailSection
+        bodyClassName="space-y-3"
+        title={
+          <span className="flex items-center gap-2">
+            <FileSpreadsheet aria-hidden className="text-muted-foreground h-4 w-4" />
             Step 1 — download the template
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="text-sm text-muted-foreground">
-              Required columns: <code className="rounded bg-muted px-1 py-0.5 text-xs">name</code>. Everything else is optional.
-            </p>
-            <Button variant="outline" size="sm" onClick={downloadTemplate}>
-              <Download className="h-4 w-4" /> Download CSV template
-            </Button>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Applied on import: {appliedColumns.join(', ')}. Leave{' '}
-            <code className="rounded bg-muted px-1 py-0.5">warehouse_name</code> blank to
-            use the {warehouseLabel.toLowerCase()} chosen below, or name one exactly as it
-            appears in {warehouseLabel}s to send that row somewhere else. The remaining
-            template columns
-            {sportsEnabled
-              ? ' (product group identity, counting unit, tracking mode, serial, asset tag, and the category / location lookups)'
-              : ' (the category / location lookups)'}{' '}
-            are accepted and checked, but are set through the item
-            {sportsEnabled ? ' and product-group screens' : ' screens'} rather than a bulk
-            import.
-            {sportsEnabled ? (
-              <>
-                {' '}
-                Keep{' '}
-                <code className="rounded bg-muted px-1 py-0.5">jersey_number</code> formatted
-                as text so leading zeroes survive.
-              </>
-            ) : null}
+          </span>
+        }
+      >
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+          <p className="text-muted-foreground text-[13px]">
+            Required columns: <code className={CODE}>name</code>. Everything else is optional.
           </p>
-        </CardContent>
-      </Card>
+          <Button variant="outline" onClick={downloadTemplate}>
+            <Download className="h-4 w-4" /> Download CSV template
+          </Button>
+        </div>
+        <p className="text-muted-foreground text-[12px] leading-[18px]">
+          Applied on import: {appliedColumns.join(', ')}. Leave{' '}
+          <code className={CODE}>warehouse_name</code> blank to use the{' '}
+          {warehouseLabel.toLowerCase()} chosen below, or name one exactly as it appears in{' '}
+          {warehouseLabel}s to send that row somewhere else. The remaining template columns
+          {sportsEnabled
+            ? ' (product group identity, counting unit, tracking mode, serial, asset tag, and the category / location lookups)'
+            : ' (the category / location lookups)'}{' '}
+          are accepted and checked, but are set through the item
+          {sportsEnabled ? ' and product-group screens' : ' screens'} rather than a bulk import.
+          {sportsEnabled ? (
+            <>
+              {' '}
+              Keep <code className={CODE}>jersey_number</code> formatted as text so leading zeroes
+              survive.
+            </>
+          ) : null}
+        </p>
+      </DetailSection>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Step 2 — upload your CSV</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="csv-warehouse">Destination {warehouseLabel.toLowerCase()}</Label>
-            <Select
-              value={warehouseId}
-              onValueChange={setWarehouseId}
-              disabled={Boolean(forcedWarehouseId) || warehouses.length === 0}
-            >
-              <SelectTrigger id="csv-warehouse" className="sm:max-w-sm">
-                <SelectValue placeholder={`Pick a ${warehouseLabel.toLowerCase()}`} />
-              </SelectTrigger>
-              <SelectContent>
-                {warehouses.map((w) => (
-                  <SelectItem key={w.id} value={w.id}>
-                    {w.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">
-              {warehouses.length === 0
-                ? `Create a ${warehouseLabel.toLowerCase()} first — every item has to live somewhere.`
-                : `Where these items land unless a row names its own ${warehouseLabel.toLowerCase()}.`}
-            </p>
-          </div>
-          <label
-            htmlFor="csv-upload"
-            className={cn(
-              'flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-border bg-muted/20 px-6 py-10 transition-colors hover:border-primary/40 hover:bg-muted/40',
-            )}
+      <DetailSection
+        bodyClassName="space-y-4"
+        title={
+          <span className="flex items-center gap-2">
+            <Upload aria-hidden className="text-muted-foreground h-4 w-4" />
+            Step 2 — upload your CSV
+          </span>
+        }
+      >
+        <div className="space-y-1.5">
+          <Label htmlFor="csv-warehouse">Destination {warehouseLabel.toLowerCase()}</Label>
+          <Select
+            value={warehouseId}
+            onValueChange={setWarehouseId}
+            disabled={Boolean(forcedWarehouseId) || warehouses.length === 0}
           >
-            {parsing ? (
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-            ) : (
-              <Upload className="h-5 w-5 text-muted-foreground" />
-            )}
-            <p className="text-sm font-medium">{parsing ? 'Parsing…' : 'Drop or click to choose a CSV'}</p>
-            <p className="text-xs text-muted-foreground">UTF-8 encoded · up to 5,000 rows</p>
-            <input
-              id="csv-upload"
-              ref={inputRef}
-              type="file"
-              accept=".csv,text/csv"
-              className="sr-only"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) handleFile(f);
-                e.target.value = '';
-              }}
-            />
-          </label>
-        </CardContent>
-      </Card>
+            <SelectTrigger id="csv-warehouse" className="sm:max-w-sm">
+              <SelectValue placeholder={`Pick a ${warehouseLabel.toLowerCase()}`} />
+            </SelectTrigger>
+            <SelectContent>
+              {warehouses.map((w) => (
+                <SelectItem key={w.id} value={w.id}>
+                  {w.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-muted-foreground text-[12px] leading-[17px]">
+            {warehouses.length === 0
+              ? `Create a ${warehouseLabel.toLowerCase()} first — every item has to live somewhere.`
+              : `Where these items land unless a row names its own ${warehouseLabel.toLowerCase()}.`}
+          </p>
+        </div>
+        <label
+          htmlFor="csv-upload"
+          className={cn(
+            // The inset drop zone (the shared upload look): a quiet dashed
+            // box on the stronger hairline over the recessed fill.
+            'border-line-strong bg-sunk hover:bg-muted flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed px-6 py-10 text-center transition-colors',
+          )}
+        >
+          {parsing ? (
+            <Loader2 aria-hidden className="text-muted-foreground h-5 w-5 animate-spin" />
+          ) : (
+            <FileSpreadsheet aria-hidden className="text-muted-foreground h-5 w-5" />
+          )}
+          <p className="text-[13.5px] font-medium">
+            {parsing ? 'Parsing…' : 'Drop or click to choose a CSV'}
+          </p>
+          <p className="text-muted-foreground text-[12px]">UTF-8 encoded · up to 5,000 rows</p>
+          <input
+            id="csv-upload"
+            ref={inputRef}
+            type="file"
+            accept=".csv,text/csv"
+            className="sr-only"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleFile(f);
+              e.target.value = '';
+            }}
+          />
+        </label>
+      </DetailSection>
 
       {parsed && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Step 3 — review & import</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="rounded-md border bg-muted/30 px-4 py-3 text-sm">
-              <p>
-                Detected <strong>{parsed.rows.length}</strong> rows in{' '}
-                <span className="font-mono text-xs">{parsed.fileName}</span>
-                {unmapped.length > 0 && (
-                  <>
-                    {' '}
-                    · not imported:{' '}
-                    <span className="font-mono text-xs">
-                      {unmapped.map((m) => m.header).join(', ')}
-                    </span>
-                  </>
-                )}
-              </p>
-            </div>
+        <DetailSection
+          bodyClassName="space-y-4"
+          title={
+            <span className="flex items-center gap-2">
+              <ListChecks aria-hidden className="text-muted-foreground h-4 w-4" />
+              Step 3 — review & import
+            </span>
+          }
+        >
+          <div className="border-border bg-sunk rounded-md border px-4 py-3 text-[13px]">
+            <p>
+              Detected <strong>{parsed.rows.length}</strong> rows in{' '}
+              <span className="font-mono text-[12px] [overflow-wrap:anywhere]">
+                {parsed.fileName}
+              </span>
+              {unmapped.length > 0 && (
+                <>
+                  {' '}
+                  · not imported:{' '}
+                  <span className="font-mono text-[12px] [overflow-wrap:anywhere]">
+                    {unmapped.map((m) => m.header).join(', ')}
+                  </span>
+                </>
+              )}
+            </p>
+          </div>
 
-            {/*
+          {/*
               THE MAPPING STEP. Requirements: "Never silently guess: show
               candidate mappings, require confirmation, preserve source values,
               block import until required mappings resolved." The live run found
               a column headed `Number` echoed once and then dropped, with Import
               enabled from the moment the file parsed.
             */}
-            {ambiguous.length > 0 && (
-              <section className="border-warning/40 bg-warning/5 space-y-3 rounded-xl border p-4">
-                <div className="flex items-start gap-2">
-                  <AlertTriangle className="text-warning mt-0.5 h-4 w-4 shrink-0" />
-                  <div className="space-y-1">
-                    <h3 className="text-sm font-semibold">
-                      Confirm what {ambiguous.length} column
-                      {ambiguous.length === 1 ? ' means' : 's mean'}
-                    </h3>
-                    <p className="text-muted-foreground text-xs">
-                      A column headed something like &ldquo;Number&rdquo; could be a
-                      {showSportsColumns ? ' jersey number, a' : ''} quantity, a serial or a
-                      style number. Rather than guess, this import waits for you to say.
-                      Choosing <span className="font-medium">Ignore</span> leaves the column
-                      out entirely — its values are never applied to a field you did not name.
-                    </p>
-                  </div>
+          {ambiguous.length > 0 && (
+            <section className={CAUTION}>
+              <div className="flex items-start gap-2">
+                <AlertTriangle aria-hidden className="text-warning mt-0.5 h-4 w-4 shrink-0" />
+                <div className="space-y-1">
+                  <h3 className="text-[13.5px] font-medium">
+                    Confirm what {ambiguous.length} column
+                    {ambiguous.length === 1 ? ' means' : 's mean'}
+                  </h3>
+                  <p className="text-muted-foreground text-[12px] leading-[18px]">
+                    A column headed something like &ldquo;Number&rdquo; could be a
+                    {showSportsColumns ? ' jersey number, a' : ''} quantity, a serial or a style
+                    number. Rather than guess, this import waits for you to say. Choosing{' '}
+                    <span className="font-medium">Ignore</span> leaves the column out entirely — its
+                    values are never applied to a field you did not name.
+                  </p>
                 </div>
-                <div className="divide-border border-border bg-card divide-y rounded-md border">
-                  {ambiguous.map((m) => (
-                    <div
-                      key={m.header}
-                      className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2 text-xs"
-                    >
-                      <span className="font-mono font-medium">{m.header}</span>
-                      <span className="text-muted-foreground max-w-[280px] truncate">
-                        e.g.{' '}
-                        {parsed.rows
-                          .slice(0, 3)
-                          .map((r) => r[m.header])
-                          .filter((v) => (v ?? '').trim() !== '')
-                          .join(', ') || '—'}
-                      </span>
-                      <div className="ml-auto min-w-[220px]">
-                        <Select
-                          value={decisions[m.header] ?? ''}
-                          onValueChange={(v) =>
-                            answerHeader(m.header, v as AmbiguousColumnMeaning)
-                          }
-                          disabled={reviewing}
+              </div>
+              <div className="divide-border border-border bg-card divide-y rounded-md border">
+                {ambiguous.map((m) => (
+                  <div
+                    key={m.header}
+                    className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2 text-[12.5px]"
+                  >
+                    <span className="font-mono font-medium">{m.header}</span>
+                    <span className="text-muted-foreground min-w-0 max-w-[280px] truncate">
+                      e.g.{' '}
+                      {parsed.rows
+                        .slice(0, 3)
+                        .map((r) => r[m.header])
+                        .filter((v) => (v ?? '').trim() !== '')
+                        .join(', ') || '—'}
+                    </span>
+                    <div className="ml-auto w-full sm:w-auto sm:min-w-[220px]">
+                      <Select
+                        value={decisions[m.header] ?? ''}
+                        onValueChange={(v) => answerHeader(m.header, v as AmbiguousColumnMeaning)}
+                        disabled={reviewing}
+                      >
+                        <SelectTrigger
+                          className="text-[12.5px]"
+                          aria-label={`What does the column ${m.header} mean?`}
                         >
-                          <SelectTrigger
-                            className="h-8 text-xs"
-                            aria-label={`What does the column ${m.header} mean?`}
-                          >
-                            <SelectValue placeholder="What is this column?" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {m.candidates.map((c) => (
-                              <SelectItem key={c} value={c}>
-                                {AMBIGUOUS_COLUMN_MEANING_LABELS[c]}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
+                          <SelectValue placeholder="What is this column?" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {m.candidates.map((c) => (
+                            <SelectItem key={c} value={c}>
+                              {AMBIGUOUS_COLUMN_MEANING_LABELS[c]}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
-                  ))}
-                </div>
-              </section>
-            )}
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
 
-            {/*
+          {/*
               THE DUPLICATE WARNING. A byte-identical re-upload used to show
               nothing at all and offer Import again. The hash is never a dead
               end: a human who means it ticks the box and the predecessor is
               superseded.
             */}
-            {duplicate && (
-              <section className="border-warning/40 bg-warning/5 space-y-2 rounded-xl border p-4">
-                <div className="flex items-start gap-2">
-                  <AlertTriangle className="text-warning mt-0.5 h-4 w-4 shrink-0" />
-                  <div className="space-y-1">
-                    <h3 className="text-sm font-semibold">This file was already imported</h3>
-                    <p className="text-muted-foreground text-xs">
-                      The same {duplicate.rowCount} rows were imported on{' '}
-                      {new Date(duplicate.importedAt).toLocaleString()} and created{' '}
-                      {duplicate.createdCount} item
-                      {duplicate.createdCount === 1 ? '' : 's'}. Importing again creates them a
-                      second time. If this really is a second shipment rather than a repeated
-                      upload, confirm below.
-                    </p>
-                  </div>
+          {duplicate && (
+            <section className={CAUTION}>
+              <div className="flex items-start gap-2">
+                <AlertTriangle aria-hidden className="text-warning mt-0.5 h-4 w-4 shrink-0" />
+                <div className="space-y-1">
+                  <h3 className="text-[13.5px] font-medium">This file was already imported</h3>
+                  <p className="text-muted-foreground text-[12px] leading-[18px]">
+                    The same {duplicate.rowCount} rows were imported on{' '}
+                    {new Date(duplicate.importedAt).toLocaleString()} and created{' '}
+                    {duplicate.createdCount} item
+                    {duplicate.createdCount === 1 ? '' : 's'}. Importing again creates them a second
+                    time. If this really is a second shipment rather than a repeated upload, confirm
+                    below.
+                  </p>
                 </div>
-                <label className="flex items-center gap-2 text-xs font-medium">
-                  <input
-                    type="checkbox"
-                    className="accent-primary h-3.5 w-3.5"
-                    checked={acknowledgeDuplicate}
-                    onChange={(e) => setAcknowledgeDuplicate(e.target.checked)}
-                  />
-                  Import it again anyway
-                </label>
-              </section>
-            )}
+              </div>
+              {/* The shared checkbox; its words are part of the one control. */}
+              <Checkbox
+                className="font-medium"
+                checked={acknowledgeDuplicate}
+                onCheckedChange={setAcknowledgeDuplicate}
+              >
+                Import it again anyway
+              </Checkbox>
+            </section>
+          )}
 
-            {/*
+          {/*
               THE REVIEW TABLE. Source row / Name / Group / Variant / Qty /
               Result — not the file's own first eight raw headers, and never a
               bare Valid/Invalid. Group and Variant are module-gated.
             */}
-            <div className="overflow-x-auto rounded-md border">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/40">
-                  <tr>
-                    {['Row', 'Name', ...(showSportsColumns ? ['Group', 'Variant'] : []), 'Qty', 'Result'].map(
-                      (h) => (
-                        <th
-                          key={h}
-                          className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"
-                        >
-                          {h}
-                        </th>
-                      ),
-                    )}
-                  </tr>
-                </thead>
-                <tbody>
-                  {(preview?.rows ?? []).slice(0, 20).map((r) => (
-                    <tr key={r.sourceRow} className="border-t align-top">
-                      <td className="px-3 py-2 font-mono text-xs text-muted-foreground">
-                        {r.sourceRow}
-                      </td>
-                      <td className="px-3 py-2 text-xs">{r.name || '—'}</td>
-                      {showSportsColumns && (
-                        <>
-                          <td className="px-3 py-2 text-xs">{r.group ?? '—'}</td>
-                          <td className="px-3 py-2 text-xs">{r.variant ?? '—'}</td>
-                        </>
-                      )}
-                      <td className="px-3 py-2 text-xs">{r.quantity || '—'}</td>
-                      <td className="px-3 py-2 text-xs">
-                        <span
-                          className={cn(
-                            'rounded-full border px-1.5 py-px text-[10px] font-medium',
-                            r.result === 'ready' || r.result === 'add_new_variant'
-                              ? 'border-success/40 bg-success/10 text-success'
-                              : 'border-warning/40 bg-warning/10 text-warning',
-                          )}
-                        >
-                          {LINE_RESULT_LABELS[r.result]}
-                        </span>
-                        {r.message && (
-                          <span className="text-muted-foreground ml-2">{r.message}</span>
-                        )}
-                      </td>
-                    </tr>
+          {/* The review table in the shared table look: uppercase quiet
+                headers, hairline rows, contained horizontal scroll. */}
+          <div className="border-border overflow-x-auto rounded-md border">
+            <table className="w-full min-w-[480px] text-[13px]">
+              <thead>
+                <tr className="border-border border-b">
+                  {[
+                    'Row',
+                    'Name',
+                    ...(showSportsColumns ? ['Group', 'Variant'] : []),
+                    'Qty',
+                    'Result',
+                  ].map((h) => (
+                    <th
+                      key={h}
+                      className="text-muted-foreground whitespace-nowrap px-3 py-2.5 text-left text-[11px] font-medium uppercase tracking-[0.06em] first:pl-4 last:pr-4"
+                    >
+                      {h}
+                    </th>
                   ))}
-                </tbody>
-              </table>
-              {(preview?.rows.length ?? 0) > 20 && (
-                <p className="border-t bg-muted/20 px-3 py-1.5 text-xs text-muted-foreground">
-                  …and {(preview?.rows.length ?? 0) - 20} more
-                </p>
+                </tr>
+              </thead>
+              <tbody>
+                {(preview?.rows ?? []).slice(0, 20).map((r) => (
+                  <tr
+                    key={r.sourceRow}
+                    className="border-border border-b align-top last:border-b-0"
+                  >
+                    <td className="text-muted-foreground py-2.5 pl-4 pr-3 font-mono text-[12px] tabular-nums">
+                      {r.sourceRow}
+                    </td>
+                    <td className="px-3 py-2.5 [overflow-wrap:anywhere]">{r.name || '—'}</td>
+                    {showSportsColumns && (
+                      <>
+                        <td className="px-3 py-2.5">{r.group ?? '—'}</td>
+                        <td className="px-3 py-2.5">{r.variant ?? '—'}</td>
+                      </>
+                    )}
+                    <td className="px-3 py-2.5 tabular-nums">{r.quantity || '—'}</td>
+                    <td className="py-2.5 pl-3 pr-4">
+                      <Badge
+                        variant={
+                          r.result === 'ready' || r.result === 'add_new_variant'
+                            ? 'success'
+                            : 'warning'
+                        }
+                        className="align-middle"
+                      >
+                        {LINE_RESULT_LABELS[r.result]}
+                      </Badge>
+                      {r.message && (
+                        <span className="text-muted-foreground ml-2 text-[12px]">{r.message}</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {(preview?.rows.length ?? 0) > 20 && (
+              <p className="border-border text-muted-foreground border-t px-4 py-2 text-[12px]">
+                …and {(preview?.rows.length ?? 0) - 20} more
+              </p>
+            )}
+          </div>
+          <div className="border-border -mx-[18px] -mb-[18px] flex items-center justify-end gap-3 border-t px-[18px] py-3">
+            {reviewing && <span className="text-muted-foreground text-[12px]">Reviewing…</span>}
+            {/* Committing the reviewed file: the ink primary. */}
+            <Button onClick={runImport} disabled={importing || blocked}>
+              {importing ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                `Import ${parsed.rows.length} items`
               )}
-            </div>
-            <div className="flex items-center justify-end gap-3">
-              {reviewing && (
-                <span className="text-muted-foreground text-[11px]">Reviewing…</span>
-              )}
-              <Button variant="gradient" onClick={runImport} disabled={importing || blocked}>
-                {importing ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  `Import ${parsed.rows.length} items`
-                )}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+            </Button>
+          </div>
+        </DetailSection>
       )}
 
       {/*
@@ -648,55 +679,59 @@ export function CsvImport({
         user the only thing they actually wanted: the items.
       */}
       {done && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
+        <DetailSection
+          bodyClassName="space-y-3"
+          title={
+            <span className="flex items-center gap-2">
               {done.created > 0 ? (
-                <CheckCircle2 className="text-success h-4 w-4" />
+                <CheckCircle2 aria-hidden className="text-success h-4 w-4" />
               ) : (
-                <AlertTriangle className="text-warning h-4 w-4" />
+                <AlertTriangle aria-hidden className="text-warning h-4 w-4" />
               )}
               {done.created > 0
                 ? `Imported ${done.created} item${done.created === 1 ? '' : 's'}`
                 : 'No items were imported'}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-muted-foreground text-sm">
-              {done.created > 0
-                ? `${done.created} of ${done.total} row${done.total === 1 ? '' : 's'} became items.`
-                : `All ${done.total} row${done.total === 1 ? '' : 's'} were rejected — nothing was written.`}
-              {done.failed > 0 && ` ${done.failed} row${done.failed === 1 ? '' : 's'} failed.`}
-              {' Upload another file above to import more.'}
-            </p>
-            {done.errors.length > 0 && (
-              <details open={done.created === 0}>
-                <summary className="text-muted-foreground cursor-pointer text-sm">
-                  Show {done.errors.length} error{done.errors.length === 1 ? '' : 's'}
-                </summary>
-                <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto text-xs">
-                  {done.errors.map((e, i) => (
-                    <li key={i} className="bg-destructive/10 text-destructive rounded px-2 py-1">
-                      Row {e.row}: {e.message}
-                    </li>
-                  ))}
-                </ul>
-              </details>
-            )}
-            {done.created > 0 && (
-              <Button
-                variant="gradient"
-                // Newest first, so the rows that just landed are the rows at the
-                // top of the list. `created_desc` is an existing, validated sort
-                // on /dashboard/inventory — no new URL vocabulary here.
-                onClick={() => router.push('/dashboard/inventory?sort=created_desc')}
-              >
-                View imported items <ArrowRight className="h-4 w-4" />
-              </Button>
-            )}
-          </CardContent>
-        </Card>
+            </span>
+          }
+        >
+          <p className="text-muted-foreground text-[13px]">
+            {done.created > 0
+              ? `${done.created} of ${done.total} row${done.total === 1 ? '' : 's'} became items.`
+              : `All ${done.total} row${done.total === 1 ? '' : 's'} were rejected — nothing was written.`}
+            {done.failed > 0 && ` ${done.failed} row${done.failed === 1 ? '' : 's'} failed.`}
+            {' Upload another file above to import more.'}
+          </p>
+          {done.errors.length > 0 && (
+            <details open={done.created === 0}>
+              <summary className="text-muted-foreground hover:text-foreground cursor-pointer text-[13px]">
+                Show {done.errors.length} error{done.errors.length === 1 ? '' : 's'}
+              </summary>
+              <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto text-[12px]">
+                {done.errors.map((e, i) => (
+                  <li key={i} className="bg-destructive-wash text-destructive rounded px-2 py-1">
+                    Row {e.row}: {e.message}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+          {done.created > 0 && (
+            <Button
+              // Newest first, so the rows that just landed are the rows at the
+              // top of the list. `created_desc` is an existing, validated sort
+              // on /dashboard/inventory — no new URL vocabulary here.
+              onClick={() => router.push('/dashboard/inventory?sort=created_desc')}
+            >
+              View imported items <ArrowRight className="h-4 w-4" />
+            </Button>
+          )}
+        </DetailSection>
       )}
     </div>
   );
 }
+
+/** An inline code chip (a column name). */
+const CODE = 'bg-sunk rounded px-1 py-0.5 font-mono text-[12px]';
+/** A caution panel that blocks the import until it is answered. */
+const CAUTION = 'border-warning/40 bg-warning-wash space-y-3 rounded-lg border p-4';
