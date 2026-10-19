@@ -2,7 +2,8 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import * as Linking from 'expo-linking';
 import { useRouter } from 'expo-router';
-import { ChevronLeft } from 'lucide-react-native';
+import { StatusBar } from 'expo-status-bar';
+import { ChevronLeft, Sparkles } from 'lucide-react-native';
 import * as React from 'react';
 import {
   ActivityIndicator,
@@ -20,7 +21,9 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { Button } from '@/components/ui/button';
 import { IconChip } from '@/components/ui/row';
+import { Body, Display } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import { API_BASE, orgHeader } from '@/lib/api';
 import { scanDocumentPages } from '@/lib/document-scanner';
@@ -28,7 +31,17 @@ import { resizeForUpload } from '@/lib/image-resize';
 import { postMultipart, type MultipartFilePart } from '@/lib/multipart-upload';
 import { buildDisplayNames } from '@/lib/po-scan-display-names';
 import { supabase } from '@/lib/supabase';
-import { radius, space, theme } from '@/lib/theme';
+import {
+  FONT,
+  RADIUS,
+  SPACE,
+  TYPE_CEILING,
+  capTo,
+  palette,
+  type Palette,
+  type ThemeMode,
+} from '@/lib/theme';
+import { useTheme } from '@/lib/use-theme';
 
 import { PO_IMPORT_DISPLAY_NAME_MAX } from '@stockpilot/core';
 
@@ -41,6 +54,23 @@ interface CapturedFrame {
 const MAX_FRAMES = 5;
 
 /**
+ * A captured page is removed by holding it ("Hold to remove"). VoiceOver and
+ * TalkBack offer the same removal as an action named Remove, since a hold is
+ * a gesture they never announce.
+ */
+const REMOVE_PAGE_ACTIONS = [{ name: 'remove', label: 'Remove' }];
+
+/**
+ * The captures after adding `incoming`, never more than `max`: a source that
+ * returns more than the slots left keeps only as many as fit, in order. The
+ * scan route refuses a request of more than five files outright, after the
+ * whole upload, so a capture past the limit must never be kept.
+ */
+function appendFrames<T>(cur: T[], incoming: T[], max: number): T[] {
+  return [...cur, ...incoming.slice(0, Math.max(0, max - cur.length))];
+}
+
+/**
  * Phone-scanned PO flow. The user takes one or more photos (or picks
  * existing photos / a PDF), and we POST them all to /api/po-imports/scan
  * which runs Gemini Flash extraction and creates a po_imports row.
@@ -48,10 +78,15 @@ const MAX_FRAMES = 5;
  * On success we route to the NATIVE review screen (app/po-import/[id]) —
  * parse retry, per-line matching, and the full approve flow all run on
  * device now; the web review page remains available via "Open in browser".
+ *
+ * Drawn in the device's mode; the camera's chrome is dark in both (CAMERA,
+ * below). It was on the light-only legacy theme and stayed light in dark mode.
  */
 export default function ScanPo() {
   const router = useRouter();
   const { session } = useAuth();
+  const { c, mode: themeMode } = useTheme();
+  const styles = SCAN_PO_STYLES[themeMode];
   const [permission, requestPermission] = useCameraPermissions();
   const [frames, setFrames] = React.useState<CapturedFrame[]>([]);
   /**
@@ -65,12 +100,22 @@ export default function ScanPo() {
    * `image.jpg` or `po-frame-1.jpg`, which is the noise this field replaces.
    */
   const [names, setNames] = React.useState<string[]>([]);
+  // Which name box has focus (its border deepens to ink, as the shared
+  // Field's does), or null.
+  const [focusedName, setFocusedName] = React.useState<number | null>(null);
   const [cameraOpen, setCameraOpen] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   // With 2+ captures: true = each file is its OWN PO import (default); false =
   // combine as pages of ONE PO. Ignored for a single capture.
   const [separate, setSeparate] = React.useState(true);
   const cameraRef = React.useRef<CameraView | null>(null);
+  // One photo at a time: a second tap on the shutter while the first photo
+  // was still being taken read the old count, passed the limit check and
+  // could add a sixth page, which the server refuses for the whole scan.
+  const capturingRef = React.useRef(false);
+  // Synchronous re-entry guard for Extract: a quick second tap fired before
+  // the button went away sent the same pages twice (two extractions).
+  const submittingRef = React.useRef(false);
 
   // Extraction progress. The scan is one request (upload + Gemini vision, ~6-10s)
   // with no server-streamed progress, so we drive an optimistic bar on elapsed
@@ -95,10 +140,7 @@ export default function ScanPo() {
     if (!permission?.granted) {
       const r = await requestPermission();
       if (!r.granted) {
-        Alert.alert(
-          'Camera permission needed',
-          'Enable camera access in Settings to scan POs.',
-        );
+        Alert.alert('Camera permission needed', 'Enable camera access in Settings to scan POs.');
         return;
       }
     }
@@ -111,23 +153,45 @@ export default function ScanPo() {
       Alert.alert('Limit reached', `Up to ${MAX_FRAMES} frames per scan.`);
       return;
     }
-    const photo = await cameraRef.current.takePictureAsync({
-      quality: 0.85,
-      // Skipping base64 here — we'll read the file later when uploading.
-      base64: false,
-    });
-    if (!photo) return;
-    setFrames((cur) => [
-      ...cur,
-      {
-        uri: photo.uri,
-        fileName: `po-frame-${cur.length + 1}.jpg`,
-        mimeType: 'image/jpeg',
-      },
-    ]);
+    if (capturingRef.current) return;
+    capturingRef.current = true;
+    try {
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.85,
+        // Skipping base64 here — we'll read the file later when uploading.
+        base64: false,
+      });
+      if (!photo) return;
+      setFrames((cur) =>
+        appendFrames(
+          cur,
+          [
+            {
+              uri: photo.uri,
+              fileName: `po-frame-${cur.length + 1}.jpg`,
+              mimeType: 'image/jpeg',
+            },
+          ],
+          MAX_FRAMES,
+        ),
+      );
+    } catch (e) {
+      // The camera could not take this one (not ready yet): the shutter is
+      // there for another try. It used to escape as an unhandled rejection.
+      console.warn('[scan-po] capture failed', e instanceof Error ? e.message : e);
+    } finally {
+      capturingRef.current = false;
+    }
   }
 
   async function pickFromLibrary() {
+    // With every slot taken there is nothing to pick: the picker reads a
+    // selection limit of 0 as no limit at all, so it offered the whole
+    // library and the scan went past the five pages the server takes.
+    if (frames.length >= MAX_FRAMES) {
+      Alert.alert('Limit reached', `Up to ${MAX_FRAMES} frames per scan.`);
+      return;
+    }
     const res = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsMultipleSelection: true,
@@ -135,14 +199,18 @@ export default function ScanPo() {
       quality: 0.85,
     });
     if (res.canceled || !res.assets) return;
-    setFrames((cur) => [
-      ...cur,
-      ...res.assets.map((a, i) => ({
-        uri: a.uri,
-        fileName: a.fileName ?? `po-pick-${cur.length + i + 1}.jpg`,
-        mimeType: a.mimeType ?? 'image/jpeg',
-      })),
-    ]);
+    const assets = res.assets;
+    setFrames((cur) =>
+      appendFrames(
+        cur,
+        assets.map((a, i) => ({
+          uri: a.uri,
+          fileName: a.fileName ?? `po-pick-${cur.length + i + 1}.jpg`,
+          mimeType: a.mimeType ?? 'image/jpeg',
+        })),
+        MAX_FRAMES,
+      ),
+    );
   }
 
   /**
@@ -169,14 +237,17 @@ export default function ScanPo() {
       );
       return;
     }
-    setFrames((cur) => [
-      ...cur,
-      ...result.pages.slice(0, MAX_FRAMES - cur.length).map((uri, i) => ({
-        uri,
-        fileName: `po-scan-${cur.length + i + 1}.jpg`,
-        mimeType: 'image/jpeg',
-      })),
-    ]);
+    setFrames((cur) =>
+      appendFrames(
+        cur,
+        result.pages.map((uri, i) => ({
+          uri,
+          fileName: `po-scan-${cur.length + i + 1}.jpg`,
+          mimeType: 'image/jpeg',
+        })),
+        MAX_FRAMES,
+      ),
+    );
   }
 
   function removeFrame(uri: string) {
@@ -215,6 +286,9 @@ export default function ScanPo() {
       Alert.alert('Not signed in', 'Sign in again and retry.');
       return;
     }
+    // Checked and set synchronously, before the button re-renders away.
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setBusy(true);
 
     // Kick off the optimistic progress bar + rotating stage labels.
@@ -359,7 +433,9 @@ export default function ScanPo() {
         Alert.alert(
           'Imported',
           `${made} import${made === 1 ? '' : 's'} created${
-            failedCount > 0 ? ` · ${failedCount} file${failedCount === 1 ? '' : 's'} couldn't be read` : ''
+            failedCount > 0
+              ? ` · ${failedCount} file${failedCount === 1 ? '' : 's'} couldn't be read`
+              : ''
           }. Review and approve each.`,
           [
             { text: 'Review', onPress: () => router.replace('/po-imports') },
@@ -402,6 +478,7 @@ export default function ScanPo() {
     } finally {
       stopProgress();
       setBusy(false);
+      submittingRef.current = false;
     }
   }
 
@@ -412,30 +489,49 @@ export default function ScanPo() {
 
   if (cameraOpen) {
     return (
-      <SafeAreaView style={styles.cameraRoot} edges={['top']}>
-        <CameraView ref={cameraRef} style={styles.camera} facing="back" />
-        <View style={styles.cameraOverlay}>
-          <Text style={styles.frameCount}>
-            {frames.length}/{MAX_FRAMES} captured
-          </Text>
-          <View style={styles.cameraButtons}>
+      // THE CAMERA CHROME IS DARK IN BOTH MODES (CAMERA, below): a solid bar
+      // over the camera with Done and the count, and the shutter under it.
+      <View style={cameraStyles.root}>
+        {/* Light clock and battery over the dark bar (they were dark text on
+            the black camera ground in light mode). */}
+        <StatusBar style="light" />
+        <SafeAreaView edges={['top']} style={cameraStyles.bar}>
+          <View style={cameraStyles.barRow}>
             <Pressable
               onPress={() => setCameraOpen(false)}
-              style={styles.cancelBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Done"
+              style={({ pressed }) => [cameraStyles.closeFrame, pressed && { opacity: 0.7 }]}
             >
-              <Text style={styles.cancelBtnText}>Done</Text>
+              <View style={cameraStyles.closeBtn}>
+                <Text
+                  style={cameraStyles.closeText}
+                  numberOfLines={1}
+                  maxFontSizeMultiplier={CLOSE_CAP}
+                >
+                  Done
+                </Text>
+              </View>
             </Pressable>
-            <Pressable
-              onPress={captureFrame}
-              style={({ pressed }) => [
-                styles.shutter,
-                pressed && { transform: [{ scale: 0.92 }] },
-              ]}
-            />
-            <View style={{ width: 60 }} />
+            <Text style={cameraStyles.frameCount}>
+              {frames.length}/{MAX_FRAMES} captured
+            </Text>
           </View>
-        </View>
-      </SafeAreaView>
+        </SafeAreaView>
+        <CameraView ref={cameraRef} style={cameraStyles.camera} facing="back" />
+        <SafeAreaView edges={['bottom']} style={cameraStyles.shutterBar}>
+          {/* The shutter had no name for VoiceOver: it takes the photo. */}
+          <Pressable
+            onPress={captureFrame}
+            accessibilityRole="button"
+            accessibilityLabel="Take photo"
+            style={({ pressed }) => [
+              cameraStyles.shutter,
+              pressed && { transform: [{ scale: 0.92 }] },
+            ]}
+          />
+        </SafeAreaView>
+      </View>
     );
   }
 
@@ -452,17 +548,20 @@ export default function ScanPo() {
           minTap
         />
       </View>
+      {/* A name box low on the page scrolls clear of the keyboard. */}
       <ScrollView
-        contentContainerStyle={{ padding: space.md, paddingBottom: 200 }}
+        contentContainerStyle={{ padding: SPACE.md, paddingBottom: 200 }}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
+        automaticallyAdjustKeyboardInsets
       >
-        <Text style={styles.title}>Scan a PO</Text>
-        <Text style={styles.subtitle}>
-          Take a photo of a printed purchase order. Up to {MAX_FRAMES} pages —
-          we extract vendor, line items, and totals automatically, then you
-          review and approve right here.
-        </Text>
+        <Display size={28} accessibilityRole="header">
+          Scan a PO
+        </Display>
+        <Body muted size={13.5} style={styles.subtitle}>
+          Take a photo of a printed purchase order. Up to {MAX_FRAMES} pages — we extract vendor,
+          line items, and totals automatically, then you review and approve right here.
+        </Body>
 
         {!perFileNames && (
           <View style={styles.nameField}>
@@ -471,12 +570,15 @@ export default function ScanPo() {
               value={names[0] ?? ''}
               onChangeText={(v) => setName(0, v)}
               placeholder="Example: August DC4 Book Order"
-              placeholderTextColor={theme.textMuted}
+              placeholderTextColor={c.ink3}
               maxLength={PO_IMPORT_DISPLAY_NAME_MAX}
               editable={!busy}
               autoCapitalize="words"
               returnKeyType="done"
-              style={styles.nameInput}
+              accessibilityLabel="PO name"
+              onFocus={() => setFocusedName(0)}
+              onBlur={() => setFocusedName((f) => (f === 0 ? null : f))}
+              style={[styles.nameInput, focusedName === 0 && styles.nameInputFocused]}
             />
             <Text style={styles.nameHint}>
               Optional — without one it is listed by its file name.
@@ -484,34 +586,20 @@ export default function ScanPo() {
           </View>
         )}
 
-        <View style={styles.actionRow}>
-          <Pressable
-            style={({ pressed }) => [
-              styles.primaryBtn,
-              pressed && { opacity: 0.7 },
-            ]}
-            onPress={scanCleanDocument}
-          >
-            <Text style={styles.primaryBtnText}>Scan document</Text>
-          </Pressable>
-          <Pressable
-            style={({ pressed }) => [
-              styles.secondaryBtn,
-              pressed && { opacity: 0.7 },
-            ]}
-            onPress={openCamera}
-          >
-            <Text style={styles.secondaryBtnText}>Take photo</Text>
-          </Pressable>
-          <Pressable
-            style={({ pressed }) => [
-              styles.secondaryBtn,
-              pressed && { opacity: 0.7 },
-            ]}
-            onPress={pickFromLibrary}
-          >
-            <Text style={styles.secondaryBtnText}>From library</Text>
-          </Pressable>
+        {/* One full-width button under another at every text size: side by
+            side, "From library" and "Take photo" lost their words to an
+            ellipsis. Scan document stays the lead (the accent: it starts a
+            new scan); Extract below is the one ink button, which commits. */}
+        <View style={styles.actions}>
+          <Button variant="accent" block onPress={scanCleanDocument}>
+            Scan document
+          </Button>
+          <Button variant="outline" block onPress={openCamera}>
+            Take photo
+          </Button>
+          <Button variant="outline" block onPress={pickFromLibrary}>
+            From library
+          </Button>
         </View>
 
         {frames.length > 0 &&
@@ -522,6 +610,10 @@ export default function ScanPo() {
                 <View key={f.uri} style={styles.frameRow}>
                   <Pressable
                     onLongPress={() => removeFrame(f.uri)}
+                    accessibilityActions={REMOVE_PAGE_ACTIONS}
+                    onAccessibilityAction={(e) => {
+                      if (e.nativeEvent.actionName === 'remove') removeFrame(f.uri);
+                    }}
                     style={styles.frameRowThumb}
                   >
                     <Image source={{ uri: f.uri }} style={styles.thumbnailImage} />
@@ -535,19 +627,20 @@ export default function ScanPo() {
                       value={names[i] ?? ''}
                       onChangeText={(v) => setName(i, v)}
                       placeholder="Example: August DC4 Book Order"
-                      placeholderTextColor={theme.textMuted}
+                      placeholderTextColor={c.ink3}
                       maxLength={PO_IMPORT_DISPLAY_NAME_MAX}
                       editable={!busy}
                       autoCapitalize="words"
                       returnKeyType="done"
-                      style={styles.nameInput}
+                      accessibilityLabel={`PO ${i + 1} name`}
+                      onFocus={() => setFocusedName(i)}
+                      onBlur={() => setFocusedName((cur) => (cur === i ? null : cur))}
+                      style={[styles.nameInput, focusedName === i && styles.nameInputFocused]}
                     />
                   </View>
                 </View>
               ))}
-              <Text style={styles.nameHint}>
-                Names are optional. Hold a photo to remove it.
-              </Text>
+              <Text style={styles.nameHint}>Names are optional. Hold a photo to remove it.</Text>
             </View>
           ) : (
             <View style={styles.thumbnails}>
@@ -555,6 +648,10 @@ export default function ScanPo() {
                 <Pressable
                   key={f.uri}
                   onLongPress={() => removeFrame(f.uri)}
+                  accessibilityActions={REMOVE_PAGE_ACTIONS}
+                  onAccessibilityAction={(e) => {
+                    if (e.nativeEvent.actionName === 'remove') removeFrame(f.uri);
+                  }}
                   style={styles.thumbnail}
                 >
                   <Image source={{ uri: f.uri }} style={styles.thumbnailImage} />
@@ -568,26 +665,26 @@ export default function ScanPo() {
 
         {frames.length > 1 && !busy && (
           <View style={styles.modeCard}>
-            <Text style={styles.modeQuestion}>
-              {frames.length} captures — are these…
-            </Text>
-            <View style={styles.modeRow}>
+            <Text style={styles.modeQuestion}>{frames.length} captures — are these…</Text>
+            {/* Two choices, one of them on: radio buttons to VoiceOver, with
+                the chosen one checked (they were two unnamed elements). */}
+            <View style={styles.modeRow} accessibilityRole="radiogroup">
               <Pressable
                 onPress={() => setSeparate(true)}
+                accessibilityRole="radio"
+                accessibilityState={{ checked: separate }}
                 style={[styles.modeBtn, separate && styles.modeBtnActive]}
               >
-                <Text style={[styles.modeBtnTitle, separate && styles.modeBtnTitleActive]}>
-                  Separate POs
-                </Text>
+                <Text style={styles.modeBtnTitle}>Separate POs</Text>
                 <Text style={styles.modeBtnSub}>Each becomes its own import</Text>
               </Pressable>
               <Pressable
                 onPress={() => setSeparate(false)}
+                accessibilityRole="radio"
+                accessibilityState={{ checked: !separate }}
                 style={[styles.modeBtn, !separate && styles.modeBtnActive]}
               >
-                <Text style={[styles.modeBtnTitle, !separate && styles.modeBtnTitleActive]}>
-                  One multi-page PO
-                </Text>
+                <Text style={styles.modeBtnTitle}>One multi-page PO</Text>
                 <Text style={styles.modeBtnSub}>Combine as pages of one PO</Text>
               </Pressable>
             </View>
@@ -595,24 +692,23 @@ export default function ScanPo() {
         )}
 
         {frames.length > 0 && !busy && (
-          <Pressable
+          // Committing the pages: the screen's one ink button. The sparkle
+          // emoji in the words became an icon beside them.
+          <Button
+            block
             onPress={submit}
-            style={({ pressed }) => [
-              styles.extractBtn,
-              pressed && { opacity: 0.7 },
-            ]}
+            style={styles.extractBtn}
+            leading={<Sparkles size={16} color={c.paper} strokeWidth={1.75} />}
           >
-            <Text style={styles.extractBtnText}>
-              ✨  Extract {frames.length}{' '}
-              {frames.length > 1 && separate ? 'POs' : frames.length === 1 ? 'page' : 'pages'}
-            </Text>
-          </Pressable>
+            Extract {frames.length}{' '}
+            {frames.length > 1 && separate ? 'POs' : frames.length === 1 ? 'page' : 'pages'}
+          </Button>
         )}
 
         {busy && (
           <View style={styles.progressCard}>
             <View style={styles.progressHeaderRow}>
-              <ActivityIndicator color={theme.primary} />
+              <ActivityIndicator color={c.ink} />
               <Text style={styles.progressLabel}>{stageLabel || 'Working…'}</Text>
             </View>
             <View style={styles.progressTrack}>
@@ -638,193 +734,205 @@ export default function ScanPo() {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: theme.bg },
-  // The back chip's 44pt frame (IconChip minTap) is 3pt wider than the 38pt
-  // chip on every side, so the bar takes 3pt off each padding (12, 8, 4): the
-  // chip and the page under it sit where they did.
-  topbar: {
-    paddingHorizontal: 9,
-    paddingTop: 5,
-    paddingBottom: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  cameraRoot: { flex: 1, backgroundColor: '#000' },
-  camera: { flex: 1 },
-  cameraOverlay: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    padding: space.md,
-    paddingBottom: space.xl,
-    alignItems: 'center',
-  },
-  frameCount: {
-    color: '#fff',
-    fontSize: 13,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 999,
-    marginBottom: space.md,
-  },
-  cameraButtons: {
+/**
+ * THE CAMERA CHROME IS DARK IN BOTH MODES. The bar and the ground behind the
+ * camera draw from the dark palette whatever the mode is: the same camera as
+ * the Scan tab and the count scanner (DESIGN-SPEC 10).
+ */
+const CAMERA_PALETTE = palette('dark');
+const CAMERA = {
+  /** The bar and the ground behind the camera: the reference viewfinder. */
+  surface: '#0a0b09',
+  ink: CAMERA_PALETTE.ink,
+  ink2: CAMERA_PALETTE.ink2,
+  /** A control on the bar: the raised fill with an outline at 3:1. */
+  chip: CAMERA_PALETTE.card,
+  chipBorder: CAMERA_PALETTE.ink4,
+  /** The shutter: white in both modes, the camera's own control, ringed in
+   *  the faint ink (the old ring was white at 40% over this ground). */
+  shutter: '#ffffff',
+  shutterRing: CAMERA_PALETTE.ink4,
+} as const;
+
+/** Done sits on the camera bar: chrome, capped at its ceiling. */
+const CLOSE_CAP = capTo(13, TYPE_CEILING.chrome);
+
+/**
+ * Behind the words over a captured page ("Hold to remove"): the camera's
+ * scrim, so the words read the same over a white page or a dark one, in both
+ * modes. It sits over a photo, which does not change with the mode.
+ */
+const PHOTO_SCRIM = 'rgba(10, 11, 9, 0.72)';
+
+/** The screen's styles for one mode's palette, built once per mode at load. */
+function makeStyles(c: Palette) {
+  return StyleSheet.create({
+    root: { flex: 1, backgroundColor: c.paper },
+    // The back chip's 44pt frame (IconChip minTap) is 3pt wider than the 38pt
+    // chip on every side, so the bar takes 3pt off each padding (12, 8, 4): the
+    // chip and the page under it sit where they did.
+    topbar: {
+      paddingHorizontal: 9,
+      paddingTop: 5,
+      paddingBottom: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    subtitle: { marginTop: 8, marginBottom: SPACE.lg },
+    actions: { gap: SPACE.sm, marginBottom: SPACE.lg },
+    thumbnails: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: SPACE.sm,
+      marginBottom: SPACE.lg,
+    },
+    thumbnail: {
+      width: 100,
+      height: 130,
+      borderRadius: RADIUS.card,
+      overflow: 'hidden',
+      backgroundColor: c.card,
+      borderWidth: 1,
+      borderColor: c.hair,
+    },
+    thumbnailImage: { width: '100%', height: '100%' },
+    thumbnailOverlay: {
+      position: 'absolute',
+      bottom: 0,
+      left: 0,
+      right: 0,
+      backgroundColor: PHOTO_SCRIM,
+      paddingVertical: 4,
+      alignItems: 'center',
+    },
+    thumbnailHint: { color: CAMERA.ink, fontFamily: FONT.display, fontSize: 10.5 },
+    nameField: { gap: 6, marginBottom: SPACE.lg },
+    nameLabel: { color: c.ink3, fontFamily: FONT.display, fontSize: 12.5 },
+    // The shared Field's box: the card fill, the stronger border that deepens
+    // to ink on focus. The typed name grows with the text size, as before.
+    nameInput: {
+      backgroundColor: c.card,
+      borderWidth: 1,
+      borderColor: c.hair2,
+      borderRadius: RADIUS.tile,
+      paddingHorizontal: SPACE.md,
+      paddingVertical: SPACE.sm,
+      minHeight: 44,
+      color: c.ink,
+      fontFamily: FONT.displayRegular,
+      fontSize: 15,
+    },
+    nameInputFocused: { borderColor: c.ink },
+    nameHint: { color: c.ink3, fontFamily: FONT.displayRegular, fontSize: 12.5, lineHeight: 17 },
+    frameList: { gap: SPACE.sm, marginBottom: SPACE.lg },
+    frameRow: { flexDirection: 'row', gap: SPACE.sm, alignItems: 'center' },
+    frameRowThumb: {
+      width: 56,
+      height: 72,
+      borderRadius: RADIUS.tile,
+      overflow: 'hidden',
+      backgroundColor: c.card,
+      borderWidth: 1,
+      borderColor: c.hair,
+    },
+    frameRowBody: { flex: 1, gap: 4 },
+    modeCard: {
+      backgroundColor: c.card,
+      borderWidth: 1,
+      borderColor: c.hair,
+      borderRadius: RADIUS.card,
+      padding: SPACE.sm,
+      marginTop: SPACE.sm,
+      gap: SPACE.xs,
+    },
+    modeQuestion: { color: c.ink3, fontFamily: FONT.display, fontSize: 12.5 },
+    modeRow: { flexDirection: 'row', gap: SPACE.xs },
+    modeBtn: {
+      flex: 1,
+      minHeight: 44,
+      borderWidth: 1,
+      borderColor: c.hair2,
+      borderRadius: RADIUS.tile,
+      paddingVertical: SPACE.sm,
+      paddingHorizontal: SPACE.sm,
+      gap: 2,
+    },
+    // The chosen one: the accent edge on the accent wash (DESIGN-SPEC 6.21's
+    // selected row), so it does not rest on the words' colour.
+    modeBtnActive: { borderColor: c.accent, backgroundColor: c.accentWash },
+    modeBtnTitle: { color: c.ink, fontFamily: FONT.display, fontSize: 13.5 },
+    modeBtnSub: { color: c.ink3, fontFamily: FONT.displayRegular, fontSize: 12 },
+    extractBtn: { marginTop: SPACE.sm },
+    progressCard: {
+      marginTop: SPACE.md,
+      backgroundColor: c.card,
+      borderWidth: 1,
+      borderColor: c.hair,
+      borderRadius: RADIUS.card,
+      padding: SPACE.md,
+      gap: SPACE.sm,
+    },
+    progressHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm },
+    progressLabel: { color: c.ink, fontFamily: FONT.display, fontSize: 14, flexShrink: 1 },
+    // The reference's 4pt progress bar: the accent on the stronger-border track.
+    progressTrack: {
+      height: 4,
+      borderRadius: 2,
+      backgroundColor: c.hair2,
+      overflow: 'hidden',
+    },
+    progressFill: { height: '100%', borderRadius: 2, backgroundColor: c.accent },
+    progressHint: {
+      color: c.ink3,
+      fontFamily: FONT.displayRegular,
+      fontSize: 12.5,
+      lineHeight: 17,
+    },
+  });
+}
+
+const SCAN_PO_STYLES: Record<ThemeMode, ReturnType<typeof makeStyles>> = {
+  light: makeStyles(palette('light')),
+  dark: makeStyles(palette('dark')),
+};
+
+const cameraStyles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: CAMERA.surface },
+  bar: { backgroundColor: CAMERA.surface },
+  barRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    width: '100%',
-    paddingHorizontal: space.lg,
+    gap: SPACE.md,
+    paddingHorizontal: SPACE.md,
+    paddingVertical: SPACE.xs,
   },
-  cancelBtn: {
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: radius.md,
-    minWidth: 60,
+  // Done is a button in a frame at least 44pt tall around the pill.
+  closeFrame: { minHeight: 44, minWidth: 44, justifyContent: 'center' },
+  closeBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: CAMERA.chipBorder,
+    backgroundColor: CAMERA.chip,
+  },
+  closeText: { color: CAMERA.ink, fontFamily: FONT.displaySemi, fontWeight: '600', fontSize: 13 },
+  // The live tally of pages: content, so it grows with the text size.
+  frameCount: { color: CAMERA.ink2, fontFamily: FONT.mono, fontSize: 13, flexShrink: 1 },
+  camera: { flex: 1 },
+  shutterBar: {
+    backgroundColor: CAMERA.surface,
     alignItems: 'center',
+    paddingTop: SPACE.md,
+    paddingBottom: SPACE.md,
   },
-  cancelBtnText: { color: '#fff', fontWeight: '600' },
   shutter: {
     width: 72,
     height: 72,
     borderRadius: 36,
-    backgroundColor: '#fff',
+    backgroundColor: CAMERA.shutter,
     borderWidth: 4,
-    borderColor: 'rgba(255,255,255,0.4)',
+    borderColor: CAMERA.shutterRing,
   },
-  title: { color: theme.text, fontSize: 26, fontWeight: '700' },
-  subtitle: {
-    color: theme.textMuted,
-    fontSize: 13,
-    lineHeight: 18,
-    marginTop: 6,
-    marginBottom: space.lg,
-  },
-  actionRow: {
-    flexDirection: 'row',
-    gap: space.sm,
-    marginBottom: space.lg,
-  },
-  primaryBtn: {
-    flex: 2,
-    backgroundColor: theme.primary,
-    paddingVertical: space.md,
-    borderRadius: radius.md,
-    alignItems: 'center',
-  },
-  primaryBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
-  secondaryBtn: {
-    flex: 1,
-    backgroundColor: theme.card,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-    paddingVertical: space.md,
-    borderRadius: radius.md,
-    alignItems: 'center',
-  },
-  secondaryBtnText: { color: theme.text, fontSize: 13 },
-  thumbnails: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: space.sm,
-    marginBottom: space.lg,
-  },
-  thumbnail: {
-    width: 100,
-    height: 130,
-    borderRadius: radius.md,
-    overflow: 'hidden',
-    backgroundColor: theme.card,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-  },
-  thumbnailImage: { width: '100%', height: '100%' },
-  thumbnailOverlay: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    paddingVertical: 4,
-    alignItems: 'center',
-  },
-  thumbnailHint: { color: '#fff', fontSize: 10 },
-  nameField: { gap: 6, marginBottom: space.lg },
-  nameLabel: { color: theme.textMuted, fontSize: 12, fontWeight: '600' },
-  nameInput: {
-    backgroundColor: theme.card,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-    borderRadius: radius.md,
-    paddingHorizontal: space.sm,
-    paddingVertical: space.sm,
-    color: theme.text,
-    fontSize: 15,
-  },
-  nameHint: { color: theme.textMuted, fontSize: 12, lineHeight: 16 },
-  frameList: { gap: space.sm, marginBottom: space.lg },
-  frameRow: { flexDirection: 'row', gap: space.sm, alignItems: 'center' },
-  frameRowThumb: {
-    width: 56,
-    height: 72,
-    borderRadius: radius.sm,
-    overflow: 'hidden',
-    backgroundColor: theme.card,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-  },
-  frameRowBody: { flex: 1, gap: 4 },
-  modeCard: {
-    backgroundColor: theme.card,
-    borderWidth: 1,
-    borderColor: theme.border,
-    borderRadius: radius.md,
-    padding: space.sm,
-    marginTop: space.sm,
-    gap: space.xs,
-  },
-  modeQuestion: { color: theme.textMuted, fontSize: 12, fontWeight: '600' },
-  modeRow: { flexDirection: 'row', gap: space.xs },
-  modeBtn: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: theme.border,
-    borderRadius: radius.md,
-    paddingVertical: space.sm,
-    paddingHorizontal: space.sm,
-    gap: 2,
-  },
-  modeBtnActive: { borderColor: theme.primary, backgroundColor: theme.bg },
-  modeBtnTitle: { color: theme.text, fontSize: 13, fontWeight: '700' },
-  modeBtnTitleActive: { color: theme.primary },
-  modeBtnSub: { color: theme.textMuted, fontSize: 11 },
-  extractBtn: {
-    backgroundColor: theme.primary,
-    paddingVertical: space.md,
-    borderRadius: radius.md,
-    alignItems: 'center',
-    marginTop: space.sm,
-  },
-  extractBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
-  progressCard: {
-    marginTop: space.md,
-    backgroundColor: theme.card,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-    borderRadius: radius.md,
-    padding: space.md,
-    gap: space.sm,
-  },
-  progressHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
-  progressLabel: { color: theme.text, fontSize: 14, fontWeight: '600' },
-  progressTrack: {
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: theme.border,
-    overflow: 'hidden',
-  },
-  progressFill: { height: '100%', borderRadius: 4, backgroundColor: theme.primary },
-  progressHint: { color: theme.textMuted, fontSize: 12 },
 });

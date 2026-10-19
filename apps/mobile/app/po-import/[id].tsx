@@ -20,7 +20,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -29,6 +29,7 @@ import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { Chip } from '@/components/ui/chip';
 import { listWarehouses, type CachedWarehouse } from '@/lib/db-reads';
+import { footerReservation } from '@/lib/dynamic-type-layout';
 import {
   actionsForStatus,
   buildApproveCharterFields,
@@ -54,7 +55,7 @@ import { settleIdBatchRead } from '@/lib/id-batches';
 import { readItemRefs } from '@/lib/id-reads';
 import { readPoImportUploaders } from '@/lib/po-import-uploaders';
 import { supabase } from '@/lib/supabase';
-import { ACCENT, FONT, SHADOW } from '@/lib/theme';
+import { FONT, SHADOW } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { useRole } from '@/lib/use-role';
@@ -163,6 +164,9 @@ function money(v: number): string {
   return `$${v.toFixed(2)}`;
 }
 
+/** The approve sheet's date field: its label, and its name for VoiceOver. */
+const EXPECTED_DATE_LABEL = 'EXPECTED DATE (OPTIONAL · YYYY-MM-DD)';
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -178,6 +182,7 @@ export default function PoImportDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { orgId } = useOrg();
   const { c } = useTheme();
+  const insets = useSafeAreaInsets();
   const { role } = useRole();
   const permissions = useEffectivePermissions();
 
@@ -205,6 +210,9 @@ export default function PoImportDetailScreen() {
   const [actionError, setActionError] = React.useState<string | null>(null);
   const [actionBusy, setActionBusy] = React.useState<'parse' | 'cancel' | null>(null);
   const [approveOpen, setApproveOpen] = React.useState(false);
+  // The pinned footer's measured height (null until it lays out): the lines
+  // scroll clear of it however tall its notes and buttons grow.
+  const [footerHeight, setFooterHeight] = React.useState<number | null>(null);
 
   /**
    * Re-import lineage (migs 0286/0287) — parity with the web detail page.
@@ -390,8 +398,7 @@ export default function PoImportDetailScreen() {
         player_name: (lr.player_name as string | null) ?? null,
         group_hint: (lr.group_hint as string | null) ?? null,
         serial_hint: (lr.serial_hint as string | null) ?? null,
-        mapping_confidence:
-          lr.mapping_confidence == null ? null : Number(lr.mapping_confidence),
+        mapping_confidence: lr.mapping_confidence == null ? null : Number(lr.mapping_confidence),
       };
     });
     setLines(flat);
@@ -514,7 +521,10 @@ export default function PoImportDetailScreen() {
   }
 
   const meta = header
-    ? (STATUS_META[header.status] ?? { label: header.status.toUpperCase(), status: 'default' as const })
+    ? (STATUS_META[header.status] ?? {
+        label: header.status.toUpperCase(),
+        status: 'default' as const,
+      })
     : null;
 
   return (
@@ -547,21 +557,46 @@ export default function PoImportDetailScreen() {
           <ActivityIndicator color={c.ink} />
         </View>
       ) : !header ? (
-        <View style={{ padding: 24, alignItems: 'center' }}>
-          <Body muted style={{ textAlign: 'center' }}>
+        // A first read that failed says why and offers another read, as the
+        // receive screen does (it said the error with no way to load again
+        // but going back); an import that is not there says so.
+        <View style={{ padding: 24, alignItems: 'center', gap: 14 }}>
+          <Body muted style={{ textAlign: 'center' }} accessibilityRole="alert">
             {loadError ?? 'This import was not found, or you no longer have access to it.'}
           </Body>
+          {loadError !== null ? (
+            <Button
+              variant="outline"
+              onPress={() => {
+                setLoading(true);
+                setLoadError(null);
+                void load();
+              }}
+            >
+              Try again
+            </Button>
+          ) : null}
         </View>
       ) : (
         <>
           <ScrollView
-            contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: 160, gap: 10 }}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />}
+            contentContainerStyle={{
+              paddingHorizontal: 20,
+              paddingTop: 12,
+              // The footer's own height, measured, with 160 as the floor: an
+              // error and the approve note above the buttons made it taller
+              // than the fixed 160, and the last parsed line sat under it.
+              paddingBottom: footerReservation(actions.length > 0 ? footerHeight : null, 160),
+              gap: 10,
+            }}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />
+            }
           >
             {loadError !== null ? (
               // A refresh that failed while an earlier load is on screen: say
               // so, rather than leave the older copy looking current.
-              <Body size={12} color={ACCENT.warn}>
+              <Body size={12} color={c.warnText} accessibilityRole="alert">
                 Could not refresh this import: {loadError}. Pull down to try again.
               </Body>
             ) : null}
@@ -575,13 +610,13 @@ export default function PoImportDetailScreen() {
                 }}
               >
                 <View style={{ flex: 1, minWidth: 0 }}>
-                  <Mono size={9.5} tracking={0.2} upper color={c.ink4}>
+                  <Mono size={9.5} tracking={0.2} upper color={c.ink3}>
                     — {header.source_type}
                   </Mono>
                   <Body size={15} color={c.ink} style={{ marginTop: 6, fontFamily: FONT.display }}>
                     {header.po_number ?? header.file_name}
                   </Body>
-                  <Mono size={11} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
+                  <Mono size={11} tracking={0.04} color={c.ink3} style={{ marginTop: 4 }}>
                     {header.vendor_name ? `${header.vendor_name} · ` : ''}
                     {header.created_at
                       ? new Date(header.created_at).toLocaleDateString(undefined, {
@@ -592,7 +627,7 @@ export default function PoImportDetailScreen() {
                       : ''}
                   </Mono>
                   {uploadedBy !== null ? (
-                    <Mono size={11} tracking={0.04} color={c.ink4} style={{ marginTop: 2 }}>
+                    <Mono size={11} tracking={0.04} color={c.ink3} style={{ marginTop: 2 }}>
                       Uploaded by {uploadedBy}
                     </Mono>
                   ) : null}
@@ -622,7 +657,7 @@ export default function PoImportDetailScreen() {
               </View>
 
               {header.parse_error ? (
-                <Mono size={11.5} color={ACCENT.crit} style={{ marginTop: 10, lineHeight: 16 }}>
+                <Mono size={11.5} color={c.critText} style={{ marginTop: 10, lineHeight: 16 }}>
                   {header.parse_error}
                 </Mono>
               ) : null}
@@ -634,7 +669,7 @@ export default function PoImportDetailScreen() {
                 redo and itself superseded. */}
             {replacement ? (
               <Card padding={14}>
-                <Mono size={9.5} tracking={0.2} upper color={ACCENT.warn}>
+                <Mono size={9.5} tracking={0.2} upper color={c.warnText}>
                   — SUPERSEDED
                 </Mono>
                 <Body size={13} color={c.ink} style={{ marginTop: 6 }}>
@@ -664,7 +699,7 @@ export default function PoImportDetailScreen() {
               // Stamped, but the successor row is gone or not visible under
               // RLS. State the fact rather than offer a link that would fail.
               <Card padding={14}>
-                <Mono size={9.5} tracking={0.2} upper color={ACCENT.warn}>
+                <Mono size={9.5} tracking={0.2} upper color={c.warnText}>
                   — SUPERSEDED
                 </Mono>
                 <Body muted size={12} style={{ marginTop: 6 }}>
@@ -675,7 +710,7 @@ export default function PoImportDetailScreen() {
 
             {predecessor ? (
               <Card padding={14}>
-                <Mono size={9.5} tracking={0.2} upper color={c.ink4}>
+                <Mono size={9.5} tracking={0.2} upper color={c.ink3}>
                   — RE-IMPORT
                 </Mono>
                 <Body size={13} color={c.ink} style={{ marginTop: 6 }}>
@@ -715,7 +750,7 @@ export default function PoImportDetailScreen() {
               <Eyebrow>PARSED LINES</Eyebrow>
             </View>
             {itemNamesError !== null ? (
-              <Body size={12} color={ACCENT.warn}>
+              <Body size={12} color={c.warnText}>
                 Item names did not load. Pull down to try again.
               </Body>
             ) : null}
@@ -739,6 +774,7 @@ export default function PoImportDetailScreen() {
 
           {actions.length > 0 ? (
             <View
+              onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
               style={{
                 position: 'absolute',
                 left: 0,
@@ -746,7 +782,8 @@ export default function PoImportDetailScreen() {
                 bottom: 0,
                 paddingHorizontal: 20,
                 paddingTop: 12,
-                paddingBottom: 28,
+                // Clear of the home indicator on a phone that has one.
+                paddingBottom: Math.max(28, insets.bottom),
                 backgroundColor: c.paper,
                 borderTopWidth: 1,
                 borderTopColor: c.hair,
@@ -754,56 +791,54 @@ export default function PoImportDetailScreen() {
               }}
             >
               {actionError ? (
-                <Mono size={11.5} color={ACCENT.crit} style={{ lineHeight: 16 }}>
+                <Mono size={11.5} color={c.critText} style={{ lineHeight: 16 }}>
                   {actionError}
                 </Mono>
               ) : null}
               {actions.includes('approve') && itemNamesError !== null ? (
-                <Mono size={11.5} color={ACCENT.warn} style={{ lineHeight: 16 }}>
-                  Approve is unavailable until item names load, so every line can be checked
-                  against its item. Pull down to try again.
+                <Mono size={11.5} color={c.warnText} style={{ lineHeight: 16 }}>
+                  Approve is unavailable until item names load, so every line can be checked against
+                  its item. Pull down to try again.
                 </Mono>
               ) : null}
-              <View style={{ flexDirection: 'row', gap: 10 }}>
-                {actions.includes('cancel') ? (
-                  <View style={{ flex: 1 }}>
-                    <Button
-                      block
-                      variant="ghost"
-                      disabled={actionBusy !== null}
-                      onPress={confirmCancel}
-                    >
-                      {actionBusy === 'cancel' ? 'Cancelling…' : 'Cancel import'}
-                    </Button>
-                  </View>
-                ) : null}
-                {actions.includes('parse') ? (
-                  <View style={{ flex: 1 }}>
-                    <Button block disabled={actionBusy !== null} onPress={() => void runParse()}>
-                      {actionBusy === 'parse'
-                        ? 'Parsing…'
-                        : header.status === 'failed'
-                          ? 'Retry parse'
-                          : 'Parse file'}
-                    </Button>
-                  </View>
-                ) : null}
-                {actions.includes('approve') ? (
-                  <View style={{ flex: 1 }}>
-                    <Button
-                      block
-                      disabled={actionBusy !== null || itemNamesError !== null}
-                      onPress={() => {
-                        if (itemNamesError !== null) return;
-                        setActionError(null);
-                        setApproveOpen(true);
-                      }}
-                    >
-                      Approve…
-                    </Button>
-                  </View>
-                ) : null}
-              </View>
+              {/* One full-width button under the other at every text size:
+                  side by side, "Cancel import" lost its words to an ellipsis
+                  from the larger text sizes, and on a small phone at the
+                  default one. Same order, same actions. Cancel import is the
+                  refusal-red words (it discards the import); Parse file or
+                  Approve… is the one ink button. */}
+              {actions.includes('cancel') ? (
+                <Button
+                  block
+                  variant="destructive"
+                  disabled={actionBusy !== null}
+                  onPress={confirmCancel}
+                >
+                  {actionBusy === 'cancel' ? 'Cancelling…' : 'Cancel import'}
+                </Button>
+              ) : null}
+              {actions.includes('parse') ? (
+                <Button block disabled={actionBusy !== null} onPress={() => void runParse()}>
+                  {actionBusy === 'parse'
+                    ? 'Parsing…'
+                    : header.status === 'failed'
+                      ? 'Retry parse'
+                      : 'Parse file'}
+                </Button>
+              ) : null}
+              {actions.includes('approve') ? (
+                <Button
+                  block
+                  disabled={actionBusy !== null || itemNamesError !== null}
+                  onPress={() => {
+                    if (itemNamesError !== null) return;
+                    setActionError(null);
+                    setApproveOpen(true);
+                  }}
+                >
+                  Approve…
+                </Button>
+              ) : null}
             </View>
           ) : null}
 
@@ -832,8 +867,10 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
   // get a new identity every render and remount their subtree (compiler rule
   // react-hooks/static-components).
   const { c } = useTheme();
+  // Muted ink (ink3): the label names the field, so it is information (the
+  // faint ink4 held it under AA).
   return (
-    <Mono size={10} tracking={0.12} upper color={c.ink4}>
+    <Mono size={10} tracking={0.12} upper color={c.ink3}>
       {children}
     </Mono>
   );
@@ -843,7 +880,7 @@ function HeaderStat({ label, value }: { label: string; value: string }) {
   const { c } = useTheme();
   return (
     <View>
-      <Mono size={9.5} tracking={0.12} upper color={c.ink4}>
+      <Mono size={9.5} tracking={0.12} upper color={c.ink3}>
         {label}
       </Mono>
       <Body size={14} color={c.ink} style={{ marginTop: 3, fontFamily: FONT.display }}>
@@ -892,17 +929,22 @@ function LineCard({
   return (
     <Card padding={14}>
       <View
-        style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}
+        style={{
+          flexDirection: 'row',
+          justifyContent: 'space-between',
+          alignItems: 'flex-start',
+          gap: 12,
+        }}
       >
         <View style={{ flex: 1, minWidth: 0 }}>
-          <Mono size={9.5} tracking={0.12} upper color={c.ink4}>
+          <Mono size={9.5} tracking={0.12} upper color={c.ink3}>
             LINE {line.line_number}
             {!isInventory ? ` · ${line.line_type}` : ''}
           </Mono>
           <Body size={14} color={c.ink} style={{ marginTop: 5 }} numberOfLines={3}>
             {line.description?.trim() || 'No description'}
           </Body>
-          <Mono size={11} tracking={0.02} color={c.ink4} style={{ marginTop: 4 }}>
+          <Mono size={11} tracking={0.02} color={c.ink3} style={{ marginTop: 4 }}>
             {qtyText}
             {line.uom ? ` ${line.uom}` : ''} × {costText}
             {totalText ? ` · ${totalText}` : ''}
@@ -918,12 +960,18 @@ function LineCard({
             // map confidently is never silently treated as fine. Confirming the
             // meaning is a web-review action, so say so rather than offering a
             // control that is not here.
-            <Mono size={10.5} tracking={0.04} upper color={ACCENT.warn} style={{ marginTop: 6 }}>
+            <Mono size={10.5} tracking={0.04} upper color={c.warnText} style={{ marginTop: 6 }}>
               Confirm column mapping in web review
             </Mono>
           ) : null}
           {isInventory && match.kind !== 'none' ? (
-            <Mono size={11} color={match.kind === 'matched' ? c.ink3 : c.ink4} style={{ marginTop: 6 }}>
+            // A linked item reads stronger (ink2) than a suggestion (ink3);
+            // both are information, so neither is the faint ink4 any more.
+            <Mono
+              size={11}
+              color={match.kind === 'matched' ? c.ink2 : c.ink3}
+              style={{ marginTop: 6 }}
+            >
               {match.text}
             </Mono>
           ) : null}
@@ -1071,11 +1119,11 @@ function ApproveSheetContent({
   // itemCharterId is tri-state, matching approvePoImportSchema.itemCharterId:
   // undefined = keep every item's current charter (the default — approve()
   // touches no ownership), null = explicitly Generic, uuid = that charter.
-  const [itemCharterId, setItemCharterId] = React.useState<string | null | undefined>(
-    undefined,
-  );
+  const [itemCharterId, setItemCharterId] = React.useState<string | null | undefined>(undefined);
   const [billToCharterId, setBillToCharterId] = React.useState<string | null>(null);
   const [expectedAtText, setExpectedAtText] = React.useState('');
+  // The date box has focus: its border deepens to ink, as the shared Field's.
+  const [dateFocused, setDateFocused] = React.useState(false);
   const [decisions, setDecisions] = React.useState<Record<string, LineDecision>>({});
 
   const [submitting, setSubmitting] = React.useState(false);
@@ -1110,7 +1158,10 @@ function ApproveSheetContent({
       ]);
       if (cancelled) return;
       const pickerFailure =
-        vendorsRes.error?.message ?? chartersRes.error?.message ?? locationsRes.error?.message ?? null;
+        vendorsRes.error?.message ??
+        chartersRes.error?.message ??
+        locationsRes.error?.message ??
+        null;
       setPickersError(pickerFailure);
       setWarehouses(whs);
       // Keep the header's warehouse when it exists, else default to the only/first.
@@ -1184,11 +1235,12 @@ function ApproveSheetContent({
     return merged;
   }
 
-  const unmatchedIds = React.useMemo(
-    () => unmatchedLines.map((l) => l.id),
-    [unmatchedLines],
+  const unmatchedIds = React.useMemo(() => unmatchedLines.map((l) => l.id), [unmatchedLines]);
+  const validation = validateApprove(
+    { warehouseId, vendorId, locationId },
+    unmatchedIds,
+    decisions,
   );
-  const validation = validateApprove({ warehouseId, vendorId, locationId }, unmatchedIds, decisions);
   const expected = normalizeExpectedAt(expectedAtText);
   // Never approve while the item names did not load: a candidate would be
   // an item nobody on this screen can identify.
@@ -1245,330 +1297,350 @@ function ApproveSheetContent({
 
   return (
     <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={{ flex: 1 }}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      style={{ flex: 1 }}
+    >
+      {/*
+       * Backdrop is a SIBLING behind the sheet, not its parent. A Pressable
+       * ancestor claims the touch on press-down and beats the ScrollView's
+       * pan recogniser, so the parsed-lines list would not scroll until
+       * something else took the responder first (focusing a text field).
+       * Do not re-nest this card inside the scrim — taps outside still close
+       * because the scrim fills the screen behind it. See
+       * add-order-items-sheet.tsx for the measured detail.
+       *
+       * VoiceOver (the sheets' shape, sheet-a11y-structure.test.ts): the
+       * container keeps VoiceOver inside the open sheet and its escape scrub
+       * closes it; the scrim is its own element, so it says what it does
+       * ("Close", a button), and a VoiceOver double-tap on it closes directly
+       * rather than landing on the card at the screen's centre.
+       */}
+      <View
+        style={{ flex: 1, justifyContent: 'flex-end' }}
+        accessibilityViewIsModal
+        onAccessibilityEscape={onClose}
       >
-        {/*
-         * Backdrop is a SIBLING behind the sheet, not its parent. A Pressable
-         * ancestor claims the touch on press-down and beats the ScrollView's
-         * pan recogniser, so the parsed-lines list would not scroll until
-         * something else took the responder first (focusing a text field).
-         * Do not re-nest this card inside the scrim — taps outside still close
-         * because the scrim fills the screen behind it. See
-         * add-order-items-sheet.tsx for the measured detail.
-         */}
-        <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-          <Pressable
-            onPress={onClose}
-            style={[
-              StyleSheet.absoluteFill,
-              {
-                backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)',
-              },
-            ]}
-          />
-          <View
-            style={[
-              {
-                backgroundColor: c.card,
-                borderTopLeftRadius: 24,
-                borderTopRightRadius: 24,
-                paddingTop: 12,
-                paddingBottom: 36,
-                paddingHorizontal: 22,
-                maxHeight: '90%',
-              },
-              SHADOW.sheet,
-            ]}
-          >
-            <View style={{ alignItems: 'center', marginBottom: 18 }}>
-              <View
-                style={{
-                  width: 36,
-                  height: 5,
-                  borderRadius: 100,
-                  backgroundColor:
-                    mode === 'dark' ? 'rgba(250,250,247,0.22)' : 'rgba(14,15,13,0.18)',
-                }}
-              />
+        <Pressable
+          onPress={onClose}
+          onAccessibilityTap={onClose}
+          accessibilityRole="button"
+          accessibilityLabel="Close"
+          style={[
+            StyleSheet.absoluteFill,
+            {
+              backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)',
+            },
+          ]}
+        />
+        <View
+          style={[
+            {
+              backgroundColor: c.card,
+              borderTopLeftRadius: 24,
+              borderTopRightRadius: 24,
+              paddingTop: 12,
+              paddingBottom: 36,
+              paddingHorizontal: 22,
+              maxHeight: '90%',
+            },
+            SHADOW.sheet,
+          ]}
+        >
+          <View style={{ alignItems: 'center', marginBottom: 18 }}>
+            <View
+              style={{
+                width: 36,
+                height: 5,
+                borderRadius: 100,
+                backgroundColor: mode === 'dark' ? 'rgba(250,250,247,0.22)' : 'rgba(14,15,13,0.18)',
+              }}
+            />
+          </View>
+
+          <Eyebrow>APPROVE IMPORT</Eyebrow>
+          <Display size={24} style={{ marginTop: 10 }} accessibilityRole="header">
+            Create the PO
+          </Display>
+
+          {loading ? (
+            <View style={{ paddingVertical: 40, alignItems: 'center' }}>
+              <ActivityIndicator color={c.ink3} />
             </View>
-
-            <Eyebrow>APPROVE IMPORT</Eyebrow>
-            <Display size={24} style={{ marginTop: 10 }}>
-              Create the PO
-            </Display>
-
-            {loading ? (
-              <View style={{ paddingVertical: 40, alignItems: 'center' }}>
-                <ActivityIndicator color={c.ink4} />
-              </View>
-            ) : pickersError !== null ? (
-              <View style={{ marginTop: 18, gap: 6 }}>
-                <Body size={13} color={ACCENT.warn}>
-                  Could not load the vendor, charter and location choices.
-                </Body>
-                <Mono size={11} color={c.ink4} style={{ lineHeight: 16 }}>
-                  {pickersError}
-                </Mono>
-                <Mono size={11} color={c.ink4} style={{ lineHeight: 16 }}>
-                  Close this sheet and open it again to try again.
-                </Mono>
-              </View>
-            ) : (
-              <ScrollView
-                style={{ marginTop: 18 }}
-                keyboardShouldPersistTaps="handled"
-                showsVerticalScrollIndicator={false}
-              >
-                <View style={{ gap: 6, marginBottom: 16 }}>
-                  <FieldLabel>WAREHOUSE *</FieldLabel>
-                  {warehouses.length === 0 ? (
-                    <Mono size={11} color={c.ink4}>
-                      No warehouses — create one on the web first.
-                    </Mono>
-                  ) : (
-                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                      {warehouses.map((w) => (
-                        <Chip
-                          key={w.id}
-                          label={w.name}
-                          active={w.id === warehouseId}
-                          onPress={() => pickWarehouse(w.id)}
-                        />
-                      ))}
-                    </View>
-                  )}
-                </View>
-
-                <View style={{ gap: 6, marginBottom: 16 }}>
-                  <FieldLabel>VENDOR *</FieldLabel>
-                  {vendors.length === 0 ? (
-                    <Mono size={11} color={c.ink4}>
-                      No suppliers yet — add the vendor on the web first.
-                    </Mono>
-                  ) : (
-                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                      {vendors.map((v) => (
-                        <Chip
-                          key={v.id}
-                          label={v.name}
-                          active={v.id === vendorId}
-                          onPress={() => setVendorId(v.id)}
-                        />
-                      ))}
-                    </View>
-                  )}
-                </View>
-
-                <View style={{ gap: 6, marginBottom: 16 }}>
-                  <FieldLabel>RECEIVE INTO (SITE) *</FieldLabel>
-                  {!warehouseId ? (
-                    <Mono size={11} color={c.ink4}>
-                      Pick a warehouse first.
-                    </Mono>
-                  ) : locationChoices.length === 0 ? (
-                    <Mono size={11} color={c.ink4}>
-                      No site locations in this warehouse — add one on the web first.
-                    </Mono>
-                  ) : (
-                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                      {locationChoices.map((l) => (
-                        <Chip
-                          key={l.id}
-                          label={l.name}
-                          active={l.id === locationId}
-                          onPress={() => setLocationId(l.id)}
-                        />
-                      ))}
-                    </View>
-                  )}
-                </View>
-
-                <View style={{ gap: 6, marginBottom: 16 }}>
-                  <FieldLabel>CHARTER FOR ITEMS (OWNERSHIP)</FieldLabel>
-                  <Mono size={11} color={c.ink4}>
-                    Who owns the stock. &quot;Keep as-is&quot; changes no item&apos;s
-                    charter.
+          ) : pickersError !== null ? (
+            <View style={{ marginTop: 18, gap: 6 }}>
+              <Body size={13} color={c.warnText}>
+                Could not load the vendor, charter and location choices.
+              </Body>
+              <Mono size={11} color={c.ink3} style={{ lineHeight: 16 }}>
+                {pickersError}
+              </Mono>
+              <Mono size={11} color={c.ink3} style={{ lineHeight: 16 }}>
+                Close this sheet and open it again to try again.
+              </Mono>
+            </View>
+          ) : (
+            <ScrollView
+              style={{ marginTop: 18 }}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              <View style={{ gap: 6, marginBottom: 16 }}>
+                <FieldLabel>WAREHOUSE *</FieldLabel>
+                {warehouses.length === 0 ? (
+                  <Mono size={11} color={c.ink3}>
+                    No warehouses — create one on the web first.
                   </Mono>
-                  {charters.length === 0 ? (
-                    <Mono size={11} color={c.ink4}>
-                      No charters configured — items stay generic.
-                    </Mono>
-                  ) : (
-                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                      {/* Default. Distinct from "Generic": this states NO
-                          ownership intent, so approve() re-charters nothing. */}
+                ) : (
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                    {warehouses.map((w) => (
                       <Chip
-                        label="Keep as-is"
-                        active={itemCharterId === undefined}
-                        onPress={() => setItemCharterId(undefined)}
+                        key={w.id}
+                        label={w.name}
+                        active={w.id === warehouseId}
+                        onPress={() => pickWarehouse(w.id)}
                       />
-                      <Chip
-                        label="Generic"
-                        active={itemCharterId === null}
-                        onPress={() => setItemCharterId(null)}
-                      />
-                      {charters.map((ch) => (
-                        <Chip
-                          key={ch.id}
-                          label={ch.name}
-                          active={ch.id === itemCharterId}
-                          onPress={() => setItemCharterId(ch.id)}
-                        />
-                      ))}
-                    </View>
-                  )}
-                </View>
+                    ))}
+                  </View>
+                )}
+              </View>
 
-                <View style={{ gap: 6, marginBottom: 16 }}>
-                  <FieldLabel>BILL-TO CHARTER (BILLING ONLY)</FieldLabel>
-                  <Mono size={11} color={c.ink4}>
-                    Printed on the PO document. Does not affect the warehouse,
-                    the destination location, item ownership or access.
+              <View style={{ gap: 6, marginBottom: 16 }}>
+                <FieldLabel>VENDOR *</FieldLabel>
+                {vendors.length === 0 ? (
+                  <Mono size={11} color={c.ink3}>
+                    No suppliers yet — add the vendor on the web first.
                   </Mono>
-                  {charters.length === 0 ? (
-                    <Mono size={11} color={c.ink4}>
-                      No charters configured — the PO stays generic.
-                    </Mono>
-                  ) : (
-                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                ) : (
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                    {vendors.map((v) => (
                       <Chip
-                        label="Generic"
-                        active={billToCharterId === null}
-                        onPress={() => setBillToCharterId(null)}
+                        key={v.id}
+                        label={v.name}
+                        active={v.id === vendorId}
+                        onPress={() => setVendorId(v.id)}
                       />
-                      {charters.map((ch) => (
-                        <Chip
-                          key={ch.id}
-                          label={ch.name}
-                          active={ch.id === billToCharterId}
-                          onPress={() => setBillToCharterId(ch.id)}
-                        />
-                      ))}
-                    </View>
-                  )}
-                </View>
+                    ))}
+                  </View>
+                )}
+              </View>
 
-                <View style={{ gap: 6, marginBottom: 16 }}>
-                  <FieldLabel>EXPECTED DATE (OPTIONAL · YYYY-MM-DD)</FieldLabel>
-                  <TextInput
-                    value={expectedAtText}
-                    onChangeText={setExpectedAtText}
-                    placeholder="2026-08-01"
-                    placeholderTextColor={c.ink5}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    keyboardType="numbers-and-punctuation"
-                    style={{
-                      fontFamily: FONT.displayRegular,
-                      fontSize: 15,
-                      height: 46,
-                      paddingHorizontal: 12,
-                      borderWidth: 1,
-                      borderColor: !expected.ok ? ACCENT.crit : c.hair,
-                      borderRadius: 8,
-                      color: c.ink,
-                      backgroundColor: c.paper2,
-                    }}
-                  />
-                  {!expected.ok ? (
-                    <Mono size={11} color={ACCENT.crit}>
-                      Use YYYY-MM-DD (or leave blank).
+              <View style={{ gap: 6, marginBottom: 16 }}>
+                <FieldLabel>RECEIVE INTO (SITE) *</FieldLabel>
+                {!warehouseId ? (
+                  <Mono size={11} color={c.ink3}>
+                    Pick a warehouse first.
+                  </Mono>
+                ) : locationChoices.length === 0 ? (
+                  <Mono size={11} color={c.ink3}>
+                    No site locations in this warehouse — add one on the web first.
+                  </Mono>
+                ) : (
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                    {locationChoices.map((l) => (
+                      <Chip
+                        key={l.id}
+                        label={l.name}
+                        active={l.id === locationId}
+                        onPress={() => setLocationId(l.id)}
+                      />
+                    ))}
+                  </View>
+                )}
+              </View>
+
+              <View style={{ gap: 6, marginBottom: 16 }}>
+                <FieldLabel>CHARTER FOR ITEMS (OWNERSHIP)</FieldLabel>
+                <Mono size={11} color={c.ink3}>
+                  Who owns the stock. &quot;Keep as-is&quot; changes no item&apos;s charter.
+                </Mono>
+                {charters.length === 0 ? (
+                  <Mono size={11} color={c.ink3}>
+                    No charters configured — items stay generic.
+                  </Mono>
+                ) : (
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                    {/* Default. Distinct from "Generic": this states NO
+                        ownership intent, so approve() re-charters nothing. */}
+                    <Chip
+                      label="Keep as-is"
+                      active={itemCharterId === undefined}
+                      onPress={() => setItemCharterId(undefined)}
+                    />
+                    <Chip
+                      label="Generic"
+                      active={itemCharterId === null}
+                      onPress={() => setItemCharterId(null)}
+                    />
+                    {charters.map((ch) => (
+                      <Chip
+                        key={ch.id}
+                        label={ch.name}
+                        active={ch.id === itemCharterId}
+                        onPress={() => setItemCharterId(ch.id)}
+                      />
+                    ))}
+                  </View>
+                )}
+              </View>
+
+              <View style={{ gap: 6, marginBottom: 16 }}>
+                <FieldLabel>BILL-TO CHARTER (BILLING ONLY)</FieldLabel>
+                <Mono size={11} color={c.ink3}>
+                  Printed on the PO document. Does not affect the warehouse, the destination
+                  location, item ownership or access.
+                </Mono>
+                {charters.length === 0 ? (
+                  <Mono size={11} color={c.ink3}>
+                    No charters configured — the PO stays generic.
+                  </Mono>
+                ) : (
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                    <Chip
+                      label="Generic"
+                      active={billToCharterId === null}
+                      onPress={() => setBillToCharterId(null)}
+                    />
+                    {charters.map((ch) => (
+                      <Chip
+                        key={ch.id}
+                        label={ch.name}
+                        active={ch.id === billToCharterId}
+                        onPress={() => setBillToCharterId(ch.id)}
+                      />
+                    ))}
+                  </View>
+                )}
+              </View>
+
+              <View style={{ gap: 6, marginBottom: 16 }}>
+                <FieldLabel>{EXPECTED_DATE_LABEL}</FieldLabel>
+                {/* The shared Field's box: the card fill and the stronger
+                    border, ink on focus, the refusal tone when the date is
+                    not one. It grows with the text size (minHeight, no fixed
+                    height: the typed date was clipped at the larger sizes),
+                    and it is named for VoiceOver, which read only its
+                    example date. */}
+                <TextInput
+                  value={expectedAtText}
+                  onChangeText={setExpectedAtText}
+                  placeholder="2026-08-01"
+                  placeholderTextColor={c.ink3}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="numbers-and-punctuation"
+                  accessibilityLabel={EXPECTED_DATE_LABEL}
+                  onFocus={() => setDateFocused(true)}
+                  onBlur={() => setDateFocused(false)}
+                  style={{
+                    fontFamily: FONT.displayRegular,
+                    fontSize: 15,
+                    minHeight: 46,
+                    paddingHorizontal: 12,
+                    paddingVertical: 10,
+                    borderWidth: 1,
+                    borderColor: !expected.ok ? c.critText : dateFocused ? c.ink : c.hair2,
+                    borderRadius: 8,
+                    color: c.ink,
+                    backgroundColor: c.card,
+                  }}
+                />
+                {!expected.ok ? (
+                  <Mono size={11} color={c.critText}>
+                    Use YYYY-MM-DD (or leave blank).
+                  </Mono>
+                ) : null}
+              </View>
+
+              {unmatchedLines.length > 0 ? (
+                <View style={{ gap: 6, marginBottom: 6 }}>
+                  <FieldLabel>UNMATCHED LINES *</FieldLabel>
+                  <Mono size={11} color={c.ink3} style={{ lineHeight: 16 }}>
+                    Decide each line: link an existing item, create a new one, or skip it.
+                  </Mono>
+                  {suggestionsNote ? (
+                    <Mono size={11} color={c.ink3} style={{ lineHeight: 16 }}>
+                      {suggestionsNote}
                     </Mono>
                   ) : null}
-                </View>
-
-                {unmatchedLines.length > 0 ? (
-                  <View style={{ gap: 6, marginBottom: 6 }}>
-                    <FieldLabel>UNMATCHED LINES *</FieldLabel>
-                    <Mono size={11} color={c.ink4} style={{ lineHeight: 16 }}>
-                      Decide each line: link an existing item, create a new one, or skip it.
-                    </Mono>
-                    {suggestionsNote ? (
-                      <Mono size={11} color={c.ink4} style={{ lineHeight: 16 }}>
-                        {suggestionsNote}
-                      </Mono>
-                    ) : null}
-                    {unmatchedLines.map((l) => {
-                      const d = decisions[l.id];
-                      const candidates = candidatesFor(l);
-                      return (
-                        <View
-                          key={l.id}
-                          style={{
-                            borderWidth: 1,
-                            borderColor: c.hair,
-                            borderRadius: 10,
-                            padding: 12,
-                            marginTop: 6,
-                            gap: 8,
-                          }}
-                        >
-                          <Body size={13} color={c.ink} numberOfLines={2}>
-                            {l.description?.trim() || `Line ${l.line_number}`}
-                          </Body>
-                          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                            {candidates.map((cand) => (
-                              <Chip
-                                key={cand.id}
-                                label={`Use · ${cand.name}${cand.sku ? ` (${cand.sku})` : ''}`}
-                                active={d?.mode === 'use_existing' && d.itemId === cand.id}
-                                onPress={() =>
-                                  setDecisions((cur) => ({
-                                    ...cur,
-                                    [l.id]: { mode: 'use_existing', itemId: cand.id },
-                                  }))
-                                }
-                              />
-                            ))}
+                  {unmatchedLines.map((l) => {
+                    const d = decisions[l.id];
+                    const candidates = candidatesFor(l);
+                    return (
+                      <View
+                        key={l.id}
+                        style={{
+                          borderWidth: 1,
+                          borderColor: c.hair,
+                          borderRadius: 10,
+                          padding: 12,
+                          marginTop: 6,
+                          gap: 8,
+                        }}
+                      >
+                        <Body size={13} color={c.ink} numberOfLines={2}>
+                          {l.description?.trim() || `Line ${l.line_number}`}
+                        </Body>
+                        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                          {candidates.map((cand) => (
                             <Chip
-                              label="Create new"
-                              active={d?.mode === 'create'}
+                              key={cand.id}
+                              label={`Use · ${cand.name}${cand.sku ? ` (${cand.sku})` : ''}`}
+                              active={d?.mode === 'use_existing' && d.itemId === cand.id}
                               onPress={() =>
-                                setDecisions((cur) => ({ ...cur, [l.id]: { mode: 'create' } }))
+                                setDecisions((cur) => ({
+                                  ...cur,
+                                  [l.id]: { mode: 'use_existing', itemId: cand.id },
+                                }))
                               }
                             />
-                            <Chip
-                              label="Skip"
-                              active={d?.mode === 'skip'}
-                              onPress={() =>
-                                setDecisions((cur) => ({ ...cur, [l.id]: { mode: 'skip' } }))
-                              }
-                            />
-                          </View>
+                          ))}
+                          <Chip
+                            label="Create new"
+                            active={d?.mode === 'create'}
+                            onPress={() =>
+                              setDecisions((cur) => ({ ...cur, [l.id]: { mode: 'create' } }))
+                            }
+                          />
+                          <Chip
+                            label="Skip"
+                            active={d?.mode === 'skip'}
+                            onPress={() =>
+                              setDecisions((cur) => ({ ...cur, [l.id]: { mode: 'skip' } }))
+                            }
+                          />
                         </View>
-                      );
-                    })}
-                  </View>
-                ) : null}
+                      </View>
+                    );
+                  })}
+                </View>
+              ) : null}
 
-                {error ? (
-                  <Mono size={11.5} color={ACCENT.crit} style={{ marginTop: 12, lineHeight: 16 }}>
-                    {error}
-                  </Mono>
-                ) : null}
-                {!validation.ok && !error ? (
-                  <Mono size={11} color={c.ink4} style={{ marginTop: 12 }}>
-                    {validation.reason}
-                  </Mono>
-                ) : null}
-              </ScrollView>
-            )}
+              {error ? (
+                <Mono size={11.5} color={c.critText} style={{ marginTop: 12, lineHeight: 16 }}>
+                  {error}
+                </Mono>
+              ) : null}
+              {!validation.ok && !error ? (
+                <Mono size={11} color={c.ink3} style={{ marginTop: 12 }}>
+                  {validation.reason}
+                </Mono>
+              ) : null}
+            </ScrollView>
+          )}
 
-            <View style={{ flexDirection: 'row', gap: 10, marginTop: 18 }}>
-              <View style={{ flex: 1 }}>
-                <Button block variant="ghost" onPress={onClose} disabled={submitting}>
-                  Cancel
-                </Button>
-              </View>
-              <View style={{ flex: 1 }}>
-                <Button block onPress={() => void submit()} disabled={!canSubmit}>
-                  {submitting ? 'Approving…' : 'Approve'}
-                </Button>
-              </View>
-            </View>
+          {/* One full-width button under the other at every text size (side
+              by side, "Approving…" ran out of room at the larger sizes);
+              Approve, which commits, is the sheet's one ink button. */}
+          <View style={{ gap: 8, marginTop: 18 }}>
+            <Button block variant="ghost" onPress={onClose} disabled={submitting}>
+              Cancel
+            </Button>
+            <Button block onPress={() => void submit()} disabled={!canSubmit}>
+              {submitting ? 'Approving…' : 'Approve'}
+            </Button>
           </View>
         </View>
-      </KeyboardAvoidingView>
+      </View>
+    </KeyboardAvoidingView>
   );
 }
