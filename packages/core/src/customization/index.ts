@@ -190,8 +190,7 @@ export function applyNavOverrides(
         href,
         iconName,
         section,
-        sortOrder:
-          typeof link.sortOrder === 'number' ? link.sortOrder : Number.MAX_SAFE_INTEGER,
+        sortOrder: typeof link.sortOrder === 'number' ? link.sortOrder : Number.MAX_SAFE_INTEGER,
         requiresAdmin: false,
       };
       const arr = customBySection.get(section) ?? [];
@@ -256,9 +255,7 @@ export function applyNavOverrides(
         items: customs.slice().sort((a, b) => a.sortOrder - b.sortOrder),
       });
     }
-    result.sort(
-      (a, b) => SECTION_ORDER.indexOf(a.section) - SECTION_ORDER.indexOf(b.section),
-    );
+    result.sort((a, b) => SECTION_ORDER.indexOf(a.section) - SECTION_ORDER.indexOf(b.section));
   }
 
   return result;
@@ -294,9 +291,9 @@ export function resolveDashboardWidgets(
   const availableSet = new Set<string>(available);
 
   const defaultOrder = (): string[] =>
-    DASHBOARD_WIDGETS.filter(
-      (def) => availableSet.has(def.id) && !def.defaultHidden,
-    ).map((def) => def.id);
+    DASHBOARD_WIDGETS.filter((def) => availableSet.has(def.id) && !def.defaultHidden).map(
+      (def) => def.id,
+    );
 
   if (!isValidLayout(layout)) return defaultOrder();
 

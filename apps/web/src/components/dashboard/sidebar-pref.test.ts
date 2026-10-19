@@ -47,11 +47,11 @@ describe('sidebarCookieString', () => {
 describe('isDesktopViewport', () => {
   it('mirrors matchMedia(min-width: 768px).matches', () => {
     vi.spyOn(window, 'matchMedia').mockImplementation(
-      (q: string) => ({ matches: true, media: q } as MediaQueryList),
+      (q: string) => ({ matches: true, media: q }) as MediaQueryList,
     );
     expect(isDesktopViewport()).toBe(true);
     vi.spyOn(window, 'matchMedia').mockImplementation(
-      (q: string) => ({ matches: false, media: q } as MediaQueryList),
+      (q: string) => ({ matches: false, media: q }) as MediaQueryList,
     );
     expect(isDesktopViewport()).toBe(false);
   });

@@ -1,12 +1,7 @@
 import { hasPermission, type Permission } from '../constants/permissions';
 import { isAdminRole } from '../constants/terminology';
 import type { Role } from '../constants/roles';
-import {
-  MODULE_REGISTRY,
-  type ModuleId,
-  type NavSurface,
-  type NavSectionKey,
-} from './registry';
+import { MODULE_REGISTRY, type ModuleId, type NavSurface, type NavSectionKey } from './registry';
 
 /**
  * Pure navigation resolver shared by web + mobile.
@@ -58,7 +53,13 @@ export interface ResolvedNavSection {
 /** Canonical section render order. Exported so a guard test can assert it
  *  covers every section any placement uses (a new section omitted here would
  *  silently never render). */
-export const SECTION_ORDER: NavSectionKey[] = ['overview', 'inventory', 'workspace', 'tools', 'admin'];
+export const SECTION_ORDER: NavSectionKey[] = [
+  'overview',
+  'inventory',
+  'workspace',
+  'tools',
+  'admin',
+];
 
 export function resolveSurface(surface: NavSurface, input: ResolveInput): ResolvedNavSection[] {
   const admin = isAdminRole(input.role);

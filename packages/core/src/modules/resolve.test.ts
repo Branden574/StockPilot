@@ -51,9 +51,13 @@ describe('resolveSurface', () => {
       permissions: new Set(['items:read']),
     }).flatMap((s) => s.items.map((i) => i.href));
     for (const href of [
-      '/dashboard/cycle-counts', '/dashboard/schedule', '/dashboard/bundles',
-      '/dashboard/rentals', '/dashboard/audit',
-    ]) expect(without).not.toContain(href);
+      '/dashboard/cycle-counts',
+      '/dashboard/schedule',
+      '/dashboard/bundles',
+      '/dashboard/rentals',
+      '/dashboard/audit',
+    ])
+      expect(without).not.toContain(href);
 
     // Grant the read perms (Auditor preset shape) → every surface appears,
     // WITHOUT any write permission and without being an admin.
@@ -61,14 +65,22 @@ describe('resolveSurface', () => {
       role: 'viewer',
       enabledModules: ALL,
       permissions: new Set([
-        'items:read', 'cycle_counts:read', 'schedule:read', 'bundles:read',
-        'rentals:read', 'activity_logs:read',
+        'items:read',
+        'cycle_counts:read',
+        'schedule:read',
+        'bundles:read',
+        'rentals:read',
+        'activity_logs:read',
       ]),
     }).flatMap((s) => s.items.map((i) => i.href));
     for (const href of [
-      '/dashboard/cycle-counts', '/dashboard/schedule', '/dashboard/bundles',
-      '/dashboard/rentals', '/dashboard/audit',
-    ]) expect(withReads).toContain(href);
+      '/dashboard/cycle-counts',
+      '/dashboard/schedule',
+      '/dashboard/bundles',
+      '/dashboard/rentals',
+      '/dashboard/audit',
+    ])
+      expect(withReads).toContain(href);
   });
   it('returns placement gates on returns:read (module on, web only)', () => {
     const withReturns = new Set<ModuleId>([...ALL, 'returns']);
@@ -130,52 +142,99 @@ describe('resolveSurface', () => {
 // future sortOrder/section drift fails here instead of silently reordering nav.
 describe('nav order is frozen to the original static nav', () => {
   it('web_sidebar (admin, full set) matches the legacy BASE_NAV+ADMIN_NAV order', () => {
-    const hrefs = resolveSurface('web_sidebar', { role: 'admin', enabledModules: ALL })
-      .flatMap((s) => s.items.map((i) => i.href));
+    const hrefs = resolveSurface('web_sidebar', { role: 'admin', enabledModules: ALL }).flatMap(
+      (s) => s.items.map((i) => i.href),
+    );
     expect(hrefs).toEqual([
       '/dashboard',
-      '/dashboard/inventory', '/dashboard/inventory/staging',
+      '/dashboard/inventory',
+      '/dashboard/inventory/staging',
       // Exceptions (sortOrder 7) lands between Staging (5) and Books (20).
       // This list is FROZEN on purpose — it is the guard that a nav change is
       // deliberate rather than an accident of registry ordering. Updated here
       // knowingly: the Exception Center is a new inventory-oversight surface.
       '/dashboard/exceptions',
-      '/dashboard/books', '/dashboard/categories', '/dashboard/tags',
-      '/dashboard/movements', '/dashboard/rentals', '/dashboard/bundles', '/dashboard/orders',
-      '/dashboard/cycle-counts', '/dashboard/procedures', '/dashboard/purchase-orders',
+      '/dashboard/books',
+      '/dashboard/categories',
+      '/dashboard/tags',
+      '/dashboard/movements',
+      '/dashboard/rentals',
+      '/dashboard/bundles',
+      '/dashboard/orders',
+      '/dashboard/cycle-counts',
+      '/dashboard/procedures',
+      '/dashboard/purchase-orders',
       '/dashboard/purchase-orders/recurring',
-      '/dashboard/purchase-orders/imports', '/dashboard/locations', '/dashboard/suppliers',
+      '/dashboard/purchase-orders/imports',
+      '/dashboard/locations',
+      '/dashboard/suppliers',
       '/dashboard/reports',
-      '/dashboard/ai', '/dashboard/insights', '/dashboard/schedule', '/dashboard/notifications',
-      '/dashboard/team', '/dashboard/support', '/dashboard/settings',
-      '/dashboard/admin', '/dashboard/admin/charters', '/dashboard/admin/warehouses',
-      '/dashboard/admin/bins', '/dashboard/admin/users', '/dashboard/admin/vendor-mappings',
+      '/dashboard/ai',
+      '/dashboard/insights',
+      '/dashboard/schedule',
+      '/dashboard/notifications',
+      '/dashboard/team',
+      '/dashboard/support',
+      '/dashboard/settings',
+      '/dashboard/admin',
+      '/dashboard/admin/charters',
+      '/dashboard/admin/warehouses',
+      '/dashboard/admin/bins',
+      '/dashboard/admin/users',
+      '/dashboard/admin/vendor-mappings',
       // Audit log moved to the grantable non-admin route (auditor visibility);
       // same position in the Admin section.
-      '/dashboard/admin/uom-conversions', '/dashboard/admin/reconciliation', '/dashboard/audit',
+      '/dashboard/admin/uom-conversions',
+      '/dashboard/admin/reconciliation',
+      '/dashboard/audit',
     ]);
   });
 
   it('mobile_drawer (admin, full set) matches the legacy DRAWER_SECTIONS order', () => {
-    const hrefs = resolveSurface('mobile_drawer', { role: 'admin', enabledModules: ALL })
-      .flatMap((s) => s.items.map((i) => i.href));
+    const hrefs = resolveSurface('mobile_drawer', { role: 'admin', enabledModules: ALL }).flatMap(
+      (s) => s.items.map((i) => i.href),
+    );
     expect(hrefs).toEqual([
       '/',
       // Staging gained a native twin (put-away is done on foot; it used to be
       // desk-only). Deliberate addition to the frozen sequence, placed exactly
       // where the web sidebar already puts it: sortOrder 5, immediately after
       // Items. Everything else is byte-for-byte the legacy order.
-      '/inventory', '/staging',
+      '/inventory',
+      '/staging',
       // Exceptions gained a native twin (F1-1). Deliberate addition, placed
       // where the web sidebar already puts it: sortOrder 7, after Staging.
       '/exceptions',
-      '/books', '/categories', '/tags', '/movements', '/rentals', '/bundles',
-      '/orders', '/cycle-counts', '/procedures', '/receive', '/purchase-orders', '/recurring-pos', '/po-imports',
-      '/locations', '/suppliers', '/reports',
-      '/ai', '/schedule', '/notifications', '/team', '/settings',
+      '/books',
+      '/categories',
+      '/tags',
+      '/movements',
+      '/rentals',
+      '/bundles',
+      '/orders',
+      '/cycle-counts',
+      '/procedures',
+      '/receive',
+      '/purchase-orders',
+      '/recurring-pos',
+      '/po-imports',
+      '/locations',
+      '/suppliers',
+      '/reports',
+      '/ai',
+      '/schedule',
+      '/notifications',
+      '/team',
+      '/settings',
       '/scan',
-      '/admin', '/admin/charters', '/admin/warehouses', '/admin/bins', '/admin/users',
-      '/admin/vendor-mappings', '/admin/uom-conversions', '/admin/audit',
+      '/admin',
+      '/admin/charters',
+      '/admin/warehouses',
+      '/admin/bins',
+      '/admin/users',
+      '/admin/vendor-mappings',
+      '/admin/uom-conversions',
+      '/admin/audit',
     ]);
   });
 });

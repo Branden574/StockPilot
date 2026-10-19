@@ -11,7 +11,11 @@ import type { ResolvedNavItem, ResolvedNavSection } from '../modules/resolve';
 
 // --- helpers ---------------------------------------------------------------
 
-function item(href: string, label: string, partial: Partial<ResolvedNavItem> = {}): ResolvedNavItem {
+function item(
+  href: string,
+  label: string,
+  partial: Partial<ResolvedNavItem> = {},
+): ResolvedNavItem {
   return {
     moduleId: 'inventory',
     label,
@@ -105,7 +109,9 @@ describe('applyNavOverrides', () => {
       v: 1,
       labels: { '/dashboard/inventory': 'Stock' },
     });
-    const inv = out.find((s) => s.section === 'inventory')!.items.find((i) => i.href === '/dashboard/inventory')!;
+    const inv = out
+      .find((s) => s.section === 'inventory')!
+      .items.find((i) => i.href === '/dashboard/inventory')!;
     expect(inv.label).toBe('Stock');
   });
 
@@ -126,8 +132,20 @@ describe('applyNavOverrides', () => {
     const out = applyNavOverrides(baseSections(), {
       v: 1,
       custom: [
-        { id: 'wiki', label: 'Team Wiki', href: 'https://wiki.example.com', section: 'tools', iconName: 'BookOpen' },
-        { id: 'sop', label: 'SOPs', href: '/dashboard/inventory/sops', section: 'inventory', iconName: 'FileText' },
+        {
+          id: 'wiki',
+          label: 'Team Wiki',
+          href: 'https://wiki.example.com',
+          section: 'tools',
+          iconName: 'BookOpen',
+        },
+        {
+          id: 'sop',
+          label: 'SOPs',
+          href: '/dashboard/inventory/sops',
+          section: 'inventory',
+          iconName: 'FileText',
+        },
       ],
     });
     const inv = out.find((s) => s.section === 'inventory')!.items.map((i) => i.href);
@@ -196,9 +214,15 @@ describe('resolveDashboardWidgets', () => {
   });
 
   it('garbage layout => default order (fail-closed)', () => {
-    expect(resolveDashboardWidgets({ v: 2 } as unknown as DashboardLayout, ALL_WIDGETS)).toEqual(ALL_WIDGETS);
-    expect(resolveDashboardWidgets({ v: 1 } as unknown as DashboardLayout, ALL_WIDGETS)).toEqual(ALL_WIDGETS);
-    expect(resolveDashboardWidgets('x' as unknown as DashboardLayout, ALL_WIDGETS)).toEqual(ALL_WIDGETS);
+    expect(resolveDashboardWidgets({ v: 2 } as unknown as DashboardLayout, ALL_WIDGETS)).toEqual(
+      ALL_WIDGETS,
+    );
+    expect(resolveDashboardWidgets({ v: 1 } as unknown as DashboardLayout, ALL_WIDGETS)).toEqual(
+      ALL_WIDGETS,
+    );
+    expect(resolveDashboardWidgets('x' as unknown as DashboardLayout, ALL_WIDGETS)).toEqual(
+      ALL_WIDGETS,
+    );
   });
 
   it('honors layout order', () => {

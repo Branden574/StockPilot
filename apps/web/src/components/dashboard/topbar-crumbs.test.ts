@@ -64,9 +64,7 @@ describe('breadcrumb derivation from the (overridden) nav', () => {
       '/dashboard/admin',
       '/dashboard/audit',
     ]) {
-      expect(applyNavLabelsToCrumbs(crumbsForPathname(path), map)).toEqual(
-        crumbsForPathname(path),
-      );
+      expect(applyNavLabelsToCrumbs(crumbsForPathname(path), map)).toEqual(crumbsForPathname(path));
     }
   });
 
@@ -138,7 +136,15 @@ describe('fixed pages have their own crumb, never a catch-all Detail', () => {
 
   it('none of them ends in "Detail"', () => {
     const wrong = fixedPages
-      .map((p) => [p, crumbsForPathname(p).map((c) => c.label).join(' / ')] as const)
+      .map(
+        (p) =>
+          [
+            p,
+            crumbsForPathname(p)
+              .map((c) => c.label)
+              .join(' / '),
+          ] as const,
+      )
       .filter(([, trail]) => trail.endsWith('Detail'));
     expect(wrong).toEqual([]);
   });
@@ -152,7 +158,10 @@ describe('fixed pages have their own crumb, never a catch-all Detail', () => {
     const renamed = navLabelMap(
       navForRole('admin', ALL, { v: 1, labels: { '/dashboard/inventory/staging': 'Put-away' } }),
     );
-    expect(applyNavLabelsToCrumbs(crumbs, renamed).map((c) => c.label)).toEqual(['Inventory', 'Put-away']);
+    expect(applyNavLabelsToCrumbs(crumbs, renamed).map((c) => c.label)).toEqual([
+      'Inventory',
+      'Put-away',
+    ]);
   });
 
   it('Labels and Recurring sit under their lists', () => {
@@ -169,11 +178,11 @@ describe('fixed pages have their own crumb, never a catch-all Detail', () => {
   });
 
   it('an item id is still an item', () => {
-    expect(crumbsForPathname('/dashboard/inventory/0a0f2100-0000-4000-8000-000000000201').map((c) => c.label)).toEqual([
-      'Inventory',
-      'Items',
-      'Detail',
-    ]);
+    expect(
+      crumbsForPathname('/dashboard/inventory/0a0f2100-0000-4000-8000-000000000201').map(
+        (c) => c.label,
+      ),
+    ).toEqual(['Inventory', 'Items', 'Detail']);
   });
 });
 
