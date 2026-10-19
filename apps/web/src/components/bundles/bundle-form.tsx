@@ -25,10 +25,7 @@ import {
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { generateSku } from '@/lib/utils';
-import {
-  createBundleAction,
-  updateBundleAction,
-} from '@/server/actions/bundles';
+import { createBundleAction, updateBundleAction } from '@/server/actions/bundles';
 
 interface ComponentRow {
   itemId: string;
@@ -52,18 +49,11 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
   const [name, setName] = React.useState(initial?.name ?? '');
   const [sku, setSku] = React.useState(initial?.sku ?? '');
   const [description, setDescription] = React.useState(initial?.description ?? '');
-  const [preassembly, setPreassembly] = React.useState(
-    initial?.preassemblyEnabled ?? false,
-  );
-  const [components, setComponents] = React.useState<ComponentRow[]>(
-    initial?.components ?? [],
-  );
+  const [preassembly, setPreassembly] = React.useState(initial?.preassemblyEnabled ?? false);
+  const [components, setComponents] = React.useState<ComponentRow[]>(initial?.components ?? []);
   const [submitting, setSubmitting] = React.useState(false);
   const isEdit = Boolean(initial);
-  const addedIds = React.useMemo(
-    () => new Set(components.map((c) => c.itemId)),
-    [components],
-  );
+  const addedIds = React.useMemo(() => new Set(components.map((c) => c.itemId)), [components]);
 
   function addComponent(item: ComponentSearchItem) {
     setComponents((cur) => {
@@ -206,8 +196,8 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
             <span>Enable pre-boxing</span>
           </Checkbox>
           <p id="bundle-preassembly-help" className="text-muted-foreground text-[12px]">
-            Lets you decrement components ahead of time and hold the kits as
-            phantom inventory until distribution.
+            Lets you decrement components ahead of time and hold the kits as phantom inventory until
+            distribution.
           </p>
         </div>
 
@@ -231,20 +221,21 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
           purchase order line-entry card). */}
       <DetailSection title="Components" bodyClassName="flex flex-col gap-3">
         <p className="text-muted-foreground -mt-1 text-[12px]">
-          Items + per-kit quantities. Optional items don't block distribution
-          when stock is short.
+          Items + per-kit quantities. Optional items don't block distribution when stock is short.
         </p>
 
         <BundleComponentPicker addedIds={addedIds} onAdd={addComponent} />
 
         {components.length === 0 ? (
           <p className="text-muted-foreground border-border rounded-md border border-dashed p-4 text-center text-[12px]">
-            No components yet. Search for items above, then click one or press
-            Enter to add it.
+            No components yet. Search for items above, then click one or press Enter to add it.
           </p>
         ) : (
-          <div className="border-border min-w-0 overflow-hidden rounded-md border">
-            <Table>
+          // On a phone the lines run edge to edge in the card, with tighter
+          // cells and a narrower Qty / kit box, so Optional and Remove stay
+          // on screen; a name wraps at word breaks, never letter by letter.
+          <div className="border-border min-w-0 overflow-hidden rounded-md border max-sm:-mx-[18px] max-sm:rounded-none max-sm:border-x-0">
+            <Table className="[&_td]:max-sm:px-2 [&_td]:max-sm:first:pl-4 [&_td]:max-sm:last:pr-4 [&_th]:max-sm:px-2 [&_th]:max-sm:first:pl-4 [&_th]:max-sm:last:pr-4">
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
                   <TableHead>Item</TableHead>
@@ -256,11 +247,9 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
               <TableBody>
                 {components.map((c) => (
                   <TableRow key={c.itemId}>
-                    <TableCell>
-                      <div className="text-foreground font-medium [overflow-wrap:anywhere]">
-                        {c.itemName}
-                      </div>
-                      <div className="text-muted-foreground font-mono text-[11.5px] [overflow-wrap:anywhere]">
+                    <TableCell className="min-w-24">
+                      <div className="text-foreground break-words font-medium">{c.itemName}</div>
+                      <div className="text-muted-foreground break-all font-mono text-[11.5px]">
                         {c.itemSku}
                       </div>
                     </TableCell>
@@ -269,14 +258,14 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
                         min={0.0001}
                         step="any"
                         value={c.quantity}
-                        onValueChange={(n) =>
-                          updateComponent(c.itemId, { quantity: n })
-                        }
+                        onValueChange={(n) => updateComponent(c.itemId, { quantity: n })}
                         placeholder="1"
-                        className="ml-auto w-24 text-right font-mono tabular-nums"
+                        className="ml-auto w-16 text-right font-mono tabular-nums sm:w-24"
                       />
                     </TableCell>
-                    <TableCell className="text-center">
+                    {/* The table drops a checkbox cell's right padding; this
+                        one is centred under its header, so it keeps it. */}
+                    <TableCell className="text-center [&:has([role=checkbox])]:pr-3 max-sm:[&:has([role=checkbox])]:pr-2">
                       <Checkbox
                         checked={c.isOptional}
                         onCheckedChange={(checked) =>
@@ -306,12 +295,7 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
       </DetailSection>
 
       <div className="flex flex-wrap justify-end gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => router.back()}
-          disabled={submitting}
-        >
+        <Button type="button" variant="outline" onClick={() => router.back()} disabled={submitting}>
           Cancel
         </Button>
         <Button type="submit" variant="gradient" disabled={submitting}>
