@@ -1,11 +1,22 @@
+import type { Metadata } from 'next';
+
 import { LocationsManager } from '@/components/locations/locations-manager';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getWarehousesForRequest } from '@/lib/dashboard/request-cache';
+import { isNextControlFlowError } from '@/lib/error-reporter';
 import { scopeLocationsToWarehouse } from '@/lib/locations/scope';
+import { effectiveNavLabel } from '@/lib/nav-labels';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { LocationsService } from '@/server/services/locations';
 
 import { can } from '@stockpilot/core';
+
+// The tab names the page ("Locations · StockPilot"); before, it read the
+// group's "Dashboard" (CONFLICTS D16).
+export const metadata: Metadata = { title: 'Locations' };
+
+/** The page area (DESIGN-SPEC 4 and 5.3), the same box the other pages use. */
+const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
 
 interface LocationsPageProps {
   searchParams: Promise<{ view?: string }>;
@@ -14,10 +25,18 @@ interface LocationsPageProps {
 export default async function LocationsPage({ searchParams }: LocationsPageProps) {
   const params = await searchParams;
   const isArchivedView = params.view === 'archived';
-  const [ctx, svc, warehouseFilter] = await Promise.all([
+  // The heading follows a Settings > Navigation rename of this page's sidebar
+  // entry, as the sidebar and the crumb do (PLAN rule 10): a lookup of the
+  // request-cached org row the dashboard layout already read, so nothing new
+  // is read; a failed lookup keeps the page's own word.
+  const [ctx, svc, warehouseFilter, title] = await Promise.all([
     requireOrgContext(),
     LocationsService.forCurrentUser(),
     getActiveWarehouseFilter(),
+    effectiveNavLabel('/dashboard/locations', 'Locations').catch((e: unknown) => {
+      if (isNextControlFlowError(e)) throw e;
+      return 'Locations';
+    }),
   ]);
   const canManage = can(ctx, 'locations:manage');
   const [rows, warehouses] = await Promise.all([
@@ -33,17 +52,12 @@ export default async function LocationsPage({ searchParams }: LocationsPageProps
   );
 
   return (
-    <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Locations</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {isArchivedView
-            ? 'Locations you archived. Restore one to bring it back into pick lists.'
-            : 'Warehouses, rooms, shelves, vehicles, job sites — wherever stock lives.'}
-        </p>
-      </div>
+    // The header (h1, subline, Active / Archived, New location) is drawn by
+    // LocationsManager, which holds the dialog New location opens.
+    <div className={PAGE}>
       <LocationsManager
         view={isArchivedView ? 'archived' : 'active'}
+        title={title}
         canManage={canManage}
         initial={scoped.map((r) => ({
           id: r.id as string,

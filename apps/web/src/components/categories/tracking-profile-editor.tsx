@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -11,6 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { cn } from '@/lib/utils';
 
 import {
   COUNTING_UNITS,
@@ -88,6 +90,11 @@ export function isTrackingProfileComplete(p: SubcategoryTrackingProfile): boolea
   return parsed.success && trackingProfileConsistencyError(parsed.data) === null;
 }
 
+/** One choice in a chip list (allowed modes, attributes): the shared Checkbox
+ *  with its words inside one bordered control, so the whole chip toggles. */
+const CHOICE =
+  'border-border hover:bg-muted rounded-md border px-2 py-1 text-[12.5px] leading-5';
+
 export interface TrackingProfileEditorProps {
   value: SubcategoryTrackingProfile;
   onChange: (next: SubcategoryTrackingProfile) => void;
@@ -126,10 +133,10 @@ export function TrackingProfileEditor({ value, onChange }: TrackingProfileEditor
 
   return (
     <div
-      className="space-y-4 rounded-md border border-border bg-muted/20 p-3"
+      className="border-border bg-sunk space-y-4 rounded-md border p-3"
       data-testid="tracking-profile-editor"
     >
-      <p className="text-xs font-medium text-muted-foreground">
+      <p className="text-muted-foreground text-[12px] font-medium">
         Custom tracking profile — every field below is required.
       </p>
 
@@ -158,17 +165,14 @@ export function TrackingProfileEditor({ value, onChange }: TrackingProfileEditor
         <Label>Allowed tracking modes</Label>
         <div className="flex flex-wrap gap-2">
           {TRACKING_MODES.map((m) => (
-            <label
+            <Checkbox
               key={m}
-              className="flex items-center gap-1.5 rounded border border-border px-2 py-1 text-xs"
+              checked={value.allowedModes.includes(m)}
+              onCheckedChange={() => toggleMode(m)}
+              className={CHOICE}
             >
-              <input
-                type="checkbox"
-                checked={value.allowedModes.includes(m)}
-                onChange={() => toggleMode(m)}
-              />
               {TRACKING_MODE_LABELS[m]}
-            </label>
+            </Checkbox>
           ))}
         </div>
         {value.allowedModes.length === 0 && (
@@ -202,17 +206,14 @@ export function TrackingProfileEditor({ value, onChange }: TrackingProfileEditor
           <Label>Supported attributes</Label>
           <div className="flex flex-wrap gap-2">
             {SPORTS_ATTRIBUTES.map((a) => (
-              <label
+              <Checkbox
                 key={a}
-                className="flex items-center gap-1.5 rounded border border-border px-2 py-1 text-xs"
+                checked={value.supportedAttributes.includes(a)}
+                onCheckedChange={() => toggleAttribute('supportedAttributes', a)}
+                className={CHOICE}
               >
-                <input
-                  type="checkbox"
-                  checked={value.supportedAttributes.includes(a)}
-                  onChange={() => toggleAttribute('supportedAttributes', a)}
-                />
                 {ATTRIBUTE_LABELS[a]}
-              </label>
+              </Checkbox>
             ))}
           </div>
         </div>
@@ -222,19 +223,16 @@ export function TrackingProfileEditor({ value, onChange }: TrackingProfileEditor
             {SPORTS_ATTRIBUTES.map((a) => {
               const supported = value.supportedAttributes.includes(a);
               return (
-                <label
+                <Checkbox
                   key={a}
-                  className="flex items-center gap-1.5 rounded border border-border px-2 py-1 text-xs data-[disabled=true]:opacity-40"
+                  disabled={!supported}
                   data-disabled={!supported}
+                  checked={value.requiredAttributes.includes(a)}
+                  onCheckedChange={() => toggleAttribute('requiredAttributes', a)}
+                  className={cn(CHOICE, 'disabled:opacity-40')}
                 >
-                  <input
-                    type="checkbox"
-                    disabled={!supported}
-                    checked={value.requiredAttributes.includes(a)}
-                    onChange={() => toggleAttribute('requiredAttributes', a)}
-                  />
                   {ATTRIBUTE_LABELS[a]}
-                </label>
+                </Checkbox>
               );
             })}
           </div>
@@ -272,15 +270,14 @@ export function TrackingProfileEditor({ value, onChange }: TrackingProfileEditor
             ['individualTrackingAllowed', 'Can be individually tagged'],
           ] as const
         ).map(([key, label]) => (
-          <label key={key} className="flex items-start gap-2 rounded-md border border-border p-2 text-xs">
-            <input
-              type="checkbox"
-              className="mt-0.5"
-              checked={value[key]}
-              onChange={(e) => set(key, e.target.checked)}
-            />
+          <Checkbox
+            key={key}
+            checked={value[key]}
+            onCheckedChange={(next) => set(key, next)}
+            className="border-border hover:bg-muted items-start rounded-md border p-2 text-[12.5px] leading-5"
+          >
             {label}
-          </label>
+          </Checkbox>
         ))}
       </div>
     </div>

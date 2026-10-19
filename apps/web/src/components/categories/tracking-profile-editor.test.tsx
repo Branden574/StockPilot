@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { type SubcategoryTrackingProfile } from '@stockpilot/core';
 
@@ -68,5 +68,34 @@ describe('isTrackingProfileComplete', () => {
       isTrackingProfileComplete({ ...COMPLETE, requiredAttributes: ['colorway'] }),
     ).toBe(false);
     expect(isTrackingProfileComplete({ ...COMPLETE, defaultMode: 'LOT_TRACKED' })).toBe(false);
+  });
+});
+
+/**
+ * The editor's choices use the shared Checkbox (DESIGN-SPEC 6.21): each
+ * chip is one control named by its words, a required attribute is disabled
+ * until it is supported, and every toggle still edits the draft.
+ */
+describe('TrackingProfileEditor checkboxes', () => {
+  it('toggles allowed modes, attributes and flags through the shared Checkbox', async () => {
+    const { render, screen } = await import('@testing-library/react');
+    const { default: userEvent } = await import('@testing-library/user-event');
+    const { TrackingProfileEditor } = await import('./tracking-profile-editor');
+    const { TRACKING_MODE_LABELS } = await import('@stockpilot/core');
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<TrackingProfileEditor value={EMPTY_TRACKING_PROFILE_DRAFT} onChange={onChange} />);
+
+    await user.click(screen.getByRole('checkbox', { name: TRACKING_MODE_LABELS.QUANTITY }));
+    expect(onChange.mock.calls.at(-1)?.[0].allowedModes).toEqual(['QUANTITY']);
+
+    await user.click(screen.getByRole('checkbox', { name: 'Can be individually tagged' }));
+    expect(onChange.mock.calls.at(-1)?.[0].individualTrackingAllowed).toBe(true);
+
+    // Required attributes wait for their supported twin.
+    const boxes = screen.getAllByRole('checkbox');
+    const disabled = boxes.filter((b) => (b as HTMLButtonElement).disabled);
+    expect(disabled.length).toBeGreaterThan(0);
+    for (const b of disabled) expect(b).toHaveAttribute('aria-checked', 'false');
   });
 });

@@ -270,3 +270,129 @@ describe('CategoriesManager — the edit dialog sends only what changed', () => 
     expect(payload.sportsSubcategoryKey).toBeNull();
   });
 });
+
+/**
+ * The redesign (W-BK-10): the shared page header carries the Active /
+ * Archived toggle, "Set up Sports" and "New category"; the cards keep every
+ * control and gate. D18: a card's Archive button was invisible until hovered,
+ * so touch and keyboard users never saw it.
+ */
+describe('CategoriesManager — header, cards and gates (redesign)', () => {
+  const PLAIN = [
+    row({ id: 'cat-a', name: 'Apparel', parent_id: null, sports_subcategory_key: null }),
+    row({
+      id: 'cat-b',
+      name: 'Books',
+      description: 'Novels and readers',
+      parent_id: null,
+      sports_subcategory_key: null,
+    }),
+  ];
+
+  it('one h1, the Active / Archived toggle, Set up Sports and New category for a sports admin', () => {
+    renderEditable(PLAIN);
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Categories');
+    expect(screen.getByText('Group items so filters and reports stay tidy.')).toBeTruthy();
+    const toggle = screen.getByRole('tablist', { name: 'View filter' });
+    expect(toggle).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Set up Sports/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /New category/ })).toBeTruthy();
+  });
+
+  it('a reader without categories:manage gets no New, Archive or edit buttons', () => {
+    renderManager(PLAIN, false);
+    expect(screen.queryByRole('button', { name: /New category/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Archive Apparel/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Apparel' })).toBeNull();
+    expect(screen.getByText('Apparel')).toBeTruthy();
+    expect(screen.getByText('Novels and readers')).toBeTruthy();
+  });
+
+  it('the archived view says so and offers Restore, not New category', () => {
+    render(
+      <CategoriesManager
+        initial={PLAIN}
+        view="archived"
+        canManage
+        canManagePublicVisibility={false}
+        sportsEnabled
+        canManageSports
+      />,
+    );
+    expect(
+      screen.getByText(
+        'Categories you archived. Restore one to bring it back into filters and item forms.',
+      ),
+    ).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: /Restore/ })).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: /New category/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Set up Sports/ })).toBeNull();
+  });
+
+  it('D18: the Archive button hides only for a fine pointer, never on touch or for the keyboard', () => {
+    renderEditable(PLAIN);
+    const archive = screen.getByRole('button', { name: 'Archive Apparel' });
+    const classes = archive.className.split(/\s+/);
+    expect(classes).not.toContain('opacity-0');
+    expect(classes).not.toContain('group-hover:opacity-100');
+    expect(classes).toContain('pointer-fine:opacity-0');
+    expect(classes).toContain('pointer-fine:group-hover:opacity-100');
+    expect(classes).toContain('pointer-fine:group-focus-within:opacity-100');
+  });
+
+  it('Archive asks first, with the words about filters and item forms', async () => {
+    const user = userEvent.setup();
+    renderEditable(PLAIN);
+    await user.click(screen.getByRole('button', { name: 'Archive Apparel' }));
+    expect(await screen.findByText(/hidden from filters and item forms/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Archive' })).toBeTruthy();
+  });
+
+  it('the per-category Public / Internal only select shows only with public_links:manage', () => {
+    render(
+      <CategoriesManager
+        initial={PLAIN}
+        canManage
+        canManagePublicVisibility
+        sportsEnabled={false}
+        canManageSports={false}
+      />,
+    );
+    expect(screen.getByRole('combobox', { name: 'Public visibility for Apparel' })).toBeTruthy();
+    expect(screen.getByText('Public visibility:')).toBeTruthy();
+  });
+
+  it('"Has size variants" is the shared checkbox and its tick reaches the create payload', async () => {
+    const user = userEvent.setup();
+    vi.mocked(createCategoryAction).mockResolvedValue({ ok: true, data: { id: 'x' } } as never);
+    renderEditable(PLAIN);
+    await user.click(screen.getByRole('button', { name: /New category/ }));
+    await user.type(await screen.findByLabelText('Name'), 'Hoodies');
+    const sizes = screen.getByRole('checkbox', { name: /Has size variants/ });
+    expect(sizes).toHaveAttribute('aria-checked', 'false');
+    // A click on the words toggles it too, as the native label did.
+    await user.click(screen.getByText(/Has size variants/));
+    expect(sizes).toHaveAttribute('aria-checked', 'true');
+    await user.click(screen.getByRole('button', { name: /create category/i }));
+    await waitFor(() => expect(createCategoryAction).toHaveBeenCalled());
+    const call = vi.mocked(createCategoryAction).mock.calls.at(-1);
+    const payload = call?.[0] as Record<string, unknown>;
+    expect(payload.supportsSizes).toBe(true);
+    expect(payload.name).toBe('Hoodies');
+  });
+
+  it('with subcategories, each root is a card with its children and Add subcategory', () => {
+    renderEditable([
+      SPORTS_ROOT,
+      row({ id: 'c1', name: 'Shoes' }),
+      row({ id: 'c2', name: 'Jerseys', sports_subcategory_key: 'jerseys' }),
+    ]);
+    const roots = screen.getAllByTestId('category-root');
+    expect(roots).toHaveLength(1);
+    expect(roots[0]).toHaveTextContent('Sports');
+    expect(roots[0]).toHaveTextContent('Shoes');
+    expect(roots[0]).toHaveTextContent('Jerseys');
+    expect(screen.getByRole('button', { name: /Add subcategory/ })).toBeTruthy();
+  });
+});
