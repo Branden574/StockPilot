@@ -1,6 +1,6 @@
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { ItemForm } from '@/components/inventory/item-form';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { forcedWarehouseId } from '@/lib/auth/warehouse';
@@ -52,11 +52,7 @@ export default async function NewRentalItemPage() {
     CustomFieldsService.forCurrentUser(),
     forcedWarehouseId(),
     getActiveWarehouseFilter(),
-    supabase
-      .from('organizations')
-      .select('terminology')
-      .eq('id', ctx.organizationId)
-      .maybeSingle(),
+    supabase.from('organizations').select('terminology').eq('id', ctx.organizationId).maybeSingle(),
   ]);
 
   const [
@@ -113,9 +109,7 @@ export default async function NewRentalItemPage() {
   const defaultWarehouseId =
     forced ??
     (activeFilter && warehouseIds.has(activeFilter) ? activeFilter : null) ??
-    (recent?.warehouseId && warehouseIds.has(recent.warehouseId)
-      ? recent.warehouseId
-      : null);
+    (recent?.warehouseId && warehouseIds.has(recent.warehouseId) ? recent.warehouseId : null);
   const defaultPrimaryLocationId =
     recent?.primaryLocationId &&
     locationIds.has(recent.primaryLocationId) &&
@@ -131,19 +125,17 @@ export default async function NewRentalItemPage() {
   );
 
   return (
-    <div className="container mx-auto flex min-h-full max-w-3xl flex-col px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href="/dashboard/rentals/items"
-          className="text-muted-foreground hover:text-foreground text-sm"
-        >
-          ← Back to rental items
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">New rental item</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Add a canopy, supply, or other circulating asset to the rental catalog.
-        </p>
-      </div>
+    // The form page box: the shared page gutters at the form's reading width.
+    <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <PageHeader
+        back={
+          <PageHeaderBackLink href="/dashboard/rentals/items">
+            ← Back to rental items
+          </PageHeaderBackLink>
+        }
+        title="New rental item"
+        subline="Add a canopy, supply, or other circulating asset to the rental catalog."
+      />
       <Card className="flex-1">
         <CardHeader>
           <CardTitle>Item details</CardTitle>

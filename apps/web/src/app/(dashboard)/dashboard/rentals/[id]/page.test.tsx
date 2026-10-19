@@ -1,4 +1,4 @@
-import { render } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -22,7 +22,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const rentalGet = vi.fn();
 const overdueRemindersOn = vi.fn(async (): Promise<boolean | null> => true);
-const orgRow = vi.fn(async (): Promise<{ timezone: string | null } | null> => ({ timezone: 'America/New_York' }));
+const orgRow = vi.fn(async (): Promise<{ timezone: string | null } | null> => ({
+  timezone: 'America/New_York',
+}));
 const emailsCardProps = vi.fn();
 const headerProps = vi.fn();
 const inventoryByIds = vi.fn(async () => []);
@@ -153,7 +155,11 @@ describe('rentals/[id] host — ReportProblemButton gating (I1, fix wave 2)', ()
     checkModuleAccessMock.mockResolvedValue({ enabled: true, canManage: false });
     await renderPage();
     expect(reportProblemButtonProps).toHaveBeenCalledWith(
-      expect.objectContaining({ canSubmit: true, moduleEnabled: true, prefill: { rentalId: RENTAL_ID } }),
+      expect.objectContaining({
+        canSubmit: true,
+        moduleEnabled: true,
+        prefill: { rentalId: RENTAL_ID },
+      }),
     );
   });
 
@@ -232,6 +238,54 @@ describe('rentals/[id] host: the borrower emails card (2026-09-25)', () => {
   it('an unreadable organization row falls back to the documented default zone, not a failed page', async () => {
     orgRow.mockRejectedValue(new Error('org read failed'));
     await renderPage();
-    expect(emailsCardProps.mock.calls.at(-1)?.[0]).toMatchObject({ timeZone: 'America/Los_Angeles' });
+    expect(emailsCardProps.mock.calls.at(-1)?.[0]).toMatchObject({
+      timeZone: 'America/Los_Angeles',
+    });
+  });
+});
+
+// Redesign P4.D1: the page in the redesign's look. One h1, the back link and
+// the items card with every column; Notes still hides below sm and its words
+// then ride under the item's name (the accessible alternative), and an
+// unreadable item still shows its raw id.
+describe('rentals/[id]: header and items card', () => {
+  it('one h1, the plain back link, and the items with SKU, Qty and Notes', async () => {
+    rentalGet.mockResolvedValue({
+      ...rentalFixture(),
+      lines: [
+        { id: 'l1', item_id: 'i1', quantity: 2, notes: 'Bring stakes' },
+        { id: 'l2', item_id: 'gone', quantity: 1, notes: null },
+      ],
+    });
+    inventoryByIds.mockResolvedValue([{ id: 'i1', name: 'Event tent', sku: 'TENT-1' }] as never);
+    await renderPage();
+    expect(screen.getAllByRole('heading', { level: 1 }).map((x) => x.textContent)).toEqual([
+      'Rental detail',
+    ]);
+    expect(screen.getByRole('link', { name: '← Back to rentals' }).getAttribute('href')).toBe(
+      '/dashboard/rentals',
+    );
+    expect(screen.getByRole('heading', { name: 'Items (2)' })).toBeTruthy();
+    const headers = screen.getAllByRole('columnheader').map((x) => x.textContent);
+    expect(headers).toEqual(['Item', 'SKU', 'Qty', 'Notes']);
+    expect(screen.getAllByRole('columnheader')[3]!.className).toMatch(/hidden sm:table-cell/);
+
+    const tent = screen.getByRole('link', { name: 'Event tent' });
+    expect(tent.getAttribute('href')).toBe('/dashboard/rentals/items/i1');
+    const row = tent.closest('tr')!;
+    const narrow = within(row.querySelectorAll('td')[0]!).getByText('Notes: Bring stakes');
+    expect(narrow.className).toMatch(/(^|\s)sm:hidden(\s|$)/);
+    expect(row.querySelectorAll('td')[1]!.textContent).toBe('TENT-1');
+    expect(row.querySelectorAll('td')[3]!.textContent).toBe('Bring stakes');
+
+    // The unreadable line keeps its raw id and no narrow notes line.
+    const gone = screen.getByText('gone').closest('tr')!;
+    expect(gone.querySelectorAll('td')[0]!.textContent).toBe('gone');
+  });
+
+  it('no lines: the words stay', async () => {
+    await renderPage();
+    expect(screen.getByRole('heading', { name: 'Items (0)' })).toBeTruthy();
+    expect(screen.getByText('No items on this rental.')).toBeTruthy();
   });
 });

@@ -135,7 +135,11 @@ export function BorrowerPicker({
       }
       return;
     }
-    onChange({ borrowerUserId: null, borrowerName: typed, borrowerEmail: value.borrowerEmail ?? null });
+    onChange({
+      borrowerUserId: null,
+      borrowerName: typed,
+      borrowerEmail: value.borrowerEmail ?? null,
+    });
     setInputValue(typed);
     // The name is in: the email is the next thing to fill.
     emailRef.current?.focus();
@@ -190,7 +194,8 @@ export function BorrowerPicker({
   }
 
   const email = value.borrowerEmail ?? '';
-  const emailInvalid = emailTouched && email.trim().length > 0 && !isBorrowerEmailFormat(email.trim());
+  const emailInvalid =
+    emailTouched && email.trim().length > 0 && !isBorrowerEmailFormat(email.trim());
 
   return (
     <div className="space-y-2">
@@ -231,11 +236,11 @@ export function BorrowerPicker({
             aria-activedescendant={open && activeIndex >= 0 ? optionId(activeIndex) : undefined}
             aria-describedby={isMember ? undefined : hintId}
           />
-          <ChevronsUpDown className="absolute right-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+          <ChevronsUpDown className="text-muted-foreground pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2" />
         </div>
 
         {open && (
-          <div className="absolute z-50 mt-1 w-full rounded-md border bg-popover text-popover-foreground shadow-lg overflow-hidden">
+          <div className="border-border bg-popover text-popover-foreground absolute z-50 mt-1 w-full overflow-hidden rounded-md border shadow-lg">
             <ul
               id={listId}
               className="max-h-64 overflow-y-auto py-1 text-sm"
@@ -258,20 +263,20 @@ export function BorrowerPicker({
                 aria-selected={someoneElseChosen}
                 onClick={() => selectOption(0)}
                 className={cn(
-                  'flex items-start gap-2 px-3 py-2 cursor-pointer select-none border-b border-border/50',
+                  'border-border flex cursor-pointer select-none items-start gap-2 border-b px-3 py-2',
                   activeIndex === 0 ? 'bg-muted' : 'hover:bg-muted',
                 )}
               >
-                <UserPlus className="mt-0.5 h-4 w-4 flex-none text-muted-foreground" />
-                <span className="flex-1 min-w-0">
-                  <span className="font-medium truncate block">
+                <UserPlus className="text-muted-foreground mt-0.5 h-4 w-4 flex-none" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">
                     {!isMember && typed ? (
                       <>Someone else: &ldquo;{typed}&rdquo;</>
                     ) : (
                       'Someone not in StockPilot'
                     )}
                   </span>
-                  <span className="text-[11px] text-muted-foreground block">
+                  <span className="text-muted-foreground block text-[12px] leading-[18px]">
                     {!isMember && typed
                       ? 'Not in StockPilot. Add their email below.'
                       : 'Type their name here, then add their email below.'}
@@ -291,13 +296,13 @@ export function BorrowerPicker({
                     aria-selected={isSelected}
                     onClick={() => selectOption(index)}
                     className={cn(
-                      'flex items-center gap-2 px-3 py-2 cursor-pointer select-none',
+                      'flex cursor-pointer select-none items-center gap-2 px-3 py-2',
                       isSelected
                         ? // The picked member, highlighted: a ring, since the
                           // picked fill would hide the highlight's.
                           cn(
                             'bg-primary text-primary-foreground',
-                            activeIndex === index && 'ring-2 ring-inset ring-primary-foreground/70',
+                            activeIndex === index && 'ring-primary-foreground/70 ring-2 ring-inset',
                           )
                         : activeIndex === index
                           ? 'bg-muted'
@@ -310,12 +315,12 @@ export function BorrowerPicker({
                         isSelected ? 'text-primary-foreground' : 'text-muted-foreground',
                       )}
                     />
-                    <span className="flex-1 min-w-0">
-                      <span className="font-medium truncate block">{member.displayName}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium">{member.displayName}</span>
                       {member.email ? (
                         <span
                           className={cn(
-                            'text-[11px] truncate block',
+                            'block truncate text-[12px] leading-[18px]',
                             isSelected ? 'text-primary-foreground/80' : 'text-muted-foreground',
                           )}
                         >
@@ -329,7 +334,7 @@ export function BorrowerPicker({
               })}
 
               {filteredMembers.length === 0 && query ? (
-                <li role="presentation" className="px-3 py-2 text-[12px] text-muted-foreground">
+                <li role="presentation" className="text-muted-foreground px-3 py-2 text-[12px]">
                   No team member matches &ldquo;{typed}&rdquo;.
                 </li>
               ) : null}
@@ -340,7 +345,7 @@ export function BorrowerPicker({
 
       {isMember ? (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <p className="text-[11px] text-emerald-700 dark:text-emerald-400">
+          <p className="text-success text-[12px] leading-[18px]">
             Team member selected.
             {value.borrowerEmail ? ` Rental emails go to ${value.borrowerEmail}.` : ''}
           </p>
@@ -348,18 +353,21 @@ export function BorrowerPicker({
             type="button"
             onClick={selectSomeoneElse}
             disabled={disabled}
-            className="text-[11px] font-medium text-foreground underline underline-offset-2 hover:text-muted-foreground disabled:opacity-50"
+            className="text-foreground hover:text-muted-foreground inline-flex items-center text-[12px] font-medium underline underline-offset-2 disabled:opacity-50 max-sm:min-h-11"
           >
             Rent to someone not in StockPilot
           </button>
         </div>
       ) : (
         <>
-          <p id={hintId} className="text-[11px] text-muted-foreground">
+          <p id={hintId} className="text-muted-foreground text-[12px] leading-[18px]">
             Not in StockPilot? Type their name above and add their email below.
           </p>
           <div className="space-y-1">
-            <label htmlFor={emailId} className="text-[12px] font-medium text-foreground">
+            <label
+              htmlFor={emailId}
+              className="text-foreground text-[13px] font-medium leading-none"
+            >
               Borrower email (optional)
             </label>
             <Input
@@ -384,11 +392,11 @@ export function BorrowerPicker({
               aria-describedby={emailInvalid ? `${emailErrorId} ${emailHelpId}` : emailHelpId}
             />
             {emailInvalid ? (
-              <p id={emailErrorId} className="text-[11px] text-destructive">
+              <p id={emailErrorId} className="text-destructive text-[12px] leading-[18px]">
                 Enter a full email address, like name@example.com, or leave it blank.
               </p>
             ) : null}
-            <p id={emailHelpId} className="text-[11px] text-muted-foreground">
+            <p id={emailHelpId} className="text-muted-foreground text-[12px] leading-[18px]">
               {RENTAL_BORROWER_EMAIL_HELP}
             </p>
           </div>
