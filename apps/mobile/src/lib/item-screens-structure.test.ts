@@ -16,7 +16,7 @@ import {
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
 import { SERIAL_STATUSES } from './serials';
-import { palette, type Palette } from './theme';
+import { TYPE_CEILING, capTo, palette, type Palette } from './theme';
 
 /**
  * THE PHONE ITEM SCREENS AND STOCK SHEETS, READ AS SOURCE (redesign package
@@ -52,6 +52,9 @@ const SHIM = 'app/dashboard/inventory/[id].tsx';
 
 /** Every file this package restyled. */
 const OWNED = [ITEM, NEW_ITEM, MOVE, REMOVE, RECOUNT, HISTORY, CARD, VIEWER];
+
+/** The 44pt rule, as the screens spell it. */
+const MIN_TAP_PT = 44;
 
 const LIGHT = palette('light');
 const DARK = palette('dark');
@@ -564,7 +567,10 @@ describe('item screen: every control is named, with its role and state', () => {
   it('every typed box in the sheets is named for VoiceOver', () => {
     const inputs = elements(ITEM, (el, sf) => tagOf(el, sf) === 'TextInput');
     expect(inputs.map((i) => attrText(i.el, 'accessibilityLabel', i.sf))).toEqual([
-      undefined, // the note box: its sheet says ADD NOTE / EDIT NOTE right above it
+      // The note box: the ADD NOTE / EDIT NOTE eyebrow is a separate element
+      // and the placeholder is read only while the box is empty, so EDIT
+      // NOTE's existing note needs a name of its own.
+      'Note',
       'Change, plus adds, minus removes',
       'Reason, optional',
       'Serial numbers, one per line',
@@ -694,8 +700,12 @@ describe('sheets and cards: names, roles and states', () => {
     };
     visit(content);
     expect(nested).toEqual([]);
-    expect(sourceOf(REMOVE)).toContain("import { Chip } from '@/components/ui/chip';");
-    expect(elements(REMOVE, (el, s) => tagOf(el, s) === 'Chip')).toHaveLength(1);
+    // The holdings are the move sheet's module-level 44pt chip.
+    expect(sourceOf(REMOVE)).toContain(
+      "import { SheetChip } from '@/components/move-stock-modal';",
+    );
+    expect(elements(REMOVE, (el, s) => tagOf(el, s) === 'SheetChip')).toHaveLength(1);
+    expect(elements(REMOVE, (el, s) => tagOf(el, s) === 'Chip')).toHaveLength(0);
   });
 
   it('the recount choices are radios that say which is chosen, with a mark beside the colour', () => {
@@ -1176,6 +1186,8 @@ describe('the pairs this package draws, measured in both modes', () => {
     ['an idle choice chip on the page', 'ink2', 'paper', AA_TEXT],
     ['history values and the put-away source on the recessed fill', 'ink2', 'sunk', AA_TEXT],
     ['typed text in a recessed box', 'ink', 'sunk', AA_TEXT],
+    ['an idle sheet chip (SheetChip) on its recessed fill', 'ink', 'sunk', AA_TEXT],
+    ['a chosen sheet chip (SheetChip): card on ink', 'card', 'ink', AA_TEXT],
     ['a chosen chip, Create and a chosen warehouse: paper on ink', 'paper', 'ink', AA_TEXT],
     ['an open exception chip', 'ink', 'warnWash', AA_TEXT],
     ['the unconfirmed and queued notes, the as-of banner', 'warnText', 'card', AA_TEXT],
@@ -1234,6 +1246,62 @@ describe('every control is a 44pt target', () => {
     expect(sourceOf(NEW_ITEM)).toContain('const MIN_TAP = 44;');
   });
 
+  // The shared chip is about 36.5pt (9pt padding twice, a 16.5pt mono line,
+  // the border): every choice in the two sheets is the 44pt SheetChip.
+  it.each([MOVE, REMOVE])('%s: every choice chip is the 44pt SheetChip', (file) => {
+    expect(elements(file, (el, s) => tagOf(el, s) === 'Chip')).toHaveLength(0);
+    expect(sourceOf(file)).not.toContain("from '@/components/ui/chip'");
+    expect(elements(file, (el, s) => tagOf(el, s) === 'SheetChip')).toHaveLength(
+      file === MOVE ? 4 : 1,
+    );
+  });
+
+  it('SheetChip is the shared chip recipe with a 44pt minimum height', () => {
+    const sf = treeOf(MOVE);
+    const fn = flat(codeOnly(functionNamed(sf, 'SheetChip').getText(sf)));
+    expect(codeOnly(sourceOf(MOVE))).toContain('const MIN_TAP = 44;');
+    expect(fn).toContain('minHeight: MIN_TAP,');
+    expect(fn).toContain("justifyContent: 'center',");
+    expect(fn).toContain('accessibilityRole="button"');
+    expect(fn).toContain('accessibilityState={{ selected: active }}');
+    expect(fn).toContain('borderColor: active ? c.ink : c.hair2,');
+    expect(fn).toContain('backgroundColor: active ? c.ink : c.sunk,');
+    expect(fn).toContain('<Mono size={12.5} color={active ? c.card : c.ink}>');
+    expect(fn).toContain('borderColor: active ? c.card : c.hair2,');
+    expect(fn).not.toMatch(/(^|[^a-zA-Z])height: (?!10)/);
+    expect(sourceOf(MOVE)).toMatch(/\nexport function SheetChip\(/);
+  });
+
+  // A frame is only a 44pt target where no later sibling covers it (a later
+  // sibling wins the tap): each frame's margins give back exactly what it
+  // borrows, and its padding keeps the mark where it was.
+  it('SKU Auto runs from the NAME box to the SKU box, covering neither', () => {
+    const block = styleBlock(NEW_ITEM, 'autoSku');
+    expect(block).toContain('marginTop: -22, marginBottom: -6, paddingTop: 22, paddingBottom: 6,');
+    expect(block).not.toContain('marginVertical');
+    const code = flat(codeOnly(sourceOf(NEW_ITEM)));
+    expect(code).toContain('const SKU_ROW_GAP = 8;');
+    expect(code).toContain('<Row marginTop={SKU_ROW_GAP}> <Field flex label="SKU"');
+    // Above: the SKU field's 14pt top margin and the row's gap reach the
+    // NAME box; below: the 16pt label row and Field's 6pt gap reach the SKU box.
+    expect(code).toContain(
+      '<View style={{ marginTop: 14, flex: flex && !stacked ? 1 : undefined }}>',
+    );
+    expect(code).toContain('<View style={{ marginTop: 6 }}>{children}</View>');
+    // What the frame keeps in the layout is the label row's 16pt.
+    expect(MIN_TAP_PT - 22 - 6).toBe(16);
+  });
+
+  it('the history X ends where the item name starts', () => {
+    const block = styleBlock(HISTORY, 'close');
+    expect(block).toContain('marginTop: -18, marginBottom: -8, paddingTop: 18, paddingBottom: 8,');
+    expect(block).not.toContain('marginVertical');
+    // The 8pt below is the header's bottom padding, above the item name.
+    expect(styleBlock(HISTORY, 'header')).toContain('paddingBottom: 8,');
+    expect(MIN_TAP_PT - 18 - 8).toBe(18); // the X's own 18pt in the layout
+    expect(codeOnly(sourceOf(HISTORY))).toContain('<X size={18}');
+  });
+
   it('the card keeps its 44pt rule (the location screen imports it)', () => {
     expect(sourceOf(CARD)).toMatch(/export const MIN_TAP = 44;/);
   });
@@ -1246,8 +1314,42 @@ describe('Dynamic Type policy unchanged', () => {
     const code = flat(codeOnly(sourceOf(ITEM)));
     expect(code).toContain('const TAB_CAP = capTo(13, TYPE_CEILING.control);');
     expect(code).toContain('maxFontSizeMultiplier={TAB_CAP}');
+    // A label that outgrows its segment shrinks instead of being cut.
+    expect(code).toContain(
+      'numberOfLines={1} maxFontSizeMultiplier={TAB_CAP} adjustsFontSizeToFit minimumFontScale={TAB_MIN_FONT_SCALE}',
+    );
     expect(code).toContain('maxFontSizeMultiplier={capTo(17, TYPE_CEILING.control)}');
     expect(code).toContain('maxFontSizeMultiplier={capTo(56, TYPE_CEILING.display)}');
+  });
+
+  // The segmented track takes about 23pt from each column. Measured with
+  // fontkit on the bundled InterTight_600SemiBold.ttf: Movements advances
+  // 117.3pt at 22pt (the cap), without the negative tracking that narrows it.
+  it('the widest tab label fits the narrowest segment at its shrink floor', () => {
+    const MOVEMENTS_SEMIBOLD_AT_CAP = 117.3;
+    const num = (block: string, key: string) => {
+      const m = new RegExp(`(?:^|[ ,])${key}: (\\d+(?:\\.\\d+)?),`).exec(block);
+      expect(m, `${key} in ${block}`).not.toBeNull();
+      return Number(m![1]);
+    };
+    const row = styleBlock(ITEM, 'tabsRow');
+    const tab = styleBlock(ITEM, 'tab');
+    const segment = (screen: number) =>
+      (screen -
+        2 * num(row, 'marginHorizontal') -
+        2 * num(row, 'borderWidth') -
+        2 * num(row, 'padding') -
+        2 * num(row, 'gap')) /
+        3 -
+      2 * num(tab, 'borderWidth') -
+      2 * num(tab, 'paddingHorizontal');
+    expect(segment(320)).toBeCloseTo(70, 5);
+    const floor = /const TAB_MIN_FONT_SCALE = (\d+(?:\.\d+)?);/.exec(codeOnly(sourceOf(ITEM)));
+    expect(floor).not.toBeNull();
+    // A 320pt zoomed screen at the cap, and at the default 13pt with no shrink.
+    expect(Number(floor![1]) * MOVEMENTS_SEMIBOLD_AT_CAP).toBeLessThanOrEqual(segment(320));
+    expect((MOVEMENTS_SEMIBOLD_AT_CAP * 13) / 22).toBeLessThanOrEqual(segment(320));
+    expect(capTo(13, TYPE_CEILING.control) * 13).toBe(22);
   });
 
   // A fixed height clipped the typed text: every typed box grows with it.
@@ -1280,7 +1382,9 @@ describe('the inventory deep-link shim lands on this screen', () => {
   });
 
   it('the screen is a registered card and reads the id and the tab', () => {
-    expect(sourceOf('app/_layout.tsx')).toContain(
+    // The root stack (P5.4's file), read flat and without comments, so a
+    // reformat there cannot fail this pin.
+    expect(flat(codeOnly(sourceOf('app/_layout.tsx')))).toContain(
       '<Stack.Screen name="item/[id]" options={{ presentation: \'card\' }} />',
     );
     const code = flat(codeOnly(sourceOf(ITEM)));
