@@ -63,10 +63,12 @@ describe('PoReceiveDialog fields', () => {
 
   it('draws the "Received now" label as a block box so its column lines up with Variance (review fix)', async () => {
     // The Label primitive is an inline <label>; inline, its line box took the
-    // parent's strut and sat about 6 px below the block Variance caption.
+    // parent's strut and sat about 6 px below the block Variance caption. It
+    // also needs its own leading-none: cn() drops the primitive's leading-none
+    // when text-[11px] follows it, and a 1.5 line height left the field 4 px low.
     const { dialog } = await open([line('a', 10)]);
     const label = within(dialog).getByText('Received now', { selector: 'label' });
-    expect(label).toHaveClass('block');
+    expect(label).toHaveClass('block', 'leading-none');
     expect(within(dialog).getByText('Variance').tagName).toBe('P');
   });
 
