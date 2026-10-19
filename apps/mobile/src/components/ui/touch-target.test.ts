@@ -214,7 +214,8 @@ describe('Button size sm: a 44pt target round the 36pt button', () => {
     expect(face.minHeight).toBe(44); // the 44pt button those screens drew stays 44pt
     expect(face.marginTop).toBeUndefined();
     expect(face.alignSelf).toBeUndefined();
-    // recurring-pos.tsx styles.delete.
+    // recurring-pos.tsx styles.delete as it was before P5.4b (it now passes
+    // no minHeight: the frame alone is its 44pt target).
     const del = splitButtonStyle({
       minHeight: 44,
       alignSelf: 'flex-start',
@@ -267,12 +268,13 @@ describe('Button size sm: a 44pt target round the 36pt button', () => {
     }
     // The sweep is not vacuous (72 at 9079cf659).
     expect(smButtons.length).toBeGreaterThan(60);
-    // The named local styles keep to the same rule.
+    // The named local styles keep to the same rule. (po-attachments' Attach
+    // dropped its smallButton style in P5.4b: the frame alone gives it the
+    // 44pt target, and the inline-style sweep above covers it.)
     for (const [file, name] of [
       ['app/(drawer)/recurring-pos.tsx', 'delete'],
       ['app/group-selected.tsx', 'smallButton'],
       ['app/ungroup-selected.tsx', 'smallButton'],
-      ['src/components/po-attachments.tsx', 'smallButton'],
       ['src/components/po-attachments.tsx', 'scanButton'],
     ] as const) {
       const block = new RegExp(`\\b${name}: \\{[^}]*\\}`).exec(readSource(at(file)))?.[0];

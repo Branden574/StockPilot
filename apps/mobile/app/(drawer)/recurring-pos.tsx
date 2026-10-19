@@ -299,8 +299,9 @@ function TemplateCard({
           accessibilityLabel={row.name}
         />
       </View>
-      {/* Refusal-red words on no fill, in a frame at least 44pt tall (it was
-          the height of its 10.5pt line and a fixed red under AA in dark). */}
+      {/* Refusal-red words on no fill, in the shared small button's 44pt
+          frame (it was the height of its 10.5pt line and a fixed red under
+          AA in dark). */}
       <Button
         variant="destructive"
         size="sm"
@@ -318,7 +319,6 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   body: { flex: 1, minWidth: 0 },
   delete: {
-    minHeight: 44,
     alignSelf: 'flex-start',
     paddingHorizontal: 0,
     marginTop: 4,

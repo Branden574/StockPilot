@@ -509,7 +509,6 @@ export default function CycleCounts() {
             clearSearch();
             setStatus(null);
           }}
-          style={TAP}
         >
           Clear search and filters
         </Button>
@@ -636,15 +635,18 @@ export default function CycleCounts() {
 /** 9pt tracked uppercase micro-marker against the chrome ceiling. */
 const TILE_LABEL_CAP = capTo(9, TYPE_CEILING.chrome);
 
-/** A 44pt minimum for the shared small Buttons (36pt on their own). */
+/** The error card's full-width Try again is drawn at 44pt (the shared small
+ *  Button draws 36pt inside its own 44pt frame). */
 const TAP = { minHeight: MIN_TAP };
 
 /**
  * One status filter: the reference's filter chip (DESIGN-SPEC 6.6) at the
  * phone's 44pt. Idle, the stronger border with secondary-ink words on the
  * page; chosen, the ink fill with the words in the page colour. The same
- * button role, selected state and words as the shared Chip it replaces (36pt
- * tall); the words are content and grow with the text size, as they did.
+ * button role, selected state and words as the shared Chip, which now has a
+ * 44pt frame too but draws the picker chip (mono words, radius 8, the sunk
+ * fill), not this filter chip; the words are content and grow with the text
+ * size, as they did.
  */
 function FilterChip({
   label,

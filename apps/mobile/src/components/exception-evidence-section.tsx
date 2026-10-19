@@ -234,7 +234,7 @@ export function ExceptionEvidenceSection({
             size="sm"
             disabled={!online}
             onPress={onChanged}
-            style={{ alignSelf: 'flex-start', marginTop: 12, minHeight: MIN_TAP }}
+            style={{ alignSelf: 'flex-start', marginTop: 12 }}
           >
             Try again
           </Button>
@@ -287,7 +287,7 @@ export function ExceptionEvidenceSection({
                     disabled={!online}
                     onPress={onChanged}
                     accessibilityLabel={`Try loading photo ${i + 1} again`}
-                    style={{ alignSelf: 'flex-start', minHeight: MIN_TAP }}
+                    style={{ alignSelf: 'flex-start' }}
                   >
                     Try again
                   </Button>
@@ -311,7 +311,7 @@ export function ExceptionEvidenceSection({
                     disabled={!online}
                     onPress={() => setRemoving(p)}
                     accessibilityLabel={`Remove photo ${i + 1}`}
-                    style={{ alignSelf: 'flex-start', minHeight: MIN_TAP }}
+                    style={{ alignSelf: 'flex-start' }}
                   >
                     Remove
                   </Button>
@@ -377,7 +377,6 @@ export function ExceptionEvidenceSection({
                     disabled={retryReason !== null}
                     onPress={() => retry(entry.key)}
                     accessibilityLabel="Retry adding this photo"
-                    style={{ minHeight: MIN_TAP }}
                   >
                     Retry
                   </Button>
@@ -387,7 +386,6 @@ export function ExceptionEvidenceSection({
                   size="sm"
                   onPress={() => discard(entry.key)}
                   accessibilityLabel="Discard this photo"
-                  style={{ minHeight: MIN_TAP }}
                 >
                   Discard
                 </Button>

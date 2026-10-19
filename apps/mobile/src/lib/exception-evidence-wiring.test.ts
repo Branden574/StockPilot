@@ -296,9 +296,18 @@ describe('tap targets and spoken names', () => {
     for (const b of buttons) {
       const size = attrText(b.el, 'size', b.sf);
       if (size === undefined || size === 'md') continue;
+      // P5.4b: an sm Button is a 44pt target through its own frame; a style
+      // may add a drawn minHeight but never caps the frame.
+      expect(size, where(b)).toBe('sm');
       const style = attrText(b.el, 'style', b.sf) ?? '';
-      expect(style, `${where(b)} is size ${size} with no minHeight`).toContain('minHeight: MIN_TAP');
+      expect(style, where(b)).not.toMatch(/\b(?:height|maxHeight|maxWidth|minWidth)\s*:/);
     }
+    // The 44pt target is the shared small Button's own frame (P2.5c; drawn
+    // and measured in components/ui/touch-target.test.ts).
+    const smFrame = readSource(path.join(MOBILE_ROOT, 'src/components/ui/button.tsx'));
+    expect(smFrame).toContain("const framed = size === 'sm';");
+    expect(smFrame).toContain('export const BUTTON_MIN_TARGET = 44;');
+    expect(smFrame).toMatch(/frame: \{\s*minHeight: BUTTON_MIN_TARGET,\s*minWidth: BUTTON_MIN_TARGET,/);
   });
 
   it.each(PHOTO_FILES)('%s: every touchable has a role, a name and a 44pt target (or is the full-screen scrim)', (file) => {

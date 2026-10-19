@@ -1044,8 +1044,10 @@ describe('Counts tab: words, the filters and the offline view', () => {
     expect(wordsOf(COUNTS_TAB)).toContain(word);
   });
 
-  // The shared Chip is 36pt; the filter chips are the reference's (6.6) at
-  // 44pt, with the same role, state and words.
+  // The shared Chip has a 44pt frame too since P2.5c, but draws the picker
+  // chip (mono 12.5, radius 8, the sunk fill); the status filters stay the
+  // reference's filter chip (6.6) at 44pt, with the same role, state and
+  // words.
   it('the status filters are 44pt chips: All and every status, each a button with its selected state', () => {
     expect(code).toMatch(
       /\{\[null, \.\.\.CYCLE_COUNT_STATUSES\]\.map\(\(s\) => \(\s*<FilterChip\s+key=\{s \?\? 'all'\}\s+label=\{s \? CYCLE_COUNT_STATUS_LABELS\[s\] : 'All'\}\s+active=\{view\.status === s\}\s+onPress=\{\(\) => setStatus\(s\)\}/,
@@ -1060,11 +1062,30 @@ describe('Counts tab: words, the filters and the offline view', () => {
     expect(styleBlock(COUNTS_TAB, 'filterChip')).toMatch(/minHeight: MIN_TAP\b/);
   });
 
-  it('every small Button is 44pt tall', () => {
+  // P5.4b: the shared small Button now frames itself at 44pt, so a button
+  // whose 44pt was for the target alone draws at 36pt in that frame; the
+  // error card's full-width Try again keeps its drawn 44pt (TAP).
+  it('every small Button is a 44pt target; the full-width Try again is drawn at 44pt', () => {
     const { sf, els } = elements(COUNTS_TAB, (el, s) => tagOf(el, s) === 'Button');
     expect(els.length).toBeGreaterThan(0);
-    for (const el of els) expect(attrText(el, 'style', sf)).toBe('TAP');
+    for (const el of els) {
+      expect(attrText(el, 'size', sf)).toBe('sm');
+      expect([undefined, 'TAP']).toContain(attrText(el, 'style', sf));
+    }
+    const retry = els.filter((el) => attrText(el, 'style', sf) === 'TAP');
+    expect(retry).toHaveLength(1);
+    expect(attrText(retry[0]!, 'onPress', sf)).toBe(
+      '() => void load(view, { withSummary: !summary })',
+    );
     expect(code).toContain('const TAP = { minHeight: MIN_TAP };');
+    // The 44pt target is the shared small Button's own frame (P2.5c; drawn
+    // and measured in components/ui/touch-target.test.ts).
+    const smFrame = readSource(path.join(MOBILE_ROOT, 'src/components/ui/button.tsx'));
+    expect(smFrame).toContain("const framed = size === 'sm';");
+    expect(smFrame).toContain('export const BUTTON_MIN_TARGET = 44;');
+    expect(smFrame).toMatch(
+      /frame: \{\s*minHeight: BUTTON_MIN_TARGET,\s*minWidth: BUTTON_MIN_TARGET,/,
+    );
   });
 
   it('Clear search is a 44pt frame and the pager buttons need no hitSlop', () => {
