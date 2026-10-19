@@ -54,9 +54,9 @@ export default function MovementsLoading() {
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
-            <Bar w={240} h={32} radius={6} />
-            <Bar w={150} h={32} radius={6} />
-            <Bar w={150} h={32} radius={6} />
+            <Bar w={264} h={32} radius={6} />
+            <Bar w={140} h={32} radius={6} />
+            <Bar w={140} h={32} radius={6} />
           </div>
           <div className="flex items-center gap-2">
             <Bar w={120} h={12} />

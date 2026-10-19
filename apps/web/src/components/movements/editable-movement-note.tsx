@@ -117,7 +117,10 @@ export function EditableMovementNote({
               if (e.key === 'Enter') void save();
               if (e.key === 'Escape') cancelEdit();
             }}
-            className={inline ? 'h-7 w-48 text-xs' : 'w-56'}
+            // The table's field is 160 px so the field and both buttons fit the
+            // Note column (240 px at 1280): wider, the open editor pushed the
+            // table past its card and Save and Cancel scrolled out of sight.
+            className={inline ? 'h-7 w-48 text-xs' : 'w-40'}
             maxLength={2000}
             autoFocus
             placeholder="Add a note"

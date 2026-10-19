@@ -154,9 +154,15 @@ export function MovementsFilterBar({
       </div>
 
       <FilterBar
+        // The top pager keeps to the right when the row wraps under the
+        // search (as when Clear filters shows), in line with the bottom one.
+        className="[&>:nth-child(2)]:ml-auto"
         leading={
           <>
-            <div className="relative w-full sm:w-[240px]">
+            {/* 264 px, not the toolbar's 240, and the clear button's room kept
+                only while there is text: the placeholder "Search by item name
+                or SKU…" reads whole (it was cut to "…or SI" before the restyle). */}
+            <div className="relative w-full sm:w-[264px]">
               <Search
                 aria-hidden="true"
                 className="text-muted-foreground pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
@@ -168,7 +174,10 @@ export function MovementsFilterBar({
                 onChange={(e) => setQ(e.target.value)}
                 placeholder="Search by item name or SKU…"
                 aria-label="Search stock movements"
-                className="pl-8 pr-9"
+                className={cn(
+                  'pl-8 [&::-webkit-search-cancel-button]:appearance-none',
+                  q ? 'pr-9' : 'pr-2.5',
+                )}
               />
               {q && (
                 <button
@@ -207,7 +216,7 @@ export function MovementsFilterBar({
                 max={to || undefined}
                 aria-label="From date"
                 className={cn(
-                  'min-w-0 flex-1 [color-scheme:light] sm:w-[150px] sm:flex-none dark:[color-scheme:dark]',
+                  'min-w-0 flex-1 [color-scheme:light] sm:w-[140px] sm:flex-none dark:[color-scheme:dark]',
                   !from && 'text-muted-foreground',
                 )}
               />
@@ -221,7 +230,7 @@ export function MovementsFilterBar({
                 min={from || undefined}
                 aria-label="To date"
                 className={cn(
-                  'min-w-0 flex-1 [color-scheme:light] sm:w-[150px] sm:flex-none dark:[color-scheme:dark]',
+                  'min-w-0 flex-1 [color-scheme:light] sm:w-[140px] sm:flex-none dark:[color-scheme:dark]',
                   !to && 'text-muted-foreground',
                 )}
               />

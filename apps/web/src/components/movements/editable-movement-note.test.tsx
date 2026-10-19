@@ -144,3 +144,23 @@ describe('EditableMovementNote — editor touch targets', () => {
     },
   );
 });
+
+describe('EditableMovementNote — the table editor fits its column', () => {
+  // The Movements Note column is about 240 px wide at 1280. A 224 px field
+  // plus Save and Cancel pushed the table past its card, so the two buttons
+  // scrolled out of sight; the table's field is 160 px, the feed's 192 px.
+  it('the cell editor field is 160 px, the inline one keeps 192 px', () => {
+    const { unmount } = render(
+      <EditableMovementNote movementId={MOVEMENT_ID} note="restock" canEdit />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /edit note/i }));
+    expect(screen.getByRole('textbox', { name: /movement note/i })).toHaveClass('w-40');
+    unmount();
+
+    render(
+      <EditableMovementNote movementId={MOVEMENT_ID} note="restock" canEdit variant="inline" />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /edit note/i }));
+    expect(screen.getByRole('textbox', { name: /movement note/i })).toHaveClass('w-48');
+  });
+});
