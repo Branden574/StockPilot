@@ -20,7 +20,7 @@ import {
 // A native select drawn like the shared Input on these external forms: the
 // stronger hairline, 40 px on desktop, and 44 px with 16 px text below sm.
 const SELECT_CLASS =
-  'bg-card focus-visible:ring-ring focus-visible:ring-offset-background flex h-10 w-full rounded-md border border-[var(--ed-line-strong)] px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 max-sm:h-11 max-sm:text-base';
+  'bg-card focus-visible:ring-ring focus-visible:ring-offset-background flex h-10 w-full rounded-md border border-line-strong px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 max-sm:h-11 max-sm:text-base';
 
 const INDUSTRIES = [
   'Ecommerce',

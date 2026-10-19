@@ -118,7 +118,7 @@ export default function PricingPage() {
             className={
               'flex flex-col rounded-lg border p-5 ' +
               (t.highlight
-                ? 'border-primary bg-card ring-1 ring-[var(--ed-line-strong)]'
+                ? 'border-primary bg-card ring-line-strong ring-1'
                 : 'border-border bg-card')
             }
           >

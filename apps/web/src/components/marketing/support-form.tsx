@@ -27,7 +27,7 @@ const PRIORITIES: Array<{ value: string; label: string }> = [
 // A native select drawn like the shared Input (P5.1): the stronger hairline,
 // 40 px on desktop, and 44 px with 16 px text below sm.
 const selectClass =
-  'bg-card focus-visible:ring-ring focus-visible:ring-offset-background h-10 w-full rounded-md border border-[var(--ed-line-strong)] px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 max-sm:h-11 max-sm:text-base';
+  'bg-card focus-visible:ring-ring focus-visible:ring-offset-background h-10 w-full rounded-md border border-line-strong px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 max-sm:h-11 max-sm:text-base';
 
 export function SupportForm() {
   const [busy, setBusy] = React.useState(false);

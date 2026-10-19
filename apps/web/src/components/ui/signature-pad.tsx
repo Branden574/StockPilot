@@ -339,7 +339,7 @@ export const SignaturePad = React.forwardRef<SignaturePadHandle, SignaturePadPro
           'relative w-full select-none',
           'aspect-[3/1]',
           'rounded-lg',
-          'border border-dashed border-[var(--ed-line-strong)]',
+          'border-line-strong border border-dashed',
           className ?? '',
         ]
           .filter(Boolean)

@@ -123,7 +123,7 @@ export function MfaChallengeForm({ factors }: MfaChallengeFormProps) {
                 setFactorId(e.target.value);
                 setCode('');
               }}
-              className="bg-card focus-visible:ring-ring focus-visible:ring-offset-background h-10 w-full rounded-md border border-[var(--ed-line-strong)] px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 max-sm:h-11 max-sm:text-base"
+              className="bg-card focus-visible:ring-ring focus-visible:ring-offset-background border-line-strong h-10 w-full rounded-md border px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 max-sm:h-11 max-sm:text-base"
             >
               {factors.map((f) => (
                 <option key={f.id} value={f.id}>
