@@ -32,6 +32,10 @@ vi.mock('@/lib/modules/module-gate', () => ({
   checkModuleAccess: vi.fn(async () => ({ enabled: true, canManage: true })),
 }));
 vi.mock('@/components/dashboard/module-not-enabled', () => ({ ModuleNotEnabled: () => null }));
+const effectiveNavLabel = vi.fn(async (_href: string, fallback: string) => fallback);
+vi.mock('@/lib/nav-labels', () => ({
+  effectiveNavLabel: (href: string, fallback: string) => effectiveNavLabel(href, fallback),
+}));
 
 const listPage = vi.fn(async (..._a: unknown[]) => ({}) as unknown);
 vi.mock('@/server/services/returns', () => ({
@@ -101,6 +105,22 @@ describe('returns list (redesign)', () => {
     expect(
       screen.getByText(/RMAs against handed-over orders\. Approving moves nothing;/),
     ).toBeInTheDocument();
+  });
+
+  it("follows a Settings > Navigation rename of the sidebar's Returns entry in the h1 (PLAN rule 10)", async () => {
+    listPage.mockResolvedValueOnce(answer());
+    effectiveNavLabel.mockResolvedValueOnce('RMAs');
+    await renderPage();
+    expect(effectiveNavLabel).toHaveBeenCalledWith('/dashboard/returns', 'Returns');
+    expect(screen.getByRole('heading', { level: 1, name: 'RMAs' })).toBeInTheDocument();
+  });
+
+  it('keeps "Returns" when the rename cannot be read, and still shows the list', async () => {
+    listPage.mockResolvedValueOnce(answer());
+    effectiveNavLabel.mockRejectedValueOnce(new Error('no org row'));
+    await renderPage();
+    expect(screen.getByRole('heading', { level: 1, name: 'Returns' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'RMA-20261018-ABCDEF' })).toBeInTheDocument();
   });
 
   it('offers all nine filters as links in the "Return filters" navigation, the open one marked current', async () => {

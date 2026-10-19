@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/table';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { effectiveNavLabel } from '@/lib/nav-labels';
 import { cn, formatRelative } from '@/lib/utils';
 import { RMAService } from '@/server/services/returns';
 
@@ -78,7 +79,15 @@ export default async function ReturnsPage({
   // unavailable, replacement ready) are on.
   const filter = parseReturnListFilter(sp.filter, { exchanges: true });
   const svc = await RMAService.forCurrentUser();
-  const page = await svc.listPage({ filter, q: sp.q ?? null, cursor: sp.cursor ?? null });
+  // The heading follows a Settings > Navigation rename of this page's sidebar
+  // entry, as the sidebar and the crumb already do (PLAN rule 10). Both reads
+  // are request-cached lookups the dashboard layout already made, so nothing
+  // new is read; a failed lookup keeps the page's own word instead of failing
+  // the page.
+  const [page, heading] = await Promise.all([
+    svc.listPage({ filter, q: sp.q ?? null, cursor: sp.cursor ?? null }),
+    effectiveNavLabel('/dashboard/returns', 'Returns').catch(() => 'Returns'),
+  ]);
   const filters = availableReturnListFilters({ exchanges: true });
 
   const hrefFor = (next: { filter?: ReturnListFilterId; cursor?: string | null }) => {
@@ -107,7 +116,7 @@ export default async function ReturnsPage({
   return (
     <div className={PAGE_BOX}>
       <PageHeader
-        title="Returns"
+        title={heading}
         subline={
           <p className="max-w-3xl">
             RMAs against handed-over orders. Approving moves nothing; processing a received return
