@@ -123,6 +123,26 @@ describe('ExportBuilderDialog — chrome', () => {
   });
 });
 
+describe('ExportBuilderDialog — phone width', () => {
+  // Below lg the field picker, column order and preview stack in ONE grid
+  // column. An implicit `grid` column is sized to its widest content (the
+  // preview table), so on a 390 px phone the column ran past the dialog and
+  // every Move button sat off screen. `grid-cols-1` is minmax(0, 1fr): the
+  // column is the dialog's width and the preview scrolls inside its own box.
+  it('stacks the picker and preview in a column that cannot grow past the dialog', () => {
+    renderDialog({ itemType: 'product' });
+    const order = screen.getByRole('list', { name: 'Selected fields, in export order' });
+    let grid: HTMLElement | null = order.parentElement;
+    while (grid && !(grid.getAttribute('class') ?? '').split(/\s+/).includes('grid')) {
+      grid = grid.parentElement;
+    }
+    expect(grid).not.toBeNull();
+    const classes = (grid!.getAttribute('class') ?? '').split(/\s+/);
+    expect(classes).toContain('grid-cols-1');
+    expect(classes).toContain('lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]');
+  });
+});
+
 describe('ExportBuilderDialog — format selection', () => {
   it('offers the three formats with the brief descriptions', () => {
     renderDialog();
