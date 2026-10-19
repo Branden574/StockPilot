@@ -2,9 +2,11 @@ import { ChevronLeft, ChevronRight } from 'lucide-react-native';
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
 
-import { Mono } from '@/components/ui/text';
-import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
-import { useTheme } from '@/lib/use-theme';
+// Relative imports on purpose (as in checkbox.tsx): touch-target.test.ts
+// loads this file in the node test runner, which does not resolve `@/`.
+import { FONT, TYPE_CEILING, capTo } from '../../lib/theme';
+import { useTheme } from '../../lib/use-theme';
+import { Mono } from './text';
 
 /**
  * Returns a windowed page list with ellipses, e.g.:
@@ -48,6 +50,16 @@ function pageNumbers(current: number, total: number): (number | 'ellipsis')[] {
  * Look (the reference pager): page buttons and arrows sit on the card colour
  * with the stronger border, the current page is the ink fill, and the range
  * line is muted ink (information, so ink3, not ink4).
+ *
+ * THE 44pt TARGET (redesign P2.5c). Each page button and arrow is drawn at
+ * 36pt inside a 44 x 44pt frame (the Pressable), the drawn box centred in it,
+ * so every target is 44pt while the buttons look as they did. A frame, not
+ * hitSlop: the old 4-6pt hitSlop never reached past the row. The frames sit
+ * edge to edge (the row has no gap), so the drawn buttons stand 8pt apart
+ * (4pt of frame each side; the gap was 6pt). The row breaks into as many
+ * lines as it did on a 393pt phone; on a 375pt phone a six-page pager (eight
+ * controls, 352pt) now takes two lines where it took one. A line is 44pt
+ * tall instead of 36pt.
  */
 export function Paginator({
   page,
@@ -97,7 +109,8 @@ export function Paginator({
         Nine 52pt buttons on a 353pt screen walked the Next arrow clean off the
         right edge — unreachable, which stranded the user on page 1 of the two
         hottest tabs in the app. Wrapping to a second row keeps every control
-        on screen at any text size.
+        on screen at any text size. No gap: the 44pt frames touch, and their
+        4pt margins round each drawn button are the space between them.
       */}
       <View
         style={{
@@ -105,7 +118,6 @@ export function Paginator({
           flexWrap: 'wrap',
           alignItems: 'center',
           justifyContent: 'center',
-          gap: 6,
         }}
       >
         <PaginatorArrow
@@ -162,36 +174,41 @@ function PageButton({
   return (
     <Pressable
       onPress={onPress}
-      hitSlop={4}
       // VoiceOver: "Page 2, button, selected" for the page on screen.
       accessibilityRole="button"
       accessibilityLabel={`Page ${num}`}
       accessibilityState={{ selected: active }}
-      style={({ pressed }) => ({
-        minWidth: 36,
-        // minHeight pairs with the chrome cap on the number below: the button
-        // grows with its digits rather than clipping them.
-        minHeight: 36,
-        paddingHorizontal: 9,
-        paddingVertical: 6,
-        borderRadius: 8,
-        backgroundColor: active ? c.ink : c.card,
-        borderWidth: active ? 0 : 1,
-        borderColor: c.hair2,
-        alignItems: 'center',
-        justifyContent: 'center',
-        opacity: pressed && !active ? 0.7 : 1,
-      })}
+      style={PAGER_FRAME}
     >
-      <Mono
-        size={13}
-        tracking={-0.012}
-        color={active ? c.paper : c.ink}
-        maxFontSizeMultiplier={capTo(13, TYPE_CEILING.chrome)}
-        style={{ fontFamily: FONT.display }}
-      >
-        {num}
-      </Mono>
+      {({ pressed }) => (
+        <View
+          style={{
+            minWidth: PAGER_BUTTON_SIZE,
+            // minHeight pairs with the chrome cap on the number below: the
+            // button grows with its digits rather than clipping them.
+            minHeight: PAGER_BUTTON_SIZE,
+            paddingHorizontal: 9,
+            paddingVertical: 6,
+            borderRadius: 8,
+            backgroundColor: active ? c.ink : c.card,
+            borderWidth: active ? 0 : 1,
+            borderColor: c.hair2,
+            alignItems: 'center',
+            justifyContent: 'center',
+            opacity: pressed && !active ? 0.7 : 1,
+          }}
+        >
+          <Mono
+            size={13}
+            tracking={-0.012}
+            color={active ? c.paper : c.ink}
+            maxFontSizeMultiplier={capTo(13, TYPE_CEILING.chrome)}
+            style={{ fontFamily: FONT.display }}
+          >
+            {num}
+          </Mono>
+        </View>
+      )}
     </Pressable>
   );
 }
@@ -211,24 +228,46 @@ function PaginatorArrow({
     <Pressable
       onPress={onPress}
       disabled={disabled}
-      hitSlop={6}
       // An icon-only arrow had no words at all for VoiceOver.
       accessibilityRole="button"
       accessibilityLabel={direction === 'prev' ? 'Previous page' : 'Next page'}
       accessibilityState={{ disabled: Boolean(disabled) }}
-      style={({ pressed }) => ({
-        width: 36,
-        height: 36,
-        borderRadius: 8,
-        borderWidth: 1,
-        borderColor: c.hair2,
-        backgroundColor: c.card,
-        alignItems: 'center',
-        justifyContent: 'center',
-        opacity: disabled ? 0.3 : pressed ? 0.7 : 1,
-      })}
+      style={PAGER_FRAME}
     >
-      <Icon size={16} color={c.ink} strokeWidth={1.6} />
+      {({ pressed }) => (
+        <View
+          style={{
+            width: PAGER_BUTTON_SIZE,
+            height: PAGER_BUTTON_SIZE,
+            borderRadius: 8,
+            borderWidth: 1,
+            borderColor: c.hair2,
+            backgroundColor: c.card,
+            alignItems: 'center',
+            justifyContent: 'center',
+            opacity: disabled ? 0.3 : pressed ? 0.7 : 1,
+          }}
+        >
+          <Icon size={16} color={c.ink} strokeWidth={1.6} />
+        </View>
+      )}
     </Pressable>
   );
 }
+
+/** The drawn page button and arrow: 36pt (a page button grows with its
+ *  digits). */
+export const PAGER_BUTTON_SIZE = 36;
+
+/** The least each page button's and arrow's frame measures each way (the
+ *  iOS minimum). */
+export const PAGER_MIN_TARGET = 44;
+
+/** The frame: at least 44 x 44pt, the drawn button centred in it at its own
+ *  size (alignItems centre, so it is never stretched to the frame). */
+const PAGER_FRAME = {
+  minWidth: PAGER_MIN_TARGET,
+  minHeight: PAGER_MIN_TARGET,
+  alignItems: 'center',
+  justifyContent: 'center',
+} as const;
