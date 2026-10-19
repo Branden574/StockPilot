@@ -105,9 +105,15 @@ describe('/p/items/[id]', () => {
     const badge = screen.getByText(long);
     const classes = badge.className.split(/\s+/);
     expect(classes).toEqual(
-      expect.arrayContaining(['whitespace-normal', 'max-w-full', '[overflow-wrap:anywhere]']),
+      expect.arrayContaining([
+        'whitespace-normal',
+        'max-w-full',
+        '[overflow-wrap:anywhere]',
+        'rounded-[11px]',
+      ]),
     );
     expect(classes).not.toContain('whitespace-nowrap');
+    expect(classes).not.toContain('rounded-full');
     // The type label keeps the plain pill.
     expect(screen.getByText('Product').className.split(/\s+/)).toContain('whitespace-nowrap');
   });

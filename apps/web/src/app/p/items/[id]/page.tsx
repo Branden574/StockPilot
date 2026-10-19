@@ -110,14 +110,16 @@ export default async function PublicItemPage({
 
       {/* A category name can run to 120 characters: its pill may wrap inside
           the column (the Badge never wraps by default), so a long one cannot
-          push the public page wider than a phone. The type labels are short. */}
+          push the public page wider than a phone. The type labels are short.
+          An 11 px radius is half the one-line pill's 22 px height, so one line
+          is the same pill, and wrapped lines keep their ends off the curve. */}
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <Badge variant="outline">{typeLabel[item.itemType]}</Badge>
         {item.category ? (
           <Badge
             variant="outline"
             data-slot="public-category"
-            className="max-w-full whitespace-normal text-left [overflow-wrap:anywhere]"
+            className="max-w-full whitespace-normal rounded-[11px] text-left [overflow-wrap:anywhere]"
           >
             {item.category}
           </Badge>
