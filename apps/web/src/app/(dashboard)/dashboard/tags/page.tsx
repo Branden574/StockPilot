@@ -3,6 +3,8 @@ import { redirect } from 'next/navigation';
 
 import { TagsManager } from '@/components/tags/tags-manager';
 import { requireOrgContext } from '@/lib/auth/session';
+import { isNextControlFlowError } from '@/lib/error-reporter';
+import { effectiveNavLabel } from '@/lib/nav-labels';
 import { TagsService } from '@/server/services/tags';
 
 import { can } from '@stockpilot/core';
@@ -21,14 +23,24 @@ export default async function TagsPage() {
   if (!can(ctx, 'items:update')) {
     redirect('/dashboard');
   }
-  const svc = await TagsService.forCurrentUser();
-  const rows = await svc.listWithCounts();
+  // The heading follows a Settings > Navigation rename of this page's sidebar
+  // entry, as the sidebar and the crumb do (PLAN rule 10): a lookup of the
+  // request-cached org row the dashboard layout already read, so nothing new
+  // is read; a failed lookup keeps the page's own word.
+  const [rows, title] = await Promise.all([
+    TagsService.forCurrentUser().then((svc) => svc.listWithCounts()),
+    effectiveNavLabel('/dashboard/tags', 'Tags').catch((e: unknown) => {
+      if (isNextControlFlowError(e)) throw e;
+      return 'Tags';
+    }),
+  ]);
 
   return (
     // The header (h1, subline, New tag) is drawn by TagsManager, which holds
     // the dialog New tag opens.
     <div className={PAGE}>
       <TagsManager
+        title={title}
         initial={rows.map((r) => ({
           id: r.id,
           name: r.name,

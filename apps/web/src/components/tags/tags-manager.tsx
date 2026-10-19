@@ -59,7 +59,15 @@ const DEFAULT_COLOR = '#94a3b8';
 const ROW_ACTIONS =
   'flex shrink-0 items-center gap-2 transition-opacity pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:group-focus-within:opacity-100';
 
-export function TagsManager({ initial }: { initial: TagManagerRow[] }) {
+export function TagsManager({
+  initial,
+  title = 'Tags',
+}: {
+  initial: TagManagerRow[];
+  /** The page's h1: "Tags", or the org's Settings > Navigation rename of the
+   *  sidebar entry, resolved by the page (PLAN rule 10). */
+  title?: string;
+}) {
   const router = useRouter();
   const [editing, setEditing] = React.useState<TagManagerRow | null>(null);
   const [open, setOpen] = React.useState(false);
@@ -92,7 +100,7 @@ export function TagsManager({ initial }: { initial: TagManagerRow[] }) {
   return (
     <>
       <PageHeader
-        title="Tags"
+        title={title}
         subline={
           <span className="block max-w-[640px]">
             Flexible labels you can apply to many items at once. Stack them with categories for

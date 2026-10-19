@@ -140,6 +140,7 @@ function resolveTrackingDisplay(
 export function CategoriesManager({
   initial,
   view = 'active',
+  title = 'Categories',
   canManage = true,
   canManagePublicVisibility = false,
   sportsEnabled = false,
@@ -147,6 +148,9 @@ export function CategoriesManager({
 }: {
   initial: CategoryRow[];
   view?: 'active' | 'archived';
+  /** The page's h1: "Categories", or the org's Settings > Navigation rename
+   *  of the sidebar entry, resolved by the page (PLAN rule 10). */
+  title?: string;
   /**
    * When false, hides the New / Edit / Archive / Restore action buttons
    * so viewers see a read-only list. Server-side actions still throw on
@@ -343,6 +347,7 @@ export function CategoriesManager({
     <>
       <CategoriesHeader
         view={view}
+        title={title}
         actions={
           sportsEnabled && canManageSports && !isArchivedView ? (
             <Button variant="outline" onClick={handleSetupSports} disabled={setupBusy}>

@@ -5,7 +5,9 @@ import { CategoriesGridSkeleton } from '@/components/categories/categories-grid-
 import { CategoriesHeader } from '@/components/categories/categories-header';
 import { CategoriesManager } from '@/components/categories/categories-manager';
 import { requireOrgContext } from '@/lib/auth/session';
+import { isNextControlFlowError } from '@/lib/error-reporter';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { effectiveNavLabel } from '@/lib/nav-labels';
 import { CategoriesService } from '@/server/services/categories';
 
 import { can, type SubcategoryTrackingProfile, type TrackingMode } from '@stockpilot/core';
@@ -22,7 +24,18 @@ interface CategoriesPageProps {
 }
 
 export default async function CategoriesPage({ searchParams }: CategoriesPageProps) {
-  const params = await searchParams;
+  // The heading follows a Settings > Navigation rename of this page's sidebar
+  // entry, as the sidebar and the crumb do (PLAN rule 10). The lookup reads
+  // the request-cached context and org row the dashboard layout already read,
+  // so nothing new is read and the header still paints at once; a failed
+  // lookup keeps the page's own word instead of failing the page.
+  const [params, title] = await Promise.all([
+    searchParams,
+    effectiveNavLabel('/dashboard/categories', 'Categories').catch((e: unknown) => {
+      if (isNextControlFlowError(e)) throw e;
+      return 'Categories';
+    }),
+  ]);
   const isArchivedView = params.view === 'archived';
 
   const view = isArchivedView ? 'archived' : 'active';
@@ -35,12 +48,12 @@ export default async function CategoriesPage({ searchParams }: CategoriesPagePro
       <Suspense
         fallback={
           <>
-            <CategoriesHeader view={view} />
+            <CategoriesHeader view={view} title={title} />
             <CategoriesGridSkeleton />
           </>
         }
       >
-        <CategoriesSection isArchivedView={isArchivedView} />
+        <CategoriesSection isArchivedView={isArchivedView} title={title} />
       </Suspense>
     </div>
   );
@@ -51,7 +64,13 @@ export default async function CategoriesPage({ searchParams }: CategoriesPagePro
  * the page heading and description paint immediately (the Suspense fallback
  * draws them) and only the cards stream. Same component, same props as before.
  */
-async function CategoriesSection({ isArchivedView }: { isArchivedView: boolean }) {
+async function CategoriesSection({
+  isArchivedView,
+  title,
+}: {
+  isArchivedView: boolean;
+  title: string;
+}) {
   const [ctx, svc] = await Promise.all([
     requireOrgContext(),
     CategoriesService.forCurrentUser(),
@@ -72,6 +91,7 @@ async function CategoriesSection({ isArchivedView }: { isArchivedView: boolean }
   return (
     <CategoriesManager
       view={isArchivedView ? 'archived' : 'active'}
+      title={title}
       canManage={canManage}
       canManagePublicVisibility={canManagePublicVisibility}
       sportsEnabled={sportsEnabled}

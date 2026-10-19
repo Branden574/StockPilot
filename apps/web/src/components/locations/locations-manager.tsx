@@ -102,10 +102,14 @@ const TYPES = [
 export function LocationsManager({
   initial,
   view = 'active',
+  title = 'Locations',
   canManage = true,
 }: {
   initial: LocationRow[];
   view?: 'active' | 'archived';
+  /** The page's h1: "Locations", or the org's Settings > Navigation rename of
+   *  the sidebar entry, resolved by the page (PLAN rule 10). */
+  title?: string;
   /** Hides New / Edit / Archive / Restore buttons when false. */
   canManage?: boolean;
 }) {
@@ -188,7 +192,7 @@ export function LocationsManager({
   return (
     <>
       <PageHeader
-        title="Locations"
+        title={title}
         subline={
           isArchivedView
             ? 'Locations you archived. Restore one to bring it back into pick lists.'

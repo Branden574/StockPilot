@@ -11,13 +11,20 @@ import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
  * CategoriesManager draws the same header with its buttons once the list is
  * in hand. The actions row wraps, so at 390 px both buttons stay inside the
  * page (P2.6c hand-off: the old row overflowed by 42 to 73 px).
+ *
+ * The title is the page's own word unless the org renamed the Categories
+ * sidebar entry in Settings > Navigation: the page resolves that through
+ * effectiveNavLabel and passes it here (PLAN rule 10).
  */
 export function CategoriesHeader({
   view,
+  title = 'Categories',
   actions,
   primaryAction,
 }: {
   view: 'active' | 'archived';
+  /** The h1: "Categories", or the org's rename of its sidebar entry. */
+  title?: string;
   /** Secondary actions after the toggle ("Set up Sports"). */
   actions?: React.ReactNode;
   /** "New category" (accent). */
@@ -25,7 +32,7 @@ export function CategoriesHeader({
 }) {
   return (
     <PageHeader
-      title="Categories"
+      title={title}
       subline={
         view === 'archived'
           ? 'Categories you archived. Restore one to bring it back into filters and item forms.'

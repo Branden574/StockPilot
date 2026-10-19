@@ -3,7 +3,9 @@ import type { Metadata } from 'next';
 import { LocationsManager } from '@/components/locations/locations-manager';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getWarehousesForRequest } from '@/lib/dashboard/request-cache';
+import { isNextControlFlowError } from '@/lib/error-reporter';
 import { scopeLocationsToWarehouse } from '@/lib/locations/scope';
+import { effectiveNavLabel } from '@/lib/nav-labels';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { LocationsService } from '@/server/services/locations';
 
@@ -23,10 +25,18 @@ interface LocationsPageProps {
 export default async function LocationsPage({ searchParams }: LocationsPageProps) {
   const params = await searchParams;
   const isArchivedView = params.view === 'archived';
-  const [ctx, svc, warehouseFilter] = await Promise.all([
+  // The heading follows a Settings > Navigation rename of this page's sidebar
+  // entry, as the sidebar and the crumb do (PLAN rule 10): a lookup of the
+  // request-cached org row the dashboard layout already read, so nothing new
+  // is read; a failed lookup keeps the page's own word.
+  const [ctx, svc, warehouseFilter, title] = await Promise.all([
     requireOrgContext(),
     LocationsService.forCurrentUser(),
     getActiveWarehouseFilter(),
+    effectiveNavLabel('/dashboard/locations', 'Locations').catch((e: unknown) => {
+      if (isNextControlFlowError(e)) throw e;
+      return 'Locations';
+    }),
   ]);
   const canManage = can(ctx, 'locations:manage');
   const [rows, warehouses] = await Promise.all([
@@ -47,6 +57,7 @@ export default async function LocationsPage({ searchParams }: LocationsPageProps
     <div className={PAGE}>
       <LocationsManager
         view={isArchivedView ? 'archived' : 'active'}
+        title={title}
         canManage={canManage}
         initial={scoped.map((r) => ({
           id: r.id as string,
