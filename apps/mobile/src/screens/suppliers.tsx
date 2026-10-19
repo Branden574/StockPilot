@@ -153,56 +153,57 @@ export default function SuppliersScreen() {
  * other than the number shown.
  *
  * The mailto: link for a supplier's email, or null when the stored text is not
- * one plain address (the card then shows the text, not a link). Plain: the
- * text without its outer spaces is one '@' between a name and a dotted domain,
- * with none of the characters that make a mailto: link do more than address
- * one person: '?' and '&' (a query: more recipients, a subject, a body), ','
- * and ';' (another address), '#' and '%' (a fragment, an escape), quotes,
- * brackets, slashes, colons, any space, and any control or invisible
- * formatting character. The name and the domain go out percent-encoded
+ * one plain address (the card then shows the text, not a link). Plain is an
+ * allow-list, so anything not named here fails closed: the text without its
+ * outer spaces is one '@' between a name and a domain, both ASCII only. The
+ * name is dot-separated runs of letters, digits and ! $ ' * + = ^ _ ` { | } ~ -
+ * (never '?', '&', ',', ';', '#', '%', '/', quotes, brackets, colons or
+ * spaces, which make a mailto: link do more than address one person). The
+ * domain is two or more dot-separated labels of letters, digits and inner
+ * hyphens. So no control, invisible, look-alike or other non-ASCII character
+ * can reach the link. The name and the domain go out percent-encoded
  * (encodeURIComponent) on either side of a literal '@': RFC 6068 keeps the
  * separating '@' literal (addr-spec = local-part "@" domain), and an encoded
  * %40 would be a character inside the name, leaving no domain.
  */
 function supplierMailtoUrl(email: string | null): string | null {
   const address = (email ?? '').trim();
+  if (address.length > 254) return null;
   const parts = address.split('@');
   if (parts.length !== 2) return null;
   const [name = '', domain = ''] = parts;
-  const plain = /^[^\s?&,;#%"<>()[\]\\/:@]+$/;
-  if (!plain.test(name) || !plain.test(domain)) return null;
-  // A dotted domain: "b.com", never "b", ".com", "b." or "b..com".
-  if (!/^[^.]+(\.[^.]+)+$/.test(domain)) return null;
-  for (const ch of address) {
-    const code = ch.codePointAt(0) ?? 0;
-    // Control characters (C0, DEL, C1) and the invisible formatting ones:
-    // the soft hyphen, zero-width marks, direction overrides, word joiners
-    // and the byte-order mark.
-    if (
-      code <= 0x1f ||
-      (code >= 0x7f && code <= 0x9f) ||
-      code === 0xad ||
-      (code >= 0x200b && code <= 0x200f) ||
-      (code >= 0x202a && code <= 0x202e) ||
-      (code >= 0x2060 && code <= 0x206f) ||
-      code === 0xfeff
-    ) {
-      return null;
-    }
-  }
+  const atom = "[A-Za-z0-9!$'*+=^_`{|}~-]+";
+  const label = '[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?';
+  if (!new RegExp(`^${atom}(?:\\.${atom})*$`).test(name) || name.length > 64) return null;
+  if (!new RegExp(`^${label}(?:\\.${label})+$`).test(domain)) return null;
   return `mailto:${encodeURIComponent(name)}@${encodeURIComponent(domain)}`;
 }
 
 /**
- * The tel: link for a supplier's phone, or null when no digit is in it (the
- * card then shows the text, not a link). Only the digits and '+' reach the
- * dialler: letters, spaces, brackets, dashes, '*', '#', ',' and ';' are left
- * out, so the stored text can never dial a service code, add a pause and more
- * digits, or carry a parameter the card does not show.
+ * The tel: link for a supplier's phone, or null when the stored text is not
+ * one plain phone number (the card then shows the text, not a link). Plain is
+ * an allow-list that fails closed: the text without its outer spaces holds
+ * only ASCII digits, spaces, dots, dashes and round brackets, with at most one
+ * '+' and only at the start, and its digits make one number. With a '+' that
+ * is 8 to 15 digits (E.164), and exactly 11 for +1; without one it is a North
+ * American number of 7, 10 or 11 digits (11 only after a leading 1). So an
+ * extension, a second number ("555-1234 or 555-9999", or two numbers side by
+ * side), letters, a service code ('*', '#'), a pause (',', ';') or a parameter
+ * never becomes a link that dials something other than the one number shown.
+ * Only the digits and the leading '+' reach the dialler.
  */
 function supplierTelUrl(phone: string | null): string | null {
-  const dial = (phone ?? '').replace(/[^0-9+]/g, '');
-  return /[0-9]/.test(dial) ? `tel:${dial}` : null;
+  const text = (phone ?? '').trim();
+  if (!/^\+?[0-9 .()-]+$/.test(text)) return null;
+  const digits = text.replace(/[^0-9]/g, '');
+  if (text.startsWith('+')) {
+    if (digits.length < 8 || digits.length > 15) return null;
+    if (digits.startsWith('1') && digits.length !== 11) return null;
+    return `tel:+${digits}`;
+  }
+  const northAmerican =
+    digits.length === 7 || digits.length === 10 || (digits.length === 11 && digits.startsWith('1'));
+  return northAmerican ? `tel:${digits}` : null;
 }
 
 /**

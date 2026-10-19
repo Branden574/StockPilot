@@ -609,9 +609,10 @@ describe('the rows and controls VoiceOver and a finger reach', () => {
  * `tel:${supplier.phone}` from the stored text, so a link could open a target
  * the card did not show: an email "a@b.com?bcc=x@y.z" opened a message copied
  * to x@y.z, and a phone with letters or symbols dialled what the dialler made
- * of them. A link is now made only from a plain address (percent-encoded) or
- * from the number's digits and '+', and otherwise the same words are shown as
- * plain text. Every case below fails on the old screen, which had no such
+ * of them. A link is now made only from a plain ASCII address
+ * (percent-encoded) or from one plain phone number's digits and leading '+',
+ * and otherwise the same words are shown as plain text. Every case below
+ * fails on the old screen, which had no such
  * rule (its helpers do not exist and its links were built from the raw text).
  */
 describe('security: a supplier link opens only what the card shows', () => {
@@ -669,6 +670,36 @@ describe('security: a supplier link opens only what the card shows', () => {
     }
   });
 
+  // Mutation caught: a deny-list again, which lets any character it does not
+  // name through, among them look-alike letters from other scripts.
+  it('an address with any character outside the ASCII allow-list is not a link', () => {
+    for (const email of [
+      'аcme@acme.com',
+      'orders@аcme.com',
+      'über@acme.com',
+      'orders@müller.de',
+      'orders@acme.сom',
+      'orders＠acme.com',
+      'orders@acme。com',
+      'or‍ders@acme.com',
+      '.orders@acme.com',
+      'orders.@acme.com',
+      'or..ders@acme.com',
+      'orders@-acme.com',
+      'orders@acme-.com',
+      'orders@acme.com.',
+      'orders@acme_co.com',
+      `${'a'.repeat(65)}@acme.com`,
+      `orders@${'a'.repeat(64)}.com`,
+      `${'a'.repeat(60)}@${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(63)}.${'e'.repeat(63)}.com`,
+    ]) {
+      expect(mailto(email), JSON.stringify(email)).toBeNull();
+    }
+    // The allow-list still takes the plain addresses suppliers use.
+    expect(mailto('Orders-2026@Acme-Supply.co')).toBe('mailto:Orders-2026@Acme-Supply.co');
+    expect(mailto('ap_desk@acme.example.com')).toBe('mailto:ap_desk@acme.example.com');
+  });
+
   it('text that is not one address with a dotted domain is not a link', () => {
     for (const email of [
       '',
@@ -688,22 +719,52 @@ describe('security: a supplier link opens only what the card shows', () => {
   });
 
   // Mutation caught: the old `tel:${supplier.phone}`, letters and all.
-  it('a phone becomes a tel: link of its digits and + only', () => {
+  it('a plain phone number becomes a tel: link of its digits and leading +', () => {
     expect(tel('+1 (555) 010-0100')).toBe('tel:+15550100100');
     expect(tel('555.010.0100')).toBe('tel:5550100100');
-    expect(tel('555-0100 ext. 12')).toBe('tel:555010012');
-    expect(tel('Call 555 0100 ask for Sam')).toBe('tel:5550100');
-    expect(tel('555-0100;phone-context=example.com')).toBe('tel:5550100');
-    expect(tel('*67 555 0100')).toBe('tel:675550100');
+    expect(tel('(555) 010-0100')).toBe('tel:5550100100');
+    expect(tel('  555-010-0100  ')).toBe('tel:5550100100');
+    expect(tel('555-0100')).toBe('tel:5550100');
+    expect(tel('1-800-555-0100')).toBe('tel:18005550100');
+    expect(tel('+44 20 7946 0958')).toBe('tel:+442079460958');
+    expect(tel('+49 30 1234567')).toBe('tel:+49301234567');
+  });
+
+  // Mutation caught: the digits of any text dialled as one number, so
+  // '555-1234 or 555-9999' dialled 55512345559999, a number the card never
+  // shows. Anything that is not one plain number stays plain text.
+  it('text that is not one plain phone number is not a link', () => {
     for (const phone of [
-      '+1 (555) 010-0100',
       '555-0100 ext. 12',
+      '555-0100 x12',
+      '555-0100#12',
+      'Call 555 0100 ask for Sam',
+      '555-0100;phone-context=example.com',
+      '*67 555 0100',
       '1-800-FLOWERS',
       '*#06#',
       '555,,1234',
       '555-0100?x=1',
+      '555-0100/555-0101',
+      '555-1234 or 555-9999',
+      '555-1234 555-9999',
+      '555-010-0100 555-010-0101',
+      '+1 555 010 0100 555 0101',
+      '+1 555 010 010',
+      '++1 555 010 0100',
+      '1+555 010 0100',
+      '555-010-0100+',
+      '12345',
+      '55501001',
+      '25550100100',
+      '+1234567',
+      '+1234567890123456',
+      '５５５-０１００',
+      '٥٥٥-٠١٠٠',
+      '555‑010‑0100',
+      '555-0100​',
     ]) {
-      expect(tel(phone)!, phone).toMatch(/^tel:[0-9+]+$/);
+      expect(tel(phone), JSON.stringify(phone)).toBeNull();
     }
   });
 
