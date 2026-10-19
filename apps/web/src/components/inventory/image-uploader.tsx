@@ -20,6 +20,7 @@ const ImageLightbox = dynamic(
     })),
   { ssr: false },
 );
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { compressImageVariants } from '@/lib/image-variants';
@@ -47,14 +48,7 @@ const MAX_BYTES = 10 * 1024 * 1024;
 // unless the user has flipped Camera > Format to "Most Compatible")
 // can upload directly. compressImageVariants transcodes via
 // heic2any before the normal canvas pipeline.
-const ACCEPT = [
-  'image/png',
-  'image/jpeg',
-  'image/webp',
-  'image/avif',
-  'image/heic',
-  'image/heif',
-];
+const ACCEPT = ['image/png', 'image/jpeg', 'image/webp', 'image/avif', 'image/heic', 'image/heif'];
 
 export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
   const router = useRouter();
@@ -170,9 +164,7 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
           // reached. A failed upload must never let the batch read 100%.
           batch.settle(progressKey, false);
           publishProgress();
-          toast.error(
-            `Couldn't upload "${original.name}". Check your network and try again.`,
-          );
+          toast.error(`Couldn't upload "${original.name}". Check your network and try again.`);
           return;
         }
         batch.settle(progressKey, true);
@@ -248,12 +240,14 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
           {images.map((img, i) => (
             <div
               key={img.id}
-              className="group relative aspect-square overflow-hidden rounded-lg border bg-muted"
+              // The photo tile: white in both themes (photos shot on white
+              // read the same either way, DESIGN-SPEC 6.14), hairline, radius 8.
+              className="border-border group relative aspect-square overflow-hidden rounded-lg border bg-white"
             >
               <button
                 type="button"
                 onClick={() => setLightboxIndex(i)}
-                className="absolute inset-0 cursor-zoom-in focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                className="focus-visible:ring-ring absolute inset-0 cursor-zoom-in focus:outline-none focus-visible:ring-2 focus-visible:ring-inset"
                 aria-label="Open image full screen"
               >
                 <Image
@@ -276,15 +270,17 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
                   e.stopPropagation();
                   setDeleteTarget(img);
                 }}
-                className="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-md bg-black/65 text-white shadow-sm transition-colors hover:bg-red-500/85 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+                // A dark chip over the photo, legible on any picture in both
+                // themes; it turns to the danger tone under the pointer.
+                className="hover:bg-destructive hover:text-destructive-foreground absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-md bg-black/65 text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
                 aria-label="Remove image"
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </button>
               {img.isPrimary && (
-                <span className="pointer-events-none absolute left-1.5 top-1.5 rounded bg-primary px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-primary-foreground">
+                <Badge variant="default" className="pointer-events-none absolute left-1.5 top-1.5">
                   Primary
-                </span>
+                </Badge>
               )}
             </div>
           ))}
@@ -314,23 +310,26 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
           if (e.dataTransfer.files) uploadFiles(e.dataTransfer.files);
         }}
         className={cn(
-          'flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-border bg-muted/20 px-6 py-8 transition-colors hover:border-primary/40 hover:bg-muted/40',
-          dragOver && 'border-primary bg-primary/5',
+          // The drop zone: a quiet dashed box on the stronger hairline (the
+          // reference's "+ Save view" recipe), the neutral hover fill, and the
+          // accent edge on the accent wash while a file is dragged over it.
+          'bg-card hover:bg-muted flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-[var(--ed-line-strong)] px-6 py-7 text-center transition-colors',
+          dragOver && 'border-accent bg-success-wash hover:bg-success-wash',
         )}
       >
         {uploading ? (
-          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          <Loader2 className="text-muted-foreground h-5 w-5 animate-spin" />
         ) : (
-          <ImagePlus className="h-5 w-5 text-muted-foreground" />
+          <ImagePlus className="text-muted-foreground h-5 w-5" />
         )}
-        <p className="text-sm font-medium">
+        <p className="text-[13.5px] font-medium">
           {uploading
             ? uploadPercent === null
               ? 'Preparing photos…'
               : `Uploading… ${uploadPercent}%`
             : 'Drop images, or click to browse'}
         </p>
-        <p className="text-xs text-muted-foreground">
+        <p className="text-muted-foreground text-[12px]">
           PNG, JPG, WebP, AVIF · up to 10 MB each · optimized in browser before upload
         </p>
         <input
@@ -345,7 +344,13 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
             e.target.value = '';
           }}
         />
-        <Button type="button" variant="outline" size="sm" onClick={() => inputRef.current?.click()} disabled={uploading}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => inputRef.current?.click()}
+          disabled={uploading}
+        >
           <Upload className="h-3.5 w-3.5" /> Choose files
         </Button>
       </label>

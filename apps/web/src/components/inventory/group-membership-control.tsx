@@ -37,7 +37,7 @@ export function GroupMembershipControl({
   const ids = React.useMemo(() => [itemId], [itemId]);
   if (!groupName && !open) return null;
   return (
-    <span className="inline-flex flex-wrap items-center gap-2 text-xs">
+    <span className="inline-flex flex-wrap items-center gap-2 text-[12.5px] leading-[18px]">
       {groupName ? (
         <span className="text-muted-foreground">{GROUP_COPY.itemPageInGroup(groupName)}</span>
       ) : null}

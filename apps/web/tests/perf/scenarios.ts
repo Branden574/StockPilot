@@ -156,8 +156,11 @@ const itemTab = (tab: 'movements' | 'activity'): Marker => ({
   search: `(^|[?&])tab=${tab}(&|$)`,
   selector: `#item-detail-panel-${tab}`,
 });
-// The Overview panel's on-hand number (item-detail.tsx, DetailRow "On hand").
-const ON_HAND = '#item-detail-panel-overview span.text-base.font-semibold.tabular-nums';
+// The Overview panel's on-hand number (item-detail.tsx): the redesign's
+// figure (data-testid item-on-hand), or the older DetailRow "On hand" span, so
+// the scenario measures the BEFORE and AFTER builds alike.
+const ON_HAND =
+  '#item-detail-panel-overview [data-testid="item-on-hand"], #item-detail-panel-overview span.text-base.font-semibold.tabular-nums';
 const OPEN_FIRST_ITEM: ClickStep = {
   selector: 'main table tbody tr a[href]',
   hrefPattern: INVENTORY_ROWS.hrefPattern,

@@ -48,3 +48,40 @@ describe('ItemDetailTabs', () => {
     expect(overview).toHaveAttribute('href', '/dashboard/inventory/abc');
   });
 });
+
+describe('ItemDetailTabs keeps the sticky header height for the #physical-count anchor', () => {
+  it('writes the header height to --item-detail-header-h on the page, follows resizes, and clears it on unmount', () => {
+    let resize: (() => void) | null = null;
+    const original = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(cb: () => void) {
+        resize = cb;
+      }
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+    } as unknown as typeof ResizeObserver;
+    let height = 271.4;
+    try {
+      const { container, unmount } = render(
+        <div data-testid="page">
+          <div data-item-detail-header="">
+            <ItemDetailTabs activeTab="overview" />
+          </div>
+        </div>,
+      );
+      const page = screen.getByTestId('page');
+      const header = container.querySelector('[data-item-detail-header]') as HTMLElement;
+      header.getBoundingClientRect = () => ({ height }) as DOMRect;
+      resize!();
+      expect(page.style.getPropertyValue('--item-detail-header-h')).toBe('272px');
+      height = 407;
+      resize!();
+      expect(page.style.getPropertyValue('--item-detail-header-h')).toBe('407px');
+      unmount();
+      expect(page.style.getPropertyValue('--item-detail-header-h')).toBe('');
+    } finally {
+      globalThis.ResizeObserver = original;
+    }
+  });
+});

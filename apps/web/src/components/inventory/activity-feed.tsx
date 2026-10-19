@@ -20,6 +20,8 @@ import { reasonWithoutRefLabel } from '@stockpilot/core';
 
 import { MetadataDiff } from '@/components/audit/metadata-diff';
 import { EditableMovementNote } from '@/components/movements/editable-movement-note';
+import { StatePanel } from '@/components/patterns/state-panel';
+import { Timeline, TimelineEntry, type TimelineTone } from '@/components/patterns/timeline';
 import { LocalDateTime } from '@/components/ui/local-datetime';
 import { referenceHref, referenceTypeLabel } from '@/lib/activity-references';
 import { formatAuditEvent } from '@/lib/audit/format';
@@ -48,6 +50,16 @@ interface VisualSpec {
   label: string;
   tone: 'pos' | 'neg' | 'neutral' | 'warn';
 }
+
+/** Each kind of event on the shared history tones: received stock and created
+ *  or restored records in the accent, removals and deletions in the danger
+ *  tone, archiving in the caution tone, the rest neutral. */
+const TONE: Record<VisualSpec['tone'], TimelineTone> = {
+  pos: 'accent',
+  neg: 'destructive',
+  warn: 'warning',
+  neutral: 'neutral',
+};
 
 function specFor(e: ActivityEvent): VisualSpec {
   if (e.kind === 'movement') {
@@ -110,17 +122,20 @@ function specFor(e: ActivityEvent): VisualSpec {
 export function ActivityFeed({ events, locationNames, canEditNotes = false }: ActivityFeedProps) {
   if (events.length === 0) {
     return (
-      <div className="text-muted-foreground py-10 text-center text-sm">
-        No activity yet. Adjust stock, edit fields, or add an image to start the timeline.
-      </div>
+      <StatePanel
+        kind="empty"
+        surface="plain"
+        icon={null}
+        headingLevel={null}
+        title="No activity yet. Adjust stock, edit fields, or add an image to start the timeline."
+      />
     );
   }
 
   return (
-    <ol className="relative space-y-0">
-      {events.map((e, i) => {
+    <Timeline>
+      {events.map((e) => {
         const spec = specFor(e);
-        const isLast = i === events.length - 1;
         // Transfers are net-zero on hand (delta is ALWAYS 0 — the ledger
         // must sum to quantity_on_hand), so the ±delta slot is meaningless
         // for them. Show the physical qty moved instead (moved_quantity,
@@ -132,9 +147,7 @@ export function ActivityFeed({ events, locationNames, canEditNotes = false }: Ac
         // rather than requiring both (which used to hide the route entirely
         // for every non-transfer movement type).
         const fromName =
-          e.kind === 'movement' && e.fromLocationId
-            ? locationNames?.[e.fromLocationId]
-            : undefined;
+          e.kind === 'movement' && e.fromLocationId ? locationNames?.[e.fromLocationId] : undefined;
         const toName =
           e.kind === 'movement' && e.toLocationId ? locationNames?.[e.toLocationId] : undefined;
         const route =
@@ -164,48 +177,31 @@ export function ActivityFeed({ events, locationNames, canEditNotes = false }: Ac
         // The chip is the linked one, so the reason gives it up.
         const reasonText = reasonWithoutRefLabel(e.reason, referenceDisplayLabel);
         return (
-          <li key={e.id} className="relative flex gap-3 pl-2 pr-1">
-            {!isLast && (
-              <span
-                aria-hidden
-                className="bg-border absolute left-[19px] top-9 h-[calc(100%-1.25rem)] w-px"
-              />
-            )}
-            <div
-              className={cn(
-                'relative z-10 mt-1 grid h-7 w-7 shrink-0 place-items-center rounded-full border',
-                spec.tone === 'pos' && 'border-success/30 bg-success/10 text-success',
-                spec.tone === 'neg' && 'border-destructive/30 bg-destructive/10 text-destructive',
-                spec.tone === 'warn' && 'border-warning/30 bg-warning/10 text-warning',
-                spec.tone === 'neutral' && 'border-border bg-muted text-foreground',
-              )}
-            >
-              <spec.Icon className="h-3.5 w-3.5" strokeWidth={1.75} />
-            </div>
-
-            <div className="flex-1 border-b border-border/60 pb-3 pt-1.5 last:border-b-0">
-              <div className="flex flex-wrap items-baseline gap-x-2">
-                <span className="text-sm font-medium">{spec.label}</span>
-                {isTransfer ? (
-                  e.movedQuantity !== null && (
-                    <span className="font-mono text-xs tabular-nums">
-                      {formatNumber(e.movedQuantity)}
-                    </span>
-                  )
-                ) : (
-                  e.delta !== null && (
-                    <span
-                      className={cn(
-                        'font-mono text-xs tabular-nums',
-                        e.delta > 0 && 'text-success',
-                        e.delta < 0 && 'text-destructive',
-                      )}
-                    >
-                      {e.delta > 0 ? '+' : ''}
-                      {formatNumber(e.delta)}
-                    </span>
-                  )
-                )}
+          <TimelineEntry
+            key={e.id}
+            tone={TONE[spec.tone]}
+            icon={<spec.Icon strokeWidth={1.75} />}
+            title={
+              <span className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                <span className="font-medium">{spec.label}</span>
+                {isTransfer
+                  ? e.movedQuantity !== null && (
+                      <span className="font-mono text-[13px] tabular-nums">
+                        {formatNumber(e.movedQuantity)}
+                      </span>
+                    )
+                  : e.delta !== null && (
+                      <span
+                        className={cn(
+                          'font-mono text-[13px] tabular-nums',
+                          e.delta > 0 && 'text-accent',
+                          e.delta < 0 && 'text-destructive',
+                        )}
+                      >
+                        {e.delta > 0 ? '+' : ''}
+                        {formatNumber(e.delta)}
+                      </span>
+                    )}
                 {/* ═══ WHERE IT WENT, NEXT TO HOW MUCH — owner report 2026-08-19 ═══
                     "Stock transferred 12 · 46 → 46 on hand" reads like a bug.
                     It is not: a transfer relocates stock, so on-hand is
@@ -225,22 +221,24 @@ export function ActivityFeed({ events, locationNames, canEditNotes = false }: Ac
                     the overhaul (item-history-sheet.tsx). This is web catching
                     up. Order is deliberate: what happened, how much, WHERE,
                     then what you now own. */}
-                {route && (
-                  <span className="text-muted-foreground text-[11px]">{route}</span>
-                )}
-                {e.kind === 'movement' && e.previousQuantity !== null && e.quantityAfter !== null ? (
-                  <span className="text-muted-foreground text-[11px] tabular-nums">
+                {route && <span className="text-muted-foreground text-[12px]">{route}</span>}
+                {e.kind === 'movement' &&
+                e.previousQuantity !== null &&
+                e.quantityAfter !== null ? (
+                  <span className="text-muted-foreground text-[12px] tabular-nums">
                     {formatNumber(e.previousQuantity)} → {formatNumber(e.quantityAfter)} on hand
                   </span>
                 ) : (
                   e.quantityAfter !== null && (
-                    <span className="text-muted-foreground text-[11px]">
+                    <span className="text-muted-foreground text-[12px]">
                       → {formatNumber(e.quantityAfter)} on hand
                     </span>
                   )
                 )}
-              </div>
-              <div className="text-muted-foreground mt-0.5 text-xs">
+              </span>
+            }
+            meta={
+              <>
                 <span>{e.actor}</span>
                 {/* Ported from the (now-removed) item-detail AuditTimeline:
                     show the actor's email alongside their name, but only
@@ -248,9 +246,11 @@ export function ActivityFeed({ events, locationNames, canEditNotes = false }: Ac
                     the email — e.g. a profile with no full_name set — so we
                     never render "jane@x.com (jane@x.com)"). */}
                 {e.actorEmail && e.actorEmail !== e.actor && (
-                  <span className="ml-1 text-[11px]">({e.actorEmail})</span>
+                  <span className="ml-1">({e.actorEmail})</span>
                 )}
-                <span className="mx-1.5">·</span>
+                <span aria-hidden className="mx-1.5">
+                  ·
+                </span>
                 {/* Relative for scanability + exact viewer-local date/time
                     always visible (owner ask 2026-07-15: every movement must
                     carry its accurate date+time, not just "2 months ago"). */}
@@ -260,11 +260,13 @@ export function ActivityFeed({ events, locationNames, canEditNotes = false }: Ac
                 <LocalDateTime iso={e.createdAt} prefix=" · " />
                 {referenceDisplayLabel && (
                   <>
-                    <span className="mx-1.5">·</span>
+                    <span aria-hidden className="mx-1.5">
+                      ·
+                    </span>
                     {referenceLink ? (
                       <Link
                         href={referenceLink}
-                        className="underline underline-offset-2 hover:text-foreground"
+                        className="hover:text-foreground underline underline-offset-2"
                       >
                         {referenceDisplayLabel}
                       </Link>
@@ -275,13 +277,17 @@ export function ActivityFeed({ events, locationNames, canEditNotes = false }: Ac
                 )}
                 {reasonText && (
                   <>
-                    <span className="mx-1.5">·</span>
+                    <span aria-hidden className="mx-1.5">
+                      ·
+                    </span>
                     <span className="italic">{reasonText}</span>
                   </>
                 )}
                 {e.kind === 'movement' && canEditNotes && e.noteEditable ? (
                   <>
-                    <span className="mx-1.5">·</span>
+                    <span aria-hidden className="mx-1.5">
+                      ·
+                    </span>
                     {/* Small client island — the ONLY editable surface on a
                         movement row. `e.id` is `m:<uuid>`; the RPC needs the
                         raw uuid. Audit rows AND system-managed 'receipt_line'
@@ -297,20 +303,23 @@ export function ActivityFeed({ events, locationNames, canEditNotes = false }: Ac
                 ) : (
                   e.notes && (
                     <>
-                      <span className="mx-1.5">·</span>
+                      <span aria-hidden className="mx-1.5">
+                        ·
+                      </span>
                       <span className="italic">&ldquo;{e.notes}&rdquo;</span>
                     </>
                   )
                 )}
-              </div>
-              {/* Before/after diff drawer + changed_keys chip — audit rows
-                  only (movements carry no such metadata). Shared with
-                  AuditTimeline and the global audit log page. */}
-              {e.kind === 'audit' && <MetadataDiff metadata={e.metadata} />}
-            </div>
-          </li>
+              </>
+            }
+          >
+            {/* Before/after diff drawer + changed_keys chip — audit rows
+                only (movements carry no such metadata). Shared with
+                AuditTimeline and the global audit log page. */}
+            {e.kind === 'audit' ? <MetadataDiff metadata={e.metadata} /> : null}
+          </TimelineEntry>
         );
       })}
-    </ol>
+    </Timeline>
   );
 }

@@ -33,7 +33,7 @@ export function CrateSwatch({ color, className }: { color: string | null; classN
     <span
       aria-hidden
       className={cn(
-        'inline-block size-3 shrink-0 rounded-full border border-border',
+        'border-border inline-block size-3 shrink-0 rounded-full border',
         !known && 'bg-muted',
         className,
       )}
@@ -105,14 +105,14 @@ export function CrateColorSelect({
 export function CurrentStorageSummary({ storage }: { storage: BookStorageInfo }) {
   const nothing = !storage.rackLabel && !storage.crateLabel && !storage.crateColor;
   return (
-    <div className="rounded-md border bg-muted/40 px-3 py-2">
-      <p className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
+    <div className="bg-sunk border-border rounded-md border px-3 py-2">
+      <p className="text-muted-foreground text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em]">
         Current storage
       </p>
       {nothing ? (
-        <p className="mt-1 text-sm">Not assigned</p>
+        <p className="mt-1 text-[13.5px]">Not assigned</p>
       ) : (
-        <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+        <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-[13.5px]">
           {storage.rackLabel && (
             <span>
               <span className="text-muted-foreground">Rack </span>
@@ -149,7 +149,7 @@ export function DestinationCrateNote({
 }) {
   if (!crateColor && !crateNumber) return null;
   return (
-    <p className="text-muted-foreground flex flex-wrap items-center gap-1.5 text-xs">
+    <p className="text-muted-foreground flex flex-wrap items-center gap-1.5 text-[12px]">
       <span>This crate is</span>
       <CrateColorTag color={crateColor} />
       {crateNumber && <span className="text-foreground font-medium">{crateNumber}</span>}
@@ -197,12 +197,12 @@ export function BookDestinationFields({
   const set = (key: keyof DestinationFields) => (value: string) =>
     onChange({ ...fields, [key]: value });
   return (
-    <div className="space-y-3 rounded-md border p-3">
+    <div className="border-border space-y-3 rounded-md border p-3">
       <div>
-        <p className="text-sm font-medium">Place into</p>
-        <p className="text-muted-foreground text-xs">
-          The rack and, if it sits in one, the crate on that rack. Leave the crate blank to place
-          on the bare rack — the book’s crate label is then cleared, and you will be asked first.
+        <p className="text-[13px] font-medium">Place into</p>
+        <p className="text-muted-foreground text-[12px]">
+          The rack and, if it sits in one, the crate on that rack. Leave the crate blank to place on
+          the bare rack — the book’s crate label is then cleared, and you will be asked first.
         </p>
       </div>
       <div className="grid grid-cols-2 gap-3">
@@ -249,17 +249,16 @@ export function BookDestinationFields({
         </div>
       </div>
       {unknownCrateColor && (
-        <p className="text-muted-foreground text-xs">
-          This book’s recorded crate color, “{unknownCrateColor}”, is not one of the crate
-          colors, so it could not be filled in. Pick the nearest one, or leave it blank to record
-          no color.
+        <p className="text-muted-foreground text-[12px]">
+          This book’s recorded crate color, “{unknownCrateColor}”, is not one of the crate colors,
+          so it could not be filled in. Pick the nearest one, or leave it blank to record no color.
         </p>
       )}
       {/* The planner's refusal, said where the fields are. Without it a
           half-filled form would just have a dead Place button and no
           explanation — and the version of this dialog that had neither offered
           to create a crate it could not name. */}
-      {problem && <p className="text-destructive text-xs">{problem}</p>}
+      {problem && <p className="text-destructive text-[12px]">{problem}</p>}
     </div>
   );
 }
@@ -284,4 +283,3 @@ export function CrateNumberInput({
     />
   );
 }
-

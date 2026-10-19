@@ -12,7 +12,7 @@ import {
 } from '@stockpilot/core';
 
 import { exceptionTime } from '@/components/exceptions/occurrence-display';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { DetailSection } from '@/components/patterns/detail-section';
 import { Skeleton } from '@/components/ui/skeleton';
 import { isNextControlFlowError, reportError } from '@/lib/error-reporter';
 import { canOpenCountPage } from '@/lib/verification/count-page-access';
@@ -90,16 +90,29 @@ export async function ItemVerificationCard({
  *  so the link lands on the card's place while the card streams in. */
 export const PHYSICAL_COUNT_ANCHOR = 'physical-count';
 
+/**
+ * The card: the redesign's titled section (DESIGN-SPEC 6.7). The anchor sits
+ * on it, and its scroll margin clears the item page's sticky header (the
+ * title, the actions and the tab strip pin to the top of the scrolling page),
+ * so a link to #physical-count lands with the card's title in view instead of
+ * under the header: the header's measured height (`--item-detail-header-h`,
+ * kept by the item page's tab strip) plus 12 px, or 26rem until it is known.
+ */
 function CardShell({ children, testId }: { children: React.ReactNode; testId: string }) {
   return (
-    <Card data-testid={testId} id={PHYSICAL_COUNT_ANCHOR} className="scroll-mt-20">
-      <CardHeader className="pb-2">
-        <CardTitle className="flex items-center gap-2 text-base">
-          <ClipboardCheck className="h-4 w-4" aria-hidden /> Physical count
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-2 text-sm">{children}</CardContent>
-    </Card>
+    <DetailSection
+      data-testid={testId}
+      id={PHYSICAL_COUNT_ANCHOR}
+      className="scroll-mt-[calc(var(--item-detail-header-h,25.25rem)+0.75rem)]"
+      title={
+        <span className="inline-flex items-center gap-2">
+          <ClipboardCheck className="text-muted-foreground h-4 w-4" aria-hidden /> Physical count
+        </span>
+      }
+      bodyClassName="space-y-2 text-[13.5px] leading-[20.25px]"
+    >
+      {children}
+    </DetailSection>
   );
 }
 
@@ -137,7 +150,7 @@ export function ItemVerificationCardView({
       <CardShell testId="item-verification-card">
         <div
           role="alert"
-          className="border-warning/40 bg-warning/5 flex items-start gap-2 rounded-md border px-3 py-2"
+          className="border-warning/40 bg-warning-wash flex items-start gap-2 rounded-md border px-3 py-2"
         >
           <AlertTriangle className="text-warning mt-0.5 size-4 shrink-0" aria-hidden />
           {refusal ? (
@@ -229,7 +242,7 @@ export function ItemVerificationCardView({
 
       {issues.length > 0 ? (
         <div className="space-y-1 pt-1" data-testid="verification-issues">
-          <p className="text-muted-foreground text-xs font-semibold uppercase tracking-wider">
+          <p className="text-muted-foreground text-[11px] font-medium uppercase tracking-[0.06em]">
             {excludeIssueId ? 'Other open exceptions' : 'Open exceptions'}
           </p>
           <VerificationIssueChips issues={issues} />
@@ -268,7 +281,7 @@ export function VerificationIssueChips({
         <li key={i.id} data-testid="verification-issue-chip">
           <Link
             href={`/dashboard/exceptions/${i.id}`}
-            className="border-border hover:bg-muted inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium"
+            className="hover:bg-muted inline-flex items-center rounded-full border border-[var(--ed-line-strong)] px-2 py-px text-xs/[18px] font-medium transition-colors"
           >
             {verificationIssueChipCopy(i)}
           </Link>

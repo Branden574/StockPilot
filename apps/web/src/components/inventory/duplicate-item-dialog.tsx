@@ -114,7 +114,7 @@ export function DuplicateItemDialog({ itemId, itemName, itemType }: Props) {
       }}
     >
       <DialogTrigger asChild>
-        <Button variant="outline" size="sm" className="sm:size-auto">
+        <Button variant="outline">
           <Copy className="h-4 w-4" /> Duplicate
         </Button>
       </DialogTrigger>
@@ -122,15 +122,14 @@ export function DuplicateItemDialog({ itemId, itemName, itemType }: Props) {
         <DialogHeader>
           <DialogTitle>Duplicate {isBook ? 'book' : 'item'}</DialogTitle>
           <DialogDescription>
-            Creates a second row of &ldquo;{itemName}&rdquo; at a new physical
-            location. Everything else (name, SKU base, cost, photo, tags,
-            category) is copied automatically.
+            Creates a second row of &ldquo;{itemName}&rdquo; at a new physical location. Everything
+            else (name, SKU base, cost, photo, tags, category) is copied automatically.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-3 py-2">
+        <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
-            <div>
+            <div className="space-y-1.5">
               <Label htmlFor="dup-rack-number">
                 Rack number <span className="text-destructive">*</span>
               </Label>
@@ -143,7 +142,7 @@ export function DuplicateItemDialog({ itemId, itemName, itemType }: Props) {
                 autoFocus
               />
             </div>
-            <div>
+            <div className="space-y-1.5">
               <Label htmlFor="dup-rack-row">Row (optional)</Label>
               <Input
                 id="dup-rack-row"
@@ -175,7 +174,7 @@ export function DuplicateItemDialog({ itemId, itemName, itemType }: Props) {
                         <span className="flex items-center gap-2">
                           <span
                             aria-hidden
-                            className="border-border inline-block h-3 w-3 rounded-full border"
+                            className="inline-block h-3 w-3 shrink-0 rounded-full border border-[var(--ed-line-strong)]"
                             style={{ backgroundColor: c.hex }}
                           />
                           {c.label}
@@ -201,7 +200,7 @@ export function DuplicateItemDialog({ itemId, itemName, itemType }: Props) {
             </div>
           )}
 
-          <div>
+          <div className="space-y-1.5">
             <Label htmlFor="dup-quantity">Quantity at this rack</Label>
             <Input
               id="dup-quantity"
@@ -212,18 +211,14 @@ export function DuplicateItemDialog({ itemId, itemName, itemType }: Props) {
               onChange={(e) => setQuantity(e.target.value)}
               disabled={pending}
             />
-            <p className="text-muted-foreground mt-1 text-xs">
+            <p className="text-muted-foreground text-[12px]">
               Defaults to 0. Set the actual on-hand count at the new rack.
             </p>
           </div>
         </div>
 
         <DialogFooter>
-          <Button
-            variant="outline"
-            onClick={() => setOpen(false)}
-            disabled={pending}
-          >
+          <Button variant="outline" onClick={() => setOpen(false)} disabled={pending}>
             Cancel
           </Button>
           <Button onClick={submit} disabled={pending}>

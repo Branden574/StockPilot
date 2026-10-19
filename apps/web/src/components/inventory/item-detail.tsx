@@ -1,9 +1,10 @@
-import { Box, Boxes, CalendarClock, DollarSign, Globe, GraduationCap, Hash, History, LineChart, MapPin, PackageCheck, Printer, Tag, Truck } from 'lucide-react';
+import { History, LineChart, Printer } from 'lucide-react';
 import dynamic from 'next/dynamic';
+import { getImageProps } from 'next/image';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
-import { Suspense } from 'react';
+import { Suspense, type CSSProperties, type ReactNode } from 'react';
 
 import { ItemActivityPanel } from '@/components/inventory/item-activity-panel';
 import {
@@ -11,18 +12,20 @@ import {
   ItemVerificationCardSkeleton,
 } from '@/components/inventory/item-verification-card';
 import { PlacementsBreakdown } from '@/components/inventory/placements-breakdown';
-import { StockAvailabilityLine } from '@/components/inventory/stock-availability-line';
+import {
+  FigureWithUnit,
+  StockAvailabilityLine,
+} from '@/components/inventory/stock-availability-line';
 import { BarcodeDisplay } from '@/components/inventory/barcode-display';
 import { DuplicateItemDialog } from '@/components/inventory/duplicate-item-dialog';
 import { GroupMembershipControl } from '@/components/inventory/group-membership-control';
 import { MakeOwnItemButton } from '@/components/inventory/make-own-item-button';
 // ImageUploader is heavy (canvas resize/transcode + lazy-loaded
-// ImageLightbox) and only renders on the Photos tab — lazy-load
-// the chunk so it stays out of the initial item-detail bundle.
-// item-detail is a server component, so ssr:false isn't valid;
-// the Photos tab is already conditionally rendered (activeTab ===
-// 'photos') so the chunk only downloads when the user opens the
-// tab regardless.
+// ImageLightbox) and only renders on the Overview tab's Images card —
+// lazy-load the chunk so it stays out of the initial item-detail bundle.
+// item-detail is a server component, so ssr:false isn't valid; the Images
+// card is already conditionally rendered (activeTab === 'overview') so the
+// chunk only downloads when the user is on that tab regardless.
 const ImageUploader = dynamic(() =>
   import('@/components/inventory/image-uploader').then((m) => ({
     default: m.ImageUploader,
@@ -35,10 +38,7 @@ const ImageUploader = dynamic(() =>
 // boundary here.
 import { CostTrendIsland } from '@/components/dashboard/charts/cost-trend-island';
 import { ItemDetailTabs } from '@/components/inventory/item-detail-tabs';
-import {
-  parseDetailTab,
-  type DetailTabId,
-} from '@/components/inventory/item-detail-tabs-shared';
+import { parseDetailTab, type DetailTabId } from '@/components/inventory/item-detail-tabs-shared';
 import { ItemSerialsPanel } from '@/components/inventory/item-serials-panel';
 import { PublicVisibilityControl } from '@/components/inventory/public-visibility-control';
 import { MarketPricePanel } from '@/components/inventory/market-price-panel';
@@ -47,9 +47,13 @@ import { StockAdjustDialog } from '@/components/inventory/stock-adjust-dialog';
 import { StockTransferDialog } from '@/components/inventory/stock-transfer-dialog';
 import { ReportProblemButton } from '@/components/maintenance/report-problem-button';
 import { CountThisItemButton } from '@/components/exceptions/count-this-item-button';
+import { DetailSection } from '@/components/patterns/detail-section';
+import { KeyValueList, KeyValueRow } from '@/components/patterns/key-value-row';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
+import { StatePanel } from '@/components/patterns/state-panel';
+import { StatStrip, StatStripItem } from '@/components/patterns/stat-strip';
+import { Thumb } from '@/components/patterns/thumb';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Separator } from '@/components/ui/separator';
 import { ActivityService, auditLimitFor, type ActivityEvent } from '@/server/services/activity';
 import { isModuleEnabled, ServiceError, withContext } from '@/server/services/context';
 import { CustomFieldsService } from '@/server/services/custom-fields';
@@ -87,11 +91,10 @@ import {
   type Role,
 } from '@stockpilot/core';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
-import { placementSummary } from '@/lib/placements';
+import { placementSummary, transferableHoldings } from '@/lib/placements';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { PerfUseful } from '@/components/perf/perf-useful';
 import { ITEM_DETAIL_TOUR } from '@/lib/onboarding/tours';
-
 
 interface ItemDetailProps {
   id: string;
@@ -128,7 +131,15 @@ interface ItemDetailProps {
   reservedQuantity?: number;
 }
 
-export async function ItemDetail({ id, backHref, backLabel, editHref, tab, returnParam, reservedQuantity }: ItemDetailProps) {
+export async function ItemDetail({
+  id,
+  backHref,
+  backLabel,
+  editHref,
+  tab,
+  returnParam,
+  reservedQuantity,
+}: ItemDetailProps) {
   const activeTab: DetailTabId = parseDetailTab(tab);
 
   const [ctx, inventorySvc, activitySvc, imagesSvc, locationsSvc, reportsSvc, customFieldsSvc] =
@@ -409,8 +420,9 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
 
   // ── Stock in warehouses the caller cannot see (0371) ────────────────
   // 'none' for managers and above. See InventoryService.get's withElsewhere.
-  const elsewhere: ItemElsewhere =
-    (item as { elsewhere?: ItemElsewhere }).elsewhere ?? { status: 'none' };
+  const elsewhere: ItemElsewhere = (item as { elsewhere?: ItemElsewhere }).elsewhere ?? {
+    status: 'none',
+  };
   const hiddenHoldings = elsewhere.status === 'some' ? elsewhere : null;
   const placementLine = placementSummary({
     onHand: Number(item.quantity_on_hand ?? 0),
@@ -558,14 +570,11 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   // Public-catalog visibility (P3): the row + select only render for
   // public_links:manage holders; the server action re-asserts.
   const canManagePublicVisibility = can(ctx, 'public_links:manage');
-  const itemPublicVisibility =
-    ((item as { public_visibility?: string | null }).public_visibility ?? 'internal_only') as
-      | 'internal_only'
-      | 'public'
-      | 'hidden';
+  const itemPublicVisibility = ((item as { public_visibility?: string | null }).public_visibility ??
+    'internal_only') as 'internal_only' | 'public' | 'hidden';
   const categoryIsInternalOnly =
-    ((category as { public_visibility?: string | null } | null)?.public_visibility ??
-      'public') === 'internal_only';
+    ((category as { public_visibility?: string | null } | null)?.public_visibility ?? 'public') ===
+    'internal_only';
   // Public display-name override (0261): surfaced read-only next to the
   // visibility control so catalog managers can see at a glance that the
   // public label differs from the internal name. Edited on the item edit form.
@@ -576,8 +585,59 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   // (rule and warehouse-name read: see `serialsPanelShown` above)
   const showSerialsPanel = serialsPanelShown(serialsPage.total);
 
+  // ── The redesigned layout's derived values (no reads) ──────────────
+  const isBook = item.item_type === 'book';
+  const unit = item.unit_of_measure as string;
+  const onHand = item.quantity_on_hand as number;
+  const itemStatus = item.status as 'active' | 'archived' | 'discontinued';
+  const awaitingFirstReceipt =
+    (item as { awaiting_first_receipt?: boolean }).awaiting_first_receipt === true;
+  // The ISBN-import pipeline's cover, stashed on the row's custom_fields (no
+  // read: it came with the row). Shown when the record has no uploaded photo.
+  const rowCustomFields = (item as { custom_fields?: Record<string, unknown> | null })
+    .custom_fields;
+  const coverThumbUrl =
+    rowCustomFields &&
+    typeof rowCustomFields === 'object' &&
+    typeof rowCustomFields.thumbnail_url === 'string'
+      ? (rowCustomFields.thumbnail_url as string)
+      : null;
+
+  // ── The header photo: OVERVIEW ONLY ─────────────────────────────────
+  // Photos are read (and signed) on the Overview tab only; a photo in the
+  // header of the Movements and Activity tabs would add that read to every
+  // tab (CONFLICTS D7), so there the header has no photo. On Overview it is the
+  // primary upload the gallery below already shows, at 64 px through the image
+  // optimizer (a small rendition, never the master), or the ISBN cover the
+  // list shows, or the missing-photo hatch when the record has neither.
+  const primaryImage =
+    images.find((img) => img.isPrimary && img.url) ?? images.find((img) => img.url) ?? null;
+  const headerPhotoSrc = primaryImage
+    ? getImageProps({ src: primaryImage.url, alt: '', width: 64, height: 64 }).props.src
+    : images.length === 0
+      ? coverThumbUrl
+      : null;
+
+  // ── "By location": the placed holdings and the "= on hand" line ─────
+  // Shown when there is something to say: a placed holding the viewer can see
+  // (the breakdown's own rule), placed stock elsewhere, or the line.
+  const showByLocation =
+    transferableHoldings(holdings).length > 0 ||
+    (hiddenHoldings?.placed ?? 0) > 0 ||
+    placementLine.kind !== 'none';
+
+  // The Overview grid's left column, counted so the right column (By
+  // location, Reorder, the physical count) can span exactly its rows on a wide
+  // content area (see the grid below).
+  const leftCardCount =
+    2 + // Details and Images
+    (definedCustomFields.length > 0 ? 1 : 0) +
+    (showMarketPrice ? 1 : 0) +
+    (costHistory.pointCount > 0 ? 1 : 0) +
+    (showSerialsPanel ? 1 : 0);
+
   return (
-    <div className="container mx-auto max-w-5xl px-4 pb-6 sm:px-6 sm:pb-8">
+    <div className="mx-auto flex w-full max-w-[1320px] flex-col px-4 pb-16 pt-2 sm:px-8">
       {/* Performance marker. This server component awaits the item (and
           notFound()s without one) before it returns anything, so reaching
           this markup means the real record is what renders. Shared by the
@@ -590,39 +650,45 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
           against main's top edge — which is already right under the
           topbar visually. Using top-14 here would double-count the
           topbar height and produce a 56px gap where scrolled content
-          leaks through above the sticky. */}
-      <div className="bg-card border-border sticky top-0 z-20 -mx-4 border-b px-4 py-4 sm:-mx-6 sm:px-6">
-        <div className="mb-3">
-          <Link
-            href={backHref}
-            className="text-muted-foreground hover:text-foreground inline-flex items-center text-sm"
-          >
-            ← {backLabel}
-          </Link>
+          leaks through above the sticky. Its last row is the tab strip,
+          whose hairline is the header's bottom edge. */}
+      <div
+        data-testid="item-detail-header"
+        data-item-detail-header=""
+        className="bg-card sticky top-0 z-20 -mx-4 px-4 pt-4 sm:-mx-8 sm:px-8 sm:pt-5"
+      >
+        <div className="mb-2">
+          <PageHeaderBackLink href={backHref}>← {backLabel}</PageHeaderBackLink>
         </div>
 
-        <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-              <h1 className="break-words text-xl font-semibold tracking-tight sm:text-2xl">
-                {item.name as string}
-              </h1>
-              <StockStatusBadge
-                quantity={item.quantity_on_hand as number}
-                reorderPoint={item.reorder_point as number}
-                itemStatus={item.status as 'active' | 'archived' | 'discontinued'}
-                // Expected item (mig 0277) reached via search / direct
-                // link: the verbose pill gives the context inline.
-                awaitingFirstReceipt={
-                  (item as { awaiting_first_receipt?: boolean }).awaiting_first_receipt === true
-                }
-                expectedVerbose
-              />
-              <PageTour tour={ITEM_DETAIL_TOUR} />
-            </div>
-            <p className="text-muted-foreground mt-1 break-all font-mono text-xs">
-              {item.sku as string}
-            </p>
+        {/* The title block and the actions share a line when they fit; the
+            actions wrap under the title otherwise (the title asks for 18rem
+            before they may share its line, so they never squeeze it). */}
+        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+          <PageHeader
+            variant="item"
+            className="min-w-0 flex-1 basis-72"
+            media={isOverview ? <Thumb size={64} src={headerPhotoSrc} alt="" /> : undefined}
+            title={item.name as string}
+            titleAside={<PageTour tour={ITEM_DETAIL_TOUR} />}
+            meta={
+              <>
+                <span className="break-all font-mono">{item.sku as string}</span>
+                <span aria-hidden className="text-ink-4">
+                  ·
+                </span>
+                <StockStatusBadge
+                  quantity={onHand}
+                  reorderPoint={item.reorder_point as number}
+                  itemStatus={itemStatus}
+                  // Expected item (mig 0277) reached via search / direct
+                  // link: the verbose pill gives the context inline.
+                  awaitingFirstReceipt={awaitingFirstReceipt}
+                  expectedVerbose
+                />
+              </>
+            }
+          >
             {(() => {
               // Ungroup (0399): an honest note when other records the viewer
               // can see share this SKU (edits of the shared fields change them
@@ -642,15 +708,17 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
               return (
                 <div
                   className={
-                    note ? 'mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1' : 'contents'
+                    note
+                      ? 'mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12.5px] leading-[18px]'
+                      : 'contents'
                   }
                 >
-                  {note ? <p className="text-muted-foreground text-xs">{note}</p> : null}
+                  {note ? <p className="text-muted-foreground max-w-prose">{note}</p> : null}
                   {note && canEditItem && isKit ? (
-                    <p className="text-muted-foreground text-xs">{GROUPING_ERROR_WORDS.kit}</p>
+                    <p className="text-muted-foreground">{GROUPING_ERROR_WORDS.kit}</p>
                   ) : null}
                   {note && canEditItem && !isKit && inFamily ? (
-                    <p className="text-muted-foreground text-xs">{GROUPING_ERROR_WORDS.family}</p>
+                    <p className="text-muted-foreground">{GROUPING_ERROR_WORDS.family}</p>
                   ) : null}
                   {host ? <MakeOwnItemButton itemId={id} offer={note !== null} /> : null}
                 </div>
@@ -664,39 +732,46 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
               const groupName = group ? (group.name ?? DISPLAY_GROUP_FALLBACK_NAME) : null;
               if (!groupName && !canEditItem) return null;
               return (
-                <div className={groupName ? 'mt-1.5' : 'contents'}>
+                <div className={groupName ? 'mt-2' : 'contents'}>
                   <GroupMembershipControl
                     itemId={id}
                     groupName={groupName}
                     canEdit={canEditItem}
-                    view={(item.item_type as string) === 'book' ? 'books' : 'items'}
+                    view={isBook ? 'books' : 'items'}
                   />
                 </div>
               );
             })()}
-          </div>
+          </PageHeader>
+
           {/*
             Action buttons: on small screens, scroll horizontally as a
             single row instead of wrapping into 2-3 stacked rows that
-            push the rest of the page off the fold. Inner div uses
-            `w-max` so children keep their natural width inside the
-            scroll viewport.
+            push the rest of the page off the fold (the row bleeds to the
+            screen edges, with room above and below for the focus ring).
+            From sm up the row wraps. Every action keeps its own gate and
+            name; the row sizes them alike (32 px), whatever size the
+            shared components draw on their own.
           */}
-          <div data-tour="item-actions" className="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
-            <div className="flex w-max gap-2 sm:flex-wrap">
-              {canEditItem && (() => {
-                // Append the return param so editing → save still bounces
-                // back to the same list URL the user came from.
-                const editBase = editHref ?? `/dashboard/inventory/${id}/edit`;
-                const href = returnParam
-                  ? `${editBase}?return=${encodeURIComponent(returnParam)}`
-                  : editBase;
-                return (
-                  <Button asChild variant="outline" size="sm" className="sm:size-auto">
-                    <Link href={href}>Edit</Link>
-                  </Button>
-                );
-              })()}
+          <div
+            data-tour="item-actions"
+            className="-mx-4 -my-1 w-[calc(100%+2rem)] overflow-x-auto px-4 py-1 sm:mx-0 sm:w-auto sm:overflow-visible sm:px-0"
+          >
+            <div className="flex w-max gap-2 sm:w-auto sm:flex-wrap [&>a]:h-8 [&>a]:px-3 [&>a]:text-[13px] [&>button]:h-8 [&>button]:px-3 [&>button]:text-[13px]">
+              {canEditItem &&
+                (() => {
+                  // Append the return param so editing → save still bounces
+                  // back to the same list URL the user came from.
+                  const editBase = editHref ?? `/dashboard/inventory/${id}/edit`;
+                  const href = returnParam
+                    ? `${editBase}?return=${encodeURIComponent(returnParam)}`
+                    : editBase;
+                  return (
+                    <Button asChild variant="outline">
+                      <Link href={href}>Edit</Link>
+                    </Button>
+                  );
+                })()}
               {canDuplicateItem && (
                 <DuplicateItemDialog
                   itemId={id}
@@ -710,7 +785,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                 sku={item.sku as string}
                 barcode={(item.barcode as string | null) ?? null}
               />
-              <Button asChild variant="outline" size="sm" className="sm:size-auto">
+              <Button asChild variant="outline">
                 <Link href={`/dashboard/inventory/labels?items=${id}`}>
                   <Printer className="h-4 w-4" /> Print label
                 </Link>
@@ -719,14 +794,14 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                 <StockAdjustDialog
                   itemId={id}
                   itemName={item.name as string}
-                  currentQuantity={item.quantity_on_hand as number}
+                  currentQuantity={onHand}
                 />
               )}
               {canTransferStock && locations.length >= 2 && (
                 <StockTransferDialog
                   itemId={id}
                   itemName={item.name as string}
-                  currentQuantity={item.quantity_on_hand as number}
+                  currentQuantity={onHand}
                   currentLocationId={(item.primary_location_id as string | null) ?? null}
                   locations={locations.map((l) => ({
                     // Through the ONE mapper, so the row's own rack/crate
@@ -745,7 +820,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                   // crate change from this snapshot; it confirms from the
                   // server's own refusal payload. See the prop's doc comment.
                   bookStorage={
-                    item.item_type === 'book'
+                    isBook
                       ? readBookStorage(item.custom_fields as Record<string, unknown> | null)
                       : null
                   }
@@ -773,104 +848,56 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
           role="tabpanel"
           id="item-detail-panel-overview"
           aria-labelledby="item-detail-tab-overview"
+          className="@container mt-4 flex flex-col gap-4 sm:mt-5"
         >
-          <div className="mt-6 grid gap-4 sm:mt-8 sm:gap-6 lg:grid-cols-3">
-            <Card className="lg:col-span-2">
-              <CardHeader>
-                <CardTitle className="text-base">Details</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                <DetailRow icon={Boxes} label="On hand">
-                  <span className="text-base font-semibold tabular-nums">
-                    {formatNumber(item.quantity_on_hand as number)} {item.unit_of_measure as string}
-                  </span>
-                  <StockStatusBadge
-                    quantity={item.quantity_on_hand as number}
-                    reorderPoint={item.reorder_point as number}
-                    itemStatus={item.status as 'active' | 'archived' | 'discontinued'}
-                    awaitingFirstReceipt={
-                      (item as { awaiting_first_receipt?: boolean }).awaiting_first_receipt === true
-                    }
-                  />
-                  <StockAvailabilityLine
-                    onHand={Number(item.quantity_on_hand ?? 0)}
-                    reserved={reservedByItem.get(id) ?? 0}
-                    unit={item.unit_of_measure as string}
-                  />
-                  <PlacementsBreakdown
-                    placements={holdings}
-                    itemId={id}
-                    itemName={item.name as string}
-                    // Rack-scoped write-off (2026-07-23): the tool to reach for
-                    // instead of archiving a whole item to clear one rack. Gated
-                    // on the same permission adjustStock asserts; archived items
-                    // can't be adjusted, so hide it there too.
-                    canRemoveStock={canAdjustStock && item.status !== 'archived'}
-                    // Placed stock in warehouses the caller cannot see (0371),
-                    // as one count: "7 placed in other warehouses (1 location)".
-                    elsewhere={
-                      hiddenHoldings && hiddenHoldings.placed > 0
-                        ? {
-                            quantity: hiddenHoldings.placed,
-                            locationCount: hiddenHoldings.placedLocationIds.length,
-                          }
-                        : null
-                    }
-                  />
-                  {(() => {
-                    // The "On hand" number above INCLUDES awaiting-put-away
-                    // stock (Staging + Unplaced), but the placed-rack breakdown
-                    // does NOT — so without this line the racks (e.g. 250 + 250
-                    // = 500) don't add up to On hand (600). Spell the split out
-                    // so active vs. staged is never silently combined (owner
-                    // report 2026-07-09): placed + awaiting put-away = on hand.
-                    //
-                    // 0371: for a staff member or viewer, part of the stock can
-                    // sit in warehouses they cannot see. That part is its own
-                    // term ("+ 12 in other warehouses"), so the sum still holds;
-                    // and when it could not be read, the page says so instead
-                    // of printing a sum that may be missing a part.
-                    if (placementLine.kind === 'none') return null;
-                    if (placementLine.kind === 'unavailable') {
-                      return (
-                        <p role="status" className="text-muted-foreground w-full text-xs">
-                          {placementLine.note}
-                        </p>
-                      );
-                    }
-                    return (
-                      <p className="text-muted-foreground w-full text-xs">
-                        <span className="text-foreground font-medium tabular-nums">
-                          {formatNumber(placementLine.placed)}
-                        </span>{' '}
-                        placed
-                        {placementLine.awaiting > 0 && (
-                          <>
-                            {' + '}
-                            <span className="text-warning font-medium tabular-nums">
-                              {formatNumber(placementLine.awaiting)}
-                            </span>{' '}
-                            awaiting put-away
-                          </>
-                        )}
-                        {placementLine.elsewhere > 0 && (
-                          <>
-                            {' + '}
-                            <span className="text-foreground font-medium tabular-nums">
-                              {formatNumber(placementLine.elsewhere)}
-                            </span>{' '}
-                            in other warehouses
-                          </>
-                        )}
-                        {' = '}
-                        <span className="text-foreground font-medium tabular-nums">
-                          {formatNumber(placementLine.onHand)}
-                        </span>{' '}
-                        on hand
-                      </p>
-                    );
-                  })()}
-                </DetailRow>
+          {/* The figures (DESIGN-SPEC 6.8, the record's stat strip), REAL ones
+              only: on hand; reserved for open orders and available, only when
+              something is reserved; value; reorder at. No Allocated, On order,
+              coverage days or chart the product does not compute (CONFLICTS
+              D3, O2), and on hand is never labelled available. */}
+          <StatStrip variant="detail" data-testid="item-figures">
+            <StatStripItem
+              size="detail"
+              data-testid="item-on-hand"
+              label="On hand"
+              value={<FigureWithUnit value={formatNumber(onHand)} unit={unit} />}
+            />
+            <StockAvailabilityLine
+              onHand={Number(item.quantity_on_hand ?? 0)}
+              reserved={reservedByItem.get(id) ?? 0}
+              unit={unit}
+            />
+            <StatStripItem
+              size="detail"
+              data-testid="item-value"
+              label="Value"
+              value={formatCurrency(value)}
+              sub={`@ ${formatCurrency(item.unit_cost as number)} unit cost`}
+            />
+            <StatStripItem
+              size="detail"
+              data-testid="item-reorder-at"
+              label="Reorder at"
+              value={
+                <FigureWithUnit value={formatNumber(item.reorder_point as number)} unit={unit} />
+              }
+            />
+          </StatStrip>
+
+          {/* The panels: two columns on a wide content area (the reference's
+              1.7 : 1 split with a 280 px floor for the right one), one column
+              below about 2 x 420 + 16 px of content (DESIGN-SPEC 8), measured
+              on the panel itself, not the window, so the sidebar counts.
+              In one column the cards follow the source order: Details, the
+              right column's cards, then the rest. In two, the right column
+              spans every row of the left one (its last row takes the slack),
+              so the two stack independently. */}
+          <div
+            className="@min-[856px]:grid-cols-[minmax(0,1.7fr)_minmax(280px,1fr)] @min-[856px]:grid-rows-[repeat(var(--item-detail-left-rows),auto)_1fr] @min-[856px]:items-start grid gap-4"
+            style={{ '--item-detail-left-rows': leftCardCount - 1 } as CSSProperties}
+          >
+            <DetailSection title="Details" flush className="@min-[856px]:col-start-1">
+              <KeyValueList>
                 {/* Rentals reservation surface — only the rentals item detail
                     page passes `reservedQuantity`. Checking out a rental
                     reserves stock instead of decrementing on-hand, so without
@@ -878,67 +905,55 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                     when the prop is absent (inventory/books) or zero. */}
                 {reservedQuantity !== undefined && reservedQuantity > 0 && (
                   <>
-                    <DetailRow icon={CalendarClock} label="Out on rental">
-                      <span className="text-base font-semibold tabular-nums">
-                        {formatNumber(reservedQuantity)} {item.unit_of_measure as string}
-                      </span>
-                    </DetailRow>
-                    <DetailRow icon={PackageCheck} label="Available">
-                      <span className="text-base font-semibold tabular-nums">
-                        {formatNumber(
-                          Math.max(0, (item.quantity_on_hand as number) - reservedQuantity),
-                        )}{' '}
-                        {item.unit_of_measure as string}
-                      </span>
-                    </DetailRow>
+                    <KeyValueRow label="Out on rental">
+                      {formatNumber(reservedQuantity)} {unit}
+                    </KeyValueRow>
+                    <KeyValueRow label="Available">
+                      {formatNumber(Math.max(0, onHand - reservedQuantity))} {unit}
+                    </KeyValueRow>
                   </>
                 )}
-                <DetailRow icon={DollarSign} label="Value">
-                  <span className="text-base tabular-nums">{formatCurrency(value)}</span>
-                  <span className="text-muted-foreground text-xs">
-                    @ {formatCurrency(item.unit_cost as number)} unit cost
-                  </span>
-                </DetailRow>
-                <Separator />
-                <DetailRow icon={Tag} label="Category">
+                <KeyValueRow label="Category">
                   {category ? (
-                    <span>{category.name as string}</span>
+                    (category.name as string)
                   ) : (
                     <span className="text-muted-foreground">Uncategorized</span>
                   )}
-                </DetailRow>
+                </KeyValueRow>
                 {canManagePublicVisibility && (
-                  <DetailRow icon={Globe} label="Public visibility">
+                  <KeyValueRow
+                    label="Public visibility"
+                    className="flex-col items-stretch gap-2"
+                    valueClassName="text-left"
+                  >
                     <PublicVisibilityControl
                       itemId={id}
                       value={itemPublicVisibility}
                       categoryIsInternalOnly={categoryIsInternalOnly}
                     />
                     {itemPublicDisplayName && (
-                      <span className="text-muted-foreground basis-full text-xs">
+                      <span className="text-muted-foreground mt-1.5 block text-[12px]">
                         Public name: {itemPublicDisplayName}
                       </span>
                     )}
-                  </DetailRow>
+                  </KeyValueRow>
                 )}
-                <DetailRow icon={MapPin} label="Location">
+                <KeyValueRow label="Location">
                   {location ? (
-                    <span>{location.name as string}</span>
+                    (location.name as string)
                   ) : (
                     <span className="text-muted-foreground">Not set</span>
                   )}
                   {item.bin_location && (
-                    <span className="text-muted-foreground text-xs">
+                    <span className="text-muted-foreground ml-2 text-[12px]">
                       {item.bin_location as string}
                     </span>
                   )}
-                </DetailRow>
-                {item.item_type !== 'book' && item.model_number ? (
-                  <DetailRow icon={Hash} label="Model #">
-                    <span className="font-mono tabular-nums">
-                      {item.model_number as string}
-                    </span>
-                  </DetailRow>
+                </KeyValueRow>
+                {!isBook && item.model_number ? (
+                  <KeyValueRow label="Model #" valueClassName="font-mono text-[12.5px]">
+                    {item.model_number as string}
+                  </KeyValueRow>
                 ) : null}
                 {(() => {
                   const storage = readBookStorage(
@@ -946,7 +961,6 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                   );
                   const color = getCrateColor(storage.crateColor);
                   const cf = (item.custom_fields as Record<string, unknown> | null) ?? {};
-                  const isBook = item.item_type === 'book';
                   // For books, ISBN is stored in inventory_items.barcode — the
                   // edit form's "ISBN" label binds to the same field as
                   // "Barcode" for non-books, and bulk-ISBN import also writes
@@ -965,7 +979,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                   // above is the custom_fields SUMMARY; a put-away into a
                   // position-less crate preserves it on purpose (mig 0335), so
                   // it can name a rack the stock has entirely left. The live
-                  // PlacementsBreakdown a few rows up already shows the truth,
+                  // breakdown in the By location card already shows the truth,
                   // which made this card CONTRADICT ITSELF rather than merely
                   // mislead — so a rack the holdings REFUTE stands down and
                   // points at the breakdown instead.
@@ -977,7 +991,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                   // 5") entirely, a row main has always shown. The crate
                   // summary is a human's note about which box, refuted by
                   // nothing here — the split is described in full by the
-                  // breakdown directly above.
+                  // breakdown.
                   //
                   // 0371: the holdings here are the caller's own warehouses'.
                   // A rack in ANOTHER warehouse can hold the labelled stock, so
@@ -1013,31 +1027,28 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                   return (
                     <>
                       {isBook && (
-                        <DetailRow icon={Hash} label="ISBN">
-                          {isbn ? (
-                            <span className="font-mono tabular-nums">{isbn}</span>
-                          ) : (
-                            <span className="text-muted-foreground">Not set</span>
-                          )}
-                        </DetailRow>
+                        <KeyValueRow
+                          label="ISBN"
+                          valueClassName={isbn ? 'font-mono text-[12.5px]' : undefined}
+                        >
+                          {isbn ? isbn : <span className="text-muted-foreground">Not set</span>}
+                        </KeyValueRow>
                       )}
                       {storage.grade && (
-                        <DetailRow icon={GraduationCap} label="Grade">
-                          <span>{formatGrade(storage.grade)}</span>
-                        </DetailRow>
+                        <KeyValueRow label="Grade">{formatGrade(storage.grade)}</KeyValueRow>
                       )}
                       {showRack && (
-                        <DetailRow icon={MapPin} label="Rack">
-                          <span className="font-mono tabular-nums">{storage.rackLabel}</span>
-                        </DetailRow>
+                        <KeyValueRow label="Rack" valueClassName="font-mono text-[12.5px]">
+                          {storage.rackLabel}
+                        </KeyValueRow>
                       )}
                       {storage.crateNumber && (
-                        <DetailRow icon={Box} label="Crate">
+                        <KeyValueRow label="Crate">
                           <span className="inline-flex items-center gap-2">
                             <span
                               aria-hidden
                               title={color ? color.label : 'No color set'}
-                              className="border-border inline-block h-3 w-3 rounded-full border"
+                              className="inline-block h-3 w-3 shrink-0 rounded-full border border-[var(--ed-line-strong)]"
                               style={color ? { backgroundColor: color.hex } : undefined}
                             />
                             <span>
@@ -1045,53 +1056,133 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                               <span className="font-mono tabular-nums">{storage.crateNumber}</span>
                             </span>
                           </span>
-                        </DetailRow>
+                        </KeyValueRow>
                       )}
                     </>
                   );
                 })()}
-                <DetailRow icon={Truck} label="Supplier">
+                <KeyValueRow label="Supplier">
                   {supplier ? (
-                    <span>{supplier.name as string}</span>
+                    (supplier.name as string)
                   ) : (
                     <span className="text-muted-foreground">No supplier</span>
                   )}
-                </DetailRow>
+                </KeyValueRow>
                 {(item.description as string | null) && (
-                  <>
-                    <Separator />
-                    <div className="space-y-1.5">
-                      <p className="text-muted-foreground text-xs font-semibold uppercase tracking-wider">
-                        Description
-                      </p>
-                      <p className="whitespace-pre-wrap text-sm">{item.description as string}</p>
-                    </div>
-                  </>
+                  <KeyValueRow
+                    label="Description"
+                    className="flex-col items-stretch gap-1"
+                    valueClassName="text-left whitespace-pre-wrap"
+                  >
+                    {item.description as string}
+                  </KeyValueRow>
                 )}
-              </CardContent>
-            </Card>
+              </KeyValueList>
+            </DetailSection>
 
-            <div className="space-y-4 sm:space-y-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Reorder</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3 text-sm">
-                  <Stat
-                    label="Reorder at"
-                    value={`${formatNumber(item.reorder_point as number)} ${item.unit_of_measure as string}`}
-                  />
-                  <Stat
-                    label="Reorder qty"
-                    value={`${formatNumber(item.reorder_quantity as number)} ${item.unit_of_measure as string}`}
-                  />
-                  <Stat label="Retail price" value={formatCurrency(item.retail_price as number)} />
-                  <Stat
-                    label="Status"
-                    value={(item.status as string).replace(/^./, (s) => s.toUpperCase())}
-                  />
-                </CardContent>
-              </Card>
+            {/* The right column: where the stock is, the reorder settings and
+                the last physical count. */}
+            <div className="@min-[856px]:col-start-2 @min-[856px]:row-span-full flex min-w-0 flex-col gap-4">
+              {showByLocation && (
+                <DetailSection title="By location" flush>
+                  <div className="divide-border divide-y">
+                    <PlacementsBreakdown
+                      placements={holdings}
+                      itemId={id}
+                      itemName={item.name as string}
+                      // Rack-scoped write-off (2026-07-23): the tool to reach for
+                      // instead of archiving a whole item to clear one rack. Gated
+                      // on the same permission adjustStock asserts; archived items
+                      // can't be adjusted, so hide it there too.
+                      canRemoveStock={canAdjustStock && item.status !== 'archived'}
+                      // Placed stock in warehouses the caller cannot see (0371),
+                      // as one count: "7 placed in other warehouses (1 location)".
+                      elsewhere={
+                        hiddenHoldings && hiddenHoldings.placed > 0
+                          ? {
+                              quantity: hiddenHoldings.placed,
+                              locationCount: hiddenHoldings.placedLocationIds.length,
+                            }
+                          : null
+                      }
+                    />
+                    {(() => {
+                      // The "On hand" figure INCLUDES awaiting-put-away stock
+                      // (Staging + Unplaced), but the placed-rack breakdown
+                      // does NOT — so without this line the racks (e.g. 250 +
+                      // 250 = 500) don't add up to On hand (600). Spell the
+                      // split out so active vs. staged is never silently
+                      // combined (owner report 2026-07-09): placed + awaiting
+                      // put-away = on hand.
+                      //
+                      // 0371: for a staff member or viewer, part of the stock
+                      // can sit in warehouses they cannot see. That part is its
+                      // own term ("+ 12 in other warehouses"), so the sum still
+                      // holds; and when it could not be read, the page says so
+                      // instead of printing a sum that may be missing a part.
+                      if (placementLine.kind === 'none') return null;
+                      if (placementLine.kind === 'unavailable') {
+                        return (
+                          <p
+                            role="status"
+                            className="text-muted-foreground px-[18px] py-2.5 text-[12px] leading-[18px]"
+                          >
+                            {placementLine.note}
+                          </p>
+                        );
+                      }
+                      return (
+                        <p className="text-muted-foreground px-[18px] py-2.5 text-[12px] leading-[18px]">
+                          <span className="text-foreground font-medium tabular-nums">
+                            {formatNumber(placementLine.placed)}
+                          </span>{' '}
+                          placed
+                          {placementLine.awaiting > 0 && (
+                            <>
+                              {' + '}
+                              <span className="text-warning font-medium tabular-nums">
+                                {formatNumber(placementLine.awaiting)}
+                              </span>{' '}
+                              awaiting put-away
+                            </>
+                          )}
+                          {placementLine.elsewhere > 0 && (
+                            <>
+                              {' + '}
+                              <span className="text-foreground font-medium tabular-nums">
+                                {formatNumber(placementLine.elsewhere)}
+                              </span>{' '}
+                              in other warehouses
+                            </>
+                          )}
+                          {' = '}
+                          <span className="text-foreground font-medium tabular-nums">
+                            {formatNumber(placementLine.onHand)}
+                          </span>{' '}
+                          on hand
+                        </p>
+                      );
+                    })()}
+                  </div>
+                </DetailSection>
+              )}
+
+              <DetailSection title="Reorder" flush>
+                <KeyValueList>
+                  <KeyValueRow label="Reorder at">
+                    {formatNumber(item.reorder_point as number)} {unit}
+                  </KeyValueRow>
+                  <KeyValueRow label="Reorder qty">
+                    {formatNumber(item.reorder_quantity as number)} {unit}
+                  </KeyValueRow>
+                  <KeyValueRow label="Retail price">
+                    {formatCurrency(item.retail_price as number)}
+                  </KeyValueRow>
+                  <KeyValueRow label="Status">
+                    {(item.status as string).replace(/^./, (s) => s.toUpperCase())}
+                  </KeyValueRow>
+                </KeyValueList>
+              </DetailSection>
 
               {/* Last physical count (F1-3). OFF THE CRITICAL PATH: the card
                   reads item_verification_summaries itself, under its own
@@ -1108,141 +1199,121 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                 this item has a value for. Reserved/hardcoded keys are rendered
                 by their own detail rows above and are never represented here. */}
             {definedCustomFields.length > 0 && (
-              <Card className="sm:col-span-2">
-                <CardHeader>
-                  <CardTitle className="text-base">Additional fields</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3 text-sm">
+              <DetailSection title="Additional fields" flush className="@min-[856px]:col-start-1">
+                <KeyValueList>
                   {definedCustomFields.map(({ def, display }) => (
-                    <Stat key={def.id} label={def.label} value={display as string} />
+                    <KeyValueRow key={def.id} label={def.label}>
+                      {display}
+                    </KeyValueRow>
                   ))}
-                </CardContent>
-              </Card>
+                </KeyValueList>
+              </DetailSection>
             )}
-          </div>
 
-          {/* Market price (Phase 6) — external Google Books list/retail by
-              ISBN, gated behind the optional price_tracking module + an
-              ISBN-ish barcode. Renders nothing (and loads nothing) when the
-              module is off, keeping item detail byte-identical otherwise. */}
-          {showMarketPrice && (
-            <div className="mt-8">
-              <MarketPricePanel
-                itemId={item.id as string}
-                initial={marketPriceObs}
-                ourRetail={(item.retail_price as number | null) ?? null}
-                ourCost={(item.unit_cost as number | null) ?? null}
-              />
-            </div>
-          )}
+            {/* Market price (Phase 6) — external Google Books list/retail by
+                ISBN, gated behind the optional price_tracking module + an
+                ISBN-ish barcode. Renders nothing (and loads nothing) when the
+                module is off, keeping item detail byte-identical otherwise. */}
+            {showMarketPrice && (
+              <div className="@min-[856px]:col-start-1 min-w-0">
+                <MarketPricePanel
+                  itemId={item.id as string}
+                  initial={marketPriceObs}
+                  ourRetail={(item.retail_price as number | null) ?? null}
+                  ourCost={(item.unit_cost as number | null) ?? null}
+                />
+              </div>
+            )}
 
-          {/* Supplier cost trend — what we've paid for this item over time,
-              one line per supplier, built from our own PO + receipt unit_cost
-              (no external pricing). Hidden entirely when there's no history
-              so it never shows an empty card on freshly-created items. */}
-          {costHistory.pointCount > 0 && (
-            <Card className="mt-8">
-              <CardHeader>
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div>
-                    <CardTitle className="flex items-center gap-2 text-base">
-                      <LineChart className="h-4 w-4" /> Cost trend
-                    </CardTitle>
-                    <p className="text-muted-foreground mt-1 text-xs">
-                      Unit cost paid over time, by supplier · from purchase orders &amp; receipts
-                    </p>
-                  </div>
-                  <div className="flex gap-4 text-right">
+            {/* Supplier cost trend — what we've paid for this item over time,
+                one line per supplier, built from our own PO + receipt unit_cost
+                (no external pricing). Hidden entirely when there's no history
+                so it never shows an empty card on freshly-created items. */}
+            {costHistory.pointCount > 0 && (
+              <DetailSection
+                className="@min-[856px]:col-start-1"
+                title={
+                  <span className="inline-flex items-center gap-2">
+                    <LineChart className="text-muted-foreground h-4 w-4" aria-hidden /> Cost trend
+                  </span>
+                }
+              >
+                <div className="mb-3 flex flex-wrap items-start justify-between gap-x-6 gap-y-2">
+                  <p className="text-muted-foreground text-[12.5px]">
+                    Unit cost paid over time, by supplier · from purchase orders &amp; receipts
+                  </p>
+                  <div className="flex gap-6 text-right">
                     {costHistory.lastUnitCost != null && (
                       <div>
-                        <p className="text-muted-foreground text-[10.5px] font-semibold uppercase tracking-wider">
-                          Last paid
-                        </p>
-                        <p className="text-sm font-semibold tabular-nums">
+                        <p className="text-muted-foreground text-[12px]">Last paid</p>
+                        <p className="font-mono text-[13.5px] font-medium tabular-nums">
                           {formatCurrency(costHistory.lastUnitCost)}
                         </p>
                       </div>
                     )}
                     {costHistory.avgUnitCost != null && (
                       <div>
-                        <p className="text-muted-foreground text-[10.5px] font-semibold uppercase tracking-wider">
-                          Average
-                        </p>
-                        <p className="text-sm font-semibold tabular-nums">
+                        <p className="text-muted-foreground text-[12px]">Average</p>
+                        <p className="font-mono text-[13.5px] font-medium tabular-nums">
                           {formatCurrency(costHistory.avgUnitCost)}
                         </p>
                       </div>
                     )}
                   </div>
                 </div>
-              </CardHeader>
-              <CardContent>
                 <CostTrendIsland series={costHistory.series} />
-              </CardContent>
-            </Card>
-          )}
+              </DetailSection>
+            )}
 
-          {/* Serial numbers — manual registry management. Rendered for
-              serial-tracked items or items that already have registry rows;
-              first page + total are server-loaded, the panel paginates and
-              mutates via server actions. */}
-          {showSerialsPanel && (
-            <ItemSerialsPanel
-              itemId={id}
-              canEditItems={canEditItem}
-              warehouses={serialWarehouses}
-              initialRows={serialsPage.rows}
-              initialTotal={serialsPage.total}
-            />
-          )}
+            {/* Serial numbers — manual registry management. Rendered for
+                serial-tracked items or items that already have registry rows;
+                first page + total are server-loaded, the panel paginates and
+                mutates via server actions. */}
+            {showSerialsPanel && (
+              <div className="@min-[856px]:col-start-1 min-w-0">
+                <ItemSerialsPanel
+                  itemId={id}
+                  canEditItems={canEditItem}
+                  warehouses={serialWarehouses}
+                  initialRows={serialsPage.rows}
+                  initialTotal={serialsPage.total}
+                />
+              </div>
+            )}
 
-          <Card className="mt-8">
-            <CardHeader>
-              <CardTitle className="text-base">Images</CardTitle>
-            </CardHeader>
-            <CardContent>
+            <DetailSection title="Images" className="@min-[856px]:col-start-1">
               {/* Fallback: when there are no rows in item_images yet but the
                   ISBN-import pipeline stashed a cover URL on the row's
                   custom_fields, render it inline so the detail page shows
                   the cover the list page is already showing. The uploader
                   still works underneath — uploading saves to item_images
                   and supersedes this preview. */}
-              {images.length === 0
-                ? (() => {
-                    const cf = (item as { custom_fields?: Record<string, unknown> | null })
-                      .custom_fields;
-                    const cfThumb =
-                      cf && typeof cf === 'object' && typeof cf.thumbnail_url === 'string'
-                        ? (cf.thumbnail_url as string)
-                        : null;
-                    return cfThumb ? (
-                      <div className="mb-4 flex items-start gap-3 rounded-md border border-border bg-muted/40 p-3">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={cfThumb}
-                          alt=""
-                          width={64}
-                          height={88}
-                          loading="lazy"
-                          decoding="async"
-                          className="rounded-sm border border-border bg-background object-cover"
-                          style={{ aspectRatio: '3/4' }}
-                        />
-                        <div className="text-muted-foreground text-[12px] leading-relaxed">
-                          <div className="text-foreground mb-0.5 text-[12.5px] font-medium">
-                            Cover from ISBN lookup
-                          </div>
-                          Imported from a third-party source (Google Books / Open Library / Library
-                          of Congress). Upload a photo below to replace it with your own — the
-                          uploaded image becomes the primary.
-                        </div>
-                      </div>
-                    ) : null;
-                  })()
-                : null}
+              {images.length === 0 && coverThumbUrl ? (
+                <div className="bg-sunk border-border mb-4 flex items-start gap-3 rounded-md border p-3">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={coverThumbUrl}
+                    alt=""
+                    width={64}
+                    height={88}
+                    loading="lazy"
+                    decoding="async"
+                    className="border-border rounded-sm border bg-white object-cover"
+                    style={{ aspectRatio: '3/4' }}
+                  />
+                  <div className="text-muted-foreground text-[12.5px] leading-relaxed">
+                    <div className="text-foreground mb-0.5 text-[13px] font-medium">
+                      Cover from ISBN lookup
+                    </div>
+                    Imported from a third-party source (Google Books / Open Library / Library of
+                    Congress). Upload a photo below to replace it with your own — the uploaded image
+                    becomes the primary.
+                  </div>
+                </div>
+              ) : null}
               <ImageUploader itemId={id} initialImages={images} />
-            </CardContent>
-          </Card>
+            </DetailSection>
+          </div>
         </div>
       )}
 
@@ -1251,30 +1322,24 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
           role="tabpanel"
           id="item-detail-panel-movements"
           aria-labelledby="item-detail-tab-movements"
+          className="mt-4 sm:mt-5"
         >
-          <Card className="mt-6 sm:mt-8">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <History className="h-4 w-4" /> Stock movements
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {activityFailed ? (
-                <ActivityUnavailable what="stock movements" retryHref={activityRetryHref} />
-              ) : (
-                <ItemActivityPanel
-                  key={feedKey}
-                  itemId={id}
-                  initialEvents={movementEvents}
-                  initialLocationNames={locationNames}
-                  initialCursor={activityInitialCursor}
-                  initialExhausted={movementsInitialExhausted}
-                  kindFilter="movement"
-                  canEditNotes={canEditNotes}
-                />
-              )}
-            </CardContent>
-          </Card>
+          <DetailSection title={<FeedTitle>Stock movements</FeedTitle>}>
+            {activityFailed ? (
+              <ActivityUnavailable what="stock movements" retryHref={activityRetryHref} />
+            ) : (
+              <ItemActivityPanel
+                key={feedKey}
+                itemId={id}
+                initialEvents={movementEvents}
+                initialLocationNames={locationNames}
+                initialCursor={activityInitialCursor}
+                initialExhausted={movementsInitialExhausted}
+                kindFilter="movement"
+                canEditNotes={canEditNotes}
+              />
+            )}
+          </DetailSection>
         </div>
       )}
 
@@ -1283,35 +1348,29 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
           role="tabpanel"
           id="item-detail-panel-activity"
           aria-labelledby="item-detail-tab-activity"
+          className="mt-4 sm:mt-5"
         >
-          <Card className="mt-6 sm:mt-8">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <History className="h-4 w-4" /> Activity
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {activityFailed ? (
-                <ActivityUnavailable what="activity" retryHref={activityRetryHref} />
-              ) : (
-                <ItemActivityPanel
-                  key={feedKey}
-                  itemId={id}
-                  initialEvents={activity}
-                  initialLocationNames={locationNames}
-                  initialCursor={activityInitialCursor}
-                  initialExhausted={activityInitialExhausted}
-                  canEditNotes={canEditNotes}
-                />
-              )}
-            </CardContent>
-          </Card>
+          <DetailSection title={<FeedTitle>Activity</FeedTitle>}>
+            {activityFailed ? (
+              <ActivityUnavailable what="activity" retryHref={activityRetryHref} />
+            ) : (
+              <ItemActivityPanel
+                key={feedKey}
+                itemId={id}
+                initialEvents={activity}
+                initialLocationNames={locationNames}
+                initialCursor={activityInitialCursor}
+                initialExhausted={activityInitialExhausted}
+                canEditNotes={canEditNotes}
+              />
+            )}
+          </DetailSection>
         </div>
       )}
 
       {/* ── Footer: last updated by ────────────────────────────────── */}
       {updatedAt && (
-        <p className="text-muted-foreground mt-8 text-center text-xs">
+        <p className="text-muted-foreground mt-8 text-center text-[12px]">
           {updatedByName
             ? `Last updated by ${updatedByName} · ${formatRelative(updatedAt)}`
             : `Last updated ${formatRelative(updatedAt)}`}
@@ -1321,25 +1380,12 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   );
 }
 
-function DetailRow({
-  icon: Icon,
-  label,
-  children,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  label: string;
-  children: React.ReactNode;
-}) {
+/** A feed card's title: the history icon, then the tab's own words. */
+function FeedTitle({ children }: { children: ReactNode }) {
   return (
-    <div className="flex items-start gap-3">
-      <Icon className="text-muted-foreground mt-0.5 h-4 w-4" />
-      <div className="flex-1 space-y-0.5">
-        <p className="text-muted-foreground text-xs font-semibold uppercase tracking-wider">
-          {label}
-        </p>
-        <div className="flex flex-wrap items-center gap-2">{children}</div>
-      </div>
-    </div>
+    <span className="inline-flex items-center gap-2">
+      <History className="text-muted-foreground h-4 w-4" aria-hidden /> {children}
+    </span>
   );
 }
 
@@ -1351,24 +1397,21 @@ function DetailRow({
  */
 function ActivityUnavailable({ what, retryHref }: { what: string; retryHref: string }) {
   return (
-    <div role="alert" className="text-muted-foreground py-10 text-center text-sm">
-      <p>Could not load this item&rsquo;s {what}. The history itself is unchanged.</p>
-      <Link
-        href={retryHref}
-        prefetch={false}
-        className="text-foreground mt-2 inline-block font-medium underline underline-offset-4"
-      >
-        Try again
-      </Link>
-    </div>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="font-medium tabular-nums">{value}</span>
-    </div>
+    <StatePanel
+      kind="failed"
+      surface="plain"
+      live="assertive"
+      headingLevel={null}
+      title={<>Could not load this item&rsquo;s {what}. The history itself is unchanged.</>}
+      action={
+        <Link
+          href={retryHref}
+          prefetch={false}
+          className="text-foreground text-[13.5px] font-medium underline underline-offset-4"
+        >
+          Try again
+        </Link>
+      }
+    />
   );
 }
