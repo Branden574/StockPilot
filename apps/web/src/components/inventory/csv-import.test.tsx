@@ -249,6 +249,22 @@ describe('CsvImport — the review table says what will happen', () => {
     expect(headers).not.toContain('unit_cost');
   });
 
+  // Redesign (P4.A1 review fix): at 390 px `overflow-wrap:anywhere` on the Name
+  // cell lowered the column's min-content to one letter, so names split mid-word
+  // ("Noteb / ook"). break-word keeps whole words and a min width keeps the
+  // column readable inside the table's scroll box. Look-only expectation.
+  it('keeps item names whole: the Name cell wraps by word and has a min width', async () => {
+    const user = userEvent.setup();
+    render(<CsvImport sportsEnabled={false} warehouses={WH} />);
+    await upload(user);
+
+    const table = await screen.findByRole('table');
+    const cell = within(table).getByText('Wireless Mouse').closest('td')!;
+    const classes = cell.className.split(/\s+/);
+    expect(classes).not.toContain('[overflow-wrap:anywhere]');
+    expect(classes).toEqual(expect.arrayContaining(['min-w-[9rem]', '[overflow-wrap:break-word]']));
+  });
+
   it('renders the per-row Result label from the shared vocabulary', async () => {
     vi.mocked(prepareItemImportAction).mockResolvedValue(
       preview({
@@ -600,5 +616,41 @@ describe('CsvImport — no review, no import', () => {
     expect(importBtn.hasAttribute('disabled')).toBe(true);
     await user.click(importBtn);
     expect(importItemsAction).not.toHaveBeenCalled();
+  });
+});
+
+// Redesign (P4.A1, matrix W-IT-06): the steps became step cards. They stay the
+// page's outline, in order, each a heading under the page's h1: Steps 1 and 2
+// from the start, Step 3 only once a file is read, and the done card after the
+// import with Step 3 gone.
+describe('CsvImport — the step cards keep the outline', () => {
+  const stepHeadings = () =>
+    screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent?.trim());
+
+  it('shows Steps 1 and 2, then Step 3 with the file, then only the done card', async () => {
+    vi.mocked(importItemsAction).mockResolvedValue({
+      ok: true,
+      data: { total: 1, created: 1, failed: 0, errors: [] },
+    } as never);
+    const user = userEvent.setup();
+    render(<CsvImport sportsEnabled={false} warehouses={WH} />);
+
+    expect(stepHeadings()).toEqual(['Step 1 — download the template', 'Step 2 — upload your CSV']);
+
+    await upload(user);
+    await screen.findByRole('table');
+    expect(stepHeadings()).toEqual([
+      'Step 1 — download the template',
+      'Step 2 — upload your CSV',
+      'Step 3 — review & import',
+    ]);
+
+    await user.click(await screen.findByRole('button', { name: /import 1 item/i }));
+    await screen.findByRole('heading', { level: 2, name: 'Imported 1 item' });
+    expect(stepHeadings()).toEqual([
+      'Step 1 — download the template',
+      'Step 2 — upload your CSV',
+      'Imported 1 item',
+    ]);
   });
 });

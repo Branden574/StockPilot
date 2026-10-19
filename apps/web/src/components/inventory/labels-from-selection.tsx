@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 
+import { StatePanel } from '@/components/patterns/state-panel';
 import { Button } from '@/components/ui/button';
 import { LABELS_MAX_ITEMS, readLabelsSelection } from '@/lib/inventory/labels-selection';
 import { loadLabelItemsAction, type LabelItem } from '@/server/actions/labels';
@@ -75,12 +76,18 @@ export function LabelsFromSelection({
     return (
       <>
         <LabelsHeader summary="This label selection is not available in this browser tab any more." />
-        <div className="border-border bg-card rounded-md border p-8 text-center print:hidden">
-          <p className="text-muted-foreground text-sm">
-            Go back to the inventory list, select the items again and click &quot;Print
-            labels&quot;.
-          </p>
-        </div>
+        <StatePanel
+          kind="empty"
+          size="sm"
+          headingLevel={null}
+          className="print:hidden"
+          title={
+            <>
+              Go back to the inventory list, select the items again and click &quot;Print
+              labels&quot;.
+            </>
+          }
+        />
       </>
     );
   }
@@ -105,15 +112,19 @@ export function LabelsFromSelection({
           summary="The selected items could not be loaded."
           selectedCount={state.selected}
         />
-        <div
-          className="border-border bg-card rounded-md border p-8 text-center print:hidden"
-          role="alert"
-        >
-          <p className="text-destructive text-sm">{state.message}</p>
-          <Button className="mt-4" variant="outline" onClick={() => setAttempt((n) => n + 1)}>
-            Try again
-          </Button>
-        </div>
+        <StatePanel
+          kind="failed"
+          size="sm"
+          live="assertive"
+          headingLevel={null}
+          className="print:hidden"
+          title={<span className="text-destructive">{state.message}</span>}
+          action={
+            <Button variant="outline" onClick={() => setAttempt((n) => n + 1)}>
+              Try again
+            </Button>
+          }
+        />
       </>
     );
   }

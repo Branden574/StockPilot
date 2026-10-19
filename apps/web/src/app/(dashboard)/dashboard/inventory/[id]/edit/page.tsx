@@ -1,8 +1,8 @@
-import Link from 'next/link';
+import type { Metadata } from 'next';
 import { notFound, redirect } from 'next/navigation';
 
 import { ItemForm } from '@/components/inventory/item-form';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { forcedWarehouseId } from '@/lib/auth/warehouse';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
@@ -21,6 +21,15 @@ import { WarehousesService } from '@/server/services/warehouses';
 import { WarehouseChartersService } from '@/server/services/warehouse-charters';
 
 import { can, resolveTerminology } from '@stockpilot/core';
+
+// A tab title of its own (CONFLICTS D16): a fixed word, as the record pages
+// have, so the title costs no read of its own.
+export const metadata: Metadata = { title: 'Edit item' };
+
+/** The page area (DESIGN-SPEC 4 and 5.3), the same box every redesigned page
+ *  draws; a form keeps to a reading width inside it. */
+const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
+const FORM_WIDTH = 'w-full max-w-[960px]';
 
 export default async function EditItemPage({
   params,
@@ -128,21 +137,27 @@ export default async function EditItemPage({
   const backHref = safeReturnPath(returnParam) ?? `/dashboard/inventory/${id}`;
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href={backHref}
-          className="text-muted-foreground hover:text-foreground text-sm"
-        >
-          ← Back to item
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">Edit item</h1>
-      </div>
-      <Card>
-        <CardHeader>
-          <CardTitle>{item.name as string}</CardTitle>
-        </CardHeader>
-        <CardContent>
+    <div className={PAGE}>
+      <PageHeader
+        className={FORM_WIDTH}
+        back={<PageHeaderBackLink href={backHref}>← Back to item</PageHeaderBackLink>}
+        title="Edit item"
+      />
+      {/* One form card at a reading width (the shared form pattern), titled
+          with the record's name. */}
+      <section
+        aria-labelledby="edit-record-name"
+        className={`border-border bg-card text-card-foreground rounded-lg border ${FORM_WIDTH}`}
+      >
+        <div className="border-border border-b px-[18px] py-3.5">
+          <h2
+            id="edit-record-name"
+            className="text-[13.5px] font-medium leading-5 [overflow-wrap:anywhere]"
+          >
+            {item.name as string}
+          </h2>
+        </div>
+        <div className="p-[18px]">
           <ItemForm
             defaults={{
               id,
@@ -242,8 +257,8 @@ export default async function EditItemPage({
               (item as { public_description?: string | null }).public_description ?? null
             }
           />
-        </CardContent>
-      </Card>
+        </div>
+      </section>
     </div>
   );
 }

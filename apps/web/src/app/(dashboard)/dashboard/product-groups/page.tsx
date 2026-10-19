@@ -6,6 +6,7 @@ import { can } from '@stockpilot/core';
 
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { ProductGroupRollupList } from '@/components/inventory/product-group-rollup-list';
+import { PageHeader } from '@/components/patterns/page-header';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { requireOrgContext } from '@/lib/auth/session';
@@ -14,6 +15,10 @@ import { withContext } from '@/server/services/context';
 import { ProductGroupsService } from '@/server/services/product-groups';
 
 export const metadata = { title: 'Product groups' };
+
+/** The page area (DESIGN-SPEC 4 and 5.3), the same box every redesigned page
+ *  draws, and the box this route's loading.tsx draws. */
+const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
 
 /**
  * Product groups, each showing its DERIVED roll-up ("6 variants · 52 pairs
@@ -92,39 +97,39 @@ export default async function ProductGroupsPage(props: {
   });
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">
-            {showArchived ? 'Archived product groups' : 'Product groups'}
-          </h1>
-          <p className="text-[13px] text-[var(--ed-ink-3)]">
+    <div className={PAGE}>
+      <PageHeader
+        title={showArchived ? 'Archived product groups' : 'Product groups'}
+        subline={
+          <span className="block max-w-[72ch]">
             {showArchived
               ? 'Archived groups are hidden from the product-groups list and from the pickers that link items, but nothing about them was deleted. Restore one and it comes back with its variants and its totals intact.'
               : 'One row per product. Totals are added up from the group’s variants every time this page loads — a group never holds stock of its own.'}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {/* The archived view is the ONLY place an archived group is read back,
-              so the way in has to be on the page rather than a URL you have to
-              know. Both links carry the current search so switching views does
-              not silently widen what is being looked at. */}
-          <Button asChild variant="outline" size="sm">
-            <Link
-              href={
-                showArchived
-                  ? `/dashboard/product-groups?status=active${searchQuery}`
-                  : `/dashboard/product-groups?status=archived${searchQuery}`
-              }
-            >
-              {showArchived ? 'Back to active groups' : 'View archived'}
-            </Link>
-          </Button>
-          <Button asChild variant="outline" size="sm">
-            <Link href="/dashboard/product-groups/link">Review suggested families</Link>
-          </Button>
-        </div>
-      </div>
+          </span>
+        }
+        actions={
+          <>
+            {/* The archived view is the ONLY place an archived group is read
+                back, so the way in has to be on the page rather than a URL you
+                have to know. Both links carry the current search so switching
+                views does not silently widen what is being looked at. */}
+            <Button asChild variant="outline">
+              <Link
+                href={
+                  showArchived
+                    ? `/dashboard/product-groups?status=active${searchQuery}`
+                    : `/dashboard/product-groups?status=archived${searchQuery}`
+                }
+              >
+                {showArchived ? 'Back to active groups' : 'View archived'}
+              </Link>
+            </Button>
+            <Button asChild variant="outline">
+              <Link href="/dashboard/product-groups/link">Review suggested families</Link>
+            </Button>
+          </>
+        }
+      />
 
       {rows.length === 0 ? (
         <EmptyState

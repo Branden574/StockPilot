@@ -1,8 +1,9 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { ItemForm } from '@/components/inventory/item-form';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { forcedWarehouseId } from '@/lib/auth/warehouse';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
@@ -21,6 +22,15 @@ import { WarehouseChartersService } from '@/server/services/warehouse-charters';
 import { can, resolveTerminology, type TrackingMode } from '@stockpilot/core';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { NEW_ITEM_TOUR } from '@/lib/onboarding/tours';
+
+// A tab title of its own (CONFLICTS D16): the page used to inherit the
+// dashboard's.
+export const metadata: Metadata = { title: 'New item' };
+
+/** The page area (DESIGN-SPEC 4 and 5.3), the same box every redesigned page
+ *  draws; a form keeps to a reading width inside it. */
+const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
+const FORM_WIDTH = 'w-full max-w-[960px]';
 
 export default async function NewItemPage() {
   const ctx = await requireOrgContext();
@@ -59,11 +69,7 @@ export default async function NewItemPage() {
     CustomFieldsService.forCurrentUser(),
     forcedWarehouseId(),
     getActiveWarehouseFilter(),
-    supabase
-      .from('organizations')
-      .select('terminology')
-      .eq('id', ctx.organizationId)
-      .maybeSingle(),
+    supabase.from('organizations').select('terminology').eq('id', ctx.organizationId).maybeSingle(),
   ]);
 
   const [
@@ -136,9 +142,7 @@ export default async function NewItemPage() {
   const defaultWarehouseId =
     forced ??
     (activeFilter && warehouseIds.has(activeFilter) ? activeFilter : null) ??
-    (recent?.warehouseId && warehouseIds.has(recent.warehouseId)
-      ? recent.warehouseId
-      : null);
+    (recent?.warehouseId && warehouseIds.has(recent.warehouseId) ? recent.warehouseId : null);
   // Only carry the recent primary location forward when its parent
   // warehouse matches the chosen default — picking a bin in another
   // warehouse would just confuse the user.
@@ -156,28 +160,49 @@ export default async function NewItemPage() {
     }> | null) ?? null,
   );
 
+  const canImport = can(ctx, 'items:import');
+
   return (
-    <div className="container mx-auto flex min-h-full max-w-3xl flex-col px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <div className="flex items-center justify-between">
-          <Link
-            href="/dashboard/inventory"
-            className="text-muted-foreground hover:text-foreground text-sm"
-          >
-            ← Back to inventory
-          </Link>
-          <PageTour tour={NEW_ITEM_TOUR} />
+    <div className={PAGE}>
+      <PageHeader
+        className={FORM_WIDTH}
+        back={
+          <PageHeaderBackLink href="/dashboard/inventory">← Back to inventory</PageHeaderBackLink>
+        }
+        title="New item"
+        // CONFLICTS D7: the old line still promised CSV import "in Phase 5";
+        // the import has shipped, so the line points to it for anyone the
+        // import page lets in (it redirects without items:import).
+        subline={
+          <>
+            Add a single item.
+            {canImport ? (
+              <>
+                {' To add many at once, '}
+                <Link
+                  href="/dashboard/inventory/import"
+                  className="text-foreground hover:text-accent underline underline-offset-2"
+                >
+                  import a CSV
+                </Link>
+                .
+              </>
+            ) : null}
+          </>
+        }
+        tour={<PageTour tour={NEW_ITEM_TOUR} />}
+      />
+      {/* One form card at a reading width (the shared form pattern). */}
+      <section
+        aria-labelledby="new-item-details"
+        className={`border-border bg-card text-card-foreground rounded-lg border ${FORM_WIDTH}`}
+      >
+        <div className="border-border border-b px-[18px] py-3.5">
+          <h2 id="new-item-details" className="text-[13.5px] font-medium leading-5">
+            Item details
+          </h2>
         </div>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">New item</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Add a single item. Use CSV import for bulk in Phase 5.
-        </p>
-      </div>
-      <Card className="flex-1">
-        <CardHeader>
-          <CardTitle>Item details</CardTitle>
-        </CardHeader>
-        <CardContent>
+        <div className="p-[18px]">
           <ItemForm
             defaults={{
               warehouseId: defaultWarehouseId,
@@ -214,8 +239,8 @@ export default async function NewItemPage() {
             customFieldDefs={customFieldDefs}
             lotSerialEnabled={lotSerialEnabled}
           />
-        </CardContent>
-      </Card>
+        </div>
+      </section>
     </div>
   );
 }

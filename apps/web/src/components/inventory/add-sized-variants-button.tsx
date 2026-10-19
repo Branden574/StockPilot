@@ -13,6 +13,7 @@ import {
   type ApparelAlphaSize,
 } from '@stockpilot/core';
 
+import { touchTargetClass } from '@/components/patterns/touch-target';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -158,7 +159,7 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
               warehouse, prices, and reorder thresholds from this item. This item stays unchanged.
             </DialogDescription>
           </DialogHeader>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="add-base-name">Base name</Label>
               <Input
@@ -166,7 +167,7 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
                 value={baseName}
                 onChange={(e) => setBaseName(e.target.value)}
               />
-              <p className="text-muted-foreground text-[11px]">
+              <p className="text-muted-foreground text-[12px] leading-[17px]">
                 Each variant becomes &quot;{baseName.trim() || 'Name'} - {'{Size}'}&quot;.
               </p>
             </div>
@@ -179,14 +180,14 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
                 value={baseSku}
                 onChange={(e) => setBaseSku(e.target.value)}
               />
-              <p className="text-muted-foreground text-[11px]">
+              <p className="text-muted-foreground text-[12px] leading-[17px]">
                 Each variant becomes &quot;{baseSku.trim() || '—'}-{'{Size}'}&quot;.
               </p>
             </div>
           </div>
           <div className="space-y-2">
-            <Label>Sizes</Label>
-            <div className="flex flex-wrap gap-1.5">
+            <Label id="add-sizes-label">Sizes</Label>
+            <div role="group" aria-labelledby="add-sizes-label" className="flex flex-wrap gap-2">
               {ALL_SIZES.map((s) => {
                 const picked = selected.some((x) => x.size === s);
                 return (
@@ -201,9 +202,15 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
                           : [...prev, { size: s, quantity: 0 }],
                       )
                     }
+                    // The form's size chip: the filter-chip recipe, ink when
+                    // picked, 44 px on a phone and the shared chip's touch area
+                    // on a coarse pointer (the row's gap-2 keeps them apart).
                     className={cn(
-                      'border-border rounded border px-2.5 py-1 text-xs transition-colors',
-                      picked ? 'bg-foreground text-background' : 'hover:bg-muted',
+                      touchTargetClass,
+                      'inline-flex h-7 min-w-9 items-center justify-center rounded-full border px-3 font-mono text-[12.5px] transition-colors max-sm:h-11 max-sm:min-w-11',
+                      picked
+                        ? 'border-foreground bg-foreground text-background'
+                        : 'border-line-strong text-ink-2 hover:bg-muted hover:text-foreground',
                     )}
                   >
                     {s}
@@ -215,8 +222,9 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
               <div className="mt-3 space-y-1.5">
                 {selected.map((entry, i) => (
                   <div key={entry.size} className="flex items-center gap-2">
-                    <span className="w-10 text-xs font-medium">{entry.size}</span>
+                    <span className="w-10 font-mono text-[12.5px] font-medium">{entry.size}</span>
                     <BlankZeroNumberInput
+                      aria-label={`On hand for size ${entry.size}`}
                       min={0}
                       value={entry.quantity}
                       onValueChange={(n) =>
@@ -228,7 +236,7 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
                       }
                       className="h-8 w-24"
                     />
-                    <span className="text-muted-foreground text-[11px]">on hand</span>
+                    <span className="text-muted-foreground text-[12px]">on hand</span>
                   </div>
                 ))}
               </div>

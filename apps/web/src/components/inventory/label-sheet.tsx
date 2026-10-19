@@ -3,6 +3,7 @@
 import { Printer } from 'lucide-react';
 import * as React from 'react';
 
+import { StatePanel } from '@/components/patterns/state-panel';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -45,12 +46,18 @@ export function LabelSheet({
 
   if (items.length === 0) {
     return (
-      <div className="border-border bg-card rounded-md border p-8 text-center print:hidden">
-        <p className="text-muted-foreground text-sm">
-          No items selected. Go to the inventory list, pick rows, and use the
-          "Print labels" bulk action.
-        </p>
-      </div>
+      <StatePanel
+        kind="empty"
+        size="sm"
+        headingLevel={null}
+        className="print:hidden"
+        title={
+          <>
+            No items selected. Go to the inventory list, pick rows, and use the &quot;Print
+            labels&quot; bulk action.
+          </>
+        }
+      />
     );
   }
 
@@ -58,13 +65,20 @@ export function LabelSheet({
 
   return (
     <>
-      <div className="mb-6 flex flex-wrap items-end gap-3 print:hidden">
-        <div className="space-y-1.5">
-          <Label className="text-muted-foreground text-[11px]">Template</Label>
+      {/* The sheet's controls, on screen only (the labels print alone). */}
+      <div
+        data-slot="label-sheet-controls"
+        className="border-border bg-card flex flex-wrap items-end gap-3 rounded-lg border p-3 sm:px-[18px] print:hidden"
+      >
+        <div className={CONTROL_FIELD}>
+          <Label htmlFor="label-sheet-template" className="text-muted-foreground text-[12px]">
+            Template
+          </Label>
           <select
+            id="label-sheet-template"
             value={template}
             onChange={(e) => setTemplate(e.target.value as Template)}
-            className="border-input bg-background h-10 rounded-md border px-3 text-sm"
+            className={NATIVE_SELECT}
           >
             {(Object.keys(TEMPLATES) as Template[]).map((t) => (
               <option key={t} value={t}>
@@ -73,20 +87,26 @@ export function LabelSheet({
             ))}
           </select>
         </div>
-        <div className="space-y-1.5">
-          <Label className="text-muted-foreground text-[11px]">Format</Label>
+        <div className={CONTROL_FIELD}>
+          <Label htmlFor="label-sheet-format" className="text-muted-foreground text-[12px]">
+            Format
+          </Label>
           <select
+            id="label-sheet-format"
             value={format}
             onChange={(e) => setFormat(e.target.value as LabelFormat)}
-            className="border-input bg-background h-10 rounded-md border px-3 text-sm"
+            className={NATIVE_SELECT}
           >
             <option value="barcode">Barcode (Code 128)</option>
             <option value="qr">QR code</option>
           </select>
         </div>
-        <div className="space-y-1.5">
-          <Label className="text-muted-foreground text-[11px]">Copies per item</Label>
+        <div className={CONTROL_FIELD}>
+          <Label htmlFor="label-sheet-copies" className="text-muted-foreground text-[12px]">
+            Copies per item
+          </Label>
           <Input
+            id="label-sheet-copies"
             type="number"
             min={1}
             max={20}
@@ -96,36 +116,45 @@ export function LabelSheet({
           />
         </div>
         <div className="ml-auto">
-          <Button onClick={() => window.print()} variant="gradient">
+          {/* Committing the sheet to paper: the ink primary. */}
+          <Button onClick={() => window.print()}>
             <Printer className="h-4 w-4" /> Print
           </Button>
         </div>
       </div>
 
-      <div className="label-print-page">
-        <div
-          className={tpl.kind === 'thermal' ? 'label-grid label-grid--thermal' : 'label-grid'}
-          style={
-            tpl.kind === 'thermal'
-              ? // One label per printed page — stack vertically; the print CSS
-                // page-breaks after each cell so the roll advances label by label.
-                { display: 'flex', flexDirection: 'column', gap: '8px' }
-              : {
-                  display: 'grid',
-                  gridTemplateColumns: `repeat(${tpl.perRow}, ${tpl.widthIn}in)`,
-                  gap: `${tpl.gapIn}in`,
-                }
-          }
-        >
-          {expanded.map((it, idx) => (
-            <LabelCell
-              key={`${it.id}-${idx}-${format}`}
-              item={it}
-              widthIn={tpl.widthIn}
-              heightIn={tpl.heightIn}
-              format={format}
-            />
-          ))}
+      {/* The sheet on screen sits on the recessed well, so its white labels
+          read as paper in both themes. On paper the well draws nothing and
+          the print rules below give the page to the labels alone. */}
+      <div
+        data-slot="label-sheet-preview"
+        className="border-border bg-sunk overflow-x-auto rounded-lg border p-4 sm:p-6 print:overflow-visible print:rounded-none print:border-0 print:bg-transparent print:p-0"
+      >
+        <div className="label-print-page">
+          <div
+            className={tpl.kind === 'thermal' ? 'label-grid label-grid--thermal' : 'label-grid'}
+            style={
+              tpl.kind === 'thermal'
+                ? // One label per printed page — stack vertically; the print CSS
+                  // page-breaks after each cell so the roll advances label by label.
+                  { display: 'flex', flexDirection: 'column', gap: '8px' }
+                : {
+                    display: 'grid',
+                    gridTemplateColumns: `repeat(${tpl.perRow}, ${tpl.widthIn}in)`,
+                    gap: `${tpl.gapIn}in`,
+                  }
+            }
+          >
+            {expanded.map((it, idx) => (
+              <LabelCell
+                key={`${it.id}-${idx}-${format}`}
+                item={it}
+                widthIn={tpl.widthIn}
+                heightIn={tpl.heightIn}
+                format={format}
+              />
+            ))}
+          </div>
         </div>
       </div>
 
@@ -232,8 +261,7 @@ function LabelCell({
     let cancelled = false;
     (async () => {
       const { default: QRCode } = await import('qrcode');
-      const origin =
-        typeof window !== 'undefined' ? window.location.origin : '';
+      const origin = typeof window !== 'undefined' ? window.location.origin : '';
       const url = `${origin}/p/items/${item.id}`;
       try {
         const dataUrl = await QRCode.toDataURL(url, {
@@ -252,13 +280,7 @@ function LabelCell({
   }, [format, item.id]);
 
   const encodedHeight =
-    format === 'qr'
-      ? heightIn >= 2
-        ? '70%'
-        : '60%'
-      : heightIn >= 2
-        ? '50%'
-        : '55%';
+    format === 'qr' ? (heightIn >= 2 ? '70%' : '60%') : heightIn >= 2 ? '50%' : '55%';
 
   return (
     <div
@@ -312,11 +334,7 @@ function LabelCell({
           ) : null}
         </div>
       ) : (
-        <svg
-          ref={barcodeRef}
-          style={{ width: '100%', height: encodedHeight }}
-          aria-hidden
-        />
+        <svg ref={barcodeRef} style={{ width: '100%', height: encodedHeight }} aria-hidden />
       )}
       <div
         style={{
@@ -331,3 +349,14 @@ function LabelCell({
     </div>
   );
 }
+
+/**
+ * One control with its label stacked above it, never wider than the card: on a
+ * phone a long template name used to push its select past the card's edge, and
+ * a short label (Format) sat beside its select instead of above it.
+ */
+const CONTROL_FIELD = 'flex min-w-0 max-w-full flex-col gap-1.5';
+/** A native select in the shared input look (32 px, 44 px and 16 px text on a
+ *  phone, the stronger hairline, the visible focus ring). */
+const NATIVE_SELECT =
+  'border-line-strong bg-card text-foreground focus-visible:ring-ring focus-visible:ring-offset-background h-8 max-w-full rounded-md border px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 max-sm:h-11 max-sm:text-base';
