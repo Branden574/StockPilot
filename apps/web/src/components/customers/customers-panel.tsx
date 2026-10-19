@@ -80,11 +80,11 @@ const CARD_TOGGLE =
 /** A list row inside an open card, 8 x 0 with a hairline between rows. */
 const LIST = 'divide-border border-border divide-y rounded-lg border';
 const LIST_ROW = 'flex min-h-10 items-center gap-2 px-3 py-1.5 text-[13.5px]';
-/** The quiet "nothing here yet" box. */
 /** The native select's look: the Input's box (32 px, 44 px with 16 px text on
  *  a phone), with the focus ring. Native, so the browser's picker stays. */
 const NATIVE_SELECT =
   'border-input bg-card text-foreground focus-visible:ring-ring h-8 w-full max-w-sm rounded-md border px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:h-11 max-sm:text-base';
+/** The quiet "nothing here yet" box. */
 const EMPTY =
   'border-line-strong bg-sunk text-muted-foreground rounded-lg border border-dashed p-8 text-center text-[13.5px]';
 

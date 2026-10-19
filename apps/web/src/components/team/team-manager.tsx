@@ -689,26 +689,26 @@ function InviteRow({ invite }: { invite: PendingInvite }) {
         {/* 8 px between the 28 px buttons, so each keeps its own 44 px
             touch target on a phone (the Button's hit-area rule). */}
         <div className="flex items-center justify-end gap-2">
-        <Button variant="outline" size="sm" onClick={resend} disabled={resending}>
-          {resending ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Send className="h-3.5 w-3.5" />
-          )}
-          Resend
-        </Button>
-        <Button variant="outline" size="sm" onClick={copyLink}>
-          <Copy className="h-3.5 w-3.5" /> Copy link
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="text-muted-foreground"
-          onClick={() => setRevokeOpen(true)}
-          aria-label={`Revoke invite for ${invite.email}`}
-        >
-          <Trash2 className="h-4 w-4" />
-        </Button>
+          <Button variant="outline" size="sm" onClick={resend} disabled={resending}>
+            {resending ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Send className="h-3.5 w-3.5" />
+            )}
+            Resend
+          </Button>
+          <Button variant="outline" size="sm" onClick={copyLink}>
+            <Copy className="h-3.5 w-3.5" /> Copy link
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="text-muted-foreground"
+            onClick={() => setRevokeOpen(true)}
+            aria-label={`Revoke invite for ${invite.email}`}
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
         </div>
         <DestructiveConfirm
           open={revokeOpen}
