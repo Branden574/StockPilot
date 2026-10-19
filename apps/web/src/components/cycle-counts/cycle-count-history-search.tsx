@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 
 import { Input } from '@/components/ui/input';
+import { cn } from '@/lib/utils';
 
 import { CYCLE_COUNT_SEARCH_MAX_LENGTH } from '@stockpilot/core';
 
@@ -80,7 +81,7 @@ export function CycleCountHistorySearch({
         e.preventDefault();
         apply(q);
       }}
-      className="w-full sm:w-[280px]"
+      className="w-full sm:w-[300px]"
     >
       {/* The toolbar search of the redesign (DESIGN-SPEC 6.3): the field's
           words stay its accessible name; the search icon and the placeholder
@@ -106,7 +107,12 @@ export function CycleCountHistorySearch({
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="Search count #, warehouse, or notes…"
-          className="pl-8 pr-[72px] [&::-webkit-search-cancel-button]:hidden"
+          className={cn(
+            'pl-8 [&::-webkit-search-cancel-button]:hidden',
+            // Room for the spinner and the clear button only while they show,
+            // so the whole placeholder fits beside the icon.
+            q || pending ? 'pr-12' : null,
+          )}
         />
         <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-1">
           {pending ? (

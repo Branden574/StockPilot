@@ -403,12 +403,14 @@ export function CycleCountDetail({
         />
       </StatStrip>
 
-      {/* The count beside its rail (DESIGN-SPEC 7.7: 1.7fr / minmax(260px,1fr)),
-          stacked when the page area is narrower than two 420 px columns. The
-          rail comes first in reading order, as the assignee and the linked
-          exceptions always came before the lines. */}
-      <div className="@min-[856px]:grid-cols-[minmax(0,1.7fr)_minmax(260px,1fr)] grid min-w-0 grid-cols-1 items-start gap-4">
-        <div className="@min-[856px]:col-start-2 @min-[856px]:row-start-1 flex min-w-0 flex-col gap-4">
+      {/* The count beside its rail (DESIGN-SPEC 7.7). The count table holds 50
+          lines of six columns, so the rail (300 px) sits beside it only when
+          the page area has room for both (1100 px: a 1440 window); below that
+          the rail's cards come first, side by side from 640 px, and the count
+          takes the full width. The rail comes first in reading order, as the
+          assignee and the linked exceptions always came before the lines. */}
+      <div className="@min-[1100px]:grid-cols-[minmax(0,1fr)_300px] grid min-w-0 grid-cols-1 items-start gap-4">
+        <div className="@min-[640px]:grid-cols-2 @min-[1100px]:col-start-2 @min-[1100px]:row-start-1 @min-[1100px]:grid-cols-1 grid min-w-0 grid-cols-1 items-start gap-4">
           <AssigneePicker
             cycleCountId={header.id}
             currentAssignedTo={header.assigned_to}
@@ -419,7 +421,7 @@ export function CycleCountDetail({
           {linkedExceptions}
         </div>
 
-        <div className="@min-[856px]:col-start-1 @min-[856px]:row-start-1 flex min-w-0 flex-col gap-4">
+        <div className="@min-[1100px]:col-start-1 @min-[1100px]:row-start-1 flex min-w-0 flex-col gap-4">
           {newItemsCount > 0 && (
             <div className="bg-warning-wash text-warning flex items-start gap-2.5 rounded-lg px-[18px] py-3 text-[13px] leading-5">
               <TriangleAlert aria-hidden className="mt-0.5 h-4 w-4 shrink-0" />

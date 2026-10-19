@@ -164,7 +164,14 @@ export default async function CycleCountsPage({
       <RememberCycleCountListView q={q} status={status} page={result.page} />
       <PageHeader
         title={heading}
-        subline="Recount stock against the system. Approving a count posts adjustments for every variance and brings inventory in line with what was counted."
+        subline={
+          // A reading width, so the start button keeps its place on the
+          // title's line instead of wrapping under a full-width sentence.
+          <span className="block max-w-[640px]">
+            Recount stock against the system. Approving a count posts adjustments for every variance
+            and brings inventory in line with what was counted.
+          </span>
+        }
         primaryAction={
           canStart ? (
             <Button asChild variant="gradient">
