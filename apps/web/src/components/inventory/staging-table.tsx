@@ -180,7 +180,9 @@ function SourceCell({
     return <Dash />;
   }
   return (
-    <span className="whitespace-nowrap font-mono text-[12.5px]">
+    // Wraps at the separator (and inside a long receipt number), so the column
+    // stays narrow enough for the Actions to fit beside it.
+    <span className="font-mono text-[12.5px] [overflow-wrap:anywhere]">
       {poNumber && (
         <button
           type="button"
@@ -583,7 +585,7 @@ export function StagingTable({
 
           <Table className="min-w-[760px]">
             <TableHeader>
-              <TableRow className="hover:bg-transparent">
+              <TableRow className="hover:bg-transparent [&>th]:whitespace-nowrap">
                 {canPlace && (
                   <TableHead className="w-[52px]">
                     <Checkbox
@@ -646,7 +648,7 @@ export function StagingTable({
                       </TableCell>
                     )}
                     {/* Item name, then the SKU and the source-bucket badge */}
-                    <TableCell className="min-w-[220px]">
+                    <TableCell className="min-w-[200px]">
                       <div className="text-foreground text-[13.5px] font-medium leading-5">
                         {row.name}
                       </div>
@@ -683,7 +685,7 @@ export function StagingTable({
                     </TableCell>
 
                     {/* Received date */}
-                    <TableCell className="whitespace-nowrap">
+                    <TableCell>
                       {row.receivedAt ? (
                         // Rendered on the server, hydrated a minute later:
                         // tolerate the drift instead of React error #418.
