@@ -2532,7 +2532,7 @@ export function InventoryTable({
       <div className="grid">
         <div
           className={cn(
-            'col-start-1 row-start-1 flex flex-wrap items-center gap-x-1.5 gap-y-2',
+            'col-start-1 row-start-1 flex flex-wrap content-start items-center gap-x-1.5 gap-y-2',
             selected.size > 0 && 'invisible',
           )}
         >
