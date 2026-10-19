@@ -6,6 +6,7 @@ import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
+import { PageHeader } from '@/components/patterns/page-header';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
@@ -48,6 +49,16 @@ const PRESET_COLORS = [
 ];
 const DEFAULT_COLOR = '#94a3b8';
 
+/**
+ * A row's Edit and Delete (CONFLICTS D18). They used to be opacity-0 until the
+ * row was hovered, so a phone or tablet never showed them and a keyboard user
+ * tabbed onto invisible buttons. Now only a fine pointer (a mouse) hides them
+ * until the row is hovered or holds focus; on touch they always show. The two
+ * sit 8 px apart, the gap the 44 px touch areas of 28 and 32 px buttons need.
+ */
+const ROW_ACTIONS =
+  'flex shrink-0 items-center gap-2 transition-opacity pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:group-focus-within:opacity-100';
+
 export function TagsManager({ initial }: { initial: TagManagerRow[] }) {
   const router = useRouter();
   const [editing, setEditing] = React.useState<TagManagerRow | null>(null);
@@ -80,11 +91,20 @@ export function TagsManager({ initial }: { initial: TagManagerRow[] }) {
 
   return (
     <>
-      <div className="mb-5 flex items-center justify-end">
-        <Button variant="gradient" onClick={openNew}>
-          <Plus className="h-4 w-4" /> New tag
-        </Button>
-      </div>
+      <PageHeader
+        title="Tags"
+        subline={
+          <span className="block max-w-[640px]">
+            Flexible labels you can apply to many items at once. Stack them with categories for
+            finer-grained filtering.
+          </span>
+        }
+        primaryAction={
+          <Button variant="gradient" onClick={openNew}>
+            <Plus className="h-4 w-4" /> New tag
+          </Button>
+        }
+      />
 
       {initial.length === 0 ? (
         <EmptyState
@@ -93,45 +113,45 @@ export function TagsManager({ initial }: { initial: TagManagerRow[] }) {
           description="Tags add a flexible label layer on top of categories. Apply many tags per item and pull them into bulk actions. Use the New tag button above to add one."
         />
       ) : (
-        <div className="overflow-hidden rounded-xl border bg-card">
-          <ul className="divide-y divide-border">
+        <div className="border-border bg-card min-w-0 overflow-hidden rounded-lg border">
+          <ul className="divide-border divide-y" aria-label="Tags">
             {initial.map((tag) => (
               <li
                 key={tag.id}
-                className="group flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/40"
+                data-testid="tag-row"
+                className="hover:bg-muted group flex min-h-[52px] items-center gap-3 px-[18px] py-2 transition-colors"
               >
                 <span
                   aria-hidden
-                  className="h-3 w-3 shrink-0 rounded-full"
+                  className="h-2.5 w-2.5 shrink-0 rounded-full"
                   style={{ backgroundColor: tag.color ?? DEFAULT_COLOR }}
                 />
                 <button
                   type="button"
                   onClick={() => openEdit(tag)}
-                  className="flex-1 text-left font-medium transition-colors hover:text-primary"
+                  className="text-foreground hover:text-accent min-w-0 flex-1 rounded-sm text-left text-[13.5px] font-medium transition-colors [overflow-wrap:anywhere]"
                 >
                   {tag.name}
                 </button>
-                <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                <span className="text-muted-foreground shrink-0 font-mono text-[12px] tabular-nums">
                   {tag.usage_count} item{tag.usage_count === 1 ? '' : 's'}
                 </span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => openEdit(tag)}
-                  className="opacity-0 transition-opacity group-hover:opacity-100"
-                >
-                  Edit
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="opacity-0 transition-opacity group-hover:opacity-100"
-                  onClick={() => setDeleteTarget(tag)}
-                  aria-label={`Delete ${tag.name}`}
-                >
-                  <Trash2 className="h-4 w-4 text-muted-foreground" />
-                </Button>
+                {/* Edit and Delete show on hover with a mouse, and always on
+                    touch and for the keyboard (CONFLICTS D18): with a fine
+                    pointer they hide until the row is hovered or holds focus. */}
+                <div className={ROW_ACTIONS}>
+                  <Button variant="ghost" size="sm" onClick={() => openEdit(tag)}>
+                    Edit
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setDeleteTarget(tag)}
+                    aria-label={`Delete ${tag.name}`}
+                  >
+                    <Trash2 className="text-muted-foreground h-4 w-4" />
+                  </Button>
+                </div>
               </li>
             ))}
           </ul>

@@ -1,5 +1,5 @@
-import { PageSkeleton } from '@/components/dashboard/skeletons';
+import { TagsPageSkeleton } from '@/components/tags/tags-page-skeleton';
 
 export default function TagsLoading() {
-  return <PageSkeleton />;
+  return <TagsPageSkeleton />;
 }
