@@ -47,9 +47,12 @@ export function GroupingPreview({
         : 'Serial: not required';
 
   return (
-    <div className="rounded-md border border-border bg-muted/30 p-3 text-sm">
+    <div
+      data-slot="grouping-preview"
+      className="border-border bg-sunk rounded-md border p-3 text-[13px] leading-5"
+    >
       <div className="mb-2 font-medium">This will be saved as</div>
-      <dl className="grid grid-cols-[9rem_1fr] gap-y-1">
+      <dl className="grid grid-cols-[9rem_minmax(0,1fr)] gap-x-3 gap-y-1">
         <dt className="text-muted-foreground">Product group</dt>
         <dd>{groupName ?? 'New group'}</dd>
         <dt className="text-muted-foreground">Variant</dt>
@@ -63,17 +66,18 @@ export function GroupingPreview({
       </dl>
 
       {candidates.length > 0 && (
-        <div className="mt-3 border-t border-border pt-3">
-          <div className="mb-1 text-xs text-muted-foreground">
+        <div className="border-border mt-3 border-t pt-3">
+          <div className="text-muted-foreground mb-1 text-[12px]">
             These existing groups look similar. Nothing is linked automatically.
           </div>
           <ul className="space-y-1">
             {candidates.map((c) => (
               <li key={c.id} className="flex items-center justify-between gap-2">
-                <span>{c.name}</span>
+                <span className="min-w-0 [overflow-wrap:anywhere]">{c.name}</span>
                 <button
                   type="button"
-                  className="text-xs underline"
+                  // A 12 px text button (DESIGN-SPEC 6.21), ink on hover.
+                  className="text-muted-foreground hover:text-foreground shrink-0 text-[12px] underline underline-offset-2"
                   onClick={() => onUseCandidate?.(c.id)}
                 >
                   Use this group

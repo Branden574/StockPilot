@@ -1,12 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import type {
-  FieldErrors,
-  UseFormRegister,
-  UseFormSetValue,
-  UseFormWatch,
-} from 'react-hook-form';
+import type { FieldErrors, UseFormRegister, UseFormSetValue, UseFormWatch } from 'react-hook-form';
 
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -165,7 +160,7 @@ function FieldLabel({
   return (
     <Label htmlFor={htmlFor}>
       {children}
-      {!required && <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}
+      {!required && <span className="text-muted-foreground ml-1 font-normal">(optional)</span>}
     </Label>
   );
 }
@@ -173,7 +168,7 @@ function FieldLabel({
 function FieldError({ id, message }: { id: string; message: unknown }) {
   if (!message) return null;
   return (
-    <p id={id} className="text-xs text-destructive">
+    <p id={id} className="text-destructive text-[12px] leading-[17px]">
       {String(message)}
     </p>
   );
@@ -233,11 +228,13 @@ export function SportsFields({
 
   return (
     <div
-      className="space-y-3 rounded-md border border-border bg-muted/20 p-3"
+      // A recessed panel inside the Classification section; its inputs keep
+      // their card surface, so they read as controls on the well.
+      className="border-border bg-sunk space-y-3 rounded-md border p-3"
       data-testid="sports-fields"
     >
-      <p className="text-xs font-medium text-muted-foreground">{profile.label} details</p>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <p className="text-foreground text-[12.5px] font-medium">{profile.label} details</p>
+      <div className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
         {hasGroup('brand') && (
           <div className="space-y-1.5">
             <FieldLabel htmlFor={idFor('brand')} required={required('brand')}>
@@ -401,7 +398,10 @@ export function SportsFields({
               // The single box and the chips above are two ways to answer the
               // same question, and a picked run ignores the box entirely (the
               // sized save sends variants[], never variantSize) — say which.
-              <p id={idFor('size-note')} className="text-muted-foreground text-[11px]">
+              <p
+                id={idFor('size-note')}
+                className="text-muted-foreground text-[12px] leading-[17px]"
+              >
                 {sizeRunPicked
                   ? 'Sizes are picked above, so this box is not used: one item is added per size.'
                   : 'Or pick sizes above to add one item per size.'}
@@ -452,7 +452,10 @@ export function SportsFields({
             {scaleSystemName && (
               // Why the field is optional here: the server stores the scale's
               // system when none is picked.
-              <p id={idFor('size-system-note')} className="text-muted-foreground text-[11px]">
+              <p
+                id={idFor('size-system-note')}
+                className="text-muted-foreground text-[12px] leading-[17px]"
+              >
                 {`Left empty, this category's size scale sets it: ${scaleSystemName}.`}
               </p>
             )}
@@ -500,7 +503,7 @@ export function SportsFields({
               aria-describedby={errors.jerseyNumber ? idFor('jersey-number-error') : undefined}
               {...register('jerseyNumber')}
             />
-            <p className="text-muted-foreground text-[11px]">
+            <p className="text-muted-foreground text-[12px] leading-[17px]">
               Numbers repeat across sizes and teams. Leading zeroes are kept.
             </p>
             <FieldError id={idFor('jersey-number-error')} message={errors.jerseyNumber?.message} />

@@ -34,6 +34,7 @@ const IsbnScanner = dynamic(
 import { GroupSelectedDialog } from '@/components/inventory/display-group-dialogs';
 import { StockAdjustDialog } from '@/components/inventory/stock-adjust-dialog';
 import { composeBookCustomFields } from '@/components/inventory/book-custom-fields';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { BlankZeroNumberInput } from '@/components/ui/blank-zero-number-input';
 import { Input } from '@/components/ui/input';
@@ -1605,11 +1606,17 @@ export function ItemForm({
       {isEdit && sharedSkuBanner ? (
         <div
           role="note"
-          className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-[12px] text-amber-950 dark:border-amber-500/40 dark:bg-amber-950/30 dark:text-amber-100"
+          data-slot="item-form-shared-sku-banner"
+          // The caution wash and ink text in both themes (the old hard-coded
+          // amber did not follow the dark palette's tokens).
+          className="border-warning/40 bg-warning-wash text-foreground rounded-md border px-3 py-2.5 text-[12.5px] leading-[18px]"
         >
           <p>{sharedSkuBanner}</p>
           {itemPageHref && !sharedSkuKeeps ? (
-            <Link href={itemPageHref} className="mt-1 inline-block font-medium underline">
+            <Link
+              href={itemPageHref}
+              className="hover:text-accent mt-1 inline-block font-medium underline underline-offset-2"
+            >
               Open the item page
             </Link>
           ) : null}
@@ -1618,7 +1625,7 @@ export function ItemForm({
 
       {!isEdit && (
         <Section title="Photos">
-          <p className="text-muted-foreground text-xs">
+          <p className="text-muted-foreground text-[12.5px]">
             Drop photos here. They'll upload after the item is created. PNG, JPG, WebP, AVIF — up to
             10 MB each.
           </p>
@@ -1628,22 +1635,30 @@ export function ItemForm({
               {staged.map((s, idx) => (
                 <div
                   key={s.previewUrl}
-                  className="bg-muted group relative aspect-square overflow-hidden rounded-lg border"
+                  // White photo tiles, as the item page's uploader draws them.
+                  className="border-border relative aspect-square overflow-hidden rounded-lg border bg-white"
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={s.previewUrl} alt="" className="h-full w-full object-cover" />
                   <button
                     type="button"
                     onClick={() => removeStaged(idx)}
-                    className="absolute right-1 top-1 grid h-7 w-7 place-items-center rounded-md bg-black/50 text-white opacity-0 transition-opacity group-hover:opacity-100"
+                    // Always shown: it used to stay invisible until the pointer
+                    // hovered the tile, so on a phone, a tablet or the keyboard
+                    // a staged photo could not be seen to be removable.
+                    data-slot="staged-photo-remove"
+                    className="hover:bg-destructive hover:text-destructive-foreground absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-md bg-black/65 text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
                     aria-label="Remove photo"
                   >
                     <X className="h-3.5 w-3.5" />
                   </button>
                   {idx === 0 && (
-                    <span className="bg-primary text-primary-foreground absolute left-1 top-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider">
+                    <Badge
+                      variant="default"
+                      className="pointer-events-none absolute left-1.5 top-1.5"
+                    >
                       Primary
-                    </span>
+                    </Badge>
                   )}
                 </div>
               ))}
@@ -1663,12 +1678,15 @@ export function ItemForm({
               if (e.dataTransfer.files) addFiles(e.dataTransfer.files);
             }}
             className={cn(
-              'border-border bg-muted/20 hover:border-primary/40 hover:bg-muted/40 flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-6 py-6 transition-colors',
-              dragOver && 'border-primary bg-primary/5',
+              // The item page uploader's drop zone: a quiet dashed box on the
+              // stronger hairline, the neutral hover fill, and the accent edge on
+              // the accent wash while a file is dragged over it.
+              'bg-card hover:bg-muted border-line-strong flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed px-6 py-6 text-center transition-colors',
+              dragOver && 'border-accent bg-success-wash hover:bg-success-wash',
             )}
           >
-            <ImagePlus className="text-muted-foreground h-5 w-5" />
-            <p className="text-sm font-medium">Drop photos, or click to browse</p>
+            <ImagePlus aria-hidden className="text-muted-foreground h-5 w-5" />
+            <p className="text-[13.5px] font-medium">Drop photos, or click to browse</p>
             <input
               id="item-form-photos"
               ref={fileInputRef}
@@ -1695,30 +1713,43 @@ export function ItemForm({
 
       <Section title="Basics">
         <SharedFieldsNote others={isEdit ? sharedSkuOthers : 0} />
-        <Field label="Name" error={errors.name?.message}>
-          <Input placeholder="Wireless mouse" autoFocus {...register('name')} />
+        <Field label="Name" error={errors.name?.message} htmlFor="item-form-name">
+          <Input id="item-form-name" placeholder="Wireless mouse" autoFocus {...register('name')} />
         </Field>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <Field label="SKU" error={errors.sku?.message} optional>
+        <div className={FIELD_GRID}>
+          <Field label="SKU" error={errors.sku?.message} optional htmlFor="item-form-sku">
             <div className="flex gap-2">
-              <Input placeholder="Auto-generated if blank" {...register('sku')} />
+              <Input
+                id="item-form-sku"
+                placeholder="Auto-generated if blank"
+                {...register('sku')}
+              />
               <Button
                 type="button"
                 variant="outline"
-                size="sm"
+                className="shrink-0 max-sm:h-11"
                 onClick={() => setValue('sku', generateSku())}
               >
                 Auto
               </Button>
             </div>
           </Field>
-          <Field label={isBook ? 'ISBN' : 'Barcode'} error={errors.barcode?.message} optional>
+          <Field
+            label={isBook ? 'ISBN' : 'Barcode'}
+            error={errors.barcode?.message}
+            optional
+            htmlFor="item-form-barcode"
+          >
             <div className="flex gap-2">
-              <Input placeholder={isBook ? '978-…' : 'Scan or type'} {...register('barcode')} />
+              <Input
+                id="item-form-barcode"
+                placeholder={isBook ? '978-…' : 'Scan or type'}
+                {...register('barcode')}
+              />
               <Button
                 type="button"
                 variant="outline"
-                size="sm"
+                className="shrink-0 max-sm:h-11"
                 onClick={() => setScannerOpen(true)}
                 disabled={lookingUp}
               >
@@ -1733,7 +1764,7 @@ export function ItemForm({
                 <Button
                   type="button"
                   variant="outline"
-                  size="sm"
+                  className="shrink-0 max-sm:h-11"
                   onClick={handleUpcLookup}
                   disabled={lookingUp}
                   title="Fetch product info from UPC"
@@ -1745,32 +1776,39 @@ export function ItemForm({
           </Field>
         </div>
         {!isBook && (
-          <Field label="Model number" error={errors.modelNumber?.message} optional>
+          <Field
+            label="Model number"
+            error={errors.modelNumber?.message}
+            optional
+            htmlFor="item-form-model-number"
+          >
             <Input
+              id="item-form-model-number"
               placeholder="e.g. MX432LL/A (manufacturer's per-SKU code)"
               {...register('modelNumber')}
             />
           </Field>
         )}
         {isBook && (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Field label="Author" optional>
+          <div className={FIELD_GRID}>
+            <Field label="Author" optional htmlFor="item-form-author">
               <Input
+                id="item-form-author"
                 placeholder="e.g. Toni Morrison"
                 value={author}
                 onChange={(e) => setAuthor(e.target.value)}
               />
             </Field>
-            <div className="space-y-1.5">
-              <Label>
+            <div className={FIELD}>
+              <Label htmlFor="item-form-grade">
                 Grade level
-                <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
+                <OptionalMark />
               </Label>
               <Select
                 value={grade || '__none'}
                 onValueChange={(v) => setGrade(v === '__none' ? '' : v)}
               >
-                <SelectTrigger>
+                <SelectTrigger id="item-form-grade">
                   <SelectValue placeholder="—" />
                 </SelectTrigger>
                 <SelectContent>
@@ -1785,16 +1823,21 @@ export function ItemForm({
             </div>
           </div>
         )}
-        <Field label="Description" error={errors.description?.message} optional>
-          <Textarea rows={3} {...register('description')} />
+        <Field
+          label="Description"
+          error={errors.description?.message}
+          optional
+          htmlFor="item-form-description"
+        >
+          <Textarea id="item-form-description" rows={3} {...register('description')} />
         </Field>
       </Section>
 
       <Section title="Classification">
         <SharedFieldsNote others={isEdit ? sharedSkuOthers : 0} />
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label>Item type</Label>
+        <div className={FIELD_GRID}>
+          <div className={FIELD}>
+            <Label htmlFor="item-form-item-type">Item type</Label>
             <Select
               value={watch('itemType') ?? 'product'}
               onValueChange={(v) =>
@@ -1803,7 +1846,7 @@ export function ItemForm({
                 })
               }
             >
-              <SelectTrigger>
+              <SelectTrigger id="item-form-item-type">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -1813,11 +1856,10 @@ export function ItemForm({
                 <SelectItem value="consumable">Consumable</SelectItem>
               </SelectContent>
             </Select>
-            <p className="text-muted-foreground text-[11px]">
-              Books appear under the Books tab; products under Items.
-            </p>
+            <p className={HINT}>Books appear under the Books tab; products under Items.</p>
           </div>
           <SelectField
+            id="item-form-category"
             label="Category"
             value={watch('categoryId') ?? ''}
             onChange={(v) => setValue('categoryId', v || null)}
@@ -1826,8 +1868,9 @@ export function ItemForm({
             optional
           />
         </div>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className={FIELD_GRID}>
           <SelectField
+            id="item-form-supplier"
             label="Supplier"
             value={watch('supplierId') ?? ''}
             onChange={(v) => setValue('supplierId', v || null)}
@@ -1850,8 +1893,17 @@ export function ItemForm({
             if (isEdit) {
               if (!defaults?.variantSize) return <div />;
               return (
-                <Field label="Size" optional error={errors.variantSize?.message}>
-                  <Input placeholder={`e.g. ${sizeExample}`} {...register('variantSize')} />
+                <Field
+                  label="Size"
+                  optional
+                  error={errors.variantSize?.message}
+                  htmlFor="item-form-variant-size"
+                >
+                  <Input
+                    id="item-form-variant-size"
+                    placeholder={`e.g. ${sizeExample}`}
+                    {...register('variantSize')}
+                  />
                 </Field>
               );
             }
@@ -1862,11 +1914,11 @@ export function ItemForm({
               // the Size box in the details panel are the two ways to give one.
               <Field label="Sizes" optional={!sizeRequired}>
                 {sizeRequired && !sizeRunPicked && profile && (
-                  <p className="text-muted-foreground text-[11px]">
+                  <p className={HINT}>
                     {`Pick sizes to add one item per size, or enter one size in ${profile.label} details below.`}
                   </p>
                 )}
-                <div className="flex flex-wrap gap-1.5">
+                <div className="flex flex-wrap gap-2">
                   {sizeChipOptions.map((s) => {
                     const picked = selectedSizes.some((x) => x.size === s);
                     return (
@@ -1884,10 +1936,7 @@ export function ItemForm({
                           // next save re-checks either way.
                           clearErrors(['variantSize', 'variantSizeSystem']);
                         }}
-                        className={cn(
-                          'border-border rounded border px-2 py-1 text-xs transition-colors',
-                          picked ? 'bg-foreground text-background' : 'hover:bg-muted',
-                        )}
+                        className={sizeChipClass(picked)}
                       >
                         {s}
                       </button>
@@ -1898,8 +1947,11 @@ export function ItemForm({
                   <div className="mt-3 space-y-1.5">
                     {selectedSizes.map((entry, i) => (
                       <div key={entry.size} className="flex items-center gap-2">
-                        <span className="w-10 text-xs font-medium">{entry.size}</span>
+                        <span className="w-10 font-mono text-[12.5px] font-medium">
+                          {entry.size}
+                        </span>
                         <Input
+                          aria-label={`On hand for size ${entry.size}`}
                           type="number"
                           min={0}
                           value={entry.quantity}
@@ -1955,7 +2007,7 @@ export function ItemForm({
               control is convenience, never authority.
             */}
             {canManageSports && sportsGrouping && (
-              <div className="space-y-1.5">
+              <div className={FIELD}>
                 <Label htmlFor="tracking-mode-override">Tracking mode</Label>
                 <Select
                   value={trackingModeOverride ?? MODE_OVERRIDE_NONE}
@@ -1981,7 +2033,7 @@ export function ItemForm({
                     ))}
                   </SelectContent>
                 </Select>
-                <p className="text-muted-foreground text-[11px]">
+                <p className={HINT}>
                   Only the modes this subcategory allows. The mode decides whether a unit needs a
                   serial, so the server re-checks it on save.
                 </p>
@@ -1991,13 +2043,13 @@ export function ItemForm({
         )}
         {showPublicVisibility && (
           <>
-            <div className="space-y-1.5">
-              <Label>Public visibility</Label>
+            <div className={FIELD}>
+              <Label htmlFor="item-form-public-visibility">Public visibility</Label>
               <Select
                 value={publicVisibility}
                 onValueChange={(v) => setPublicVisibility(v as ItemPublicVisibility)}
               >
-                <SelectTrigger className="sm:max-w-[280px]">
+                <SelectTrigger id="item-form-public-visibility" className="sm:max-w-[280px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -2006,14 +2058,14 @@ export function ItemForm({
                   <SelectItem value="hidden">Hidden</SelectItem>
                 </SelectContent>
               </Select>
-              <p className="text-muted-foreground text-[11px]">
+              <p className={HINT}>
                 &lsquo;Hidden&rsquo; beats everything — the item never appears publicly, even when
                 hand-picked on a link. &lsquo;Public&rsquo; still requires the item&apos;s category
                 to be public and a link that includes the public pool. Per-link curation lives in
                 Settings → Public request links.
               </p>
             </div>
-            <div className="space-y-1.5">
+            <div className={FIELD}>
               <Label htmlFor="item-form-public-display-name">Public display name</Label>
               <Input
                 id="item-form-public-display-name"
@@ -2022,12 +2074,12 @@ export function ItemForm({
                 value={publicDisplayName}
                 onChange={(e) => setPublicDisplayName(e.target.value)}
               />
-              <p className="text-muted-foreground text-[11px]">
+              <p className={HINT}>
                 Shown on public request links instead of the internal name. Leave blank to use the
                 item name.
               </p>
             </div>
-            <div className="space-y-1.5">
+            <div className={FIELD}>
               <Label htmlFor="item-form-public-description">Public description</Label>
               <Textarea
                 id="item-form-public-description"
@@ -2036,7 +2088,7 @@ export function ItemForm({
                 value={publicDescription}
                 onChange={(e) => setPublicDescription(e.target.value)}
               />
-              <p className="text-muted-foreground text-[11px]">
+              <p className={HINT}>
                 Shown under the item on public request links. Internal notes and description are
                 never shown publicly.
               </p>
@@ -2046,8 +2098,9 @@ export function ItemForm({
         <PlacementOnlyNote>
           primary location, bin/shelf, and rack apply just to this placement of the SKU.
         </PlacementOnlyNote>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className={FIELD_GRID}>
           <SelectField
+            id="item-form-primary-location"
             label="Primary location"
             value={watch('primaryLocationId') ?? ''}
             onChange={(v) => setValue('primaryLocationId', v || null)}
@@ -2056,24 +2109,30 @@ export function ItemForm({
             optional
           />
           {isBook ? (
-            <Field label="Bin / shelf" optional>
-              <Input placeholder="A-12, Shelf 3…" {...register('binLocation')} />
+            <Field label="Bin / shelf" optional htmlFor="item-form-bin-location">
+              <Input
+                id="item-form-bin-location"
+                placeholder="A-12, Shelf 3…"
+                {...register('binLocation')}
+              />
             </Field>
           ) : (
             <div />
           )}
         </div>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <Field label="Rack number" optional>
+        <div className={FIELD_GRID}>
+          <Field label="Rack number" optional htmlFor="item-form-rack-number">
             <Input
+              id="item-form-rack-number"
               placeholder="38"
               inputMode="numeric"
               value={rackNumber}
               onChange={(e) => setRackNumber(e.target.value.replace(/[^0-9]/g, ''))}
             />
           </Field>
-          <Field label="Rack row" optional>
+          <Field label="Rack row" optional htmlFor="item-form-rack-row">
             <Input
+              id="item-form-rack-row"
               placeholder="A"
               maxLength={4}
               value={rackRow}
@@ -2083,17 +2142,17 @@ export function ItemForm({
         </div>
         {isBook && (
           <>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label>
+            <div className={FIELD_GRID}>
+              <div className={FIELD}>
+                <Label htmlFor="item-form-crate-color">
                   Crate color
-                  <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
+                  <OptionalMark />
                 </Label>
                 <Select
                   value={crateColor || '__none'}
                   onValueChange={(v) => setCrateColor(v === '__none' ? '' : v)}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger id="item-form-crate-color">
                     <SelectValue placeholder="No crate" />
                   </SelectTrigger>
                   <SelectContent>
@@ -2113,12 +2172,13 @@ export function ItemForm({
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-1.5">
-                <Label>
+              <div className={FIELD}>
+                <Label htmlFor="item-form-crate-number">
                   Crate number
-                  <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
+                  <OptionalMark />
                 </Label>
                 <Input
+                  id="item-form-crate-number"
                   placeholder="e.g. 12"
                   inputMode="numeric"
                   value={crateNumber}
@@ -2126,7 +2186,7 @@ export function ItemForm({
                 />
               </div>
             </div>
-            <p className="text-muted-foreground text-xs">
+            <p className={HINT}>
               A crate number is enough — the color is an optional label you can add later.
             </p>
           </>
@@ -2149,14 +2209,18 @@ export function ItemForm({
           {warehouseLabel.toLowerCase()} and {charterLabel.toLowerCase()} apply just to this
           placement, not other racks or charters carrying this SKU.
         </PlacementOnlyNote>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label>{warehouseLabel}</Label>
+        <div className={FIELD_GRID}>
+          <div className={FIELD}>
+            <Label htmlFor={forcedWarehouseId ? undefined : 'item-form-warehouse'}>
+              {warehouseLabel}
+            </Label>
             {forcedWarehouseId ? (
-              <div className="bg-muted/30 rounded-md border px-3 py-2 text-sm">
+              // Read-only for a warehouse-scoped member: the recessed well, not
+              // a control.
+              <div className="border-border bg-sunk rounded-md border px-3 py-2 text-[13px]">
                 {warehouses.find((w) => w.id === forcedWarehouseId)?.name ??
                   'Your assigned warehouse'}
-                <p className="text-muted-foreground mt-0.5 text-[11px]">
+                <p className="text-muted-foreground mt-0.5 text-[12px]">
                   You can only create items at your assigned {warehouseLabel.toLowerCase()}.
                 </p>
               </div>
@@ -2165,7 +2229,7 @@ export function ItemForm({
                 value={watchedWarehouseId ?? ''}
                 onValueChange={(v: string) => setValue('warehouseId', v || null)}
               >
-                <SelectTrigger>
+                <SelectTrigger id="item-form-warehouse">
                   <SelectValue placeholder={`Pick a ${warehouseLabel.toLowerCase()}`} />
                 </SelectTrigger>
                 <SelectContent>
@@ -2179,17 +2243,17 @@ export function ItemForm({
             )}
           </div>
 
-          <div className="space-y-1.5">
-            <Label>
+          <div className={FIELD}>
+            <Label htmlFor="item-form-charter">
               {charterLabel}
-              <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
+              <OptionalMark />
             </Label>
             <Select
               value={watchedCharterId ?? '__generic'}
               onValueChange={(v: string) => setValue('charterId', v === '__generic' ? null : v)}
               disabled={!watchedWarehouseId}
             >
-              <SelectTrigger>
+              <SelectTrigger id="item-form-charter">
                 <SelectValue
                   placeholder={
                     watchedWarehouseId
@@ -2216,7 +2280,7 @@ export function ItemForm({
                 )}
               </SelectContent>
             </Select>
-            <p className="text-muted-foreground text-[11px]">
+            <p className={HINT}>
               Generic stock is shared across every {charterLabel.toLowerCase()} the{' '}
               {warehouseLabel.toLowerCase()} services.
             </p>
@@ -2226,13 +2290,15 @@ export function ItemForm({
 
       <Section title="Pricing & stock">
         <SharedFieldsNote others={isEdit ? sharedSkuOthers : 0} />
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <Field label="Unit cost" error={errors.unitCost?.message}>
+        <div className={FIELD_GRID}>
+          <Field label="Unit cost" error={errors.unitCost?.message} htmlFor="item-form-unit-cost">
             <Controller
               control={control}
               name="unitCost"
               render={({ field }) => (
                 <BlankZeroNumberInput
+                  id="item-form-unit-cost"
+                  name={field.name}
                   step={0.01}
                   min={0}
                   value={field.value}
@@ -2242,12 +2308,18 @@ export function ItemForm({
               )}
             />
           </Field>
-          <Field label="Retail price" error={errors.retailPrice?.message}>
+          <Field
+            label="Retail price"
+            error={errors.retailPrice?.message}
+            htmlFor="item-form-retail-price"
+          >
             <Controller
               control={control}
               name="retailPrice"
               render={({ field }) => (
                 <BlankZeroNumberInput
+                  id="item-form-retail-price"
+                  name={field.name}
                   step={0.01}
                   min={0}
                   value={field.value}
@@ -2258,30 +2330,35 @@ export function ItemForm({
             />
           </Field>
         </div>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-3">
           {(() => {
             const sizedFlowActive =
               !isEdit && Boolean(selectedCategory?.supports_sizes) && selectedSizes.length > 0;
             if (sizedFlowActive) {
               return (
                 <Field label="On hand">
-                  <p className="text-muted-foreground border-border bg-muted/30 rounded-md border border-dashed px-2.5 py-2 text-[11.5px]">
-                    Per-size qty is set above (Sizes).
-                  </p>
+                  <p className={cn(NOTE, 'px-2.5')}>Per-size qty is set above (Sizes).</p>
                 </Field>
               );
             }
             return (
-              <Field label="On hand" error={errors.quantityOnHand?.message}>
+              <Field
+                label="On hand"
+                error={errors.quantityOnHand?.message}
+                htmlFor="item-form-quantity-on-hand"
+              >
                 {isEdit ? (
                   <>
                     <div className="flex items-center gap-2">
                       <Input
+                        id="item-form-quantity-on-hand"
                         type="number"
                         step="1"
                         {...register('quantityOnHand', { valueAsNumber: true })}
                         disabled
-                        className="bg-muted/40 cursor-not-allowed opacity-70"
+                        // Locked: the recessed well, so it reads as a figure
+                        // and not as a box to type in.
+                        className="bg-sunk cursor-not-allowed tabular-nums disabled:opacity-100"
                         aria-readonly
                       />
                       {defaults?.id && (
@@ -2290,14 +2367,18 @@ export function ItemForm({
                           itemName={defaults?.name ?? 'this item'}
                           currentQuantity={defaults?.quantityOnHand ?? 0}
                           trigger={
-                            <Button type="button" variant="outline" size="sm" className="shrink-0">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="shrink-0 max-sm:h-11"
+                            >
                               Adjust
                             </Button>
                           }
                         />
                       )}
                     </div>
-                    <p className="text-muted-foreground mt-1.5 text-[11px]">
+                    <p className={cn(HINT, 'mt-1.5')}>
                       <span className="text-foreground font-medium">This placement only</span>
                       {
                         ' — quantity lives at this specific rack/charter, not other placements of this SKU.'
@@ -2310,6 +2391,11 @@ export function ItemForm({
                     name="quantityOnHand"
                     render={({ field }) => (
                       <BlankZeroNumberInput
+                        id="item-form-quantity-on-hand"
+                        // The name is the New item tour's target ("Quantity on
+                        // hand"): without it the step had nothing to point at
+                        // and was skipped.
+                        name={field.name}
                         step={1}
                         value={field.value}
                         onValueChange={field.onChange}
@@ -2321,12 +2407,19 @@ export function ItemForm({
               </Field>
             );
           })()}
-          <Field label="Reorder at" error={errors.reorderPoint?.message}>
+          <Field
+            label="Reorder at"
+            error={errors.reorderPoint?.message}
+            htmlFor="item-form-reorder-point"
+          >
             <Controller
               control={control}
               name="reorderPoint"
               render={({ field }) => (
                 <BlankZeroNumberInput
+                  id="item-form-reorder-point"
+                  // The New item tour's "Reorder point" target.
+                  name={field.name}
                   step={1}
                   min={0}
                   value={field.value}
@@ -2336,12 +2429,18 @@ export function ItemForm({
               )}
             />
           </Field>
-          <Field label="Reorder qty" error={errors.reorderQuantity?.message}>
+          <Field
+            label="Reorder qty"
+            error={errors.reorderQuantity?.message}
+            htmlFor="item-form-reorder-quantity"
+          >
             <Controller
               control={control}
               name="reorderQuantity"
               render={({ field }) => (
                 <BlankZeroNumberInput
+                  id="item-form-reorder-quantity"
+                  name={field.name}
                   step={1}
                   min={0}
                   value={field.value}
@@ -2352,8 +2451,9 @@ export function ItemForm({
             />
           </Field>
         </div>
-        <Field label="Unit of measure">
+        <Field label="Unit of measure" htmlFor="item-form-unit-of-measure">
           <Input
+            id="item-form-unit-of-measure"
             placeholder="unit, kg, lb, hr…"
             {...register('unitOfMeasure', {
               // Once typed in, the box is the user's — the category effect above
@@ -2372,9 +2472,12 @@ export function ItemForm({
           tracking_type set, so removing the field is safe.
         */}
         {lotSerialEnabled && (
-          <div className="space-y-3 rounded-md border border-amber-200 bg-amber-50/30 p-3 dark:border-amber-900/40 dark:bg-amber-950/20">
-            <div className="space-y-1.5">
-              <Label>Lot / serial tracking</Label>
+          <div
+            data-slot="item-form-lot-serial"
+            className="border-border bg-sunk space-y-3 rounded-md border p-3"
+          >
+            <div className={FIELD}>
+              <Label htmlFor="item-form-tracking-type">Lot / serial tracking</Label>
               <Select
                 value={watch('trackingType') ?? 'none'}
                 onValueChange={(v) =>
@@ -2383,7 +2486,7 @@ export function ItemForm({
                   })
                 }
               >
-                <SelectTrigger>
+                <SelectTrigger id="item-form-tracking-type">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -2401,16 +2504,17 @@ export function ItemForm({
                       which is exactly what the server-side authority rule forbids. */}
                 </SelectContent>
               </Select>
-              <p className="text-muted-foreground text-[11px]">
+              <p className={HINT}>
                 Lot-tracked items capture lot numbers + expiry at receiving and appear in aging /
                 recall reports.
               </p>
             </div>
             {watch('trackingType') === 'lot' && (
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label>Shelf life (days)</Label>
+              <div className={FIELD_GRID}>
+                <div className={FIELD}>
+                  <Label htmlFor="item-form-shelf-life">Shelf life (days)</Label>
                   <Input
+                    id="item-form-shelf-life"
                     type="number"
                     min={1}
                     step={1}
@@ -2426,12 +2530,10 @@ export function ItemForm({
                     }
                     placeholder="e.g. 30"
                   />
-                  <p className="text-muted-foreground text-[11px]">
-                    Used to estimate expiry when a lot has no explicit date.
-                  </p>
+                  <p className={HINT}>Used to estimate expiry when a lot has no explicit date.</p>
                 </div>
-                <div className="space-y-1.5">
-                  <Label>Expiry policy</Label>
+                <div className={FIELD}>
+                  <Label htmlFor="item-form-expiry-policy">Expiry policy</Label>
                   <Select
                     value={watch('expiryPolicy') ?? 'warn'}
                     onValueChange={(v) =>
@@ -2440,7 +2542,7 @@ export function ItemForm({
                       })
                     }
                   >
-                    <SelectTrigger>
+                    <SelectTrigger id="item-form-expiry-policy">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -2455,7 +2557,7 @@ export function ItemForm({
           </div>
         )}
         {isEdit && (
-          <p className="text-muted-foreground text-xs">
+          <p className={HINT}>
             On hand is locked here so every change goes through a stock movement (audit trail +
             dashboard math depends on it). Click
             <span className="font-medium"> Adjust</span> next to the field to add or remove stock
@@ -2466,11 +2568,11 @@ export function ItemForm({
 
       {tags.length > 0 && (
         <Section title="Tags">
-          <p className="text-muted-foreground text-xs">
+          <p className={HINT}>
             Click any tag to apply or remove it. Tags stack on top of category and show up in
             inventory filters and the bulk actions toolbar.
           </p>
-          <div className="flex flex-wrap gap-1.5">
+          <div className="flex flex-wrap gap-2">
             {tags.map((t) => {
               const on = selectedTagIds.has(t.id);
               const swatch = t.color ?? '#94a3b8';
@@ -2481,10 +2583,10 @@ export function ItemForm({
                   onClick={() => toggleTag(t.id)}
                   aria-pressed={on}
                   className={cn(
-                    'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px] transition-colors',
+                    'inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[12.5px] transition-colors max-sm:h-11 max-sm:px-3.5',
                     on
-                      ? 'border-transparent text-white shadow-sm'
-                      : 'border-border bg-background text-[var(--ed-ink-2)] hover:border-[var(--ed-line-strong)]',
+                      ? 'border-transparent text-white'
+                      : 'border-line-strong bg-card text-ink-2 hover:bg-muted hover:text-foreground',
                   )}
                   style={on ? { backgroundColor: swatch } : undefined}
                 >
@@ -2506,10 +2608,13 @@ export function ItemForm({
         if (!selectedCategory?.supports_sizes) return null;
         if (!defaults?.categoryId || !defaults?.warehouseId) return null;
         return (
-          <div className="border-border bg-muted/30 flex items-center justify-between rounded-md border border-dashed px-3 py-2.5 text-[12.5px]">
-            <div>
+          <div
+            data-slot="item-form-add-sizes"
+            className="border-border bg-sunk flex flex-wrap items-center justify-between gap-3 rounded-md border px-3 py-2.5 text-[13px]"
+          >
+            <div className="min-w-0">
               <p className="font-medium">Add sibling sizes from this item</p>
-              <p className="text-muted-foreground text-[11.5px]">
+              <p className="text-muted-foreground text-[12px]">
                 Copies supplier, category, warehouse, prices, and rack — you pick the sizes +
                 per-size qty.
               </p>
@@ -2551,7 +2656,12 @@ export function ItemForm({
         />
       )}
 
-      <div className="flex justify-end gap-2">
+      {/* The card's footer bar (the shared form pattern): it spans the card
+          that holds the form, under a hairline, with the actions on the right. */}
+      <div
+        data-slot="item-form-footer"
+        className="border-border -mx-[18px] -mb-[18px] flex flex-wrap items-center justify-end gap-2 rounded-b-lg border-t px-[18px] py-3"
+      >
         {(onDone || returnHref) && (
           <Button
             type="button"
@@ -2572,7 +2682,13 @@ export function ItemForm({
             Cancel
           </Button>
         )}
-        <Button type="submit" variant="gradient" disabled={isSubmitting || uploadingImages}>
+        {/* Creating a record is the page's create action (accent); saving an
+            edit commits the work in front of you (ink). */}
+        <Button
+          type="submit"
+          variant={isEdit ? 'default' : 'gradient'}
+          disabled={isSubmitting || uploadingImages}
+        >
           {isSubmitting || uploadingImages ? (
             <>
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -2617,11 +2733,45 @@ export function ItemForm({
   );
 }
 
+/** One field: label above its control, the hint or error under it. */
+const FIELD = 'space-y-1.5';
+/** Two fields side by side from the small breakpoint, stacked on a phone. */
+const FIELD_GRID = 'grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2';
+/** The quiet line under a field. */
+const HINT = 'text-muted-foreground text-[12px] leading-[17px]';
+/** A recessed note (which fields are shared, which belong to this placement). */
+const NOTE =
+  'border-border bg-sunk text-muted-foreground rounded-md border px-3 py-2 text-[12px] leading-[17px]';
+
+/** A size chip: the filter-chip recipe at 28 px (44 below sm), ink when picked. */
+function sizeChipClass(picked: boolean): string {
+  return cn(
+    'inline-flex h-7 min-w-9 items-center justify-center rounded-full border px-3 font-mono text-[12.5px] transition-colors max-sm:h-11 max-sm:min-w-11',
+    picked
+      ? 'border-foreground bg-foreground text-background'
+      : 'border-line-strong text-ink-2 hover:bg-muted hover:text-foreground',
+  );
+}
+
+/** "(optional)" after a label, in the label's muted tone. */
+function OptionalMark() {
+  return <span className="text-muted-foreground ml-1 font-normal">(optional)</span>;
+}
+
+/**
+ * A section of the form (the shared form pattern): its title in a column of
+ * its own on a wide screen and above its fields on a narrow one, the sections
+ * divided by hairlines. The heading stays the section's first child, inside
+ * the one element that also holds the section's notes and fields.
+ */
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="space-y-3">
-      <h3 className="text-muted-foreground text-sm font-semibold">{title}</h3>
-      <div className="space-y-3">{children}</div>
+    <div
+      data-slot="item-form-section"
+      className="border-border space-y-3 border-t pt-6 first:border-t-0 first:pt-0 md:grid md:grid-cols-[176px_minmax(0,1fr)] md:gap-x-8 md:space-y-0"
+    >
+      <h3 className="text-foreground text-[13.5px] font-medium leading-5 md:pt-1.5">{title}</h3>
+      <div className="min-w-0 space-y-4">{children}</div>
     </div>
   );
 }
@@ -2642,7 +2792,7 @@ function SharedFieldsNote({ others = 0 }: { others?: number }) {
   // many and that saving changes all of them (Ungroup's wording item).
   if (others > 0) {
     return (
-      <p className="border-border bg-muted/30 text-muted-foreground rounded-md border border-dashed px-3 py-2 text-[11.5px]">
+      <p className={NOTE}>
         <span className="text-foreground font-medium">
           {`Shared with ${others} other record${others === 1 ? ' that uses' : 's that use'} this SKU`}
         </span>
@@ -2651,7 +2801,7 @@ function SharedFieldsNote({ others = 0 }: { others?: number }) {
     );
   }
   return (
-    <p className="border-border bg-muted/30 text-muted-foreground rounded-md border border-dashed px-3 py-2 text-[11.5px]">
+    <p className={NOTE}>
       <span className="text-foreground font-medium">Shared across all placements of this SKU</span>
       {' — editing here updates every rack/charter this item lives in.'}
     </p>
@@ -2689,7 +2839,7 @@ export function skuTakenOpenHref(error: ActionError, isBook: boolean): string | 
 
 function PlacementOnlyNote({ children }: { children?: React.ReactNode }) {
   return (
-    <p className="border-border bg-muted/30 text-muted-foreground rounded-md border border-dashed px-3 py-2 text-[11.5px]">
+    <p className={NOTE}>
       <span className="text-foreground font-medium">This placement only</span>
       {' — '}
       {children ??
@@ -2702,26 +2852,30 @@ function Field({
   label,
   error,
   optional,
+  htmlFor,
   children,
 }: {
   label: string;
   error?: string;
   optional?: boolean;
+  /** The id of the control the label names (its accessible name). */
+  htmlFor?: string;
   children: React.ReactNode;
 }) {
   return (
-    <div className="space-y-1.5">
-      <Label>
+    <div className={FIELD}>
+      <Label htmlFor={htmlFor}>
         {label}
-        {optional && <span className="text-muted-foreground ml-1 font-normal">(optional)</span>}
+        {optional && <OptionalMark />}
       </Label>
       {children}
-      {error && <p className="text-destructive text-xs">{error}</p>}
+      {error && <p className="text-destructive text-[12px] leading-[17px]">{error}</p>}
     </div>
   );
 }
 
 function SelectField({
+  id,
   label,
   value,
   onChange,
@@ -2729,6 +2883,8 @@ function SelectField({
   placeholder,
   optional,
 }: {
+  /** The trigger's id, which the label names. */
+  id: string;
   label: string;
   value: string;
   onChange: (v: string) => void;
@@ -2737,16 +2893,16 @@ function SelectField({
   optional?: boolean;
 }) {
   return (
-    <div className="space-y-1.5">
-      <Label>
+    <div className={FIELD}>
+      <Label htmlFor={id}>
         {label}
-        {optional && <span className="text-muted-foreground ml-1 font-normal">(optional)</span>}
+        {optional && <OptionalMark />}
       </Label>
       <Select
         value={value || '__none'}
         onValueChange={(v: string) => onChange(v === '__none' ? '' : v)}
       >
-        <SelectTrigger>
+        <SelectTrigger id={id}>
           <SelectValue placeholder={placeholder} />
         </SelectTrigger>
         <SelectContent>
