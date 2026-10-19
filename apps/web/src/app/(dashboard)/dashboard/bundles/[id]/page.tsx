@@ -134,7 +134,7 @@ export default async function BundleDetailPage({ params }: { params: Promise<{ i
                 title="No components — edit this bundle to add some."
               />
             ) : (
-              <Table className="min-w-[480px]">
+              <Table className="sm:min-w-[480px] [&_td]:max-sm:px-2 [&_td]:max-sm:first:pl-4 [&_td]:max-sm:last:pr-4 [&_th]:max-sm:px-2 [&_th]:max-sm:first:pl-4 [&_th]:max-sm:last:pr-4">
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
                     <TableHead>Item</TableHead>
