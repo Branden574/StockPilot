@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { STICKY_ACTIONS } from '@/components/admin/sticky-actions';
 import { DetailSection, DetailSectionMeta } from '@/components/patterns/detail-section';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -26,6 +27,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { cn } from '@/lib/utils';
 import { archiveBinAction, createBinAction } from '@/server/actions/bins';
 
 import type { BinRow, BinType } from '@/server/services/bins';
@@ -185,15 +187,18 @@ export function BinsManager({
             }
             flush
           >
-            {/* Fixed column widths, so every warehouse card lines up with the next. */}
-            <Table className="min-w-[520px] table-fixed">
+            {/* From sm up, fixed column widths, so every warehouse card lines up
+                with the next. A phone keeps the auto layout it had, so Code, Name,
+                Type and the Default tick stay in view, and Archive is pinned to
+                the card's right edge if the row is still too wide. */}
+            <Table className="sm:min-w-[520px] sm:table-fixed">
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
-                  <TableHead className="w-[22%]">Code</TableHead>
+                  <TableHead className="sm:w-[22%]">Code</TableHead>
                   <TableHead>Name</TableHead>
-                  <TableHead className="w-[20%]">Type</TableHead>
-                  <TableHead className="w-24 text-center">Default</TableHead>
-                  <TableHead className="w-16 text-right" />
+                  <TableHead className="sm:w-[20%]">Type</TableHead>
+                  <TableHead className="text-center sm:w-24">Default</TableHead>
+                  <TableHead className={cn('w-16 text-right', STICKY_ACTIONS)} />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -206,8 +211,13 @@ export function BinsManager({
                 ) : (
                   list.map((b) => (
                     <TableRow key={b.id}>
-                      <TableCell className="font-mono text-[12.5px]">{b.code}</TableCell>
-                      <TableCell>{b.name}</TableCell>
+                      {/* A long code or name wraps inside its fixed column (a code
+                          of up to 32 letters, digits, dashes and underscores has
+                          no break of its own) instead of running into the next. */}
+                      <TableCell className="break-words font-mono text-[12.5px]">
+                        {b.code}
+                      </TableCell>
+                      <TableCell className="break-words">{b.name}</TableCell>
                       <TableCell className="text-ink-2">{b.bin_type.replace(/_/g, ' ')}</TableCell>
                       <TableCell className="text-center">
                         {b.is_default ? (
@@ -219,7 +229,7 @@ export function BinsManager({
                           </span>
                         ) : null}
                       </TableCell>
-                      <TableCell className="text-right">
+                      <TableCell className={cn('text-right', STICKY_ACTIONS)}>
                         <Button
                           variant="ghost"
                           size="icon"

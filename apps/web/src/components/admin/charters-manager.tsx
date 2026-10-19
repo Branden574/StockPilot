@@ -15,6 +15,7 @@ import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
+import { STICKY_ACTIONS } from '@/components/admin/sticky-actions';
 import { PageHeader } from '@/components/patterns/page-header';
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { Badge } from '@/components/ui/badge';
@@ -112,11 +113,6 @@ function formatAddressLines(address: CharterAddress | null): string[] {
     (s): s is string => typeof s === 'string' && s.trim().length > 0,
   );
 }
-
-/** Pins the Actions column to the right of a narrow screen (sticky cell on
- *  the card fill, with a hairline where the scrolled columns pass under it). */
-const STICKY_ACTIONS =
-  'max-md:sticky max-md:right-0 max-md:z-[1] max-md:bg-card max-md:shadow-[inset_1px_0_0_hsl(var(--border))]';
 
 export function ChartersManager({
   initial,

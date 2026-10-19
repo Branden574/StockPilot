@@ -7,6 +7,7 @@ import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
+import { STICKY_ACTIONS } from '@/components/admin/sticky-actions';
 import { FilterChip, MetaChip } from '@/components/patterns/chip';
 import { PageHeader } from '@/components/patterns/page-header';
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
@@ -84,11 +85,6 @@ interface FormValues {
 }
 
 const NONE_VALUE = '__none';
-
-/** Pins the Actions column to the right of a narrow screen (sticky cell on
- *  the card fill, with a hairline where the scrolled columns pass under it). */
-const STICKY_ACTIONS =
-  'max-md:sticky max-md:right-0 max-md:z-[1] max-md:bg-card max-md:shadow-[inset_1px_0_0_hsl(var(--border))]';
 
 export function WarehousesManager({
   initial,

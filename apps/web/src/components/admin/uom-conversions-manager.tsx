@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { STICKY_ACTIONS } from '@/components/admin/sticky-actions';
 import { DetailSection } from '@/components/patterns/detail-section';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
@@ -25,6 +26,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { cn } from '@/lib/utils';
 import {
   deleteUomConversionAction,
   upsertUomConversionAction,
@@ -222,9 +224,12 @@ export function UomConversionsManager({
         </div>
       </DetailSection>
 
-      {/* Scrolls sideways inside its card on a narrow screen. */}
+      {/* From sm up the table keeps a 600 px minimum and scrolls sideways inside
+          its card; a phone keeps the auto layout it had, so To, Ratio and
+          Rounding stay in view, and Delete is pinned to the card's right edge
+          below md. */}
       <div className="border-border bg-card overflow-hidden rounded-lg border">
-        <Table className="min-w-[600px]">
+        <Table className="sm:min-w-[600px]">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead>Item</TableHead>
@@ -232,7 +237,7 @@ export function UomConversionsManager({
               <TableHead>To</TableHead>
               <TableHead className="text-right">Ratio</TableHead>
               <TableHead>Rounding</TableHead>
-              <TableHead className="w-12 text-right" />
+              <TableHead className={cn('w-12 text-right', STICKY_ACTIONS)} />
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -253,7 +258,7 @@ export function UomConversionsManager({
                     {c.denominator !== 1 && ` / ${c.denominator}`}
                   </TableCell>
                   <TableCell className="text-ink-2">{c.rounding_rule}</TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className={cn('text-right', STICKY_ACTIONS)}>
                     <Button
                       variant="ghost"
                       size="icon"

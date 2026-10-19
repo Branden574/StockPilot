@@ -16,6 +16,7 @@ vi.mock('@/server/actions/uom-conversions', () => ({
   deleteUomConversionAction: actions.remove,
 }));
 
+import { STICKY_ACTIONS } from './sticky-actions';
 import { UomConversionsManager } from './uom-conversions-manager';
 
 const CONVERSION = {
@@ -58,6 +59,21 @@ describe('UomConversionsManager', () => {
   it('says "No conversions yet. Add one above." when there are none', () => {
     render(<UomConversionsManager conversions={[]} items={[]} />);
     expect(screen.getByText('No conversions yet. Add one above.')).toBeInTheDocument();
+  });
+
+  // Look-only expectations (review 1b): the 600 px minimum applies from sm up
+  // only, so a phone keeps the auto layout that showed To, Ratio and Rounding,
+  // and the Delete column carries the shared pin recipe, so it stays on screen
+  // below md.
+  it('keeps the minimum width to sm and up and pins Delete below md', () => {
+    render(<UomConversionsManager conversions={[CONVERSION]} items={[]} />);
+    const table = screen.getByRole('table');
+    expect(table).toHaveClass('sm:min-w-[600px]');
+    expect(table).not.toHaveClass('min-w-[600px]');
+    const pin = STICKY_ACTIONS.split(' ');
+    const heads = within(table).getAllByRole('columnheader');
+    expect(heads[heads.length - 1]).toHaveClass(...pin);
+    expect(within(table).getByRole('button', { name: 'Delete' }).closest('td')).toHaveClass(...pin);
   });
 
   it('keeps the delete confirm words and shows a refusal inside it', async () => {

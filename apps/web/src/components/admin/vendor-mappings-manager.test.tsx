@@ -16,6 +16,7 @@ vi.mock('@/server/actions/vendor-item-mappings', () => ({
   deleteVendorItemMappingAction: actions.remove,
 }));
 
+import { STICKY_ACTIONS } from './sticky-actions';
 import { VendorMappingsManager } from './vendor-mappings-manager';
 
 const MAPPING = {
@@ -50,6 +51,21 @@ describe('VendorMappingsManager', () => {
     ).toEqual(['Vendor', 'Vendor item #', 'Internal item', '']);
     expect(within(table).getByText('Staples')).toBeInTheDocument();
     expect(within(table).getByText('i-outside-the-500')).toBeInTheDocument();
+  });
+
+  // Look-only expectations (review 1b): the 560 px minimum applies from sm up
+  // only, so a phone keeps the auto layout that showed every column whole, and
+  // the Delete column carries the shared pin recipe, so it stays on screen
+  // below md.
+  it('keeps the minimum width to sm and up and pins Delete below md', () => {
+    render(<VendorMappingsManager mappings={[MAPPING]} suppliers={[]} items={[]} />);
+    const table = screen.getByRole('table');
+    expect(table).toHaveClass('sm:min-w-[560px]');
+    expect(table).not.toHaveClass('min-w-[560px]');
+    const pin = STICKY_ACTIONS.split(' ');
+    const heads = within(table).getAllByRole('columnheader');
+    expect(heads[heads.length - 1]).toHaveClass(...pin);
+    expect(within(table).getByRole('button', { name: 'Delete' }).closest('td')).toHaveClass(...pin);
   });
 
   it('keeps the delete confirm words and shows a refusal inside it', async () => {

@@ -17,6 +17,7 @@ vi.mock('@/server/actions/bins', () => ({
 }));
 
 import { BinsManager } from './bins-manager';
+import { STICKY_ACTIONS } from './sticky-actions';
 
 const WAREHOUSES = [
   { id: 'w1', name: 'North DC' },
@@ -71,6 +72,32 @@ describe('BinsManager', () => {
     await waitFor(() => expect(box).toHaveAttribute('aria-checked', 'false'));
     expect(screen.getByLabelText('Code')).toHaveValue('');
     expect(screen.getByLabelText('Name')).toHaveValue('');
+  });
+
+  // Look-only expectations (review 1b): the 520 px minimum, the fixed layout
+  // and its column widths apply from sm up only, so a phone keeps the auto
+  // layout that showed Code, Name, Type and the Default tick; the Archive
+  // column carries the shared pin recipe, so it stays on screen below md; and
+  // a long code or name wraps inside its fixed column instead of running into
+  // the next one.
+  it('keeps the fixed layout to sm and up, pins Archive below md, and wraps long codes and names', () => {
+    render(<BinsManager warehouses={WAREHOUSES} bins={BINS} />);
+    const north = screen.getByRole('heading', { level: 3, name: 'North DC' }).closest('section')!;
+    const table = within(north).getByRole('table');
+    expect(table).toHaveClass('sm:min-w-[520px]', 'sm:table-fixed');
+    expect(table).not.toHaveClass('min-w-[520px]');
+    expect(table).not.toHaveClass('table-fixed');
+    const heads = within(table).getAllByRole('columnheader');
+    expect(heads.map((th) => th.textContent)).toEqual(['Code', 'Name', 'Type', 'Default', '']);
+    expect(heads[0]).toHaveClass('sm:w-[22%]');
+    expect(heads[0]).not.toHaveClass('w-[22%]');
+    const pin = STICKY_ACTIONS.split(' ');
+    expect(heads[4]).toHaveClass(...pin);
+    expect(within(table).getByRole('button', { name: 'Archive' }).closest('td')).toHaveClass(
+      ...pin,
+    );
+    expect(within(table).getByText('RCV').closest('td')).toHaveClass('break-words');
+    expect(within(table).getByText('Receiving dock').closest('td')).toHaveClass('break-words');
   });
 
   it('keeps the archive confirm and shows a refusal inside it', async () => {
