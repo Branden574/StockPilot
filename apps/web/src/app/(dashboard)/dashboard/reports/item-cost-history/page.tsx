@@ -5,6 +5,7 @@ import { CostTrendIsland } from '@/components/dashboard/charts/cost-trend-island
 import { DetailSection } from '@/components/patterns/detail-section';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { StatStrip, StatStripItem } from '@/components/patterns/stat-strip';
+import { StatePanel } from '@/components/patterns/state-panel';
 import { ItemCostHistorySearch } from '@/components/reports/item-cost-history-search';
 import { PdfDownloadDropdown } from '@/components/reports/pdf-download-dropdown';
 import { Badge } from '@/components/ui/badge';
@@ -71,6 +72,20 @@ export default async function ItemCostHistoryPage({
     // picker that silently means "the query broke" is exactly how this bug
     // survived. Never throw here — that would take the whole page down.
     console.error('[item-cost-history] item picker query failed:', itemsError);
+    // The visible reason the comment above promises. Before, nothing was
+    // shown: the picker was simply empty, and an itemId in the URL fell
+    // through to "Item not found", which read as a permission problem.
+    return (
+      <div className={REPORT_PAGE_CLASS}>
+        <PageHeader back={BACK} title="Item cost history" />
+        <StatePanel
+          kind="failed"
+          live="assertive"
+          title="Couldn't load your items"
+          description="Refresh the page to try again."
+        />
+      </div>
+    );
   }
 
   const items = (itemRows ?? []).map((r) => ({
