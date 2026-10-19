@@ -51,45 +51,53 @@ export function InviteSignupForm({ token, email }: InviteSignupFormProps) {
 
   return (
     <form onSubmit={submit} className="space-y-4" noValidate>
-      <div className="space-y-1.5">
+      <div className="space-y-2">
         <Label htmlFor="invite-email">Email</Label>
-        <Input id="invite-email" type="email" value={email} disabled readOnly />
+        <Input id="invite-email" type="email" value={email} disabled readOnly className="sm:h-10" />
       </div>
-      <div className="space-y-1.5">
+      <div className="space-y-2">
         <Label htmlFor="invite-name">Full name</Label>
         <Input
           id="invite-name"
           type="text"
           autoComplete="name"
           placeholder="Jane Doe"
+          className="sm:h-10"
           value={fullName}
           onChange={(e) => setFullName(e.target.value)}
         />
       </div>
-      <div className="space-y-1.5">
+      <div className="space-y-2">
         <Label htmlFor="invite-password">Choose a password</Label>
         <PasswordInput
           id="invite-password"
           autoComplete="new-password"
           minLength={8}
+          className="sm:h-10"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           required
         />
-        <p className="text-[11px] text-muted-foreground">At least 8 characters.</p>
+        <p className="text-muted-foreground text-xs">At least 8 characters.</p>
       </div>
-      <div className="space-y-1.5">
+      <div className="space-y-2">
         <Label htmlFor="invite-confirm">Confirm password</Label>
         <PasswordInput
           id="invite-confirm"
           autoComplete="new-password"
           minLength={8}
+          className="sm:h-10"
           value={confirm}
           onChange={(e) => setConfirm(e.target.value)}
           required
         />
       </div>
-      <Button type="submit" className="w-full" variant="gradient" disabled={submitting}>
+      <Button
+        type="submit"
+        className="h-11 w-full text-[14px]"
+        variant="gradient"
+        disabled={submitting}
+      >
         {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Accept & create account'}
       </Button>
     </form>

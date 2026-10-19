@@ -2,9 +2,10 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
+import { AuthCard } from '@/components/auth/auth-card';
+import { ExternalShell } from '@/components/auth/external-shell';
 import { CreateOrganizationForm } from '@/components/onboarding/create-organization-form';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { IconMark } from '@/components/ui/icon-mark';
 import { requireSession } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
@@ -28,31 +29,30 @@ export default async function OnboardingPage() {
 
   if (existing) redirect('/dashboard');
 
+  // The shared external frame and the auth card (P5.1): a flat ground (no
+  // mesh), the brand link and the theme menu, and one card. The user has no
+  // workspace yet, so there is no app navigation to show.
   return (
-    <div className="relative flex min-h-screen flex-col bg-background">
-      <div aria-hidden className="pointer-events-none fixed inset-0 -z-10 bg-mesh" />
-      <header className="container mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6">
-        <Link href="/">
-          <IconMark />
-        </Link>
-        <ThemeToggle />
-      </header>
-
-      <main className="flex flex-1 items-center justify-center px-4 py-10">
-        <div className="w-full max-w-lg">
-          <Card className="border-border/60 shadow-xl">
-            <CardHeader>
-              <CardTitle className="text-2xl">Create your workspace</CardTitle>
-              <CardDescription>
-                We'll set you up with a default location so you can start adding inventory right away.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <CreateOrganizationForm />
-            </CardContent>
-          </Card>
-        </div>
-      </main>
-    </div>
+    <ExternalShell
+      width="lg"
+      topBar={
+        <>
+          <Link
+            href="/"
+            className="focus-visible:ring-ring rounded-md focus-visible:outline-none focus-visible:ring-2"
+          >
+            <IconMark />
+          </Link>
+          <ThemeToggle />
+        </>
+      }
+    >
+      <AuthCard
+        title="Create your workspace"
+        description="We'll set you up with a default location so you can start adding inventory right away."
+      >
+        <CreateOrganizationForm />
+      </AuthCard>
+    </ExternalShell>
   );
 }

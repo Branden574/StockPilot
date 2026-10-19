@@ -1,9 +1,10 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
+import { AuthCard } from '@/components/auth/auth-card';
+import { ExternalShell } from '@/components/auth/external-shell';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { IconMark } from '@/components/ui/icon-mark';
 import { getServerSession } from '@/lib/auth/session';
 import { env } from '@/lib/env';
@@ -85,79 +86,85 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
   // The signed-in matching user simply presses Accept (one click, POSTs
   // through the action like every other mutation).
 
+  const signupOpen = Boolean(invite && !accepted && !expired && !session);
+  const body =
+    invite && !accepted && !expired ? (
+      !session ? (
+        <InviteSignupForm token={token} email={invite.email as string} />
+      ) : session.email.toLowerCase() !== (invite.email as string).toLowerCase() ? (
+        <p className="text-muted-foreground text-[13.5px] leading-[20.25px]">
+          You're signed in as{' '}
+          <strong className="text-foreground font-medium">{session.email}</strong>, but this invite
+          is for <strong className="text-foreground font-medium">{invite.email as string}</strong>.
+          Sign out and sign in with the right email to accept.
+        </p>
+      ) : (
+        <AcceptInviteButton token={token} />
+      )
+    ) : accepted || expired ? (
+      <Button asChild variant="outline" className="h-11 w-full text-[14px]">
+        <Link href="/signin">Go to sign in</Link>
+      </Button>
+    ) : null;
+
+  // The redesign draws the invite on the shared external frame and the auth
+  // card (P5.1), so the invitee sees the same product as /signin: a flat
+  // ground (no mesh), the brand link and the theme menu above one column.
   return (
-    <div className="relative flex min-h-screen flex-col bg-background">
-      <div aria-hidden className="pointer-events-none fixed inset-0 -z-10 bg-mesh" />
-      <header className="container mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6">
-        <Link href="/">
-          <IconMark />
-        </Link>
-        <ThemeToggle />
-      </header>
-      <main className="flex flex-1 items-center justify-center px-4 py-10">
-        <Card className="w-full max-w-md border-border/60 shadow-xl">
-          <CardHeader className="text-center">
-            {!invite ? (
-              <>
-                <CardTitle>Invite not found</CardTitle>
-                <CardDescription>This link is invalid or no longer active.</CardDescription>
-              </>
-            ) : accepted ? (
-              <>
-                <CardTitle>Already accepted</CardTitle>
-                <CardDescription>This invite was used. Sign in to access {orgName}.</CardDescription>
-              </>
-            ) : expired ? (
-              <>
-                <CardTitle>Invite expired</CardTitle>
-                <CardDescription>{inviteExpiredDescription(orgKnown ? orgName : null)}</CardDescription>
-              </>
-            ) : (
-              <>
-                <CardTitle>You're invited to {orgName}</CardTitle>
-                <CardDescription>
-                  Accept as <span className="font-medium text-foreground">{invite.email as string}</span>.
-                </CardDescription>
-              </>
-            )}
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {invite && !accepted && !expired && (
-              <>
-                {!session ? (
-                  <>
-                    <InviteSignupForm
-                      token={token}
-                      email={invite.email as string}
-                    />
-                    <div className="border-t border-border pt-3 text-center text-[12px] text-muted-foreground">
-                      Already have an account?{' '}
-                      <Link
-                        href={`/signin?redirect=/invite/${token}`}
-                        className="font-medium text-foreground hover:underline"
-                      >
-                        Sign in
-                      </Link>
-                    </div>
-                  </>
-                ) : session.email.toLowerCase() !== (invite.email as string).toLowerCase() ? (
-                  <p className="text-center text-sm text-muted-foreground">
-                    You're signed in as <strong>{session.email}</strong>, but this invite is for{' '}
-                    <strong>{invite.email as string}</strong>. Sign out and sign in with the right email to accept.
-                  </p>
-                ) : (
-                  <AcceptInviteButton token={token} />
-                )}
-              </>
-            )}
-            {(accepted || expired) && (
-              <Button asChild variant="outline" className="w-full">
-                <Link href="/signin">Go to sign in</Link>
-              </Button>
-            )}
-          </CardContent>
-        </Card>
-      </main>
-    </div>
+    <ExternalShell
+      width="md"
+      topBar={
+        <>
+          <Link
+            href="/"
+            className="focus-visible:ring-ring rounded-md focus-visible:outline-none focus-visible:ring-2"
+          >
+            <IconMark />
+          </Link>
+          <ThemeToggle />
+        </>
+      }
+    >
+      <AuthCard
+        title={
+          !invite
+            ? 'Invite not found'
+            : accepted
+              ? 'Already accepted'
+              : expired
+                ? 'Invite expired'
+                : `You're invited to ${orgName}`
+        }
+        description={
+          !invite ? (
+            'This link is invalid or no longer active.'
+          ) : accepted ? (
+            `This invite was used. Sign in to access ${orgName}.`
+          ) : expired ? (
+            inviteExpiredDescription(orgKnown ? orgName : null)
+          ) : (
+            <>
+              Accept as{' '}
+              <span className="text-foreground font-medium">{invite.email as string}</span>.
+            </>
+          )
+        }
+        footer={
+          signupOpen ? (
+            <>
+              Already have an account?{' '}
+              <Link
+                href={`/signin?redirect=/invite/${token}`}
+                className="text-foreground font-medium hover:underline"
+              >
+                Sign in
+              </Link>
+            </>
+          ) : undefined
+        }
+      >
+        {body}
+      </AuthCard>
+    </ExternalShell>
   );
 }

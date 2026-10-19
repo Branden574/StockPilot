@@ -17,6 +17,11 @@ import {
   CreateOrganizationFormInput,
 } from '@stockpilot/core';
 
+// A native select drawn like the shared Input on these external forms: the
+// stronger hairline, 40 px on desktop, and 44 px with 16 px text below sm.
+const SELECT_CLASS =
+  'bg-card focus-visible:ring-ring focus-visible:ring-offset-background flex h-10 w-full rounded-md border border-[var(--ed-line-strong)] px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 max-sm:h-11 max-sm:text-base';
+
 const INDUSTRIES = [
   'Ecommerce',
   'Retail',
@@ -65,20 +70,17 @@ export function CreateOrganizationForm() {
           id="name"
           placeholder="Acme Co."
           autoComplete="organization"
+          className="sm:h-10"
           {...register('name')}
           aria-invalid={!!errors.name}
         />
         {errors.name && <p className="text-destructive text-xs">{errors.name.message}</p>}
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2">
           <Label htmlFor="industry">Industry</Label>
-          <select
-            id="industry"
-            {...register('industry')}
-            className="border-input bg-background focus-visible:ring-ring flex h-10 w-full rounded-md border px-3 text-sm focus-visible:outline-none focus-visible:ring-2"
-          >
+          <select id="industry" {...register('industry')} className={SELECT_CLASS}>
             <option value="">Select…</option>
             {INDUSTRIES.map((i) => (
               <option key={i} value={i}>
@@ -89,11 +91,7 @@ export function CreateOrganizationForm() {
         </div>
         <div className="space-y-2">
           <Label htmlFor="size">Team size</Label>
-          <select
-            id="size"
-            {...register('size')}
-            className="border-input bg-background focus-visible:ring-ring flex h-10 w-full rounded-md border px-3 text-sm focus-visible:outline-none focus-visible:ring-2"
-          >
+          <select id="size" {...register('size')} className={SELECT_CLASS}>
             <option value="">Select…</option>
             <option value="1">Just me</option>
             <option value="2-5">2-5</option>
@@ -104,18 +102,24 @@ export function CreateOrganizationForm() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2">
           <Label htmlFor="timezone">Timezone</Label>
-          <Input id="timezone" {...register('timezone')} />
+          <Input id="timezone" className="sm:h-10" {...register('timezone')} />
         </div>
         <div className="space-y-2">
           <Label htmlFor="currency">Currency</Label>
-          <Input id="currency" maxLength={3} {...register('currency')} />
+          <Input id="currency" maxLength={3} className="sm:h-10" {...register('currency')} />
         </div>
       </div>
 
-      <Button type="submit" className="w-full" variant="gradient" size="lg" disabled={isSubmitting}>
+      <Button
+        type="submit"
+        className="h-11 w-full text-[14px]"
+        variant="gradient"
+        size="lg"
+        disabled={isSubmitting}
+      >
         {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Create workspace'}
       </Button>
     </form>
