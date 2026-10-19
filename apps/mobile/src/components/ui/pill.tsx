@@ -27,10 +27,12 @@ export function Pill({
   dot?: boolean;
   style?: ViewStyle;
   /**
-   * Explicit colours, overriding `status`. For palettes the four-status union
-   * cannot express — today the six serial-number statuses, which used to be a
-   * hand-rolled copy of this component on item/[id].tsx and therefore missed
-   * every box and Dynamic Type fix made here.
+   * Explicit colours, overriding `status`, for a palette the four-status union
+   * cannot express. No screen passes it today: the serial-number pills it was
+   * added for now take `status` (redesign P5.6 mapped each serial status to a
+   * pillTone, measured at AA). Kept so a future palette has a way in without
+   * a hand-rolled copy of this component, which would miss every box and
+   * Dynamic Type fix made here.
    */
   tone?: { fg: string; bg: string; border: string };
 }) {

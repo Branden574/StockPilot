@@ -1,8 +1,10 @@
 import * as React from 'react';
-import { Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native';
+import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
-import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
-import { useTheme } from '@/lib/use-theme';
+// Relative imports on purpose (as in checkbox.tsx): touch-target.test.ts
+// loads this file in the node test runner, which does not resolve `@/`.
+import { FONT, TYPE_CEILING, capTo } from '../../lib/theme';
+import { useTheme } from '../../lib/use-theme';
 import { BUTTON_RADIUS, buttonTone, type ButtonVariant } from './tones';
 
 type Variant = ButtonVariant;
@@ -24,6 +26,19 @@ type Size = 'sm' | 'md';
  * A screen shows at most one ink and one accent button. 52pt (md) and 36pt
  * (sm) tall, corner radius 14 / 10. Press scales to 0.98 per brand motion
  * spec.
+ *
+ * THE 44pt TARGET (redesign P2.5c). md is taller than 44pt on its own. sm
+ * draws its 36pt button inside a frame: the Pressable is the frame, at least
+ * 44pt tall and wide, and the drawn button is a View centred in it, so the
+ * target VoiceOver outlines and a finger can hit is 44pt while the button
+ * looks exactly as it did. A frame, not hitSlop: hitSlop never reaches past
+ * the parent's bounds and loses to an overlapping sibling (the Checkbox and
+ * IconChip rule). The caller's `style` is split: what places the button in
+ * its parent (margins, alignSelf, flex, width, position) goes on the frame,
+ * everything else (minHeight, padding, colours) stays on the drawn button, so
+ * a caller that already passes minHeight 44 still draws a 44pt button in a
+ * 44pt frame. A one-glyph label narrower than 44pt would be drawn 44pt wide
+ * (no sm button is that narrow today).
  */
 export function Button({
   children,
@@ -58,6 +73,22 @@ export function Button({
   const minHeight = size === 'sm' ? 36 : 52;
   const padH = size === 'sm' ? 14 : 20;
   const fontSize = size === 'sm' ? 13 : 15.5;
+  const framed = size === 'sm';
+
+  const drawn = (pressed: boolean): ViewStyle => ({
+    // minHeight, not height: the label is allowed to grow to the 22pt
+    // control ceiling, and the button grows with it instead of clipping.
+    minHeight,
+    paddingVertical: 6,
+    paddingHorizontal: padH,
+    borderRadius: BUTTON_RADIUS[size],
+    backgroundColor: tone.bg,
+    borderColor: tone.border,
+    opacity: disabled ? 0.5 : 1,
+    transform: [{ scale: pressed ? 0.98 : 1 }],
+  });
+  const blockWidth: ViewStyle | null = block ? { width: '100%' } : null;
+  const split = framed ? splitButtonStyle(style) : null;
 
   return (
     <Pressable
@@ -68,44 +99,106 @@ export function Button({
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
       accessibilityHint={accessibilityHint}
-      style={({ pressed }) => [
-        styles.base,
-        {
-          // minHeight, not height: the label is allowed to grow to the 22pt
-          // control ceiling, and the button grows with it instead of clipping.
-          minHeight,
-          paddingVertical: 6,
-          paddingHorizontal: padH,
-          borderRadius: BUTTON_RADIUS[size],
-          backgroundColor: tone.bg,
-          borderColor: tone.border,
-          opacity: disabled ? 0.5 : 1,
-          transform: [{ scale: pressed ? 0.98 : 1 }],
-          ...(block ? { width: '100%' } : null),
-        },
-        style,
-      ]}
+      style={({ pressed }) =>
+        split
+          ? [styles.frame, blockWidth, split.frame]
+          : [styles.base, drawn(pressed), blockWidth, style]
+      }
     >
-      {leading ? <View style={styles.slot}>{leading}</View> : null}
-      <Text
-        style={[
-          styles.label,
-          {
-            color: tone.fg,
-            fontSize,
-          },
-        ]}
-        numberOfLines={1}
-        maxFontSizeMultiplier={capTo(fontSize, TYPE_CEILING.control)}
-      >
-        {children}
-      </Text>
-      {trailing ? <View style={styles.slot}>{trailing}</View> : null}
+      {({ pressed }) => {
+        // Inside the Pressable in the source as well as on screen: the
+        // Pressable is the one root element (sheet-a11y-structure.test.ts).
+        const content = (
+          <>
+            {leading ? <View style={styles.slot}>{leading}</View> : null}
+            <Text
+              style={[
+                styles.label,
+                {
+                  color: tone.fg,
+                  fontSize,
+                },
+              ]}
+              numberOfLines={1}
+              maxFontSizeMultiplier={capTo(fontSize, TYPE_CEILING.control)}
+            >
+              {children}
+            </Text>
+            {trailing ? <View style={styles.slot}>{trailing}</View> : null}
+          </>
+        );
+        return split ? (
+          <View style={[styles.base, drawn(pressed), split.drawn]}>{content}</View>
+        ) : (
+          content
+        );
+      }}
     </Pressable>
   );
 }
 
+/** The least an sm button's frame measures each way (the iOS minimum). */
+export const BUTTON_MIN_TARGET = 44;
+
+/** The style keys that place a button in its parent. On a framed (sm) button
+ *  they go on the frame; every other key stays on the drawn button. */
+const FRAME_KEYS: ReadonlySet<string> = new Set([
+  'margin',
+  'marginTop',
+  'marginBottom',
+  'marginLeft',
+  'marginRight',
+  'marginStart',
+  'marginEnd',
+  'marginHorizontal',
+  'marginVertical',
+  'alignSelf',
+  'flex',
+  'flexGrow',
+  'flexShrink',
+  'flexBasis',
+  'width',
+  'minWidth',
+  'maxWidth',
+  'position',
+  'top',
+  'right',
+  'bottom',
+  'left',
+  'start',
+  'end',
+  'zIndex',
+  'display',
+]);
+
+/**
+ * A caller's style for a framed button, in two parts: `frame` places the
+ * 44pt frame in the parent, `drawn` is everything else, laid on the button
+ * that shows. Exported for touch-target.test.ts.
+ */
+export function splitButtonStyle(style: StyleProp<ViewStyle>): {
+  frame: ViewStyle;
+  drawn: ViewStyle;
+} {
+  const flat = (StyleSheet.flatten(style) ?? {}) as Record<string, unknown>;
+  const frame: Record<string, unknown> = {};
+  const drawn: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(flat)) {
+    (FRAME_KEYS.has(key) ? frame : drawn)[key] = value;
+  }
+  return { frame: frame as ViewStyle, drawn: drawn as ViewStyle };
+}
+
 const styles = StyleSheet.create({
+  // The sm button's target: at least 44pt each way (minHeight / minWidth, so
+  // it still grows with the label), the drawn button centred in it. The frame
+  // is a column, so the drawn button stretches to the frame's width when the
+  // caller sets one (block, width, flex in a row).
+  frame: {
+    minHeight: BUTTON_MIN_TARGET,
+    minWidth: BUTTON_MIN_TARGET,
+    justifyContent: 'center',
+  },
   base: {
     flexDirection: 'row',
     alignItems: 'center',
