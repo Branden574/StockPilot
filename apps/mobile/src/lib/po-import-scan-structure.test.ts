@@ -826,8 +826,21 @@ describe('Scan a PO: its controls have roles, names and 44pt targets', () => {
       /onLongPress=\{\(\) => removeFrame\(f\.uri\)\} accessibilityActions=\{REMOVE_PAGE_ACTIONS\} onAccessibilityAction=\{\(e\) => \{ if \(e\.nativeEvent\.actionName === 'remove'\) removeFrame\(f\.uri\); \}\}/g,
     );
     expect(holds ?? []).toHaveLength(2);
-    expect(code).toContain('<Text style={styles.thumbnailHint}>Hold to remove</Text>');
-    expect(code).toContain('<Text style={styles.thumbnailHint}>Hold</Text>');
+  });
+
+  // Mutation caught: the hint uncapped again ("Hold" broke mid-word in the
+  // 56pt frame at the larger accessibility sizes), or its words changed.
+  it("the hint on a page keeps its words, capped at the chrome ceiling inside the page's frame", () => {
+    expect(code).toContain(
+      '<Text style={styles.thumbnailHint} maxFontSizeMultiplier={HINT_CAP}> Hold to remove </Text>',
+    );
+    expect(code).toContain(
+      '<Text style={styles.thumbnailHint} maxFontSizeMultiplier={HINT_CAP}> Hold </Text>',
+    );
+    const { HINT_CAP } = topLevel(SCAN, ['HINT_CAP']) as { HINT_CAP: number };
+    expect(HINT_CAP).toBe(capTo(10.5, TYPE_CEILING.chrome));
+    // The cap is a ceiling in points: 20pt at most, which "Hold" fits in 56pt.
+    expect(10.5 * HINT_CAP).toBe(TYPE_CEILING.chrome);
   });
 
   it('each name box is named for VoiceOver, its hint muted ink, and it grows with the text', () => {

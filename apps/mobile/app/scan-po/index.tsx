@@ -618,7 +618,9 @@ export default function ScanPo() {
                   >
                     <Image source={{ uri: f.uri }} style={styles.thumbnailImage} />
                     <View style={styles.thumbnailOverlay}>
-                      <Text style={styles.thumbnailHint}>Hold</Text>
+                      <Text style={styles.thumbnailHint} maxFontSizeMultiplier={HINT_CAP}>
+                        Hold
+                      </Text>
                     </View>
                   </Pressable>
                   <View style={styles.frameRowBody}>
@@ -656,7 +658,9 @@ export default function ScanPo() {
                 >
                   <Image source={{ uri: f.uri }} style={styles.thumbnailImage} />
                   <View style={styles.thumbnailOverlay}>
-                    <Text style={styles.thumbnailHint}>Hold to remove</Text>
+                    <Text style={styles.thumbnailHint} maxFontSizeMultiplier={HINT_CAP}>
+                      Hold to remove
+                    </Text>
                   </View>
                 </Pressable>
               ))}
@@ -756,6 +760,14 @@ const CAMERA = {
 
 /** Done sits on the camera bar: chrome, capped at its ceiling. */
 const CLOSE_CAP = capTo(13, TYPE_CEILING.chrome);
+
+/**
+ * "Hold" and "Hold to remove" sit inside a page's fixed photo frame (56 and
+ * 100pt wide): chrome, capped at its ceiling. Uncapped, "Hold" broke mid-word
+ * in the 56pt frame from the larger accessibility sizes, and the longer hint
+ * covered the whole page.
+ */
+const HINT_CAP = capTo(10.5, TYPE_CEILING.chrome);
 
 /**
  * Behind the words over a captured page ("Hold to remove"): the camera's
