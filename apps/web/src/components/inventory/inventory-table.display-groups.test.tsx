@@ -401,9 +401,13 @@ describe('InventoryTable: explicit display group headers', () => {
       />,
     );
     const header = bodyRows(container)[0] as HTMLElement;
-    expect(
-      within(header).getByTitle(/other pages may hold more of this group/i),
-    ).toBeInTheDocument();
+    // Both places that explain the "*" use the group's words: the hover card's
+    // figure and (fixed in redesign P3.2) the On hand cell, which said "other
+    // pages may hold more of this SKU" over a group of different SKUs.
+    expect(within(header).getAllByTitle(/other pages may hold more of this group/i)).toHaveLength(
+      2,
+    );
+    expect(within(header).queryByTitle(/of this SKU/i)).toBeNull();
   });
 
   it('Books: one header for two editions of one title, no size runs', () => {
