@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { BookOpen } from 'lucide-react';
+import { cookies } from 'next/headers';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 
@@ -12,6 +13,8 @@ import { RefreshBookPricesButton } from '@/components/inventory/refresh-book-pri
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
 import { BooksInventoryTable } from '@/components/books/books-inventory-table';
+import { INVENTORY_VIEW_COOKIES, parseInventoryView } from '@/components/inventory/inventory-grid';
+import { PageHeader } from '@/components/patterns/page-header';
 import { PerfUseful } from '@/components/perf/perf-useful';
 import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown';
 import { Button } from '@/components/ui/button';
@@ -178,48 +181,56 @@ export default async function BooksPage({
   const [sessionCtx, heading, racks, table] = await Promise.all([
     requireOrgContext(),
     effectiveNavLabel('/dashboard/books', 'Books'),
-    InventoryService.forCurrentUser().then((svc) =>
-      svc.listDistinctRacks({ scope: 'books' }),
-    ),
+    InventoryService.forCurrentUser().then((svc) => svc.listDistinctRacks({ scope: 'books' })),
     booksTableSection({ params, lifecycleStatus, sportsEnabled }),
   ]);
 
   const canCreate = can(sessionCtx, 'items:create');
   return (
-    <div className="container mx-auto max-w-7xl px-4 py-8 sm:px-6">
-      <div className="flex flex-wrap items-end justify-between gap-3 sm:gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{heading}</h1>
-          <p className="text-muted-foreground mt-1 text-sm">
-            {lifecycleStatus === 'archived'
-              ? 'Books you archived. Restore one by editing it and setting status to Active.'
-              : 'Books are tracked separately here but still count toward total inventory value, low stock, and out of stock on the overview.'}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Same status-param toggle the Inventory page uses; books
-              accept the same lifecycleStatus filter. Active drops the
-              "Auto-archived only" chip (?auto=1), as on Items. */}
-          <ArchiveViewToggle
-            paramName="status"
-            view={lifecycleStatus === 'archived' ? 'archived' : 'active'}
-            archivedOnlyParams={['auto']}
-          />
-          <RackFilterDropdown racks={racks} />
-          {canCreate && lifecycleStatus !== 'archived' && (
-            <>
-              <BackfillCoversButton />
-              {priceTrackingEnabled && <RefreshBookPricesButton />}
-              <Button asChild variant="outline">
-                <Link href="/dashboard/books/import">Bulk ISBN import</Link>
-              </Button>
-              <Button asChild variant="gradient">
-                <Link href="/dashboard/books/new">+ New book</Link>
-              </Button>
-            </>
-          )}
-        </div>
-      </div>
+    // The page box every redesigned dashboard page shares (max 1320, 28 / 32
+    // / 64 padding, 16 px gutters on a phone; the route skeleton draws it too).
+    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <PageHeader
+        title={heading}
+        subline={
+          lifecycleStatus === 'archived'
+            ? ARCHIVED_SUBLINE
+            : 'Books are tracked separately here but still count toward total inventory value, low stock, and out of stock on the overview.'
+        }
+        // In the order they always sat: the view toggle, the rack filter, then
+        // (creators, outside the Archived view) Backfill covers, Refresh book
+        // prices and Bulk ISBN import, with + New book last as the page's one
+        // accent action.
+        actions={
+          <>
+            {/* Same status-param toggle the Inventory page uses; books
+                accept the same lifecycleStatus filter. Active drops the
+                "Auto-archived only" chip (?auto=1), as on Items. */}
+            <ArchiveViewToggle
+              paramName="status"
+              view={lifecycleStatus === 'archived' ? 'archived' : 'active'}
+              archivedOnlyParams={['auto']}
+            />
+            <RackFilterDropdown racks={racks} />
+            {canCreate && lifecycleStatus !== 'archived' && (
+              <>
+                <BackfillCoversButton />
+                {priceTrackingEnabled && <RefreshBookPricesButton />}
+                <Button asChild variant="outline">
+                  <Link href="/dashboard/books/import">Bulk ISBN import</Link>
+                </Button>
+              </>
+            )}
+          </>
+        }
+        primaryAction={
+          canCreate && lifecycleStatus !== 'archived' ? (
+            <Button asChild variant="gradient">
+              <Link href="/dashboard/books/new">+ New book</Link>
+            </Button>
+          ) : undefined
+        }
+      />
 
       {/* ONE REVEAL. The table used to sit in its own <Suspense> under
           loading.tsx, so React revealed twice: skeleton -> header with an inner
@@ -236,10 +247,18 @@ export default async function BooksPage({
           fallback React holds the page behind for 300 ms (the dataset
           adopter's fallback={null} boundary inside the table is fine: it
           draws nothing). */}
-      <div className="mt-8">{table}</div>
+      <div className="min-w-0">{table}</div>
     </div>
   );
 }
+
+/**
+ * The Archived view's line under the title. It used to say "Restore one by
+ * editing it and setting status to Active", but the book form has no status
+ * field (CONFLICTS D5): the way back is the selection bar's Restore.
+ */
+const ARCHIVED_SUBLINE =
+  'Books you archived. Select one and choose Restore to make it active again.';
 
 /**
  * Data both acquisition paths (cached default view / live filtered
@@ -294,10 +313,16 @@ async function booksTableSection({
   // Keep the rejection observed even if the data path throws before the
   // await below — an unobserved rejection would crash the lambda.
   savedViewsPromise.catch(() => {});
-  const [sessionCtx, warehouseFilter] = await Promise.all([
+  const [sessionCtx, warehouseFilter, cookieStore] = await Promise.all([
     requireOrgContext(),
     getActiveWarehouseFilter(),
+    cookies(),
   ]);
+  // The viewer's Table / Grid choice (a presentation preference, no database
+  // read): the table renders it in the first paint, so a Grid viewer never
+  // sees the table first. isDefaultInventoryView never sees it (not a URL
+  // parameter), so the cached default view serves both.
+  const initialView = parseInventoryView(cookieStore.get(INVENTORY_VIEW_COOKIES.books)?.value);
 
   let data: SectionData | null = null;
 
@@ -421,6 +446,7 @@ async function booksTableSection({
         activeWarehouseId={warehouseFilter}
         currentUserId={sessionCtx.userId}
         instant={{ items: instantItems, view: 'books' }}
+        initialView={initialView}
       />
     );
   }
@@ -616,8 +642,7 @@ async function booksTableSection({
           ),
     ]);
     const itemsWithImages = inventory.items.map((i) => {
-      const cf = (i as { custom_fields?: Record<string, unknown> | null })
-        .custom_fields;
+      const cf = (i as { custom_fields?: Record<string, unknown> | null }).custom_fields;
       const cfThumb =
         cf && typeof cf === 'object' && typeof cf.thumbnail_url === 'string'
           ? (cf.thumbnail_url as string)
@@ -648,13 +673,9 @@ async function booksTableSection({
   const itemsWithImages = data.items;
 
   const lookups = {
-    categories: new Map(
-      data.categories.map((c) => [c.id, { name: c.name, color: c.color }]),
-    ),
+    categories: new Map(data.categories.map((c) => [c.id, { name: c.name, color: c.color }])),
     locations: new Map(data.locations.map((l) => [l.id, { name: l.name }])),
-    charters: new Map(
-      data.charters.map((c) => [c.id, { name: c.name, code: c.code }]),
-    ),
+    charters: new Map(data.charters.map((c) => [c.id, { name: c.name, code: c.code }])),
   };
 
   const emptyState = booksEmptyState({
@@ -695,6 +716,7 @@ async function booksTableSection({
       currentUserId={sessionCtx.userId}
       plannedPage={data.plannedPage ?? null}
       expectedCount={data.expectedCount}
+      initialView={initialView}
     />
   );
   // Never the partial rack figures presented as complete (0371).
@@ -759,11 +781,7 @@ function booksEmptyState({
             ? 'Add your first book — title, ISBN, author, quantity. Books roll up into the same dashboard totals as regular items.'
             : 'No books have been added to this workspace yet.'
         }
-        cta={
-          canCreate
-            ? { label: 'Add your first book', href: '/dashboard/books/new' }
-            : undefined
-        }
+        cta={canCreate ? { label: 'Add your first book', href: '/dashboard/books/new' } : undefined}
       />
     );
   }

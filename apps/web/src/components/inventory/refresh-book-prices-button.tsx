@@ -19,7 +19,8 @@ export function RefreshBookPricesButton() {
     toast.success(`Prices refreshed — ${res.data.written} updated, ${res.data.skipped} skipped of ${res.data.scanned}.`);
   }
   return (
-    <Button type="button" variant="outline" size="sm" onClick={run} disabled={loading}>
+    // A secondary header action: the page header's 32 px outline button.
+    <Button type="button" variant="outline" onClick={run} disabled={loading}>
       {loading ? 'Refreshing…' : 'Refresh book prices'}
     </Button>
   );

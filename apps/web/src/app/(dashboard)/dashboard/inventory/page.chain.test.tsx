@@ -51,6 +51,8 @@ const h = vi.hoisted(() => ({
   placementMap: null as null | Map<string, unknown[]>,
   /** listPlanRows' answer (null: the view is over the cap, fixed pages). */
   planRows: null as null | { rows: unknown[]; total: number; valueOnHand: number },
+  /** The request's cookies (the Table / Grid choice, redesign P3.2). */
+  cookies: {} as Record<string, string>,
 }));
 
 const m = vi.hoisted(() => ({
@@ -115,6 +117,15 @@ vi.mock('@/components/inventory/inventory-table', () => ({
 }));
 
 vi.mock('@/lib/auth/session', () => ({ requireOrgContext: m.requireOrgContext }));
+// The request's cookies: the Items list reads its Table / Grid choice there.
+vi.mock('next/headers', () => ({
+  cookies: async () => ({
+    get: (name: string) =>
+      h.cookies[name] === undefined ? undefined : { name, value: h.cookies[name] },
+    getAll: () => Object.entries(h.cookies).map(([name, value]) => ({ name, value })),
+    set: () => {},
+  }),
+}));
 vi.mock('@/lib/nav-labels', () => ({ effectiveNavLabel: vi.fn(async () => 'Inventory') }));
 vi.mock('@/lib/warehouse-filter', () => ({
   getActiveWarehouseFilter: vi.fn(async () => h.filter),
@@ -233,6 +244,7 @@ function logged<T>(name: string, fn: () => Promise<T>): Promise<T> {
 beforeEach(() => {
   vi.clearAllMocks();
   events.length = 0;
+  h.cookies = {};
   h.role = 'manager';
   h.ctxGate = null;
   h.racksGate = null;
@@ -764,5 +776,60 @@ describe('Items page: a staff page is planned group-aware', () => {
     expect(m.inventoryList).not.toHaveBeenCalled();
     expect(m.tableProps).not.toHaveBeenCalled();
     expect(m.emptyStateProps).toHaveBeenCalled();
+  });
+});
+
+/**
+ * Redesign P3.2: the Table / Grid choice is a per-list cookie (sp_view_items)
+ * the page reads on the server and hands the table as its initial view, so a
+ * Grid viewer's first paint is already the grid (no table-then-grid swap, no
+ * second wave of images) and nothing is read from the database for it. It is
+ * not a URL parameter: the default view still takes the cached first paint.
+ */
+describe('Items page: the Table / Grid choice comes from its cookie', () => {
+  it.each<[string, Record<string, string>, 'table' | 'grid']>([
+    ['no cookie: Table, the default', {}, 'table'],
+    ['sp_view_items=grid', { sp_view_items: 'grid' }, 'grid'],
+    ['sp_view_items=table', { sp_view_items: 'table' }, 'table'],
+    ['an unknown value', { sp_view_items: 'cards' }, 'table'],
+    ["only the Books list's cookie", { sp_view_books: 'grid' }, 'table'],
+  ])('%s', async (_label, cookies, view) => {
+    h.cookies = cookies;
+    render(await callPage());
+    expect(m.tableProps).toHaveBeenCalledTimes(1);
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ initialView: view });
+  });
+
+  it('the choice keeps the cached default view (it is not a URL parameter)', async () => {
+    h.cookies = { sp_view_items: 'grid' };
+    render(await callPage());
+    expect(m.loadInventoryList).toHaveBeenCalledTimes(1);
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ initialView: 'grid' });
+    expect(m.tableProps.mock.calls[0]![0].instantPromise).toBeInstanceOf(Promise);
+  });
+
+  it('staff on the live path, and a deep link, get it too', async () => {
+    h.cookies = { sp_view_items: 'grid' };
+    h.role = 'staff';
+    render(await callPage());
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ initialView: 'grid' });
+    h.role = 'manager';
+    render(await callPage({ sort: 'name_asc' }));
+    expect(m.tableProps.mock.calls[1]![0]).toMatchObject({ initialView: 'grid' });
+  });
+});
+
+/**
+ * CONFLICTS D5 (fixed in redesign P3.2): the Archived view told people to
+ * restore an item by editing it and setting its status to Active, but the
+ * item form has no status field. The way back is Restore on the selection.
+ */
+describe('Items page: the Archived view says how to restore', () => {
+  it('points at Restore on the selection, never at a status field', async () => {
+    const { container } = render(await callPage({ status: 'archived' }));
+    expect(container.textContent).toContain(
+      'Items you archived. Select one and choose Restore to make it active again.',
+    );
+    expect(container.textContent).not.toContain('setting status to Active');
   });
 });

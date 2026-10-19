@@ -28,6 +28,8 @@ const h = vi.hoisted(() => ({
   holdDataset: null as null | Promise<void>,
   filter: null as string | null,
   tableProps: [] as Array<Record<string, unknown>>,
+  /** The request's cookies (the Table / Grid choice, redesign P3.2). */
+  cookies: {} as Record<string, string>,
 }));
 
 // useSearchParams follows the URL the way Next's router does: setting it
@@ -141,6 +143,15 @@ vi.mock('@/lib/auth/session', () => ({
   }),
 }));
 vi.mock('@/lib/nav-labels', () => ({ effectiveNavLabel: vi.fn(async () => 'Inventory') }));
+// The request's cookies: the page reads the viewer's Table / Grid choice there.
+vi.mock('next/headers', () => ({
+  cookies: async () => ({
+    get: (name: string) =>
+      h.cookies[name] === undefined ? undefined : { name, value: h.cookies[name] },
+    getAll: () => Object.entries(h.cookies).map(([name, value]) => ({ name, value })),
+    set: () => {},
+  }),
+}));
 vi.mock('@/lib/warehouse-filter', () => ({
   getActiveWarehouseFilter: vi.fn(async () => h.filter),
 }));
@@ -257,6 +268,8 @@ import {
   type InstantModeRow,
 } from '@/lib/inventory/instant-mode';
 
+import { renderToString } from 'react-dom/server';
+
 import InventoryPage from './page';
 
 /* ---- reading what the person sees ----------------------------------------- */
@@ -283,8 +296,11 @@ function snapshot(container: HTMLElement) {
     expectedChip: [...container.querySelectorAll('a[aria-pressed]')].map((a) =>
       norm(a.textContent),
     ),
-    /** An empty state's title ("No items yet"), when the page shows one. */
-    headings: [...container.querySelectorAll('h3')].map((n) => norm(n.textContent)),
+    /** An empty state's title ("No items yet"), when the page shows one.
+     *  Redesign P3.2 (locator only): h2 as well as h3, since the shared empty
+     *  state draws through the state panel, whose title sits under the page's
+     *  h1 as an h2. The page header's own h1 is not an empty state's title. */
+    headings: [...container.querySelectorAll('h2, h3')].map((n) => norm(n.textContent)),
   };
 }
 
@@ -318,6 +334,7 @@ beforeEach(() => {
   h.holdDataset = null;
   h.filter = null;
   h.tableProps.length = 0;
+  h.cookies = {};
   nav.set('');
   window.history.replaceState(null, '', '/dashboard/inventory');
   fetchSpy = vi.fn();
@@ -592,5 +609,83 @@ describe('URL probe: an Items URL paints what it settles on (review 2026-10-05)'
       'href',
       '/dashboard/inventory?auto=1&status=archived',
     );
+  });
+});
+
+/* ---- Grid first paint (redesign P3.2) -------------------------------------- */
+
+/** What the person sees in the Grid: the cards (records and group cards, by
+ *  their row or group key), the pager and the footer. */
+function gridSnapshot(container: HTMLElement) {
+  const base = snapshot(container);
+  return {
+    cards: [...container.querySelectorAll('[data-slot="grid-card"]')].map((c) => ({
+      key: c.getAttribute('data-row-key') ?? c.getAttribute('data-group-key'),
+      text: norm(c.textContent),
+      photos: [...c.querySelectorAll('img')].map((img) => img.getAttribute('src')),
+    })),
+    showing: base.showing,
+    pager: base.pager,
+    footer: base.footer,
+  };
+}
+
+/** The keys of the page's entries as the table draws them (rows and headers). */
+const tableEntryKeys = (container: HTMLElement) =>
+  [...container.querySelectorAll('tbody tr')].map(
+    (tr) => tr.getAttribute('data-row-key') ?? tr.getAttribute('data-group-key'),
+  );
+
+describe('Grid first paint: the Table / Grid cookie is read on the server', () => {
+  it('a Grid viewer gets the grid in the server-rendered HTML: no table to swap out, no second wave of images', async () => {
+    h.cookies = { sp_view_items: 'grid' };
+    const html = renderToString(await InventoryPage({ searchParams: Promise.resolve({}) }));
+    expect(html).toContain('data-slot="inventory-grid"');
+    expect(html).not.toContain('<table');
+    // The table's photos are not there to be replaced: every photo is a card's.
+    expect(html).toContain('data-slot="grid-card"');
+  });
+
+  it('a Table viewer (no cookie) gets the table, as before', async () => {
+    const html = renderToString(await InventoryPage({ searchParams: Promise.resolve({}) }));
+    expect(html).toContain('<table');
+    expect(html).not.toContain('data-slot="inventory-grid"');
+  });
+
+  it('the Grid paints page 1 exactly as the full dataset settles it (the same cards, pager and footer)', async () => {
+    h.cookies = { sp_view_items: 'grid' };
+    let releaseDataset!: () => void;
+    h.holdDataset = new Promise<void>((resolve) => {
+      releaseDataset = resolve;
+    });
+    const page = await InventoryPage({ searchParams: Promise.resolve({}) });
+    let view!: ReturnType<typeof render>;
+    await act(async () => {
+      view = render(page);
+    });
+    const firstPaint = gridSnapshot(view.container);
+    expect(view.container.querySelector('table')).toBeNull();
+    expect(firstPaint.cards.length).toBeGreaterThan(0);
+
+    releaseDataset();
+    await act(async () => {
+      await latestTableProps().instantPromise;
+    });
+    view.rerender(page);
+    await act(async () => {});
+    expect(gridSnapshot(view.container)).toEqual(firstPaint);
+    await expectInstantMode();
+  });
+
+  it('the cards are the table rows of the same page: same entries in the same order', async () => {
+    const table = render(await InventoryPage({ searchParams: Promise.resolve({}) }));
+    const keysInTable = tableEntryKeys(table.container);
+    const showingInTable = snapshot(table.container).showing;
+    table.unmount();
+
+    h.cookies = { sp_view_items: 'grid' };
+    const grid = render(await InventoryPage({ searchParams: Promise.resolve({}) }));
+    expect(gridSnapshot(grid.container).cards.map((c) => c.key)).toEqual(keysInTable);
+    expect(snapshot(grid.container).showing).toEqual(showingInTable);
   });
 });
