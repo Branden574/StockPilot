@@ -36,10 +36,11 @@ export function CreateRestorePointButton() {
         value={label}
         onChange={(e) => setLabel(e.target.value)}
         placeholder="Optional label (e.g. before bulk edit)"
-        className="max-w-xs"
+        aria-label="Restore point label (optional)"
+        className="min-w-0 max-w-xs flex-1 basis-56"
         disabled={busy}
       />
-      <Button onClick={create} disabled={busy} size="sm">
+      <Button onClick={create} disabled={busy}>
         {busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null}
         Create restore point
       </Button>

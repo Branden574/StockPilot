@@ -286,3 +286,31 @@ describe('RestoreSnapshotButton: SKU changes since the point', () => {
     expect(text).not.toMatch(/change (the |a )?(charter|rack)/i);
   });
 });
+
+describe("RestoreSnapshotButton: the point's time in the viewer's zone (CONFLICTS D13)", () => {
+  it('says "roll back to" the time in the browser zone when given the ISO time', async () => {
+    const { inZone, BROWSER_ZONE } = await import('@/test/hydration');
+    // 7:30 PM on Oct 5 in Los Angeles; 02:30 on Oct 6 in UTC.
+    const at = '2026-10-06T02:30:00.000Z';
+    const viewer = inZone(BROWSER_ZONE, () => new Date(at).toLocaleString());
+    const server = inZone('UTC', () => new Date(at).toLocaleString());
+    expect(viewer).not.toBe(server);
+    h.changes.mockResolvedValue(answer({ version: 2, changes: [], more: 0, truncated: false }));
+    const previous = process.env.TZ;
+    process.env.TZ = BROWSER_ZONE;
+    try {
+      const user = userEvent.setup();
+      render(<RestoreSnapshotButton id={ID} createdAt={at} />);
+      await user.click(screen.getByRole('button', { name: 'Restore' }));
+      expect(screen.getByText(`to roll back to ${viewer}:`, { exact: false })).toBeInTheDocument();
+      expect(
+        screen.getByRole('textbox', { name: `Type RESTORE to roll back to ${viewer}` }),
+      ).toBeInTheDocument();
+      // Confirm still waits for the check and the typed word.
+      expect(screen.getByRole('button', { name: 'Confirm' })).toBeDisabled();
+    } finally {
+      if (previous === undefined) delete process.env.TZ;
+      else process.env.TZ = previous;
+    }
+  });
+});

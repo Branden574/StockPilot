@@ -1,9 +1,21 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 
+import { Lock } from 'lucide-react';
+
+import { PageHeader } from '@/components/patterns/page-header';
 import { CreateRestorePointButton } from '@/components/settings/create-restore-point-button';
 import { RestoreSnapshotButton } from '@/components/settings/restore-snapshot-button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { SettingsPage, SettingsPanel } from '@/components/settings/settings-panel';
+import { LocalDateTime } from '@/components/ui/local-datetime';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { withContext } from '@/server/services/context';
 import { listSnapshots } from '@/server/services/restore-points';
 
@@ -35,94 +47,80 @@ export default async function RestorePointsPage() {
   const snapshots = entitled ? await listSnapshots(ctx) : [];
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Backups &amp; restore</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Point-in-time snapshots of your inventory and stock you can roll back to.
-        </p>
-      </div>
+    <SettingsPage>
+      <PageHeader
+        title="Backups & restore"
+        subline="Point-in-time snapshots of your inventory and stock you can roll back to."
+      />
 
       {!entitled ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Restore points</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="rounded-md border bg-muted/30 p-4 text-sm text-muted-foreground">
-              Restore points are a <span className="font-medium text-foreground">Business</span>{' '}
+        <SettingsPanel title="Restore points">
+          <div className="bg-sunk text-muted-foreground flex items-start gap-2.5 rounded-md border p-4 text-[13px]">
+            <Lock aria-hidden className="mt-0.5 h-4 w-4 shrink-0" />
+            <p>
+              Restore points are a <span className="text-foreground font-medium">Business</span>{' '}
               feature. Upgrade to Business or above to snapshot and roll back your inventory.
             </p>
-          </CardContent>
-        </Card>
+          </div>
+        </SettingsPanel>
       ) : (
-        <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Create a restore point</CardTitle>
-              <CardDescription>
-                Captures every item, its stock level, and its category/supplier/location now. A
-                daily snapshot is also taken automatically.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <CreateRestorePointButton />
-            </CardContent>
-          </Card>
+        <>
+          <SettingsPanel
+            title="Create a restore point"
+            description="Captures every item, its stock level, and its category/supplier/location now. A daily snapshot is also taken automatically."
+          >
+            <CreateRestorePointButton />
+          </SettingsPanel>
 
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Snapshots</CardTitle>
-              <CardDescription>
-                The most recent {snapshots.length} kept (older ones are pruned automatically).
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {snapshots.length === 0 ? (
-                <p className="text-muted-foreground text-sm">
-                  No restore points yet. Create one above, or wait for tonight&apos;s automatic
-                  snapshot.
-                </p>
-              ) : (
-                <div className="overflow-hidden rounded-md border">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b bg-muted/40 text-left text-xs uppercase tracking-wider text-muted-foreground">
-                        <th className="px-4 py-2.5 font-medium">When</th>
-                        <th className="px-4 py-2.5 font-medium">Type</th>
-                        <th className="px-4 py-2.5 font-medium">Label</th>
-                        <th className="px-4 py-2.5 font-medium text-right">Items</th>
-                        <th className="px-4 py-2.5 font-medium text-right">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {snapshots.map((s) => (
-                        <tr key={s.id} className="border-b last:border-0">
-                          <td className="px-4 py-2.5">{new Date(s.createdAt).toLocaleString()}</td>
-                          <td className="px-4 py-2.5 text-muted-foreground">
-                            {KIND_LABEL[s.kind] ?? s.kind}
-                          </td>
-                          <td className="px-4 py-2.5 text-muted-foreground">{s.label ?? '—'}</td>
-                          <td className="px-4 py-2.5 text-right font-mono tabular-nums">
-                            {s.itemCount}
-                            {s.capped ? '+' : ''}
-                          </td>
-                          <td className="px-4 py-2.5 text-right">
-                            <RestoreSnapshotButton
-                              id={s.id}
-                              when={new Date(s.createdAt).toLocaleString()}
-                            />
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+          <SettingsPanel
+            title="Snapshots"
+            description={`The most recent ${snapshots.length} kept (older ones are pruned automatically).`}
+            flush
+          >
+            {snapshots.length === 0 ? (
+              <p className="text-muted-foreground px-[18px] py-4 text-[13px]">
+                No restore points yet. Create one above, or wait for tonight&apos;s automatic
+                snapshot.
+              </p>
+            ) : (
+              // The table scrolls inside the card on narrow screens (it was
+              // clipped by overflow-hidden before); the page never scrolls
+              // sideways.
+              <Table className="min-w-[600px]">
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead>When</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Label</TableHead>
+                    <TableHead className="text-right">Items</TableHead>
+                    <TableHead className="text-right">Action</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {snapshots.map((s) => (
+                    <TableRow key={s.id} className="align-top">
+                      <TableCell className="whitespace-nowrap">
+                        <LocalDateTime iso={s.createdAt} />
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {KIND_LABEL[s.kind] ?? s.kind}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">{s.label ?? '—'}</TableCell>
+                      <TableCell className="text-right font-mono tabular-nums">
+                        {s.itemCount}
+                        {s.capped ? '+' : ''}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <RestoreSnapshotButton id={s.id} createdAt={s.createdAt} />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </SettingsPanel>
+        </>
       )}
-    </div>
+    </SettingsPage>
   );
 }
