@@ -233,9 +233,13 @@ export function SupportTicketForm({ userId }: { userId: string }) {
               type="button"
               onClick={() => replaceFile(null)}
               aria-label="Remove screenshot"
+              // touchTargetClass first: it carries `relative`, and the later
+              // `absolute` must win the twMerge so the X stays pinned over the
+              // preview's top-right corner (the ::before hit area still centres
+              // on it, an absolute element is a containing block too).
               className={cn(
-                'bg-card border-line-strong hover:bg-muted absolute right-1.5 top-1.5 grid h-6 w-6 place-items-center rounded-full border transition-colors',
                 touchTargetClass,
+                'bg-card border-line-strong hover:bg-muted absolute right-1.5 top-1.5 grid h-6 w-6 place-items-center rounded-full border transition-colors',
               )}
             >
               <X className="h-3.5 w-3.5" aria-hidden />
