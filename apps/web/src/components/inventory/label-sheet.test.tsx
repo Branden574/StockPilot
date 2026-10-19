@@ -38,6 +38,16 @@ describe('LabelSheet', () => {
     expect(print).toHaveBeenCalledTimes(1);
   });
 
+  it('stacks each label above its control, inside the card, on a phone', () => {
+    // A long template name pushed its select past the card's edge at 390 px,
+    // and "Format" sat beside its select instead of above it.
+    render(<LabelSheet items={ITEMS} copies={1} template="medium" />);
+    for (const name of ['Template', 'Format', 'Copies per item']) {
+      const field = screen.getByLabelText(name).parentElement!;
+      expect(field).toHaveClass('flex', 'flex-col', 'min-w-0', 'max-w-full');
+    }
+  });
+
   it('draws each label white with black ink, copies included, with its code under it', () => {
     const { container } = render(<LabelSheet items={ITEMS} copies={2} template="small" />);
     const cells = container.querySelectorAll<HTMLElement>('.label-print-page .label-cell');
