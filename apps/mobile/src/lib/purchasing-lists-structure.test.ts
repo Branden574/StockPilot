@@ -480,19 +480,26 @@ describe('the rows and controls VoiceOver and a finger reach', () => {
   });
 
   // Mutation caught: a mailto or tel line back to a bare 11.5pt text target.
+  // Re-pinned with the security fix below (2026-10-18): the two links became
+  // one ContactLine, which is a link only when its URL is safe to open.
   it('a supplier email and phone are links, each in a 44pt frame', () => {
     const { sf, els } = elements(SUPPLIERS, (el, s) => TOUCHABLE_TAG.test(tagOf(el, s)));
-    expect(els).toHaveLength(2);
+    expect(els).toHaveLength(1);
     for (const el of els) {
       expect(attrText(el, 'accessibilityRole', sf), where(SUPPLIERS, el, sf)).toBe('link');
       expect(attrText(el, 'style', sf)).toContain('styles.link');
+      expect(attrText(el, 'onPress', sf)).toBe('() => Linking.openURL(url).catch(() => undefined)');
     }
     const code = flatCode(SUPPLIERS);
     expect(code).toContain(
       "link: { minHeight: 44, justifyContent: 'center', alignSelf: 'flex-start' },",
     );
-    expect(code).toContain('Linking.openURL(`mailto:${supplier.email}`).catch(() => undefined)');
-    expect(code).toContain('Linking.openURL(`tel:${supplier.phone}`).catch(() => undefined)');
+    expect(code).toContain(
+      '{supplier.email ? ( <ContactLine text={supplier.email} url={supplierMailtoUrl(supplier.email)} /> ) : null}',
+    );
+    expect(code).toContain(
+      '{supplier.phone ? ( <ContactLine text={supplier.phone} url={supplierTelUrl(supplier.phone)} /> ) : null}',
+    );
   });
 
   // Mutation caught: the switch unnamed again (VoiceOver said "switch, on").
@@ -593,6 +600,130 @@ describe('the rows and controls VoiceOver and a finger reach', () => {
     ]) {
       expect(suppliers).toContain(words);
     }
+  });
+});
+
+/**
+ * SECURITY (found by the automatic commit security review, pre-existing at
+ * 36cb9b619): the supplier card built `mailto:${supplier.email}` and
+ * `tel:${supplier.phone}` from the stored text, so a link could open a target
+ * the card did not show: an email "a@b.com?bcc=x@y.z" opened a message copied
+ * to x@y.z, and a phone with letters or symbols dialled what the dialler made
+ * of them. A link is now made only from a plain address (percent-encoded) or
+ * from the number's digits and '+', and otherwise the same words are shown as
+ * plain text. Every case below fails on the old screen, which had no such
+ * rule (its helpers do not exist and its links were built from the raw text).
+ */
+describe('security: a supplier link opens only what the card shows', () => {
+  // Compiled on first use, inside each case, so on a screen without the
+  // helpers every case fails on its own rather than the whole file.
+  type LinkFor = (text: string | null) => string | null;
+  const compiled: Partial<Record<'supplierMailtoUrl' | 'supplierTelUrl', LinkFor>> = {};
+  const helper = (name: 'supplierMailtoUrl' | 'supplierTelUrl'): LinkFor =>
+    (compiled[name] ??= screenFunction(SUPPLIERS, name) as LinkFor);
+  const mailto: LinkFor = (email) => helper('supplierMailtoUrl')(email);
+  const tel: LinkFor = (phone) => helper('supplierTelUrl')(phone);
+
+  it('a plain address becomes a mailto: link, trimmed and percent-encoded', () => {
+    expect(mailto('orders@acme.com')).toBe('mailto:orders%40acme.com');
+    expect(mailto('  orders@acme.com  ')).toBe('mailto:orders%40acme.com');
+    expect(mailto('first.last+po@acme.co.uk')).toBe('mailto:first.last%2Bpo%40acme.co.uk');
+    expect(mailto("o'brien@acme.com")).toBe("mailto:o'brien%40acme.com");
+    // Read back by the mail app as the same one address.
+    expect(decodeURIComponent(mailto('first.last+po@acme.co.uk')!.slice('mailto:'.length))).toBe(
+      'first.last+po@acme.co.uk',
+    );
+  });
+
+  // Mutation caught: the old `mailto:${supplier.email}`, which opened this
+  // message with a hidden copy to x@y.z.
+  it('an address carrying a query, more recipients or hidden characters is not a link', () => {
+    for (const email of [
+      'a@b.com?bcc=x@y.z',
+      'a@b.com?subject=Invoice',
+      'a@b.com?body=hi',
+      'a@b.com&cc=x',
+      'a@b.com,x@y.z',
+      'a@b.com;x@y.z',
+      'a@b.com x@y.z',
+      'a b@c.com',
+      'a@b.com#x',
+      'a@b%2Ecom',
+      'a%3Fbcc@b.com',
+      '"a"@b.com',
+      '<a@b.com>',
+      'a@[127.0.0.1]',
+      'a@b.com/x',
+      'mailto:a@b.com',
+      'a\u0000@b.com',
+      'a@b\u0007.com',
+      'a​@b.com',
+      'a@b‮.com',
+      'a@b.com⁦',
+      '­a@b.com',
+    ]) {
+      expect(mailto(email), JSON.stringify(email)).toBeNull();
+    }
+  });
+
+  it('text that is not one address with a dotted domain is not a link', () => {
+    for (const email of [
+      '',
+      '   ',
+      'orders',
+      '@acme.com',
+      'orders@',
+      'orders@acme',
+      'orders@.com',
+      'orders@acme.',
+      'orders@acme..com',
+      'a@b@c.com',
+    ]) {
+      expect(mailto(email), JSON.stringify(email)).toBeNull();
+    }
+    expect(mailto(null)).toBeNull();
+  });
+
+  // Mutation caught: the old `tel:${supplier.phone}`, letters and all.
+  it('a phone becomes a tel: link of its digits and + only', () => {
+    expect(tel('+1 (555) 010-0100')).toBe('tel:+15550100100');
+    expect(tel('555.010.0100')).toBe('tel:5550100100');
+    expect(tel('555-0100 ext. 12')).toBe('tel:555010012');
+    expect(tel('Call 555 0100 ask for Sam')).toBe('tel:5550100');
+    expect(tel('555-0100;phone-context=example.com')).toBe('tel:5550100');
+    expect(tel('*67 555 0100')).toBe('tel:675550100');
+    for (const phone of [
+      '+1 (555) 010-0100',
+      '555-0100 ext. 12',
+      '1-800-FLOWERS',
+      '*#06#',
+      '555,,1234',
+      '555-0100?x=1',
+    ]) {
+      expect(tel(phone)!, phone).toMatch(/^tel:[0-9+]+$/);
+    }
+  });
+
+  it('a phone with no digit in it is not a link', () => {
+    for (const phone of ['', '   ', 'front desk', '+', '*#', 'ask Sam']) {
+      expect(tel(phone), JSON.stringify(phone)).toBeNull();
+    }
+    expect(tel(null)).toBeNull();
+  });
+
+  // Mutation caught: a link built from the raw text again, or a line whose
+  // words were changed (the card shows exactly what was stored).
+  it('the card opens only those links, and shows the stored words either way', () => {
+    const code = flatCode(SUPPLIERS);
+    expect(code).not.toMatch(/openURL\(\s*`(mailto|tel):/);
+    expect(code).not.toContain('${supplier.email}');
+    expect(code).not.toContain('${supplier.phone}');
+    // A line with no safe link is the same words in the same frame, with no
+    // touchable around them.
+    expect(code).toContain('if (!url) return <View style={styles.link}>{words}</View>;');
+    expect(code).toContain(
+      'const words = ( <Mono size={11.5} tracking={0.04} color={c.ink2}> {text} </Mono> );',
+    );
   });
 });
 

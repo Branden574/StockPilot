@@ -143,6 +143,91 @@ export default function SuppliersScreen() {
   );
 }
 
+/**
+ * THE LINKS ON A SUPPLIER CARD OPEN ONLY WHAT THE CARD SHOWS (security fix,
+ * redesign package P5.8). The card shows the stored email and phone exactly as
+ * they were typed; a link is made from them only when it cannot open anything
+ * else. Before, `mailto:${email}` and `tel:${phone}` went out as typed, so an
+ * email such as "a@b.com?bcc=x@y.z" opened a message copied to someone the
+ * card never names, and a phone with letters or symbols dialled something
+ * other than the number shown.
+ *
+ * The mailto: link for a supplier's email, or null when the stored text is not
+ * one plain address (the card then shows the text, not a link). Plain: the
+ * text without its outer spaces is one '@' between a name and a dotted domain,
+ * with none of the characters that make a mailto: link do more than address
+ * one person: '?' and '&' (a query: more recipients, a subject, a body), ','
+ * and ';' (another address), '#' and '%' (a fragment, an escape), quotes,
+ * brackets, slashes, colons, any space, and any control or invisible
+ * formatting character. The address goes out percent-encoded
+ * (encodeURIComponent), which the mail app reads back as the same address.
+ */
+function supplierMailtoUrl(email: string | null): string | null {
+  const address = (email ?? '').trim();
+  const parts = address.split('@');
+  if (parts.length !== 2) return null;
+  const [name = '', domain = ''] = parts;
+  const plain = /^[^\s?&,;#%"<>()[\]\\/:@]+$/;
+  if (!plain.test(name) || !plain.test(domain)) return null;
+  // A dotted domain: "b.com", never "b", ".com", "b." or "b..com".
+  if (!/^[^.]+(\.[^.]+)+$/.test(domain)) return null;
+  for (const ch of address) {
+    const code = ch.codePointAt(0) ?? 0;
+    // Control characters (C0, DEL, C1) and the invisible formatting ones:
+    // the soft hyphen, zero-width marks, direction overrides, word joiners
+    // and the byte-order mark.
+    if (
+      code <= 0x1f ||
+      (code >= 0x7f && code <= 0x9f) ||
+      code === 0xad ||
+      (code >= 0x200b && code <= 0x200f) ||
+      (code >= 0x202a && code <= 0x202e) ||
+      (code >= 0x2060 && code <= 0x206f) ||
+      code === 0xfeff
+    ) {
+      return null;
+    }
+  }
+  return `mailto:${encodeURIComponent(address)}`;
+}
+
+/**
+ * The tel: link for a supplier's phone, or null when no digit is in it (the
+ * card then shows the text, not a link). Only the digits and '+' reach the
+ * dialler: letters, spaces, brackets, dashes, '*', '#', ',' and ';' are left
+ * out, so the stored text can never dial a service code, add a pause and more
+ * digits, or carry a parameter the card does not show.
+ */
+function supplierTelUrl(phone: string | null): string | null {
+  const dial = (phone ?? '').replace(/[^0-9+]/g, '');
+  return /[0-9]/.test(dial) ? `tel:${dial}` : null;
+}
+
+/**
+ * One contact line, its words exactly as stored: a link to VoiceOver when
+ * `url` is set, in a frame at least 44pt tall (it was the height of its 11.5pt
+ * line); otherwise the same words, as plain text in the same frame, so the
+ * card reads the same either way.
+ */
+function ContactLine({ text, url }: { text: string; url: string | null }) {
+  const { c } = useTheme();
+  const words = (
+    <Mono size={11.5} tracking={0.04} color={c.ink2}>
+      {text}
+    </Mono>
+  );
+  if (!url) return <View style={styles.link}>{words}</View>;
+  return (
+    <Pressable
+      onPress={() => Linking.openURL(url).catch(() => undefined)}
+      accessibilityRole="link"
+      style={({ pressed }) => [styles.link, { opacity: pressed ? 0.7 : 1 }]}
+    >
+      {words}
+    </Pressable>
+  );
+}
+
 function SupplierCard({ supplier }: { supplier: SupplierRow }) {
   const { c } = useTheme();
 
@@ -163,29 +248,14 @@ function SupplierCard({ supplier }: { supplier: SupplierRow }) {
               {supplier.contact_name}
             </Mono>
           ) : null}
-          {/* Each opens Mail or the phone: a link to VoiceOver, in a frame at
-              least 44pt tall (it was the height of its 11.5pt line). */}
+          {/* Each opens Mail or the phone, and only with a link made from a
+              plain address or the number's digits (supplierMailtoUrl,
+              supplierTelUrl); the words shown are the stored text. */}
           {supplier.email ? (
-            <Pressable
-              onPress={() => Linking.openURL(`mailto:${supplier.email}`).catch(() => undefined)}
-              accessibilityRole="link"
-              style={({ pressed }) => [styles.link, { opacity: pressed ? 0.7 : 1 }]}
-            >
-              <Mono size={11.5} tracking={0.04} color={c.ink2}>
-                {supplier.email}
-              </Mono>
-            </Pressable>
+            <ContactLine text={supplier.email} url={supplierMailtoUrl(supplier.email)} />
           ) : null}
           {supplier.phone ? (
-            <Pressable
-              onPress={() => Linking.openURL(`tel:${supplier.phone}`).catch(() => undefined)}
-              accessibilityRole="link"
-              style={({ pressed }) => [styles.link, { opacity: pressed ? 0.7 : 1 }]}
-            >
-              <Mono size={11.5} tracking={0.04} color={c.ink2}>
-                {supplier.phone}
-              </Mono>
-            </Pressable>
+            <ContactLine text={supplier.phone} url={supplierTelUrl(supplier.phone)} />
           ) : null}
         </View>
       </View>
