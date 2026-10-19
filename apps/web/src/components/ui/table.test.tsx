@@ -280,6 +280,92 @@ describe('Table scroll wrapper', () => {
     expect(stop).toHaveAttribute('tabindex', '0');
   });
 
+  it.each([
+    [
+      'a contenteditable=""',
+      // React's types take no empty string here; the attribute is set as HTML writes it.
+      () => <span ref={(node) => node?.setAttribute('contenteditable', '')}>Note</span>,
+    ],
+    ['a plaintext-only field', () => <span contentEditable="plaintext-only">Note</span>],
+    [
+      'a summary',
+      () => (
+        <details>
+          <summary>More</summary>
+        </details>
+      ),
+    ],
+    ['a video with controls', () => <video controls />],
+    ['an iframe', () => <iframe title="Preview" />],
+  ])('%s in a row also counts as a control', (_kind, control) => {
+    widths = { scroll: 1100, client: 900 };
+    render(<Orders rowControl={control()} />);
+    expect(wrapperOf()).not.toHaveAttribute('tabindex');
+  });
+
+  it.each([
+    [
+      'a button in a display:none cell (a column hidden on a phone)',
+      () => (
+        <span style={{ display: 'none' }}>
+          <button type="button">Open</button>
+        </span>
+      ),
+    ],
+    [
+      'a button under visibility:hidden',
+      () => (
+        <span style={{ visibility: 'hidden' }}>
+          <button type="button">Open</button>
+        </span>
+      ),
+    ],
+    [
+      'a button under [inert]',
+      () => (
+        <span inert>
+          <button type="button">Open</button>
+        </span>
+      ),
+    ],
+    [
+      'a button inside a closed <details>',
+      () => (
+        <details>
+          <summary tabIndex={-1}>More</summary>
+          <button type="button">Open</button>
+        </details>
+      ),
+    ],
+    [
+      'a button with a tabindex of -1',
+      () => (
+        <button type="button" tabIndex={-1}>
+          Open
+        </button>
+      ),
+    ],
+  ])('%s cannot be reached, so the wrapper stays a stop', (_kind, control) => {
+    widths = { scroll: 1100, client: 900 };
+    render(<Orders rowControl={control()} />);
+    expect(wrapperOf()).toHaveAttribute('tabindex', '0');
+  });
+
+  it('a button in an open <details> counts as a control', () => {
+    widths = { scroll: 1100, client: 900 };
+    render(
+      <Orders
+        rowControl={
+          <details open>
+            <summary tabIndex={-1}>More</summary>
+            <button type="button">Open</button>
+          </details>
+        }
+      />,
+    );
+    expect(wrapperOf()).not.toHaveAttribute('tabindex');
+  });
+
   it('stops watching the table on unmount', () => {
     const disconnect = vi.spyOn(MutationObserver.prototype, 'disconnect');
     const { unmount } = render(<Orders />);
