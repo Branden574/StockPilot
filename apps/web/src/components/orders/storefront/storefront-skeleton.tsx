@@ -23,7 +23,7 @@ export function SkeletonCard() {
         <div className="sf-sk" style={{ height: 13, width: '55%' }} />
         <div
           className="sf-sk"
-          style={{ height: 30, width: '100%', marginTop: 6, borderRadius: 9 }}
+          style={{ height: 32, width: '100%', marginTop: 6, borderRadius: 6 }}
         />
       </div>
     </div>
@@ -37,14 +37,14 @@ export function CatalogSkeleton() {
       <div style={{ minWidth: 0 }}>
         <div
           className="sf-sk"
-          style={{ height: 40, borderRadius: 10, margin: '10px 0 12px' }}
+          style={{ height: 34, borderRadius: 6, margin: '8px 0 12px' }}
         />
-        <div style={{ display: 'flex', gap: 6, margin: '0 0 18px' }}>
+        <div style={{ display: 'flex', gap: 8, margin: '0 0 18px', overflow: 'hidden' }}>
           {[64, 118, 96, 132, 88].map((w, i) => (
             <div
               key={i}
               className="sf-sk"
-              style={{ width: w, height: 34, borderRadius: 999 }}
+              style={{ width: w, height: 30, borderRadius: 999 }}
             />
           ))}
         </div>
@@ -68,11 +68,11 @@ export function CatalogSkeleton() {
               flex: 1,
             }}
           >
-            <div className="sf-sk" style={{ height: 44, borderRadius: 9 }} />
-            <div className="sf-sk" style={{ height: 44, borderRadius: 9 }} />
+            <div className="sf-sk" style={{ height: 36, borderRadius: 6 }} />
+            <div className="sf-sk" style={{ height: 36, borderRadius: 6 }} />
           </div>
           <div className="sf-cart-foot">
-            <div className="sf-sk" style={{ height: 42, borderRadius: 11 }} />
+            <div className="sf-sk" style={{ height: 36, borderRadius: 6 }} />
           </div>
         </div>
       </div>
@@ -81,7 +81,7 @@ export function CatalogSkeleton() {
 }
 
 /**
- * Full-page storefront skeleton: the dark-scoped frame with head +
+ * Full-page storefront skeleton: the page frame with head +
  * setup-bar placeholders above the catalog skeleton. Rendered by the
  * route's loading.tsx so navigation shows the branded "store is
  * opening" state instead of the generic dashboard PageSkeleton.
@@ -90,36 +90,38 @@ export function StorefrontPageSkeleton() {
   return (
     <div className="sp-storefront">
       <div className="sf-page" aria-busy="true" aria-label="Loading order page">
-        {/* Page head placeholder */}
+        {/* Page head placeholder: the shared page header's boxes (back
+            link, the 42 px title line, the subline; the flow on the right). */}
         <div className="sf-head">
-          <div>
+          <div style={{ minWidth: 0, maxWidth: '100%' }}>
             <div
               className="sf-sk"
-              style={{ width: 96, height: 12, borderRadius: 6, marginBottom: 12 }}
+              style={{ width: 110, height: 12, borderRadius: 6, margin: '4px 0 12px' }}
             />
-            <div className="sf-sk" style={{ width: 250, height: 30, borderRadius: 8 }} />
-            <div
-              className="sf-sk"
-              style={{ width: 380, height: 13, borderRadius: 6, marginTop: 10 }}
-            />
+            <div style={{ height: 42, display: 'flex', alignItems: 'center' }}>
+              <div className="sf-sk" style={{ width: 210, height: 26 }} />
+            </div>
+            <div style={{ height: 20, display: 'flex', alignItems: 'center', marginTop: 2 }}>
+              <div className="sf-sk" style={{ width: 380, maxWidth: '100%', height: 12 }} />
+            </div>
           </div>
-          <div className="sf-sk" style={{ width: 300, height: 18, borderRadius: 999 }} />
+          <div
+            className="sf-sk"
+            style={{ width: 300, maxWidth: '100%', height: 18, borderRadius: 999 }}
+          />
         </div>
 
-        {/* Setup bar placeholder */}
-        <div className="sf-setup" style={{ padding: '13px 18px', gap: 18 }}>
+        {/* Setup bar placeholder: four cells drawn as the real ones are. */}
+        <div className="sf-setup">
           {Array.from({ length: 4 }).map((_, i) => (
-            <div
-              key={i}
-              style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 11 }}
-            >
-              <div className="sf-sk" style={{ width: 32, height: 32, borderRadius: 8 }} />
+            <div key={i} className="sf-setup-cell static">
+              <div className="sf-sk" style={{ width: 32, height: 32 }} />
               <div style={{ flex: 1 }}>
                 <div
                   className="sf-sk"
                   style={{ width: '45%', height: 10, borderRadius: 5, marginBottom: 6 }}
                 />
-                <div className="sf-sk" style={{ width: '70%', height: 13, borderRadius: 6 }} />
+                <div className="sf-sk" style={{ width: '70%', height: 13 }} />
               </div>
             </div>
           ))}

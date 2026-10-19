@@ -1,7 +1,8 @@
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
+import { StatePanel } from '@/components/patterns/state-panel';
 import { OrdersStorefront } from '@/components/orders/storefront/orders-storefront';
 import { can, deliveryRecipientsForRouting, STOREFRONT_TITLE_COPY } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
@@ -105,23 +106,20 @@ export default async function NewOrderPage({
   }));
 
   if (warehouses.length === 0) {
+    // The redesign's page frame: the shared page header and the shared empty
+    // state, with the words this state has always had.
     return (
-      <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-        <div className="mb-6">
-          <Link
-            href="/dashboard/orders"
-            className="text-muted-foreground hover:text-foreground text-sm"
-          >
-            ← Back to orders
-          </Link>
-          <h1 className="mt-2 text-2xl font-semibold tracking-tight">
-            {STOREFRONT_TITLE_COPY}
-          </h1>
-        </div>
-        <div className="bg-card rounded-xl border p-6 text-sm text-muted-foreground">
-          No active warehouses are configured. Ask an admin to add one before
-          placing an order request.
-        </div>
+      <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+        <PageHeader
+          back={<PageHeaderBackLink href="/dashboard/orders">← Back to orders</PageHeaderBackLink>}
+          title={STOREFRONT_TITLE_COPY}
+        />
+        <StatePanel
+          kind="empty"
+          size="sm"
+          title="No active warehouses are configured."
+          description="Ask an admin to add one before placing an order request."
+        />
       </div>
     );
   }
