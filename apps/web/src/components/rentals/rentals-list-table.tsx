@@ -59,10 +59,12 @@ const HOUR_MS = 60 * 60 * 1000;
  * stays pinned to the card's right edge there, on the card's own fill with a
  * divider, so View, Mark returned and Cancel… are always on screen and the
  * other columns scroll underneath. From sm up the table fits and nothing is
- * pinned.
+ * pinned. The divider is an inset shadow, not a border: the table collapses
+ * its borders, and a collapsed border stays with the grid instead of moving
+ * with a sticky cell.
  */
 const ACTIONS_PINNED =
-  'max-sm:sticky max-sm:right-0 max-sm:z-[1] max-sm:bg-card max-sm:border-l max-sm:border-border';
+  'max-sm:sticky max-sm:right-0 max-sm:z-[1] max-sm:bg-card max-sm:shadow-[inset_1px_0_0_var(--color-border)]';
 
 const DAY_MS = 24 * HOUR_MS;
 

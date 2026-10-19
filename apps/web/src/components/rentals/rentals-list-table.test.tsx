@@ -342,8 +342,7 @@ describe('RentalsListTable at narrow widths and empty', () => {
       'max-sm:sticky',
       'max-sm:right-0',
       'max-sm:bg-card',
-      'max-sm:border-l',
-      'max-sm:border-border',
+      'max-sm:shadow-[inset_1px_0_0_var(--color-border)]',
     ];
     const header = screen.getByRole('columnheader', { name: 'Actions' });
     const cell = screen.getByRole('link', { name: 'View' }).closest('td')!;
