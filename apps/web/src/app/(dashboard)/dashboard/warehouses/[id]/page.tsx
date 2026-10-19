@@ -215,7 +215,9 @@ export default async function WarehouseDetailPage({
           420 px cards (measured on the content, not the window). */}
       <div className="@container min-w-0">
         <div className="@min-[856px]:grid-cols-2 grid items-start gap-4">
-          <DetailSection title="Address & contact">
+          {/* JSX text, as before: the What's New claims test reads the
+              heading from this file in this spelling. */}
+          <DetailSection title={<>Address &amp; contact</>}>
             {addressLines.length === 0 &&
             !warehouse.contact_name &&
             !warehouse.contact_email &&
