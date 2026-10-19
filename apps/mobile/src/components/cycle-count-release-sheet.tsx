@@ -12,8 +12,10 @@ import {
   View,
 } from 'react-native';
 
+import { BUTTON_RADIUS, buttonTone } from '@/components/ui/tones';
 import { api } from '@/lib/api';
-import { radius, space, theme } from '@/lib/theme';
+import { FONT, RADIUS, SHADOW, space } from '@/lib/theme';
+import { useTheme } from '@/lib/use-theme';
 
 // Owner-approved release-reason categories. "Other" requires free text.
 const REASON_CATEGORIES = [
@@ -30,6 +32,24 @@ const REASON_CATEGORIES = [
 
 type Category = (typeof REASON_CATEGORIES)[number];
 
+/** The iOS minimum tap target, in points. */
+const MIN_TAP = 44;
+
+/**
+ * Hand an assigned count back, with a reason (redesign package P5.9a moved it
+ * off the light-only legacy `theme` alias onto the device's palette).
+ *
+ * The look: the app's bottom sheet on the card colour, the reasons as 44pt
+ * choices (the stronger border on the card, the chosen one filled with ink),
+ * the note box recessed, Cancel the outline button and Release count the ink
+ * button that commits the hand-back (tones.ts `buttonTone`), both wrapping
+ * their words rather than cutting them. Every word, reason, rule ("Other"
+ * needs a note) and request is unchanged.
+ *
+ * VoiceOver, as the app's other sheets: the backdrop is a sibling behind the
+ * card, a button named Close that closes on a double tap; the sheet is modal
+ * and the escape scrub closes it; each reason says whether it is chosen.
+ */
 export function CycleCountReleaseSheet({
   visible,
   cycleCountId,
@@ -71,14 +91,17 @@ function ReleaseSheetContent({
   onClose: () => void;
   onReleased: () => void;
 }) {
+  const { c, mode } = useTheme();
   const [category, setCategory] = React.useState<Category | null>(null);
   const [notes, setNotes] = React.useState('');
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
   const needsNotes = category === 'Other';
-  const canSubmit =
-    !!category && (!needsNotes || notes.trim().length > 0) && !submitting;
+  const canSubmit = !!category && (!needsNotes || notes.trim().length > 0) && !submitting;
+  const notePrompt = needsNotes ? 'Add a note (required)' : 'Add a note (optional)';
+  const cancelTone = buttonTone('outline', c);
+  const releaseTone = buttonTone('primary', c);
 
   async function submit() {
     if (!category) return;
@@ -121,155 +144,203 @@ function ReleaseSheetContent({
        * fills the screen behind it. See add-order-items-sheet.tsx for the
        * measured detail.
        */}
-      <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+      <View
+        accessibilityViewIsModal
+        onAccessibilityEscape={onClose}
+        style={{ flex: 1, justifyContent: 'flex-end' }}
+      >
         <Pressable
           onPress={onClose}
-          style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(14,15,13,0.45)' }]}
+          onAccessibilityTap={onClose}
+          accessibilityRole="button"
+          accessibilityLabel="Close"
+          style={[
+            StyleSheet.absoluteFill,
+            { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' },
+          ]}
         />
-          <View
-            style={{
-              backgroundColor: theme.card,
-              borderTopLeftRadius: 24,
-              borderTopRightRadius: 24,
-              paddingTop: 12,
-              paddingBottom: 36,
-              paddingHorizontal: 22,
-              maxHeight: '88%',
-            }}
+        <View style={[styles.sheet, { backgroundColor: c.card }, SHADOW.sheet]}>
+          <View style={styles.grabberRow}>
+            <View style={[styles.grabber, { backgroundColor: c.hair2 }]} />
+          </View>
+
+          <Text accessibilityRole="header" style={[styles.title, { color: c.ink }]}>
+            Release this cycle count?
+          </Text>
+          <Text style={[styles.body, { color: c.ink3 }]}>
+            You will no longer be able to edit or submit this count unless a manager assigns it back
+            to you. Your counts so far are kept. Your reason is recorded.
+          </Text>
+
+          <Text style={[styles.label, { color: c.ink }]}>Reason</Text>
+          <ScrollView
+            style={{ maxHeight: 220 }}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
           >
-            <View style={{ alignItems: 'center', marginBottom: 16 }}>
-              <View
-                style={{
-                  width: 36,
-                  height: 5,
-                  borderRadius: 100,
-                  backgroundColor: 'rgba(14,15,13,0.18)',
-                }}
-              />
-            </View>
-
-            <Text style={{ color: theme.text, fontSize: 20, fontWeight: '700' }}>
-              Release this cycle count?
-            </Text>
-            <Text style={{ color: theme.textMuted, fontSize: 13, marginTop: 6, lineHeight: 18 }}>
-              You will no longer be able to edit or submit this count unless a
-              manager assigns it back to you. Your counts so far are kept. Your
-              reason is recorded.
-            </Text>
-
-            <Text
-              style={{
-                color: theme.text,
-                fontSize: 13,
-                fontWeight: '700',
-                marginTop: 18,
-                marginBottom: 8,
-              }}
-            >
-              Reason
-            </Text>
-            <ScrollView
-              style={{ maxHeight: 220 }}
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}
-            >
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.xs }}>
-                {REASON_CATEGORIES.map((cat) => {
-                  const selected = category === cat;
-                  return (
-                    <Pressable
-                      key={cat}
-                      onPress={() => setCategory(cat)}
-                      style={{
-                        minHeight: 40,
-                        paddingVertical: 9,
-                        paddingHorizontal: 14,
-                        borderRadius: radius.md,
-                        borderWidth: 1,
-                        borderColor: selected ? theme.primary : theme.border,
-                        backgroundColor: selected ? theme.primary : 'transparent',
-                        justifyContent: 'center',
-                      }}
+            <View style={styles.reasons}>
+              {REASON_CATEGORIES.map((cat) => {
+                const selected = category === cat;
+                return (
+                  <Pressable
+                    key={cat}
+                    onPress={() => setCategory(cat)}
+                    // One of nine choices: VoiceOver says which one is chosen.
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                    style={({ pressed }) => [
+                      styles.reason,
+                      {
+                        borderColor: selected ? c.ink : c.hair2,
+                        backgroundColor: selected ? c.ink : c.card,
+                        opacity: pressed ? 0.7 : 1,
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.reasonLabel,
+                        {
+                          color: selected ? c.paper : c.ink,
+                          fontFamily: selected ? FONT.displaySemi : FONT.display,
+                        },
+                      ]}
                     >
-                      <Text
-                        style={{
-                          color: selected ? '#fff' : theme.text,
-                          fontSize: 13,
-                          fontWeight: selected ? '700' : '500',
-                        }}
-                      >
-                        {cat}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-
-              <TextInput
-                value={notes}
-                onChangeText={setNotes}
-                placeholder={
-                  needsNotes ? 'Add a note (required)' : 'Add a note (optional)'
-                }
-                placeholderTextColor={theme.textMuted}
-                multiline
-                style={{
-                  marginTop: 14,
-                  minHeight: 64,
-                  borderWidth: 1,
-                  borderColor: theme.border,
-                  borderRadius: radius.md,
-                  padding: 12,
-                  color: theme.text,
-                  fontSize: 14,
-                  textAlignVertical: 'top',
-                }}
-              />
-            </ScrollView>
-
-            {error ? (
-              <Text style={{ color: '#dc2626', fontSize: 13, marginTop: 12 }}>{error}</Text>
-            ) : null}
-
-            <View style={{ flexDirection: 'row', gap: space.sm, marginTop: 18 }}>
-              <Pressable
-                onPress={onClose}
-                disabled={submitting}
-                style={{
-                  flex: 1,
-                  minHeight: 48,
-                  borderRadius: radius.md,
-                  borderWidth: 1,
-                  borderColor: theme.border,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                <Text style={{ color: theme.text, fontSize: 15, fontWeight: '600' }}>Cancel</Text>
-              </Pressable>
-              <Pressable
-                onPress={submit}
-                disabled={!canSubmit}
-                style={{
-                  flex: 1,
-                  minHeight: 48,
-                  borderRadius: radius.md,
-                  backgroundColor: canSubmit ? '#dc2626' : 'rgba(220,38,38,0.4)',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                {submitting ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <Text style={{ color: '#fff', fontSize: 15, fontWeight: '700' }}>
-                    Release count
-                  </Text>
-                )}
-              </Pressable>
+                      {cat}
+                    </Text>
+                  </Pressable>
+                );
+              })}
             </View>
+
+            <TextInput
+              value={notes}
+              onChangeText={setNotes}
+              placeholder={notePrompt}
+              placeholderTextColor={c.ink3}
+              // Named once it holds words (an empty box reads its placeholder,
+              // and a name as well would say it twice).
+              accessibilityLabel={notes.length > 0 ? notePrompt : undefined}
+              multiline
+              style={[
+                styles.notes,
+                { borderColor: c.hair2, backgroundColor: c.sunk, color: c.ink },
+              ]}
+            />
+          </ScrollView>
+
+          {error ? (
+            <Text accessibilityRole="alert" style={[styles.error, { color: c.critText }]}>
+              {error}
+            </Text>
+          ) : null}
+
+          <View style={styles.actions}>
+            <Pressable
+              onPress={onClose}
+              disabled={submitting}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: submitting }}
+              style={({ pressed }) => [
+                styles.action,
+                {
+                  backgroundColor: cancelTone.bg,
+                  borderColor: cancelTone.border,
+                  opacity: submitting ? 0.5 : pressed ? 0.85 : 1,
+                },
+              ]}
+            >
+              <Text style={[styles.actionLabel, { color: cancelTone.fg }]}>Cancel</Text>
+            </Pressable>
+            {/* Release commits the hand-back: the ink button. Its words stay
+                beside the spinner while the request is under way. */}
+            <Pressable
+              onPress={submit}
+              disabled={!canSubmit}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: !canSubmit, busy: submitting }}
+              style={({ pressed }) => [
+                styles.action,
+                {
+                  backgroundColor: releaseTone.bg,
+                  borderColor: releaseTone.border,
+                  opacity: !canSubmit ? 0.5 : pressed ? 0.85 : 1,
+                },
+              ]}
+            >
+              {submitting ? <ActivityIndicator color={releaseTone.fg} /> : null}
+              <Text style={[styles.actionLabel, { color: releaseTone.fg }]}>Release count</Text>
+            </Pressable>
+          </View>
         </View>
       </View>
     </KeyboardAvoidingView>
   );
 }
+
+const styles = StyleSheet.create({
+  sheet: {
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingTop: 12,
+    paddingBottom: 36,
+    paddingHorizontal: 22,
+    maxHeight: '88%',
+  },
+  grabberRow: { alignItems: 'center', marginBottom: 16 },
+  grabber: { width: 36, height: 5, borderRadius: 100 },
+  title: { fontFamily: FONT.displaySemi, fontWeight: '600', fontSize: 20 },
+  body: { fontFamily: FONT.displayRegular, fontSize: 13, marginTop: 6, lineHeight: 18 },
+  label: {
+    fontFamily: FONT.displaySemi,
+    fontWeight: '600',
+    fontSize: 13,
+    marginTop: 18,
+    marginBottom: 8,
+  },
+  reasons: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
+  // A choice is a 44pt target (it was 40pt); minHeight, so a reason that wraps
+  // at a larger text size grows the chip instead of clipping.
+  reason: {
+    minHeight: MIN_TAP,
+    paddingVertical: 9,
+    paddingHorizontal: 14,
+    borderRadius: RADIUS.card,
+    borderWidth: 1,
+    justifyContent: 'center',
+  },
+  reasonLabel: { fontSize: 13 },
+  notes: {
+    marginTop: 14,
+    minHeight: 64,
+    borderWidth: 1,
+    borderRadius: RADIUS.card,
+    padding: 12,
+    fontFamily: FONT.displayRegular,
+    fontSize: 14,
+    textAlignVertical: 'top',
+  },
+  error: { fontFamily: FONT.displayRegular, fontSize: 13, marginTop: 12 },
+  actions: { flexDirection: 'row', gap: space.sm, marginTop: 18 },
+  // The shared Button's md recipe (52pt, radius 14), drawn here so a long
+  // label wraps inside its half of the row instead of being cut short.
+  action: {
+    flex: 1,
+    minHeight: 52,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: BUTTON_RADIUS.md,
+    borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  actionLabel: {
+    fontFamily: FONT.display,
+    fontWeight: '500',
+    fontSize: 15,
+    textAlign: 'center',
+    flexShrink: 1,
+  },
+});

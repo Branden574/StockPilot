@@ -5,6 +5,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 import * as React from 'react';
 import {
   ActivityIndicator,
@@ -21,6 +22,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { SyncStatusBadge } from '@/components/SyncStatusBadge';
+import { Button } from '@/components/ui/button';
+import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { API_BASE, orgHeader } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import {
@@ -32,7 +35,8 @@ import {
 import { cycleCountSync } from '@/lib/cycle-count-sync';
 import { postMultipart } from '@/lib/multipart-upload';
 import { supabase } from '@/lib/supabase';
-import { TYPE_CEILING, capTo, radius, space, theme } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo, palette, radius, space } from '@/lib/theme';
+import { useTheme } from '@/lib/use-theme';
 
 const AI_CONFIDENCE_THRESHOLD = 0.85;
 // Max compressed bytes before we refuse to upload. Matches the
@@ -97,6 +101,9 @@ export default function AiScanScreen() {
   const { user } = useAuth();
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = React.useRef<CameraView | null>(null);
+  // The permission screen follows the device's mode; the camera chrome is
+  // dark in both (CAMERA, below).
+  const { c } = useTheme();
 
   const [phase, setPhase] = React.useState<Phase>({ kind: 'idle' });
   const [cachedLines, setCachedLines] = React.useState<CachedCycleCountLine[]>([]);
@@ -386,31 +393,31 @@ export default function AiScanScreen() {
 
   if (!permission) {
     return (
-      <View style={styles.center}>
-        <ActivityIndicator color={theme.primary} />
+      <View style={[styles.center, { backgroundColor: c.paper }]}>
+        <ActivityIndicator color={c.ink} />
       </View>
     );
   }
   if (!permission.granted) {
     return (
-      <SafeAreaView style={styles.root} edges={['top']}>
+      <SafeAreaView style={[styles.permRoot, { backgroundColor: c.paper }]} edges={['top']}>
         <Stack.Screen options={{ headerShown: false }} />
         <View style={styles.center}>
-          <Text style={styles.permTitle}>Camera access needed</Text>
-          <Text style={styles.permBody}>
+          <Text style={[styles.permTitle, { color: c.ink }]}>Camera access needed</Text>
+          <Text style={[styles.permBody, { color: c.ink3 }]}>
             {permission.canAskAgain
               ? 'AI Shelf Scan uses the camera to identify books on the shelf.'
               : 'Camera access is off for StockPilot. Turn it on in Settings to use AI Shelf Scan.'}
           </Text>
           {/* App Store 5.1.1(iv): neutral CTA; link to Settings once denied. */}
           {permission.canAskAgain ? (
-            <Pressable style={styles.cta} onPress={requestPermission}>
-              <Text style={styles.ctaLabel}>Continue</Text>
-            </Pressable>
+            <Button onPress={requestPermission} style={styles.cta}>
+              Continue
+            </Button>
           ) : (
-            <Pressable style={styles.cta} onPress={() => Linking.openSettings()}>
-              <Text style={styles.ctaLabel}>Open Settings</Text>
-            </Pressable>
+            <Button onPress={() => Linking.openSettings()} style={styles.cta}>
+              Open Settings
+            </Button>
           )}
         </View>
       </SafeAreaView>
@@ -431,15 +438,18 @@ export default function AiScanScreen() {
   return (
     <View style={styles.root}>
       <Stack.Screen options={{ headerShown: false }} />
-      <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back" />
-      <SafeAreaView style={StyleSheet.absoluteFill} edges={['top', 'bottom']} pointerEvents="box-none">
-        {/* Dynamic Type: the exact twin of the cycle-count scan topBar — a
-            `flex: 1` title column between non-shrinking chrome and a
-            SyncStatusBadge that may claim 60% of the bar. Same fix: the two
-            pinned labels take the chrome ceiling, the bar may wrap to a second
-            line, and the title column keeps a real width floor so that wrap
-            can actually happen. */}
-        <View style={styles.topBar} pointerEvents="auto">
+      {/* The bars are dark in both modes, so the clock and battery over them
+          are light (the root's dark words sat on the dark bar in light mode).
+          The review that follows is an ordinary screen and takes the device's. */}
+      <StatusBar style="light" />
+      {/* Dynamic Type: the exact twin of the cycle-count scan topBar — a
+          `flex: 1` title column between non-shrinking chrome and a
+          SyncStatusBadge that may claim 60% of the bar. Same fix: the two
+          pinned labels take the chrome ceiling, the bar may wrap to a second
+          line, and the title column keeps a real width floor so that wrap
+          can actually happen. */}
+      <SafeAreaView edges={['top']} style={styles.barArea}>
+        <View style={styles.topBar}>
           <Pressable
             style={styles.closeFrame}
             onPress={() => router.back()}
@@ -460,44 +470,68 @@ export default function AiScanScreen() {
               {cachedLines.length} {cachedLines.length === 1 ? 'book' : 'books'} in this count
             </Text>
           </View>
-          <SyncStatusBadge />
-        </View>
-
-        <View style={styles.frameWrap} pointerEvents="none">
-          <View style={styles.frame} />
-          <Text style={styles.hint}>Frame one shelf row from straight on</Text>
-        </View>
-
-        <View style={styles.bottomBar} pointerEvents="auto">
-          <Pressable
-            style={[
-              styles.captureBtn,
-              (phase.kind === 'capturing' || phase.kind === 'uploading') && styles.captureBtnBusy,
-            ]}
-            onPress={onCapture}
-            disabled={phase.kind !== 'idle'}
-            accessibilityRole="button"
-            accessibilityLabel="Capture photo"
-            accessibilityState={{
-              disabled: phase.kind !== 'idle',
-              busy: phase.kind === 'capturing' || phase.kind === 'uploading',
-            }}
-          >
-            {phase.kind === 'capturing' || phase.kind === 'uploading' ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <View style={styles.captureBtnInner} />
-            )}
-          </Pressable>
-          <Text style={styles.captureCaption}>
-            {phase.kind === 'capturing'
-              ? 'Capturing…'
-              : phase.kind === 'uploading'
-                ? 'Analyzing photo…'
-                : 'Tap to capture'}
-          </Text>
+          {/* Drawn for the always-dark bar (P3.8's camera surface), so its
+              outline and words read on it in both modes. */}
+          <SyncStatusBadge surface="camera" />
         </View>
       </SafeAreaView>
+
+      <View style={styles.viewfinder}>
+        <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back" />
+        <View style={styles.frameWrap} pointerEvents="none">
+          <ShelfFrame />
+          <View style={styles.hintPill}>
+            <Text style={styles.hint}>Frame one shelf row from straight on</Text>
+          </View>
+        </View>
+      </View>
+
+      <SafeAreaView edges={['bottom']} style={styles.bottomBar}>
+        <Pressable
+          style={[
+            styles.captureBtn,
+            (phase.kind === 'capturing' || phase.kind === 'uploading') && styles.captureBtnBusy,
+          ]}
+          onPress={onCapture}
+          disabled={phase.kind !== 'idle'}
+          accessibilityRole="button"
+          accessibilityLabel="Capture photo"
+          accessibilityState={{
+            disabled: phase.kind !== 'idle',
+            busy: phase.kind === 'capturing' || phase.kind === 'uploading',
+          }}
+        >
+          {phase.kind === 'capturing' || phase.kind === 'uploading' ? (
+            <ActivityIndicator color={CAMERA.ink} />
+          ) : (
+            <View style={styles.captureBtnInner} />
+          )}
+        </Pressable>
+        <Text style={styles.captureCaption}>
+          {phase.kind === 'capturing'
+            ? 'Capturing…'
+            : phase.kind === 'uploading'
+              ? 'Analyzing photo…'
+              : 'Tap to capture'}
+        </Text>
+      </SafeAreaView>
+    </View>
+  );
+}
+
+/**
+ * The finder over the live picture: the reference's four corner brackets in
+ * the dark-mode mint (DESIGN-SPEC 6.20), in the shelf-row frame this screen
+ * always had (it was a white rounded outline). No scan line: this camera
+ * takes a photo, it does not read a barcode. Nothing on it moves.
+ */
+function ShelfFrame() {
+  return (
+    <View style={styles.frame}>
+      <View style={[styles.corner, styles.cornerTL]} />
+      <View style={[styles.corner, styles.cornerTR]} />
+      <View style={[styles.corner, styles.cornerBL]} />
+      <View style={[styles.corner, styles.cornerBR]} />
     </View>
   );
 }
@@ -517,6 +551,7 @@ function ReviewView({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const { c } = useTheme();
   const reviewLines = phase.kind === 'review' ? phase.reviewLines : [];
   const saving = phase.kind === 'saving';
 
@@ -531,9 +566,12 @@ function ReviewView({
   }
 
   return (
-    <SafeAreaView style={styles.reviewRoot} edges={['top', 'bottom']}>
+    <SafeAreaView
+      style={[styles.reviewRoot, { backgroundColor: c.paper }]}
+      edges={['top', 'bottom']}
+    >
       <Stack.Screen options={{ headerShown: false }} />
-      <View style={styles.reviewHeader}>
+      <View style={[styles.reviewHeader, { borderBottomColor: c.hair }]}>
         <Pressable
           onPress={onCancel}
           disabled={saving}
@@ -541,17 +579,28 @@ function ReviewView({
           accessibilityRole="button"
           accessibilityLabel="Back"
         >
-          <Text style={[styles.reviewBack, saving && { opacity: 0.4 }]}>← Back</Text>
+          <Text style={[styles.reviewBack, { color: c.ink }, saving && { opacity: 0.4 }]}>
+            ← Back
+          </Text>
         </Pressable>
-        <Text style={styles.reviewTitle}>Review AI counts</Text>
+        <Text accessibilityRole="header" style={[styles.reviewTitle, { color: c.ink }]}>
+          Review AI counts
+        </Text>
         <View style={{ width: 60 }} />
       </View>
 
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: space.md, gap: space.md }}>
+      {/* The keyboard: each line's box opens a number pad, which covered the
+          lower lines; the scroll insets itself by it on iOS and brings the
+          box being typed in into view. */}
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{ padding: space.md, gap: space.md }}
+        automaticallyAdjustKeyboardInsets
+      >
         {phase.kind === 'review' && phase.photoSignedUrl ? (
           <Image
             source={{ uri: phase.photoSignedUrl }}
-            style={styles.reviewPhoto}
+            style={[styles.reviewPhoto, { backgroundColor: PHOTO_BACKGROUND, borderColor: c.hair }]}
             resizeMode="cover"
           />
         ) : null}
@@ -560,7 +609,7 @@ function ReviewView({
           <ReviewSection
             title="High confidence"
             subtitle="Tap to override if needed"
-            color={theme.success}
+            color={c.accent}
             lines={high}
             onOverride={onOverride}
             disabled={saving}
@@ -570,7 +619,7 @@ function ReviewView({
           <ReviewSection
             title="Low confidence — needs review"
             subtitle="Enter a count to confirm"
-            color={theme.warning}
+            color={c.warnText}
             lines={low}
             onOverride={onOverride}
             disabled={saving}
@@ -580,7 +629,7 @@ function ReviewView({
           <ReviewSection
             title="Not detected"
             subtitle="AI didn't see these — enter manually if needed"
-            color={theme.textMuted}
+            color={c.ink3}
             lines={undetected}
             onOverride={onOverride}
             disabled={saving}
@@ -588,16 +637,11 @@ function ReviewView({
         )}
       </ScrollView>
 
-      <View style={styles.reviewFooter}>
-        <Pressable
-          style={[styles.btn, styles.btnPrimary, saving && { opacity: 0.5 }]}
-          onPress={onConfirm}
-          disabled={saving}
-        >
-          <Text style={styles.btnPrimaryLabel}>
-            {saving ? 'Saving…' : 'Confirm counts'}
-          </Text>
-        </Pressable>
+      <View style={[styles.reviewFooter, { borderTopColor: c.hair, backgroundColor: c.paper }]}>
+        {/* Confirm writes the counts: the screen's one ink button. */}
+        <Button block onPress={onConfirm} disabled={saving}>
+          {saving ? 'Saving…' : 'Confirm counts'}
+        </Button>
       </View>
     </SafeAreaView>
   );
@@ -618,15 +662,23 @@ function ReviewSection({
   onOverride: (lineId: string, next: string | null) => void;
   disabled: boolean;
 }) {
+  const { c } = useTheme();
   return (
     <View style={styles.section}>
       <View style={[styles.sectionAccent, { backgroundColor: color }]} />
       <View style={{ flex: 1 }}>
-        <Text style={styles.sectionTitle}>{title}</Text>
-        <Text style={styles.sectionSubtitle}>{subtitle}</Text>
-        <View style={{ marginTop: space.sm, gap: space.xs }}>
-          {lines.map((rl) => (
-            <ReviewRow key={rl.line.id} rl={rl} onOverride={onOverride} disabled={disabled} />
+        <Text style={[styles.sectionTitle, { color: c.ink }]}>{title}</Text>
+        <Text style={[styles.sectionSubtitle, { color: c.ink3 }]}>{subtitle}</Text>
+        {/* The lines are one hairline card (DESIGN-SPEC 6.7). */}
+        <View style={[styles.rows, { backgroundColor: c.card, borderColor: c.hair }]}>
+          {lines.map((rl, i) => (
+            <ReviewRow
+              key={rl.line.id}
+              rl={rl}
+              first={i === 0}
+              onOverride={onOverride}
+              disabled={disabled}
+            />
           ))}
         </View>
       </View>
@@ -636,13 +688,16 @@ function ReviewSection({
 
 function ReviewRow({
   rl,
+  first,
   onOverride,
   disabled,
 }: {
   rl: ReviewLine;
+  first: boolean;
   onOverride: (lineId: string, next: string | null) => void;
   disabled: boolean;
 }) {
+  const { c } = useTheme();
   const proposed = rl.result?.count;
   const display = rl.override !== null
     ? rl.override
@@ -650,25 +705,29 @@ function ReviewRow({
       ? String(proposed)
       : '';
   return (
-    <View style={styles.row}>
+    <View style={[styles.row, !first && { borderTopWidth: 1, borderTopColor: c.hair }]}>
       <View style={{ flex: 1 }}>
-        <Text style={styles.rowName} numberOfLines={2}>
+        <Text style={[styles.rowName, { color: c.ink }]} numberOfLines={2}>
           {rl.line.itemName}
         </Text>
-        <Text style={styles.rowMeta}>
+        <Text style={[styles.rowMeta, { color: c.ink3 }]}>
           Expected {rl.line.expected}
           {rl.result ? ` · AI ${(rl.result.confidence * 100).toFixed(0)}%` : ''}
         </Text>
       </View>
+      {/* Named for its line, so VoiceOver says which book a count is for (it
+          read only the number). A floor, not a width: the typed number grows
+          with the text size instead of clipping. */}
       <TextInput
-        style={styles.rowQty}
+        style={[styles.rowQty, { borderColor: c.hair2, backgroundColor: c.sunk, color: c.ink }]}
         value={display}
         onChangeText={(v) => onOverride(rl.line.id, v)}
         keyboardType="numeric"
         editable={!disabled}
         selectTextOnFocus
         placeholder="—"
-        placeholderTextColor={theme.textMuted}
+        placeholderTextColor={c.ink3}
+        accessibilityLabel={`Counted, ${rl.line.itemName}`}
       />
     </View>
   );
@@ -678,22 +737,50 @@ function ReviewRow({
 const CLOSE_CAP = capTo(14, TYPE_CEILING.chrome);
 const TITLE_CAP = capTo(16, TYPE_CEILING.chrome);
 
+/**
+ * THE CAMERA CHROME IS DARK IN BOTH MODES, as on the count scanner
+ * (app/cycle-count/scan/[id].tsx, whose CAMERA block this one matches). The
+ * bars and the viewfinder sit over a live camera, which does not change with
+ * the device's mode, so they draw from the dark palette whatever the mode is
+ * (DESIGN-SPEC 10: the viewfinder and the reticle are fixed colours). The
+ * bars are solid (they were translucent black over the picture), so every
+ * word on them reads the same over any scene. The permission screen and the
+ * review are ordinary screens and follow the device (`useTheme`).
+ */
+const CAMERA_PALETTE = palette('dark');
+const CAMERA = {
+  /** The bars and the ground behind the camera: the reference viewfinder. */
+  surface: '#0a0b09',
+  ink: CAMERA_PALETTE.ink,
+  ink2: CAMERA_PALETTE.ink2,
+  ink3: CAMERA_PALETTE.ink3,
+  /** A control on the bar: the raised fill with an outline at 3:1. */
+  chip: CAMERA_PALETTE.card,
+  chipBorder: CAMERA_PALETTE.ink4,
+  /** Corner brackets: the reference's dark-mode mint. */
+  reticle: CAMERA_PALETTE.accent,
+  /** Behind the hint over the live picture, so it reads over a white shelf. */
+  scrim: 'rgba(10, 11, 9, 0.72)',
+} as const;
+
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#000' },
+  root: { flex: 1, backgroundColor: CAMERA.surface },
   center: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     padding: space.xl,
-    backgroundColor: theme.bg,
   },
+  permRoot: { flex: 1 },
+  /** The status bar's strip and the bar under it, one solid dark band. */
+  barArea: { backgroundColor: CAMERA.surface },
   topBar: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: space.sm,
     padding: space.md,
     alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.55)',
+    backgroundColor: CAMERA.surface,
   },
   /** See the scan twin: a FLOOR, so `flexWrap` has something to wrap against. */
   titleCol: { flex: 1, minWidth: 120 },
@@ -703,35 +790,56 @@ const styles = StyleSheet.create({
   // into the bar's 12pt padding.
   closeFrame: { minHeight: 44, minWidth: 44, justifyContent: 'center', marginVertical: -8, flexShrink: 0 },
   closeBtn: {
-    paddingHorizontal: space.sm,
-    paddingVertical: space.xs,
-    borderRadius: radius.sm,
-    backgroundColor: 'rgba(255,255,255,0.16)',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: CAMERA.chipBorder,
+    backgroundColor: CAMERA.chip,
     flexShrink: 0,
   },
-  closeText: { color: '#fff', fontWeight: '600' },
-  headerLabel: { color: '#fff', fontWeight: '700', fontSize: 16 },
-  headerSub: { color: 'rgba(255,255,255,0.7)', fontSize: 12, marginTop: 2 },
+  closeText: { color: CAMERA.ink, fontFamily: FONT.displaySemi, fontWeight: '600', fontSize: 14 },
+  headerLabel: { color: CAMERA.ink, fontFamily: FONT.displaySemi, fontWeight: '600', fontSize: 16 },
+  headerSub: { color: CAMERA.ink2, fontFamily: FONT.displayRegular, fontSize: 12, marginTop: 2 },
+  viewfinder: { flex: 1, backgroundColor: CAMERA.surface },
   frameWrap: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     gap: space.md,
   },
-  frame: {
-    width: 280,
-    height: 360,
-    borderRadius: radius.lg,
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.6)',
+  // The shelf-row frame it always was (280 x 360), allowed to shrink when the
+  // bars grow at the larger text sizes so it never runs under them.
+  frame: { width: 280, height: 360, maxWidth: '80%', maxHeight: '75%' },
+  corner: { position: 'absolute', width: 26, height: 26, borderColor: CAMERA.reticle },
+  cornerTL: { top: 0, left: 0, borderTopWidth: 3, borderLeftWidth: 3, borderTopLeftRadius: 8 },
+  cornerTR: { top: 0, right: 0, borderTopWidth: 3, borderRightWidth: 3, borderTopRightRadius: 8 },
+  cornerBL: {
+    bottom: 0,
+    left: 0,
+    borderBottomWidth: 3,
+    borderLeftWidth: 3,
+    borderBottomLeftRadius: 8,
+  },
+  cornerBR: {
+    bottom: 0,
+    right: 0,
+    borderBottomWidth: 3,
+    borderRightWidth: 3,
+    borderBottomRightRadius: 8,
+  },
+  hintPill: {
+    marginHorizontal: space.lg,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: CAMERA.scrim,
   },
   hint: {
-    color: 'rgba(255,255,255,0.9)',
+    color: CAMERA.ink2,
+    fontFamily: FONT.display,
+    fontWeight: '500',
     fontSize: 13,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    paddingHorizontal: space.md,
-    paddingVertical: space.xs,
-    borderRadius: radius.sm,
     textAlign: 'center',
   },
   bottomBar: {
@@ -740,15 +848,17 @@ const styles = StyleSheet.create({
     paddingTop: space.md,
     alignItems: 'center',
     gap: space.sm,
-    backgroundColor: 'rgba(0,0,0,0.4)',
+    backgroundColor: CAMERA.surface,
   },
+  // The shutter: the raised chip fill inside a light ring, a light disc
+  // within (it was white on a translucent white).
   captureBtn: {
     width: 78,
     height: 78,
     borderRadius: 39,
-    backgroundColor: 'rgba(255,255,255,0.16)',
+    backgroundColor: CAMERA.chip,
     borderWidth: 4,
-    borderColor: '#fff',
+    borderColor: CAMERA.ink,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -757,30 +867,26 @@ const styles = StyleSheet.create({
     width: 58,
     height: 58,
     borderRadius: 29,
-    backgroundColor: '#fff',
+    backgroundColor: CAMERA.ink,
   },
-  captureCaption: { color: '#fff', fontSize: 13, fontWeight: '500' },
+  captureCaption: { color: CAMERA.ink2, fontFamily: FONT.display, fontWeight: '500', fontSize: 13 },
   permTitle: {
-    color: theme.text,
+    fontFamily: FONT.displaySemi,
+    fontWeight: '600',
     fontSize: 20,
-    fontWeight: '700',
     marginBottom: space.sm,
+    textAlign: 'center',
   },
   permBody: {
-    color: theme.textMuted,
+    fontFamily: FONT.displayRegular,
+    fontSize: 14.5,
     textAlign: 'center',
     marginBottom: space.lg,
   },
-  cta: {
-    paddingHorizontal: space.lg,
-    paddingVertical: space.md,
-    backgroundColor: theme.primary,
-    borderRadius: radius.md,
-  },
-  ctaLabel: { color: '#fff', fontWeight: '600' },
+  cta: { minWidth: 200 },
 
   // Review screen
-  reviewRoot: { flex: 1, backgroundColor: theme.bg },
+  reviewRoot: { flex: 1 },
   reviewHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -788,58 +894,51 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.md,
     paddingVertical: space.sm,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: theme.border,
   },
   // "← Back" is a button in a frame at least 44pt tall (it was the ~17pt
   // text). The frame takes the header's 8pt padding above and below, so the
   // header is about 9pt taller, and nothing overlaps.
   reviewBackBtn: { minHeight: 44, minWidth: 44, justifyContent: 'center', marginVertical: -space.sm },
-  reviewBack: { color: theme.primary, fontWeight: '600' },
-  reviewTitle: { color: theme.text, fontWeight: '700', fontSize: 16 },
+  reviewBack: { fontFamily: FONT.display, fontWeight: '500', fontSize: 14 },
+  reviewTitle: { fontFamily: FONT.displaySemi, fontWeight: '600', fontSize: 16 },
+  // The shelf photo on the photo ground (white in both modes, DESIGN-SPEC
+  // 6.14) with a hairline edge.
   reviewPhoto: {
     width: '100%',
     aspectRatio: 4 / 3,
     borderRadius: radius.md,
-    backgroundColor: theme.card,
+    borderWidth: 1,
   },
   section: { flexDirection: 'row', gap: space.sm },
   sectionAccent: { width: 4, borderRadius: 2 },
-  sectionTitle: { color: theme.text, fontWeight: '700', fontSize: 14 },
-  sectionSubtitle: { color: theme.textMuted, fontSize: 12, marginTop: 2 },
+  sectionTitle: { fontFamily: FONT.displaySemi, fontWeight: '600', fontSize: 14 },
+  sectionSubtitle: { fontFamily: FONT.displayRegular, fontSize: 12, marginTop: 2 },
+  rows: {
+    marginTop: space.sm,
+    borderWidth: 1,
+    borderRadius: radius.md,
+    overflow: 'hidden',
+  },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: space.sm,
-    backgroundColor: theme.card,
-    borderRadius: radius.sm,
     padding: space.sm,
   },
-  rowName: { color: theme.text, fontSize: 14, fontWeight: '500' },
-  rowMeta: { color: theme.textMuted, fontSize: 12, marginTop: 2 },
+  rowName: { fontFamily: FONT.display, fontWeight: '500', fontSize: 14 },
+  rowMeta: { fontFamily: FONT.displayRegular, fontSize: 12, marginTop: 2 },
   rowQty: {
-    width: 70,
+    minWidth: 70,
     paddingHorizontal: space.sm,
     paddingVertical: space.xs,
     borderRadius: radius.sm,
     borderWidth: 1,
-    borderColor: theme.border,
-    color: theme.text,
     textAlign: 'center',
-    fontWeight: '600',
+    fontFamily: FONT.mono,
     fontSize: 16,
   },
   reviewFooter: {
     padding: space.md,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: theme.border,
-    backgroundColor: theme.bg,
   },
-  btn: {
-    paddingVertical: space.md,
-    borderRadius: radius.md,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  btnPrimary: { backgroundColor: theme.primary },
-  btnPrimaryLabel: { color: '#fff', fontWeight: '700', fontSize: 15 },
 });

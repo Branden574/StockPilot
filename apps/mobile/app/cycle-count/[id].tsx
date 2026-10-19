@@ -1,5 +1,6 @@
 import * as Network from 'expo-network';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { Check } from 'lucide-react-native';
 import * as React from 'react';
 import {
   ActivityIndicator,
@@ -11,7 +12,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   COUNT_LINKED_EXCEPTIONS_UNAVAILABLE_COPY,
@@ -25,6 +26,9 @@ import {
 import { CycleCountReassignSheet } from '@/components/cycle-count-reassign-sheet';
 import { CycleCountReleaseSheet } from '@/components/cycle-count-release-sheet';
 import { SyncStatusBadge } from '@/components/SyncStatusBadge';
+import { Button } from '@/components/ui/button';
+import { StockBar } from '@/components/ui/stock-bar';
+import { BUTTON_RADIUS, buttonTone, pillTone } from '@/components/ui/tones';
 import { useAuth } from '@/lib/auth-context';
 import {
   countFooter,
@@ -56,7 +60,8 @@ import {
 import { createDraftDebouncer } from '@/lib/draft-debouncer';
 import { supabase } from '@/lib/supabase';
 import { useOrg } from '@/lib/use-org';
-import { TYPE_CEILING, capTo, radius, space, theme } from '@/lib/theme';
+import { FONT, RADIUS, TYPE_CEILING, capTo, radius, space } from '@/lib/theme';
+import { useTheme } from '@/lib/use-theme';
 
 /** The joined item columns the variant label is built from. */
 interface VariantItemRow {
@@ -90,6 +95,13 @@ const SAVE_DEBOUNCE_MS = 300;
 
 export default function CycleCountDetail() {
   const router = useRouter();
+  // The device's palette (it was the light-only legacy alias, so the screen
+  // stayed light in dark mode under a sync badge that followed the device).
+  const { c } = useTheme();
+  const outline = buttonTone('outline', c);
+  const post = buttonTone('primary', c);
+  const warnPill = pillTone('warn', c);
+  const insets = useSafeAreaInsets();
   // A cold-start link (a notification tap with the app closed) opens this
   // screen with no history under it, and going back is then a no-op that
   // leaves the person stuck here. Fall back to the cycle-count list.
@@ -584,26 +596,27 @@ export default function CycleCountDetail() {
 
   if (emptyState === 'read-failed') {
     return (
-      <SafeAreaView style={styles.root} edges={['top']}>
+      <SafeAreaView style={[styles.root, { backgroundColor: c.paper }]} edges={['top']}>
         <Stack.Screen options={{ headerShown: false }} />
-        <View style={styles.header}>
+        <View style={[styles.header, { borderBottomColor: c.hair }]}>
           <Pressable
             onPress={leave}
             style={styles.backBtn}
             accessibilityRole="button"
             accessibilityLabel="Back"
           >
-            <Text style={styles.backText}>← Back</Text>
+            <Text style={[styles.backText, { color: c.ink }]}>← Back</Text>
           </Pressable>
         </View>
         <View style={styles.center}>
-          <Text style={styles.emptyTitle}>Could not load this count</Text>
-          <Text style={styles.emptyBody}>
+          <Text style={[styles.emptyTitle, { color: c.ink }]}>Could not load this count</Text>
+          <Text style={[styles.emptyBody, { color: c.ink3 }]}>
             {readError}
             {'\n\n'}If the app was just updated, the server may still be catching up.
           </Text>
-          <Pressable
-            style={styles.retryBtn}
+          <Button
+            variant="outline"
+            style={styles.retry}
             onPress={() => {
               setLoading(true);
               setReadError(null);
@@ -611,8 +624,8 @@ export default function CycleCountDetail() {
               void load();
             }}
           >
-            <Text style={styles.retryLabel}>Retry</Text>
-          </Pressable>
+            Retry
+          </Button>
         </View>
       </SafeAreaView>
     );
@@ -620,60 +633,61 @@ export default function CycleCountDetail() {
 
   if (emptyState === 'offline-uncached') {
     return (
-      <SafeAreaView style={styles.root} edges={['top']}>
+      <SafeAreaView style={[styles.root, { backgroundColor: c.paper }]} edges={['top']}>
         <Stack.Screen options={{ headerShown: false }} />
-        <View style={styles.header}>
+        <View style={[styles.header, { borderBottomColor: c.hair }]}>
           <Pressable
             onPress={leave}
             style={styles.backBtn}
             accessibilityRole="button"
             accessibilityLabel="Back"
           >
-            <Text style={styles.backText}>← Back</Text>
+            <Text style={[styles.backText, { color: c.ink }]}>← Back</Text>
           </Pressable>
         </View>
         <View style={styles.center}>
-          <Text style={styles.emptyTitle}>Not cached for offline use</Text>
-          <Text style={styles.emptyBody}>
+          <Text style={[styles.emptyTitle, { color: c.ink }]}>Not cached for offline use</Text>
+          <Text style={[styles.emptyBody, { color: c.ink3 }]}>
             Open this cycle count once while online to use it offline next time.
           </Text>
-          <Pressable
-            style={styles.retryBtn}
+          <Button
+            variant="outline"
+            style={styles.retry}
             onPress={() => {
               setLoading(true);
               setEmptyState('none');
               void load();
             }}
           >
-            <Text style={styles.retryLabel}>Retry</Text>
-          </Pressable>
+            Retry
+          </Button>
         </View>
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={styles.root} edges={['top']}>
+    <SafeAreaView style={[styles.root, { backgroundColor: c.paper }]} edges={['top']}>
       <Stack.Screen options={{ headerShown: false }} />
-      <View style={styles.header}>
+      <View style={[styles.header, { borderBottomColor: c.hair }]}>
         <Pressable
           onPress={leave}
           style={styles.backBtn}
           accessibilityRole="button"
           accessibilityLabel="Back"
         >
-          <Text style={styles.backText}>← Back</Text>
+          <Text style={[styles.backText, { color: c.ink }]}>← Back</Text>
         </Pressable>
         <View style={styles.headerRow}>
           <View style={{ flex: 1 }}>
             {headerView.kind === 'known' && headerView.reference ? (
               <>
-                <Text style={styles.eyebrow}>CYCLE COUNT</Text>
+                <Text style={[styles.eyebrow, { color: c.ink3 }]}>CYCLE COUNT</Text>
                 {/* Selectable: a long press offers the system Copy, which is the
                     copy action here (this binary has no clipboard module, so the
                     app never claims a copy it cannot confirm). */}
                 <Text
-                  style={[styles.title, styles.reference]}
+                  style={[styles.title, styles.reference, { color: c.ink }]}
                   selectable
                   accessibilityLabel={`Cycle count ${headerView.reference}`}
                   accessibilityHint="Long press to copy the reference"
@@ -683,58 +697,108 @@ export default function CycleCountDetail() {
               </>
             ) : (
               <>
-                <Text style={styles.title}>Cycle count</Text>
+                <Text style={[styles.title, { color: c.ink }]}>Cycle count</Text>
                 {headerView.kind === 'known' ? (
-                  <Text style={styles.subtitle}>{CYCLE_COUNT_REFERENCE_UNAVAILABLE}</Text>
+                  <Text style={[styles.subtitle, { color: c.ink3 }]}>
+                    {CYCLE_COUNT_REFERENCE_UNAVAILABLE}
+                  </Text>
                 ) : null}
               </>
             )}
             {headerView.kind === 'known' ? (
-              <Text style={styles.subtitle}>
+              <Text style={[styles.subtitle, { color: c.ink3 }]}>
                 {headerView.place} · {headerView.progress}
               </Text>
             ) : headerView.kind === 'loading' ? (
-              <Text style={styles.subtitle}>{headerView.text}</Text>
+              <Text style={[styles.subtitle, { color: c.ink3 }]}>{headerView.text}</Text>
             ) : null}
           </View>
           {header && canAdjust && isOpen ? (
-            <View style={{ flexDirection: 'row', gap: space.xs }}>
+            // AI Scan and Scan are the outline buttons: the count's one ink
+            // button is the Post at the foot of the screen.
+            <View style={styles.scanRow}>
               <Pressable
                 onPress={() => router.push(`/cycle-count/ai-scan/${header.id}`)}
-                style={[styles.scanBtn, styles.aiScanBtn]}
+                accessibilityRole="button"
+                style={({ pressed }) => [
+                  styles.scanBtn,
+                  { backgroundColor: outline.bg, borderColor: outline.border },
+                  pressed && styles.pressed,
+                ]}
               >
-                <Text style={styles.scanBtnLabel} maxFontSizeMultiplier={SCAN_LABEL_CAP}>AI Scan</Text>
+                <Text
+                  style={[styles.scanBtnLabel, { color: outline.fg }]}
+                  maxFontSizeMultiplier={SCAN_LABEL_CAP}
+                >
+                  AI Scan
+                </Text>
               </Pressable>
               <Pressable
                 onPress={() => router.push(`/cycle-count/scan/${header.id}`)}
-                style={styles.scanBtn}
+                accessibilityRole="button"
+                style={({ pressed }) => [
+                  styles.scanBtn,
+                  { backgroundColor: outline.bg, borderColor: outline.border },
+                  pressed && styles.pressed,
+                ]}
               >
-                <Text style={styles.scanBtnLabel} maxFontSizeMultiplier={SCAN_LABEL_CAP}>Scan</Text>
+                <Text
+                  style={[styles.scanBtnLabel, { color: outline.fg }]}
+                  maxFontSizeMultiplier={SCAN_LABEL_CAP}
+                >
+                  Scan
+                </Text>
               </Pressable>
             </View>
           ) : header && isOpen && !isAssignee && !canManage ? (
-            <Text style={styles.lockedNote}>Assigned to another employee</Text>
+            <Text style={[styles.lockedNote, { color: c.ink3 }]}>Assigned to another employee</Text>
           ) : null}
         </View>
+        {/* The reference count card's progress bar (DESIGN-SPEC 6.11): the
+            same counted-of-total the line above says, drawn, never a new
+            number. */}
+        {headerView.kind === 'known' && lines.length > 0 ? (
+          <View style={styles.progress}>
+            <StockBar value={countedCount} max={lines.length} height={4} />
+          </View>
+        ) : null}
         <View style={styles.badgeRow}>
           <SyncStatusBadge />
-          <View style={{ flexDirection: 'row', gap: space.xs }}>
+          <View style={styles.badgeActions}>
             {isOpen && !!header?.assignedTo && (header.assignedTo === user?.id || canManage) ? (
               <Pressable
                 onPress={() => setReleaseOpen(true)}
-                style={styles.releaseBtn}
-                hitSlop={8}
+                accessibilityRole="button"
+                style={({ pressed }) => [
+                  styles.releaseBtn,
+                  { backgroundColor: outline.bg, borderColor: outline.border },
+                  pressed && styles.pressed,
+                ]}
               >
-                <Text style={styles.releaseBtnLabel} maxFontSizeMultiplier={SCAN_LABEL_CAP}>Release</Text>
+                <Text
+                  style={[styles.releaseBtnLabel, { color: outline.fg }]}
+                  maxFontSizeMultiplier={SCAN_LABEL_CAP}
+                >
+                  Release
+                </Text>
               </Pressable>
             ) : null}
             {isOpen && canManage ? (
               <Pressable
                 onPress={() => setReassignOpen(true)}
-                style={styles.releaseBtn}
-                hitSlop={8}
+                accessibilityRole="button"
+                style={({ pressed }) => [
+                  styles.releaseBtn,
+                  { backgroundColor: outline.bg, borderColor: outline.border },
+                  pressed && styles.pressed,
+                ]}
               >
-                <Text style={styles.releaseBtnLabel} maxFontSizeMultiplier={SCAN_LABEL_CAP}>Reassign</Text>
+                <Text
+                  style={[styles.releaseBtnLabel, { color: outline.fg }]}
+                  maxFontSizeMultiplier={SCAN_LABEL_CAP}
+                >
+                  Reassign
+                </Text>
               </Pressable>
             ) : null}
           </View>
@@ -742,44 +806,61 @@ export default function CycleCountDetail() {
       </View>
 
       {conflictBanner && (
-        <View style={styles.conflictBanner}>
-          <Text style={styles.conflictText}>{conflictBanner}</Text>
-          <Pressable onPress={() => setConflictBanner(null)}>
-            <Text style={styles.conflictDismiss}>Dismiss</Text>
+        <View
+          style={[
+            styles.conflictBanner,
+            { backgroundColor: c.warnWash, borderBottomColor: c.hair },
+          ]}
+        >
+          <Text style={[styles.conflictText, { color: c.ink }]}>{conflictBanner}</Text>
+          <Pressable
+            onPress={() => setConflictBanner(null)}
+            accessibilityRole="button"
+            style={styles.conflictDismissFrame}
+          >
+            <Text style={[styles.conflictDismiss, { color: c.warnText }]}>Dismiss</Text>
           </Pressable>
         </View>
       )}
 
       {loading ? (
         <View style={styles.center}>
-          <ActivityIndicator color={theme.primary} />
+          <ActivityIndicator color={c.ink} />
         </View>
       ) : (
         // Dynamic Type: MEASURED footer reservation, not a constant. The post
         // button's label reads "Sync pending edits to post" and wraps to three
         // lines (~170pt) at accessibility sizes, well past the old 140pt
         // reservation, and covered the last count input. 140 stays the floor.
+        //
+        // The keyboard: a count box opens a number pad, which covered the
+        // lower lines with no way to scroll the last ones above it. The scroll
+        // insets itself by the keyboard on iOS and brings the box being typed
+        // in into view.
         <ScrollView
+          automaticallyAdjustKeyboardInsets
           contentContainerStyle={{
             padding: space.md,
             paddingBottom: footerReservation(footerHeight, 140),
           }}
         >
           {lines.length > 0 ? (
-            <Text style={styles.expectedHint}>
+            <Text style={[styles.expectedHint, { color: c.ink3 }]}>
               Expected is the system quantity when the line was counted (the quantity
               at session start until then). Stock that moves after a line is counted is
               kept when the count is posted.
             </Text>
           ) : null}
           {linked.kind === 'failed' ? (
-            <Text style={styles.linkedNote} accessibilityRole="alert">
+            <Text style={[styles.linkedNote, { color: c.ink3 }]} accessibilityRole="alert">
               {COUNT_LINKED_EXCEPTIONS_UNAVAILABLE_COPY}
             </Text>
           ) : linked.kind === 'ready' && exceptionUnrecognizedCopy(linked.data.unrecognized) ? (
-            <Text style={styles.linkedNote}>{exceptionUnrecognizedCopy(linked.data.unrecognized)}</Text>
+            <Text style={[styles.linkedNote, { color: c.ink3 }]}>
+              {exceptionUnrecognizedCopy(linked.data.unrecognized)}
+            </Text>
           ) : null}
-          {lines.map((l) => {
+          {lines.map((l, i) => {
             const draftVal = draft[l.id];
             const isDrafting = draftVal !== undefined;
             const display = isDrafting
@@ -829,76 +910,112 @@ export default function CycleCountDetail() {
                     linked.data.status,
                   )
                 : null;
+            // The lines are one card with a hairline between rows (the
+            // reference count card's table, DESIGN-SPEC 6.7): the first row
+            // draws the top edge and corners, the last the bottom ones.
             return (
-              <View key={l.id} style={styles.card}>
+              <View
+                key={l.id}
+                style={[
+                  styles.line,
+                  { backgroundColor: c.card, borderColor: c.hair },
+                  i === 0 && styles.lineFirst,
+                  i === lines.length - 1 && styles.lineLast,
+                ]}
+              >
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.itemName} numberOfLines={2}>
+                  <Text style={[styles.itemName, { color: c.ink }]} numberOfLines={2}>
                     {l.itemName}
                   </Text>
                   {l.itemVariantLabel ? (
-                    <Text style={styles.itemVariant}>{l.itemVariantLabel}</Text>
+                    <Text style={[styles.itemVariant, { color: c.ink2 }]}>
+                      {l.itemVariantLabel}
+                    </Text>
                   ) : null}
-                  <Text style={styles.itemSku}>{l.itemSku}</Text>
+                  <Text style={[styles.itemSku, { color: c.ink3 }]}>{l.itemSku}</Text>
                   {capturedText ? (
-                    <Text style={styles.captured}>{capturedText}</Text>
+                    <Text style={[styles.captured, { color: c.ink3 }]}>{capturedText}</Text>
                   ) : null}
                   {links.length > 0 ? (
                     <View style={styles.linkRow}>
                       {links.map((x) => (
+                        // A 44pt frame around the warning chip (the chip
+                        // alone was 24pt tall).
                         <Pressable
                           key={x.occurrence.id}
                           onPress={() => router.push(`/exceptions/${x.occurrence.id}`)}
-                          style={styles.linkChip}
+                          style={styles.linkFrame}
                           accessibilityRole="link"
                           accessibilityLabel={`Recount for exception ${x.occurrence.reference ?? ''}`.trim()}
                         >
-                          <Text style={styles.linkChipText} maxFontSizeMultiplier={LINK_CHIP_CAP}>
-                            {`Recount for ${x.occurrence.reference ?? 'an exception'}`}
-                          </Text>
+                          <View
+                            style={[
+                              styles.linkChip,
+                              { backgroundColor: warnPill.bg, borderColor: warnPill.border },
+                            ]}
+                          >
+                            <Text
+                              style={[styles.linkChipText, { color: warnPill.fg }]}
+                              maxFontSizeMultiplier={LINK_CHIP_CAP}
+                            >
+                              {`Recount for ${x.occurrence.reference ?? 'an exception'}`}
+                            </Text>
+                          </View>
                         </Pressable>
                       ))}
                     </View>
                   ) : null}
                   {destination ? (
-                    <Text style={destination.kind === 'review' ? styles.destination : styles.destinationPending}>
+                    <Text
+                      style={
+                        destination.kind === 'review'
+                          ? [styles.destination, { color: c.ink }]
+                          : [styles.destinationPending, { color: c.ink3 }]
+                      }
+                    >
                       {destination.text}
                     </Text>
                   ) : null}
-                  <Text style={styles.expected}>
+                  <Text style={[styles.expected, { color: c.ink3 }]}>
                     Expected: {l.expected}
-                    {l.localDirty && (
-                      <Text style={{ color: theme.warning }}> · unsynced</Text>
-                    )}
+                    {l.localDirty && <Text style={{ color: c.warnText }}> · unsynced</Text>}
                   </Text>
                   {variance !== null && (
-                    <Text
-                      style={[
-                        styles.variance,
-                        {
-                          color:
-                            variance > 0
-                              ? theme.success
-                              : variance < 0
-                                ? theme.destructive
-                                : theme.textMuted,
-                        },
-                      ]}
-                    >
-                      {variance === 0
-                        ? '✓ Matches expected'
-                        : `Variance ${variance > 0 ? '+' : ''}${variance}`}
-                    </Text>
+                    <View style={styles.varianceRow}>
+                      {/* The check mark that led "Matches expected" is an icon
+                          now; the words are the same. */}
+                      {variance === 0 ? <Check size={14} color={c.ink3} strokeWidth={2} /> : null}
+                      <Text
+                        style={[
+                          styles.variance,
+                          {
+                            color: variance > 0 ? c.accent : variance < 0 ? c.critText : c.ink3,
+                          },
+                        ]}
+                      >
+                        {variance === 0
+                          ? 'Matches expected'
+                          : `Variance ${variance > 0 ? '+' : ''}${variance}`}
+                      </Text>
+                    </View>
                   )}
                 </View>
                 <View style={styles.countBox}>
+                  {/* The reference's count box: recessed, the stronger border,
+                      mono and right-aligned. Named for its line, so VoiceOver
+                      says which item a count is for (it read only the value). */}
                   <TextInput
-                    style={styles.countInput}
+                    style={[
+                      styles.countInput,
+                      { color: c.ink, backgroundColor: c.sunk, borderColor: c.hair2 },
+                    ]}
                     value={display}
                     onChangeText={(v) => setDraftValue(l.id, v)}
                     editable={isOpen && canAdjust}
                     keyboardType="numeric"
                     placeholder="—"
-                    placeholderTextColor={theme.textMuted}
+                    placeholderTextColor={c.ink3}
+                    accessibilityLabel={`Counted, ${l.itemName}`}
                   />
                 </View>
               </View>
@@ -906,7 +1023,7 @@ export default function CycleCountDetail() {
           })}
 
           {lines.length === 0 && (
-            <Text style={styles.emptyText}>
+            <Text style={[styles.emptyText, { color: c.ink3 }]}>
               This count has no lines yet. Add lines from the web first.
             </Text>
           )}
@@ -914,25 +1031,41 @@ export default function CycleCountDetail() {
       )}
 
       {!loading && lines.length > 0 && isOpen && canAdjust && (
+        // Clear of the home indicator: the footer is pinned to the bottom of
+        // the screen, and the Post button sat over the home indicator's strip.
         <View
-          style={styles.footer}
+          style={[
+            styles.footer,
+            {
+              backgroundColor: c.paper,
+              borderTopColor: c.hair,
+              paddingBottom: space.md + insets.bottom,
+            },
+          ]}
           onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
         >
           {footer.kind === 'post' ? (
+            // Post commits the count: the ink button. A partial post (some
+            // lines not counted) keeps its warning fill, as before, with the
+            // words in the page colour. The label wraps (no line limit): the
+            // reservation above follows its measured height.
             <Pressable
               onPress={postCount}
               disabled={footer.disabled}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: footer.disabled }}
               style={({ pressed }) => [
                 styles.postBtn,
-                footer.partial && { backgroundColor: theme.warning },
+                { backgroundColor: post.bg, borderColor: post.border },
+                footer.partial && { backgroundColor: c.warnText, borderColor: c.warnText },
                 (pressed || footer.disabled) && { opacity: 0.6 },
               ]}
             >
-              <Text style={styles.postBtnText}>{footer.label}</Text>
+              <Text style={[styles.postBtnText, { color: post.fg }]}>{footer.label}</Text>
             </Pressable>
           ) : (
             <View style={{ gap: space.sm }}>
-              <Text style={styles.footerNote} accessibilityRole="text">
+              <Text style={[styles.footerNote, { color: c.ink3 }]} accessibilityRole="text">
                 {footer.text}
               </Text>
               {footer.kind === 'unknown' && footer.retry ? (
@@ -941,10 +1074,14 @@ export default function CycleCountDetail() {
                     setCloseGate({ kind: 'loading' });
                     setCloseGateNonce((n) => n + 1);
                   }}
-                  style={styles.footerRetry}
+                  style={({ pressed }) => [
+                    styles.footerRetry,
+                    { backgroundColor: outline.bg, borderColor: outline.border },
+                    pressed && styles.pressed,
+                  ]}
                   accessibilityRole="button"
                 >
-                  <Text style={styles.releaseBtnLabel}>Check again</Text>
+                  <Text style={[styles.releaseBtnLabel, { color: outline.fg }]}>Check again</Text>
                 </Pressable>
               ) : null}
             </View>
@@ -996,14 +1133,24 @@ const SCAN_LABEL_CAP = capTo(13, TYPE_CEILING.chrome);
  */
 const LINK_CHIP_CAP = capTo(12, TYPE_CEILING.chrome);
 
+/** The iOS minimum tap target, in points. */
+const MIN_TAP = 44;
+
+/**
+ * The look (redesign package P5.9a): the device's palette in both modes (it
+ * was the light-only legacy `theme` alias, so the screen stayed light in dark
+ * mode while its sync badge followed the device); Inter Tight for words and
+ * JetBrains Mono for the reference, the SKUs and the count boxes; the lines
+ * as one hairline card; every control a 44pt target with a button role. The
+ * sizes of the words are the ones the screen always had, with the same caps.
+ */
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: theme.bg },
+  root: { flex: 1 },
   header: {
     paddingHorizontal: space.md,
     paddingTop: space.sm,
     paddingBottom: space.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: theme.border,
   },
   // "← Back" is a button in a frame at least 44pt tall (it was the 25pt
   // text), read "Back" by VoiceOver (it read the arrow too, with no button
@@ -1018,85 +1165,89 @@ const styles = StyleSheet.create({
     marginTop: -space.sm,
     marginBottom: -4,
   },
-  backText: { color: theme.primary, fontSize: 14 },
+  backText: { fontFamily: FONT.display, fontWeight: '500', fontSize: 14 },
   headerRow: { flexDirection: 'row', alignItems: 'center', gap: space.md, marginTop: 4 },
-  title: { color: theme.text, fontSize: 22, fontWeight: '700' },
-  eyebrow: { color: theme.textMuted, fontSize: 10.5, letterSpacing: 1.2, fontWeight: '600' },
-  reference: { fontVariant: ['tabular-nums'], letterSpacing: 0.2 },
-  subtitle: { color: theme.textMuted, fontSize: 12, marginTop: 2 },
+  title: { fontFamily: FONT.displaySemi, fontWeight: '600', fontSize: 22, letterSpacing: -0.4 },
+  eyebrow: { fontFamily: FONT.mono, fontSize: 10.5, letterSpacing: 1.2 },
+  // The reference is a code: mono, as the reference prints CC- ids.
+  reference: { fontFamily: FONT.mono, fontWeight: '500', letterSpacing: 0.2 },
+  subtitle: { fontFamily: FONT.displayRegular, fontSize: 12, marginTop: 2 },
+  progress: { marginTop: space.sm },
   badgeRow: {
     marginTop: space.sm,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
+  badgeActions: { flexDirection: 'row', gap: space.xs },
+  // Release, Reassign: outline buttons in a real 44pt frame (they were 32pt
+  // with hitSlop, which VoiceOver's outline does not show).
   releaseBtn: {
-    minHeight: 32,
+    minHeight: MIN_TAP,
     paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: radius.md,
+    borderRadius: BUTTON_RADIUS.sm,
     borderWidth: 1,
-    borderColor: theme.border,
     justifyContent: 'center',
   },
-  releaseBtnLabel: { color: theme.text, fontSize: 13, fontWeight: '600' },
+  releaseBtnLabel: { fontFamily: FONT.display, fontWeight: '500', fontSize: 13 },
+  scanRow: { flexDirection: 'row', gap: space.xs },
   scanBtn: {
     // Accessible 44pt touch target (Apple HIG / Android min) with a shared
     // minWidth so "Scan" and "AI Scan" render the same size instead of the
     // label-width mismatch. minWidth (not a fixed width) keeps long localized
     // labels from clipping. Centered so the label sits mid-button now that
     // minHeight exceeds the intrinsic content height.
-    minHeight: 44,
+    minHeight: MIN_TAP,
     minWidth: 76,
     paddingVertical: 8,
     paddingHorizontal: 12,
-    borderRadius: radius.md,
-    backgroundColor: theme.primary,
+    borderRadius: BUTTON_RADIUS.sm,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  aiScanBtn: {
-    // Slight purple tint so the AI button is visually distinct from
-    // the regular Scan button — same hierarchy, different affordance.
-    backgroundColor: '#7c3aed',
-  },
-  scanBtnLabel: { color: '#fff', fontSize: 13, fontWeight: '700' },
+  scanBtnLabel: { fontFamily: FONT.display, fontWeight: '500', fontSize: 13 },
+  pressed: { opacity: 0.85 },
   lockedNote: {
-    color: theme.textMuted,
+    fontFamily: FONT.displayRegular,
     fontSize: 12,
     fontStyle: 'italic',
     maxWidth: 140,
     textAlign: 'right',
   },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: space.xl },
-  card: {
+  retry: { marginTop: space.lg, minWidth: 160 },
+  line: {
     flexDirection: 'row',
-    backgroundColor: theme.card,
+    gap: space.sm,
     padding: space.md,
-    borderRadius: radius.md,
-    marginBottom: space.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderBottomWidth: 1,
   },
-  itemName: { color: theme.text, fontSize: 14, fontWeight: '600' },
-  itemVariant: { color: theme.primary, fontSize: 12, fontWeight: '600', marginTop: 1 },
-  captured: { color: theme.textMuted, fontSize: 12, marginTop: 2 },
-  itemSku: {
-    color: theme.textMuted,
-    fontFamily: 'Menlo',
-    fontSize: 11,
-    marginTop: 2,
+  lineFirst: {
+    borderTopWidth: 1,
+    borderTopLeftRadius: RADIUS.card,
+    borderTopRightRadius: RADIUS.card,
   },
-  expected: { color: theme.textMuted, fontSize: 12, marginTop: 4 },
-  expectedHint: { color: theme.textMuted, fontSize: 12, marginBottom: space.sm },
-  variance: { fontSize: 13, fontWeight: '700', marginTop: 4 },
+  lineLast: {
+    borderBottomLeftRadius: RADIUS.card,
+    borderBottomRightRadius: RADIUS.card,
+  },
+  itemName: { fontFamily: FONT.display, fontWeight: '500', fontSize: 14 },
+  itemVariant: { fontFamily: FONT.displaySemi, fontWeight: '600', fontSize: 12, marginTop: 1 },
+  captured: { fontFamily: FONT.displayRegular, fontSize: 12, marginTop: 2 },
+  itemSku: { fontFamily: FONT.monoRegular, fontSize: 11, marginTop: 2 },
+  expected: { fontFamily: FONT.displayRegular, fontSize: 12, marginTop: 4 },
+  expectedHint: { fontFamily: FONT.displayRegular, fontSize: 12, marginBottom: space.sm },
+  varianceRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
+  variance: { fontFamily: FONT.displaySemi, fontWeight: '600', fontSize: 13 },
   countBox: { alignItems: 'flex-end', justifyContent: 'center', minWidth: 110 },
   countInput: {
-    color: theme.text,
+    fontFamily: FONT.mono,
     fontSize: 18,
-    fontWeight: '600',
-    fontVariant: ['tabular-nums'],
-    backgroundColor: theme.bg,
+    borderWidth: 1,
     borderRadius: radius.sm,
     paddingHorizontal: space.sm,
     paddingVertical: 6,
@@ -1108,74 +1259,81 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    padding: space.md,
-    backgroundColor: theme.bgElevated,
+    paddingHorizontal: space.md,
+    paddingTop: space.md,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: theme.border,
   },
+  // The shared Button's md recipe (52pt, radius 14), drawn here because its
+  // label must wrap (see the reservation above).
   postBtn: {
-    backgroundColor: theme.primary,
+    minHeight: 52,
     paddingVertical: space.md,
-    borderRadius: radius.md,
+    paddingHorizontal: space.lg,
+    borderRadius: BUTTON_RADIUS.md,
+    borderWidth: 1,
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  postBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  postBtnText: { fontFamily: FONT.display, fontWeight: '500', fontSize: 16, textAlign: 'center' },
   emptyText: {
-    color: theme.textMuted,
+    fontFamily: FONT.displayRegular,
     fontSize: 14,
     textAlign: 'center',
     padding: space.xl,
   },
-  emptyTitle: { color: theme.text, fontSize: 18, fontWeight: '700', textAlign: 'center' },
+  emptyTitle: {
+    fontFamily: FONT.displaySemi,
+    fontWeight: '600',
+    fontSize: 18,
+    textAlign: 'center',
+  },
   emptyBody: {
-    color: theme.textMuted,
+    fontFamily: FONT.displayRegular,
     fontSize: 14,
     textAlign: 'center',
     marginTop: space.sm,
   },
-  retryBtn: {
-    marginTop: space.lg,
-    backgroundColor: theme.primary,
-    paddingHorizontal: space.lg,
-    paddingVertical: 10,
-    borderRadius: radius.md,
-  },
-  retryLabel: { color: '#fff', fontWeight: '600' },
   conflictBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: space.md,
-    backgroundColor: 'rgba(245, 158, 11, 0.15)',
-    borderColor: theme.warning,
     borderBottomWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: space.md,
     paddingVertical: space.sm,
   },
-  conflictText: { color: theme.text, fontSize: 12, flex: 1 },
-  conflictDismiss: { color: theme.warning, fontWeight: '700', fontSize: 12 },
-  footerNote: { color: theme.textMuted, fontSize: 14, textAlign: 'center' },
+  conflictText: { fontFamily: FONT.displayRegular, fontSize: 12, flex: 1 },
+  // Dismiss is a button in a frame at least 44pt tall and wide; it reaches
+  // into the banner's 8pt padding, so a one-line banner grows only 12pt.
+  conflictDismissFrame: {
+    minHeight: MIN_TAP,
+    minWidth: MIN_TAP,
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    marginVertical: -space.sm,
+  },
+  conflictDismiss: { fontFamily: FONT.displaySemi, fontWeight: '600', fontSize: 12 },
+  footerNote: { fontFamily: FONT.displayRegular, fontSize: 14, textAlign: 'center' },
   footerRetry: {
     alignSelf: 'center',
-    minHeight: 40,
+    minHeight: MIN_TAP,
     paddingHorizontal: 16,
-    borderRadius: radius.md,
+    borderRadius: BUTTON_RADIUS.sm,
     borderWidth: 1,
-    borderColor: theme.border,
     justifyContent: 'center',
   },
-  linkedNote: { color: theme.textMuted, fontSize: 12, marginBottom: space.sm },
+  linkedNote: { fontFamily: FONT.displayRegular, fontSize: 12, marginBottom: space.sm },
   linkRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
+  linkFrame: { minHeight: MIN_TAP, justifyContent: 'center', flexShrink: 1 },
   linkChip: {
     minHeight: 24,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: radius.sm,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.warning,
     justifyContent: 'center',
     flexShrink: 1,
   },
-  linkChipText: { color: theme.warning, fontSize: 12, fontWeight: '600' },
-  destination: { color: theme.text, fontSize: 13, marginTop: 4 },
-  destinationPending: { color: theme.textMuted, fontSize: 12, marginTop: 4 },
+  linkChipText: { fontFamily: FONT.displaySemi, fontWeight: '600', fontSize: 12 },
+  destination: { fontFamily: FONT.displayRegular, fontSize: 13, marginTop: 4 },
+  destinationPending: { fontFamily: FONT.displayRegular, fontSize: 12, marginTop: 4 },
 });
