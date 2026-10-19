@@ -724,7 +724,9 @@ function OptionCard({
   );
 }
 
-/** A whole-number stepper (− field +), labelled with the item it is for. */
+/** A whole-number stepper (− field +), labelled with the item it is for. On a
+ *  phone the buttons and the field are 44 px, the phone's touch size, like the
+ *  reason select above them. */
 function QuantityStepper({
   id,
   label,
@@ -759,7 +761,7 @@ function QuantityStepper({
           type="button"
           variant="outline"
           size="icon"
-          className="h-9 w-9"
+          className="h-9 w-9 max-sm:size-11"
           onClick={() => onChange(clampWhole(value - 1, min, max))}
           disabled={disabled || value <= min}
           aria-label={`One fewer: ${label.toLowerCase()} for ${context}`}
@@ -778,13 +780,13 @@ function QuantityStepper({
           onChange={(e) => onChange(clampWhole(e.target.value, min, max))}
           aria-invalid={invalid ? true : undefined}
           aria-describedby={invalid ? errorId : undefined}
-          className={cn(FIELD, 'h-9 w-16 px-2 text-center font-mono tabular-nums')}
+          className={cn(FIELD, 'h-9 w-16 px-2 text-center font-mono tabular-nums max-sm:h-11')}
         />
         <Button
           type="button"
           variant="outline"
           size="icon"
-          className="h-9 w-9"
+          className="h-9 w-9 max-sm:size-11"
           onClick={() => onChange(clampWhole(value + 1, min, max))}
           disabled={disabled || value >= max}
           aria-label={`One more: ${label.toLowerCase()} for ${context}`}

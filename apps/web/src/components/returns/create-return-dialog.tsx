@@ -237,7 +237,8 @@ export function CreateReturnDialog({ orderId, lines, exchangesEnabled = false }:
                   )}
                 >
                   {/* The line takes at least 14rem, so on a phone the quantity
-                      and disposition wrap under its name instead of cutting it. */}
+                      and disposition wrap under its name instead of cutting it,
+                      indented by the 20 px box and its 10 px gap. */}
                   <label className="flex min-w-0 flex-1 basis-56 cursor-pointer items-center gap-2.5">
                     <input
                       type="checkbox"
@@ -257,7 +258,7 @@ export function CreateReturnDialog({ orderId, lines, exchangesEnabled = false }:
                       </span>
                     </span>
                   </label>
-                  <div className="flex items-center gap-2 max-sm:pl-[26px]">
+                  <div className="flex items-center gap-2 max-sm:pl-[30px]">
                     <Input
                       type="number"
                       min={1}

@@ -13,18 +13,30 @@ import { cn } from '@/lib/utils';
 
 /** A native radio drawn as the shared RadioGroup dot: a faint-ink ring that
  *  fills with an ink centre when chosen; the browser's own radio in forced
- *  colors, where the fill would not show. */
+ *  colors, where the fill would not show. Every radio here sits in a choice
+ *  row or tile that draws the keyboard focus ring (choiceRowClass, the
+ *  requester's tiles), so the dot draws none of its own: one ring per focus,
+ *  as the shared RadioGroup's card look has it. */
 export const nativeRadioClass = cn(
   'bg-card size-4 shrink-0 appearance-none rounded-full border border-[var(--ed-ink-4)] transition-colors',
   'checked:border-foreground checked:bg-foreground checked:shadow-[inset_0_0_0_3px_hsl(var(--card))]',
-  'forced-colors:appearance-auto disabled:cursor-not-allowed',
-  'focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
+  'forced-colors:appearance-auto disabled:cursor-not-allowed focus-visible:outline-none',
 );
 
-/** A native checkbox in the ink of the shared Checkbox (the browser draws the
- *  tick in the contrasting colour, in both themes and in forced colors). */
+/**
+ * A native checkbox drawn as the shared Checkbox's box (components/ui/
+ * checkbox.tsx, DESIGN-SPEC 6.21): 20 x 20, radius 5, the card colour with a
+ * faint-ink edge when empty; the ink fill with the CSS tick (bottom and right
+ * borders turned 45 degrees, in the page colour) when ticked. It stays an
+ * <input type="checkbox">, so `checked`, a label's click, Space and form
+ * posting are the browser's. The tick is drawn with borders, which forced
+ * colors keeps, so a ticked box still shows its tick there.
+ */
 export const nativeCheckboxClass = cn(
-  'size-4 shrink-0 cursor-pointer rounded-[4px] accent-[hsl(var(--foreground))] disabled:cursor-not-allowed',
+  'bg-card relative size-5 shrink-0 cursor-pointer appearance-none rounded-[5px] border border-[var(--ed-ink-4)] transition-colors hover:border-[var(--ed-ink-3)]',
+  'checked:border-foreground checked:bg-foreground checked:hover:border-foreground',
+  "after:border-background after:absolute after:left-[6px] after:top-[2.5px] after:hidden after:h-[11px] after:w-[6px] after:rotate-45 after:border-b-2 after:border-r-2 after:content-[''] checked:after:block",
+  'disabled:cursor-not-allowed disabled:opacity-50',
   'focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
 );
 
