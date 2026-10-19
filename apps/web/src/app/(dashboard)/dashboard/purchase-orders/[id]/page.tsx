@@ -140,8 +140,10 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
   // to, where the receiving hint would be.
   const canAdjustStock = can(ctx, 'stock:adjust');
   const canReceive = receivableHere && canAdjustStock;
-  const receiveRefusal =
-    receivableHere && !canAdjustStock ? dbPermissionRefusedCopy('receipt_post') : null;
+  // The What's New registry test (lib/releases/registry.test.ts) pins this
+  // statement on one line, so Prettier leaves it as written.
+  // prettier-ignore
+  const receiveRefusal = receivableHere && !canAdjustStock ? dbPermissionRefusedCopy('receipt_post') : null;
   const canReverse = isManagerOrAbove(ctx.role) && canAdjustStock;
 
   const lineRows = lines.map((l) => {
