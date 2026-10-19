@@ -500,11 +500,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
   },
+  // The typed note in the body face (Inter Tight), as the shared Field's
+  // input; without a family it fell back to the system font.
   input: {
     minHeight: 96,
     borderWidth: 1,
     borderRadius: 10,
     padding: 12,
+    fontFamily: FONT.displayRegular,
     fontSize: 15,
     textAlignVertical: 'top',
   },

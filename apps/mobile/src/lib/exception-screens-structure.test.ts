@@ -140,6 +140,9 @@ describe('every exception screen draws in the device mode', () => {
       expect(code).toMatch(
         /<Body size=\{13\} color=\{c\.critText\} accessibilityRole="alert">\s*\{error\}/,
       );
+      // The typed words in the body face, as the shared Field's input (with
+      // no family the box fell back to the system font).
+      expect(styleBlock(file, 'input')).toContain('fontFamily: FONT.displayRegular');
     },
   );
 });
@@ -290,6 +293,9 @@ describe('exception screen: words and the rows of each card', () => {
     const helper = functionBody(DETAIL, 'RuledRows');
     expect(helper).toContain('React.Children.toArray(children)');
     expect(helper).toContain('{i > 0 ? <Hair /> : null}');
+    // Each row keeps its own key, so a timeline that gains an event at the
+    // top moves its rows rather than redrawing each under another's key.
+    expect(helper).toContain('key={React.isValidElement(row) && row.key !== null ? row.key : i}');
     expect(code).toMatch(/<Card padding=\{14\}>\s*<RuledRows>\s*<Fact\s+label="ITEM"/);
     expect(code).toMatch(/<Card padding=\{14\}>\s*<RuledRows>\s*\{detail\.timeline\.map\(/);
     expect(code).toMatch(/<Card padding=\{14\}>\s*<RuledRows>\s*\{detail\.history\.map\(/);

@@ -1100,7 +1100,10 @@ function RuledRows({ children }: { children: React.ReactNode }) {
   return (
     <>
       {rows.map((row, i) => (
-        <React.Fragment key={i}>
+        // Each row keeps its own key (toArray gives every child one), so a
+        // timeline that gains an event at the top moves its rows instead of
+        // redrawing each one under another's key.
+        <React.Fragment key={React.isValidElement(row) && row.key !== null ? row.key : i}>
           {i > 0 ? <Hair /> : null}
           {row}
         </React.Fragment>
