@@ -17,6 +17,12 @@ export const dynamic = 'force-dynamic';
  * B2B customer portal (P2/P3): the CUSTOMER-facing storefront. Renders only
  * for signed-in users mapped through customer_users; everything is
  * server-mediated with safe projections (see services/portal.ts).
+ *
+ * Redesign (P5.1 step B): both states sit on the shared external frame
+ * (ExternalShell: no app shell, no session reads of its own). The signed-in
+ * portal is the frame's column at the portal's own width (max-w-4xl, as
+ * before) under the supplier's brand: logo, name, "Ordering portal ·
+ * <customer>". No new reads; the header shows what it showed.
  */
 export default async function PortalPage() {
   const ctx = await resolvePortalContext();
@@ -30,9 +36,8 @@ export default async function PortalPage() {
           title="Supplier ordering portal"
           body={
             <>
-              Sign in with the email address your supplier invited, and this page
-              becomes your catalog. If you believe you should have access, contact
-              your supplier for an invite.
+              Sign in with the email address your supplier invited, and this page becomes your
+              catalog. If you believe you should have access, contact your supplier for an invite.
             </>
           }
           action={
@@ -52,15 +57,21 @@ export default async function PortalPage() {
   ]);
 
   return (
-    <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6">
-      <header className="mb-8 flex items-center gap-3">
+    <ExternalShell className="max-w-4xl">
+      <header className="border-border mb-8 flex items-center gap-3 border-b pb-4">
         {ctx.orgLogoUrl ? (
           // eslint-disable-next-line @next/next/no-img-element -- external org logo, sized fixed
-          <img src={ctx.orgLogoUrl} alt="" className="h-9 w-9 rounded-lg object-cover" />
+          <img
+            src={ctx.orgLogoUrl}
+            alt=""
+            className="border-border h-9 w-9 shrink-0 rounded-lg border object-cover"
+          />
         ) : null}
-        <div>
-          <h1 className="text-xl font-semibold leading-tight">{ctx.orgName}</h1>
-          <p className="text-muted-foreground text-sm">
+        <div className="min-w-0">
+          <h1 className="text-foreground font-display text-[22px] font-medium leading-[1.25] tracking-[-0.02em] [overflow-wrap:anywhere]">
+            {ctx.orgName}
+          </h1>
+          <p className="text-muted-foreground text-[13.5px] leading-[20.25px]">
             Ordering portal · {ctx.customerName}
           </p>
         </div>
@@ -73,6 +84,6 @@ export default async function PortalPage() {
         exchangesEnabled={exchangeCreateEnabled()}
         pricingMode={ctx.pricingMode}
       />
-    </main>
+    </ExternalShell>
   );
 }
