@@ -1,8 +1,8 @@
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { BackfillCoversButton } from '@/components/books/backfill-covers-button';
 import { BulkIsbnImport } from '@/components/books/bulk-isbn-import';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { forcedWarehouseId } from '@/lib/auth/warehouse';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
@@ -56,36 +56,26 @@ export default async function BulkIsbnImportPage() {
   );
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href="/dashboard/books"
-          className="text-muted-foreground hover:text-foreground text-sm"
-        >
-          ← Back to books
-        </Link>
-        <div className="mt-2 flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">
-              Bulk ISBN import
-            </h1>
-            <p className="text-muted-foreground mt-1 text-sm">
-              Paste up to 200 ISBNs, look them up across Google Books / Open
-              Library / Library of Congress in parallel, then create them as
-              a batch. Perfect for school-year donation drops.
-            </p>
-          </div>
-          <BackfillCoversButton />
-        </div>
-      </div>
-      <BulkIsbnImport
-        warehouses={warehouses.map((w) => ({ id: w.id, name: w.name }))}
-        charters={charters.map((c) => ({ id: c.id, name: c.name }))}
-        warehouseCharters={warehouseCharters}
-        forcedWarehouseId={forced}
-        warehouseLabel={term.warehouse_singular}
-        charterLabel={term.charter_singular}
+    // The page area (DESIGN-SPEC 4 and 5.3) with the form at a reading width,
+    // as the other form pages (Start a count).
+    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <PageHeader
+        back={<PageHeaderBackLink href="/dashboard/books">← Back to books</PageHeaderBackLink>}
+        title="Bulk ISBN import"
+        subline="Paste up to 200 ISBNs, look them up across Google Books / Open Library / Library of Congress in parallel, then create them as a batch. Perfect for school-year donation drops."
+        actions={<BackfillCoversButton />}
+        className="max-w-[880px]"
       />
+      <div className="w-full max-w-[880px]">
+        <BulkIsbnImport
+          warehouses={warehouses.map((w) => ({ id: w.id, name: w.name }))}
+          charters={charters.map((c) => ({ id: c.id, name: c.name }))}
+          warehouseCharters={warehouseCharters}
+          forcedWarehouseId={forced}
+          warehouseLabel={term.warehouse_singular}
+          charterLabel={term.charter_singular}
+        />
+      </div>
     </div>
   );
 }

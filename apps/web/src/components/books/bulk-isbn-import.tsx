@@ -12,6 +12,7 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { touchTargetClass } from '@/components/patterns/touch-target';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -24,6 +25,7 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { resolveListReturnHref } from '@/lib/last-list-url';
+import { useUnsavedWork } from '@/lib/unsaved-work';
 import { cn } from '@/lib/utils';
 import { bulkCreateBooksAction } from '@/server/actions/books-bulk-import';
 
@@ -53,6 +55,10 @@ interface BulkIsbnImportProps {
 
 const LOOKUP_CONCURRENCY = 4;
 
+/** What both Extract buttons accept (PDF, Word, Excel, CSV, TXT, images). */
+const EXTRACT_ACCEPT =
+  '.pdf,.docx,.xlsx,.xls,.csv,.txt,.png,.jpg,.jpeg,.webp,.heic,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,text/plain,image/png,image/jpeg,image/webp,image/heic';
+
 export function BulkIsbnImport({
   warehouses,
   charters,
@@ -73,6 +79,15 @@ export function BulkIsbnImport({
   const [submitting, setSubmitting] = React.useState(false);
   const [extracting, setExtracting] = React.useState(false);
   const [aiExtracting, setAiExtracting] = React.useState(false);
+  // CONFLICTS D20: the pasted list and the looked-up rows are work a reload
+  // would lose, so "Refresh to update" asks first (lib/unsaved-work.ts, as
+  // the item form and the receive dialog do). Read at click time. It saves
+  // nothing; after a successful import the page leaves and unregisters.
+  useUnsavedWork(
+    'bulk-isbn-import',
+    'Bulk ISBN import',
+    () => raw.trim().length > 0 || resolved.length > 0,
+  );
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   const aiFileInputRef = React.useRef<HTMLInputElement | null>(null);
 
@@ -308,18 +323,22 @@ export function BulkIsbnImport({
     (r) => r.status === 'pending' || r.status === 'looking_up',
   );
 
+  const done = resolved.length - inFlight.length;
+
   return (
-    <div className="space-y-5">
-      <div className="border-border bg-card space-y-4 rounded-lg border p-4">
+    <div className="flex min-w-0 flex-col gap-4">
+      {/* The batch settings, the list and the two steps: one form card at a
+          reading width (the shared form pattern). */}
+      <div className="border-border bg-card text-card-foreground space-y-4 rounded-lg border p-[18px]">
         <div className="grid gap-3 sm:grid-cols-3">
           <div className="space-y-1.5 sm:col-span-2">
-            <Label>{warehouseLabel}</Label>
+            <Label id="isbn-import-warehouse-label">{warehouseLabel}</Label>
             <Select
               value={warehouseId}
               onValueChange={setWarehouseId}
               disabled={!!forcedWarehouseId}
             >
-              <SelectTrigger>
+              <SelectTrigger aria-labelledby="isbn-import-warehouse-label">
                 <SelectValue placeholder={`Pick ${warehouseLabel.toLowerCase()}`} />
               </SelectTrigger>
               <SelectContent>
@@ -332,22 +351,24 @@ export function BulkIsbnImport({
             </Select>
           </div>
           <div className="space-y-1.5">
-            <Label>Default qty per book</Label>
+            <Label htmlFor="isbn-import-default-qty">Default qty per book</Label>
             <Input
+              id="isbn-import-default-qty"
               type="number"
               min="0"
               step="1"
               value={defaultQty}
               onChange={(e) => setDefaultQty(e.target.value)}
+              className="font-mono tabular-nums"
             />
           </div>
         </div>
 
         {charterOptions.length > 0 && (
           <div className="space-y-1.5">
-            <Label>{charterLabel}</Label>
+            <Label id="isbn-import-charter-label">{charterLabel}</Label>
             <Select value={charterId} onValueChange={setCharterId}>
-              <SelectTrigger>
+              <SelectTrigger aria-labelledby="isbn-import-charter-label">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -363,13 +384,14 @@ export function BulkIsbnImport({
         )}
 
         <div className="space-y-1.5">
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <Label htmlFor="isbn-list">ISBNs</Label>
-            <div className="flex flex-wrap items-center gap-1.5">
+            {/* 8 px between the two 28 px buttons: the Button touch rule. */}
+            <div className="flex flex-wrap items-center gap-2">
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".pdf,.docx,.xlsx,.xls,.csv,.txt,.png,.jpg,.jpeg,.webp,.heic,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,text/plain,image/png,image/jpeg,image/webp,image/heic"
+                accept={EXTRACT_ACCEPT}
                 className="hidden"
                 onChange={(e) => {
                   const f = e.target.files?.[0];
@@ -390,9 +412,9 @@ export function BulkIsbnImport({
                 title="Pull ISBNs out of a PDF / Word / Excel / CSV / TXT file using regex (fast, free)."
               >
                 {extracting ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <Loader2 aria-hidden className="h-3.5 w-3.5 animate-spin" />
                 ) : (
-                  <FileUp className="h-3.5 w-3.5" />
+                  <FileUp aria-hidden className="h-3.5 w-3.5" />
                 )}
                 Extract from file
               </Button>
@@ -407,16 +429,16 @@ export function BulkIsbnImport({
                 title="Use Gemini to find ISBNs and book references that the regex misses (slower, uses tokens)."
               >
                 {aiExtracting ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <Loader2 aria-hidden className="h-3.5 w-3.5 animate-spin" />
                 ) : (
-                  <Sparkles className="h-3.5 w-3.5" />
+                  <Sparkles aria-hidden className="h-3.5 w-3.5" />
                 )}
                 Extract with AI
               </Button>
               <input
                 ref={aiFileInputRef}
                 type="file"
-                accept=".pdf,.docx,.xlsx,.xls,.csv,.txt,.png,.jpg,.jpeg,.webp,.heic,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,text/plain,image/png,image/jpeg,image/webp,image/heic"
+                accept={EXTRACT_ACCEPT}
                 className="hidden"
                 onChange={(e) => {
                   const f = e.target.files?.[0];
@@ -433,7 +455,7 @@ export function BulkIsbnImport({
             placeholder="One ISBN per line, or comma-separated. ISBN-10 and ISBN-13 both work, with or without dashes. You can also upload a PDF, Word doc, Excel sheet, CSV, or TXT — extract pulls the ISBNs out for you."
             className="font-mono text-[12.5px]"
           />
-          <p className="text-muted-foreground text-[11px]">
+          <p className="text-muted-foreground text-[12px] leading-[18px]">
             Up to 200 per batch. The system runs Google Books, Open Library,
             Open Library Search, and the Library of Congress in parallel for
             each ISBN. When all four come up empty (often the case for
@@ -443,35 +465,36 @@ export function BulkIsbnImport({
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="border-border -mx-[18px] -mb-[18px] flex flex-wrap items-center gap-2 border-t px-[18px] py-3.5">
           <Button
             onClick={runLookups}
             disabled={scanning || submitting}
             variant="gradient"
           >
             {scanning ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <Loader2 aria-hidden className="h-4 w-4 animate-spin" />
             ) : (
-              <Sparkles className="h-4 w-4" />
+              <Sparkles aria-hidden className="h-4 w-4" />
             )}
             Look up
           </Button>
           {resolved.length > 0 && (
-            <Button
-              onClick={importAll}
-              disabled={submitting || ready.length === 0}
-              variant="outline"
-            >
+            // Creating the batch commits the work in front of you: the ink
+            // primary (DESIGN-SPEC 6.2), beside Look up's accent.
+            <Button onClick={importAll} disabled={submitting || ready.length === 0}>
               {submitting ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <Loader2 aria-hidden className="h-4 w-4 animate-spin" />
               ) : (
-                <CheckCircle2 className="h-4 w-4" />
+                <CheckCircle2 aria-hidden className="h-4 w-4" />
               )}
               Import {ready.length} book{ready.length === 1 ? '' : 's'}
             </Button>
           )}
           {resolved.length > 0 && (
-            <span className="text-muted-foreground ml-auto text-[11.5px]">
+            <span
+              data-testid="isbn-import-status"
+              className="text-muted-foreground ml-auto font-mono text-[12px] tabular-nums"
+            >
               {ready.length} ready · {failed.length} failed
               {inFlight.length > 0 && ` · ${inFlight.length} pending`}
             </span>
@@ -483,33 +506,25 @@ export function BulkIsbnImport({
           batch finishes (every row resolved or failed) the bar
           disappears and the row list below carries the final status.
           Bar position transitions smoothly so partial-batch progress
-          feels alive instead of jumpy. */}
+          feels alive instead of jumpy. The 4 px bar of DESIGN-SPEC 6.11. */}
       {resolved.length > 0 && inFlight.length > 0 && (
-        <div className="space-y-1">
-          <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+        <div className="space-y-1.5">
+          <div className="text-muted-foreground flex items-center justify-between text-[12px]">
             <span>
-              Looking up books… {resolved.length - inFlight.length} of{' '}
-              {resolved.length}
+              Looking up books… {done} of {resolved.length}
             </span>
-            <span className="tabular-nums">
-              {Math.round(
-                ((resolved.length - inFlight.length) / resolved.length) * 100,
-              )}
-              %
+            <span className="font-mono tabular-nums">
+              {Math.round((done / resolved.length) * 100)}%
             </span>
           </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+          <div className="h-1 w-full overflow-hidden rounded-sm bg-[var(--ed-line-strong)]">
             <div
-              className="h-full rounded-full bg-foreground/80 transition-[width] duration-300 ease-out"
-              style={{
-                width: `${
-                  ((resolved.length - inFlight.length) / resolved.length) * 100
-                }%`,
-              }}
+              className="bg-accent h-full rounded-sm transition-[width] duration-300 ease-out motion-reduce:transition-none"
+              style={{ width: `${(done / resolved.length) * 100}%` }}
               role="progressbar"
               aria-valuemin={0}
               aria-valuemax={resolved.length}
-              aria-valuenow={resolved.length - inFlight.length}
+              aria-valuenow={done}
               aria-label="Bulk ISBN lookup progress"
             />
           </div>
@@ -517,16 +532,18 @@ export function BulkIsbnImport({
       )}
 
       {resolved.length > 0 && (
-        <ul className="space-y-2">
+        // The looked-up rows as list rows in one card (DESIGN-SPEC 6.7).
+        <ul className="border-border bg-card divide-border divide-y overflow-hidden rounded-lg border">
           {resolved.map((r, i) => (
             <li
               key={r.isbn + i}
+              data-status={r.status}
               className={cn(
-                'border-border bg-card flex items-start gap-3 rounded-lg border p-3',
-                r.status === 'failed' && 'border-destructive/30',
+                'flex items-start gap-3 px-4 py-3',
+                r.status === 'failed' && 'bg-destructive-wash',
               )}
             >
-              <div className="grid h-12 w-9 shrink-0 place-items-center overflow-hidden rounded-sm bg-muted">
+              <div className="border-border bg-sunk grid h-12 w-9 shrink-0 place-items-center overflow-hidden rounded-[4px] border">
                 {r.thumbnailUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
@@ -536,27 +553,25 @@ export function BulkIsbnImport({
                   />
                 ) : null}
               </div>
-              <div className="min-w-0 flex-1 space-y-1.5">
-                <div className="flex flex-wrap items-baseline gap-x-2">
-                  <span className="text-muted-foreground font-mono text-[10.5px]">
-                    {r.isbn}
-                  </span>
+              <div className="min-w-0 flex-1 space-y-2">
+                <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                  <span className="text-foreground font-mono text-[12px]">{r.isbn}</span>
                   {r.status === 'looking_up' && (
-                    <span className="text-muted-foreground inline-flex items-center gap-1 text-[10.5px]">
-                      <Loader2 className="h-3 w-3 animate-spin" /> looking up
+                    <span className="text-muted-foreground inline-flex items-center gap-1 text-[12px]">
+                      <Loader2 aria-hidden className="h-3 w-3 animate-spin" /> looking up
                     </span>
                   )}
                   {r.status === 'pending' && (
-                    <span className="text-muted-foreground text-[10.5px]">queued</span>
+                    <span className="text-muted-foreground text-[12px]">queued</span>
                   )}
                   {r.status === 'ready' && (
-                    <span className="text-success inline-flex items-center gap-1 text-[10.5px]">
-                      <CheckCircle2 className="h-3 w-3" /> ready
+                    <span className="text-success inline-flex items-center gap-1 text-[12px]">
+                      <CheckCircle2 aria-hidden className="h-3 w-3" /> ready
                     </span>
                   )}
                   {r.status === 'failed' && (
-                    <span className="text-destructive inline-flex items-center gap-1 text-[10.5px]">
-                      <XCircle className="h-3 w-3" /> {r.error ?? 'failed'}
+                    <span className="text-destructive inline-flex items-center gap-1 text-[12px]">
+                      <XCircle aria-hidden className="h-3 w-3 shrink-0" /> {r.error ?? 'failed'}
                     </span>
                   )}
                 </div>
@@ -566,20 +581,20 @@ export function BulkIsbnImport({
                       value={r.title ?? ''}
                       onChange={(e) => updateRow(i, { title: e.target.value })}
                       placeholder="Title"
-                      className="h-8 text-sm"
+                      aria-label={`Title for ${r.isbn}`}
                     />
                     <div className="grid gap-2 sm:grid-cols-[1fr_120px_120px]">
                       <Input
                         value={r.author ?? ''}
                         onChange={(e) => updateRow(i, { author: e.target.value })}
                         placeholder="Author"
-                        className="h-8 text-xs"
+                        aria-label={`Author for ${r.isbn}`}
                       />
                       <Input
                         value={r.grade ?? ''}
                         onChange={(e) => updateRow(i, { grade: e.target.value })}
                         placeholder="Grade"
-                        className="h-8 text-xs"
+                        aria-label={`Grade for ${r.isbn}`}
                       />
                       <Input
                         type="number"
@@ -595,7 +610,8 @@ export function BulkIsbnImport({
                           })
                         }
                         placeholder="Qty"
-                        className="h-8 text-xs"
+                        aria-label={`Qty for ${r.isbn}`}
+                        className="font-mono tabular-nums"
                       />
                     </div>
                   </>
@@ -604,10 +620,13 @@ export function BulkIsbnImport({
               <button
                 type="button"
                 onClick={() => removeRow(i)}
-                className="text-muted-foreground hover:text-destructive shrink-0 p-1"
+                className={cn(
+                  touchTargetClass,
+                  'text-muted-foreground hover:bg-muted hover:text-destructive inline-flex size-7 shrink-0 items-center justify-center rounded-md transition-colors',
+                )}
                 aria-label={`Remove ${r.isbn}`}
               >
-                <Trash2 className="h-3.5 w-3.5" />
+                <Trash2 aria-hidden className="h-3.5 w-3.5" />
               </button>
             </li>
           ))}
