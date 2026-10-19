@@ -230,3 +230,90 @@ describe('MovementsFilterBar controls keep their names', () => {
     expect(screen.getByRole('navigation', { name: 'Top pager' })).toBeInTheDocument();
   });
 });
+
+describe('MovementsFilterBar follows the URL in server mode', () => {
+  // Next keeps the bar's state when only the search params change, so a link
+  // that clears the URL from outside the bar (the no-match state's "Clear
+  // filters", the sidebar's Movements link, the breadcrumb) used to leave the
+  // old search, chip and dates showing over an unfiltered ledger, and the
+  // next chip press sent the stale search back.
+  it('takes the filters off when the URL is cleared from outside the bar', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <MovementsFilterBar
+        mode="server"
+        initial={{ q: 'zzz', type: 'adjust', from: '2026-09-01', to: '2026-09-30' }}
+      />,
+    );
+    expect(searchBox()).toHaveValue('zzz');
+
+    rerender(<MovementsFilterBar mode="server" initial={EMPTY} />);
+
+    expect(searchBox()).toHaveValue('');
+    const group = screen.getByRole('group', { name: 'Filter by movement type' });
+    expect(within(group).getByRole('button', { name: 'All types' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(within(group).getByRole('button', { name: 'Adjust' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+    expect(screen.getByLabelText('From date')).toHaveValue('');
+    expect(screen.getByLabelText('To date')).toHaveValue('');
+    expect(screen.queryByRole('button', { name: 'Clear filters' })).toBeNull();
+    await new Promise((r) => setTimeout(r, 400));
+    expect(replaceMock).not.toHaveBeenCalled();
+
+    // The next chip press carries no stale search.
+    await user.click(within(group).getByRole('button', { name: 'Loss' }));
+    expect(replaceMock).toHaveBeenLastCalledWith('/dashboard/movements?type=loss');
+  });
+
+  it('takes new filters from a URL changed from outside the bar', () => {
+    const { rerender } = render(<MovementsFilterBar mode="server" initial={EMPTY} />);
+    rerender(
+      <MovementsFilterBar
+        mode="server"
+        initial={{ q: 'tape', type: 'damage', from: '2026-08-01', to: '' }}
+      />,
+    );
+    expect(searchBox()).toHaveValue('tape');
+    expect(screen.getByRole('button', { name: 'Damage' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByLabelText('From date')).toHaveValue('2026-08-01');
+  });
+
+  it("keeps characters typed while the bar's own debounced search makes its round trip", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<MovementsFilterBar mode="server" initial={EMPTY} />);
+
+    await user.type(searchBox(), 'lan ');
+    await waitFor(() => expect(replaceMock).toHaveBeenCalledWith('/dashboard/movements?q=lan'));
+    // More typed before the URL lands...
+    await user.type(searchBox(), 'yard');
+    // ...then the URL the bar sent arrives (trimmed, as the URL keeps it).
+    rerender(<MovementsFilterBar mode="server" initial={{ ...EMPTY, q: 'lan' }} />);
+    expect(searchBox()).toHaveValue('lan yard');
+    await waitFor(() =>
+      expect(replaceMock).toHaveBeenLastCalledWith('/dashboard/movements?q=lan+yard'),
+    );
+  });
+
+  it('a fresh but equal filter set changes nothing', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <MovementsFilterBar mode="server" initial={{ ...EMPTY, q: 'tape' }} />,
+    );
+    await user.type(searchBox(), 's');
+    rerender(<MovementsFilterBar mode="server" initial={{ ...EMPTY, q: 'tape' }} />);
+    expect(searchBox()).toHaveValue('tapes');
+  });
+
+  it('client mode ignores a changed initial (the instant ledger owns its filters)', () => {
+    const { rerender } = render(
+      <MovementsFilterBar mode="client" initial={{ ...EMPTY, q: 'zzz' }} onChange={vi.fn()} />,
+    );
+    rerender(<MovementsFilterBar mode="client" initial={EMPTY} onChange={vi.fn()} />);
+    expect(searchBox()).toHaveValue('zzz');
+  });
+});

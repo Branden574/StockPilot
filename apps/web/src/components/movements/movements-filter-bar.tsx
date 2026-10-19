@@ -85,7 +85,7 @@ export function MovementsFilterBar({
   // initial render still skips a redundant apply (in server mode that would
   // router.replace() the page back over the user's own ?page= navigation).
   //
-  // It has to be a REF of the last APPLIED value, not a `q === initial.q`
+  // It has to track the last APPLIED value, not a `q === initial.q`
   // comparison: instant mode's `initial` is the filters in effect when the bar
   // mounted (a module constant, q:'', when it used to be), never updated
   // after, so comparing against it also swallowed the keystroke that returns
@@ -93,11 +93,40 @@ export function MovementsFilterBar({
   // Export CSV href built from the same filter state, pinned to the old needle
   // while the search box read empty (SP-034). Server mode hid it because the
   // URL round-trip keeps initial.q equal to the committed value.
-  const appliedQ = React.useRef(initial.q);
+  //
+  // State, not a ref: the URL sync below reads it while rendering.
+  const [appliedQ, setAppliedQ] = React.useState(initial.q);
+
+  // Server mode: follow the URL when it changes from OUTSIDE the bar. Next
+  // keeps this component's state when only the search params change (the
+  // page segment's state key drops them), so without this a link that clears
+  // the URL (the no-match state's "Clear filters", the sidebar's Movements
+  // link, the breadcrumb) left the old search, chip and dates showing over an
+  // unfiltered ledger, and the next chip press sent the stale search back.
+  // Not a `key` on the bar: that would remount it after every debounced
+  // search and drop focus while typing. Adjusted during render (React's
+  // "adjust state when a prop changes" pattern), compared as the query string
+  // so a fresh but equal `initial` object changes nothing.
+  const urlKey = buildMovementsQueryString(initial);
+  const [seenUrlKey, setSeenUrlKey] = React.useState(urlKey);
+  if (mode === 'server' && urlKey !== seenUrlKey) {
+    setSeenUrlKey(urlKey);
+    setType(initial.type);
+    setFrom(initial.from);
+    setTo(initial.to);
+    // The search only when the URL's needle is not the one this bar last
+    // applied (the URL keeps it trimmed), so characters typed during the
+    // round trip of the bar's own debounced search survive.
+    if (initial.q.trim() !== appliedQ.trim()) {
+      setQ(initial.q);
+      setAppliedQ(initial.q);
+    }
+  }
+
   React.useEffect(() => {
-    if (q === appliedQ.current) return;
+    if (q === appliedQ) return;
     const t = setTimeout(() => {
-      appliedQ.current = q;
+      setAppliedQ(q);
       apply({ q, ...latest.current });
     }, 300);
     return () => clearTimeout(t);
@@ -122,7 +151,7 @@ export function MovementsFilterBar({
   }
   function clearAll() {
     setQ('');
-    appliedQ.current = '';
+    setAppliedQ('');
     setType('');
     setFrom('');
     setTo('');
@@ -184,7 +213,7 @@ export function MovementsFilterBar({
                   type="button"
                   onClick={() => {
                     setQ('');
-                    appliedQ.current = '';
+                    setAppliedQ('');
                     apply({ q: '', type, from, to });
                   }}
                   aria-label="Clear search"
