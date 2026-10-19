@@ -549,8 +549,11 @@ const ROW = cn(
 const LINE_GRID =
   'grid grid-cols-3 items-end gap-x-3 gap-y-2 px-4 sm:grid-cols-[minmax(0,1fr)_88px_112px_104px_32px] sm:items-start';
 
-/** A line field's label: shown over the field on a phone, read aloud everywhere. */
-const LINE_LABEL = 'text-muted-foreground text-[12px] font-normal leading-4 sm:sr-only';
+/** A line field's label: shown over the field on a phone, read aloud everywhere.
+ *  A block, so every label starts at its column's top and the four labels of a
+ *  stacked line sit on one row (an inline label rode 3 px lower than a block
+ *  one in the line box). */
+const LINE_LABEL = 'text-muted-foreground block text-[12px] font-normal leading-4 sm:sr-only';
 
 // ─── PoForm ─────────────────────────────────────────────────────────────────
 
@@ -1226,7 +1229,7 @@ export function PoForm({
                           />
                         </div>
                         <div className="min-w-0 space-y-1">
-                          <span className={cn(LINE_LABEL, 'block text-right')}>Subtotal</span>
+                          <span className={cn(LINE_LABEL, 'text-right')}>Subtotal</span>
                           <p className="text-foreground flex h-8 items-center justify-end font-mono text-[13px] tabular-nums max-sm:h-11">
                             {formatCurrency(line.quantityOrdered * line.unitCost)}
                           </p>

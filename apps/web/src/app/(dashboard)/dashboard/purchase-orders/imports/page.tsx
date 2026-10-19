@@ -237,10 +237,11 @@ export default async function PoImportsPage({
     );
   } else {
     list = (
-      // The table card (DESIGN-SPEC 6.9): the rows scroll sideways inside it
-      // on a phone, never the page.
+      // The table card (DESIGN-SPEC 6.9): natural column widths, as before
+      // the redesign; on a phone the rows scroll sideways inside it, never the
+      // page.
       <div className="border-border bg-card min-w-0 overflow-hidden rounded-lg border">
-        <Table className="min-w-[560px]">
+        <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead>Name</TableHead>

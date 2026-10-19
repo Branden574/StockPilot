@@ -765,7 +765,10 @@ export function PoImportDetail({
       {unmappedIds.length > 0 && canApprove && (
         <div className="border-border bg-card flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border px-[18px] py-2.5 text-[13px]">
           <Sparkles aria-hidden className="text-accent h-4 w-4 shrink-0" />
-          <span className="min-w-0 flex-1">
+          {/* The words keep at least 14rem, so on a phone the button wraps
+              under them (at the right) instead of squeezing them into a
+              narrow column beside it. */}
+          <span className="min-w-0 flex-[1_1_14rem]">
             <strong className="font-medium tabular-nums">{unmappedIds.length}</strong> unmapped line
             {unmappedIds.length === 1 ? '' : 's'} — create new internal items from the PO so you
             don't have to enter them manually.
@@ -773,6 +776,7 @@ export function PoImportDetail({
           <Button
             size="sm"
             variant="outline"
+            className="ml-auto"
             onClick={() => openCreateItems(unmappedIds)}
             disabled={busy || !vendorId}
             title={!vendorId ? 'Pick a vendor first' : undefined}
@@ -804,10 +808,12 @@ export function PoImportDetail({
       )}
 
       {/* The review table (DESIGN-SPEC 6.9) in its card: the eleven columns
-          scroll sideways inside it on a narrow screen, never the page, and
-          every column stays available. */}
+          take their natural widths and scroll sideways inside it when they
+          need more room than the screen has, never the page, and every column
+          stays available (an import with no lines keeps all its headers in
+          view). */}
       <div className="border-border bg-card min-w-0 overflow-hidden rounded-lg border">
-        <Table className="min-w-[1180px]">
+        <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead className="w-12">#</TableHead>
@@ -862,7 +868,8 @@ export function PoImportDetail({
                       </Badge>
                     )}
                   </TableCell>
-                  <TableCell className="text-ink-2 font-mono text-[12px]">
+                  {/* A vendor code reads whole: it never breaks at its hyphens. */}
+                  <TableCell className="text-ink-2 whitespace-nowrap font-mono text-[12px]">
                     {l.vendor_item_number ?? '—'}
                   </TableCell>
                   <TableCell className="text-ink-2 max-w-[180px] truncate text-[12.5px]">

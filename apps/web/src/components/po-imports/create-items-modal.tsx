@@ -681,7 +681,10 @@ export function CreateItemsModal({
                   // Per-line variant inputs, so a missing required attribute
                   // can be supplied here instead of after the fact. Blank means
                   // "the document said nothing" and stays that way — nothing is
-                  // guessed or defaulted.
+                  // guessed or defaulted. Fixed widths that wrap, as before
+                  // the redesign: on a phone Size takes the first row and Size
+                  // system and Number the second, each wide enough to read
+                  // whole at the phone's 16 px.
                   <div className="flex flex-wrap items-center gap-2">
                     <Input
                       value={v.size ?? l.variant_size ?? ''}
@@ -699,9 +702,9 @@ export function CreateItemsModal({
                       placeholder={`Size${sizeRequired ? ' (required)' : ''}, e.g. ${sizeExample}`}
                       maxLength={40}
                       disabled={busy}
-                      className="w-full sm:w-[170px]"
+                      className="w-[170px]"
                     />
-                    <div className="w-full sm:w-[170px]">
+                    <div className="w-[170px]">
                       <Select
                         value={v.sizeSystem ?? l.variant_size_system ?? NO_SIZE_SYSTEM}
                         onValueChange={(val) =>
@@ -750,7 +753,7 @@ export function CreateItemsModal({
                       placeholder={numberRequired ? 'Number (required)' : 'Number'}
                       maxLength={4}
                       disabled={busy}
-                      className={numberRequired ? 'w-full sm:w-[140px]' : 'w-full sm:w-[90px]'}
+                      className={numberRequired ? 'w-[140px]' : 'w-[90px]'}
                     />
                   </div>
                 )}
