@@ -31,9 +31,10 @@ const RETURNABLE_ORDER_STATUSES = new Set(['completed', 'delivered']);
 const SECTION_TITLE =
   'font-display text-foreground mb-3 text-[16px] font-medium leading-6 tracking-[-0.015em]';
 
-/** A stepper end: 32 px, 44 px on a phone, the neutral hover, a visible focus. */
+/** A stepper end: 32 px, 44 px on a phone or a touch screen (a plain button
+ *  has no Button hit area of its own), the neutral hover, a visible focus. */
 const STEP_BUTTON =
-  'text-foreground hover:bg-muted focus-visible:ring-ring disabled:text-ink-4 grid w-8 place-items-center outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset disabled:pointer-events-none max-sm:w-11';
+  'text-foreground hover:bg-muted focus-visible:ring-ring disabled:text-ink-4 grid w-8 place-items-center outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset disabled:pointer-events-none max-sm:w-11 pointer-coarse:w-11';
 
 type ReturnableLine = PortalOrder['lines'][number] & { remaining: number };
 
@@ -233,8 +234,9 @@ export function PortalShop({
                       </Badge>
                     )}
                   </div>
-                  {/* The stepper: one joined control, as on the order pages. */}
-                  <div className="border-line-strong bg-card mt-auto inline-flex h-8 w-fit items-stretch overflow-hidden rounded-md border max-sm:h-11">
+                  {/* The stepper: one joined control, as on the order pages;
+                      32 px, 44 px on a phone or a touch screen (an iPad too). */}
+                  <div className="border-line-strong bg-card pointer-coarse:h-11 mt-auto inline-flex h-8 w-fit items-stretch overflow-hidden rounded-md border max-sm:h-11">
                     <button
                       type="button"
                       className={STEP_BUTTON}

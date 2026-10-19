@@ -270,6 +270,25 @@ describe('the portal look keeps the performance and phone rules', () => {
     expect(bar.innerHTML).not.toMatch(/\border-(?:first|last|\d+)\b/);
   });
 
+  it('the stepper ends are 44 px on a phone and on coarse pointers (a touch tablet too), as the rental stepper', () => {
+    shop();
+    for (const item of [NOTEBOOK, MARKERS]) {
+      const minus = screen.getByRole('button', { name: `Remove one ${item.name}` });
+      const plus = screen.getByRole('button', { name: `Add one ${item.name}` });
+      for (const button of [minus, plus]) {
+        const label = button.getAttribute('aria-label') ?? '';
+        expect(button.className, label).toMatch(/(^|\s)max-sm:w-11(\s|$)/);
+        expect(button.className, label).toMatch(/(^|\s)pointer-coarse:w-11(\s|$)/);
+      }
+      // One joined control: both ends share the stepper, which is 44 px tall
+      // on a phone and on a touch screen.
+      const stepper = minus.parentElement as HTMLElement;
+      expect(plus.parentElement).toBe(stepper);
+      expect(stepper.className, `${item.name} stepper`).toMatch(/(^|\s)max-sm:h-11(\s|$)/);
+      expect(stepper.className, `${item.name} stepper`).toMatch(/(^|\s)pointer-coarse:h-11(\s|$)/);
+    }
+  });
+
   it('an order row lets its status, total and actions wrap under its words (they ran off a 390 px screen)', () => {
     shop({ orders: [order({ status: 'completed' })], returnsEnabled: true });
     const reorder = screen.getByRole('button', { name: 'Reorder' });
