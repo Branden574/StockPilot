@@ -610,13 +610,13 @@ function BooksTable({
             <TableHead scope="col" className="px-2 sm:px-3">
               {BOOK_REPORT_UI.columnBook}
             </TableHead>
-            <TableHead scope="col" className="px-2 text-right sm:px-3">
+            <TableHead scope="col" className="px-2 text-right sm:whitespace-nowrap sm:px-3">
               {bookReportQuantityColumnLabel(answer.summary.unresolved.entries > 0)}
             </TableHead>
             <TableHead scope="col" className="hidden text-right sm:table-cell">
               {BOOK_REPORT_UI.columnOrders}
             </TableHead>
-            <TableHead scope="col" className="hidden md:table-cell">
+            <TableHead scope="col" className="hidden whitespace-nowrap md:table-cell">
               {BOOK_REPORT_UI.columnLatest}
             </TableHead>
             <TableHead scope="col" className="hidden sm:table-cell sm:px-3 sm:last:pr-4">
@@ -662,8 +662,12 @@ function BookRow({ row, cover }: { row: BookReportRow; cover: Promise<BookCoverS
           </span>
         ) : null}
       </th>
-      <TableCell className="px-2 text-right font-mono text-[13.5px] font-medium tabular-nums max-sm:pr-3 sm:px-3">
-        {row.countsAsCopies ? formatReportQuantity(row.copies) : rowQuantityText(row)}
+      <TableCell className="px-2 text-right max-sm:pr-3 sm:px-3">
+        {/* The figure in mono (DESIGN-SPEC 6.9); View orders below it at
+            phone width keeps the body face. */}
+        <span className="font-mono text-[13.5px] font-medium tabular-nums">
+          {row.countsAsCopies ? formatReportQuantity(row.copies) : rowQuantityText(row)}
+        </span>
         {/* At phone width View orders sits under the total, so the Book
             column has room to keep an ISBN whole and the table fits a
             390 px screen; from sm up it has its own column (below). */}
