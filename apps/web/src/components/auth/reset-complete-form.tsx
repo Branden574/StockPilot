@@ -46,6 +46,7 @@ export function ResetCompleteForm() {
         <PasswordInput
           id="password"
           autoComplete="new-password"
+          className="sm:h-10"
           {...register('password')}
           aria-invalid={!!errors.password}
         />
@@ -57,6 +58,7 @@ export function ResetCompleteForm() {
         <PasswordInput
           id="confirmPassword"
           autoComplete="new-password"
+          className="sm:h-10"
           {...register('confirmPassword')}
           aria-invalid={!!errors.confirmPassword}
         />
@@ -65,7 +67,13 @@ export function ResetCompleteForm() {
         )}
       </div>
 
-      <Button type="submit" className="w-full" variant="gradient" size="lg" disabled={isSubmitting}>
+      <Button
+        type="submit"
+        className="h-11 w-full text-[14px]"
+        variant="gradient"
+        size="lg"
+        disabled={isSubmitting}
+      >
         {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Update password'}
       </Button>
     </form>

@@ -15,7 +15,7 @@
  */
 
 /* ── Authentication shell ─────────────────────────────────────────────────────
- * A cinematic split on desktop, a form-first stack on mobile.
+ * A quiet split on desktop, a form-first stack on mobile.
  *
  * Governing rule: the decoration never delays or obstructs the form. The visual
  * column is aria-hidden, loads no media, and its animation is purely decorative.
@@ -29,19 +29,14 @@
 }
 
 /* ── visual column ── */
+/* A flat, quiet inset surface (redesign P5.1): the redesign draws no
+   gradients, washes or meshes, so the decorative column is the sunk surface
+   with one hairline against the form, in both themes. */
 .auth-visual {
   position: relative;
   overflow: hidden;
   border-right: 1px solid hsl(var(--border));
-  background: hsl(var(--card));
-}
-.auth-visual-ground {
-  position: absolute;
-  inset: 0;
-  background-image:
-    radial-gradient(60rem 44rem at 88% -12%, hsl(var(--accent) / 0.26), transparent 60%),
-    radial-gradient(48rem 38rem at -6% 108%, hsl(var(--accent) / 0.14), transparent 58%),
-    repeating-linear-gradient(90deg, hsl(var(--border) / 0.35) 0 1px, transparent 1px 9rem);
+  background: var(--ed-bg-sunk);
 }
 .auth-visual-inner {
   position: relative;
@@ -86,9 +81,15 @@
   background: hsl(var(--accent));
   box-shadow: 0 0 0 3px hsl(var(--accent) / 0.2);
 }
-.auth-stage-sep { opacity: 0.4; }
+.auth-stage-sep {
+  opacity: 0.4;
+}
 
-.auth-flow { list-style: none; margin: 0; padding: 0; }
+.auth-flow {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
 .auth-flow li {
   position: relative;
   display: grid;
@@ -141,22 +142,50 @@
 }
 
 @keyframes auth-step {
-  0%, 6%    { opacity: 0.5; }
-  10%, 20%  { opacity: 1; }
-  26%, 100% { opacity: 0.5; }
+  0%,
+  6% {
+    opacity: 0.5;
+  }
+  10%,
+  20% {
+    opacity: 1;
+  }
+  26%,
+  100% {
+    opacity: 0.5;
+  }
 }
 @keyframes auth-rail {
-  0%, 6%    { background: hsl(var(--border)); }
-  10%, 20%  { background: hsl(var(--accent)); }
-  26%, 100% { background: hsl(var(--border)); }
+  0%,
+  6% {
+    background: hsl(var(--border));
+  }
+  10%,
+  20% {
+    background: hsl(var(--accent));
+  }
+  26%,
+  100% {
+    background: hsl(var(--border));
+  }
 }
 @keyframes auth-in {
-  from { opacity: 0; transform: translateY(8px); }
-  to   { opacity: 1; transform: none; }
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 /* ── form column ── */
-.auth-panel { display: flex; flex-direction: column; min-width: 0; }
+.auth-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
 .auth-panel-head {
   display: flex;
   align-items: center;
@@ -166,7 +195,9 @@
 }
 /* The brand lives in the visual column on desktop; the form column carries it
    only when that column is gone. */
-.auth-panel-brand { display: none; }
+.auth-panel-brand {
+  display: none;
+}
 .auth-panel-main {
   flex: 1;
   display: flex;
@@ -188,7 +219,10 @@
   padding: 0 clamp(1.25rem, 3vw, 2.5rem) 2rem;
   text-align: center;
 }
-.auth-panel-foot p { font-size: 12px; color: hsl(var(--muted-foreground)); }
+.auth-panel-foot p {
+  font-size: 12px;
+  color: hsl(var(--muted-foreground));
+}
 .auth-panel-foot nav {
   display: flex;
   justify-content: center;
@@ -199,21 +233,53 @@
   border-top: 1px solid hsl(var(--border) / 0.6);
   font-size: 12px;
 }
-.auth-panel-foot nav a { color: hsl(var(--muted-foreground)); }
-.auth-panel-foot nav a:hover { color: hsl(var(--foreground)); }
+.auth-panel-foot nav a {
+  color: hsl(var(--muted-foreground));
+}
+.auth-panel-foot nav a:hover {
+  color: hsl(var(--foreground));
+}
+.auth-panel-foot nav a:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+  border-radius: 4px;
+}
 
 /* ── tablet: narrow the cinema, widen the work ── */
 @media (max-width: 1100px) {
-  .auth-shell { grid-template-columns: 40fr 60fr; }
-  .auth-stage-foot { display: none; }
+  .auth-shell {
+    grid-template-columns: 40fr 60fr;
+  }
+  .auth-stage-foot {
+    display: none;
+  }
 }
 
 /* ── mobile: the split is REMOVED, not squeezed ── */
 @media (max-width: 780px) {
-  .auth-shell { grid-template-columns: 1fr; }
-  .auth-visual { display: none; }
-  .auth-panel-brand { display: inline-flex; }
-  .auth-panel-col { padding-top: clamp(1rem, 4vh, 2rem); }
+  .auth-shell {
+    grid-template-columns: 1fr;
+  }
+  .auth-visual {
+    display: none;
+  }
+  .auth-panel-brand {
+    display: inline-flex;
+  }
+  .auth-panel-col {
+    padding-top: clamp(1rem, 4vh, 2rem);
+  }
+  /* Phones: the three help links are 44 px tall targets, nothing moves. */
+  .auth-panel-foot nav {
+    gap: 0.5rem;
+    padding-top: 0.25rem;
+  }
+  .auth-panel-foot nav a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 0 0.5rem;
+  }
 }
 
 /* ── reduced motion: same composition, nothing moving ── */
@@ -226,8 +292,14 @@
     transform: none;
   }
   /* Every row at its settled, readable state rather than mid-cycle. */
-  .auth-flow li { animation: none; opacity: 1; }
-  .af-rail { animation: none; background: hsl(var(--border)); }
+  .auth-flow li {
+    animation: none;
+    opacity: 1;
+  }
+  .af-rail {
+    animation: none;
+    background: hsl(var(--border));
+  }
 }
 
 /* ── Auth: input microinteractions ────────────────────────────────────────────
@@ -236,9 +308,12 @@
  * none of them move anything, and none of them change the field's box, so
  * nothing reflows when focus moves between fields.
  */
+/* The accent itself, not --accent-foreground: in dark that token is a
+   near-white mint (165 60% 92%) that reads as plain text, and DESIGN-SPEC 2.3
+   moves accent text on the page to --accent (5.29:1 light, 10.44:1 dark). */
 .auth-field:focus-within > label,
 .auth-field:focus-within > div > label {
-  color: hsl(var(--accent-foreground));
+  color: hsl(var(--accent));
   transition: color 0.16s ease;
 }
 .auth-field input:focus-visible {
@@ -252,7 +327,9 @@
     box-shadow 0.16s ease,
     background-color 0.16s ease;
 }
-.auth-field:focus-within input:not(:focus-visible) { background: hsl(var(--muted) / 0.35); }
+.auth-field:focus-within input:not(:focus-visible) {
+  background: hsl(var(--muted) / 0.35);
+}
 
 /* Errors appear beneath the field WITHOUT moving anything.
  *
@@ -276,7 +353,22 @@
   line-height: 1rem;
   margin-top: 0.25rem !important;
 }
-.auth-msg:not(:empty) { animation: auth-err 0.18s ease-out; }
+.auth-msg:not(:empty) {
+  animation: auth-err 0.18s ease-out;
+}
+/* CONFLICTS D32: the rule above named a keyframe that was defined nowhere, so
+   an error line never eased in. A short fade with a 2 px settle; the box and
+   its reserved height do not change, so nothing around it moves. */
+@keyframes auth-err {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
 
 .auth-submit-done {
   display: inline-flex;
@@ -294,30 +386,55 @@
 .auth-stage:not([data-phase='idle']) .af-rail {
   animation-play-state: paused;
 }
-.auth-stage:not([data-phase='idle']) .auth-flow li { opacity: 0.42; }
+.auth-stage:not([data-phase='idle']) .auth-flow li {
+  opacity: 0.42;
+}
 
-.auth-flow li[data-lit] { opacity: 1; }
-.auth-flow li[data-lit] .af-rail { background: hsl(var(--accent)); }
+.auth-flow li[data-lit] {
+  opacity: 1;
+}
+.auth-flow li[data-lit] .af-rail {
+  background: hsl(var(--accent));
+}
 
 /* In flight: the whole ledger breathes once per second — the system is working. */
-.auth-stage[data-phase='submitting'] .auth-flow li { opacity: 0.55; }
+.auth-stage[data-phase='submitting'] .auth-flow li {
+  opacity: 0.55;
+}
 .auth-stage[data-phase='submitting'] .af-rail {
   background: hsl(var(--accent) / 0.55);
   animation: auth-pulse 1s ease-in-out infinite !important;
   animation-play-state: running !important;
 }
 @keyframes auth-pulse {
-  0%, 100% { opacity: 0.45; }
-  50%      { opacity: 1; }
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 /* Resolved: every stage accounted for, settled, nothing moving. */
-.auth-stage[data-phase='success'] .auth-flow li { opacity: 1; }
-.auth-stage[data-phase='success'] .af-rail { background: hsl(var(--accent)); }
-.auth-stage[data-phase='success'] .auth-live { box-shadow: 0 0 0 5px hsl(var(--accent) / 0.24); }
+.auth-stage[data-phase='success'] .auth-flow li {
+  opacity: 1;
+}
+.auth-stage[data-phase='success'] .af-rail {
+  background: hsl(var(--accent));
+}
+.auth-stage[data-phase='success'] .auth-live {
+  box-shadow: 0 0 0 5px hsl(var(--accent) / 0.24);
+}
 
 @media (prefers-reduced-motion: reduce) {
   .auth-field p,
-  .auth-submit-done { animation: none; }
-  .auth-stage[data-phase='submitting'] .af-rail { animation: none !important; opacity: 1; }
+  .auth-msg:not(:empty),
+  .auth-submit-done {
+    animation: none;
+  }
+  .auth-stage[data-phase='submitting'] .af-rail {
+    animation: none !important;
+    opacity: 1;
+  }
 }
