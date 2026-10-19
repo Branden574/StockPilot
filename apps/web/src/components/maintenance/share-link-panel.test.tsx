@@ -205,3 +205,16 @@ describe('ShareLinkPanel hydrates with the server in UTC and the browser in Los 
     }
   });
 });
+
+describe('redesign structure (P4.F3)', () => {
+  it('is a named region with its title as a heading, and its button glyphs are hidden from screen readers', async () => {
+    render(<ShareLinkPanel requestId="r1" status={STATUS} canRevoke />);
+    const region = screen.getByRole('region', { name: 'Photo share link' });
+    expect(
+      within(region).getByRole('heading', { level: 2, name: 'Photo share link' }),
+    ).toBeInTheDocument();
+    const generate = within(region).getByRole('button', { name: 'Generate new link' });
+    expect(generate.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
+    expect(within(region).getByRole('button', { name: 'Revoke' })).toBeInTheDocument();
+  });
+});

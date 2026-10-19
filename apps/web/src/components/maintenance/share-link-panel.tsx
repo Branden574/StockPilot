@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { DetailSection } from '@/components/patterns/detail-section';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { useHydrated } from '@/lib/use-hydrated';
@@ -129,54 +130,70 @@ export function ShareLinkPanel({ requestId, status, canRevoke }: Props) {
   }
 
   return (
-    <section aria-label="Photo share link" className="space-y-2 rounded-xl border bg-card p-4 text-xs">
-      <h2 className="text-muted-foreground text-[10.5px] uppercase tracking-[0.08em]">Photo share link</h2>
-
-      <p className="text-[11px] text-muted-foreground">
+    // The aside card look (DESIGN-SPEC 6.7): a titled card, the copy in
+    // 12.5 px quiet ink, the buttons as 28 px secondary buttons.
+    <DetailSection
+      title="Photo share link"
+      aria-label="Photo share link"
+      bodyClassName="space-y-2.5"
+    >
+      <p className="text-muted-foreground text-[12.5px] leading-[18.75px]">
         Grants photo access to this request for about 180 days, without a StockPilot account. Revocable at
         any time.
       </p>
 
       {generatedUrl ? (
-        <p className="text-[11px] font-medium">
+        <p className="text-foreground text-[12.5px] font-medium leading-[18.75px]">
           Link generated — copy it now. For security it is shown only this once; generating again replaces
           it.
         </p>
       ) : hasActiveLink ? (
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-muted-foreground text-[12.5px] leading-[18.75px]">
           An active share link exists. Its URL is not stored and cannot be shown again — generate a new
           link to get a copyable URL (the current one stops working).
         </p>
       ) : (
-        <p className="text-[11px] text-muted-foreground">No active share link.</p>
+        <p className="text-muted-foreground text-[12.5px] leading-[18.75px]">
+          No active share link.
+        </p>
       )}
 
       <div className="flex flex-wrap items-center gap-2">
         {generatedUrl ? (
           <Button type="button" variant="outline" size="sm" onClick={() => void copyUrl()}>
-            {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+            {copied ? (
+              <Check className="h-3.5 w-3.5" aria-hidden="true" />
+            ) : (
+              <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+            )}
             {copied ? 'Copied' : 'Copy URL'}
           </Button>
         ) : null}
         <Button type="button" variant="outline" size="sm" disabled={generating} onClick={() => void generate()}>
           {generating ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
           ) : hasActiveLink ? (
-            <RefreshCw className="h-3.5 w-3.5" />
+            <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
           ) : (
-            <Link2 className="h-3.5 w-3.5" />
+            <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
           )}
           {hasActiveLink ? 'Generate new link' : 'Generate link'}
         </Button>
         {canRevoke && hasActiveLink ? (
-          <Button type="button" variant="outline" size="sm" onClick={() => setConfirmOpen(true)}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="text-destructive hover:text-destructive"
+            onClick={() => setConfirmOpen(true)}
+          >
             Revoke
           </Button>
         ) : null}
       </div>
 
       {expiresAt ? (
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-muted-foreground text-[12px] leading-[18px]">
           {/* A non-breaking space holds the line until then. */}
           {hydrated ? `Expires ${new Date(expiresAt).toLocaleDateString()}.` : '\u00a0'}
         </p>
@@ -193,6 +210,6 @@ export function ShareLinkPanel({ requestId, status, canRevoke }: Props) {
           onConfirm={() => void revoke()}
         />
       ) : null}
-    </section>
+    </DetailSection>
   );
 }

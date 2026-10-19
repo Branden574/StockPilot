@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import type { ReactNode } from 'react';
 
 import { can, formatMaintenanceRequestNumber, relatedLocationText, uuidSchema } from '@stockpilot/core';
 
@@ -11,6 +12,10 @@ import { MaintenanceStatusBadge } from '@/components/maintenance/maintenance-sta
 import { MaintenanceShareLinkProvider } from '@/components/maintenance/share-link-context';
 import { ShareLinkPanel, type MaintenanceShareLinkStatus } from '@/components/maintenance/share-link-panel';
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { DetailSection } from '@/components/patterns/detail-section';
+import { KeyValueList, KeyValueRow } from '@/components/patterns/key-value-row';
+import { PageHeaderBackLink } from '@/components/patterns/page-header';
+import { PatternPhoto } from '@/components/patterns/photo';
 import { Badge } from '@/components/ui/badge';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { formatRelative } from '@/lib/utils';
@@ -24,14 +29,54 @@ import { MaintenancePhotosPanelClient, MaintenanceRequestActions } from './detai
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * The page box every redesigned dashboard page shares (DESIGN-SPEC 4 and 5.3:
+ * max 1320, 28 / 32 / 64 padding, 16 px gutters on a phone, 16 px between
+ * blocks).
+ */
+const PAGE_BOX =
+  'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
+
+/** One label / value row of the Details card (DESIGN-SPEC 6.7); a blank
+ *  value leaves the row out, as before. */
 function DetailRow({ label, value }: { label: string; value: string | null | undefined }) {
   const v = typeof value === 'string' ? value.trim() : '';
   if (!v) return null;
+  return <KeyValueRow label={label}>{v}</KeyValueRow>;
+}
+
+/** One StockPilot activity row: the event in ink, its time quiet. */
+function ActivityRow({ label, children }: { label: ReactNode; children: ReactNode }) {
   return (
-    <div className="flex justify-between gap-3">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="text-right">{v}</dd>
-    </div>
+    <KeyValueRow
+      label={label}
+      labelClassName="text-foreground"
+      valueClassName="text-muted-foreground"
+    >
+      {children}
+    </KeyValueRow>
+  );
+}
+
+/** A read-only grid of request photos (a closed request, the resolution
+ *  proof): the small rendition in a fixed tile, the missing-photo hatch when
+ *  a signed link has expired. */
+function PhotoGrid({
+  photos,
+}: {
+  photos: { id: string; url: string; thumbUrl: string | null; originalFilename: string }[];
+}) {
+  return (
+    <ul className="grid grid-cols-3 gap-3 sm:grid-cols-4">
+      {photos.map((p) => (
+        <li
+          key={p.id}
+          className="border-border relative h-24 overflow-hidden rounded-md border bg-white"
+        >
+          <PatternPhoto src={p.thumbUrl ?? p.url} alt={p.originalFilename} />
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -130,7 +175,7 @@ export default async function MaintenanceRequestDetailPage({
     // than nesting inside the two-column layout below (which would
     // duplicate every field it already shows).
     return (
-      <div className="container mx-auto px-4 py-8 sm:px-6">
+      <div className={PAGE_BOX}>
         <MaintenanceReview
           detail={detail}
           photos={photos}
@@ -177,22 +222,34 @@ export default async function MaintenanceRequestDetailPage({
   const requestNumber =
     formatMaintenanceRequestNumber(detail.requestNumber, detail.createdAt) ?? String(detail.requestNumber);
 
+
   return (
-    <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link href="/dashboard/maintenance" className="text-muted-foreground hover:text-foreground text-sm">
-          ← Back to maintenance requests
-        </Link>
-        <div className="mt-2 flex flex-wrap items-end justify-between gap-3">
+    <div className={PAGE_BOX}>
+      {/* The record header (DESIGN-SPEC 6.1, the item-detail variant without
+          a photo): back link, the request number as the page's only h1 with
+          its status and priority beside it, the subject line under it, and
+          the request's actions on the right. It keeps its own title column
+          (min-w-0 flex-1 basis-72, a truncating h1) rather than the shared
+          PageHeader: the detail-title guard pins that column on this page so
+          the actions wrap under the number instead of squeezing it. */}
+      <div className="flex min-w-0 flex-col">
+        <div className="mb-2">
+          <PageHeaderBackLink href="/dashboard/maintenance">
+            ← Back to maintenance requests
+          </PageHeaderBackLink>
+        </div>
+        <div className="flex flex-wrap items-end justify-between gap-4">
           <div className="min-w-0 flex-1 basis-72">
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="truncate text-2xl font-semibold tracking-tight">{requestNumber}</h1>
+            <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+              <h1 className="truncate font-display text-[26px] font-medium leading-[1.2] tracking-[-0.025em]">
+                {requestNumber}
+              </h1>
               <MaintenanceStatusBadge status={detail.status} />
               <Badge variant="outline" className="capitalize">
                 {detail.priority}
               </Badge>
             </div>
-            <p className="text-muted-foreground mt-1 text-sm">
+            <p className="text-muted-foreground mt-1.5 text-[13.5px] [overflow-wrap:anywhere]">
               {detail.subject} · Created {formatRelative(detail.createdAt)}
             </p>
           </div>
@@ -213,288 +270,267 @@ export default async function MaintenanceRequestDetailPage({
           draft can include the link now that the server cannot re-read
           the plaintext at render time. */}
       <MaintenanceShareLinkProvider>
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div className="space-y-4 lg:col-span-2">
-          <section className="bg-card rounded-xl border p-4">
-            <h2 className="text-sm font-medium">Description</h2>
-            <p className="mt-2 whitespace-pre-wrap text-sm">{detail.description}</p>
-          </section>
-
-          {detail.resolvedAt ? (
-            <section className="bg-card rounded-xl border p-4">
-              <h2 className="text-sm font-medium">Resolution</h2>
-              <p className="mt-2 whitespace-pre-wrap text-sm">{detail.resolutionNote}</p>
-              <p className="text-muted-foreground mt-2 text-xs">
-                Marked resolved by {detail.resolvedByName} · {formatRelative(detail.resolvedAt)}
+        {/* Two columns with an aside (DESIGN-SPEC 7.4's item-detail split):
+            the request on the left, its details and working tools on the
+            right; one column below lg. */}
+        <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1.7fr)_minmax(280px,1fr)]">
+          <div className="flex min-w-0 flex-col gap-4">
+            <DetailSection title="Description">
+              <p className="whitespace-pre-wrap text-[13.5px] leading-[20.25px] [overflow-wrap:anywhere]">
+                {detail.description}
               </p>
-            </section>
-          ) : null}
+            </DetailSection>
 
-          <section className="bg-card rounded-xl border p-4">
-            <h2 className="mb-3 text-sm font-medium">Photos ({requesterPhotos.length})</h2>
-            {closed ? (
-              requesterPhotos.length === 0 ? (
-                <p className="text-muted-foreground text-sm">No photos were added to this request.</p>
-              ) : (
-                <ul className="grid grid-cols-3 gap-3 sm:grid-cols-4">
-                  {requesterPhotos.map((p) => (
-                    <li key={p.id}>
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={p.thumbUrl ?? p.url}
-                        alt={p.originalFilename}
-                        className="h-24 w-full rounded-lg border object-cover"
-                      />
-                    </li>
-                  ))}
-                </ul>
-              )
-            ) : (
-              <MaintenancePhotosPanelClient requestId={detail.id} photos={requesterPhotos} />
-            )}
-            {closed ? (
-              <p className="text-muted-foreground mt-2 text-xs">
-                This request is closed. Photos can no longer be added or removed.
-              </p>
+            {detail.resolvedAt ? (
+              <DetailSection title="Resolution">
+                <p className="whitespace-pre-wrap text-[13.5px] leading-[20.25px] [overflow-wrap:anywhere]">
+                  {detail.resolutionNote}
+                </p>
+                <p className="text-muted-foreground mt-2 text-[12px]">
+                  Marked resolved by {detail.resolvedByName} · {formatRelative(detail.resolvedAt)}
+                </p>
+              </DetailSection>
             ) : null}
-          </section>
 
-          {resolutionPhotos.length > 0 ? (
-            <section className="bg-card rounded-xl border p-4">
-              <h2 className="mb-3 text-sm font-medium">Resolution proof ({resolutionPhotos.length})</h2>
-              <ul className="grid grid-cols-3 gap-3 sm:grid-cols-4">
-                {resolutionPhotos.map((p) => (
-                  <li key={p.id}>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={p.thumbUrl ?? p.url}
-                      alt={p.originalFilename}
-                      className="h-24 w-full rounded-lg border object-cover"
-                    />
-                  </li>
-                ))}
-              </ul>
-              <p className="text-muted-foreground mt-2 text-xs">
-                {/* Fix wave (Important 1): this card intentionally renders
-                    STRAY kind='resolution' rows even on a still-open request
-                    (a manager staged proof photos then cancelled the Resolve
-                    dialog — spec §12.5's pre-flip staging is designed,
-                    disclosed behavior, not a bug). Hiding those rows from
-                    the requester would be worse than showing them, but the
-                    caption must never claim resolution happened when it
-                    hasn't — so the claim itself is gated on the ONE fact
-                    that actually means "resolved", `detail.resolvedAt`,
-                    never on `resolutionPhotos.length > 0` (spec §11
-                    Vocabulary: "marked resolved" is only true of a real
-                    StockPilot record). */}
-                {detail.resolvedAt
-                  ? 'Added by the team when this request was marked resolved.'
-                  : 'Staged by the team while preparing to mark this request resolved.'}
-              </p>
-            </section>
-          ) : null}
+            <DetailSection title={`Photos (${requesterPhotos.length})`}>
+              {closed ? (
+                requesterPhotos.length === 0 ? (
+                  <p className="text-muted-foreground text-[13.5px]">
+                    No photos were added to this request.
+                  </p>
+                ) : (
+                  <PhotoGrid photos={requesterPhotos} />
+                )
+              ) : (
+                <MaintenancePhotosPanelClient requestId={detail.id} photos={requesterPhotos} />
+              )}
+              {closed ? (
+                <p className="text-muted-foreground mt-3 text-[12px]">
+                  This request is closed. Photos can no longer be added or removed.
+                </p>
+              ) : null}
+            </DetailSection>
 
-          {emailRouting.state === 'valid' ? (
-            <section className="bg-card rounded-xl border p-4">
-              <h2 className="mb-3 text-sm font-medium">Email</h2>
-              <MaintenanceEmailAction
-                requestId={detail.id}
-                emailInput={emailInput}
-                recipients={emailRouting.recipients}
-                initialOpenCount={detail.outlookDraftOpenCount}
-                photoDownloads={requesterPhotos.map((p) => ({ url: p.url, filename: p.originalFilename }))}
-              />
-            </section>
-          ) : canConfigureRouting ? (
-            // Admin-only hint (fallback matrix states B/D): an admin who
-            // just enabled the module would otherwise wonder where the
-            // email action went. Members see nothing — the record flow
-            // (save, photos, share link, resolve) is untouched.
-            <section className="bg-card rounded-xl border p-4">
-              <h2 className="mb-3 text-sm font-medium">Email</h2>
-              <p className="text-sm text-muted-foreground" data-testid="maintenance-routing-hint">
-                {emailRouting.state === 'invalid'
-                  ? `Email routing for maintenance requests is invalid: ${emailRouting.reason} The email action is hidden until this is fixed in `
-                  : 'Email routing is not configured for this organization, so the email action is hidden. Set it in '}
-                <Link href="/dashboard/settings/email-routing" className="underline underline-offset-2">
-                  Settings &rarr; Email routing
-                </Link>
-                .
-              </p>
-            </section>
-          ) : null}
-        </div>
+            {resolutionPhotos.length > 0 ? (
+              <DetailSection title={`Resolution proof (${resolutionPhotos.length})`}>
+                <PhotoGrid photos={resolutionPhotos} />
+                <p className="text-muted-foreground mt-3 text-[12px]">
+                  {/* Fix wave (Important 1): this card intentionally renders
+                      STRAY kind='resolution' rows even on a still-open request
+                      (a manager staged proof photos then cancelled the Resolve
+                      dialog — spec §12.5's pre-flip staging is designed,
+                      disclosed behavior, not a bug). Hiding those rows from
+                      the requester would be worse than showing them, but the
+                      caption must never claim resolution happened when it
+                      hasn't — so the claim itself is gated on the ONE fact
+                      that actually means "resolved", `detail.resolvedAt`,
+                      never on `resolutionPhotos.length > 0` (spec §11
+                      Vocabulary: "marked resolved" is only true of a real
+                      StockPilot record). */}
+                  {detail.resolvedAt
+                    ? 'Added by the team when this request was marked resolved.'
+                    : 'Staged by the team while preparing to mark this request resolved.'}
+                </p>
+              </DetailSection>
+            ) : null}
 
-        <aside className="space-y-4">
-          <section className="bg-card rounded-xl border p-4 text-xs">
-            <h2 className="text-muted-foreground mb-2 text-[10.5px] uppercase tracking-[0.08em]">Details</h2>
-            <dl className="space-y-1.5 text-[11.5px]">
-              <DetailRow label="Requester" value={detail.requesterName} />
-              <DetailRow label="Requester email" value={detail.requesterEmail} />
-              <DetailRow label="Requester phone" value={detail.requesterPhone} />
-              <DetailRow label="Site" value={detail.siteName} />
-              <DetailRow label="Building" value={detail.building} />
-              <DetailRow label="Room or area" value={detail.roomOrArea} />
-              <DetailRow label="Department" value={detail.department} />
-              <DetailRow label="Category" value={detail.category} />
-              <DetailRow label="Access instructions" value={detail.accessInstructions} />
-              {emailInput.relatedItem ? (
-                <div className="flex justify-between gap-3">
-                  <dt className="text-muted-foreground">Related item</dt>
-                  <dd className="text-right">
+            {emailRouting.state === 'valid' ? (
+              <DetailSection title="Email">
+                <MaintenanceEmailAction
+                  requestId={detail.id}
+                  emailInput={emailInput}
+                  recipients={emailRouting.recipients}
+                  initialOpenCount={detail.outlookDraftOpenCount}
+                  photoDownloads={requesterPhotos.map((p) => ({
+                    url: p.url,
+                    filename: p.originalFilename,
+                  }))}
+                />
+              </DetailSection>
+            ) : canConfigureRouting ? (
+              // Admin-only hint (fallback matrix states B/D): an admin who
+              // just enabled the module would otherwise wonder where the
+              // email action went. Members see nothing — the record flow
+              // (save, photos, share link, resolve) is untouched.
+              <DetailSection title="Email">
+                <p
+                  className="text-muted-foreground text-[13.5px]"
+                  data-testid="maintenance-routing-hint"
+                >
+                  {emailRouting.state === 'invalid'
+                    ? `Email routing for maintenance requests is invalid: ${emailRouting.reason} The email action is hidden until this is fixed in `
+                    : 'Email routing is not configured for this organization, so the email action is hidden. Set it in '}
+                  <Link
+                    href="/dashboard/settings/email-routing"
+                    className="text-accent hover:text-foreground underline underline-offset-2"
+                  >
+                    Settings &rarr; Email routing
+                  </Link>
+                  .
+                </p>
+              </DetailSection>
+            ) : null}
+          </div>
+
+          <aside className="flex min-w-0 flex-col gap-4">
+            <DetailSection title="Details" flush>
+              <KeyValueList>
+                <DetailRow label="Requester" value={detail.requesterName} />
+                <DetailRow label="Requester email" value={detail.requesterEmail} />
+                <DetailRow label="Requester phone" value={detail.requesterPhone} />
+                <DetailRow label="Site" value={detail.siteName} />
+                <DetailRow label="Building" value={detail.building} />
+                <DetailRow label="Room or area" value={detail.roomOrArea} />
+                <DetailRow label="Department" value={detail.department} />
+                <DetailRow label="Category" value={detail.category} />
+                <DetailRow label="Access instructions" value={detail.accessInstructions} />
+                {emailInput.relatedItem ? (
+                  <KeyValueRow label="Related item">
                     {emailInput.relatedItem.url ? (
-                      <a href={emailInput.relatedItem.url} className="hover:underline">
+                      <a
+                        href={emailInput.relatedItem.url}
+                        className="text-accent hover:text-foreground hover:underline"
+                      >
                         {emailInput.relatedItem.name}
                       </a>
                     ) : (
                       emailInput.relatedItem.name
                     )}
-                  </dd>
-                </div>
-              ) : null}
-              {/* F1-5: the location the request is about (an escalated
-                  exception's rack, Staging or Unplaced). Names only, read by
-                  emailInput() from the request's related_location_id. */}
-              <DetailRow label="Related location" value={relatedLocationText(emailInput.relatedLocation)} />
-              {emailInput.relatedOrder ? (
-                <div className="flex justify-between gap-3">
-                  <dt className="text-muted-foreground">Related order</dt>
-                  <dd className="text-right">
+                  </KeyValueRow>
+                ) : null}
+                {/* F1-5: the location the request is about (an escalated
+                    exception's rack, Staging or Unplaced). Names only, read by
+                    emailInput() from the request's related_location_id. */}
+                <DetailRow
+                  label="Related location"
+                  value={relatedLocationText(emailInput.relatedLocation)}
+                />
+                {emailInput.relatedOrder ? (
+                  <KeyValueRow label="Related order">
                     {emailInput.relatedOrder.url ? (
-                      <a href={emailInput.relatedOrder.url} className="hover:underline">
+                      <a
+                        href={emailInput.relatedOrder.url}
+                        className="text-accent hover:text-foreground hover:underline"
+                      >
                         {emailInput.relatedOrder.handle}
                       </a>
                     ) : (
                       emailInput.relatedOrder.handle
                     )}
-                  </dd>
-                </div>
-              ) : null}
-              {emailInput.relatedRental ? (
-                <div className="flex justify-between gap-3">
-                  <dt className="text-muted-foreground">Related rental</dt>
-                  <dd className="text-right">
+                  </KeyValueRow>
+                ) : null}
+                {emailInput.relatedRental ? (
+                  <KeyValueRow label="Related rental">
                     {emailInput.relatedRental.url ? (
-                      <a href={emailInput.relatedRental.url} className="hover:underline">
+                      <a
+                        href={emailInput.relatedRental.url}
+                        className="text-accent hover:text-foreground hover:underline"
+                      >
                         {emailInput.relatedRental.itemNames.join(', ') || 'Rental record'}
                       </a>
                     ) : (
                       emailInput.relatedRental.itemNames.join(', ') || 'Rental record'
                     )}
-                  </dd>
+                  </KeyValueRow>
+                ) : null}
+              </KeyValueList>
+
+              {canManage ? (
+                <div className="border-border border-t px-[18px] py-3.5">
+                  <AssignOwnerSelect
+                    requestId={detail.id}
+                    currentOwnerUserId={detail.localOwnerUserId}
+                    members={members}
+                  />
                 </div>
+              ) : detail.localOwnerUserId ? (
+                // Its own description list: a dt/dd pair is only valid
+                // inside a dl (it used to sit loose under the card).
+                <KeyValueList className="border-border border-t">
+                  <KeyValueRow label="StockPilot owner">Assigned</KeyValueRow>
+                </KeyValueList>
               ) : null}
-            </dl>
+            </DetailSection>
+
+            <DetailSection title="StockPilot activity" aria-label="StockPilot activity" flush>
+              {/* No fake ticket conversation timeline (brief §23) — every row
+                  below is a real, locally-observed StockPilot event, never a
+                  claim about Outlook/Zendesk state this app cannot see. */}
+              <p className="text-muted-foreground border-border border-b px-[18px] py-3 text-[12px] leading-[18px]">
+                Local StockPilot actions only. Ticket replies happen in the Outlook/Zendesk email
+                conversation and are not shown here.
+              </p>
+              <KeyValueList>
+                <ActivityRow label="Request saved">{formatRelative(detail.createdAt)}</ActivityRow>
+                {photoUploadedAt.map((createdAt, i) => (
+                  <ActivityRow key={`photo-${i}`} label="Photo uploaded">
+                    {formatRelative(createdAt)}
+                  </ActivityRow>
+                ))}
+                {detail.outlookDraftOpenedAt ? (
+                  <ActivityRow
+                    label={
+                      <>
+                        Outlook draft opened
+                        {detail.outlookDraftOpenCount > 1
+                          ? ` ×${detail.outlookDraftOpenCount}`
+                          : ''}
+                      </>
+                    }
+                  >
+                    {formatRelative(detail.outlookDraftOpenedAt)}
+                  </ActivityRow>
+                ) : null}
+                {detail.localOwnerUserId ? (
+                  <ActivityRow label="Local owner assigned">
+                    {ownerAssignedAt ? formatRelative(ownerAssignedAt) : '—'}
+                  </ActivityRow>
+                ) : null}
+                {detail.resolvedAt ? (
+                  <ActivityRow label="Marked resolved">
+                    {formatRelative(detail.resolvedAt)}
+                  </ActivityRow>
+                ) : null}
+                {detail.archivedAt ? (
+                  <ActivityRow label="Request archived">
+                    {formatRelative(detail.archivedAt)}
+                  </ActivityRow>
+                ) : null}
+                {detail.cancelledAt ? (
+                  <ActivityRow label="Request cancelled">
+                    {formatRelative(detail.cancelledAt)}
+                  </ActivityRow>
+                ) : null}
+              </KeyValueList>
+            </DetailSection>
+
+            {/* Important 2 (fix wave): issueLink's own tier (maintenance-
+                share-links.ts) deliberately admits the owning requester
+                (submit + owns it), not just manage — the affordance here must
+                match. The owning requester gets Generate-only (canRevoke
+                false): revoke() is genuinely manage-only server-side, so a
+                Revoke button for a non-manager owner would only ever 403. A
+                read_all-only non-owner is neither manage nor the owning
+                requester and sees no panel at all. */}
+            {canManage || isOwningRequester ? (
+              <ShareLinkPanel
+                requestId={detail.id}
+                status={shareLinkStatus}
+                canRevoke={canManage}
+              />
+            ) : null}
 
             {canManage ? (
-              <div className="mt-3 border-t pt-3">
-                <AssignOwnerSelect
-                  requestId={detail.id}
-                  currentOwnerUserId={detail.localOwnerUserId}
-                  members={members}
-                />
-              </div>
-            ) : detail.localOwnerUserId ? (
-              <div className="mt-3 flex justify-between gap-3 border-t pt-3">
-                <dt className="text-muted-foreground">StockPilot owner</dt>
-                <dd className="text-right">Assigned</dd>
-              </div>
+              <MaintenanceNotesPanel
+                requestId={detail.id}
+                canManage={canManage}
+                notes={notes}
+                authorNames={authorNames}
+                truncated={notes.length >= 500}
+              />
             ) : null}
-          </section>
-
-          <section aria-label="StockPilot activity" className="bg-card rounded-xl border p-4 text-xs">
-            <h2 className="text-muted-foreground mb-1 text-[10.5px] uppercase tracking-[0.08em]">
-              StockPilot activity
-            </h2>
-            {/* No fake ticket conversation timeline (brief §23) — every row
-                below is a real, locally-observed StockPilot event, never a
-                claim about Outlook/Zendesk state this app cannot see. */}
-            <p className="text-muted-foreground mb-2 text-[11px]">
-              Local StockPilot actions only. Ticket replies happen in the Outlook/Zendesk email conversation and
-              are not shown here.
-            </p>
-            <dl className="space-y-1.5 text-[11.5px]">
-              <div className="flex justify-between gap-3">
-                <dt>Request saved</dt>
-                <dd className="text-muted-foreground text-right tabular-nums">
-                  {formatRelative(detail.createdAt)}
-                </dd>
-              </div>
-              {photoUploadedAt.map((createdAt, i) => (
-                <div key={`photo-${i}`} className="flex justify-between gap-3">
-                  <dt>Photo uploaded</dt>
-                  <dd className="text-muted-foreground text-right tabular-nums">{formatRelative(createdAt)}</dd>
-                </div>
-              ))}
-              {detail.outlookDraftOpenedAt ? (
-                <div className="flex justify-between gap-3">
-                  <dt>
-                    Outlook draft opened
-                    {detail.outlookDraftOpenCount > 1 ? ` ×${detail.outlookDraftOpenCount}` : ''}
-                  </dt>
-                  <dd className="text-muted-foreground text-right tabular-nums">
-                    {formatRelative(detail.outlookDraftOpenedAt)}
-                  </dd>
-                </div>
-              ) : null}
-              {detail.localOwnerUserId ? (
-                <div className="flex justify-between gap-3">
-                  <dt>Local owner assigned</dt>
-                  <dd className="text-muted-foreground text-right tabular-nums">
-                    {ownerAssignedAt ? formatRelative(ownerAssignedAt) : '—'}
-                  </dd>
-                </div>
-              ) : null}
-              {detail.resolvedAt ? (
-                <div className="flex justify-between gap-3">
-                  <dt>Marked resolved</dt>
-                  <dd className="text-muted-foreground text-right tabular-nums">
-                    {formatRelative(detail.resolvedAt)}
-                  </dd>
-                </div>
-              ) : null}
-              {detail.archivedAt ? (
-                <div className="flex justify-between gap-3">
-                  <dt>Request archived</dt>
-                  <dd className="text-muted-foreground text-right tabular-nums">
-                    {formatRelative(detail.archivedAt)}
-                  </dd>
-                </div>
-              ) : null}
-              {detail.cancelledAt ? (
-                <div className="flex justify-between gap-3">
-                  <dt>Request cancelled</dt>
-                  <dd className="text-muted-foreground text-right tabular-nums">
-                    {formatRelative(detail.cancelledAt)}
-                  </dd>
-                </div>
-              ) : null}
-            </dl>
-          </section>
-
-          {/* Important 2 (fix wave): issueLink's own tier (maintenance-
-              share-links.ts) deliberately admits the owning requester
-              (submit + owns it), not just manage — the affordance here must
-              match. The owning requester gets Generate-only (canRevoke
-              false): revoke() is genuinely manage-only server-side, so a
-              Revoke button for a non-manager owner would only ever 403. A
-              read_all-only non-owner is neither manage nor the owning
-              requester and sees no panel at all. */}
-          {canManage || isOwningRequester ? (
-            <ShareLinkPanel requestId={detail.id} status={shareLinkStatus} canRevoke={canManage} />
-          ) : null}
-
-          {canManage ? (
-            <MaintenanceNotesPanel
-              requestId={detail.id}
-              canManage={canManage}
-              notes={notes}
-              authorNames={authorNames}
-              truncated={notes.length >= 500}
-            />
-          ) : null}
-        </aside>
-      </div>
+          </aside>
+        </div>
       </MaintenanceShareLinkProvider>
     </div>
   );

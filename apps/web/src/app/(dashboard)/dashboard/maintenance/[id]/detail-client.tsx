@@ -107,26 +107,28 @@ export function MaintenanceRequestActions({
   if (!showArchive && !showCancel && !showResolve) return null;
 
   return (
-    <div className="flex items-center gap-2">
-      {showResolve ? (
-        <Button type="button" variant="default" size="sm" onClick={() => setResolveOpen(true)}>
-          Resolve
-        </Button>
-      ) : null}
+    // The record header's actions (DESIGN-SPEC 6.2): 32 px buttons, Cancel
+    // request and Archive as secondary buttons (Archive in the destructive
+    // ink), then Resolve as the one ink-filled commit on the right.
+    <div className="flex flex-wrap items-center gap-2">
       {showCancel ? (
-        <Button type="button" variant="ghost" size="sm" onClick={() => setCancelOpen(true)}>
+        <Button type="button" variant="outline" onClick={() => setCancelOpen(true)}>
           Cancel request
         </Button>
       ) : null}
       {showArchive ? (
         <Button
           type="button"
-          variant="ghost"
-          size="sm"
+          variant="outline"
           className="text-destructive hover:text-destructive"
           onClick={() => setArchiveOpen(true)}
         >
           Archive
+        </Button>
+      ) : null}
+      {showResolve ? (
+        <Button type="button" variant="default" onClick={() => setResolveOpen(true)}>
+          Resolve
         </Button>
       ) : null}
 

@@ -311,7 +311,9 @@ function MaintenanceEmailActionInner({
   const hasPhotoDownloads = Boolean(photoDownloads && photoDownloads.length > 0);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
+      {/* The compose actions (DESIGN-SPEC 6.2): Open in Outlook is the one
+          ink-filled commit, the copy and default-app paths secondary. */}
       <div className="flex flex-wrap items-center gap-2">
         <Button type="button" onClick={handlePrimaryClick}>
           <Mail className="h-4 w-4" aria-hidden="true" />
@@ -330,9 +332,9 @@ function MaintenanceEmailActionInner({
       </div>
 
       {hasPhotoDownloads ? (
-        <div className="space-y-1.5 rounded-md border border-dashed p-3 text-sm">
-          <p className="flex items-center gap-1.5 font-medium">
-            <Download className="h-4 w-4" aria-hidden="true" />
+        <div className="border-border bg-sunk space-y-1.5 rounded-md border px-3 py-2.5 text-[13px] leading-[19.5px]">
+          <p className="text-foreground flex items-center gap-1.5 font-medium">
+            <Download className="text-muted-foreground h-3.5 w-3.5" aria-hidden="true" />
             Download Photos for Outlook
           </p>
           <p className="text-muted-foreground">
@@ -342,7 +344,11 @@ function MaintenanceEmailActionInner({
           <ul className="flex flex-wrap gap-x-3 gap-y-1">
             {(photoDownloads ?? []).map((photo) => (
               <li key={photo.url}>
-                <a href={photo.url} download={photo.filename} className="underline underline-offset-2">
+                <a
+                  href={photo.url}
+                  download={photo.filename}
+                  className="text-accent hover:text-foreground underline underline-offset-2"
+                >
                   {photo.filename}
                 </a>
               </li>
@@ -352,23 +358,25 @@ function MaintenanceEmailActionInner({
       ) : null}
 
       {prepared.draft.condensed && prepared.linkFits ? (
-        <p className="rounded-md border border-dashed p-2 text-sm text-muted-foreground">
+        <p className="border-border bg-sunk text-muted-foreground rounded-md border px-3 py-2 text-[13px] leading-[19.5px]">
           This email will open with a shortened summary — the full request was too long for a compose link. The
           complete details are saved in this request, and Copy Email Details always includes everything.
         </p>
       ) : null}
 
       {!prepared.linkFits ? (
-        <p className="rounded-md border border-dashed p-2 text-sm text-muted-foreground">{OVERSIZED_MESSAGE}</p>
+        <p className="border-warning/30 bg-warning-wash text-foreground rounded-md border px-3 py-2 text-[13px] leading-[19.5px]">
+          {OVERSIZED_MESSAGE}
+        </p>
       ) : null}
 
       {fallbackReason === 'blocked' ? (
-        <div className="space-y-2 rounded-md border p-3 text-sm">
+        <div className="border-warning/30 bg-warning-wash space-y-2 rounded-md border px-3 py-2.5 text-[13px] leading-[19.5px]">
           {/* Two separate elements, not one concatenated sentence: the exact
               headline must be independently findable (brief section 19's
               literal-pinned string) without swallowing the trailing
               context sentence into the same text node. */}
-          <p>{BLOCKED_HEADLINE}</p>
+          <p className="text-foreground font-medium">{BLOCKED_HEADLINE}</p>
           <p className="text-muted-foreground">
             Your request is saved — try again, or use one of the options below.
           </p>

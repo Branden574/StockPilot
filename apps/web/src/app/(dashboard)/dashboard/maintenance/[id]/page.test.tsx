@@ -981,3 +981,106 @@ describe('related location (F1-5)', () => {
     expect(screen.getByText('Related StockPilot record')).toBeInTheDocument();
   });
 });
+
+/**
+ * Redesign (P4.F3): the detail page's cards are the shared titled card and
+ * label / value rows. These pin the structure the restyle relies on, and the
+ * one markup defect it fixed.
+ */
+describe('redesign structure (P4.F3)', () => {
+  it('a non-manager sees "StockPilot owner: Assigned" as a dt/dd pair inside a description list (it used to sit outside any dl)', async () => {
+    vi.mocked(withContext).mockResolvedValue(buildCtx({ userId: 'other-user' }) as never);
+    get.mockResolvedValueOnce(detailFixture({ localOwnerUserId: 'mgr-1' }));
+    render(await MaintenanceRequestDetailPage(args()));
+    const term = screen.getByText('StockPilot owner');
+    expect(term.tagName).toBe('DT');
+    expect(term.closest('dl')).not.toBeNull();
+    expect(within(term.closest('div') as HTMLElement).getByText('Assigned').tagName).toBe('DD');
+  });
+
+  it('every Details value is a dd beside its dt label', async () => {
+    get.mockResolvedValueOnce(detailFixture({ building: 'North wing', roomOrArea: 'Room 204' }));
+    render(await MaintenanceRequestDetailPage(args()));
+    for (const [label, value] of [
+      ['Requester', 'Jane Smith'],
+      ['Site', 'Fresno Warehouse DC4'],
+      ['Building', 'North wing'],
+      ['Room or area', 'Room 204'],
+    ]) {
+      const term = screen.getByText(label!, { selector: 'dt' });
+      expect(
+        within(term.parentElement as HTMLElement).getByText(value!, { selector: 'dd' }),
+      ).toBeInTheDocument();
+    }
+    // A blank field still leaves its row out.
+    expect(screen.queryByText('Department', { selector: 'dt' })).toBeNull();
+  });
+
+  it('the cards are titled sections with h2 headings, and the page has one h1 (the request number)', async () => {
+    vi.mocked(withContext).mockResolvedValue(
+      buildCtx({ userId: 'mgr-1', permissions: ['maintenance_requests:manage'] }) as never,
+    );
+    render(await MaintenancePageWithPhotos());
+    expect(screen.getAllByRole('heading', { level: 1 }).map((h) => h.textContent)).toEqual([
+      'MR-2026-000042',
+    ]);
+    const h2s = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
+    expect(h2s).toEqual(
+      expect.arrayContaining([
+        'Description',
+        'Photos (1)',
+        'Email',
+        'Details',
+        'StockPilot activity',
+        'Photo share link',
+        'Internal StockPilot notes',
+      ]),
+    );
+    expect(screen.getByRole('region', { name: 'StockPilot activity' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '← Back to maintenance requests' })).toHaveAttribute(
+      'href',
+      '/dashboard/maintenance',
+    );
+  });
+
+  it('a closed request shows its photos read-only, each with its file name as the image text', async () => {
+    get.mockResolvedValueOnce(
+      detailFixture({ archivedAt: '2026-08-03T00:00:00.000Z', status: 'archived' }),
+    );
+    signedViewUrls.mockResolvedValueOnce([
+      {
+        id: 'p1',
+        originalFilename: 'leak.jpg',
+        url: 'https://signed/leak.jpg',
+        thumbUrl: 'https://signed/leak-t.jpg',
+        kind: 'requester',
+      },
+    ]);
+    render(await MaintenanceRequestDetailPage(args()));
+    const section = screen.getByText('Photos (1)').closest('section') as HTMLElement;
+    expect(within(section).getByAltText('leak.jpg')).toHaveAttribute(
+      'src',
+      'https://signed/leak-t.jpg',
+    );
+    expect(within(section).queryByRole('button', { name: /Add photos|Remove/ })).toBeNull();
+    expect(
+      within(section).getByText(
+        'This request is closed. Photos can no longer be added or removed.',
+      ),
+    ).toBeInTheDocument();
+  });
+});
+
+async function MaintenancePageWithPhotos() {
+  signedViewUrls.mockResolvedValueOnce([
+    {
+      id: 'p1',
+      originalFilename: 'leak.jpg',
+      url: 'https://signed/leak.jpg',
+      thumbUrl: null,
+      kind: 'requester',
+    },
+  ]);
+  getActiveLinkStatus.mockResolvedValueOnce(null);
+  return MaintenanceRequestDetailPage(args());
+}
