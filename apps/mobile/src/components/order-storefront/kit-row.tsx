@@ -25,7 +25,7 @@ import {
   kitRowLabel,
 } from '@/lib/order-storefront/a11y';
 import { STOREFRONT_GUTTER, kitRowStacked, storefrontLayout } from '@/lib/order-storefront/layout';
-import { FONT } from '@/lib/theme';
+import { FONT, RADIUS } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 import { SmallAction, Stepper } from './controls';
@@ -73,7 +73,9 @@ export const KitRow = React.memo(function KitRow({
   const full = inCart === 0 && !out && maxInCart < 1;
 
   return (
-    <View style={[styles.row, { borderColor: c.hair, backgroundColor: c.card }, stacked && styles.rowStacked]}>
+    <View
+      style={[styles.row, { borderColor: c.hair, backgroundColor: c.card }, stacked && styles.rowStacked]}
+    >
       <View
         accessible
         accessibilityLabel={kitRowLabel(kit, itemMap, inCart)}
@@ -85,15 +87,16 @@ export const KitRow = React.memo(function KitRow({
         <Mono size={11.5} color={out ? c.critText : c.ink3}>
           {kitsAvailableCopy(avail.kits)}
         </Mono>
+        {/* Sentences in the body face (mono is for codes and figures). */}
         {limiting && avail.limiting ? (
-          <Mono size={11} color={c.ink3}>
+          <Body size={12.5} color={c.ink3}>
             {kitLimitedByCopy(limiting.name, avail.limiting.available)}
-          </Mono>
+          </Body>
         ) : null}
         {full ? (
-          <Mono size={11} color={c.ink3}>
+          <Body size={12.5} color={c.ink3}>
             {CART_ALL_STOCK_IN_CART_COPY}
-          </Mono>
+          </Body>
         ) : null}
       </View>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
@@ -138,7 +141,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     borderWidth: 1,
-    borderRadius: 12,
+    borderRadius: RADIUS.card,
     padding: 10,
   },
   rowStacked: { flexDirection: 'column', alignItems: 'stretch' },

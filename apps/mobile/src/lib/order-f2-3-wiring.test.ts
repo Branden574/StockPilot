@@ -391,8 +391,10 @@ describe('the approve-partial sheet (sibling backdrop, VoiceOver, 44 pt, Dynamic
     expect(code).toContain('{view.note}');
     expect(code).toContain('{view.unavailable}');
     // Pattern #20: a refusal stays on the sheet, announced (iOS gives the
-    // 'alert' role no trait), never only a toast.
-    expect(code).toMatch(/<Body size=\{13\} color=\{ACCENT\.crit\} accessibilityRole="alert">\s*\{error\}/);
+    // 'alert' role no trait), never only a toast. Re-pinned by the redesign
+    // (P5.7a, look only): the per-mode refusal ink, c.critText, in place of
+    // the single-mode ACCENT.crit.
+    expect(code).toMatch(/<Body size=\{13\} color=\{c\.critText\} accessibilityRole="alert">\s*\{error\}/);
     expect(functionBody(sheet, SHEET_FILE, 'confirm')).toBe(
       '{ if (!canConfirm) return; setBusy(true); setError(null); try { await onConfirm(); } catch (e) { const message = describePartialCommitError(e); setError(message); AccessibilityInfo.announceForAccessibility(message); } finally { setBusy(false); } }',
     );
@@ -413,7 +415,9 @@ describe('the approve-partial sheet (sibling backdrop, VoiceOver, 44 pt, Dynamic
   it('the order moved on under the sheet: Close instead of Confirm, never while a commit runs, and says why unless a refusal already did', () => {
     const code = codeOnly(sheet);
     expect(code).toContain('const movedOn = view.movedOn !== null && !busy;');
-    expect(code).toMatch(/\{movedOn && !error \? \(\s*<Body size=\{13\.5\} color=\{ACCENT\.warn\}>\s*\{view\.movedOn\}/);
+    // Re-pinned by the redesign (P5.7a, look only): c.warnText, the per-mode
+    // warning ink, in place of the single-mode ACCENT.warn.
+    expect(code).toMatch(/\{movedOn && !error \? \(\s*<Body size=\{13\.5\} color=\{c\.warnText\}>\s*\{view\.movedOn\}/);
     expect(code).toContain('const closeLabel = movedOn ? PARTIAL_CLOSE_LABEL : view.cancelLabel;');
     expect(code).toMatch(/accessibilityLabel=\{closeLabel\}/);
     expect(code).toMatch(/maxFontSizeMultiplier=\{ACTION_CAP\}>\s*\{closeLabel\}/);

@@ -103,7 +103,7 @@ import {
 } from '@/lib/order-storefront/sections';
 import { clockLabel } from '@/lib/order-storefront/setup';
 import { placedOnStorefrontFocus } from '@/lib/order-storefront/success';
-import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT, RADIUS, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 import { CartBar, CartPanel } from './cart-panel';
@@ -529,14 +529,15 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
           ref={searchRef}
           onChangeText={(text) => setFilter((f) => ({ ...f, search: text }))}
           placeholder={STOREFRONT_SEARCH_PLACEHOLDER_COPY}
-          placeholderTextColor={c.ink4}
+          placeholderTextColor={c.ink3}
           autoCorrect={false}
           autoCapitalize="none"
           returnKeyType="search"
           clearButtonMode="while-editing"
           accessibilityLabel={STOREFRONT_SEARCH_LABEL_COPY}
           maxFontSizeMultiplier={INPUT_CAP}
-          style={[styles.search, { borderColor: c.hair, backgroundColor: c.card, color: c.ink }]}
+          // The shared text box's recipe: the card fill in the stronger border.
+          style={[styles.search, { borderColor: c.hair2, backgroundColor: c.card, color: c.ink }]}
         />
         <Pressable
           onPress={() => setSheet({ kind: 'sort' })}
@@ -546,7 +547,7 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
               ? `${STOREFRONT_SORT_AND_FILTER_COPY}, ${activeFilterCount(filter)} on`
               : STOREFRONT_SORT_AND_FILTER_COPY
           }
-          style={[styles.filterButton, { borderColor: c.hair, backgroundColor: c.card }]}
+          style={[styles.filterButton, { borderColor: c.hair2, backgroundColor: c.card }]}
         >
           <SlidersHorizontal size={18} color={c.ink} strokeWidth={1.5} />
         </Pressable>
@@ -836,7 +837,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     borderWidth: 1,
-    borderRadius: 12,
+    borderRadius: RADIUS.card,
     paddingHorizontal: 14,
     paddingVertical: 10,
   },

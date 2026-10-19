@@ -7,6 +7,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Text,
   useWindowDimensions,
   View,
 } from 'react-native';
@@ -15,9 +16,10 @@ import { PARTIAL_CLOSE_LABEL, READINESS_NEEDS_CONNECTION_COPY } from '@stockpilo
 
 import { MIN_TAP } from '@/components/item-verification-card';
 import { Body, Mono } from '@/components/ui/text';
+import { buttonTone } from '@/components/ui/tones';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { describePartialCommitError, type PartialSheetView } from '@/lib/order-partial';
-import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -51,6 +53,12 @@ import { useTheme } from '@/lib/use-theme';
  * each item's "Holds X of Y" goes under its name (shouldStackRow): side by side,
  * the uncapped figure took the row's width and the name ran a letter or two a
  * line on an iPhone at AX5.
+ *
+ * The redesign look: Confirm is the ink button (it commits), Close or Cancel
+ * the outline in the stronger border, both labels in the display face (the
+ * shared Button's); the moved-on and unavailable sentences in the per-mode
+ * warning ink and a refusal in the refusal ink (warnText / critText, AA in
+ * both modes; the single-mode amber and red were under it in one mode each).
  */
 export function ApprovePartialSheet({
   visible,
@@ -69,6 +77,11 @@ export function ApprovePartialSheet({
   onConfirm: () => Promise<void>;
 }) {
   const { c, mode } = useTheme();
+  // Confirm commits (the ink button); Close or Cancel is the outline.
+  const ink = buttonTone('primary', c);
+  const outline = buttonTone('outline', c);
+  const inkText = [styles.actionLabel, { color: ink.fg }];
+  const outlineText = [styles.actionLabel, { color: outline.fg }];
   const { height, fontScale } = useWindowDimensions();
   // Name over figure at accessibility text sizes (the live scale, never a
   // module-level read: it changes while the app is in the background).
@@ -159,7 +172,7 @@ export function ApprovePartialSheet({
                 justifyContent: 'center',
               }}
             >
-              <X size={18} color={c.ink4} />
+              <X size={18} color={c.ink2} />
             </Pressable>
           </View>
 
@@ -214,7 +227,7 @@ export function ApprovePartialSheet({
                 </Body>
               ) : null}
               {view.unavailable ? (
-                <Body size={13.5} color={ACCENT.warn}>
+                <Body size={13.5} color={c.warnText}>
                   {view.unavailable}
                 </Body>
               ) : null}
@@ -222,12 +235,12 @@ export function ApprovePartialSheet({
           )}
 
           {movedOn && !error ? (
-            <Body size={13.5} color={ACCENT.warn}>
+            <Body size={13.5} color={c.warnText}>
               {view.movedOn}
             </Body>
           ) : null}
           {error ? (
-            <Body size={13} color={ACCENT.crit} accessibilityRole="alert">
+            <Body size={13} color={c.critText} accessibilityRole="alert">
               {error}
             </Body>
           ) : null}
@@ -247,15 +260,19 @@ export function ApprovePartialSheet({
               accessibilityHint={offline ? READINESS_NEEDS_CONNECTION_COPY : undefined}
               style={[
                 styles.action,
-                { backgroundColor: c.ink, opacity: canConfirm || busy ? 1 : 0.5 },
+                {
+                  backgroundColor: ink.bg,
+                  borderColor: ink.border,
+                  opacity: canConfirm || busy ? 1 : 0.5,
+                },
               ]}
             >
               {busy ? (
-                <ActivityIndicator color={c.paper} />
+                <ActivityIndicator color={ink.fg} />
               ) : (
-                <Mono size={13} color={c.paper} maxFontSizeMultiplier={ACTION_CAP}>
+                <Text style={inkText} maxFontSizeMultiplier={ACTION_CAP}>
                   {confirmLabel}
-                </Mono>
+                </Text>
               )}
             </Pressable>
           ) : null}
@@ -267,12 +284,12 @@ export function ApprovePartialSheet({
             accessibilityState={{ disabled: busy }}
             style={[
               styles.action,
-              { borderWidth: 1, borderColor: c.hair, opacity: busy ? 0.5 : 1 },
+              { backgroundColor: outline.bg, borderColor: outline.border, opacity: busy ? 0.5 : 1 },
             ]}
           >
-            <Mono size={13} color={c.ink} maxFontSizeMultiplier={ACTION_CAP}>
+            <Text style={outlineText} maxFontSizeMultiplier={ACTION_CAP}>
               {closeLabel}
-            </Mono>
+            </Text>
           </Pressable>
         </View>
       </View>
@@ -294,5 +311,8 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     minHeight: MIN_TAP,
     borderRadius: 10,
+    borderWidth: 1,
   },
+  /** The shared Button's label: the display face at 500; it wraps. */
+  actionLabel: { fontFamily: FONT.display, fontSize: 13, textAlign: 'center', flexShrink: 1 },
 });

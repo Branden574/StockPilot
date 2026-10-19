@@ -76,7 +76,12 @@ describe('the delivery-request draft opens only on a tap (Outlook rule 1)', () =
 
   it('the press handler is wired to the "Email delivery request" button and nothing else', () => {
     expect(count(screen, 'handleDeliveryRequestPress')).toBe(2); // its declaration and the button
-    expect(screen).toMatch(/actionBtn\('Email delivery request', 'delivery-request', handleDeliveryRequestPress\)/);
+    // Re-pinned by the redesign (P5.7a, look only): the button now passes
+    // its tone (the outline, as the web's button), so the call may wrap and
+    // carry that last argument; the same handler on the same button.
+    expect(screen).toMatch(
+      /actionBtn\(\s*'Email delivery request',\s*'delivery-request',\s*handleDeliveryRequestPress,\s*'default',?\s*\)/,
+    );
   });
 
   it('no effect, focus or refresh callback reaches the composer (mutation: open it from an effect)', () => {
@@ -208,11 +213,14 @@ describe('the revise sheet', () => {
   // OTA-safe and Outlook rule 1: JS only, and nothing in it composes mail.
   it('imports no native date picker and nothing that opens mail', () => {
     const imports = [...sheetSrc.matchAll(/^import[\s\S]*?from '([^']+)';/gm)].map((m) => m[1]);
+    // The redesign (P5.7a) added the shared button tones (a pure JS module):
+    // still no native date picker and nothing that opens mail.
     expect(imports.sort()).toEqual(
       [
         '@/components/item-verification-card',
         '@/components/needed-by-picker',
         '@/components/ui/text',
+        '@/components/ui/tones',
         '@/lib/exception-sheet-layout',
         '@/lib/order-needed-by',
         '@/lib/orders-api',
@@ -257,7 +265,8 @@ describe('the revise sheet', () => {
     expect(bodyOf(sheetSrc, SHEET_FILE, 'save')).toBe(
       "{ if (saving.current) return; const atTap = neededByDraftView(draft, { ...viewContext, now: readClock() }); if (!atTap.canSave || atTap.wall === null || atTap.reason === null) { setNow(readClock()); return; } saving.current = true; setBusy(true); setError(null); const result = await submitNeededByRevision({ revise: reviseOrderNeededBy, readCurrent: () => readOrderNeededBy(supabase, organizationId, orderId) }, { orderId, wall: atTap.wall, expected, reason: atTap.reason, zone: timeZone }); saving.current = false; setBusy(false); if (result.kind === 'saved') { onSaved(result.outcome, result.title, result.message); return; } setError(result.message); AccessibilityInfo.announceForAccessibility(result.message); if (result.current !== undefined) setExpected(result.current.neededBy); if (result.closed) setClosed(true); if (result.current !== undefined || result.closed) onRefresh(); }",
     );
-    expect(sheetCode).toMatch(/<Body size=\{13\} color=\{ACCENT\.crit\} accessibilityRole="alert">\s*\{error\}/);
+    // Re-pinned by the redesign (P5.7a, look only): the per-mode refusal ink.
+    expect(sheetCode).toMatch(/<Body size=\{13\} color=\{c\.critText\} accessibilityRole="alert">\s*\{error\}/);
   });
 
   // Mutation caught: the preview (or its problem) changes and VoiceOver is

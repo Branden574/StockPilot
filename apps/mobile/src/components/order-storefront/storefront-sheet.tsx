@@ -120,7 +120,9 @@ export function StorefrontSheet({
                 accessibilityState={{ disabled: busy }}
                 style={styles.close}
               >
-                <X size={18} color={c.ink4} />
+                {/* An icon button's glyph: the secondary ink (DESIGN-SPEC 6.2),
+                    14.10:1 on the light card and 12.69:1 on the dark. */}
+                <X size={18} color={c.ink2} />
               </Pressable>
             </View>
             <ScrollView

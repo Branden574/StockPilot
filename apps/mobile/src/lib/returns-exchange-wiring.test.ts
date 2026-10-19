@@ -605,7 +605,9 @@ describe('fix round 1 on the phone screens', () => {
 
   // Verification L7: the create sheet's refusal line is announced.
   it("the create sheet's refusal is an alert", () => {
-    expect(screen).toMatch(/\{returnError \? \(\s*<Mono size=\{11\} color="#b42318" accessibilityRole="alert">\s*\{returnError\}/);
+    // Re-pinned by the redesign (P5.7a, look only): the per-mode refusal ink
+    // (critText) in the body face, in place of a fixed red in mono.
+    expect(screen).toMatch(/\{returnError \? \(\s*(?:\/\/[^\n]*\n\s*)*<Body size=\{13\} color=\{c\.critText\} accessibilityRole="alert">\s*\{returnError\}/);
   });
 
   // Verification L10: iOS VoiceOver hears the new number after each step.

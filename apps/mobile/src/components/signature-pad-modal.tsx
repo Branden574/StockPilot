@@ -1,19 +1,16 @@
+import { StatusBar } from 'expo-status-bar';
+import { X } from 'lucide-react-native';
 import React, { useRef, useState } from 'react';
-import {
-  Alert,
-  Keyboard,
-  Modal,
-  PanResponder,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  useWindowDimensions,
-  View,
-} from 'react-native';
+import { Alert, Keyboard, Modal, PanResponder, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { Path, Rect, Svg } from 'react-native-svg';
 import { type SignaturePoint, isValidSignatureDataUrl, pointsToSmoothSvgPath } from '@stockpilot/core';
+
+import { Button } from '@/components/ui/button';
+import { Field } from '@/components/ui/field';
+import { IconChip } from '@/components/ui/row';
+import { Body, Display, Mono } from '@/components/ui/text';
+import { useTheme } from '@/lib/use-theme';
 import { api } from '../lib/api';
 
 interface SignaturePadModalProps {
@@ -31,6 +28,20 @@ const PAD_H_MARGIN = 40;
 const PAD_MIN_WIDTH = 280;
 const PAD_MAX_WIDTH = 560;
 
+/**
+ * The packing-slip signature pad (Scan tab and the order screen), in the
+ * device's mode: the page, the words, the text boxes and the buttons follow
+ * the per-mode palette, and the modal sets its own status bar so the clock
+ * reads on its page in both modes. The capture surface does NOT follow the
+ * mode: it stays white with near-black strokes (17.40:1), because the stored
+ * PNG prints on the packing slip and shows on the web, both on white.
+ *
+ * Kept exactly: every word, the required name, email and drawn signature, the
+ * re-entry guard, the PanResponder that holds the whole stroke (the pad sits
+ * in a plain, non-scrolling View) and drops the keyboard on the first stroke,
+ * and the pad's width rule. Save Signature is the ink button (it commits the
+ * signature), Clear the outline beside it; Close is a named 44pt button.
+ */
 export function SignaturePadModal({
   visible,
   onClose,
@@ -39,13 +50,11 @@ export function SignaturePadModal({
   defaultName = '',
   defaultEmail = '',
 }: SignaturePadModalProps) {
+  const { c, mode } = useTheme();
   // Fill the available width (up to a cap) so tablets and large phones get a
   // proportionate pad instead of a fixed 320px box floating in the middle.
   const { width: windowWidth } = useWindowDimensions();
-  const padWidth = Math.max(
-    PAD_MIN_WIDTH,
-    Math.min(PAD_MAX_WIDTH, windowWidth - PAD_H_MARGIN),
-  );
+  const padWidth = Math.max(PAD_MIN_WIDTH, Math.min(PAD_MAX_WIDTH, windowWidth - PAD_H_MARGIN));
   const [signerName, setSignerName] = useState(defaultName);
   const [signerEmail, setSignerEmail] = useState(defaultEmail);
   const [strokes, setStrokes] = useState<SignaturePoint[][]>([]);
@@ -152,94 +161,104 @@ export function SignaturePadModal({
   };
 
   return (
-    <Modal
-      visible={visible}
-      animationType="slide"
-      presentationStyle="fullScreen"
-      onRequestClose={onClose}
-    >
+    <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" onRequestClose={onClose}>
       <SafeAreaProvider>
-        <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+        <SafeAreaView
+          style={[styles.container, { backgroundColor: c.paper }]}
+          edges={['top', 'bottom']}
+        >
+          {/* The modal's own status bar: dark words on the light page, light
+              words on the dark one (it was the host's: white on a light page
+              in dark mode, about 1.05:1). Mounted only while the pad shows,
+              so closing it hands the bar back to the screen underneath. */}
+          <StatusBar style={mode === 'dark' ? 'light' : 'dark'} />
           <View style={styles.header}>
-          <Text style={styles.title}>Sign Order</Text>
-          <TouchableOpacity
-            onPress={onClose}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Text style={styles.closeBtn}>✕</Text>
-          </TouchableOpacity>
-        </View>
+            <Display size={24} accessibilityRole="header" style={styles.title}>
+              Sign Order
+            </Display>
+            {/* The chip's 44pt frame is 3pt wider than the chip on each side:
+                it takes 3pt back so the X sits on the page's edge. */}
+            <View style={styles.close}>
+              <IconChip icon={X} onPress={onClose} accessibilityLabel="Close" minTap />
+            </View>
+          </View>
 
-        <View style={styles.form}>
-          <Text style={styles.label}>Full Name *</Text>
-          <TextInput
-            style={styles.input}
-            value={signerName}
-            onChangeText={setSignerName}
-            placeholder="Your full name"
-            autoCapitalize="words"
-            returnKeyType="next"
-          />
-          <Text style={styles.label}>Email *</Text>
-          <TextInput
-            style={styles.input}
-            value={signerEmail}
-            onChangeText={setSignerEmail}
-            placeholder="your@email.com"
-            keyboardType="email-address"
-            autoCapitalize="none"
-            returnKeyType="done"
-            onSubmitEditing={() => Keyboard.dismiss()}
-          />
-        </View>
+          <View style={styles.form}>
+            {/* The shared text box. Named for VoiceOver by its label's words
+                (the placeholder is still read while it is empty); typed words
+                grow with the text size as before (0: React Native's no-limit
+                sentinel, which the shared box honours). */}
+            <Field
+              label="Full Name *"
+              value={signerName}
+              onChangeText={setSignerName}
+              placeholder="Your full name"
+              autoCapitalize="words"
+              returnKeyType="next"
+              accessibilityLabel="Full Name"
+              maxFontSizeMultiplier={0}
+            />
+            <Field
+              label="Email *"
+              value={signerEmail}
+              onChangeText={setSignerEmail}
+              placeholder="your@email.com"
+              keyboardType="email-address"
+              autoCapitalize="none"
+              returnKeyType="done"
+              onSubmitEditing={() => Keyboard.dismiss()}
+              accessibilityLabel="Email"
+              maxFontSizeMultiplier={0}
+            />
+          </View>
 
-        <Text style={styles.label}>Signature *</Text>
-        <View style={styles.padWrapper}>
-          <Svg
-            ref={svgRef}
-            width={padWidth}
-            height={PAD_HEIGHT}
-            style={styles.svg}
-            {...panResponder.panHandlers}
-          >
-            <Rect x={0} y={0} width={padWidth} height={PAD_HEIGHT} fill="white" />
-            {strokes.map((stroke, i) => (
-              <Path
-                key={i}
-                d={pointsToSmoothSvgPath(stroke)}
-                stroke="#1a1a1a"
-                strokeWidth={2}
-                fill="none"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            ))}
-            {currentStroke.length > 0 && (
-              <Path
-                d={pointsToSmoothSvgPath(currentStroke)}
-                stroke="#1a1a1a"
-                strokeWidth={2}
-                fill="none"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            )}
-          </Svg>
-        </View>
-        <Text style={styles.padHint}>Draw your signature above</Text>
+          <Mono size={10} tracking={0.12} upper color={c.ink3} style={styles.padLabel}>
+            Signature *
+          </Mono>
+          <View style={[styles.padWrapper, { borderColor: c.hair2 }]}>
+            <Svg
+              ref={svgRef}
+              width={padWidth}
+              height={PAD_HEIGHT}
+              style={styles.svg}
+              {...panResponder.panHandlers}
+            >
+              <Rect x={0} y={0} width={padWidth} height={PAD_HEIGHT} fill="white" />
+              {strokes.map((stroke, i) => (
+                <Path
+                  key={i}
+                  d={pointsToSmoothSvgPath(stroke)}
+                  stroke="#1a1a1a"
+                  strokeWidth={2}
+                  fill="none"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              ))}
+              {currentStroke.length > 0 && (
+                <Path
+                  d={pointsToSmoothSvgPath(currentStroke)}
+                  stroke="#1a1a1a"
+                  strokeWidth={2}
+                  fill="none"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              )}
+            </Svg>
+          </View>
+          <Body size={12.5} color={c.ink3} style={styles.padHint}>
+            Draw your signature above
+          </Body>
 
-        <View style={styles.actions}>
-          <TouchableOpacity style={styles.clearBtn} onPress={handleClear}>
-            <Text style={styles.clearBtnText}>Clear</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.saveBtn, submitting && styles.saveBtnDisabled]}
-            onPress={() => void handleSave()}
-            disabled={submitting}
-          >
-            <Text style={styles.saveBtnText}>{submitting ? 'Saving…' : 'Save Signature'}</Text>
-          </TouchableOpacity>
-        </View>
+          <View style={styles.actions}>
+            <Button variant="outline" onPress={handleClear} style={styles.clearBtn}>
+              Clear
+            </Button>
+            <Button onPress={() => void handleSave()} disabled={submitting} style={styles.saveBtn}>
+              {submitting ? 'Saving…' : 'Save Signature'}
+            </Button>
+          </View>
         </SafeAreaView>
       </SafeAreaProvider>
     </Modal>
@@ -247,54 +266,29 @@ export function SignaturePadModal({
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f8f9fa', paddingHorizontal: 20, paddingVertical: 8 },
+  container: { flex: 1, paddingHorizontal: 20, paddingVertical: 8 },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 12,
     marginBottom: 20,
   },
-  title: { fontSize: 20, fontWeight: '700', color: '#111' },
-  closeBtn: { fontSize: 18, color: '#666' },
-  form: { marginBottom: 16 },
-  label: { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 6, marginTop: 8 },
-  input: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 16,
-    backgroundColor: '#fff',
-    color: '#111',
-  },
+  title: { flexShrink: 1 },
+  close: { marginRight: -3 },
+  form: { gap: 14, marginBottom: 16 },
+  padLabel: { marginBottom: 6 },
+  // The frame around the white capture surface: the per-mode stronger border.
   padWrapper: {
     borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
+    borderRadius: 10,
     overflow: 'hidden',
     alignSelf: 'center',
   },
+  // White in both modes: the stored signature prints on white.
   svg: { backgroundColor: '#fff' },
-  padHint: { fontSize: 12, color: '#999', textAlign: 'center', marginTop: 4, marginBottom: 16 },
+  padHint: { textAlign: 'center', marginTop: 4, marginBottom: 16 },
   actions: { flexDirection: 'row', gap: 12, marginTop: 8 },
-  clearBtn: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#ddd',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-  },
-  clearBtnText: { fontSize: 16, color: '#555', fontWeight: '600' },
-  saveBtn: {
-    flex: 2,
-    paddingVertical: 14,
-    borderRadius: 8,
-    backgroundColor: '#2563eb',
-    alignItems: 'center',
-  },
-  saveBtnDisabled: { opacity: 0.5 },
-  saveBtnText: { fontSize: 16, color: '#fff', fontWeight: '700' },
+  clearBtn: { flex: 1 },
+  saveBtn: { flex: 2 },
 });
