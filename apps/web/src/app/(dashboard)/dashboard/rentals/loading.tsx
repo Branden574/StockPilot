@@ -22,8 +22,11 @@ const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 
 const COLUMNS =
   'grid-cols-[minmax(150px,1fr)_120px_88px_120px] sm:grid-cols-[minmax(150px,1.3fr)_minmax(140px,1.2fr)_minmax(120px,1fr)_88px_220px] md:grid-cols-[minmax(150px,1.3fr)_minmax(140px,1.2fr)_110px_minmax(120px,1fr)_88px_220px]';
 
-/** The status views' widths (Out, Overdue, Returned, Cancelled, All). */
-const STATUS_VIEWS = [36, 64, 72, 74, 30];
+/** The section tabs' label widths (Activity, Items) at the tabs' 13.5 px. */
+const SECTION_TABS = [48, 35];
+
+/** The status views' label widths (Out, Overdue, Returned, Cancelled, All) at the segments' 13 px. */
+const STATUS_VIEWS = [22, 52, 57, 61, 15];
 
 function Bar({ w, h, radius = 4 }: { w: number | string; h: number; radius?: number }) {
   return (
@@ -47,27 +50,38 @@ export default function RentalsLoading() {
           <div className="mt-0.5 flex h-5 items-center">
             <Bar w={380} h={12} />
           </div>
+          {/* A phone wraps that line onto a second one. */}
+          <div className="flex h-5 items-center sm:hidden">
+            <Bar w={96} h={12} />
+          </div>
         </div>
         <Bar w={112} h={32} radius={6} />
       </div>
 
-      {/* The section tabs on their hairline. */}
-      <div className="border-border flex h-10 items-center gap-6 border-b px-3">
-        <Bar w={56} h={12} />
-        <Bar w={40} h={12} />
+      {/* The section tabs on their hairline, 44 px tall on a phone as the
+          tabs are. */}
+      <div className="border-border flex gap-1 border-b">
+        {SECTION_TABS.map((w, i) => (
+          <div key={i} className="flex h-10 items-center px-3 max-sm:h-11">
+            <Bar w={w} h={12} />
+          </div>
+        ))}
       </div>
 
-      {/* The status views on their sunk track. */}
-      <div className="border-border bg-sunk flex h-9 w-fit max-w-full items-center gap-0.5 overflow-hidden rounded-lg border p-[3px]">
+      {/* The status views on their sunk track, each 44 px tall on a phone as
+          the segments are. */}
+      <div className="border-border bg-sunk flex w-fit max-w-full items-center gap-0.5 overflow-hidden rounded-lg border p-[3px]">
         {STATUS_VIEWS.map((w, i) => (
-          <div key={i} className="flex h-7 items-center px-2.5">
+          <div key={i} className="flex h-7 items-center px-2.5 max-sm:h-11">
             <Bar w={w} h={11} />
           </div>
         ))}
       </div>
 
       {/* The table card: 11 px header labels on a 37 px row, then rows that
-          pad by var(--row-py) like the table's, the borrower two lines tall. */}
+          pad by var(--row-py) like the table's. The borrower is two lines
+          tall, and four on a phone, where the table carries the hidden Items
+          (below sm) and Checked out (below md) as lines under the name. */}
       <div className="border-border bg-card overflow-hidden rounded-lg border">
         <div className={`border-border grid h-[37px] items-center gap-3 border-b px-4 ${COLUMNS}`}>
           <Bar w={64} h={8} />
@@ -92,9 +106,15 @@ export default function RentalsLoading() {
               paddingBottom: 'var(--row-py, 11px)',
             }}
           >
-            <div className="flex h-[37px] flex-col justify-center gap-1.5">
+            <div className="flex min-h-[37px] flex-col justify-center gap-1.5">
               <Bar w={132} h={12} />
               <Bar w={84} h={10} />
+              <div className="sm:hidden">
+                <Bar w={120} h={11} />
+              </div>
+              <div className="md:hidden">
+                <Bar w={110} h={11} />
+              </div>
             </div>
             <div className="hidden sm:block">
               <Bar w={140} h={11} />

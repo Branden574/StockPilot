@@ -36,6 +36,35 @@ describe('Rentals loading screen', () => {
     expect(rows).toHaveLength(6);
   });
 
+  it('on a phone: the line under the title wraps, tabs and status views are 44 px, and the borrower carries the hidden columns', () => {
+    const { container } = render(<RentalsLoading />);
+    // The second line of the header's text shows below sm only.
+    const header = container.firstElementChild!.firstElementChild as HTMLElement;
+    const lines = Array.from(header.firstElementChild!.children) as HTMLElement[];
+    expect(lines).toHaveLength(3);
+    expect(lines[2]!.classList.contains('sm:hidden')).toBe(true);
+    // Two section tabs and five status views, each 44 px tall below sm.
+    const tabs = Array.from(
+      (container.firstElementChild!.children[1] as HTMLElement).children,
+    ) as HTMLElement[];
+    expect(tabs).toHaveLength(2);
+    const track = container.querySelector('.bg-sunk') as HTMLElement;
+    for (const el of [...tabs, ...(Array.from(track.children) as HTMLElement[])]) {
+      expect(el.classList.contains('max-sm:h-11'), el.className).toBe(true);
+    }
+    // Every row's borrower cell: the name and its kind, then Items (below sm)
+    // and Checked out (below md), as the table carries them on a phone.
+    const card = container.querySelector('.rounded-lg.border.bg-card') as HTMLElement;
+    const rows = (Array.from(card.children) as HTMLElement[]).slice(1);
+    expect(rows).toHaveLength(6);
+    for (const row of rows) {
+      const borrower = Array.from(row.firstElementChild!.children) as HTMLElement[];
+      expect(borrower).toHaveLength(4);
+      expect(borrower[2]!.className).toBe('sm:hidden');
+      expect(borrower[3]!.className).toBe('md:hidden');
+    }
+  });
+
   it('hides the Items and Checked out columns where the table hides them', () => {
     const { container } = render(<RentalsLoading />);
     const card = container.querySelector('.rounded-lg.border.bg-card') as HTMLElement;
