@@ -175,8 +175,13 @@ export function TrackForm({ initialToken, initialId, initialEmail }: Props) {
         </form>
       </ExternalCard>
 
+      {/* role="alert": a screen reader says the miss when the panel appears,
+          after "Find my order" was pressed. */}
       {notFound ? (
-        <div className="bg-destructive-wash text-destructive rounded-lg border border-transparent p-[18px] text-[13.5px] leading-[20.25px]">
+        <div
+          role="alert"
+          className="bg-destructive-wash text-destructive rounded-lg border border-transparent p-[18px] text-[13.5px] leading-[20.25px]"
+        >
           We couldn&apos;t find that order. Double-check the email address
           and request ID from your confirmation email and try again.
         </div>
@@ -296,16 +301,21 @@ function TrackResultBlock({ result }: { result: TrackResult }) {
                 className="flex items-baseline justify-between gap-4 py-2 text-[13.5px]"
               >
                 <span className="flex-1 truncate">{l.itemName}</span>
-                <span className="text-muted-foreground font-mono tabular-nums text-xs">
+                {/* Mono for the figures only; the words stay in the body face. */}
+                <span className="text-muted-foreground tabular-nums text-xs">
                   {l.quantityFulfilled > 0 ? (
                     <>
-                      {l.quantityFulfilled} / {l.quantityRequested}
+                      <span className="font-mono">
+                        {l.quantityFulfilled} / {l.quantityRequested}
+                      </span>
                       {returnedFragment(l.returnedQuantity) ? (
                         <> · {returnedFragment(l.returnedQuantity)}</>
                       ) : null}
                     </>
                   ) : (
-                    <>{l.quantityRequested} requested</>
+                    <>
+                      <span className="font-mono">{l.quantityRequested}</span> requested
+                    </>
                   )}
                 </span>
               </li>

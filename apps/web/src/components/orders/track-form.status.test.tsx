@@ -8,7 +8,8 @@ import { STATUS_LABELS, TrackForm } from './track-form';
 /**
  * Public /r/track keeps its OWN status words (CONFLICTS E3: "Delivered" for
  * completed, the six-step timeline), and every status the API can answer has
- * a word (CONFLICTS D14: a backordered order printed the raw key).
+ * a word (CONFLICTS D14: a backordered order printed the raw key). A lookup
+ * that finds nothing is said in an alert.
  */
 
 vi.mock('@/components/orders/delivery-map', () => ({ DeliveryMap: () => null }));
@@ -97,5 +98,55 @@ describe('/r/track status words', () => {
     expect(denied.container.querySelector('[data-slot="timeline"]')).toBeNull();
     expect(screen.getByText('Request denied')).toBeInTheDocument();
     expect(screen.getByText('Reason: Out of budget')).toBeInTheDocument();
+  });
+
+  it('sets only the figures of an item line in mono; "requested" and "returned" stay in the body face', async () => {
+    const { container } = await look('completed', {
+      lines: [
+        { itemName: 'Polo S', quantityRequested: 2, quantityFulfilled: 2, returnedQuantity: 1 },
+        { itemName: 'Polo M', quantityRequested: 3, quantityFulfilled: 0 },
+      ],
+    });
+    const rows = Array.from(container.querySelectorAll('li')).filter((li) =>
+      li.textContent?.includes('Polo'),
+    );
+    // Every word is unchanged.
+    expect(rows.map((li) => li.textContent)).toEqual([
+      'Polo S2 / 2 · 1 returned',
+      'Polo M3 requested',
+    ]);
+    const monoText = (li: Element) =>
+      Array.from(li.querySelectorAll('.font-mono')).map((el) => el.textContent);
+    expect(monoText(rows[0]!)).toEqual(['2 / 2']);
+    expect(monoText(rows[1]!)).toEqual(['3']);
+    // The quantity cell itself is in the body face, so its words are too.
+    for (const li of rows) {
+      const cell = li.lastElementChild as HTMLElement;
+      expect(cell.className.split(/\s+/)).not.toContain('font-mono');
+      expect(cell.className.split(/\s+/)).toContain('tabular-nums');
+    }
+  });
+});
+
+describe('/r/track lookup miss', () => {
+  it('says the miss in an alert, so a screen reader hears it after "Find my order"', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status: 404, json: async () => ({}) })),
+    );
+    const utils = render(
+      <TrackForm
+        initialToken="tok"
+        initialId="11111111-1111-1111-1111-111111111111"
+        initialEmail="l@example.org"
+      />,
+    );
+    expect(screen.queryByRole('alert')).toBeNull();
+    fireEvent.submit(utils.container.querySelector('form') as HTMLFormElement);
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent("We couldn't find that order.");
+    expect(alert).toHaveTextContent(
+      'Double-check the email address and request ID from your confirmation email and try again.',
+    );
   });
 });
