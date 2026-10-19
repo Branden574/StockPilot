@@ -104,7 +104,7 @@ export function AssignDeliveryDialog({
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 <>
-                  <Truck className="mr-1 h-4 w-4" /> Assign
+                  <Truck className="h-4 w-4" /> Assign
                 </>
               )}
             </Button>

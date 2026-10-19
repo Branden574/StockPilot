@@ -23,7 +23,10 @@ import { ReplacementBanner } from '@/components/orders/replacement-banner';
 import { exchangeCreateEnabled } from '@/lib/returns/exchange-switch';
 import { ReadinessLineCell } from '@/components/orders/readiness-line-cell';
 import { ReadinessStrip } from '@/components/orders/readiness-strip';
-import { NeededByChangeButton, ReviseNeededByDialog } from '@/components/orders/revise-needed-by-dialog';
+import {
+  NeededByChangeButton,
+  ReviseNeededByDialog,
+} from '@/components/orders/revise-needed-by-dialog';
 import { bookReportReturnPath } from '@/components/reports/book-order-totals/return-path';
 import {
   readinessLinePutAwayHref,
@@ -38,6 +41,9 @@ import {
 import type { StorefrontCharter } from '@/components/orders/v2/types';
 import { ShippingPanel } from '@/components/orders/shipping-panel';
 import { OrderStatusBadge } from '@/components/orders/status-badge';
+import { DetailSection, DetailSectionMeta } from '@/components/patterns/detail-section';
+import { KeyValueList, KeyValueRow } from '@/components/patterns/key-value-row';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -141,6 +147,16 @@ import { PageTour } from '@/components/onboarding/page-tour';
 import { ORDER_DETAIL_TOUR } from '@/lib/onboarding/tours';
 import { HelpTip } from '@/components/onboarding/help-tip';
 
+/** The record page's frame, as the purchase order's (DESIGN-SPEC 5.3). */
+const ORDER_PAGE =
+  'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
+
+/** An attention band inside the lines card (stale slip, unpicked units,
+ *  partial or backordered): the warning wash with its words in the warning
+ *  ink, the card's 18 px gutter, a hairline under it. */
+const WARNING_BANNER =
+  'border-border bg-warning-wash text-warning border-b px-[18px] py-2.5 text-[12.5px] leading-[18px]';
+
 const TIMELINE_FIELDS: Array<{
   key: keyof OrderRequestRow;
   label: string;
@@ -238,8 +254,7 @@ export default async function OrderDetailPage({
     notFound();
   }
   const detail = detailRes.value;
-  const attachments =
-    attachmentsRes.status === 'fulfilled' ? attachmentsRes.value : [];
+  const attachments = attachmentsRes.status === 'fulfilled' ? attachmentsRes.value : [];
 
   const { request, lines, reservations, warehouseName, requesterDisplay } = detail;
   // Returns RX-2: an exchange replacement order. Its items come from its RMA
@@ -303,22 +318,19 @@ export default async function OrderDetailPage({
   // not Approve / Deny / Generate-pack-slip. We also suppress the panel
   // entirely on pending_confirmation since nothing in the panel applies.
   const isAssignedDriver =
-    request.assigned_delivery_user_id !== null &&
-    request.assigned_delivery_user_id === ctx.userId;
+    request.assigned_delivery_user_id !== null && request.assigned_delivery_user_id === ctx.userId;
   // Picking phase — show the panel to ANY viewer with order access so a staff
   // picker can claim an unclaimed order (claim-before-pick). The shared state
   // machine narrows the actual buttons per role/assignment (unclaimed staff →
   // claim only; the claimant → pick/complete/release; a bystander → print only;
   // manager+ → pick/complete/reassign/release).
   const isPickingStatus =
-    request.status === 'pick_slip_generated' ||
-    request.status === 'picking_in_progress';
+    request.status === 'pick_slip_generated' || request.status === 'picking_in_progress';
   const showActionsPanel =
     request.status !== 'pending_confirmation' &&
     (canApprove ||
       isPickingStatus ||
-      (isAssignedDriver &&
-        ['staged_for_delivery', 'in_transit'].includes(request.status)));
+      (isAssignedDriver && ['staged_for_delivery', 'in_transit'].includes(request.status)));
 
   // ORDER READINESS (F2-1): per-line readiness and a roll-up while the order
   // is still to be picked (core orderReadinessPhase 'to_pick': pending,
@@ -343,9 +355,7 @@ export default async function OrderDetailPage({
 
   // Live tracking: the assigned driver can stream location only while in transit.
   const liveTrackingGate =
-    isAssignedDriver &&
-    request.fulfillment_type === 'delivery' &&
-    request.status === 'in_transit';
+    isAssignedDriver && request.fulfillment_type === 'delivery' && request.status === 'in_transit';
 
   // Phase 4 — candidate drivers for the AssignDeliveryDialog only need
   // loading when the dialog can actually render: a canApprove viewer on a
@@ -406,11 +416,7 @@ export default async function OrderDetailPage({
   //     has no delivery to request, so it gets no button.)
   //   * Not on terminal statuses — a completed / denied / cancelled order
   //     has nothing left to deliver.
-  const DELIVERY_REQUEST_BLOCKED: OrderRequestStatus[] = [
-    'completed',
-    'denied',
-    'cancelled',
-  ];
+  const DELIVERY_REQUEST_BLOCKED: OrderRequestStatus[] = ['completed', 'denied', 'cancelled'];
   const showDeliveryRequest =
     isOwnRequest &&
     request.fulfillment_type === 'delivery' &&
@@ -492,7 +498,9 @@ export default async function OrderDetailPage({
           const supabase = await createClient();
           const { data: members } = await supabase
             .from('organization_members')
-            .select('user_id, is_delivery_driver, user:user_profiles!user_id (id, full_name, email)')
+            .select(
+              'user_id, is_delivery_driver, user:user_profiles!user_id (id, full_name, email)',
+            )
             .eq('organization_id', ctx.organizationId)
             .not('accepted_at', 'is', null);
           type MemberRow = {
@@ -567,14 +575,14 @@ export default async function OrderDetailPage({
             const rawMembers = ((membersRes.data ?? []) as MemberRow[]).flatMap((m) => {
               const u = Array.isArray(m.user) ? m.user[0] : m.user;
               if (!u || typeof u.email !== 'string') return [];
-              return [{ userId: u.id, role: m.role, fullName: u.full_name ?? null, email: u.email }];
+              return [
+                { userId: u.id, role: m.role, fullName: u.full_name ?? null, email: u.email },
+              ];
             });
             const pickers = rawMembers
               .filter((m) => isManagerOrAbove(m.role) || assignedUserIds.has(m.userId))
               .map((m) => ({ userId: m.userId, fullName: m.fullName, email: m.email }))
-              .sort((a, b) =>
-                (a.fullName ?? a.email).localeCompare(b.fullName ?? b.email),
-              );
+              .sort((a, b) => (a.fullName ?? a.email).localeCompare(b.fullName ?? b.email));
             let assignedPickerName: string | null = null;
             if (request.assigned_picker_id) {
               const match = rawMembers.find((m) => m.userId === request.assigned_picker_id);
@@ -591,15 +599,16 @@ export default async function OrderDetailPage({
               .eq('id', request.assigned_picker_id)
               .maybeSingle();
             const assignedPickerName = pk
-              ? (pk.full_name as string | null)?.trim() ||
-                (pk.email as string | null) ||
-                null
+              ? (pk.full_name as string | null)?.trim() || (pk.email as string | null) || null
               : null;
             return { pickers: [] as DriverOption[], assignedPickerName };
           }
           return { pickers: [] as DriverOption[], assignedPickerName: null as string | null };
         })()
-      : Promise.resolve({ pickers: [] as DriverOption[], assignedPickerName: null as string | null }),
+      : Promise.resolve({
+          pickers: [] as DriverOption[],
+          assignedPickerName: null as string | null,
+        }),
 
     shippableOrder ? checkModuleAccess('shipping') : Promise.resolve(null),
 
@@ -621,9 +630,12 @@ export default async function OrderDetailPage({
             .select('id, name, code, address')
             .eq('id', request.delivery_charter_id as string)
             .maybeSingle();
-          const c = data as
-            | { id: string; name: string; code: string | null; address: unknown }
-            | null;
+          const c = data as {
+            id: string;
+            name: string;
+            code: string | null;
+            address: unknown;
+          } | null;
           if (!c || typeof c.id !== 'string') return null;
           const raw = c.address;
           // jsonb: null, an object, or (defensively) a scalar — anything
@@ -707,8 +719,7 @@ export default async function OrderDetailPage({
     const hasWhWrite = warehouseAccess
       ? warehouseAccess.hasAllAccess || warehouseAccess.writableIds.includes(request.warehouse_id)
       : false;
-    viewerCanPick =
-      (isManagerOrAbove(ctx.role) || can(ctx, 'items:update')) && hasWhWrite;
+    viewerCanPick = (isManagerOrAbove(ctx.role) || can(ctx, 'items:update')) && hasWhWrite;
   }
   // Fold the routing read into the delivery-request gate: the button needs a
   // routable pair, and `deliveryRecipientsForRouting` is the whole fallback
@@ -765,7 +776,10 @@ export default async function OrderDetailPage({
       ? { replacementGate: 'waiting' as const, returnNumber: replacement.returnNumber }
       : null;
   const readinessStrip = readinessNow
-    ? readinessStripView(readinessNow, viewerReadinessAudience, { timeZone: orgTimeZone, ...replacementReadinessGate })
+    ? readinessStripView(readinessNow, viewerReadinessAudience, {
+        timeZone: orgTimeZone,
+        ...replacementReadinessGate,
+      })
     : null;
   // ── F2-4: change the needed-by. "Change" beside the date, for an approver
   // with write access to the order's warehouse, on an open order, once the
@@ -799,7 +813,9 @@ export default async function OrderDetailPage({
       ? readinessNow.assessment
       : null;
   const readinessLineById = new Map(readinessAssessment?.lines.map((l) => [l.lineId, l] as const));
-  const readinessItemById = new Map(readinessAssessment?.items.map((it) => [it.itemId, it] as const));
+  const readinessItemById = new Map(
+    readinessAssessment?.items.map((it) => [it.itemId, it] as const),
+  );
   // ── F2-3: put away from the order. From the readiness result above, no
   // read of its own. The lines with units in this warehouse's Staging (core
   // putAwayTargets: whatever the line's state, since the state is the worst
@@ -813,7 +829,10 @@ export default async function OrderDetailPage({
     orderId: request.id,
     access: { canTransfer: can(ctx, 'stock:transfer'), canReadItems: can(ctx, 'items:read') },
   };
-  const readinessPutAway = readinessStripPutAway(putAwayTargets(readinessAssessment), putAwayLinkOpts);
+  const readinessPutAway = readinessStripPutAway(
+    putAwayTargets(readinessAssessment),
+    putAwayLinkOpts,
+  );
   // "Count this item" on a line where on record and the locations disagree:
   // the item page's rule (a manager who can start a count; an item a count
   // can include). The service context is the one every read above already
@@ -1017,17 +1036,11 @@ export default async function OrderDetailPage({
 
   // Phase 2A — packing slip generation. Manager+ only, and only while the
   // request is at a status where the service actually accepts the call.
-  const totalQty = lines.reduce(
-    (s, l) => s + (Number(l.quantity_requested) || 0),
-    0,
-  );
+  const totalQty = lines.reduce((s, l) => s + (Number(l.quantity_requested) || 0), 0);
   // Fulfilled = units PROVIDED to the customer (shipped at hand-over); owed =
   // the still-unfulfilled remainder. Drives the backorder progress line + the
   // per-line Owed column.
-  const totalFulfilled = lines.reduce(
-    (s, l) => s + (Number(l.quantity_fulfilled) || 0),
-    0,
-  );
+  const totalFulfilled = lines.reduce((s, l) => s + (Number(l.quantity_fulfilled) || 0), 0);
   const totalOwed = Math.max(0, totalQty - totalFulfilled);
   // SO-000061: units that are neither handed over NOR staged — nobody has
   // pulled them. Derived (no column), and only meaningful once picking is
@@ -1041,10 +1054,7 @@ export default async function OrderDetailPage({
     })),
     request.status,
   );
-  const reservedTotal = reservations.reduce(
-    (s, r) => s + (Number(r.quantity) || 0),
-    0,
-  );
+  const reservedTotal = reservations.reduce((s, r) => s + (Number(r.quantity) || 0), 0);
 
   // Returns-access Unit A: the REQUESTER'S own self-service affordance. A
   // requester without returns:manage never sees the staff CreateReturnDialog,
@@ -1102,7 +1112,9 @@ export default async function OrderDetailPage({
   // (approverWarehouseAccess: an approver whose role does not decide it),
   // request-cached, so no round trip of its own; a failed read is no access.
   const handOverWarehouseAccess =
-    approverWarehouseAccess && !isAssignedDriver ? await approverWarehouseAccess.catch(() => null) : null;
+    approverWarehouseAccess && !isAssignedDriver
+      ? await approverWarehouseAccess.catch(() => null)
+      : null;
   const wantsHandOverLink = handOverLinkWanted({
     showActionsPanel,
     viewerMayHandOver: handOverAllowed(ctx, request, handOverWarehouseAccess),
@@ -1131,7 +1143,9 @@ export default async function OrderDetailPage({
       ? trackingForOrder(secretsAdmin, ctx.organizationId, id)
       : Promise.resolve<RequesterTrackingReturn[]>([]),
   ]);
-  const requesterReturnPath = requesterReturnToken ? `/returns/request/${requesterReturnToken}` : null;
+  const requesterReturnPath = requesterReturnToken
+    ? `/returns/request/${requesterReturnToken}`
+    : null;
   // RX-3 fix round 1 (desk checks H1, M1, M2): the staff "Returns (N)" panel
   // below renders for every member (RLS), so a requester's own request showed
   // twice, the second time in staff words (the reason, the disposition, the
@@ -1146,7 +1160,11 @@ export default async function OrderDetailPage({
     viewerCanReadReturns: returnsLinkable,
   });
   const returnsAnchor =
-    returnsShown.orderReturns.length > 0 ? '#order-returns' : returnsShown.tracking.length > 0 ? '#your-requests' : null;
+    returnsShown.orderReturns.length > 0
+      ? '#order-returns'
+      : returnsShown.tracking.length > 0
+        ? '#your-requests'
+        : null;
 
   // Item-level summary for the add-items picker: it labels a pick that would
   // TOP UP an existing line instead of creating one. Summed PER ITEM because an
@@ -1203,58 +1221,69 @@ export default async function OrderDetailPage({
   // request's only source, so a link to any other order opens nothing (fix
   // round 1, verification V-2). The dialog names the order.
   const openPhysicalSignature =
-    (Array.isArray(signParam) ? signParam[0] : signParam) === 'physical' && isReplacement && replacement?.live === true;
+    (Array.isArray(signParam) ? signParam[0] : signParam) === 'physical' &&
+    isReplacement &&
+    replacement?.live === true;
 
+  const orderNumberLabel = formatOrderNumber(
+    (request as { order_number?: number | null }).order_number,
+  );
+
+  // The record's page (DESIGN-SPEC 6.1, 6.7 and 6.18, extending the PO and
+  // item pages): the shared page header with the way back, the SO number and
+  // the status beside it, who it is from, and the order's own actions on the
+  // right (wrapping under the title on a narrow screen, so the number is never
+  // squeezed); then the lines and the pipeline in the main column beside an
+  // aside of facts (Dates, Details), one column below about 856 px of content.
   return (
-    <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
+    <div className={ORDER_PAGE}>
       <OrderRealtimeRefresh orderId={id} />
       <ReviseNeededByDialog change={neededByChange} trigger={false} />
       <DraftShortfallPoDialog offer={shortfallPoOffer} />
-      <div className="mb-6">
-        <Link
-          href={backToReport ?? '/dashboard/orders'}
-          className="text-muted-foreground hover:text-foreground text-sm"
-        >
-          ← {backToReport ? BOOK_REPORT_BACK_TO_REPORT : 'Back to orders'}
-        </Link>
-        <div className="mt-2 flex flex-wrap items-end justify-between gap-3">
-          {/* basis-72: the title column asks for 18rem before the actions may
-              share its line. With flex-1 alone (a 0 basis) the actions never
-              wrapped and the title got what they left: "Or..." at 390 px,
-              the order's number hidden. Now they wrap under it instead. */}
-          <div className="min-w-0 flex-1 basis-72" data-testid="order-title-column">
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="truncate text-2xl font-semibold tracking-tight">
-                Order request{' '}
-                {formatOrderNumber((request as { order_number?: number | null }).order_number) ? (
-                  <span className="text-muted-foreground font-mono tabular-nums">
-                    {formatOrderNumber((request as { order_number?: number | null }).order_number)}
-                  </span>
-                ) : null}
-              </h1>
-              <OrderStatusBadge status={request.status} fulfillmentType={request.fulfillment_type} />
-              <PageTour tour={ORDER_DETAIL_TOUR} />
-              {request.source === 'public_link' && (
-                <Badge variant="outline">Public</Badge>
-              )}
-            </div>
-            <p className="text-muted-foreground mt-1 text-sm">
-              From <span className="text-foreground font-medium">{requesterDisplay}</span>
-              {warehouseName ? <> · {warehouseName}</> : null}
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
+      <PageHeader
+        back={
+          <PageHeaderBackLink href={backToReport ?? '/dashboard/orders'}>
+            ← {backToReport ? BOOK_REPORT_BACK_TO_REPORT : 'Back to orders'}
+          </PageHeaderBackLink>
+        }
+        title={
+          <>
+            Order request{' '}
+            {orderNumberLabel ? (
+              <span className="text-muted-foreground font-mono text-[0.86em] font-normal tabular-nums tracking-normal">
+                {orderNumberLabel}
+              </span>
+            ) : null}
+          </>
+        }
+        titleAside={
+          <span className="flex flex-wrap items-center gap-2" data-testid="order-title-aside">
+            <OrderStatusBadge status={request.status} fulfillmentType={request.fulfillment_type} />
+            {request.source === 'public_link' && <Badge variant="outline">Public</Badge>}
+          </span>
+        }
+        subline={
+          <>
+            From <span className="text-foreground font-medium">{requesterDisplay}</span>
+            {warehouseName ? <> · {warehouseName}</> : null}
+          </>
+        }
+        tour={<PageTour tour={ORDER_DETAIL_TOUR} />}
+        actions={
+          <>
             {canCreateReturn && (
-              <CreateReturnDialog orderId={id} lines={returnableLines} exchangesEnabled={exchangeCreateEnabled()} />
+              <CreateReturnDialog
+                orderId={id}
+                lines={returnableLines}
+                exchangesEnabled={exchangeCreateEnabled()}
+              />
             )}
             {requesterReturnPath && (
               <Button asChild variant="outline">
                 {/* Returns RX-3: the link opens the requester's sheet, where each
                     item can be a return only or an exchange for another size
                     (the words follow the exchange kill switch). */}
-                <a href={requesterReturnPath}>
-                  {requesterEntryLabel(exchangeCreateEnabled())}
-                </a>
+                <a href={requesterReturnPath}>{requesterEntryLabel(exchangeCreateEnabled())}</a>
               </Button>
             )}
             {/* RX-3 fix round 1 (L6): no return token on this order (it was
@@ -1267,9 +1296,7 @@ export default async function OrderDetailPage({
               <SendDeliveryRequestButton
                 recipients={deliveryRequestRecipientsDto}
                 orderId={id}
-                orderNumber={
-                  (request as { order_number?: number | null }).order_number ?? null
-                }
+                orderNumber={(request as { order_number?: number | null }).order_number ?? null}
                 warehouseName={warehouseName ?? ''}
                 destination={deliveryRequestCharter}
                 requestedFor={detail.requesterName ?? requesterDisplay}
@@ -1296,45 +1323,54 @@ export default async function OrderDetailPage({
                 canApprove,
                 isOwnRequest,
                 canRequest: can(ctx, 'orders:request'),
-              }) !== null && (
-              <CancelOrderButton orderId={id} status={request.status} />
-            )}
+              }) !== null && <CancelOrderButton orderId={id} status={request.status} />}
             <ReportProblemButton
               moduleEnabled={maintenanceModuleEnabled}
               canSubmit={maintenanceGate}
               prefill={{ orderRequestId: id }}
             />
-          </div>
-        </div>
-      </div>
+          </>
+        }
+      />
 
-      <ReplacementBanner replacement={replacement} fulfillmentType={request.fulfillment_type} isRequester={isOwnRequest} />
+      <ReplacementBanner
+        replacement={replacement}
+        fulfillmentType={request.fulfillment_type}
+        isRequester={isOwnRequest}
+      />
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div className="space-y-4 lg:col-span-2">
-          <section className="bg-card rounded-xl border">
-            <div className="flex items-center justify-between border-b border-border px-4 py-3">
-              <h2 className="text-sm font-medium">Lines ({lines.length})</h2>
-              <div className="flex items-center gap-3">
-                <p className="text-muted-foreground text-xs tabular-nums">
-                  Total qty {formatNumber(totalQty)}
-                </p>
-                {/* Adding items edits the CONTENTS of this collection, so the
+      <div className="@container min-w-0">
+        <div className="@min-[856px]:grid-cols-[minmax(0,1.7fr)_minmax(280px,1fr)] grid items-start gap-4">
+          <div className="flex min-w-0 flex-col gap-4">
+            <DetailSection
+              title={`Lines (${lines.length})`}
+              flush
+              data-testid="order-lines"
+              aside={
+                <div className="flex items-center gap-3">
+                  <p className="text-muted-foreground text-[12.5px] tabular-nums">
+                    Total qty{' '}
+                    <span className="text-foreground font-mono font-medium">
+                      {formatNumber(totalQty)}
+                    </span>
+                  </p>
+                  {/* Adding items edits the CONTENTS of this collection, so the
                     affordance sits with the collection (and the Total qty
                     readout it changes) rather than in the header row, which
                     holds whole-order lifecycle actions. */}
-                {canAddLines && (
-                  <AddItemsDialog
-                    orderId={id}
-                    status={request.status}
-                    warehouseId={request.warehouse_id}
-                    warehouseName={warehouseName}
-                    existingLines={existingLineSummary}
-                  />
-                )}
-              </div>
-            </div>
-            {/* A pick slip printed BEFORE the last line was added no longer
+                  {canAddLines && (
+                    <AddItemsDialog
+                      orderId={id}
+                      status={request.status}
+                      warehouseId={request.warehouse_id}
+                      warehouseName={warehouseName}
+                      existingLines={existingLineSummary}
+                    />
+                  )}
+                </div>
+              }
+            >
+              {/* A pick slip printed BEFORE the last line was added no longer
                 matches the order. Ungated by permission on purpose: the person
                 who needs this is the picker holding the paper, not whoever
                 clicked Add. Derived on the detail, so it self-clears on
@@ -1348,7 +1384,7 @@ export default async function OrderDetailPage({
                 is no longer possible. Same status set the add affordance uses —
                 once contents are frozen, a reprint is moot. (Mobile applies the
                 identical gate via isAddLinesBlockedStatus.) */}
-            {/* No longer suppressed by the shortfall notice. The original
+              {/* No longer suppressed by the shortfall notice. The original
                 reason was that both opened with "generate the pick slip
                 again" — but that instruction has been removed from the
                 shortfall copy (it is impossible at five of the six statuses it
@@ -1358,14 +1394,13 @@ export default async function OrderDetailPage({
                 is derived from created_at and is the narrow case; the shortfall
                 says how many units nobody has pulled. Both can be true at once,
                 and each carries information the other cannot. */}
-            {detail.pickSlipStale &&
-              !ADD_LINES_BLOCKED.includes(request.status) && (
-                <div className="border-b border-border bg-amber-50 px-4 py-2.5 dark:bg-amber-950/30">
-                  <p className="flex items-start gap-2 text-xs font-medium text-amber-800 dark:text-amber-300">
-                    <Printer className="mt-px size-3.5 shrink-0" />
+              {detail.pickSlipStale && !ADD_LINES_BLOCKED.includes(request.status) && (
+                <div className={WARNING_BANNER} data-testid="order-stale-pick-slip">
+                  <p className="flex items-start gap-2 font-medium">
+                    <Printer className="mt-0.5 size-3.5 shrink-0" aria-hidden />
                     <span>
-                      Items were added after the pick slip was printed. Generate the
-                      pick slip again so the sheet matches this order
+                      Items were added after the pick slip was printed. Generate the pick slip again
+                      so the sheet matches this order
                       {detail.assignedPickerName
                         ? `, and give the new copy to ${detail.assignedPickerName}`
                         : ''}
@@ -1374,66 +1409,68 @@ export default async function OrderDetailPage({
                   </p>
                 </div>
               )}
-            {/* Un-picked units, shown the moment they exist rather than at
+              {/* Un-picked units, shown the moment they exist rather than at
                 hand-over (SO-000061). Standalone only when the partial-
                 fulfilment banner below is NOT up: when it is, the same units
                 are already being counted there as "owed", and the instruction
                 is appended INSIDE that banner instead (see below) so the card
-                never stacks two amber boxes about one number.
+                never stacks two warning boxes about one number.
 
-                Same construction and tone as the two banners around it —
-                border-b, amber-50 / amber-950-30, amber-800 / amber-300 text —
-                because it is the same class of message: attention needed,
-                nothing broken. */}
-            {shortfallNotice != null &&
-              !(totalOwed > 0 && (totalFulfilled > 0 || request.status === 'backordered')) && (
-                <div className="border-b border-border bg-amber-50 px-4 py-2.5 dark:bg-amber-950/30">
-                  <p className="flex items-start gap-2 text-xs font-medium text-amber-800 dark:text-amber-300">
-                    <Printer className="mt-px size-3.5 shrink-0" />
-                    <span>
-                      <span className="font-semibold">{UNPICKED_SHORTFALL_TITLE}.</span>{' '}
-                      {shortfallNotice}
-                      {detail.assignedPickerName
-                        ? ` Give the new copy to ${detail.assignedPickerName}.`
-                        : ''}
+                Same construction and tone as the two banners around it (the
+                warning wash with its own words), because it is the same class
+                of message: attention needed, nothing broken. */}
+              {shortfallNotice != null &&
+                !(totalOwed > 0 && (totalFulfilled > 0 || request.status === 'backordered')) && (
+                  <div className={WARNING_BANNER} data-testid="order-unpicked-shortfall">
+                    <p className="flex items-start gap-2 font-medium">
+                      <Printer className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+                      <span>
+                        <span className="font-semibold">{UNPICKED_SHORTFALL_TITLE}.</span>{' '}
+                        {shortfallNotice}
+                        {detail.assignedPickerName
+                          ? ` Give the new copy to ${detail.assignedPickerName}.`
+                          : ''}
+                      </span>
+                    </p>
+                  </div>
+                )}
+              {totalOwed > 0 && (totalFulfilled > 0 || request.status === 'backordered') && (
+                <div className={WARNING_BANNER} data-testid="order-partial-fulfilment">
+                  <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5">
+                    <span className="font-medium">
+                      {request.status === 'backordered'
+                        ? 'Backordered — awaiting stock'
+                        : 'Partially fulfilled'}
                     </span>
-                  </p>
-                </div>
-              )}
-            {totalOwed > 0 && (totalFulfilled > 0 || request.status === 'backordered') && (
-              <div className="border-b border-border bg-amber-50 px-4 py-2.5 text-xs dark:bg-amber-950/30">
-                <div className="flex items-center justify-between">
-                  <span className="font-medium text-amber-800 dark:text-amber-300">
-                    {request.status === 'backordered'
-                      ? 'Backordered — awaiting stock'
-                      : 'Partially fulfilled'}
-                  </span>
-                  <span className="tabular-nums text-amber-800 dark:text-amber-300">
-                    {formatNumber(totalFulfilled)} of {formatNumber(totalQty)} provided ·{' '}
-                    {formatNumber(totalOwed)} owed
-                  </span>
-                </div>
-                <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-amber-200 dark:bg-amber-900">
+                    <span className="font-mono text-[12px] tabular-nums">
+                      {formatNumber(totalFulfilled)} of {formatNumber(totalQty)} provided ·{' '}
+                      {formatNumber(totalOwed)} owed
+                    </span>
+                  </div>
+                  {/* The progress bar (DESIGN-SPEC 6.11): 4 px on the warning
+                    track, provided against requested. */}
                   <div
-                    className="h-full rounded-full bg-amber-500"
-                    style={{
-                      width: `${totalQty > 0 ? Math.round((totalFulfilled / totalQty) * 100) : 0}%`,
-                    }}
-                  />
-                </div>
-                {/* The owed count above says what the customer has NOT received.
+                    className="bg-warning/20 mt-2 h-1 w-full overflow-hidden rounded-sm"
+                    aria-hidden
+                  >
+                    <div
+                      className="bg-warning h-full rounded-sm"
+                      style={{
+                        width: `${totalQty > 0 ? Math.round((totalFulfilled / totalQty) * 100) : 0}%`,
+                      }}
+                    />
+                  </div>
+                  {/* The owed count above says what the customer has NOT received.
                     It does not say whether anyone is pulling those units — on a
                     backorder they are waiting on stock, but after a raise past
                     picking they are waiting on a person. This sentence is the
                     only one that names an action, so it rides inside the same
                     banner rather than opening a second one. */}
-                {shortfallNotice != null && (
-                  <p className="mt-1.5 text-amber-800 dark:text-amber-300">{shortfallNotice}</p>
-                )}
-              </div>
-            )}
-            {/* Returned units, stated as a LATER event beside the shipped
-                total (SO-000085). Neutral tone, not amber — nothing needs
+                  {shortfallNotice != null && <p className="mt-1.5">{shortfallNotice}</p>}
+                </div>
+              )}
+              {/* Returned units, stated as a LATER event beside the shipped
+                total (SO-000085). Neutral tone, not warning — nothing needs
                 attention, the order is simply not the clean "everything
                 delivered and kept" it would otherwise read as. The net figure
                 is arithmetic on records (provided − returned across closed
@@ -1446,76 +1483,91 @@ export default async function OrderDetailPage({
                 also rides in the figure's title/aria so the figure carries
                 its own qualification wherever it is read alone. The returns
                 panel with the notes it points at sits directly beneath. */}
-            {returnSummary && (
-              <div
-                className="border-b border-border bg-muted/40 px-4 py-2.5 text-xs text-muted-foreground"
-                data-testid="order-return-summary"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-                  <span className="font-medium">Returns</span>
-                  <span
-                    className="tabular-nums"
-                    title={ORDER_RETURN_SUMMARY_NOTE}
-                    aria-label={`${formatOrderReturnSummary(returnSummary)}. ${ORDER_RETURN_SUMMARY_NOTE}`}
+              {returnSummary && (
+                <div
+                  className="border-border bg-sunk text-muted-foreground border-b px-[18px] py-2.5 text-[12.5px]"
+                  data-testid="order-return-summary"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                    <span className="text-foreground font-medium">Returns</span>
+                    <span
+                      className="tabular-nums"
+                      title={ORDER_RETURN_SUMMARY_NOTE}
+                      aria-label={`${formatOrderReturnSummary(returnSummary)}. ${ORDER_RETURN_SUMMARY_NOTE}`}
+                    >
+                      {formatOrderReturnSummary(returnSummary)}
+                      {returnsAnchor && (
+                        <>
+                          {' · '}
+                          <a
+                            href={returnsAnchor}
+                            className="text-accent hover:text-foreground underline-offset-2 hover:underline"
+                          >
+                            See returns
+                          </a>
+                        </>
+                      )}
+                    </span>
+                  </div>
+                  <p
+                    className="mt-1 text-[11.5px] leading-snug"
+                    data-testid="order-return-summary-note"
                   >
-                    {formatOrderReturnSummary(returnSummary)}
-                    {returnsAnchor && (
-                      <>
-                        {' · '}
-                        <a href={returnsAnchor} className="underline-offset-2 hover:underline">
-                          See returns
-                        </a>
-                      </>
-                    )}
-                  </span>
+                    {ORDER_RETURN_SUMMARY_NOTE}
+                  </p>
                 </div>
-                <p className="mt-1 text-[10.5px] leading-snug" data-testid="order-return-summary-note">
-                  {ORDER_RETURN_SUMMARY_NOTE}
-                </p>
-              </div>
-            )}
-            {/* Readiness (F2-1), directly above the lines it describes; with
+              )}
+              {/* Readiness (F2-1), directly above the lines it describes; with
                 "Hold available stock" for an approver when a line is not
                 held (F2-2), "Put away N items" when items are in Staging
                 (F2-3; the permission sentence instead without Transfer
                 stock), and "Draft PO for what is short" when something may be
                 drafted (F2-5; the permission sentence instead for anyone who
                 may not draft). */}
-            {readinessStrip && (
-              <ReadinessStrip
-                view={readinessStrip}
-                holdOrderId={holdOrderId}
-                putAway={readinessPutAway}
-                neededByChange={neededByChangeOnStrip ? neededByChange : null}
-                shortfallPo={readinessShortfallPo}
-              />
-            )}
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Item</TableHead>
-                  <TableHead className="text-right">Requested</TableHead>
-                  <TableHead className="text-right">
-                    <span className="inline-flex items-center gap-1">
-                      Fulfilled
-                      <HelpTip label="Fulfilled vs Owed">
-                        <p>
-                          Fulfilled counts units actually handed over at
-                          pickup/delivery — picked or staged units are not fulfilled
-                          yet. Owed is requested minus fulfilled; a backordered order
-                          stays live until owed reaches zero or a manager closes it.
-                        </p>
-                        <p>
-                          Returned units are shown under Fulfilled; the shipped
-                          count is never rewritten — a return is a later event,
-                          listed under Returns below.
-                        </p>
-                      </HelpTip>
-                    </span>
-                  </TableHead>
-                  <TableHead className="text-right">Owed</TableHead>
-                  <TableHead className="text-right">On hand</TableHead>
-                  {/* A trailing actions column rather than a click-the-number
+              {readinessStrip && (
+                <ReadinessStrip
+                  view={readinessStrip}
+                  holdOrderId={holdOrderId}
+                  putAway={readinessPutAway}
+                  neededByChange={neededByChangeOnStrip ? neededByChange : null}
+                  shortfallPo={readinessShortfallPo}
+                />
+              )}
+              {/* The line table in the reference's table recipe (DESIGN-SPEC
+                6.9): uppercase quiet headers, the 18 px card gutter at both
+                edges, the numbers right-aligned in mono. Rows are not links,
+                so they take no hover fill. */}
+              <Table className="[&_td:first-child]:pl-[18px] [&_td:last-child]:pr-[18px] [&_th:first-child]:pl-[18px] [&_th:last-child]:pr-[18px]">
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    {/* The item takes the room the numbers leave (they keep their
+                        own width), so readiness under the name reads in
+                        lines, not a word at a time. The four number columns
+                        pad 8 px a side and the actions column 4 px on its
+                        left (the recipe's 12 left the item 168 px of a 612 px
+                        card at 1280; now about 208). */}
+                    <TableHead className="w-full">Item</TableHead>
+                    <TableHead className="whitespace-nowrap px-2 text-right">Requested</TableHead>
+                    <TableHead className="whitespace-nowrap px-2 text-right">
+                      <span className="inline-flex items-center gap-1">
+                        Fulfilled
+                        <HelpTip label="Fulfilled vs Owed">
+                          <p>
+                            Fulfilled counts units actually handed over at pickup/delivery — picked
+                            or staged units are not fulfilled yet. Owed is requested minus
+                            fulfilled; a backordered order stays live until owed reaches zero or a
+                            manager closes it.
+                          </p>
+                          <p>
+                            Returned units are shown under Fulfilled; the shipped count is never
+                            rewritten — a return is a later event, listed under Returns below.
+                          </p>
+                        </HelpTip>
+                      </span>
+                    </TableHead>
+                    <TableHead className="whitespace-nowrap px-2 text-right">Owed</TableHead>
+                    <TableHead className="whitespace-nowrap px-2 text-right">On hand</TableHead>
+                    {/* A trailing actions column rather than a click-the-number
                       affordance on Requested. The complaint that produced this
                       was "theres no way to" — a hover-to-reveal editor gives no
                       standing signal that editing exists at all, and removal
@@ -1525,161 +1577,174 @@ export default async function OrderDetailPage({
                       removal somewhere to render as a disabled control with a
                       reason instead of vanishing. Header is sr-only because an
                       icon column needs no visible label. */}
-                  {canEditLines && (
-                    <TableHead className="w-px">
-                      <span className="sr-only">Line actions</span>
-                    </TableHead>
-                  )}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {lines.length === 0 && (
-                  <TableRow>
-                    <TableCell
-                      colSpan={canEditLines ? 6 : 5}
-                      className="text-muted-foreground py-6 text-center text-sm"
-                    >
-                      No lines on this request.
-                    </TableCell>
+                    {canEditLines && (
+                      <TableHead className="w-px pl-1">
+                        <span className="sr-only">Line actions</span>
+                      </TableHead>
+                    )}
                   </TableRow>
-                )}
-                {lines.map((l, rowIndex) => {
-                  const owed = lineOwedUnits({
-                    quantityRequested: l.quantity_requested,
-                    quantityFulfilled: l.quantity_fulfilled,
-                  });
-                  const shortFixes = shortFixesFor(l.id, rowIndex);
-                  return (
-                    // With readiness under the item name the row is taller:
-                    // every cell starts at the top, so the numbers and the
-                    // line's controls sit level with the item's name.
-                    //
-                    // The row is where the completion and departure confirms
-                    // send someone ("Review short lines", "Fix the order",
-                    // F2-2): it has an id and takes focus from script only.
-                    <TableRow
-                      key={l.id}
-                      id={orderLineAnchorId(l.id)}
-                      tabIndex={-1}
-                      className={cn(
-                        'scroll-mt-24 focus:outline-none data-[review=true]:bg-amber-50/70 dark:data-[review=true]:bg-amber-950/30',
-                        readinessAssessment || shortFixes ? '[&>td]:align-top' : undefined,
-                      )}
-                    >
-                      <TableCell>
-                        {l.item ? (
-                          <>
-                            <Link
-                              href={`/dashboard/inventory/${l.item.id}`}
-                              className="hover:underline"
-                            >
-                              <div className="font-medium">{l.item.name}</div>
-                              <div className="text-muted-foreground font-mono text-[11px]">
-                                {l.item.sku}
-                              </div>
-                            </Link>
-                            {l.item.charter_name && (
-                              <div
-                                className="mt-1 inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[10px] text-emerald-700 dark:text-emerald-300"
-                                title={`Earmarked for ${l.item.charter_name}${l.item.charter_code ? ` (${l.item.charter_code})` : ''}`}
-                              >
-                                <Landmark className="size-3" />
-                                {l.item.charter_name}
-                              </div>
-                            )}
-                          </>
-                        ) : (
-                          // A line's item cannot be deleted (ON DELETE
-                          // RESTRICT): a missing item is one this viewer's
-                          // access hides. Core's label, the phone's too.
-                          <span className="text-muted-foreground italic">
-                            {ORDER_LINE_HIDDEN_ITEM_NAME}
-                          </span>
+                </TableHeader>
+                <TableBody>
+                  {lines.length === 0 && (
+                    <TableRow className="hover:bg-transparent">
+                      <TableCell
+                        colSpan={canEditLines ? 6 : 5}
+                        className="text-muted-foreground py-10 text-center text-[13.5px]"
+                      >
+                        No lines on this request.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {lines.map((l, rowIndex) => {
+                    const owed = lineOwedUnits({
+                      quantityRequested: l.quantity_requested,
+                      quantityFulfilled: l.quantity_fulfilled,
+                    });
+                    const shortFixes = shortFixesFor(l.id, rowIndex);
+                    return (
+                      // With readiness under the item name the row is taller:
+                      // every cell starts at the top, so the numbers and the
+                      // line's controls sit level with the item's name.
+                      //
+                      // The row is where the completion and departure confirms
+                      // send someone ("Review short lines", "Fix the order",
+                      // F2-2): it has an id and takes focus from script only.
+                      <TableRow
+                        key={l.id}
+                        id={orderLineAnchorId(l.id)}
+                        tabIndex={-1}
+                        className={cn(
+                          'data-[review=true]:bg-warning-wash scroll-mt-24 hover:bg-transparent focus:outline-none',
+                          readinessAssessment || shortFixes ? '[&>td]:align-top' : undefined,
                         )}
-                        {/* The line's readiness, under its item (F2-1): in
+                      >
+                        <TableCell>
+                          {l.item ? (
+                            <>
+                              <Link
+                                href={`/dashboard/inventory/${l.item.id}`}
+                                className="group/item block rounded-sm"
+                              >
+                                <div className="text-foreground text-[13.5px] font-medium leading-5 group-hover/item:underline">
+                                  {l.item.name}
+                                </div>
+                                <div className="text-muted-foreground font-mono text-[11.5px] leading-[18px]">
+                                  {l.item.sku}
+                                </div>
+                              </Link>
+                              {/* A pill on one line (radius half its 20 px
+                                height); a name longer than the column wraps
+                                into a rounded box with the icon on its first
+                                line, never a two-line stadium. */}
+                              {l.item.charter_name && (
+                                <div
+                                  className="border-accent/30 bg-success-wash text-accent mt-1 inline-flex items-start gap-1 rounded-[10px] border px-2 font-mono text-[11px] leading-[18px]"
+                                  title={`Earmarked for ${l.item.charter_name}${l.item.charter_code ? ` (${l.item.charter_code})` : ''}`}
+                                  data-testid="order-line-charter"
+                                >
+                                  <Landmark className="mt-[3px] size-3 shrink-0" aria-hidden />
+                                  {l.item.charter_name}
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            // A line's item cannot be deleted (ON DELETE
+                            // RESTRICT): a missing item is one this viewer's
+                            // access hides. Core's label, the phone's too.
+                            <span className="text-muted-foreground italic">
+                              {ORDER_LINE_HIDDEN_ITEM_NAME}
+                            </span>
+                          )}
+                          {/* The line's readiness, under its item (F2-1): in
                             the Item cell, not a column of its own. A
                             Readiness column made the table wider than its
                             card at every width (705 px in 641 px) and pushed
                             each line's edit and remove buttons out of view. */}
-                        {readinessAssessment && (
-                          <div className="mt-2">
-                            <ReadinessLineCell
-                              {...readinessCellFor(l.id)}
-                              timeZone={orgTimeZone}
-                              position={rowIndex + 1}
-                              replacementGate={replacementReadinessGate?.replacementGate ?? null}
-                            />
-                          </div>
-                        )}
-                        {/* The one-tap fix on a short line (F2-2): Lower or
+                          {readinessAssessment && (
+                            <div className="mt-2">
+                              <ReadinessLineCell
+                                {...readinessCellFor(l.id)}
+                                timeZone={orgTimeZone}
+                                position={rowIndex + 1}
+                                replacementGate={replacementReadinessGate?.replacementGate ?? null}
+                              />
+                            </div>
+                          )}
+                          {/* The one-tap fix on a short line (F2-2): Lower or
                             Remove, under the line it fixes, in the Item cell
                             (a column of its own would push the row's edit
                             controls out of the card). */}
-                        {shortFixes && (
-                          <ShortLineFixes
-                            orderId={id}
-                            lineId={l.id}
-                            itemName={orderLineItemName(l.item)}
-                            quantityRequested={Number(l.quantity_requested) || 0}
-                            fixes={shortFixes}
-                          />
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {formatNumber(l.quantity_requested)}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums text-muted-foreground">
-                        {formatNumber(l.quantity_fulfilled)}
-                        {/* The shipped number stays the number. A return is
+                          {shortFixes && (
+                            <ShortLineFixes
+                              orderId={id}
+                              lineId={l.id}
+                              itemName={orderLineItemName(l.item)}
+                              quantityRequested={Number(l.quantity_requested) || 0}
+                              fixes={shortFixes}
+                            />
+                          )}
+                        </TableCell>
+                        <TableCell className="px-2 text-right font-mono text-[13px] font-medium tabular-nums">
+                          {formatNumber(l.quantity_requested)}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground px-2 text-right font-mono text-[13px] tabular-nums">
+                          {formatNumber(l.quantity_fulfilled)}
+                          {/* The shipped number stays the number. A return is
                             appended BENEATH it as its own labelled figure —
                             "1 / 1 returned" — never subtracted; the hover/aria
                             names the RMA(s) it came back on. Renders nothing
                             when nothing was returned, so a plain delivered
                             order's cell is byte-identical to before. */}
-                        {returnedFragment(l.returned_quantity) && (
-                          <div
-                            className="text-[10.5px]"
-                            data-testid="line-returned"
-                            title={describeLineReturnRefs(l.returned_quantity, returnRefs.get(l.id)) ?? undefined}
-                            aria-label={describeLineReturnRefs(l.returned_quantity, returnRefs.get(l.id)) ?? undefined}
-                          >
-                            {returnedFragment(l.returned_quantity)}
-                          </div>
-                        )}
-                      </TableCell>
-                      <TableCell
-                        className={`text-right tabular-nums ${owed > 0 ? 'font-medium text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}`}
-                      >
-                        {formatNumber(owed)}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums text-muted-foreground">
-                        {l.item ? formatNumber(l.item.quantity_on_hand) : '—'}
-                      </TableCell>
-                      {canEditLines && (
-                        <TableCell className="py-1 pr-2 text-right align-middle">
-                          {/* itemName is the same label the Item cell shows
+                          {returnedFragment(l.returned_quantity) && (
+                            <div
+                              className="font-sans text-[11.5px]"
+                              data-testid="line-returned"
+                              title={
+                                describeLineReturnRefs(l.returned_quantity, returnRefs.get(l.id)) ??
+                                undefined
+                              }
+                              aria-label={
+                                describeLineReturnRefs(l.returned_quantity, returnRefs.get(l.id)) ??
+                                undefined
+                              }
+                            >
+                              {returnedFragment(l.returned_quantity)}
+                            </div>
+                          )}
+                        </TableCell>
+                        <TableCell
+                          className={`px-2 text-right font-mono text-[13px] tabular-nums ${owed > 0 ? 'text-warning font-medium' : 'text-muted-foreground'}`}
+                        >
+                          {formatNumber(owed)}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground px-2 text-right font-mono text-[13px] tabular-nums">
+                          {l.item ? formatNumber(l.item.quantity_on_hand) : '—'}
+                        </TableCell>
+                        {canEditLines && (
+                          <TableCell className="py-1 pl-1 text-right align-middle">
+                            {/* itemName is the same label the Item cell shows
                               (core orderLineItemName), so the confirmation
                               names what the viewer is looking at. */}
-                          <OrderLineActions
-                            orderId={id}
-                            lineId={l.id}
-                            itemName={orderLineItemName(l.item)}
-                            quantityRequested={Number(l.quantity_requested) || 0}
-                            quantityFulfilled={Number(l.quantity_fulfilled) || 0}
-                            quantityPicked={l.quantity_picked}
-                            orderStatus={request.status}
-                            isOnlyLine={lines.length === 1}
-                          />
-                        </TableCell>
-                      )}
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </section>
+                            <OrderLineActions
+                              orderId={id}
+                              lineId={l.id}
+                              itemName={orderLineItemName(l.item)}
+                              quantityRequested={Number(l.quantity_requested) || 0}
+                              quantityFulfilled={Number(l.quantity_fulfilled) || 0}
+                              quantityPicked={l.quantity_picked}
+                              orderStatus={request.status}
+                              isOnlyLine={lines.length === 1}
+                            />
+                          </TableCell>
+                        )}
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </DetailSection>
 
-          {/* The order's returns — number, status, what came back and how it
+            {/* The order's returns — number, status, what came back and how it
               was dispositioned, and the NOTES. The notes are where an
               in-person swap is recorded today (SO-000085: "Size S … swapped
               out for Ladies size M" — the replacement is on no order line),
@@ -1687,304 +1752,306 @@ export default async function OrderDetailPage({
               Rendered for every viewer (RLS decided what came back); the RMA
               number is a link only when the returns page would open for this
               viewer. Nothing renders when the order has no returns. */}
-          {/* Returns RX-3: the requester's own requests, in their words. */}
-          <RequesterTracking
-            requests={returnsShown.tracking}
-            id="your-requests"
-            density="compact"
-            className="bg-card rounded-xl border p-4"
-          />
+            {/* Returns RX-3: the requester's own requests, in their words. */}
+            <RequesterTracking
+              requests={returnsShown.tracking}
+              id="your-requests"
+              density="compact"
+              className="bg-card rounded-lg border p-[18px]"
+            />
 
-          {returnsShown.orderReturns.length > 0 && (
-            <section id="order-returns" className="bg-card rounded-xl border" data-testid="order-returns">
-              <div className="flex items-center justify-between border-b border-border px-4 py-3">
-                <h2 className="text-sm font-medium">Returns ({returnsShown.orderReturns.length})</h2>
-                <p className="text-muted-foreground text-xs">
-                  A return is a later event — the shipped count above is never rewritten.
-                </p>
-              </div>
-              <ul className="divide-y divide-border">
-                {returnsShown.orderReturns.map((r) => (
-                  <li key={r.id} className="px-4 py-3" data-testid="order-return">
-                    <div className="flex flex-wrap items-center gap-2 text-sm">
-                      {returnsLinkable ? (
-                        <Link
-                          href={`/dashboard/returns/${r.id}`}
-                          className="font-mono font-medium tabular-nums hover:underline"
-                        >
-                          {returnHandle(r)}
-                        </Link>
-                      ) : (
-                        <span className="font-mono font-medium tabular-nums">{returnHandle(r)}</span>
+            {returnsShown.orderReturns.length > 0 && (
+              <DetailSection
+                id="order-returns"
+                data-testid="order-returns"
+                title={`Returns (${returnsShown.orderReturns.length})`}
+                aside={
+                  <DetailSectionMeta>
+                    A return is a later event — the shipped count above is never rewritten.
+                  </DetailSectionMeta>
+                }
+                flush
+              >
+                <ul className="divide-border divide-y">
+                  {returnsShown.orderReturns.map((r) => (
+                    <li key={r.id} className="px-[18px] py-3" data-testid="order-return">
+                      <div className="flex flex-wrap items-center gap-2 text-[13.5px]">
+                        {returnsLinkable ? (
+                          <Link
+                            href={`/dashboard/returns/${r.id}`}
+                            className="text-accent hover:text-foreground font-mono font-medium tabular-nums hover:underline"
+                          >
+                            {returnHandle(r)}
+                          </Link>
+                        ) : (
+                          <span className="font-mono font-medium tabular-nums">
+                            {returnHandle(r)}
+                          </span>
+                        )}
+                        <ReturnStatusBadge status={r.status as ReturnStatus} />
+                        <span className="text-muted-foreground text-[12.5px]">
+                          {returnReasonLabel(r.reasonCode)} ·{' '}
+                          {formatRelative(r.closedAt ?? r.createdAt)}
+                        </span>
+                      </div>
+                      {r.lines.length > 0 && (
+                        <ul className="text-muted-foreground mt-1.5 space-y-0.5 text-[12.5px] tabular-nums">
+                          {r.lines.map((rl, i) => (
+                            <li key={`${r.id}-${rl.orderRequestLineId}-${i}`}>
+                              {describeReturnLine({
+                                quantity: rl.quantity,
+                                itemName:
+                                  lineById.get(rl.orderRequestLineId)?.item?.name ??
+                                  (rl.itemId ? `Item ${rl.itemId.slice(0, 8)}` : null),
+                                disposition: rl.disposition,
+                                applied: rl.applied,
+                                returnStatus: r.status,
+                              })}
+                            </li>
+                          ))}
+                        </ul>
                       )}
-                      <ReturnStatusBadge status={r.status as ReturnStatus} />
-                      <span className="text-muted-foreground text-xs">
-                        {returnReasonLabel(r.reasonCode)} · {formatRelative(r.closedAt ?? r.createdAt)}
-                      </span>
-                    </div>
-                    {r.lines.length > 0 && (
-                      <ul className="text-muted-foreground mt-1.5 space-y-0.5 text-xs tabular-nums">
-                        {r.lines.map((rl, i) => (
-                          <li key={`${r.id}-${rl.orderRequestLineId}-${i}`}>
-                            {describeReturnLine({
-                              quantity: rl.quantity,
-                              itemName:
-                                lineById.get(rl.orderRequestLineId)?.item?.name ??
-                                (rl.itemId ? `Item ${rl.itemId.slice(0, 8)}` : null),
-                              disposition: rl.disposition,
-                              applied: rl.applied,
-                              returnStatus: r.status,
-                            })}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                    {/* RX-2: "Exchange: Large ×1 → SO-000104 (Waiting for returned item)". */}
-                    {r.exchangeLines && r.exchangeLines.length > 0 && (
-                      <ul className="mt-1.5 space-y-0.5 text-xs" data-testid="order-return-exchange">
-                        {r.exchangeLines.map((line) => (
-                          <li key={`${r.id}-${line}`}>{line}</li>
-                        ))}
-                      </ul>
-                    )}
-                    {r.notes && (
-                      <p className="mt-1.5 whitespace-pre-wrap text-sm" data-testid="order-return-notes">
-                        {r.notes}
-                      </p>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
+                      {/* RX-2: "Exchange: Large ×1 → SO-000104 (Waiting for returned item)". */}
+                      {r.exchangeLines && r.exchangeLines.length > 0 && (
+                        <ul
+                          className="mt-1.5 space-y-0.5 text-[12.5px]"
+                          data-testid="order-return-exchange"
+                        >
+                          {r.exchangeLines.map((line) => (
+                            <li key={`${r.id}-${line}`}>{line}</li>
+                          ))}
+                        </ul>
+                      )}
+                      {r.notes && (
+                        <p
+                          className="mt-1.5 whitespace-pre-wrap text-[13.5px]"
+                          data-testid="order-return-notes"
+                        >
+                          {r.notes}
+                        </p>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </DetailSection>
+            )}
 
-          {reservations.length > 0 && (
-            <section className="bg-card rounded-xl border p-4 text-xs">
-              <div className="flex items-center justify-between">
-                <h2 className="text-sm font-medium">Active reservations</h2>
-                <span className="text-muted-foreground tabular-nums">
-                  {formatNumber(reservedTotal)} reserved
-                </span>
-              </div>
-              <p className="text-muted-foreground mt-1 text-[11.5px]">
-                Stock is held until this request is delivered or cancelled. Removing a
-                line, or lowering its quantity, releases that line&rsquo;s share straight
-                away.
-              </p>
-            </section>
-          )}
+            {reservations.length > 0 && (
+              <DetailSection
+                title="Active reservations"
+                aside={
+                  <DetailSectionMeta className="tabular-nums">
+                    <span className="text-foreground font-mono font-medium">
+                      {formatNumber(reservedTotal)}
+                    </span>{' '}
+                    reserved
+                  </DetailSectionMeta>
+                }
+                data-testid="order-reservations"
+              >
+                <p className="text-muted-foreground text-[12.5px]">
+                  Stock is held until this request is delivered or cancelled. Removing a line, or
+                  lowering its quantity, releases that line&rsquo;s share straight away.
+                </p>
+              </DetailSection>
+            )}
 
-          {request.notes && (
-            <section className="bg-card rounded-xl border p-4">
-              <h2 className="text-muted-foreground text-[10.5px] uppercase tracking-[0.08em]">
-                Requester note
-              </h2>
-              <p className="mt-1.5 whitespace-pre-wrap text-sm">{request.notes}</p>
-            </section>
-          )}
+            {request.notes && (
+              <DetailSection title="Requester note" data-testid="order-requester-note">
+                <p className="whitespace-pre-wrap text-[13.5px]">{request.notes}</p>
+              </DetailSection>
+            )}
 
-          {showActionsPanel && (
-            // canApprove drives the manage-only sections inside the
-            // panel (Approve/Deny, AssignDelivery, Internal notes).
-            // A staff driver who only sees the panel for in-transit
-            // actions still gets MarkInTransit + CollectSignature but
-            // none of the manager-only controls.
-            <ManagerActionsPanel
-              canApprove={canApprove}
-              canAssignDelivery={canAssignDelivery}
-              stockGates={stockGates}
-              approveNotice={approveNotice}
-              partialPreview={partialPreview}
-              completionConfirm={completionConfirm}
-              departureLines={departureLines}
-              orderId={id}
-              status={request.status}
-              internalNotes={request.internal_notes}
-              neededBy={neededBy}
-              orgTimeZone={orgTimeZone}
-              hasRequesterNote={Boolean(request.notes?.trim())}
-              fulfillmentType={request.fulfillment_type}
-              assignedDeliveryUserId={request.assigned_delivery_user_id}
-              signatureToken={handOverLink}
-              handOverMfaMessage={handOverMfa ? handOverMfaPanelMessage(handOverMfa.reason) : null}
-              hasSignature={hasCapturedSignature(request)}
-              signedByName={request.signed_by_name}
-              signedAt={request.signed_at}
-              drivers={drivers}
-              viewerRole={ctx.role}
-              viewerUserId={ctx.userId}
-              assignedPickerId={request.assigned_picker_id}
-              assignedPickerName={assignedPickerName}
-              pickers={pickers}
-              viewerCanPick={viewerCanPick}
-              openPhysicalSignature={openPhysicalSignature}
-              orderLabel={formatOrderNumber((request as { order_number?: number | null }).order_number) ?? null}
-              replacement={
-                replacement && replacement.live
-                  ? {
-                      returnId: replacement.returnId,
-                      returnNumber: replacement.returnNumber,
-                      waitingForReturn: replacement.waitingForReturn,
-                      returnClosed: replacement.returnClosed,
-                      canReleaseEarly: replacement.canReleaseEarly,
-                      driverLine: replacement.driverLine,
-                      exchangeStatus: replacement.exchangeStatus,
-                      held: replacement.held,
-                    }
-                  : null
-              }
-            />
-          )}
+            {showActionsPanel && (
+              // canApprove drives the manage-only sections inside the
+              // panel (Approve/Deny, AssignDelivery, Internal notes).
+              // A staff driver who only sees the panel for in-transit
+              // actions still gets MarkInTransit + CollectSignature but
+              // none of the manager-only controls.
+              <ManagerActionsPanel
+                canApprove={canApprove}
+                canAssignDelivery={canAssignDelivery}
+                stockGates={stockGates}
+                approveNotice={approveNotice}
+                partialPreview={partialPreview}
+                completionConfirm={completionConfirm}
+                departureLines={departureLines}
+                orderId={id}
+                status={request.status}
+                internalNotes={request.internal_notes}
+                neededBy={neededBy}
+                orgTimeZone={orgTimeZone}
+                hasRequesterNote={Boolean(request.notes?.trim())}
+                fulfillmentType={request.fulfillment_type}
+                assignedDeliveryUserId={request.assigned_delivery_user_id}
+                signatureToken={handOverLink}
+                handOverMfaMessage={
+                  handOverMfa ? handOverMfaPanelMessage(handOverMfa.reason) : null
+                }
+                hasSignature={hasCapturedSignature(request)}
+                signedByName={request.signed_by_name}
+                signedAt={request.signed_at}
+                drivers={drivers}
+                viewerRole={ctx.role}
+                viewerUserId={ctx.userId}
+                assignedPickerId={request.assigned_picker_id}
+                assignedPickerName={assignedPickerName}
+                pickers={pickers}
+                viewerCanPick={viewerCanPick}
+                openPhysicalSignature={openPhysicalSignature}
+                orderLabel={
+                  formatOrderNumber((request as { order_number?: number | null }).order_number) ??
+                  null
+                }
+                replacement={
+                  replacement && replacement.live
+                    ? {
+                        returnId: replacement.returnId,
+                        returnNumber: replacement.returnNumber,
+                        waitingForReturn: replacement.waitingForReturn,
+                        returnClosed: replacement.returnClosed,
+                        canReleaseEarly: replacement.canReleaseEarly,
+                        driverLine: replacement.driverLine,
+                        exchangeStatus: replacement.exchangeStatus,
+                        held: replacement.held,
+                      }
+                    : null
+                }
+              />
+            )}
 
-          {showLiveTrackingShare && <DeliveryLocationShare orderId={id} />}
+            {showLiveTrackingShare && <DeliveryLocationShare orderId={id} />}
 
-          {showShippingPanel && (
-            <ShippingPanel
-              orderId={id}
-              canBuyLabel={canBuyLabel}
-              charterSettingsHref="/dashboard/admin/charters"
-            />
-          )}
+            {showShippingPanel && (
+              <ShippingPanel
+                orderId={id}
+                canBuyLabel={canBuyLabel}
+                charterSettingsHref="/dashboard/admin/charters"
+              />
+            )}
 
-          {(canAttach || attachments.length > 0) && (
-            <OrderAttachmentsPanel
-              orderId={id}
-              organizationId={ctx.organizationId}
-              attachments={attachments}
-              canManage={canManageAttachments}
-              canAttach={canAttach}
-            />
-          )}
+            {(canAttach || attachments.length > 0) && (
+              <OrderAttachmentsPanel
+                orderId={id}
+                organizationId={ctx.organizationId}
+                attachments={attachments}
+                canManage={canManageAttachments}
+                canAttach={canAttach}
+              />
+            )}
 
-          {request.denied_reason && request.status === 'denied' && (
-            <section className="bg-card border-destructive/40 rounded-xl border p-4">
-              <h2 className="text-destructive text-sm font-medium">Denied</h2>
-              <p className="mt-1 whitespace-pre-wrap text-sm">
-                {request.denied_reason}
-              </p>
-            </section>
-          )}
+            {request.denied_reason && request.status === 'denied' && (
+              <DetailSection
+                title={<span className="text-destructive">Denied</span>}
+                className="border-destructive/40"
+                data-testid="order-denied"
+              >
+                <p className="whitespace-pre-wrap text-[13.5px]">{request.denied_reason}</p>
+              </DetailSection>
+            )}
 
-          <section className="bg-card rounded-xl border p-4">
-            <h2 className="font-display mb-3 text-base font-medium">Timeline</h2>
-            {/* Async RSC (audit_logs + user_profiles) — Suspense lets the rest
+            <DetailSection title="Timeline" data-testid="order-timeline">
+              {/* Async RSC (audit_logs + user_profiles) — Suspense lets the rest
                 of the order page flush immediately and the timeline stream in,
                 instead of its queries blocking every render (including each
                 realtime router.refresh() during a delivery). */}
-            <React.Suspense
-              fallback={
-                <div className="space-y-2" aria-hidden>
-                  <div className="bg-muted h-4 w-2/3 animate-pulse rounded" />
-                  <div className="bg-muted h-4 w-1/2 animate-pulse rounded" />
-                  <div className="bg-muted h-4 w-3/5 animate-pulse rounded" />
-                </div>
-              }
-            >
-              <OrderTimeline
-                orderId={request.id}
-                organizationId={ctx.organizationId}
-                timeZone={orgTimeZone}
-                canReadActivity={can(ctx, 'activity_logs:read')}
-              />
-            </React.Suspense>
-          </section>
-        </div>
+              <React.Suspense
+                fallback={
+                  <div className="space-y-2" aria-hidden>
+                    <div className="bg-muted h-4 w-2/3 animate-pulse rounded" />
+                    <div className="bg-muted h-4 w-1/2 animate-pulse rounded" />
+                    <div className="bg-muted h-4 w-3/5 animate-pulse rounded" />
+                  </div>
+                }
+              >
+                <OrderTimeline
+                  orderId={request.id}
+                  organizationId={ctx.organizationId}
+                  timeZone={orgTimeZone}
+                  canReadActivity={can(ctx, 'activity_logs:read')}
+                />
+              </React.Suspense>
+            </DetailSection>
+          </div>
 
-        <aside className="space-y-4">
-          <section className="bg-card rounded-xl border p-4 text-xs">
-            <h2 className="text-muted-foreground mb-2 text-[10.5px] uppercase tracking-[0.08em]">
-              Dates
-            </h2>
-            <dl className="space-y-1.5 text-[11.5px]">
-              {(neededBy || neededByChangeInDates) && (
-                <div className="flex justify-between gap-3" data-testid="dates-needed-by">
-                  <dt className="text-muted-foreground">Needed by</dt>
-                  {/* In the org's zone, not the server's (UTC on Vercel). The
+          {/* The facts rail (the tour's `main aside`): label and value rows
+            (DESIGN-SPEC 6.7). Below the two-column width it follows the main
+            column, as before. */}
+          <aside className="flex min-w-0 flex-col gap-4">
+            <DetailSection title="Dates" flush>
+              <KeyValueList>
+                {(neededBy || neededByChangeInDates) && (
+                  <KeyValueRow
+                    label="Needed by"
+                    data-testid="dates-needed-by"
+                    valueClassName="font-medium"
+                  >
+                    {/* In the org's zone, not the server's (UTC on Vercel). The
                       rows below are relative ("2 hours ago"): a difference
                       from now, the same in every zone. F2-4: Change beside it
                       where the readiness strip does not carry it. */}
-                  <dd className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 text-right font-medium">
-                    <span>{neededBy ? formatNeededBy(neededBy, orgTimeZone) : '—'}</span>
-                    {neededByChangeInDates && neededByChange && (
-                      <NeededByChangeButton orderId={neededByChange.orderId} className="h-6 font-normal" />
-                    )}
-                  </dd>
-                </div>
-              )}
-              {TIMELINE_FIELDS.map(({ key, label }) => {
-                const v = request[key] as string | null;
-                if (!v) return null;
-                return (
-                  <div key={String(key)} className="flex justify-between gap-3">
-                    <dt className="text-muted-foreground">{label}</dt>
-                    <dd className="tabular-nums text-right">{formatRelative(v)}</dd>
-                  </div>
-                );
-              })}
-            </dl>
-          </section>
+                    <span className="inline-flex flex-wrap items-center justify-end gap-x-2 gap-y-1">
+                      <span>{neededBy ? formatNeededBy(neededBy, orgTimeZone) : '—'}</span>
+                      {neededByChangeInDates && neededByChange && (
+                        <NeededByChangeButton
+                          orderId={neededByChange.orderId}
+                          className="font-normal"
+                        />
+                      )}
+                    </span>
+                  </KeyValueRow>
+                )}
+                {TIMELINE_FIELDS.map(({ key, label }) => {
+                  const v = request[key] as string | null;
+                  if (!v) return null;
+                  return (
+                    <KeyValueRow key={String(key)} label={label}>
+                      {formatRelative(v)}
+                    </KeyValueRow>
+                  );
+                })}
+              </KeyValueList>
+            </DetailSection>
 
-          <section className="bg-card rounded-xl border p-4 text-xs">
-            <h2 className="text-muted-foreground mb-2 text-[10.5px] uppercase tracking-[0.08em]">
-              Details
-            </h2>
-            <dl className="space-y-1.5 text-[11.5px]">
-              <div className="flex justify-between gap-3">
-                <dt className="text-muted-foreground">Requester</dt>
-                <dd className="text-right">{requesterDisplay}</dd>
-              </div>
-              {request.requester_email && (
-                <div className="flex justify-between gap-3">
-                  <dt className="text-muted-foreground">Email</dt>
-                  <dd className="truncate text-right">{request.requester_email}</dd>
-                </div>
-              )}
-              {request.signed_by_name && (
-                <div className="flex justify-between gap-3">
-                  <dt className="text-muted-foreground">Signed by</dt>
-                  <dd className="text-right">
+            <DetailSection title="Details" flush>
+              <KeyValueList>
+                <KeyValueRow label="Requester">{requesterDisplay}</KeyValueRow>
+                {request.requester_email && (
+                  <KeyValueRow label="Email">{request.requester_email}</KeyValueRow>
+                )}
+                {request.signed_by_name && (
+                  <KeyValueRow label="Signed by">
                     {request.signed_by_name}
                     {/* Only call out "on behalf of" when the actual
-                        signer is a DIFFERENT person from the requester.
-                        Trim + lowercase comparison so trailing-space or
-                        casing differences don't render a confusing
-                        "John on behalf of John" row. */}
+                      signer is a DIFFERENT person from the requester.
+                      Trim + lowercase comparison so trailing-space or
+                      casing differences don't render a confusing
+                      "John on behalf of John" row. */}
                     {request.requester_name &&
                     request.signed_by_name.trim().toLowerCase() !==
                       request.requester_name.trim().toLowerCase() ? (
-                      <span className="text-muted-foreground block text-[10.5px]">
+                      <span className="text-muted-foreground block text-[12px]">
                         on behalf of {request.requester_name}
                       </span>
                     ) : null}
-                  </dd>
-                </div>
-              )}
-              {request.signed_by_email &&
-                request.signed_by_email !== request.requester_email && (
-                  <div className="flex justify-between gap-3">
-                    <dt className="text-muted-foreground">Signer email</dt>
-                    <dd className="truncate text-right">{request.signed_by_email}</dd>
-                  </div>
+                  </KeyValueRow>
                 )}
-              <div className="flex justify-between gap-3">
-                <dt className="text-muted-foreground">Source</dt>
-                <dd className="text-right capitalize">
-                  {request.source === 'public_link' ? 'Public link' : request.source === 'portal' ? 'Customer portal' : 'Internal'}
-                </dd>
-              </div>
-              <div className="flex justify-between gap-3">
-                <dt className="text-muted-foreground">Warehouse</dt>
-                <dd className="text-right">{warehouseName ?? '—'}</dd>
-              </div>
-              <div className="flex justify-between gap-3">
-                <dt className="text-muted-foreground">Updated</dt>
-                <dd className="tabular-nums text-right">
-                  {formatRelative(request.updated_at)}
-                </dd>
-              </div>
-            </dl>
-          </section>
-        </aside>
+                {request.signed_by_email && request.signed_by_email !== request.requester_email && (
+                  <KeyValueRow label="Signer email">{request.signed_by_email}</KeyValueRow>
+                )}
+                <KeyValueRow label="Source" valueClassName="capitalize">
+                  {request.source === 'public_link'
+                    ? 'Public link'
+                    : request.source === 'portal'
+                      ? 'Customer portal'
+                      : 'Internal'}
+                </KeyValueRow>
+                <KeyValueRow label="Warehouse">{warehouseName ?? '—'}</KeyValueRow>
+                <KeyValueRow label="Updated">{formatRelative(request.updated_at)}</KeyValueRow>
+              </KeyValueList>
+            </DetailSection>
+          </aside>
+        </div>
       </div>
     </div>
   );

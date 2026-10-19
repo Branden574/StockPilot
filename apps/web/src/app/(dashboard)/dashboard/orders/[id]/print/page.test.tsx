@@ -177,3 +177,66 @@ describe('order print page: the order is named by its number (L91)', () => {
     expect((container.textContent ?? '').match(/Order #11111111/g)).toHaveLength(2);
   });
 });
+
+// CONFLICTS D6: the print rule hid `aside, header` to drop the dashboard
+// chrome, and the bare `header` also matched the slip's own <header> (logo,
+// org, "Packing Slip", status, dates), so the printed copy lost its title
+// block (confirmed in a print-media render of the lab build). The rule now
+// spares the slip's header; the shell's top bar (a plain <header>) and the
+// sidebar (<aside>) are still hidden.
+describe('order print page: the slip keeps its own header on paper (D6)', () => {
+  /** The selectors the print block sets to display: none. */
+  function hiddenSelectors(css: string): string[] {
+    const print = css.slice(css.indexOf('@media print'));
+    const out: string[] = [];
+    for (const m of print.matchAll(/([^{}]+)\{\s*display:\s*none\s*!important;?\s*\}/g)) {
+      out.push(
+        ...m[1]!
+          .replace(/\/\*[\s\S]*?\*\//g, '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean),
+      );
+    }
+    return out;
+  }
+
+  it('hides the shell chrome but not the slip header', async () => {
+    orderGet.mockResolvedValue({
+      request: {
+        id: '11111111-1111-1111-1111-111111111111',
+        warehouse_id: 'wh-1',
+        status: 'approved',
+        created_at: '2026-09-01T00:00:00Z',
+        approved_at: null,
+        notes: null,
+        order_number: 49,
+      },
+      lines: [],
+      warehouseName: 'DC4',
+      requesterDisplay: 'Pat',
+    });
+    stubWith(() => ({ data: [], error: null }));
+
+    const { container } = render(await OrderPrintPage({ params: Promise.resolve({ id: 'o1' }) }));
+    const css = container.querySelector('style')?.textContent ?? '';
+    const selectors = hiddenSelectors(css);
+    expect(selectors.length).toBeGreaterThan(0);
+    const hides = (el: Element) => selectors.some((sel) => el.matches(sel));
+
+    const slipHeader = container.querySelector('.print-slip header');
+    expect(slipHeader).not.toBeNull();
+    expect(slipHeader!.textContent).toContain('Packing Slip');
+    expect(slipHeader!.textContent).toContain('Order SO-000049');
+    expect(hides(slipHeader!)).toBe(false);
+
+    // The shell's chrome, as the dashboard renders it, is still hidden.
+    const shell = document.createElement('div');
+    shell.innerHTML = '<aside></aside><header></header><a href="#main-content">Skip</a>';
+    document.body.appendChild(shell);
+    expect(hides(shell.querySelector('aside')!)).toBe(true);
+    expect(hides(shell.querySelector('header')!)).toBe(true);
+    expect(hides(shell.querySelector('a')!)).toBe(true);
+    shell.remove();
+  });
+});

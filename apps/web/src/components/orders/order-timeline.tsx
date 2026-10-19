@@ -10,6 +10,7 @@ import {
   type HoldOrderStockResult,
 } from '@stockpilot/core';
 
+import { Timeline, TimelineEntry } from '@/components/patterns/timeline';
 import { LocalDateTime } from '@/components/ui/local-datetime';
 import { isPlatformAdmin } from '@/lib/auth/platform-admin';
 import { orderTimelineActor } from '@/lib/people/deleted-person-labels';
@@ -106,9 +107,13 @@ function eventLabel(event: string, metadata: Record<string, unknown> | null): st
   const rma = typeof metadata?.returnNumber === 'string' ? metadata.returnNumber : null;
   if (typeof metadata?.replacementForReturnId === 'string') {
     if (event === 'order_request.created') {
-      return createdAsReplacementLabel(rma, typeof metadata.revision === 'number' ? metadata.revision : null);
+      return createdAsReplacementLabel(
+        rma,
+        typeof metadata.revision === 'number' ? metadata.revision : null,
+      );
     }
-    if (event === 'order_request.approved') return `Approved with the exchange${rma ? ` (${rma})` : ''}`;
+    if (event === 'order_request.approved')
+      return `Approved with the exchange${rma ? ` (${rma})` : ''}`;
     if (event === 'order_request.cancelled') return `Cancelled from ${rma ?? 'its RMA'}`;
     // RX-4 fix round 1 (desk check people L3): "Close the rest", and the RMA
     // cancel's close of a part-handed-over backorder, end the rest from the RMA.
@@ -303,7 +308,9 @@ export async function OrderTimeline({ orderId, organizationId, timeZone, canRead
   // order's history, and "No events yet." would be untrue. Say why instead,
   // and read nothing.
   if (!canReadActivity) {
-    return <div className="text-muted-foreground text-sm">{ORDER_TIMELINE_NO_ACTIVITY_ACCESS}</div>;
+    return (
+      <p className="text-muted-foreground text-[13.5px]">{ORDER_TIMELINE_NO_ACTIVITY_ACCESS}</p>
+    );
   }
   const zone = resolveOrgTimezone(timeZone);
   const supabase = await createClient();
@@ -322,14 +329,10 @@ export async function OrderTimeline({ orderId, organizationId, timeZone, canRead
   const rows = (data ?? []) as AuditRow[];
 
   if (rows.length === 0) {
-    return (
-      <div className="text-muted-foreground text-sm">No events yet.</div>
-    );
+    return <p className="text-muted-foreground text-[13.5px]">No events yet.</p>;
   }
 
-  const userIds = [
-    ...new Set(rows.map((r) => r.user_id).filter((v): v is string => Boolean(v))),
-  ];
+  const userIds = [...new Set(rows.map((r) => r.user_id).filter((v): v is string => Boolean(v)))];
   const usersById = new Map<string, UserProfile>();
   if (userIds.length > 0) {
     const { data: profiles } = await supabase
@@ -343,49 +346,61 @@ export async function OrderTimeline({ orderId, organizationId, timeZone, canRead
   }
 
   return (
-    <ol className="border-border space-y-3 border-l-2 pl-4">
+    // The shared history rail (Timeline, DESIGN-SPEC 6.16 family): a dot per
+    // event joined by a hairline, the event and who did it, then when, then
+    // the detail lines.
+    <Timeline>
       {rows.map((row) => {
         const label = eventLabel(row.event, row.metadata);
-        const profile = row.user_id ? usersById.get(row.user_id) ?? null : null;
+        const profile = row.user_id ? (usersById.get(row.user_id) ?? null) : null;
         // An event with no user is a public-link step ("Public"), unless its
         // marker records that the actor deleted their account (0393).
         const actor = orderTimelineActor(profile, row);
         const details = humanDetails(row.event, row.metadata, actor, zone);
         return (
-          <li key={row.id} className="relative">
-            <span className="bg-primary absolute -left-[1.4rem] top-1.5 h-2 w-2 rounded-full" />
-            <div className="text-sm">
-              <span className="font-medium">{label}</span>
-              <span className="text-muted-foreground"> — {actor}</span>
-            </div>
-            {/* This is a SERVER component, so toLocaleString() ran in the
-                deployment's timezone (UTC on Vercel) and there was no
-                hydration pass to correct it — every entry showed a wall-clock
-                time hours off from the viewer's, permanently. LocalDateTime is
-                a client component that fills the text in after mount. */}
-            <div className="text-muted-foreground text-xs">
-              <LocalDateTime iso={row.created_at} />
-            </div>
-            {details.length > 0 && (
-              <div className="text-muted-foreground mt-1 space-y-0.5 text-xs">
-                {details.map((d, i) => (
-                  <p key={i}>{d}</p>
-                ))}
-              </div>
-            )}
-            {showRaw && row.metadata && (
-              <details className="text-muted-foreground mt-1 text-xs">
-                <summary className="cursor-pointer opacity-70">
-                  Raw event · platform admin
-                </summary>
-                <pre className="mt-1 whitespace-pre-wrap text-[11px]">
-                  {JSON.stringify(row.metadata, null, 2)}
-                </pre>
-              </details>
-            )}
-          </li>
+          <TimelineEntry
+            key={row.id}
+            title={
+              <>
+                <span className="font-medium">{label}</span>
+                <span className="text-muted-foreground"> — {actor}</span>
+              </>
+            }
+            // This is a SERVER component, so toLocaleString() ran in the
+            // deployment's timezone (UTC on Vercel) and there was no
+            // hydration pass to correct it — every entry showed a wall-clock
+            // time hours off from the viewer's, permanently. LocalDateTime is
+            // a client component that fills the text in after mount.
+            meta={<LocalDateTime iso={row.created_at} />}
+          >
+            {/* One child or none, so an event with nothing more to say draws
+                no empty detail block. */}
+            {details.length > 0 || (showRaw && row.metadata) ? (
+              <>
+                {details.length > 0 && (
+                  <div className="text-muted-foreground space-y-0.5 text-[12.5px] leading-[18px]">
+                    {details.map((d, i) => (
+                      <p key={i}>{d}</p>
+                    ))}
+                  </div>
+                )}
+                {showRaw && row.metadata && (
+                  <details className="text-muted-foreground mt-1 text-[12px]">
+                    {/* The muted ink at full strength: a 70 % opacity on it
+                        fell under the 4.5:1 text contrast in both themes. */}
+                    <summary className="hover:text-foreground cursor-pointer">
+                      Raw event · platform admin
+                    </summary>
+                    <pre className="mt-1 whitespace-pre-wrap text-[11px]">
+                      {JSON.stringify(row.metadata, null, 2)}
+                    </pre>
+                  </details>
+                )}
+              </>
+            ) : null}
+          </TimelineEntry>
         );
       })}
-    </ol>
+    </Timeline>
   );
 }

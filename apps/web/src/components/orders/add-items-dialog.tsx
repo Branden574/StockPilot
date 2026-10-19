@@ -160,7 +160,12 @@ export function AddItemsDialog({
         Add items
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="sm:max-w-2xl">
+        {/* One column that never grows past the dialog: the content is a grid
+            whose implicit track took the width of the longest item name (a
+            truncated name is one unbroken line), so a 120-character name made
+            the column 860 px in a 672 px dialog and pushed the search, the
+            list, Selected and the buttons off its right edge. */}
+        <DialogContent className="grid-cols-[minmax(0,1fr)] sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Add items to this order</DialogTitle>
             <DialogDescription>
@@ -173,7 +178,7 @@ export function AddItemsDialog({
                 reached it silently, which review flagged as the same defect one
                 door over. */}
             {isPickingSettled(status) && (
-              <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+              <p className="bg-warning-wash text-warning mt-2 rounded-md px-3 py-2 text-[12.5px]">
                 Picking on this order is already complete. Anything added here will need picking
                 before hand-over, or it will be reported as owed.
               </p>
@@ -413,7 +418,9 @@ function AddItemsBody({
 
   return (
     <div className="space-y-3">
-      <div className="bg-muted/50 inline-flex rounded-md p-0.5 text-sm">
+      {/* The segmented look (DESIGN-SPEC 6.5) on the same aria-pressed
+          toggles. */}
+      <div className="border-border bg-sunk inline-flex gap-0.5 rounded-lg border p-[3px] text-[13px]">
         <PickerTabButton active={tab === 'inventory'} onClick={() => setTab('inventory')}>
           Inventory
         </PickerTabButton>
@@ -469,22 +476,23 @@ function AddItemsBody({
                         aria-pressed={staged}
                         onClick={() => toggle(row)}
                         className={cn(
-                          'hover:bg-muted/40 flex w-full items-center gap-3 px-3 py-2 text-left',
-                          staged && 'bg-muted/30',
+                          'flex w-full items-center gap-3 px-3 py-2 text-left',
+                          'focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset',
+                          staged ? 'bg-success-wash' : 'hover:bg-muted',
                         )}
                       >
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm">{row.name}</span>
-                          <span className="text-muted-foreground block truncate font-mono text-xs">
+                          <span className="block truncate text-[13.5px]">{row.name}</span>
+                          <span className="text-muted-foreground block truncate font-mono text-[11.5px]">
                             {row.sku}
                           </span>
                         </span>
                         {onOrder !== undefined && (
-                          <span className="shrink-0 text-xs tabular-nums text-amber-700 dark:text-amber-300">
+                          <span className="text-warning shrink-0 text-[12px] tabular-nums">
                             On order · {formatNumber(onOrder)}
                           </span>
                         )}
-                        <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
+                        <span className="text-muted-foreground shrink-0 text-[12px] tabular-nums">
                           {formatNumber(row.quantity_on_hand)} on hand
                         </span>
                       </button>
@@ -529,11 +537,11 @@ function AddItemsBody({
       </div>
 
       <div className="border-border overflow-hidden rounded-md border">
-        <div className="border-border bg-muted/30 border-b px-3 py-2">
-          <h3 className="text-xs font-medium">Selected ({entries.length})</h3>
+        <div className="border-border bg-sunk border-b px-3 py-2">
+          <h3 className="text-[12.5px] font-medium">Selected ({entries.length})</h3>
         </div>
         {entries.length === 0 ? (
-          <p className="text-muted-foreground px-3 py-4 text-center text-xs">
+          <p className="text-muted-foreground px-3 py-4 text-center text-[12.5px]">
             Pick items above to add them to this order.
           </p>
         ) : (
@@ -543,8 +551,8 @@ function AddItemsBody({
               return (
                 <li key={p.row.id} className="flex items-center gap-2 px-3 py-2">
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm">{p.row.name}</span>
-                    <span className="text-muted-foreground block truncate font-mono text-xs">
+                    <span className="block truncate text-[13.5px]">{p.row.name}</span>
+                    <span className="text-muted-foreground block truncate font-mono text-[11.5px]">
                       {p.row.sku}
                     </span>
                     {onOrder !== undefined && (
@@ -557,7 +565,7 @@ function AddItemsBody({
                       // item only the LAST row is topped up and no single line
                       // ever reads this number. The item total is the figure
                       // that is true either way.
-                      <span className="block text-xs text-amber-700 dark:text-amber-300">
+                      <span className="text-warning block text-[12px]">
                         Already on this order — {formatNumber(onOrder)} requested, going to{' '}
                         {formatNumber(onOrder + (Number.isFinite(p.qty) ? p.qty : 0))} in total
                       </span>
@@ -568,7 +576,7 @@ function AddItemsBody({
                     onValueChange={(n) => setQty(p.row.id, n)}
                     min={1}
                     step={1}
-                    className="w-20 text-right tabular-nums"
+                    className="h-8 w-20 text-right font-mono tabular-nums"
                     aria-label={`Quantity for ${p.row.name}`}
                   />
                   <Button
@@ -626,9 +634,10 @@ function PickerTabButton({
       onClick={onClick}
       aria-pressed={active}
       className={cn(
-        'rounded px-3 py-1.5 font-medium transition-colors',
+        'h-7 rounded-[5px] px-2.5 font-medium transition-colors max-sm:h-10',
+        'focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset',
         active
-          ? 'bg-background text-foreground shadow-sm'
+          ? 'bg-card text-foreground ring-line-strong ring-1'
           : 'text-muted-foreground hover:text-foreground',
       )}
     >

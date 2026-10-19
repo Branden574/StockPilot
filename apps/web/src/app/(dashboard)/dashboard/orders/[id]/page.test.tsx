@@ -2233,18 +2233,31 @@ describe('orders/[id]: the Dates card prints the needed-by in the org zone', () 
 // flex-1 with a 0 basis, so the actions never wrapped: they kept their width
 // and the title took what was left. jsdom has no layout; the browser walk
 // measures the widths, this pins the rule that gives them.
+//
+// Redesign P4.B1 (look-only update of this test, owner P4.B1): the header is
+// now the shared PageHeader, which keeps the same rule a different way: its
+// title block takes its own width on a wrapping row (it is not a flex-1
+// column), the actions are its sibling on that row and wrap under it, and the
+// h1 wraps instead of truncating, so the number can never be cut to "Or...".
 describe('orders/[id]: the title is never squeezed out by the actions', () => {
-  it('the title column asks for 18rem before the actions share its line, so on a narrow screen they wrap under it', async () => {
+  it('the title sits in the shared page header, never truncated, with the actions wrapping on the same row', async () => {
     orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ order_number: 18 }) }));
     await renderPage();
     const h1 = screen.getByRole('heading', { level: 1 });
     expect(h1).toHaveTextContent('Order request SO-000018');
-    const column = h1.closest('[data-testid="order-title-column"]');
-    expect(column).not.toBeNull();
-    expect(column!.className.split(/\s+/)).toEqual(expect.arrayContaining(['min-w-0', 'flex-1', 'basis-72']));
-    // The actions are the column's sibling on the same wrapping row.
-    const row = column!.parentElement!;
+    // Never truncated: the number wraps onto a new line instead.
+    expect(h1.className.split(/\s+/)).not.toContain('truncate');
+    const header = h1.closest('[data-slot="page-header"]');
+    expect(header).not.toBeNull();
+    const actions = header!.querySelector('[data-slot="page-header-actions"]');
+    expect(actions).not.toBeNull();
+    // The actions are the title block's sibling on the same wrapping row.
+    const row = actions!.parentElement!;
+    expect(row.contains(h1)).toBe(true);
     expect(row.className.split(/\s+/)).toEqual(expect.arrayContaining(['flex', 'flex-wrap']));
+    // The title block asks for no fixed share of the row (no flex-1 squeeze).
+    const titleBlock = Array.from(row.children).find((c) => c.contains(h1))!;
+    expect(titleBlock.className.split(/\s+/)).not.toContain('flex-1');
   });
 });
 
@@ -2780,5 +2793,116 @@ describe('orders/[id]: ?sign=physical from the RMA\'s Hand over', () => {
     orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'staged_for_pickup' }) }));
     render(await OrderDetailPage({ params: Promise.resolve({ id: ORDER_ID }), searchParams: Promise.resolve({ sign: 'physical' }) }));
     expect((managerActionsProps.mock.calls.at(-1)![0] as Record<string, unknown>).openPhysicalSignature).toBe(false);
+  });
+});
+
+// Redesign P4.B1: the record page in the shared patterns. The header is
+// PageHeader (the way back, the SO number in the h1, who it is from and the
+// warehouse); every block of the main column is a titled section; Dates and
+// Details are label / value lists (dt / dd pairs) in the page's aside, the
+// tour's `main aside`. Words, order and gates are the page's own.
+describe('orders/[id]: the record layout keeps every section (P4.B1)', () => {
+  it('the page header carries the way back, the number and who it is from', async () => {
+    await renderPage();
+    const header = document.querySelector('[data-slot="page-header"]')!;
+    expect(header).not.toBeNull();
+    expect(within(header as HTMLElement).getByRole('heading', { level: 1 })).toHaveTextContent(
+      'Order request SO-000042',
+    );
+    expect(
+      within(header as HTMLElement).getByRole('link', { name: '← Back to orders' }),
+    ).toHaveAttribute('href', '/dashboard/orders');
+    expect(header).toHaveTextContent('From Jane Smith · Main DC');
+  });
+
+  it('the lines, reservations, note, denied reason and timeline are titled sections; Dates and Details sit in the aside as label / value rows', async () => {
+    orderGet.mockResolvedValue(
+      detailFixture({
+        request: requestFixture({
+          status: 'denied',
+          denied_reason: 'Over the term budget',
+          notes: 'For room 4',
+          requester_email: 'jane@school.test',
+        }),
+        reservations: [{ id: 'r1', quantity: 3 }],
+      }),
+    );
+    const { container } = await renderPage();
+    for (const title of [
+      'Lines (0)',
+      'Active reservations',
+      'Requester note',
+      'Denied',
+      'Timeline',
+    ]) {
+      const heading = screen.getByRole('heading', { level: 2, name: title });
+      expect(heading.closest('section'), title).toHaveAttribute('data-slot', 'detail-section');
+    }
+    expect(screen.getByText('No lines on this request.')).toBeInTheDocument();
+    expect(screen.getByText('For room 4')).toBeInTheDocument();
+    expect(screen.getByText('Over the term budget')).toBeInTheDocument();
+
+    const aside = container.querySelector('aside')!;
+    expect(aside).not.toBeNull();
+    const pairs = (title: string) => {
+      const section = within(aside as HTMLElement)
+        .getByRole('heading', { level: 2, name: title })
+        .closest('section')!;
+      return Array.from(section.querySelectorAll('dl > div')).map(
+        (row) => row.querySelector('dt')?.textContent,
+      );
+    };
+    expect(pairs('Dates')).toEqual(['Submitted', 'Approved']);
+    expect(pairs('Details')).toEqual(['Requester', 'Email', 'Source', 'Warehouse', 'Updated']);
+    expect(aside).toHaveTextContent('jane@school.test');
+    expect(aside).toHaveTextContent('Internal');
+    expect(aside).toHaveTextContent('Main DC');
+  });
+
+  // The 1280 shots: in the 612 px lines card the recipe's 12 px padding left
+  // the item 168 px, so names wrapped and a charter pill broke into a
+  // two-line stadium.
+  it('the line table leaves the item its room: the numbers pad 8 px a side, Line actions 4 px on its left, and a charter pill wraps into a rounded box', async () => {
+    ctxHolder.current = {
+      role: 'manager',
+      permissions: new Set(['orders:read', 'orders:approve']),
+    };
+    orderGet.mockResolvedValue(
+      detailFixture({
+        request: requestFixture({ status: 'pending_approval' }),
+        lines: [
+          {
+            ...DELIVERY_LINE,
+            item: {
+              ...DELIVERY_LINE.item,
+              charter_name: 'Valley Learning Center',
+              charter_code: 'VLC',
+            },
+          },
+        ],
+      }),
+    );
+    await renderPage();
+    const heads = screen.getAllByRole('columnheader');
+    expect(heads.map((h) => h.textContent?.trim())).toEqual([
+      'Item',
+      'Requested',
+      'Fulfilled',
+      'Owed',
+      'On hand',
+      'Line actions',
+    ]);
+    const row = screen.getByText('Google Chrome Book').closest('tr')!;
+    for (const i of [1, 2, 3, 4]) {
+      expect(heads[i]!.className, heads[i]!.textContent!).toMatch(/(^|\s)px-2(\s|$)/);
+      expect(row.cells[i]!.className, heads[i]!.textContent!).toMatch(/(^|\s)px-2(\s|$)/);
+    }
+    expect(heads[5]!.className).toMatch(/(^|\s)pl-1(\s|$)/);
+    expect(row.cells[5]!.className).toMatch(/(^|\s)pl-1(\s|$)/);
+    const charter = within(row.cells[0]!).getByTestId('order-line-charter');
+    expect(charter).toHaveTextContent('Valley Learning Center');
+    expect(charter).toHaveAttribute('title', 'Earmarked for Valley Learning Center (VLC)');
+    expect(charter.className).toMatch(/(^|\s)rounded-\[10px\](\s|$)/);
+    expect(charter.className).not.toMatch(/rounded-full/);
   });
 });

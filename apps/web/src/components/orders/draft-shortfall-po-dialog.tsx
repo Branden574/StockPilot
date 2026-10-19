@@ -92,7 +92,8 @@ function draftableChanged(a: ShortfallPoView, b: ShortfallPoView): boolean {
  *  "Check again", which is always there, rather than the page's body. */
 const FOCUS_FALLBACK = '[data-testid="readiness-recheck"]';
 
-type Phase = { step: 'choose' } | { step: 'drafting' } | { step: 'done'; result: ShortfallPoResult };
+type Phase =
+  { step: 'choose' } | { step: 'drafting' } | { step: 'done'; result: ShortfallPoResult };
 
 /**
  * DRAFT A PO FOR WHAT AN ORDER IS SHORT (F2-5), on the web order page.
@@ -186,7 +187,11 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
 
   function adopt(fresh: ShortfallPoView) {
     setView(fresh);
-    setSelection((sel) => (touched.current ? keepShortfallSelection(sel, fresh).selection : defaultShortfallSelection(fresh)));
+    setSelection((sel) =>
+      touched.current
+        ? keepShortfallSelection(sel, fresh).selection
+        : defaultShortfallSelection(fresh),
+    );
     if (!touched.current) setKeyState(null);
   }
 
@@ -198,7 +203,10 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
     const seq = ++loadSeq.current;
     let res: ShortfallPoLoad | null;
     try {
-      res = await loadShortfallPoAction({ orderId: forOrder, supplierIds: shortfallSupplierIds(shown) });
+      res = await loadShortfallPoAction({
+        orderId: forOrder,
+        supplierIds: shortfallSupplierIds(shown),
+      });
     } catch {
       res = null;
     }
@@ -261,7 +269,9 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
       !!el && el.isConnected && !(el as HTMLButtonElement).disabled;
     const candidates = [
       opener,
-      session ? document.querySelector<HTMLElement>(`[data-shortfall-po="${session.orderId}"]`) : null,
+      session
+        ? document.querySelector<HTMLElement>(`[data-shortfall-po="${session.orderId}"]`)
+        : null,
       // The button is gone once nothing is left to draft (the refresh after
       // drafting): the strip's "Check again", never the page's body (WCAG
       // 2.4.3, review).
@@ -335,7 +345,9 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
       return;
     }
     const details = res.error.details ?? {};
-    const reason = (typeof details.reason === 'string' ? details.reason : 'failed') as ShortfallPoFailureReason;
+    const reason = (
+      typeof details.reason === 'string' ? details.reason : 'failed'
+    ) as ShortfallPoFailureReason;
     const message = res.error.message;
     setPhase({ step: 'choose' });
     // Only "busy" and a fault are the same request tried again.
@@ -346,7 +358,8 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
     let chosen = selection;
     let unchosen: string[] = [];
     let shown = view;
-    const current = reason === 'shortfall_changed' ? parseShortfallChangedDetail(details.current) : null;
+    const current =
+      reason === 'shortfall_changed' ? parseShortfallChangedDetail(details.current) : null;
     if (current) {
       // The database's own numbers, at once (core: lowered, never raised).
       shown = shortfallViewWithMaxima(view, current);
@@ -368,7 +381,8 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
       // or nothing is left to draft at all (that sentence says it all).
       if (fresh && fresh.unavailable === null && editSeq.current === edits && !inFlight.current) {
         const more = keepShortfallSelection(chosen, fresh).unchosen;
-        if (more.length > 0) setError(shortfallRefusalCopy(message, before, [...unchosen, ...more]));
+        if (more.length > 0)
+          setError(shortfallRefusalCopy(message, before, [...unchosen, ...more]));
       }
     }
     if (reason === 'not_found') {
@@ -384,7 +398,10 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
   const chosenLines: ShortfallPoLine[] = view
     ? view.rows
         .filter((r) => r.state === 'draftable' && selection[r.itemId]?.checked)
-        .map((r) => ({ itemId: r.itemId, quantity: parseShortfallQuantity(selection[r.itemId]!.quantity) ?? 0 }))
+        .map((r) => ({
+          itemId: r.itemId,
+          quantity: parseShortfallQuantity(selection[r.itemId]!.quantity) ?? 0,
+        }))
     : [];
   const check = view ? checkShortfallSelection(view, selection) : null;
   const done = phase.step === 'done' ? phase.result : null;
@@ -397,13 +414,18 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
   // first read is on its way.
   const supplierText = (supplierId: string | null): string | null => {
     if (!supplierId) return shortfallSupplierLabel(null, null);
-    if (names && (supplierId in names || !namesFailed)) return shortfallSupplierLabel(supplierId, names);
+    if (names && (supplierId in names || !namesFailed))
+      return shortfallSupplierLabel(supplierId, names);
     return namesFailed ? shortfallSupplierLabel(supplierId, null) : null;
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl" data-testid="draft-shortfall-po-dialog" onCloseAutoFocus={returnFocus}>
+      <DialogContent
+        className="max-w-2xl"
+        data-testid="draft-shortfall-po-dialog"
+        onCloseAutoFocus={returnFocus}
+      >
         <DialogHeader>
           <DialogTitle>{SHORTFALL_PO_TITLE}</DialogTitle>
           {view && (
@@ -418,28 +440,40 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
             filled in. */}
         <div role="status" aria-live="polite" data-testid="draft-shortfall-po-status">
           {done && (
-            <p className="text-sm font-medium" data-testid="draft-shortfall-po-result">
+            <p className="text-[13.5px] font-medium" data-testid="draft-shortfall-po-result">
               {shortfallPoCreatedCopy(done)}
             </p>
           )}
           {!done && notice && (
-            <p className="text-muted-foreground text-sm" data-testid="draft-shortfall-po-notice">
+            <p
+              className="text-muted-foreground text-[13.5px]"
+              data-testid="draft-shortfall-po-notice"
+            >
               {notice}
             </p>
           )}
         </div>
 
         {done && done.created.length > 0 && (
-          <ul className="border-border divide-border divide-y rounded-lg border text-sm" data-testid="draft-shortfall-po-created">
+          <ul
+            className="border-border divide-border divide-y rounded-lg border text-[13.5px]"
+            data-testid="draft-shortfall-po-created"
+          >
             {done.created.map((c) => (
-              <li key={c.purchaseOrderId} className="px-3 py-2" data-testid="draft-shortfall-po-created-row">
+              <li
+                key={c.purchaseOrderId}
+                className="px-3 py-2"
+                data-testid="draft-shortfall-po-created-row"
+              >
                 <IntentLink
                   href={`/dashboard/purchase-orders/${c.purchaseOrderId}`}
-                  className="text-primary font-medium underline-offset-2 hover:underline"
+                  className="text-accent hover:text-foreground font-mono font-medium underline-offset-2 hover:underline"
                 >
                   {shortfallPoCreatedRowCopy(c)}
                 </IntentLink>
-                <p className="text-muted-foreground mt-0.5 text-xs">{supplierText(c.supplierId) ?? ''}</p>
+                <p className="text-muted-foreground mt-0.5 text-[12px]">
+                  {supplierText(c.supplierId) ?? ''}
+                </p>
               </li>
             ))}
           </ul>
@@ -448,7 +482,7 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
         {/* Not twice: a refusal that says the same (picked or closed, more
             lines than are checked) is the alert below. */}
         {!done && view && view.rows.length === 0 && view.unavailableCopy !== error && (
-          <p className="text-sm" data-testid="draft-shortfall-po-unavailable">
+          <p className="text-[13.5px]" data-testid="draft-shortfall-po-unavailable">
             {view.unavailableCopy}
           </p>
         )}
@@ -456,14 +490,14 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
         {!done && view && view.rows.length > 0 && (
           <div className="grid gap-2">
             {view.draftableCount > 0 && (
-              <div className="text-muted-foreground flex justify-end px-3 text-xs" aria-hidden>
+              <div className="text-muted-foreground flex justify-end px-3 text-[12px]" aria-hidden>
                 <span id={qtyHeaderId} className="w-24 text-right">
                   {SHORTFALL_PO_QUANTITY_LABEL}
                 </span>
               </div>
             )}
             <ul
-              className="border-border divide-border max-h-[50vh] divide-y overflow-y-auto rounded-lg border text-sm"
+              className="border-border divide-border max-h-[50vh] divide-y overflow-y-auto rounded-lg border text-[13.5px]"
               aria-busy={names === null && !namesFailed ? true : undefined}
               data-testid="draft-shortfall-po-rows"
             >
@@ -476,7 +510,11 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
                   qtyHeaderId={qtyHeaderId}
                   checked={row.state === 'draftable' && !!selection[row.itemId]?.checked}
                   quantity={selection[row.itemId]?.quantity ?? ''}
-                  problem={row.state === 'draftable' && selection[row.itemId]?.checked ? (check?.problems[row.itemId] ?? null) : null}
+                  problem={
+                    row.state === 'draftable' && selection[row.itemId]?.checked
+                      ? (check?.problems[row.itemId] ?? null)
+                      : null
+                  }
                   supplier={row.state === 'draftable' ? supplierText(row.supplierId) : null}
                   disabled={drafting}
                   onToggle={(checked) => edit(row.itemId, { checked })}
@@ -485,12 +523,18 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
               ))}
             </ul>
             {view.hiddenNote && (
-              <p className="text-muted-foreground text-xs" data-testid="draft-shortfall-po-hidden">
+              <p
+                className="text-muted-foreground text-[12px]"
+                data-testid="draft-shortfall-po-hidden"
+              >
                 {view.hiddenNote}
               </p>
             )}
             {view.draftableCount > 0 && (
-              <p className="text-muted-foreground text-xs" data-testid="draft-shortfall-po-footer">
+              <p
+                className="text-muted-foreground text-[12px]"
+                data-testid="draft-shortfall-po-footer"
+              >
                 {shortfallPoFooterCopy(shortfallDraftGroups(view, chosenLines))}
               </p>
             )}
@@ -498,19 +542,33 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
         )}
 
         {error && (
-          <p role="alert" className="text-destructive text-sm" data-testid="draft-shortfall-po-error">
+          <p
+            role="alert"
+            className="text-destructive text-[13.5px]"
+            data-testid="draft-shortfall-po-error"
+          >
             {error}
           </p>
         )}
 
         <DialogFooter>
           {done ? (
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} data-testid="draft-shortfall-po-close">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              data-testid="draft-shortfall-po-close"
+            >
               {SHORTFALL_PO_CLOSE_LABEL}
             </Button>
           ) : (
             <>
-              <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={drafting}>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => onOpenChange(false)}
+                disabled={drafting}
+              >
                 {SHORTFALL_PO_CANCEL_LABEL}
               </Button>
               <Button
@@ -568,16 +626,25 @@ function ShortfallRow({
   const describedBy = [detailId, draftable ? supplierId : null].filter(Boolean).join(' ');
   return (
     <li
-      className={cn('flex flex-wrap items-start gap-x-3 gap-y-2 px-3 py-2.5', !draftable && 'bg-muted/30')}
+      className={cn(
+        'flex flex-wrap items-start gap-x-3 gap-y-2 px-3 py-2.5',
+        !draftable && 'bg-sunk',
+      )}
       data-testid="draft-shortfall-po-row"
       data-item-id={row.itemId}
       data-state={row.state}
     >
-      <label htmlFor={checkboxId} className="flex min-h-9 min-w-0 flex-1 cursor-pointer items-start gap-2.5">
+      <label
+        htmlFor={checkboxId}
+        className="flex min-h-9 min-w-0 flex-1 cursor-pointer items-start gap-2.5"
+      >
         <input
           id={checkboxId}
           type="checkbox"
-          className="accent-primary mt-0.5 size-4 shrink-0"
+          // The native box kept (its checked state, label and disabled rule
+          // are the dialog's); drawn at the shared Checkbox's 20 px with the
+          // ink fill (DESIGN-SPEC 6.21).
+          className="accent-foreground mt-px size-5 shrink-0 cursor-pointer disabled:cursor-not-allowed"
           checked={checked}
           disabled={!draftable || disabled}
           aria-labelledby={nameId}
@@ -586,15 +653,28 @@ function ShortfallRow({
           data-testid="draft-shortfall-po-check"
         />
         <span className="min-w-0">
-          <span id={nameId} className="block font-medium break-words">
+          <span id={nameId} className="block break-words font-medium">
             {row.itemSku ? `${row.itemName} (${row.itemSku})` : row.itemName}
           </span>
-          <span id={detailId} className="text-muted-foreground block text-xs tabular-nums" data-testid="draft-shortfall-po-detail">
+          <span
+            id={detailId}
+            className="text-muted-foreground block text-[12px] tabular-nums"
+            data-testid="draft-shortfall-po-detail"
+          >
             {row.detail}
           </span>
           {draftable && (
-            <span id={supplierId} className="text-muted-foreground block text-xs" data-testid="draft-shortfall-po-supplier">
-              {supplier ?? <span className="bg-muted inline-block h-3 w-28 animate-pulse rounded align-middle" aria-hidden />}
+            <span
+              id={supplierId}
+              className="text-muted-foreground block text-[12px]"
+              data-testid="draft-shortfall-po-supplier"
+            >
+              {supplier ?? (
+                <span
+                  className="bg-muted inline-block h-3 w-28 animate-pulse rounded align-middle"
+                  aria-hidden
+                />
+              )}
             </span>
           )}
         </span>
@@ -611,11 +691,15 @@ function ShortfallRow({
             aria-labelledby={`${qtyHeaderId} ${nameId}`}
             aria-invalid={problem ? true : undefined}
             aria-describedby={problem ? problemId : undefined}
-            className="h-9 text-right tabular-nums"
+            className="h-9 text-right font-mono tabular-nums"
             data-testid="draft-shortfall-po-qty"
           />
           {problem && (
-            <p id={problemId} className="text-destructive text-xs" data-testid="draft-shortfall-po-problem">
+            <p
+              id={problemId}
+              className="text-destructive text-[12px]"
+              data-testid="draft-shortfall-po-problem"
+            >
               {problem}
             </p>
           )}

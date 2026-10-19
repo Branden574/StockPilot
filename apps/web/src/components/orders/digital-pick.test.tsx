@@ -191,3 +191,90 @@ describe('DigitalPick — an unentered line does not look filled', () => {
     expect(notebooks.nextElementSibling).toHaveTextContent('of 60');
   });
 });
+
+// Redesign P4.B1: the pick is the count workbench's card (one row per line,
+// the commit in the card's footer) and the lock notice is the shared
+// forbidden state, with every word, label and way back the page had.
+describe('DigitalPick — the redesigned card and lock notice (P4.B1)', () => {
+  it('a viewer who may not pick an order someone holds gets the forbidden state with its words and no fields', () => {
+    render(
+      <DigitalPick
+        orderId={ORDER}
+        initialLines={LINES}
+        canPick={false}
+        assignedPickerName="Ana Ruiz"
+        readiness={READY}
+      />,
+    );
+    const panel = screen.getByTestId('digital-pick-locked');
+    expect(panel).toHaveAttribute('data-slot', 'state-panel');
+    expect(panel).toHaveAttribute('data-state-kind', 'forbidden');
+    expect(
+      within(panel).getByRole('heading', { name: 'This order is being picked by Ana Ruiz.' }),
+    ).toBeInTheDocument();
+    expect(panel).toHaveTextContent('Ask a manager to reassign it if you need to take over.');
+    expect(within(panel).getByRole('link', { name: 'Back to order' })).toHaveAttribute(
+      'href',
+      `/dashboard/orders/${ORDER}`,
+    );
+    expect(screen.queryByRole('spinbutton')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Complete picking/ })).toBeNull();
+  });
+
+  it('an unclaimed order tells the viewer to claim it first', () => {
+    render(
+      <DigitalPick
+        orderId={ORDER}
+        initialLines={LINES}
+        canPick={false}
+        assignedPickerName={null}
+        readiness={READY}
+      />,
+    );
+    const panel = screen.getByTestId('digital-pick-locked');
+    expect(
+      within(panel).getByRole('heading', {
+        name: 'This order needs to be claimed before you can pick it.',
+      }),
+    ).toBeInTheDocument();
+    expect(panel).toHaveTextContent('Go back to the order and tap “Claim picking” to start.');
+  });
+
+  it('a picker gets one row per line (name, SKU, requested, the field, "of N", Save) and Complete picking in the card footer', () => {
+    renderPick();
+    const card = screen.getByTestId('digital-pick');
+    const rows = within(card).getAllByTestId('digital-pick-line');
+    expect(rows).toHaveLength(2);
+    const pens = rows[1]!;
+    expect(pens).toHaveTextContent('L4L - Pen Black & Rose Gold');
+    expect(pens).toHaveTextContent('SKU-pens');
+    expect(pens).toHaveTextContent('requested 60');
+    expect(
+      within(pens).getByRole('spinbutton', {
+        name: 'Picked quantity for L4L - Pen Black & Rose Gold',
+      }),
+    ).toBeInTheDocument();
+    expect(pens).toHaveTextContent('of 60');
+    expect(within(pens).getByRole('button', { name: 'Save' })).toBeInTheDocument();
+    // The commit sits after the list, in the card itself.
+    const complete = within(card).getByRole('button', { name: /Complete picking/ });
+    const list = card.querySelector('ul')!;
+    expect(list.compareDocumentPosition(complete) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  // The 1280 shots: "of 4" beside "of 10" moved each line's field sideways,
+  // and on a phone a 28 px Save sat beside the 44 px field.
+  it('the fields line up down the card: "of N" holds six characters, Save its width while it spins, and on a phone Save is as tall as the field', () => {
+    renderPick(READY, [line('notebooks', 'Notebook', 4, 4), line('pens', 'Pens', 10, null)]);
+    const rows = screen.getAllByTestId('digital-pick-line');
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      const ofN = within(row).getByRole('spinbutton').nextElementSibling as HTMLElement;
+      expect(ofN.textContent).toMatch(/^of \d+$/);
+      expect(ofN.className).toMatch(/(^|\s)min-w-\[6ch\](\s|$)/);
+      const save = within(row).getByRole('button', { name: 'Save' });
+      expect(save.className).toMatch(/(^|\s)min-w-\[72px\](\s|$)/);
+      expect(save.className).toMatch(/(^|\s)max-sm:h-11(\s|$)/);
+    }
+  });
+});
