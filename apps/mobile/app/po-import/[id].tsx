@@ -1158,10 +1158,7 @@ function ApproveSheetContent({
       ]);
       if (cancelled) return;
       const pickerFailure =
-        vendorsRes.error?.message ??
-        chartersRes.error?.message ??
-        locationsRes.error?.message ??
-        null;
+        vendorsRes.error?.message ?? chartersRes.error?.message ?? locationsRes.error?.message ?? null;
       setPickersError(pickerFailure);
       setWarehouses(whs);
       // Keep the header's warehouse when it exists, else default to the only/first.
