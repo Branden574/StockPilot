@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -129,6 +129,26 @@ describe('ProductGroupRollupList — on-demand expansion', () => {
 
     expect(await screen.findByText('Could not load variants.')).toBeInTheDocument();
     expect(screen.queryByText('No items are linked to this group yet.')).not.toBeInTheDocument();
+  });
+
+  // Redesign (P4.A1): the two states the open group shows while it has no rows
+  // are announced, so a screen reader hears the wait and the failure.
+  it('announces the wait as a status and a failed read as an alert, with Try again', async () => {
+    const user = userEvent.setup();
+    let settle: (value: unknown) => void = () => {};
+    loadVariantsMock.mockReturnValueOnce(new Promise((resolve) => (settle = resolve)));
+    render(<ProductGroupRollupList groups={[group()]} />);
+    await user.click(screen.getByRole('button', { name: /expand/i }));
+
+    expect(screen.getByRole('status')).toHaveTextContent('Loading variants…');
+    settle({ ok: false, error: { code: 'internal_error', message: 'Could not load variants.' } });
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Could not load variants.');
+    loadVariantsMock.mockClear();
+    await user.click(within(alert).getByRole('button', { name: 'Try again' }));
+    expect(loadVariantsMock).toHaveBeenCalledWith('grp-1');
+    expect(await screen.findByText('PEG-9')).toBeInTheDocument();
   });
 });
 

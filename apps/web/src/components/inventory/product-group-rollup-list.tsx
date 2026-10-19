@@ -15,6 +15,7 @@ import {
   type TrackingMode,
 } from '@stockpilot/core';
 
+import { touchTargetClass } from '@/components/patterns/touch-target';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn, formatNumber } from '@/lib/utils';
@@ -297,7 +298,10 @@ function GroupRow({
           aria-label={`${expanded ? 'Collapse' : 'Expand'} ${group.name} (${rollup})`}
           // The group-header chevron: 24 x 24, radius 6, a 14 px chevron that
           // turns a quarter when the group is open (44 px to touch below sm).
-          className="text-muted-foreground hover:bg-muted hover:text-foreground relative grid h-6 w-6 shrink-0 place-items-center rounded-md transition-colors before:absolute before:left-1/2 before:top-1/2 before:size-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-['']"
+          className={cn(
+            'text-muted-foreground hover:bg-muted hover:text-foreground grid h-6 w-6 shrink-0 place-items-center rounded-md transition-colors',
+            touchTargetClass,
+          )}
         >
           <ChevronRight
             aria-hidden

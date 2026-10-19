@@ -20,8 +20,6 @@ import { WarehouseChartersService } from '@/server/services/warehouse-charters';
 
 import { can, resolveTerminology } from '@stockpilot/core';
 
-import { isbnFromSearchParam } from './isbn-param';
-
 // A tab title of its own (CONFLICTS D16): the page used to inherit the
 // dashboard's.
 export const metadata: Metadata = { title: 'New book' };
@@ -30,6 +28,22 @@ export const metadata: Metadata = { title: 'New book' };
  *  draws; a form keeps to a reading width inside it. */
 const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
 const FORM_WIDTH = 'w-full max-w-[960px]';
+
+/** The longest ISBN the item schema takes (its barcode field). */
+const ISBN_MAX = 128;
+
+/**
+ * The ISBN a link hands this page (`?isbn=`, the Books scan shortcut's "Create
+ * new book" when a scanned ISBN has no match): trimmed, and dropped when it is
+ * blank, repeated or longer than the field takes. CONFLICTS D3: the shortcut
+ * sent it and the page never read it, so the person typed it in again. Kept in
+ * this file (not exported: a page may export only what Next reads).
+ */
+function isbnFromSearchParam(raw: string | string[] | undefined): string {
+  if (typeof raw !== 'string') return '';
+  const isbn = raw.trim();
+  return isbn.length > 0 && isbn.length <= ISBN_MAX ? isbn : '';
+}
 
 export default async function NewBookPage({
   searchParams,
