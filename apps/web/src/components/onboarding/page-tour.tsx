@@ -254,19 +254,25 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
 
   return (
     <>
-      {/* Replay affordance — always available (PRD §10/§15). */}
-      <button
+      {/* Replay affordance — always available (PRD §10/§15). The ghost
+          "Tour" of DESIGN-SPEC 6.21: the shared small ghost Button, so below
+          sm and on coarse pointers it gets the Button's 44 px touch target
+          beside the page header's 32 px actions. The quiet muted words at
+          400 and the 14 px glyph are the ones the tour slot already drew. */}
+      <Button
         type="button"
+        variant="ghost"
+        size="sm"
         onClick={() => {
           setPhase('running');
           capture('tour_started', { tourId: tour.id, via: 'pill' });
           void goTo(0);
         }}
-        className="text-muted-foreground hover:bg-muted hover:text-foreground inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-[12.5px] transition-colors"
+        className="text-muted-foreground shrink-0 font-normal [&_svg]:size-3.5"
         aria-label={`Start the ${tour.name} tour`}
       >
-        <Sparkles className="size-3.5" strokeWidth={1.6} aria-hidden /> Tour
-      </button>
+        <Sparkles strokeWidth={1.6} aria-hidden /> Tour
+      </Button>
 
       {/* First-visit offer (never auto-launch a long tour). */}
       {phase === 'offer' &&
@@ -275,7 +281,7 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
             role="dialog"
             data-tour-open
             aria-label={`${tour.name} tour offer`}
-            className="bg-card fixed bottom-4 right-4 z-50 w-80 max-w-[calc(100vw-32px)] rounded-lg border p-4 shadow-[0_10px_30px_rgba(0,0,0,0.25)] animate-in fade-in slide-in-from-bottom-2"
+            className="bg-card border-line-strong fixed bottom-4 right-4 z-50 w-80 max-w-[calc(100vw-32px)] rounded-lg border p-4 shadow-[0_10px_30px_rgba(0,0,0,0.25)] animate-in fade-in slide-in-from-bottom-2"
           >
             <div className="flex items-start gap-2">
               <Sparkles
@@ -335,7 +341,7 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
               aria-modal="true"
               aria-label={step.title}
               tabIndex={-1}
-              className="bg-card fixed z-[71] w-[min(360px,calc(100vw-32px))] rounded-lg border p-4 shadow-[0_10px_30px_rgba(0,0,0,0.25)] outline-none"
+              className="bg-card border-line-strong fixed z-[71] w-[min(360px,calc(100vw-32px))] rounded-lg border p-4 shadow-[0_10px_30px_rgba(0,0,0,0.25)] outline-none"
               style={{ transition, ...cardPosition(rect, step.placement) }}
             >
               <div className="flex items-start justify-between gap-3">
