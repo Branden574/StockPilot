@@ -8,7 +8,9 @@ vi.mock('@/server/actions/bundles', () => ({
   updateBundleAction: vi.fn(),
 }));
 
-import { createBundleAction } from '@/server/actions/bundles';
+import { toast } from 'sonner';
+
+import { createBundleAction, updateBundleAction } from '@/server/actions/bundles';
 
 import { COMPONENT_SEARCH_DEBOUNCE_MS } from './bundle-component-picker';
 import { BundleForm } from './bundle-form';
@@ -107,5 +109,83 @@ describe('BundleForm components: the search picker', () => {
     await settle();
     expect(screen.getByRole('option')).toHaveTextContent('Added');
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('BundleForm checkboxes and lines (redesign: the shared Checkbox)', () => {
+  const initial = {
+    id: 'b-1',
+    name: 'Kit',
+    sku: 'KIT-1',
+    description: null,
+    preassemblyEnabled: false,
+    components: [
+      { itemId: 'i-1', itemName: 'Pencil No. 2', itemSku: 'PEN-2', quantity: 1, isOptional: false },
+      { itemId: 'i-2', itemName: 'Eraser', itemSku: 'ERS', quantity: 2, isOptional: false },
+    ],
+  };
+
+  afterEach(() => {
+    vi.mocked(updateBundleAction).mockReset();
+    vi.mocked(createBundleAction).mockReset();
+    vi.mocked(toast.error).mockReset();
+  });
+
+  it('Enable pre-boxing is one labelled checkbox described by its help, toggled once per click', () => {
+    render(<BundleForm />);
+    const box = screen.getByRole('checkbox', { name: 'Enable pre-boxing' });
+    expect(box).toHaveAttribute('aria-checked', 'false');
+    expect(box).toHaveAccessibleDescription(
+      'Lets you decrement components ahead of time and hold the kits as phantom inventory until distribution.',
+    );
+    fireEvent.click(box);
+    expect(box).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(box);
+    expect(box).toHaveAttribute('aria-checked', 'false');
+  });
+
+  it('pre-boxing, Optional, a decimal Qty / kit and a removed line all reach the save', async () => {
+    vi.mocked(updateBundleAction).mockResolvedValue({ ok: true, data: { id: 'b-1' } } as never);
+    render(<BundleForm initial={initial} />);
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Enable pre-boxing' }));
+    const optional = screen.getAllByRole('checkbox', { name: 'Mark component as optional' });
+    expect(optional).toHaveLength(2);
+    fireEvent.click(optional[0]!);
+    expect(optional[0]).toHaveAttribute('aria-checked', 'true');
+
+    const qty = within(screen.getByRole('table')).getAllByRole('spinbutton')[0]!;
+    fireEvent.change(qty, { target: { value: '0.5' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Eraser' }));
+    expect(screen.queryByText('Eraser')).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    });
+    expect(updateBundleAction).toHaveBeenCalledWith({
+      id: 'b-1',
+      name: 'Kit',
+      sku: 'KIT-1',
+      description: null,
+      preassemblyEnabled: true,
+      components: [{ itemId: 'i-1', quantity: 0.5, isOptional: true }],
+    });
+  });
+
+  it('keeps its two refusals: a name, then at least one component', async () => {
+    render(<BundleForm />);
+    const form = screen.getByRole('button', { name: 'Create bundle' }).closest('form')!;
+    await act(async () => {
+      fireEvent.submit(form);
+    });
+    expect(toast.error).toHaveBeenLastCalledWith('Enter a bundle name.');
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Kit' } });
+    await act(async () => {
+      fireEvent.submit(form);
+    });
+    expect(toast.error).toHaveBeenLastCalledWith('Add at least one component to the bundle.');
+    expect(createBundleAction).not.toHaveBeenCalled();
+    expect(screen.getByText(/No components yet\. Search for items above/)).toBeInTheDocument();
   });
 });

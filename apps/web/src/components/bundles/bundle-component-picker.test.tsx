@@ -422,7 +422,9 @@ describe('keyboard and ARIA', () => {
     type('pen');
     await settle();
     const [first, second] = screen.getAllByRole('option');
-    const marker = 'shadow-[inset_3px_0_0_hsl(var(--accent-foreground))]';
+    // Look-only re-pin (redesign P4.D2): the rail moved from
+    // --accent-foreground to the page accent --accent (DESIGN-SPEC 2.3).
+    const marker = 'shadow-[inset_3px_0_0_hsl(var(--accent))]';
     expect(first).toHaveClass(marker);
     expect(second).not.toHaveClass(marker);
   });
