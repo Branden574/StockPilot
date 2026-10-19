@@ -12,6 +12,7 @@ import {
 
 import { BlankZeroNumberInput } from '@/components/ui/blank-zero-number-input';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 
 /**
  * A PO receive line, plus the two variant columns that make a size run
@@ -85,11 +86,48 @@ function variance(l: ReceiveRunLine, entered: number): number {
   return l.quantityOrdered - l.quantityReceived - entered;
 }
 
-/** Same tone convention as the flat renderer's Variance cell. */
-function varianceTone(v: number): string {
-  if (v > 0) return 'text-amber-600 dark:text-amber-400';
+/**
+ * The variance tone, shared with the receive dialog's flat rows: caution while
+ * stock is still to come, danger past what was ordered, success once fully
+ * received. The tokens hold their contrast in both themes (the fixed amber and
+ * emerald did not), and the figure's sign and the flat row's caption say the
+ * same in words, so colour is never the only cue.
+ */
+export function varianceToneClass(v: number): string {
+  if (v > 0) return 'text-warning';
   if (v < 0) return 'text-destructive';
-  return 'text-emerald-600 dark:text-emerald-400';
+  return 'text-success';
+}
+
+/**
+ * One figure of a size row. Wider than a phone the grid's column labels name
+ * it; on a phone, where the row stacks, it carries its own label above it.
+ * The figure keeps its own element (and test id) apart from that label.
+ */
+function RunFigure({
+  label,
+  testId,
+  className,
+  valueClassName,
+  children,
+}: {
+  label: string;
+  testId: string;
+  className?: string;
+  valueClassName?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={cn('min-w-0', className)}>
+      <span className="text-muted-foreground block text-[11px] leading-4 sm:hidden">{label}</span>
+      <span
+        className={cn('block font-mono text-[12.5px] tabular-nums', valueClassName)}
+        data-testid={testId}
+      >
+        {children}
+      </span>
+    </div>
+  );
 }
 
 export interface SizeRunReceiveGridProps {
@@ -152,12 +190,24 @@ export function SizeRunReceiveGrid({
 
   const totalOrdered = lines.reduce((s, l) => s + l.quantityOrdered, 0);
 
+  // One card per run (the grouped rows of the Items list, X-SEL): the run's
+  // name and size count in its header with Receive all ordered, then one row
+  // per size and the subtotal. Wider than a phone the sizes form the seven
+  // columns under their labels; on a phone each size stacks (size, ordered and
+  // already, the field, then accepted, rejected and variance, each labelled),
+  // so every figure stays on screen without scrolling sideways.
   return (
-    <div className="rounded-md border" data-testid="size-run" data-group-id={groupId}>
-      <div className="flex flex-wrap items-start justify-between gap-2 border-b px-3 py-2">
-        <div>
-          <p className="font-medium">{group.name}</p>
-          <p className="text-muted-foreground text-xs">
+    <div
+      className="border-border bg-card overflow-hidden rounded-lg border"
+      data-testid="size-run"
+      data-group-id={groupId}
+    >
+      <div className="border-border flex flex-wrap items-start justify-between gap-2 border-b px-3 py-2.5">
+        <div className="min-w-0">
+          <p className="text-[13.5px] font-medium leading-5 [overflow-wrap:anywhere]">
+            {group.name}
+          </p>
+          <p className="text-muted-foreground text-[12px] leading-[18px]">
             Size run · {lines.length} sizes · {totalOrdered}{' '}
             {countingUnitLabel(group.countingUnit, totalOrdered)} ordered
           </p>
@@ -167,7 +217,7 @@ export function SizeRunReceiveGrid({
         </Button>
       </div>
 
-      <div className="text-muted-foreground grid grid-cols-12 gap-2 px-3 pt-2 text-[11px] font-medium">
+      <div className="text-muted-foreground hidden grid-cols-12 gap-2 px-3 pt-2 text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] sm:grid">
         <div className="col-span-2">Size</div>
         <div className="col-span-1 text-right">Ordered</div>
         <div className="col-span-1 text-right">Already</div>
@@ -177,52 +227,72 @@ export function SizeRunReceiveGrid({
         <div className="col-span-3 text-right">Variance</div>
       </div>
 
-      <div className="divide-y">
+      <div className="divide-border divide-y">
         {lines.map((l) => {
           const received = receivedOf(l.id);
           const lineVariance = variance(l, received);
           return (
             <div key={l.id} className="px-3 py-2" data-testid="size-run-row">
-              <div className="grid grid-cols-12 items-center gap-2">
-                <div className="col-span-2">
+              <div className="grid grid-cols-6 items-end gap-2 sm:grid-cols-12 sm:items-center">
+                <div className="col-span-6 min-w-0 sm:col-span-2">
                   <p className="font-medium tabular-nums" data-testid="size-run-size">
                     {l.variantSize?.trim() ? l.variantSize : 'No size'}
                   </p>
                   <p className="text-muted-foreground truncate font-mono text-[11px]">{l.sku}</p>
                 </div>
-                <div className="col-span-1 text-right tabular-nums" data-testid="size-run-ordered">
+                <RunFigure
+                  label="Ordered"
+                  testId="size-run-ordered"
+                  className="col-span-3 sm:col-span-1 sm:text-right"
+                >
                   {l.quantityOrdered}
-                </div>
-                <div className="col-span-1 text-right tabular-nums" data-testid="size-run-already">
+                </RunFigure>
+                <RunFigure
+                  label="Already"
+                  testId="size-run-already"
+                  className="col-span-3 sm:col-span-1 sm:text-right"
+                >
                   {l.quantityReceived}
-                </div>
-                <div className="col-span-3">
+                </RunFigure>
+                <div className="col-span-6 min-w-0 sm:col-span-3">
+                  <span
+                    aria-hidden="true"
+                    className="text-muted-foreground mb-1 block text-[11px] leading-4 sm:hidden"
+                  >
+                    Receiving
+                  </span>
                   <BlankZeroNumberInput
                     min={0}
                     step={1}
                     aria-label={`Receiving size ${l.variantSize ?? l.sku}`}
                     value={received}
                     onValueChange={(v) => onChange(l.id, { received: Math.max(0, v) })}
+                    className="font-mono"
                   />
                 </div>
-                <div
-                  className="col-span-1 text-right tabular-nums"
-                  data-testid="size-run-accepted"
+                <RunFigure
+                  label="Accepted"
+                  testId="size-run-accepted"
+                  className="col-span-2 sm:col-span-1 sm:text-right"
                 >
                   {received}
-                </div>
-                <div
-                  className="text-muted-foreground col-span-1 text-right tabular-nums"
-                  data-testid="size-run-rejected"
+                </RunFigure>
+                <RunFigure
+                  label="Rejected"
+                  testId="size-run-rejected"
+                  className="col-span-2 sm:col-span-1 sm:text-right"
+                  valueClassName="text-muted-foreground"
                 >
                   0
-                </div>
-                <div
-                  className={`col-span-3 text-right tabular-nums ${varianceTone(lineVariance)}`}
-                  data-testid="size-run-variance"
+                </RunFigure>
+                <RunFigure
+                  label="Variance"
+                  testId="size-run-variance"
+                  className="col-span-2 sm:col-span-3 sm:text-right"
+                  valueClassName={varianceToneClass(lineVariance)}
                 >
                   {lineVariance}
-                </div>
+                </RunFigure>
               </div>
               {renderExtras?.(l)}
             </div>
@@ -230,16 +300,16 @@ export function SizeRunReceiveGrid({
         })}
       </div>
 
-      <div className="bg-muted/30 border-t px-3 py-2 text-xs" data-testid="size-run-subtotal">
+      <div
+        className="border-border bg-sunk border-t px-3 py-2 text-[12px] leading-[18px]"
+        data-testid="size-run-subtotal"
+      >
         {subtotal.sizes === 0 ? (
-          <span className="text-muted-foreground">
-            Nothing entered yet for this run.
-          </span>
+          <span className="text-muted-foreground">Nothing entered yet for this run.</span>
         ) : (
           <span className="font-medium">
-            Receiving {subtotal.quantity}{' '}
-            {countingUnitLabel(group.countingUnit, subtotal.quantity)} across{' '}
-            {subtotal.sizes} {subtotal.sizes === 1 ? 'size' : 'sizes'}
+            Receiving {subtotal.quantity} {countingUnitLabel(group.countingUnit, subtotal.quantity)}{' '}
+            across {subtotal.sizes} {subtotal.sizes === 1 ? 'size' : 'sizes'}
           </span>
         )}
       </div>

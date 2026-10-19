@@ -1,8 +1,10 @@
 import { Download } from 'lucide-react';
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { ItemThumb } from '@/components/items/item-thumb';
+import { DetailSection, DetailSectionMeta } from '@/components/patterns/detail-section';
+import { KeyValueList, KeyValueRow } from '@/components/patterns/key-value-row';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { MakeRecurringButton } from '@/components/po/make-recurring-button';
 import { PoReceiveDialog } from '@/components/po/po-receive-dialog';
 import { PoNotesEditor } from '@/components/po/po-notes-editor';
@@ -13,7 +15,6 @@ import { PoActions } from '@/components/po/po-actions';
 import { PoFileActions, PoAttachmentsList } from '@/components/po/po-attachments-panel';
 import { ReceiptHistory } from '@/components/po/receipt-history';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Table,
   TableBody,
@@ -36,6 +37,9 @@ import { WarehousesService } from '@/server/services/warehouses';
 import { formatCurrency, formatRelative } from '@/lib/utils';
 
 import { can, dbPermissionRefusedCopy, formatCalendarDate, isManagerOrAbove } from '@stockpilot/core';
+
+/** The page area (DESIGN-SPEC 5.3 and 4): max 1320, 28 / 32 / 64, 16 px gutters on a phone. */
+const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
 
 export default async function PoDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -160,50 +164,66 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
   // per-size ordered/received. No group ids (every non-sports PO) = no query.
   const receiveGroups = await loadSizeRunGroups(lineRows.map((l) => l.groupId));
 
-  return (
-    <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href="/dashboard/purchase-orders"
-          className="text-muted-foreground hover:text-foreground text-sm"
-        >
-          ← Back to purchase orders
-        </Link>
-      </div>
+  const supplierName = (supplier?.name as string | undefined) ?? null;
+  // The receiving hint, or the reason receiving is not offered, beside the
+  // Line items title (the reference's card header meta).
+  const receiveNote =
+    canReceive && warehouseId
+      ? 'Items arrived? Use “Receive items” to record what was received.'
+      : receiveRefusal;
 
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-1.5">
-            <h1 className="font-mono text-2xl font-semibold tracking-tight">
-              {po.po_number as string}
-            </h1>
+  return (
+    <div className={PAGE}>
+      {/* The record's header (DESIGN-SPEC 6.1 and 6.18): the PO number is the
+          page's h1 in mono, the rename pencil and the status label beside it,
+          the supplier and when it was created under it, and the actions on
+          the right, wrapping under the title on a narrow screen so the number
+          is never squeezed. Mark as ordered is the one ink-filled button. */}
+      <PageHeader
+        back={
+          <PageHeaderBackLink href="/dashboard/purchase-orders">
+            ← Back to purchase orders
+          </PageHeaderBackLink>
+        }
+        title={
+          <span className="font-mono text-[24px] font-medium tracking-normal">
+            {po.po_number as string}
+          </span>
+        }
+        titleAside={
+          <span className="flex items-center gap-2">
             {status !== 'cancelled' && (
               <PoRenameButton poId={id} currentNumber={po.po_number as string} />
             )}
-          </div>
-          <div className="mt-2 flex items-center gap-2">
             <PoStatusBadge status={status} />
-            <span className="text-muted-foreground text-sm">
-              · created {formatRelative(po.created_at as string)}
-            </span>
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button asChild variant="outline">
-            <a href={`/api/purchase-orders/${id}/pdf`} target="_blank" rel="noopener noreferrer">
-              <Download className="h-4 w-4" /> Download PDF
-            </a>
-          </Button>
-          <PoFileActions
-            purchaseOrderId={id}
-            organizationId={ctx.organizationId}
-            canManage={canManagePo}
-            hasAttachments={attachments.length > 0}
-          />
-          <MakeRecurringButton poId={id} />
-          <PoActions poId={id} status={status} />
-        </div>
-      </div>
+          </span>
+        }
+        meta={
+          <>
+            {supplierName ? <span className="text-ink-2">{supplierName}</span> : null}
+            {supplierName ? <span aria-hidden="true">·</span> : null}
+            <span>created {formatRelative(po.created_at as string)}</span>
+          </>
+        }
+        actions={
+          <>
+            <Button asChild variant="outline">
+              <a href={`/api/purchase-orders/${id}/pdf`} target="_blank" rel="noopener noreferrer">
+                <Download className="h-4 w-4" /> Download PDF
+              </a>
+            </Button>
+            <PoFileActions
+              purchaseOrderId={id}
+              organizationId={ctx.organizationId}
+              canManage={canManagePo}
+              hasAttachments={attachments.length > 0}
+            />
+            <MakeRecurringButton poId={id} />
+            <PoActions poId={id} status={status} part="secondary" />
+          </>
+        }
+        commitAction={<PoActions poId={id} status={status} part="commit" />}
+      />
 
       {/*
         Show the destination-fix card whenever we can't resolve a warehouse to
@@ -216,132 +236,201 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
           status === 'ordered' ||
           status === 'partially_received' ||
           status === 'draft') && (
-          <div className="mt-6">
-            <PoSetDestination
-              poId={id}
-              warehouses={warehouses.map((w) => ({ id: w.id, name: w.name }))}
-              hasUnreceivableDestination={po.destination_location_id != null}
-            />
-          </div>
+          <PoSetDestination
+            poId={id}
+            warehouses={warehouses.map((w) => ({ id: w.id, name: w.name }))}
+            hasUnreceivableDestination={po.destination_location_id != null}
+          />
         )}
 
-      <div className="mt-8 grid gap-6 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
-          <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
-            <div>
-              <CardTitle className="text-base">Line items</CardTitle>
-              {canReceive && warehouseId && (
-                <p className="text-muted-foreground mt-1 text-xs">
-                  Items arrived? Use “Receive items” to record what was received.
-                </p>
-              )}
-              {receiveRefusal && (
-                <p className="text-muted-foreground mt-1 text-xs">{receiveRefusal}</p>
-              )}
-            </div>
-            {canReceive && warehouseId && (
-              <PoReceiveDialog
-                poId={id}
-                poNumber={po.po_number as string}
-                warehouseId={warehouseId}
-                lines={lineRows}
-                groups={receiveGroups}
+      {/* Two columns once the space beside the sidebar holds them (about 2 x
+          420 + 16 px of content, DESIGN-SPEC 8), measured on the content, not
+          the window; one column below that, in the same order: Line items,
+          Receipts, Summary, Attachments. */}
+      <div className="@container min-w-0">
+        <div className="@min-[856px]:grid-cols-[minmax(0,1.7fr)_minmax(280px,1fr)] grid items-start gap-4">
+          <div className="flex min-w-0 flex-col gap-4">
+            <DetailSection
+              title="Line items"
+              aside={
+                receiveNote ? (
+                  <DetailSectionMeta className="max-w-sm">{receiveNote}</DetailSectionMeta>
+                ) : undefined
+              }
+              flush
+              footer={
+                <>
+                  {/* The lines' own sum. The PO's Total, which also carries an
+                      import's charges, stays in Summary beside it. */}
+                  <div className="text-muted-foreground text-[13.5px]">
+                    Subtotal
+                    <span className="text-foreground ml-1.5 font-mono font-medium tabular-nums">
+                      {formatCurrency(po.subtotal as number)}
+                    </span>
+                  </div>
+                  {canReceive && warehouseId && (
+                    <PoReceiveDialog
+                      poId={id}
+                      poNumber={po.po_number as string}
+                      warehouseId={warehouseId}
+                      lines={lineRows}
+                      groups={receiveGroups}
+                    />
+                  )}
+                </>
+              }
+            >
+              <LineItems rows={lineRows} />
+            </DetailSection>
+
+            <DetailSection title="Receipts" bodyClassName="max-sm:px-3">
+              <ReceiptHistory
+                receipts={receiptData.receipts}
+                lines={receiptData.lines}
+                items={Object.fromEntries(
+                  referencedItems.map((i) => [i.id, { name: i.name, sku: i.sku }]),
+                )}
+                canReverse={canReverse}
               />
-            )}
-          </CardHeader>
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-12">Image</TableHead>
-                  <TableHead>Item</TableHead>
-                  <TableHead className="text-right">Ordered</TableHead>
-                  <TableHead className="text-right">Received</TableHead>
-                  <TableHead className="text-right">Unit cost</TableHead>
-                  <TableHead className="text-right">Total</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {lineRows.map((l) => (
-                  <TableRow key={l.id}>
-                    <TableCell>
-                      <ItemThumb
-                        imageUrl={l.imageUrl}
-                        previewUrl={l.previewUrl}
-                        alt={l.name}
-                        size="sm"
-                        itemId={l.itemId}
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <p className="font-medium">{l.name}</p>
-                      <p className="text-muted-foreground font-mono text-xs">{l.sku}</p>
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">{l.quantityOrdered}</TableCell>
-                    <TableCell className="text-right tabular-nums">{l.quantityReceived}</TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatCurrency(l.unitCost)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatCurrency(l.lineTotal)}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
+            </DetailSection>
+          </div>
 
-        <Card className="lg:col-span-2">
-          <CardHeader>
-            <CardTitle className="text-base">Receipts</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ReceiptHistory
-              receipts={receiptData.receipts}
-              lines={receiptData.lines}
-              items={Object.fromEntries(
-                referencedItems.map((i) => [i.id, { name: i.name, sku: i.sku }]),
-              )}
-              canReverse={canReverse}
-            />
-          </CardContent>
-        </Card>
+          <div className="flex min-w-0 flex-col gap-4">
+            <DetailSection title="Summary" flush>
+              <KeyValueList>
+                <KeyValueRow label="Supplier">{supplierName ?? '—'}</KeyValueRow>
+                <KeyValueRow label="Destination">{(location?.name as string) ?? '—'}</KeyValueRow>
+                {/* A DAY stored as its UTC midnight, read in UTC: in the server's
+                    zone it was the day before on any server west of UTC. */}
+                <KeyValueRow label="Expected">
+                  {formatCalendarDate(po.expected_at as string | null, {
+                    year: 'numeric',
+                    month: 'numeric',
+                    day: 'numeric',
+                  })}
+                </KeyValueRow>
+                <KeyValueRow label="Subtotal">{formatCurrency(po.subtotal as number)}</KeyValueRow>
+                <KeyValueRow label="Total" valueClassName="font-semibold">
+                  {formatCurrency(po.total as number)}
+                </KeyValueRow>
+              </KeyValueList>
+              <PoNotesEditor poId={id} currentNotes={(po.notes as string | null) ?? null} />
+            </DetailSection>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Summary</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            <Row label="Supplier" value={(supplier?.name as string) ?? '—'} />
-            <Row label="Destination" value={(location?.name as string) ?? '—'} />
-            {/* A DAY stored as its UTC midnight, read in UTC: in the server's
-                zone it was the day before on any server west of UTC. */}
-            <Row
-              label="Expected"
-              value={formatCalendarDate(po.expected_at as string | null, {
-                year: 'numeric',
-                month: 'numeric',
-                day: 'numeric',
-              })}
+            <PoAttachmentsList
+              purchaseOrderId={id}
+              attachments={attachments}
+              canManage={canManagePo}
             />
-            <Row label="Subtotal" value={formatCurrency(po.subtotal as number)} />
-            <Row label="Total" value={formatCurrency(po.total as number)} bold />
-            <PoNotesEditor poId={id} currentNotes={(po.notes as string | null) ?? null} />
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       </div>
-
-      <PoAttachmentsList purchaseOrderId={id} attachments={attachments} canManage={canManagePo} />
     </div>
   );
 }
 
-function Row({ label, value, bold }: { label: string; value: string; bold?: boolean }) {
+type LineRow = {
+  id: string;
+  itemId: string;
+  name: string;
+  sku: string;
+  quantityOrdered: number;
+  quantityReceived: number;
+  unitCost: number;
+  lineTotal: number;
+  imageUrl: string | null;
+  previewUrl: string | null;
+};
+
+/** Received against ordered, 0-100 (an over-receipt fills the bar). */
+function receivedPercent(received: number, ordered: number): number {
+  if (!(ordered > 0)) return received > 0 ? 100 : 0;
+  return Math.min(100, Math.max(0, (received / ordered) * 100));
+}
+
+/**
+ * The PO's lines in M4's row look (DESIGN-SPEC 6.18): the photo with its hover
+ * preview, the name, then the SKU with the unit cost and the line total in
+ * mono, and on the right what was received against what was ordered over a
+ * thin bar drawn from those two numbers. Every value the old columns held
+ * (Image, Item, SKU, Ordered, Received, Unit cost, Total) is still printed,
+ * and named for a screen reader. All lines render (no pagination).
+ */
+function LineItems({ rows }: { rows: LineRow[] }) {
   return (
-    <div className="flex items-center justify-between">
-      <span className="text-muted-foreground">{label}</span>
-      <span className={bold ? 'font-semibold tabular-nums' : 'tabular-nums'}>{value}</span>
-    </div>
+    <Table>
+      <TableHeader>
+        <TableRow className="hover:bg-transparent">
+          <TableHead className="w-[46px] first:pl-[18px]">
+            <span className="sr-only">Image</span>
+          </TableHead>
+          <TableHead className="pl-0">Item</TableHead>
+          <TableHead className="text-right last:pr-[18px] sm:w-[168px] sm:whitespace-nowrap">
+            Received / ordered
+          </TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((l) => {
+          const unitCost = formatCurrency(l.unitCost);
+          const lineTotal = formatCurrency(l.lineTotal);
+          return (
+            <TableRow key={l.id} className="hover:bg-transparent" data-testid="po-line">
+              <TableCell className="py-2.5 first:pl-[18px]">
+                <ItemThumb
+                  imageUrl={l.imageUrl}
+                  previewUrl={l.previewUrl}
+                  alt={l.name}
+                  size="sm"
+                  itemId={l.itemId}
+                />
+              </TableCell>
+              <TableCell className="py-2.5 pl-0">
+                <p className="text-foreground font-medium leading-5 [overflow-wrap:anywhere]">
+                  {l.name}
+                </p>
+                <p className="text-muted-foreground mt-0.5 font-mono text-[12px] tabular-nums leading-[18px]">
+                  {l.sku ? <span className="whitespace-nowrap">{l.sku} · </span> : null}
+                  <span aria-hidden="true" data-testid="po-line-money">
+                    <span className="whitespace-nowrap">{unitCost} ea</span> ·{' '}
+                    <span className="whitespace-nowrap">{lineTotal}</span>
+                  </span>
+                  <span className="sr-only">
+                    Unit cost {unitCost}, total {lineTotal}
+                  </span>
+                </p>
+              </TableCell>
+              <TableCell className="py-2.5 last:pr-[18px]">
+                <div className="ml-auto w-24 max-w-full sm:w-[120px]">
+                  <div className="flex items-baseline justify-between gap-2 font-mono text-[12px] tabular-nums">
+                    <span className="text-foreground">
+                      <span className="sr-only">Received </span>
+                      {l.quantityReceived}
+                    </span>
+                    <span className="text-muted-foreground">
+                      <span aria-hidden="true">/ </span>
+                      <span className="sr-only">of </span>
+                      {l.quantityOrdered}
+                      <span className="sr-only"> ordered</span>
+                    </span>
+                  </div>
+                  <div
+                    aria-hidden="true"
+                    className="bg-line-strong mt-1 h-1 overflow-hidden rounded-sm"
+                  >
+                    <div
+                      className="bg-accent h-full rounded-sm"
+                      style={{
+                        width: `${receivedPercent(l.quantityReceived, l.quantityOrdered)}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+              </TableCell>
+            </TableRow>
+          );
+        })}
+      </TableBody>
+    </Table>
   );
 }

@@ -52,13 +52,11 @@ export function MakeRecurringButton({ poId }: Props) {
     router.push(recurringPoSeedHref(poId));
   }
 
+  // The page header's secondary button size (32 px), like Download PDF and
+  // Attach file beside it; it was the one 28 px button in that row.
   return (
-    <Button variant="outline" size="sm" onClick={handle} disabled={busy}>
-      {busy ? (
-        <Loader2 className="h-4 w-4 animate-spin" />
-      ) : (
-        <RefreshCw className="h-4 w-4" />
-      )}
+    <Button variant="outline" onClick={handle} disabled={busy}>
+      {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
       Make recurring
     </Button>
   );

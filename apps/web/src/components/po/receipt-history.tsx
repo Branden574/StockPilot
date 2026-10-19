@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { Timeline, TimelineEntry, type TimelineTone } from '@/components/patterns/timeline';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -28,21 +30,34 @@ import {
 import { formatRelative } from '@/lib/utils';
 import { reverseReceiptAction } from '@/server/actions/receiving';
 
-import type {
-  ReceiptLineRow,
-  ReceiptRow,
-} from '@/server/services/receiving';
+import type { ReceiptLineRow, ReceiptRow } from '@/server/services/receiving';
 
 interface ItemLookup {
   [id: string]: { name: string; sku: string };
 }
 
-const STATUS_COLORS: Record<ReceiptRow['status'], string> = {
-  draft: 'bg-muted text-muted-foreground',
-  posted: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300',
-  reversed: 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300',
-  reversal: 'bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300',
-  canceled: 'bg-muted text-muted-foreground',
+/**
+ * Each receipt status keeps its own word on a label in one of the shared tones
+ * (DESIGN-SPEC 6.10), which hold their contrast in both themes where the old
+ * fixed emerald, amber and blue chips did not; the timeline dot repeats the
+ * tone, so colour is never the only cue.
+ */
+type ReceiptBadgeTone = 'outline' | 'success' | 'warning' | 'secondary';
+
+const STATUS_BADGE: Record<ReceiptRow['status'], ReceiptBadgeTone> = {
+  draft: 'outline',
+  posted: 'success',
+  reversed: 'warning',
+  reversal: 'secondary',
+  canceled: 'outline',
+};
+
+const STATUS_TONE: Record<ReceiptRow['status'], TimelineTone> = {
+  draft: 'muted',
+  posted: 'accent',
+  reversed: 'warning',
+  reversal: 'neutral',
+  canceled: 'muted',
 };
 
 interface ReceiptHistoryProps {
@@ -53,12 +68,12 @@ interface ReceiptHistoryProps {
   canReverse: boolean;
 }
 
-export function ReceiptHistory({
-  receipts,
-  lines,
-  items,
-  canReverse,
-}: ReceiptHistoryProps) {
+/**
+ * The PO's receipts, newest first as the service returns them, as a timeline
+ * (matrix W-PU-02d, P-TL): one entry per receipt with its number and status,
+ * when and by whom, Reverse where allowed, and its lines.
+ */
+export function ReceiptHistory({ receipts, lines, items, canReverse }: ReceiptHistoryProps) {
   const linesByReceipt = React.useMemo(() => {
     const m = new Map<string, ReceiptLineRow[]>();
     for (const l of lines) {
@@ -71,17 +86,17 @@ export function ReceiptHistory({
 
   if (receipts.length === 0) {
     return (
-      <p className="text-muted-foreground text-sm">
-        No receipts yet. Use the &quot;Receive items&quot; button on the line items above to
-        record what was received — partial deliveries are fine.
+      <p className="text-muted-foreground text-[13.5px] leading-[20.25px]">
+        No receipts yet. Use the &quot;Receive items&quot; button on the line items above to record
+        what was received — partial deliveries are fine.
       </p>
     );
   }
 
   return (
-    <div className="space-y-4">
+    <Timeline>
       {receipts.map((r) => (
-        <ReceiptCard
+        <ReceiptEntry
           key={r.id}
           receipt={r}
           lines={linesByReceipt.get(r.id) ?? []}
@@ -89,11 +104,11 @@ export function ReceiptHistory({
           canReverse={canReverse}
         />
       ))}
-    </div>
+    </Timeline>
   );
 }
 
-function ReceiptCard({
+function ReceiptEntry({
   receipt,
   lines,
   items,
@@ -130,94 +145,108 @@ function ReceiptCard({
   }
 
   return (
-    <div className="rounded-xl border border-border bg-card">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span className="font-mono text-sm font-medium">{receipt.receipt_number}</span>
-          <span className={`rounded-full px-2 py-0.5 text-[11px] ${STATUS_COLORS[receipt.status]}`}>
-            {receipt.status}
-          </span>
-          {/* Relative for scanability + the viewer's own wall-clock time.
-              LocalDateTime renders CLIENT-side on purpose: this component is
-              SSR'd, and a toLocaleString() computed on the server prints the
-              container's timezone (UTC on Vercel). suppressHydrationWarning
-              used to sit on this span, which made that worse — it told React
-              to KEEP the server text, so a 9:47 AM receipt read "4:47 PM"
-              forever. It now sits on the relative <time> alone, whose server
-              words stay right to within the minute that passes before
-              hydration (React error #418 otherwise).
-              Same order and prefix as the activity feed so timestamps read
-              identically across the app. */}
-          <span className="text-muted-foreground text-xs">
-            <time dateTime={receipt.received_at} suppressHydrationWarning>
-              {formatRelative(receipt.received_at)}
-            </time>
-            <LocalDateTime iso={receipt.received_at} prefix=" · " />
-          </span>
+    <TimelineEntry
+      tone={STATUS_TONE[receipt.status]}
+      title={
+        <span className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+          <span className="font-mono text-[13.5px] font-medium">{receipt.receipt_number}</span>
+          <Badge variant={STATUS_BADGE[receipt.status]}>{receipt.status}</Badge>
+          {canReverse && receipt.status === 'posted' && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="-my-1 ml-auto"
+              onClick={() => setReverseOpen(true)}
+            >
+              <Undo2 className="h-3.5 w-3.5" /> Reverse
+            </Button>
+          )}
+        </span>
+      }
+      meta={
+        // Relative for scanability + the viewer's own wall-clock time.
+        // LocalDateTime renders CLIENT-side on purpose: this component is
+        // SSR'd, and a toLocaleString() computed on the server prints the
+        // container's timezone (UTC on Vercel). suppressHydrationWarning used
+        // to sit on the whole line, which made that worse — it told React to
+        // KEEP the server text, so a 9:47 AM receipt read "4:47 PM" forever.
+        // It now sits on the relative <time> alone, whose server words stay
+        // right to within the minute that passes before hydration (React
+        // error #418 otherwise). Same order and prefix as the activity feed
+        // so timestamps read identically across the app.
+        <>
+          <time dateTime={receipt.received_at} suppressHydrationWarning>
+            {formatRelative(receipt.received_at)}
+          </time>
+          <LocalDateTime iso={receipt.received_at} prefix=" · " />
           {receipt.received_by_name && (
-            <span className="text-muted-foreground text-xs">
+            <>
+              {' '}
               · by <span className="text-foreground font-medium">{receipt.received_by_name}</span>
-            </span>
+            </>
           )}
-        </div>
-        {canReverse && receipt.status === 'posted' && (
-          <Button variant="ghost" size="sm" onClick={() => setReverseOpen(true)}>
-            <Undo2 className="mr-1 h-3.5 w-3.5" /> Reverse
-          </Button>
+        </>
+      }
+    >
+      <div className="border-border mt-1 overflow-hidden rounded-md border">
+        <Table className="text-[13px]">
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="whitespace-nowrap py-2 first:pl-3">Item</TableHead>
+              <TableHead className="whitespace-nowrap py-2 text-right">Received</TableHead>
+              <TableHead className="whitespace-nowrap py-2 text-right">Accepted</TableHead>
+              <TableHead className="whitespace-nowrap py-2 text-right last:pr-3">
+                Rejected
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {lines.map((l) => {
+              const item = items[l.item_id];
+              return (
+                <TableRow key={l.id} className="hover:bg-transparent">
+                  {/* The item keeps a readable width; on a phone the table
+                      scrolls inside its own box instead of breaking names. */}
+                  <TableCell className="min-w-36 py-2 first:pl-3">
+                    <p className="text-foreground font-medium leading-5 [overflow-wrap:anywhere]">
+                      {item?.name ?? 'Unknown item'}
+                    </p>
+                    <p className="text-muted-foreground font-mono text-[11.5px] leading-[17.25px]">
+                      {item?.sku ?? ''}
+                    </p>
+                  </TableCell>
+                  <TableCell className="py-2 text-right font-mono text-[12.5px] tabular-nums">
+                    {Number(l.qty_received_base).toLocaleString()}
+                  </TableCell>
+                  <TableCell className="py-2 text-right font-mono text-[12.5px] tabular-nums">
+                    {Number(l.qty_accepted_base).toLocaleString()}
+                  </TableCell>
+                  <TableCell className="py-2 text-right font-mono text-[12.5px] tabular-nums last:pr-3">
+                    {Number(l.qty_rejected_base).toLocaleString()}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+        {(receipt.notes || receipt.reversal_reason) && (
+          <div className="border-border space-y-0.5 border-t px-3 py-2 text-[12.5px] leading-[18.75px] [overflow-wrap:anywhere]">
+            {receipt.notes && (
+              <p>
+                <span className="text-muted-foreground">Notes:</span> {receipt.notes}
+              </p>
+            )}
+            {receipt.reversal_reason && (
+              <p>
+                <span className="text-muted-foreground">Reversed:</span> {receipt.reversal_reason}
+              </p>
+            )}
+          </div>
         )}
-      </div>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Item</TableHead>
-            <TableHead className="text-right">Received</TableHead>
-            <TableHead className="text-right">Accepted</TableHead>
-            <TableHead className="text-right">Rejected</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {lines.map((l) => {
-            const item = items[l.item_id];
-            return (
-              <TableRow key={l.id}>
-                <TableCell>
-                  <p className="font-medium">{item?.name ?? 'Unknown item'}</p>
-                  <p className="text-muted-foreground font-mono text-xs">
-                    {item?.sku ?? ''}
-                  </p>
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {Number(l.qty_received_base).toLocaleString()}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {Number(l.qty_accepted_base).toLocaleString()}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {Number(l.qty_rejected_base).toLocaleString()}
-                </TableCell>
-              </TableRow>
-            );
-          })}
-        </TableBody>
-      </Table>
-      {(receipt.notes || receipt.reversal_reason) && (
-        <div className="border-t border-border px-4 py-2 text-xs">
-          {receipt.notes && (
-            <p>
-              <span className="text-muted-foreground">Notes:</span> {receipt.notes}
-            </p>
-          )}
-          {receipt.reversal_reason && (
-            <p>
-              <span className="text-muted-foreground">Reversed:</span>{' '}
-              {receipt.reversal_reason}
-            </p>
-          )}
+        <div className="border-border bg-sunk text-ink-2 border-t px-3 py-2 text-[12px] tabular-nums leading-[18px]">
+          Total accepted: {totalAccepted.toLocaleString()} · Rejected:{' '}
+          {totalRejected.toLocaleString()}
         </div>
-      )}
-      <div className="border-t border-border bg-muted/20 px-4 py-2 text-xs tabular-nums">
-        Total accepted: {totalAccepted.toLocaleString()} · Rejected:{' '}
-        {totalRejected.toLocaleString()}
       </div>
 
       <Dialog open={reverseOpen} onOpenChange={setReverseOpen}>
@@ -225,9 +254,8 @@ function ReceiptCard({
           <DialogHeader>
             <DialogTitle>Reverse {receipt.receipt_number}?</DialogTitle>
             <DialogDescription>
-              Stock will be decremented by the previously accepted quantities.
-              The original receipt is preserved for audit; a sibling
-              &quot;reversal&quot; receipt is created.
+              Stock will be decremented by the previously accepted quantities. The original receipt
+              is preserved for audit; a sibling &quot;reversal&quot; receipt is created.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-1.5">
@@ -244,11 +272,12 @@ function ReceiptCard({
               Cancel
             </Button>
             <Button variant="destructive" onClick={reverse} disabled={busy}>
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Confirm reversal'}
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Confirm reversal
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </TimelineEntry>
   );
 }

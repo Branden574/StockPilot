@@ -11,6 +11,9 @@ import { Input } from '@/components/ui/input';
  * (router.push) rather than a native GET form so searching is an in-app SPA
  * navigation — the dashboard shell stays mounted rather than cold-loading.
  * Preserves the active status tab in the query string.
+ *
+ * Drawn as the list's toolbar search (DESIGN-SPEC 6.3): 240 px beside the
+ * status tabs, the whole row on a phone.
  */
 export function PoSearch({ status, initialQuery }: { status: string; initialQuery: string }) {
   const router = useRouter();
@@ -33,16 +36,19 @@ export function PoSearch({ status, initialQuery }: { status: string; initialQuer
         e.preventDefault();
         submit(q);
       }}
-      className="relative min-w-[200px] max-w-xs flex-1 sm:flex-none"
+      className="relative w-full sm:w-60"
     >
-      <Search className="text-muted-foreground pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2" />
+      <Search
+        aria-hidden
+        className="text-muted-foreground pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+      />
       <Input
         type="search"
         value={q}
         onChange={(e) => setQ(e.target.value)}
         placeholder="Search PO #, supplier…"
         aria-label="Search purchase orders"
-        className="h-9 pl-8 text-[13px]"
+        className="pl-8"
       />
     </form>
   );

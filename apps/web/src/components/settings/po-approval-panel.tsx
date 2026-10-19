@@ -5,8 +5,8 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { DetailSection } from '@/components/patterns/detail-section';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { setPoApprovalSettingsAction } from '@/server/actions/po-approval-settings';
@@ -16,6 +16,8 @@ import { setPoApprovalSettingsAction } from '@/server/actions/po-approval-settin
  * for owner/admin; the server action re-gates. POs at/above the amount can
  * only be PLACED by an owner or admin — managers keep full draft/cancel
  * rights. 0 turns the gate off.
+ *
+ * Drawn as a titled card under the list (DESIGN-SPEC 6.7).
  */
 export function PoApprovalPanel({ initialAmount }: { initialAmount: number }) {
   const router = useRouter();
@@ -44,38 +46,38 @@ export function PoApprovalPanel({ initialAmount }: { initialAmount: number }) {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <ShieldCheck className="h-4 w-4" /> Approval threshold
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <p className="text-muted-foreground text-sm">
-          Purchase orders at or above this amount can only be <span className="text-foreground font-medium">placed</span>{' '}
-          by an owner or admin. Managers can still draft and edit POs of any size — the gate is on
-          committing the spend. Leave blank (or 0) to turn it off.
-        </p>
-        <div className="flex items-end gap-2">
-          <div className="w-44 space-y-1.5">
-            <Label htmlFor="poApprovalThreshold">Threshold ($)</Label>
-            <Input
-              id="poApprovalThreshold"
-              type="number"
-              min={0}
-              step="0.01"
-              placeholder="Off"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              disabled={busy}
-            />
-          </div>
-          <Button onClick={save} disabled={busy} size="sm">
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Save
-          </Button>
+    <DetailSection
+      title={
+        <span className="inline-flex items-center gap-2">
+          <ShieldCheck aria-hidden className="text-muted-foreground h-4 w-4" /> Approval threshold
+        </span>
+      }
+    >
+      <p className="text-muted-foreground max-w-3xl text-[13.5px] leading-[20.25px]">
+        Purchase orders at or above this amount can only be{' '}
+        <span className="text-foreground font-medium">placed</span> by an owner or admin. Managers
+        can still draft and edit POs of any size — the gate is on committing the spend. Leave blank
+        (or 0) to turn it off.
+      </p>
+      <div className="mt-4 flex flex-wrap items-end gap-2">
+        <div className="w-44 space-y-1.5">
+          <Label htmlFor="poApprovalThreshold">Threshold ($)</Label>
+          <Input
+            id="poApprovalThreshold"
+            type="number"
+            min={0}
+            step="0.01"
+            placeholder="Off"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            disabled={busy}
+          />
         </div>
-      </CardContent>
-    </Card>
+        <Button onClick={save} disabled={busy}>
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          Save
+        </Button>
+      </div>
+    </DetailSection>
   );
 }
