@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -45,7 +45,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function Orders(props: React.ComponentProps<typeof Table>) {
+function Orders({
+  rowControl,
+  ...props
+}: React.ComponentProps<typeof Table> & { rowControl?: React.ReactNode }) {
   return (
     <>
       <button type="button">Before</button>
@@ -61,6 +64,12 @@ function Orders(props: React.ComponentProps<typeof Table>) {
             <TableCell>ORD-1</TableCell>
             <TableCell>5h ago</TableCell>
           </TableRow>
+          {rowControl ? (
+            <TableRow>
+              <TableCell>ORD-2</TableCell>
+              <TableCell>{rowControl}</TableCell>
+            </TableRow>
+          ) : null}
         </TableBody>
       </Table>
     </>
@@ -163,6 +172,110 @@ describe('Table scroll wrapper', () => {
     expect(html).toContain('aria-label="Orders"');
     expect(html).not.toContain('tabindex');
     expect(html).not.toContain('data-overflow');
+  });
+
+  it('an overflowing table with a button in a row adds no wrapper stop; Tab reaches the button', async () => {
+    widths = { scroll: 1100, client: 900 };
+    const user = userEvent.setup();
+    render(<Orders rowControl={<button type="button">Open ORD-2</button>} />);
+    const wrapper = wrapperOf();
+    expect(wrapper).not.toHaveAttribute('tabindex');
+    // The edge treatment still knows the table overflows.
+    expect(wrapper).toHaveAttribute('data-overflow', 'true');
+    await user.tab();
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'Open ORD-2' })).toHaveFocus();
+  });
+
+  it.each([
+    ['a link', () => <a href="/orders/2">ORD-2</a>],
+    ['a field', () => <input aria-label="Quantity" />],
+    ['a select', () => <select aria-label="Status" />],
+    ['a tab stop', () => <span tabIndex={0}>Note</span>],
+  ])('%s in a row also counts as a control', (_kind, control) => {
+    widths = { scroll: 1100, client: 900 };
+    render(<Orders rowControl={control()} />);
+    expect(wrapperOf()).not.toHaveAttribute('tabindex');
+  });
+
+  it.each([
+    [
+      'a disabled button',
+      () => (
+        <button type="button" disabled>
+          Open
+        </button>
+      ),
+    ],
+    ['a link with no href', () => <a>ORD-2</a>],
+    ['a hidden input', () => <input type="hidden" value="2" readOnly />],
+    ['a tabindex of -1', () => <span tabIndex={-1}>Note</span>],
+  ])('%s is not a control, so the wrapper stays a stop', (_kind, control) => {
+    widths = { scroll: 1100, client: 900 };
+    render(<Orders rowControl={control()} />);
+    expect(wrapperOf()).toHaveAttribute('tabindex', '0');
+  });
+
+  it('a control added later removes the stop, and removing it brings the stop back', async () => {
+    widths = { scroll: 1100, client: 900 };
+    const { rerender } = render(<Orders />);
+    const wrapper = wrapperOf();
+    expect(wrapper).toHaveAttribute('tabindex', '0');
+
+    rerender(<Orders rowControl={<button type="button">Open ORD-2</button>} />);
+    await waitFor(() => expect(wrapper).not.toHaveAttribute('tabindex'));
+
+    rerender(<Orders />);
+    await waitFor(() => expect(wrapper).toHaveAttribute('tabindex', '0'));
+  });
+
+  it('a button turning enabled or disabled is noticed', async () => {
+    widths = { scroll: 1100, client: 900 };
+    const { rerender } = render(
+      <Orders
+        rowControl={
+          <button type="button" disabled>
+            Open ORD-2
+          </button>
+        }
+      />,
+    );
+    const wrapper = wrapperOf();
+    expect(wrapper).toHaveAttribute('tabindex', '0');
+    rerender(<Orders rowControl={<button type="button">Open ORD-2</button>} />);
+    await waitFor(() => expect(wrapper).not.toHaveAttribute('tabindex'));
+    rerender(
+      <Orders
+        rowControl={
+          <button type="button" disabled>
+            Open ORD-2
+          </button>
+        }
+      />,
+    );
+    await waitFor(() => expect(wrapper).toHaveAttribute('tabindex', '0'));
+  });
+
+  it('a named table is a region either way: with or without controls, fitting or not', () => {
+    widths = { scroll: 1100, client: 900 };
+    const { unmount } = render(
+      <Orders scrollLabel="Orders" rowControl={<button type="button">Open ORD-2</button>} />,
+    );
+    const region = screen.getByRole('region', { name: 'Orders' });
+    expect(region).toBe(wrapperOf());
+    expect(region).not.toHaveAttribute('tabindex');
+    unmount();
+
+    render(<Orders scrollLabel="Orders" />);
+    const stop = screen.getByRole('region', { name: 'Orders' });
+    expect(stop).toHaveAttribute('tabindex', '0');
+  });
+
+  it('stops watching the table on unmount', () => {
+    const disconnect = vi.spyOn(MutationObserver.prototype, 'disconnect');
+    const { unmount } = render(<Orders />);
+    unmount();
+    expect(disconnect).toHaveBeenCalled();
   });
 
   it('without ResizeObserver it still measures on mount and on window resize', () => {

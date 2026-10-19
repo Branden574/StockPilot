@@ -23,9 +23,11 @@ export interface TableProps extends React.HTMLAttributes<HTMLTableElement> {
  * wide table scrolls inside its own wrapper, never the page. A cell holding a
  * checkbox keeps no right padding, so the checkbox column stays narrow.
  *
- * While the table is wider than the wrapper, the wrapper is a Tab stop so the
- * arrow keys can scroll it (TableScroll, the one client part; rows and cells
- * stay server-renderable). Pass `scrollLabel` or `scrollLabelledBy` to name it.
+ * While the table is wider than the wrapper and holds no link, button or field
+ * of its own, the wrapper is a Tab stop so the arrow keys can scroll it
+ * (TableScroll, the one client part; rows and cells stay server-renderable).
+ * Pass `scrollLabel` or `scrollLabelledBy` to name it; every table that can
+ * overflow should.
  */
 export const Table = React.forwardRef<HTMLTableElement, TableProps>(
   ({ className, scrollLabel, scrollLabelledBy, ...props }, ref) => (
