@@ -4,11 +4,14 @@ import { redirect } from 'next/navigation';
 import { Fragment } from 'react';
 
 import { AUDIT_CATEGORIES } from '@/components/admin/audit-categories';
+import { AuditTime } from '@/components/admin/audit-time';
 import { diffMetadataFields, MetadataDiff } from '@/components/audit/metadata-diff';
+import { FilterChipLink } from '@/components/patterns/chip';
+import { DetailSection } from '@/components/patterns/detail-section';
+import { PageHeader } from '@/components/patterns/page-header';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -21,8 +24,8 @@ import {
 } from '@/components/ui/table';
 import { formatAuditEvent, formatEntityType, shortId } from '@/lib/audit/format';
 import { requireOrgContext } from '@/lib/auth/session';
+import { effectiveNavLabel } from '@/lib/nav-labels';
 import { auditActorName } from '@/lib/people/deleted-person-labels';
-import { cn, formatRelative } from '@/lib/utils';
 import { AuditLogService } from '@/server/services/audit-log';
 import { ServiceError } from '@/server/services/context';
 
@@ -129,13 +132,15 @@ export default async function AuditLogPage({
   }
 
   const params = await searchParams;
+  // A Settings > Navigation rename of the sidebar entry reaches the heading
+  // (no read of its own: the org row is cached for the request).
+  const title = await effectiveNavLabel('/dashboard/audit', 'Audit log');
   const page = clampPage(params.page);
   const offset = (page - 1) * PAGE_SIZE;
 
   const activeCategory =
     AUDIT_CATEGORIES.find((c) => c.slug === (params.category ?? 'all'))?.slug ?? 'all';
-  const eventPrefix =
-    AUDIT_CATEGORIES.find((c) => c.slug === activeCategory)?.prefix ?? undefined;
+  const eventPrefix = AUDIT_CATEGORIES.find((c) => c.slug === activeCategory)?.prefix ?? undefined;
 
   const filters = {
     event: trim(params.event),
@@ -166,118 +171,95 @@ export default async function AuditLogPage({
   const hasNext = page < totalPages;
   const hasActiveFilters = Boolean(
     eventPrefix ||
-      filters.event ||
-      filters.userId ||
-      filters.entityType ||
-      filters.since ||
-      filters.until,
+    filters.event ||
+    filters.userId ||
+    filters.entityType ||
+    filters.since ||
+    filters.until,
   );
 
   return (
-    <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Audit log</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Read-only record of every privileged action across the org —
-          invites, role changes, stock adjustments, transfers.
-        </p>
-      </div>
+    // Always a table, never cards, and no Export (the console has none; the
+    // reference's Movements Export must not become a placeholder here).
+    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <PageHeader
+        title={title}
+        subline="Read-only record of every privileged action across the org — invites, role changes, stock adjustments, transfers."
+      />
 
-      <div className="mb-4 flex flex-wrap items-center gap-1.5">
+      <div className="flex flex-wrap items-center gap-2">
         {AUDIT_CATEGORIES.map((c) => {
           const isActive = c.slug === activeCategory;
           return (
-            <Link
+            <FilterChipLink
               key={c.slug}
               href={buildCategoryHref(params, c.slug)}
-              className={cn(
-                'inline-flex h-7 items-center rounded-full border px-3 text-[12px] transition-colors',
-                isActive
-                  ? 'border-foreground bg-foreground text-background'
-                  : 'border-border bg-background text-muted-foreground hover:text-foreground',
-              )}
+              active={isActive}
+              aria-current={isActive ? 'page' : undefined}
             >
               {c.label}
-            </Link>
+            </FilterChipLink>
           );
         })}
       </div>
 
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle className="text-base">Filter</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {/* method=GET so filters work without JS. The form re-submits to
-              the same route with filters as query params; submitting also
-              resets pagination by omitting `page`. The active category is
-              carried through the hidden input so chips + fields compose. */}
-          <form
-            method="GET"
-            className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3"
-          >
-            {activeCategory !== 'all' && (
-              <input type="hidden" name="category" value={activeCategory} />
-            )}
-            <div className="space-y-1">
-              <Label htmlFor="event">Event</Label>
-              <Input
-                id="event"
-                name="event"
-                placeholder="e.g. inventory.item.created"
-                defaultValue={params.event ?? ''}
-              />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="userId">Actor (user id)</Label>
-              <Input
-                id="userId"
-                name="userId"
-                placeholder="UUID"
-                defaultValue={params.userId ?? ''}
-              />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="entityType">Entity type</Label>
-              <Input
-                id="entityType"
-                name="entityType"
-                placeholder="e.g. inventory_item"
-                defaultValue={params.entityType ?? ''}
-              />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="since">Since</Label>
-              <Input
-                id="since"
-                name="since"
-                type="date"
-                defaultValue={params.since ?? ''}
-              />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="until">Until</Label>
-              <Input
-                id="until"
-                name="until"
-                type="date"
-                defaultValue={params.until ?? ''}
-              />
-            </div>
-            <div className="flex items-end gap-2">
-              <Button type="submit" size="sm">
-                Apply
-              </Button>
-              <Button asChild type="button" variant="outline" size="sm">
-                <Link href="/dashboard/audit">Reset</Link>
-              </Button>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
+      <DetailSection title="Filter">
+        {/* method=GET so filters work without JS. The form re-submits to
+            the same route with filters as query params; submitting also
+            resets pagination by omitting `page`. The active category is
+            carried through the hidden input so chips + fields compose. */}
+        <form method="GET" className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {activeCategory !== 'all' && (
+            <input type="hidden" name="category" value={activeCategory} />
+          )}
+          <div className="space-y-1.5">
+            <Label htmlFor="event">Event</Label>
+            <Input
+              id="event"
+              name="event"
+              placeholder="e.g. inventory.item.created"
+              defaultValue={params.event ?? ''}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="userId">Actor (user id)</Label>
+            <Input
+              id="userId"
+              name="userId"
+              placeholder="UUID"
+              defaultValue={params.userId ?? ''}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="entityType">Entity type</Label>
+            <Input
+              id="entityType"
+              name="entityType"
+              placeholder="e.g. inventory_item"
+              defaultValue={params.entityType ?? ''}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="since">Since</Label>
+            <Input id="since" name="since" type="date" defaultValue={params.since ?? ''} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="until">Until</Label>
+            <Input id="until" name="until" type="date" defaultValue={params.until ?? ''} />
+          </div>
+          <div className="flex items-end gap-2">
+            <Button type="submit" size="sm">
+              Apply
+            </Button>
+            <Button asChild type="button" variant="outline" size="sm">
+              <Link href="/dashboard/audit">Reset</Link>
+            </Button>
+          </div>
+        </form>
+      </DetailSection>
 
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        <p className="text-xs text-muted-foreground tabular-nums">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-muted-foreground text-[12.5px] tabular-nums">
           {total === 0
             ? 'No events'
             : `${total.toLocaleString()} event${total === 1 ? '' : 's'} · page ${page} of ${totalPages}`}
@@ -303,10 +285,12 @@ export default async function AuditLogPage({
           />
         )
       ) : (
-        <div className="overflow-x-auto rounded-xl border bg-card">
-          <Table>
+        // The ledger table (DESIGN-SPEC 6.9): it scrolls sideways inside its
+        // card on a narrow screen instead of widening the page.
+        <div className="border-border bg-card overflow-hidden rounded-lg border">
+          <Table className="min-w-[860px]">
             <TableHeader>
-              <TableRow>
+              <TableRow className="hover:bg-transparent">
                 <TableHead>Time</TableHead>
                 <TableHead>Actor</TableHead>
                 <TableHead>Event</TableHead>
@@ -330,17 +314,15 @@ export default async function AuditLogPage({
                   (Array.isArray(meta.changed_keys) && meta.changed_keys.length > 0);
                 return (
                   <Fragment key={row.id}>
-                    <TableRow className={hasDiffContent ? 'border-b-0' : undefined}>
-                      <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
-                        <time
-                          dateTime={row.createdAt}
-                          title={new Date(row.createdAt).toLocaleString()}
-                        >
-                          {formatRelative(row.createdAt)}
-                        </time>
+                    <TableRow
+                      data-audit-row={row.id}
+                      className={hasDiffContent ? 'border-b-0' : undefined}
+                    >
+                      <TableCell className="text-muted-foreground whitespace-nowrap text-[12.5px]">
+                        <AuditTime iso={row.createdAt} />
                       </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
+                      <TableCell className="min-w-[200px]">
+                        <div className="flex items-center gap-2.5">
                           <Avatar className="h-7 w-7">
                             {row.actor?.avatarUrl ? (
                               <AvatarImage src={row.actor.avatarUrl} alt={actorName} />
@@ -350,23 +332,27 @@ export default async function AuditLogPage({
                             </AvatarFallback>
                           </Avatar>
                           <div className="min-w-0">
-                            <div className="truncate text-sm font-medium">{actorName}</div>
+                            <div className="text-foreground truncate font-medium">{actorName}</div>
                             {row.actor?.email && row.actor.fullName ? (
-                              <div className="truncate text-[11px] text-muted-foreground">
+                              <div className="text-muted-foreground truncate text-[12px]">
                                 {row.actor.email}
                               </div>
                             ) : null}
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell className="text-sm">{formatAuditEvent(row.event)}</TableCell>
-                      <TableCell className="text-xs">
+                      <TableCell className="text-foreground">
+                        {formatAuditEvent(row.event)}
+                      </TableCell>
+                      <TableCell className="text-[12.5px]">
                         {entityType ? (
                           <div className="space-y-0.5">
-                            <div className="font-medium">{formatEntityType(entityType)}</div>
+                            <div className="text-foreground font-medium">
+                              {formatEntityType(entityType)}
+                            </div>
                             {entityId ? (
                               <code
-                                className="font-mono text-[11px] text-muted-foreground"
+                                className="text-muted-foreground font-mono text-[11.5px]"
                                 title={entityId}
                               >
                                 {shortId(entityId)}
@@ -377,12 +363,12 @@ export default async function AuditLogPage({
                           <span className="text-muted-foreground">—</span>
                         )}
                       </TableCell>
-                      <TableCell className="font-mono text-[11px] text-muted-foreground">
+                      <TableCell className="text-muted-foreground font-mono text-[12px]">
                         {row.ip ?? '—'}
                       </TableCell>
                     </TableRow>
                     {hasDiffContent && (
-                      <TableRow>
+                      <TableRow className="hover:bg-transparent">
                         <TableCell colSpan={5} className="pt-0">
                           <MetadataDiff metadata={meta} />
                         </TableCell>
@@ -396,7 +382,7 @@ export default async function AuditLogPage({
         </div>
       )}
 
-      <div className="mt-4 flex items-center justify-end">
+      <div className="flex items-center justify-end">
         <Pager
           prevHref={hasPrev ? buildPageHref(params, page - 1) : null}
           nextHref={hasNext ? buildPageHref(params, page + 1) : null}
@@ -406,30 +392,33 @@ export default async function AuditLogPage({
   );
 }
 
-function Pager({
-  prevHref,
-  nextHref,
-}: {
-  prevHref: string | null;
-  nextHref: string | null;
-}) {
+const DISABLED_PAGER = 'border-border text-ink-4 pointer-events-none bg-transparent';
+
+function Pager({ prevHref, nextHref }: { prevHref: string | null; nextHref: string | null }) {
+  // The pager recipe (DESIGN-SPEC 6.2): 28 px; a disabled end is quiet and
+  // takes no clicks (aria-disabled, no pointer events), as before. 8 px apart,
+  // the room the 44 px touch targets of two 28 px buttons need.
   return (
     <div className="flex items-center gap-2">
-      <Button asChild variant="outline" size="sm" disabled={!prevHref}>
-        <Link
-          href={prevHref ?? '#'}
-          aria-disabled={!prevHref}
-          className={!prevHref ? 'pointer-events-none opacity-50' : ''}
-        >
+      <Button
+        asChild
+        variant="outline"
+        size="sm"
+        disabled={!prevHref}
+        className={!prevHref ? DISABLED_PAGER : undefined}
+      >
+        <Link href={prevHref ?? '#'} aria-disabled={!prevHref}>
           ← Newer
         </Link>
       </Button>
-      <Button asChild variant="outline" size="sm" disabled={!nextHref}>
-        <Link
-          href={nextHref ?? '#'}
-          aria-disabled={!nextHref}
-          className={!nextHref ? 'pointer-events-none opacity-50' : ''}
-        >
+      <Button
+        asChild
+        variant="outline"
+        size="sm"
+        disabled={!nextHref}
+        className={!nextHref ? DISABLED_PAGER : undefined}
+      >
+        <Link href={nextHref ?? '#'} aria-disabled={!nextHref}>
           Older →
         </Link>
       </Button>
