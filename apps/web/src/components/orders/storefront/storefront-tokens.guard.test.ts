@@ -197,9 +197,12 @@ describe('the narrow setup bar is the New order page bar only', () => {
     }
   });
 
-  it('only the public page has no .sf-page, so the scoped rules leave its bar alone', () => {
+  it('the public order page draws its bar outside any .sf-page, so the four-cell rules leave it alone', () => {
     expect(PUBLIC_PAGE).toContain('<div className="sf-setup">');
-    expect(PUBLIC_PAGE).not.toMatch(/\bsf-page\b/);
+    expect(
+      PUBLIC_PAGE,
+      'the public bar has three cells: if it gains an .sf-page frame, scope the four-cell rules another way',
+    ).not.toMatch(/\bsf-page\b/);
   });
 });
 
