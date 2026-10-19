@@ -591,14 +591,17 @@ describe('redesign structure (P4.F3)', () => {
       .map((h) => h.textContent);
     const photosIdx = headers.indexOf('Photos');
     const siteIdx = headers.indexOf('Site');
-    const [withPhotos, withoutPhotos] = within(table).getAllByRole('row').slice(1);
-    const photoCell = within(withPhotos).getAllByRole('cell')[photosIdx];
+    const bodyRows = within(table).getAllByRole('row').slice(1);
+    expect(bodyRows).toHaveLength(2);
+    const [withPhotos, withoutPhotos] = bodyRows as [HTMLElement, HTMLElement];
+    const photoCell = within(withPhotos).getAllByRole('cell')[photosIdx] as HTMLElement;
     expect(photoCell).toHaveTextContent('3');
     expect(photoCell.querySelector('.font-mono')).toHaveTextContent('3');
     const cells = within(withoutPhotos).getAllByRole('cell');
-    expect(cells[photosIdx]).toHaveTextContent('—');
-    expect(cells[photosIdx].querySelector('.font-mono')).toBeNull();
-    expect(cells[photosIdx]).not.toHaveClass('font-mono');
+    const emptyPhotoCell = cells[photosIdx] as HTMLElement;
+    expect(emptyPhotoCell).toHaveTextContent('—');
+    expect(emptyPhotoCell.querySelector('.font-mono')).toBeNull();
+    expect(emptyPhotoCell).not.toHaveClass('font-mono');
     expect(cells[siteIdx]).toHaveTextContent('—');
   });
 
