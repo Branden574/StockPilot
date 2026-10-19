@@ -520,7 +520,21 @@ describe('the rows and controls VoiceOver and a finger reach', () => {
     expect(attrText(del, 'onPress', sf)).toBe('onDelete');
     expect(attrText(del, 'disabled', sf)).toBe('busy');
     expect(textOf(del, sf)).toBe('Delete template');
-    expect(flatCode(RECURRING)).toMatch(/delete: \{ minHeight: 44,/);
+    // P5.4b: the 44pt target is the shared small Button's own frame (the
+    // words on no fill look the same); the placement stays.
+    expect(attrText(del, 'size', sf)).toBe('sm');
+    expect(attrText(del, 'style', sf)).toBe('styles.delete');
+    expect(flatCode(RECURRING)).toMatch(
+      /delete: \{ alignSelf: 'flex-start', paddingHorizontal: 0, marginTop: 4, marginBottom: -8, \}/,
+    );
+    // The 44pt target is the shared small Button's own frame (P2.5c; drawn
+    // and measured in components/ui/touch-target.test.ts).
+    const smFrame = readSource(path.join(MOBILE_ROOT, 'src/components/ui/button.tsx'));
+    expect(smFrame).toContain("const framed = size === 'sm';");
+    expect(smFrame).toContain('export const BUTTON_MIN_TARGET = 44;');
+    expect(smFrame).toMatch(
+      /frame: \{\s*minHeight: BUTTON_MIN_TARGET,\s*minWidth: BUTTON_MIN_TARGET,/,
+    );
   });
 
   it('the recurring writes still go through the audited route, and the list changes only after it answers', () => {

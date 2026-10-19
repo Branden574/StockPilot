@@ -267,12 +267,13 @@ describe('Button size sm: a 44pt target round the 36pt button', () => {
     }
     // The sweep is not vacuous (72 at 9079cf659).
     expect(smButtons.length).toBeGreaterThan(60);
-    // The named local styles keep to the same rule.
+    // The named local styles keep to the same rule. (po-attachments' Attach
+    // dropped its smallButton style in P5.4b: the frame alone gives it the
+    // 44pt target, and the inline-style sweep above covers it.)
     for (const [file, name] of [
       ['app/(drawer)/recurring-pos.tsx', 'delete'],
       ['app/group-selected.tsx', 'smallButton'],
       ['app/ungroup-selected.tsx', 'smallButton'],
-      ['src/components/po-attachments.tsx', 'smallButton'],
       ['src/components/po-attachments.tsx', 'scanButton'],
     ] as const) {
       const block = new RegExp(`\\b${name}: \\{[^}]*\\}`).exec(readSource(at(file)))?.[0];

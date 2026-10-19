@@ -329,7 +329,7 @@ export default function ExceptionDetailScreen() {
               size="sm"
               disabled={retryingWorkspace}
               onPress={() => void reloadWorkspace()}
-              style={{ alignSelf: 'flex-start', marginTop: 14, minHeight: MIN_TAP }}
+              style={{ alignSelf: 'flex-start', marginTop: 14 }}
             >
               Try again
             </Button>
@@ -344,7 +344,7 @@ export default function ExceptionDetailScreen() {
               {state.message}
             </Body>
             <View style={{ marginTop: 14, alignSelf: 'flex-start' }}>
-              <Button variant="outline" size="sm" onPress={() => void refresh()} style={{ minHeight: MIN_TAP }}>
+              <Button variant="outline" size="sm" onPress={() => void refresh()}>
                 Try again
               </Button>
             </View>

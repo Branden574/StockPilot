@@ -198,14 +198,23 @@ describe('Exceptions list: words, tabs and the recount selection', () => {
     );
   });
 
+  // P5.4b: the shared small Button frames itself at 44pt, so the local TAP
+  // style (there for the target alone) went; they draw at 36pt in the frame.
   it('Select, Check now and Try again are 44pt buttons', () => {
     const { sf, els } = elements(
       LIST,
       (el, s) => tagOf(el, s) === 'Button' && attrText(el, 'size', s) === 'sm',
     );
     expect(els).toHaveLength(3);
-    for (const el of els) expect(attrText(el, 'style', sf)).toBe('TAP');
-    expect(code).toContain('const TAP = { minHeight: MIN_TAP };');
+    for (const el of els) expect(attrText(el, 'style', sf)).toBeUndefined();
+    // The 44pt target is the shared small Button's own frame (P2.5c; drawn
+    // and measured in components/ui/touch-target.test.ts).
+    const smFrame = readSource(path.join(MOBILE_ROOT, 'src/components/ui/button.tsx'));
+    expect(smFrame).toContain("const framed = size === 'sm';");
+    expect(smFrame).toContain('export const BUTTON_MIN_TARGET = 44;');
+    expect(smFrame).toMatch(
+      /frame: \{\s*minHeight: BUTTON_MIN_TARGET,\s*minWidth: BUTTON_MIN_TARGET,/,
+    );
   });
 
   // P2.5b: the card is the press target and VoiceOver's checkbox while

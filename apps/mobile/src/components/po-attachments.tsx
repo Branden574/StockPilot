@@ -475,7 +475,6 @@ export function PoAttachments({ poId }: { poId: string }) {
             size="sm"
             onPress={addFile}
             disabled={busy}
-            style={styles.smallButton}
             leading={
               busy ? (
                 <ActivityIndicator color={c.ink} size="small" />
@@ -600,8 +599,8 @@ function makeStyles(c: Palette) {
       gap: SPACE.sm,
     },
     title: { color: c.ink, fontFamily: FONT.display, fontSize: 15, flexShrink: 1 },
-    // The small button is 36pt; its frame is taken to the 44pt minimum.
-    smallButton: { minHeight: 44 },
+    // Attach is the shared small button: 36pt drawn in its own 44pt frame.
+    // Scan Document is a full-width row action, drawn at 44pt on purpose.
     scanButton: { minHeight: 44, marginTop: SPACE.sm },
     progress: { marginTop: SPACE.sm },
     muted: {

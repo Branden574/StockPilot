@@ -60,9 +60,6 @@ import { useTheme } from '@/lib/use-theme';
 /** The iOS minimum tap target, in points. */
 const MIN_TAP = 44;
 
-/** A 44pt minimum for the shared small Buttons (36pt on their own). */
-const TAP = { minHeight: MIN_TAP };
-
 /**
  * Exceptions: the native twin of the web /dashboard/exceptions page (F1-1).
  *
@@ -279,7 +276,7 @@ export default function ExceptionsScreen() {
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             {canSelect ? (
-              <Button size="sm" variant="outline" onPress={toggleSelecting} style={TAP}>
+              <Button size="sm" variant="outline" onPress={toggleSelecting}>
                 {selecting ? 'Done' : 'Select'}
               </Button>
             ) : null}
@@ -289,7 +286,6 @@ export default function ExceptionsScreen() {
                 variant="outline"
                 disabled={checking || offline}
                 onPress={() => void checkNow()}
-                style={TAP}
               >
                 {checking ? 'Starting...' : 'Check now'}
               </Button>
@@ -331,7 +327,7 @@ export default function ExceptionsScreen() {
               {view.message}
             </Body>
             <View style={{ marginTop: 14, alignSelf: 'flex-start' }}>
-              <Button variant="outline" size="sm" onPress={() => void refresh()} style={TAP}>
+              <Button variant="outline" size="sm" onPress={() => void refresh()}>
                 Try again
               </Button>
             </View>

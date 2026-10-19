@@ -588,9 +588,26 @@ describe('the attachments panel', () => {
         borderWidth: 1,
         borderRadius: RADIUS.card,
       });
-      for (const name of ['smallButton', 'scanButton', 'errorRow', 'fileOpen', 'removeFrame']) {
+      // P5.4b: Attach dropped smallButton (the shared small Button's own
+      // 44pt frame is its target); Scan Document, a full-width row action,
+      // keeps its drawn 44pt.
+      for (const name of ['scanButton', 'errorRow', 'fileOpen', 'removeFrame']) {
         expect(s[name]?.minHeight, name).toBe(44);
       }
+      expect(s.smallButton).toBeUndefined();
+      const { sf, els } = elements(ATTACH, (el, t) => tagOf(el, t) === 'Button');
+      expect(els.map((el) => [attrText(el, 'size', sf), attrText(el, 'style', sf)])).toEqual([
+        ['sm', undefined],
+        ['sm', 'styles.scanButton'],
+      ]);
+      // The 44pt target is the shared small Button's own frame (P2.5c; drawn
+      // and measured in components/ui/touch-target.test.ts).
+      const smFrame = readSource(path.join(MOBILE_ROOT, 'src/components/ui/button.tsx'));
+      expect(smFrame).toContain("const framed = size === 'sm';");
+      expect(smFrame).toContain('export const BUTTON_MIN_TARGET = 44;');
+      expect(smFrame).toMatch(
+        /frame: \{\s*minHeight: BUTTON_MIN_TARGET,\s*minWidth: BUTTON_MIN_TARGET,/,
+      );
     },
   );
 
