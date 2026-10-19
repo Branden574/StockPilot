@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import { AA_TEXT, AA_UI, contrast } from '../components/ui/__fixtures__/contrast';
 import { PHOTO_BACKGROUND, pillTone, toggleTone } from '../components/ui/tones';
+import { createSequenceGuard } from './debounced-list-load';
 import {
   TOUCHABLE_TAG,
   attr,
@@ -36,7 +37,10 @@ import { palette, type Palette } from './theme';
  *     links and the filters took hitSlop, the small buttons were 36pt);
  *   - statuses on the shared pill tones, photos on the white photo ground,
  *     no fixed colours, no single-mode accents, no word in the faint inks,
- *     and the colours each screen names measured in both modes.
+ *     and the colours each screen names measured in both modes;
+ *   - a defect fixed: a pull to refresh sent before an action could paint
+ *     the RMA back to how it was (Receive offered again) when its answer
+ *     came in after the action's.
  *
  * The behaviour stays pinned where it was: returns-screen-wiring,
  * returns-exchange-wiring, requester-returns-wiring, returns-view.still-
@@ -327,6 +331,38 @@ describe('one RMA (the route)', () => {
 
 describe('the workbench', () => {
   const code = flatCode(VIEW);
+
+  // The defect: a pull to refresh sent before Receive (or any action) that
+  // answered after it painted the RMA back to how it was, offering Receive
+  // again until the next read.
+  describe('only the newest read or answer paints the RMA (defect fix)', () => {
+    it('every read takes a number and paints only while it is the newest', () => {
+      expect(code).toContain('const [reads] = React.useState(() => createSequenceGuard());');
+      expect(code).toContain(
+        'const seq = reads.next(); setLoadError(null); try { const next = await getReturnWorkbench(returnId); if (reads.isCurrent(seq)) setWb(next); } catch (e) { if (reads.isCurrent(seq)) setLoadError(describeReturnError(e)); } finally { if (reads.isCurrent(seq)) setLoading(false); setRefreshing(false); }',
+      );
+    });
+
+    it("every action's answer goes through adopt, which outranks the reads on their way", () => {
+      expect(code).toContain(
+        'function adopt(next: MobileReturnWorkbench) { reads.next(); setWb(next); }',
+      );
+      expect(code.match(/adopt\(res\.workbench\);/g)).toHaveLength(2);
+      expect(code).toContain('if (done.workbench) adopt(done.workbench); else void load();');
+      // setWb only in the read, in adopt and in the reset for a new RMA.
+      expect(code.match(/\bsetWb\(/g)).toHaveLength(3);
+      expect(code).toContain('setWb(null);');
+    });
+
+    it('the guard the screen uses drops a read that was overtaken by an answer', () => {
+      const reads = createSequenceGuard();
+      const pull = reads.next(); // the pull to refresh is sent
+      reads.next(); // Receive answers first: adopt
+      expect(reads.isCurrent(pull)).toBe(false); // the pull's older RMA is dropped
+      const after = reads.next(); // a read after the answer
+      expect(reads.isCurrent(after)).toBe(true);
+    });
+  });
 
   it('nothing read: the words with the no-connection or the warning glyph, and Try again at 44pt', () => {
     expect(code).toContain(

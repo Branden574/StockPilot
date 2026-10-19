@@ -32,6 +32,7 @@ import { Card } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
 import { PHOTO_BACKGROUND } from '@/components/ui/tones';
+import { createSequenceGuard } from '@/lib/debounced-list-load';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { isOfflineState } from '@/lib/exceptions-api';
 import {
@@ -110,17 +111,30 @@ export function ReturnWorkbenchView({
   const [sheet, setSheet] = React.useState<ReturnSheetMode | null>(null);
   const [notice, setNotice] = React.useState<string | null>(null);
 
+  // Every read is numbered (the list's sequence guard): only the newest one
+  // paints the screen, and an action's answer takes a number too (adopt), so
+  // a pull to refresh sent before Receive can never paint the RMA back to how
+  // it was before (it offered Receive again until the next read).
+  const [reads] = React.useState(() => createSequenceGuard());
   const load = React.useCallback(async () => {
+    const seq = reads.next();
     setLoadError(null);
     try {
-      setWb(await getReturnWorkbench(returnId));
+      const next = await getReturnWorkbench(returnId);
+      if (reads.isCurrent(seq)) setWb(next);
     } catch (e) {
-      setLoadError(describeReturnError(e));
+      if (reads.isCurrent(seq)) setLoadError(describeReturnError(e));
     } finally {
-      setLoading(false);
+      if (reads.isCurrent(seq)) setLoading(false);
       setRefreshing(false);
     }
-  }, [returnId]);
+  }, [returnId, reads]);
+
+  /** An action's answer is the newest workbench: it outranks every read still on its way. */
+  function adopt(next: MobileReturnWorkbench) {
+    reads.next();
+    setWb(next);
+  }
 
   // A new returnId (the iPad split view picks another row) starts from a
   // clean slate: reset during render, not in the effect (no cascading render).
@@ -205,7 +219,7 @@ export function ReturnWorkbenchView({
     setNotice(null);
     try {
       const res = await prepareReturnReplacement(wb.return.id);
-      setWb(res.workbench);
+      adopt(res.workbench);
       setNotice(prepareOutcomeMessage(res.answer));
       onChanged?.();
     } catch (e) {
@@ -222,7 +236,7 @@ export function ReturnWorkbenchView({
     setNotice(null);
     try {
       const res = await runReturnSteps(wb.return.id, { steps: ['receive'], expectedRevision: wb.revision, expectedPlanSeq: wb.planSeq });
-      setWb(res.workbench);
+      adopt(res.workbench);
       const step = res.ran[0];
       setNotice(step ? stepOutcomeMessage(step, res.workbench, false) : null);
       onChanged?.();
@@ -619,7 +633,7 @@ export function ReturnWorkbenchView({
           onDone={(done) => {
             setSheet(null);
             setNotice(done.message);
-            if (done.workbench) setWb(done.workbench);
+            if (done.workbench) adopt(done.workbench);
             else void load();
             onChanged?.();
           }}
