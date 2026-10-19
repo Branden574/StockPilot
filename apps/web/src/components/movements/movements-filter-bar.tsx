@@ -4,15 +4,12 @@ import { Search, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 
+import { FilterChip } from '@/components/patterns/chip';
+import { FilterBar } from '@/components/patterns/filter-bar';
+import { touchTargetClass } from '@/components/patterns/touch-target';
+import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import {
   MOVEMENT_TYPE_OPTIONS,
   buildMovementsQueryString,
@@ -32,6 +29,8 @@ interface MovementsFilterBarProps {
   onChange?: (values: MovementsFilterQuery) => void;
   /** Server mode only. Defaults to the Movements page itself. */
   basePath?: string;
+  /** The right end of the search row: the top pager. */
+  trailing?: React.ReactNode;
 }
 
 /**
@@ -40,12 +39,20 @@ interface MovementsFilterBarProps {
  * it replaces); type/date changes apply immediately since they're discrete
  * picks, not keystrokes. All four filters travel together so a page link or
  * export href built from them is always internally consistent.
+ *
+ * The type is a row of chips (DESIGN-SPEC 6.6, the reference's type chips)
+ * over the 10 real movement types plus "All types", in the order the select
+ * they replace listed them. A chip sets exactly what the select set: the same
+ * `type` value, so the server ledger's URL keeps its `?type=` and the instant
+ * ledger filters in memory. They are toggle buttons in a group that keeps the
+ * select's name, "Filter by movement type"; the one on is pressed.
  */
 export function MovementsFilterBar({
   initial,
   mode,
   onChange,
   basePath = '/dashboard/movements',
+  trailing,
 }: MovementsFilterBarProps) {
   const router = useRouter();
   const [q, setQ] = React.useState(initial.q);
@@ -79,13 +86,13 @@ export function MovementsFilterBar({
   // router.replace() the page back over the user's own ?page= navigation).
   //
   // It has to be a REF of the last APPLIED value, not a `q === initial.q`
-  // comparison: instant mode passes a module constant as `initial`
-  // (movements-instant-table.tsx EMPTY_FILTERS, q:'' for the life of the
-  // component), so comparing against it also swallowed the keystroke that
-  // returns q to '' — select-all + Backspace left the ledger, and the Export
-  // CSV href built from the same filter state, pinned to the old needle while
-  // the search box read empty (SP-034). Server mode hid it because the URL
-  // round-trip keeps initial.q equal to the committed value.
+  // comparison: instant mode's `initial` is the filters in effect when the bar
+  // mounted (a module constant, q:'', when it used to be), never updated
+  // after, so comparing against it also swallowed the keystroke that returns
+  // q to the mount value — select-all + Backspace left the ledger, and the
+  // Export CSV href built from the same filter state, pinned to the old needle
+  // while the search box read empty (SP-034). Server mode hid it because the
+  // URL round-trip keeps initial.q equal to the committed value.
   const appliedQ = React.useRef(initial.q);
   React.useEffect(() => {
     if (q === appliedQ.current) return;
@@ -98,6 +105,10 @@ export function MovementsFilterBar({
   }, [q]);
 
   function updateType(next: string) {
+    // The chip already on does nothing, as picking the select's current
+    // option did nothing: in server mode a repeat would router.replace() the
+    // ledger back to page 1.
+    if (next === type) return;
     setType(next);
     apply({ q, type: next, from, to });
   }
@@ -121,93 +132,117 @@ export function MovementsFilterBar({
   const hasFilters = Boolean(q || type || from || to);
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <div className="relative min-w-[200px] max-w-xs flex-1 sm:flex-none">
-        <Search className="text-muted-foreground pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2" />
-        <Input
-          type="search"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Search by item name or SKU…"
-          aria-label="Search stock movements"
-          className="h-9 pl-8 pr-8 text-[13px]"
-        />
-        {q && (
-          <button
-            type="button"
-            onClick={() => {
-              setQ('');
-              appliedQ.current = '';
-              apply({ q: '', type, from, to });
-            }}
-            aria-label="Clear search"
-            className="text-muted-foreground hover:text-foreground absolute right-2 top-1/2 -translate-y-1/2"
+    <div data-slot="movements-filter-bar" className="flex min-w-0 flex-col gap-3">
+      <div
+        role="group"
+        aria-label="Filter by movement type"
+        className="flex min-w-0 flex-wrap items-center gap-2"
+      >
+        <FilterChip size="md" pressed={type === ''} onClick={() => updateType('')}>
+          All types
+        </FilterChip>
+        {MOVEMENT_TYPE_OPTIONS.map((opt) => (
+          <FilterChip
+            key={opt.value}
+            size="md"
+            pressed={type === opt.value}
+            onClick={() => updateType(opt.value)}
           >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        )}
+            {opt.label}
+          </FilterChip>
+        ))}
       </div>
 
-      <Select value={type || 'all'} onValueChange={(v) => updateType(v === 'all' ? '' : v)}>
-        <SelectTrigger className="h-9 w-[150px] text-[13px]" aria-label="Filter by movement type">
-          <SelectValue placeholder="All types" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="all">All types</SelectItem>
-          {MOVEMENT_TYPE_OPTIONS.map((opt) => (
-            <SelectItem key={opt.value} value={opt.value}>
-              {opt.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      <FilterBar
+        leading={
+          <>
+            <div className="relative w-full sm:w-[240px]">
+              <Search
+                aria-hidden="true"
+                className="text-muted-foreground pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+                strokeWidth={1.8}
+              />
+              <Input
+                type="search"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Search by item name or SKU…"
+                aria-label="Search stock movements"
+                className="pl-8 pr-9"
+              />
+              {q && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQ('');
+                    appliedQ.current = '';
+                    apply({ q: '', type, from, to });
+                  }}
+                  aria-label="Clear search"
+                  // The touch target first: its `relative` must lose to `absolute`.
+                  className={cn(
+                    touchTargetClass,
+                    'text-muted-foreground hover:bg-muted hover:text-foreground absolute right-1.5 top-1/2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded transition-colors',
+                  )}
+                >
+                  <X aria-hidden="true" className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
 
-      {/* The from–to pair is ONE flex group so a wrapping filter bar never
-          splits the range across rows (dangling dash / orphaned second date
-          — owner report 2026-07-15). [color-scheme:…] keeps the NATIVE
-          date-picker chrome (calendar icon + popup) in sync with the app
-          theme. An EMPTY native date input paints its mm/dd/yyyy segment
-          text in the normal text color (it is not a ::placeholder), which
-          reads as bright typed text next to the muted search placeholder —
-          so tint the whole control muted until a date is actually set
-          (owner report 2026-07-15). */}
-      <div className="flex shrink-0 items-center gap-2">
-        <Input
-          type="date"
-          value={from}
-          onChange={(e) => updateFrom(e.target.value)}
-          max={to || undefined}
-          aria-label="From date"
-          className={cn(
-            'h-9 w-[170px] text-[13px] sm:text-[13px] [color-scheme:light] dark:[color-scheme:dark]',
-            !from && 'text-muted-foreground',
-          )}
-        />
-        <span className="text-muted-foreground text-xs" aria-hidden>
-          –
-        </span>
-        <Input
-          type="date"
-          value={to}
-          onChange={(e) => updateTo(e.target.value)}
-          min={from || undefined}
-          aria-label="To date"
-          className={cn(
-            'h-9 w-[170px] text-[13px] sm:text-[13px] [color-scheme:light] dark:[color-scheme:dark]',
-            !to && 'text-muted-foreground',
-          )}
-        />
-      </div>
+            {/* The from–to pair is ONE flex group so a wrapping filter bar never
+                splits the range across rows (dangling dash / orphaned second date
+                — owner report 2026-07-15). [color-scheme:…] keeps the NATIVE
+                date-picker chrome (calendar icon + popup) in sync with the app
+                theme. An EMPTY native date input paints its mm/dd/yyyy segment
+                text in the normal text color (it is not a ::placeholder), which
+                reads as bright typed text next to the muted search placeholder —
+                so tint the whole control muted until a date is actually set
+                (owner report 2026-07-15). On a phone the pair shares the row. */}
+            <div className="flex w-full min-w-0 items-center gap-2 sm:w-auto">
+              <Input
+                type="date"
+                value={from}
+                onChange={(e) => updateFrom(e.target.value)}
+                max={to || undefined}
+                aria-label="From date"
+                className={cn(
+                  'min-w-0 flex-1 [color-scheme:light] sm:w-[150px] sm:flex-none dark:[color-scheme:dark]',
+                  !from && 'text-muted-foreground',
+                )}
+              />
+              <span className="text-muted-foreground text-[13px]" aria-hidden>
+                –
+              </span>
+              <Input
+                type="date"
+                value={to}
+                onChange={(e) => updateTo(e.target.value)}
+                min={from || undefined}
+                aria-label="To date"
+                className={cn(
+                  'min-w-0 flex-1 [color-scheme:light] sm:w-[150px] sm:flex-none dark:[color-scheme:dark]',
+                  !to && 'text-muted-foreground',
+                )}
+              />
+            </div>
 
-      {hasFilters && (
-        <button
-          type="button"
-          onClick={clearAll}
-          className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 text-[11.5px]"
-        >
-          <X className="h-3 w-3" /> Clear filters
-        </button>
-      )}
+            {hasFilters && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={clearAll}
+                className="text-muted-foreground font-normal"
+              >
+                <X aria-hidden="true" /> Clear filters
+              </Button>
+            )}
+          </>
+        }
+      >
+        {trailing}
+      </FilterBar>
     </div>
   );
 }
