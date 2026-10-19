@@ -11,6 +11,7 @@ import {
   Layers,
   Loader2,
   MapPin,
+  Printer,
   ShoppingCart,
   Tags as TagsIcon,
   Truck,
@@ -31,6 +32,7 @@ import {
 } from '@stockpilot/core';
 
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import {
   Dialog,
@@ -64,6 +66,7 @@ import {
   type ItemPublicVisibility,
 } from '@/server/actions/item-visibility';
 import { createDraftPosFromItemsAction } from '@/server/actions/purchase-orders';
+import { cn } from '@/lib/utils';
 import {
   ExportBuilderDialog,
   type ExportBuilderDialogProps,
@@ -178,6 +181,17 @@ type ActiveDialog =
 /** The labels page with no selection; the Print labels link's href until the
  *  selection is stored (pointer down or focus). */
 const LABELS_PAGE_HREF = '/dashboard/inventory/labels';
+
+/** A bar action (DESIGN-SPEC 6.21): a 28 px ghost button with 13 px ink-2
+ *  words and a 14 px icon; the neutral hover turns it ink. */
+const ACTION = 'h-7 px-2 text-[13px] font-normal text-[var(--ed-ink-2)] [&_svg]:size-3.5';
+
+/** "Start an order": the 28 px ink button that leads the bar. */
+const START_ORDER = 'h-7 px-2.5 text-[13px] [&_svg]:size-3.5';
+
+/** A caution note inside a bulk dialog: the warning tone on its wash, in both
+ *  themes (it was a fixed amber palette with dark-mode overrides). */
+const CAUTION_NOTE = 'bg-warning-wash text-warning rounded-md px-3 py-2 text-[12.5px]';
 
 /** Same ids in the same order: a re-render with an equal selection keeps the
  *  stored key instead of writing another one. */
@@ -534,235 +548,227 @@ export function BulkActions({
 
   return (
     <>
-      <div className="border-border bg-card flex flex-wrap items-center gap-3 rounded-md border px-3 py-2 text-[12.5px]">
+      {/* The bar (DESIGN-SPEC 6.21): a card strip in the toolbar's place,
+          28 px ghost actions with 14 px icons, the ink "Start an order", a
+          danger-toned Archive and Clear at the far end. 4 px between actions
+          on a mouse; 8 px below sm and on coarse pointers, where each action
+          grows a 44 px touch area and a later one paints over its
+          neighbour's edge (the Button's touch rule). */}
+      <div className="border-border bg-card flex min-h-9 flex-wrap items-center gap-1 rounded-lg border px-3 py-1 pointer-coarse:gap-2 max-sm:gap-2 max-sm:py-2">
         {/* Leading checked box — the bar swaps in over the toolbar when rows
             are selected, so this sits right where the user's attention is.
             Mirrors the table's header select-all: one click unselects
-            everything (same as the Clear button at the far end). Visuals
-            match the table Checkbox exactly. */}
-        <button
-          type="button"
-          role="checkbox"
-          aria-checked="true"
+            everything (same as the Clear button at the far end). The same
+            shared Checkbox as the rows'. */}
+        <Checkbox
+          checked
           title="Unselect all"
-          aria-label={`Unselect all ${count} selected item${count === 1 ? '' : 's'}`}
-          onClick={onClear}
-          className="inline-grid h-5 w-5 place-items-center rounded-[5px] border border-foreground bg-foreground transition-colors"
-        >
-          <span
-            aria-hidden
-            className="h-[11px] w-[6px] -translate-y-px rotate-45 border-b-2 border-r-2 border-background"
-          />
-        </button>
-        <span className="font-mono tabular-nums text-[var(--ed-ink-2)]">
+          label={`Unselect all ${count} selected item${count === 1 ? '' : 's'}`}
+          onCheckedChange={() => onClear()}
+          className="mr-1"
+        />
+        <span className="text-foreground mr-1 font-mono text-[12.5px] tabular-nums">
           {count} selected
         </span>
 
         {canStartOrder && onStartOrder ? (
-          <>
-            <span className="text-[var(--ed-ink-4)]">·</span>
-            {/* Primary workflow, so it leads the bar and carries the accent
-                treatment rather than the plain link styling of the edit
-                actions. Drops the checked items into a new order draft. */}
-            <button
-              type="button"
-              onClick={onStartOrder}
-              className="inline-flex items-center gap-1 rounded-[5px] bg-foreground px-2 py-0.5 font-medium text-background transition-opacity hover:opacity-90"
-            >
-              <ShoppingCart className="h-3 w-3" /> Start an order
-            </button>
-          </>
+          // Primary workflow, so it leads the bar and carries the ink
+          // treatment rather than the quiet look of the edit actions. Drops
+          // the checked items into a new order draft.
+          <Button type="button" size="sm" onClick={onStartOrder} className={START_ORDER}>
+            <ShoppingCart aria-hidden strokeWidth={1.6} /> Start an order
+          </Button>
         ) : null}
 
-        <span className="text-[var(--ed-ink-4)]">·</span>
-        <a
-          href={labelsReady && labelsTarget.href ? labelsTarget.href : LABELS_PAGE_HREF}
-          onPointerDown={() => void prepareLabels()}
-          onFocus={() => void prepareLabels()}
-          onClick={onLabelsClick}
-          className="text-[var(--ed-ink-2)] hover:text-foreground"
-        >
-          Print labels
-        </a>
+        <Button asChild variant="ghost" size="sm" className={ACTION}>
+          <a
+            href={labelsReady && labelsTarget.href ? labelsTarget.href : LABELS_PAGE_HREF}
+            onPointerDown={() => void prepareLabels()}
+            onFocus={() => void prepareLabels()}
+            onClick={onLabelsClick}
+          >
+            <Printer aria-hidden strokeWidth={1.6} /> Print labels
+          </a>
+        </Button>
 
-        <span className="text-[var(--ed-ink-4)]">·</span>
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
+          className={ACTION}
           onClick={() => setExportOpen(true)}
-          className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
         >
-          <Download className="h-3 w-3" /> Export
-        </button>
+          <Download aria-hidden strokeWidth={1.6} /> Export
+        </Button>
 
-        <span className="text-[var(--ed-ink-4)]">·</span>
-        <button
-          type="button"
-          onClick={onCycleCount}
-          className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
-        >
-          <ClipboardCheck className="h-3 w-3" /> Cycle count
-        </button>
+        <Button type="button" variant="ghost" size="sm" className={ACTION} onClick={onCycleCount}>
+          <ClipboardCheck aria-hidden strokeWidth={1.6} /> Cycle count
+        </Button>
 
         {groupItemIds.length > 0 ? (
-          <>
-            <span className="text-[var(--ed-ink-4)]">·</span>
-            <button
-              type="button"
-              onClick={() => {
-                // One review takes at most 100 records, as on the phone.
-                if (new Set(groupItemIds).size > GROUPING_MAX_ITEMS) {
-                  toast.error(GROUPING_ERROR_WORDS.groupTooMany);
-                  return;
-                }
-                groupingDone.current = false;
-                groupedId.current = null;
-                setGroupIds([...groupItemIds]);
-              }}
-              title="Show the selected records together as one group (stock, charters and SKUs stay as they are)"
-              className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
-            >
-              <Group className="h-3 w-3" /> {GROUP_COPY.bulkAction}
-            </button>
-          </>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className={ACTION}
+            onClick={() => {
+              // One review takes at most 100 records, as on the phone.
+              if (new Set(groupItemIds).size > GROUPING_MAX_ITEMS) {
+                toast.error(GROUPING_ERROR_WORDS.groupTooMany);
+                return;
+              }
+              groupingDone.current = false;
+              groupedId.current = null;
+              setGroupIds([...groupItemIds]);
+            }}
+            title="Show the selected records together as one group (stock, charters and SKUs stay as they are)"
+          >
+            <Group aria-hidden strokeWidth={1.6} /> {GROUP_COPY.bulkAction}
+          </Button>
         ) : null}
 
         {ungroupItemIds.length > 0 ? (
-          <>
-            <span className="text-[var(--ed-ink-4)]">·</span>
-            <button
-              type="button"
-              onClick={() => {
-                const ids = [...new Set(selectedIds)];
-                // One review takes at most 100 records: said here, as on the
-                // phone, never by a review that opens only to refuse.
-                if (ids.length > GROUPING_MAX_ITEMS) {
-                  toast.error(GROUPING_ERROR_WORDS.tooMany);
-                  return;
-                }
-                ungroupDone.current = false;
-                setUngroupOpen({ ids, shownUnder: new Map(ungroupShownUnder ?? []) });
-              }}
-              title="Take each selected record out of the grouping it shows under: its group, a shared SKU or its size family"
-              className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
-            >
-              <Ungroup className="h-3 w-3" /> {UNGROUP_COPY.bulkAction}
-            </button>
-          </>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className={ACTION}
+            onClick={() => {
+              const ids = [...new Set(selectedIds)];
+              // One review takes at most 100 records: said here, as on the
+              // phone, never by a review that opens only to refuse.
+              if (ids.length > GROUPING_MAX_ITEMS) {
+                toast.error(GROUPING_ERROR_WORDS.tooMany);
+                return;
+              }
+              ungroupDone.current = false;
+              setUngroupOpen({ ids, shownUnder: new Map(ungroupShownUnder ?? []) });
+            }}
+            title="Take each selected record out of the grouping it shows under: its group, a shared SKU or its size family"
+          >
+            <Ungroup aria-hidden strokeWidth={1.6} /> {UNGROUP_COPY.bulkAction}
+          </Button>
         ) : null}
 
-        <span className="text-[var(--ed-ink-4)]">·</span>
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
+          className={ACTION}
           onClick={() => setDialog({ kind: 'set_category' })}
-          className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
         >
-          <FolderTree className="h-3 w-3" /> Set category
-        </button>
+          <FolderTree aria-hidden strokeWidth={1.6} /> Set category
+        </Button>
 
-        <span className="text-[var(--ed-ink-4)]">·</span>
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
+          className={ACTION}
           onClick={() => setDialog({ kind: 'set_supplier' })}
-          className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
         >
-          <Truck className="h-3 w-3" /> Set supplier
-        </button>
+          <Truck aria-hidden strokeWidth={1.6} /> Set supplier
+        </Button>
 
         {canSetPublicVisibility && (
-          <>
-            <span className="text-[var(--ed-ink-4)]">·</span>
-            <button
-              type="button"
-              onClick={() => setDialog({ kind: 'set_public_visibility' })}
-              className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
-            >
-              <Globe className="h-3 w-3" /> Set public visibility
-            </button>
-          </>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className={ACTION}
+            onClick={() => setDialog({ kind: 'set_public_visibility' })}
+          >
+            <Globe aria-hidden strokeWidth={1.6} /> Set public visibility
+          </Button>
         )}
 
-        <span className="text-[var(--ed-ink-4)]">·</span>
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
+          className={ACTION}
           onClick={() => setDialog({ kind: 'add_tags' })}
-          className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
         >
-          <TagsIcon className="h-3 w-3" /> Add tags
-        </button>
+          <TagsIcon aria-hidden strokeWidth={1.6} /> Add tags
+        </Button>
 
-        <span className="text-[var(--ed-ink-4)]">·</span>
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
+          className={ACTION}
           onClick={() => setDialog({ kind: 'remove_tags' })}
-          className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
         >
-          <TagsIcon className="h-3 w-3" /> Remove tags
-        </button>
+          <TagsIcon aria-hidden strokeWidth={1.6} /> Remove tags
+        </Button>
 
-        <span className="text-[var(--ed-ink-4)]">·</span>
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
+          className={ACTION}
           onClick={() => setDialog({ kind: 'set_location' })}
-          className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
         >
-          <MapPin className="h-3 w-3" /> Set location
-        </button>
+          <MapPin aria-hidden strokeWidth={1.6} /> Set location
+        </Button>
 
-        <span className="text-[var(--ed-ink-4)]">·</span>
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
+          className={ACTION}
           onClick={() => setDialog({ kind: 'set_rack' })}
-          className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
         >
-          <Layers className="h-3 w-3" /> Set rack
-        </button>
+          <Layers aria-hidden strokeWidth={1.6} /> Set rack
+        </Button>
 
-        <span className="text-[var(--ed-ink-4)]">·</span>
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
+          className={ACTION}
           onClick={createDraftPos}
           disabled={draftBusy}
-          className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground disabled:opacity-60"
         >
           {draftBusy ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
+            <Loader2 aria-hidden className="animate-spin" />
           ) : (
-            <ClipboardList className="h-3 w-3" />
+            <ClipboardList aria-hidden strokeWidth={1.6} />
           )}{' '}
           Create draft POs
-        </button>
+        </Button>
 
         {hasArchivedSelection ? (
-          <>
-            <span className="text-[var(--ed-ink-4)]">·</span>
-            <button
-              type="button"
-              onClick={() => setDialog({ kind: 'unarchive' })}
-              className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
-            >
-              <Undo2 className="h-3 w-3" /> Restore
-            </button>
-          </>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className={ACTION}
+            onClick={() => setDialog({ kind: 'unarchive' })}
+          >
+            <Undo2 aria-hidden strokeWidth={1.6} /> Restore
+          </Button>
         ) : (
-          <>
-            <span className="text-[var(--ed-ink-4)]">·</span>
-            <button
-              type="button"
-              onClick={() => setDialog({ kind: 'archive' })}
-              className="text-destructive inline-flex items-center gap-1 hover:underline"
-            >
-              <Archive className="h-3 w-3" /> Archive
-            </button>
-          </>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className={cn(ACTION, 'text-destructive hover:text-destructive')}
+            onClick={() => setDialog({ kind: 'archive' })}
+          >
+            <Archive aria-hidden strokeWidth={1.6} /> Archive
+          </Button>
         )}
 
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
+          className={cn(ACTION, 'text-muted-foreground ml-auto')}
           onClick={onClear}
-          className="ml-auto inline-flex items-center gap-1 text-[var(--ed-ink-4)] hover:text-foreground"
         >
-          <X className="h-3 w-3" /> Clear
-        </button>
+          <X aria-hidden strokeWidth={1.6} /> Clear
+        </Button>
       </div>
 
       {groupIds ? (
@@ -1052,14 +1058,14 @@ export function BulkActions({
             </div>
           </div>
           {hasSplitRackSelection && (
-            <p className="rounded-md border border-amber-200 bg-amber-50/30 px-3 py-2 text-[12.5px] text-amber-700 dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-amber-400">
+            <p className={CAUTION_NOTE}>
               Some selected items have stock split across multiple racks. Set
               rack updates their label only — to physically move stock, use
               Transfer.
             </p>
           )}
           {hasElsewhereSelection && (
-            <p className="rounded-md border border-amber-200 bg-amber-50/30 px-3 py-2 text-[12.5px] text-amber-700 dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-amber-400">
+            <p className={CAUTION_NOTE}>
               Some selected items also have stock in warehouses you don&apos;t
               manage. Set rack does not move that stock.
             </p>
@@ -1205,7 +1211,7 @@ export function BulkActions({
             .
           </p>
           {visibilityError && (
-            <p className="border-destructive/30 bg-destructive/10 text-destructive rounded-md border px-3 py-2 text-[12.5px]">
+            <p role="alert" className="bg-destructive-wash text-destructive rounded-md px-3 py-2 text-[12.5px]">
               {visibilityError}
             </p>
           )}
@@ -1267,7 +1273,7 @@ function TagsDialog({
           <DialogDescription>{desc}</DialogDescription>
         </DialogHeader>
         {tags.length === 0 ? (
-          <p className="rounded-md border border-dashed bg-muted/30 px-3 py-3 text-[12.5px] text-muted-foreground">
+          <p className="border-border bg-sunk text-muted-foreground rounded-md border px-3 py-3 text-[12.5px]">
             No tags exist yet — create some on the{' '}
             <a className="underline" href="/dashboard/tags">
               Tags page
@@ -1289,7 +1295,7 @@ function TagsDialog({
                     className={
                       on
                         ? 'inline-flex items-center gap-1.5 rounded-full border border-transparent px-2.5 py-1 text-[12px] text-white shadow-sm transition-colors'
-                        : 'inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-1 text-[12px] text-foreground transition-colors hover:bg-muted'
+                        : 'inline-flex items-center gap-1.5 rounded-full border border-[var(--ed-line-strong)] bg-card px-2.5 py-1 text-[12.5px] text-foreground transition-colors hover:bg-muted'
                     }
                     style={on ? { backgroundColor: swatch } : undefined}
                   >

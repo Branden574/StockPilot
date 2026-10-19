@@ -3,6 +3,8 @@
 import { Loader2 } from 'lucide-react';
 import * as React from 'react';
 
+import { MissingPhoto } from '@/components/patterns/missing-photo';
+
 import {
   GROUP_COPY,
   GROUPING_ERROR_WORDS,
@@ -208,6 +210,12 @@ async function sendGrouping(
   return { ok: true, outcome: r.data.outcome };
 }
 
+/** A text field or select in these reviews: the shared field look (DESIGN-SPEC
+ *  6.3), 32 px with the stronger hairline and the focus ring; 44 px with 16 px
+ *  text below sm. */
+const FIELD =
+  'h-8 w-full rounded-md border border-[var(--ed-line-strong)] bg-card px-2.5 text-[13px] focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 max-sm:h-11 max-sm:text-base';
+
 /** One record line: picture, name, identifiers, size or edition, charter, rack,
  *  on hand (core's line, the same on the phone; "No charter" only for a record
  *  with none, recheck R2-6). */
@@ -222,13 +230,10 @@ function RecordLine({ r, view }: { r: GroupingReviewRecord; view: 'items' | 'boo
           alt=""
           width={28}
           height={28}
-          className="border-border h-7 w-7 shrink-0 rounded-[5px] border object-cover"
+          className="border-border h-7 w-7 shrink-0 rounded-[5px] border bg-white object-cover"
         />
       ) : (
-        <span
-          aria-hidden
-          className="border-border bg-muted h-7 w-7 shrink-0 rounded-[5px] border"
-        />
+        <MissingPhoto className="border-border h-7 w-7 shrink-0 rounded-[5px] border" />
       )}
       <span className="min-w-0">
         <span className="block truncate font-medium">{r.name}</span>
@@ -558,7 +563,7 @@ export function GroupSelectedDialog({
                 <label className="block space-y-1 pl-6">
                   <span className="text-xs">{GROUP_COPY.nameLabel}</span>
                   <input
-                    className="border-input bg-background w-full rounded-md border px-2 py-1 text-sm"
+                    className={FIELD}
                     value={nameValue}
                     maxLength={120}
                     disabled={phase === 'saving'}
@@ -588,7 +593,7 @@ export function GroupSelectedDialog({
                     </span>
                   ) : (
                     <select
-                      className="border-input bg-background w-full rounded-md border px-2 py-1 text-sm"
+                      className={FIELD}
                       value={groupId ?? ''}
                       disabled={phase === 'saving'}
                       onChange={(e) => setGroupId(e.target.value || null)}
@@ -614,7 +619,7 @@ export function GroupSelectedDialog({
               <div className="space-y-1">
                 <p className="text-xs font-medium">{GROUP_COPY.previewLabel}</p>
                 <p
-                  className="bg-muted/40 rounded-md px-2 py-1 font-medium"
+                  className="bg-sunk rounded-md px-2 py-1 font-medium"
                   data-testid="group-preview-header"
                 >
                   {plan.previewHeader}
@@ -985,7 +990,7 @@ export function RenameGroupDialog({
           <label className="block space-y-1 text-sm">
             <span className="text-xs">{GROUP_COPY.nameLabel}</span>
             <input
-              className="border-input bg-background w-full rounded-md border px-2 py-1 text-sm"
+              className={FIELD}
               value={value}
               maxLength={120}
               disabled={phase === 'saving'}

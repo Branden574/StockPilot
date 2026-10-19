@@ -1,5 +1,6 @@
 'use client';
 
+import { ChevronDown } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import * as React from 'react';
@@ -36,8 +37,11 @@ export function RackFilterDropdown({ racks }: { racks: string[] }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm">
+        {/* A header action: the 32 px secondary button, "Rack: Any" with a
+            chevron like the filter triggers below it. */}
+        <Button variant="outline" className="font-normal">
           Rack: {current || 'Any'}
+          <ChevronDown aria-hidden className="text-muted-foreground !size-3" strokeWidth={2} />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="max-h-72 overflow-y-auto">

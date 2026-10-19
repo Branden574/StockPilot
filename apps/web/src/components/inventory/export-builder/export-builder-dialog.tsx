@@ -4,6 +4,7 @@ import { Loader2 } from 'lucide-react';
 import * as React from 'react';
 
 import { Button } from '@/components/ui/button';
+import { Checkbox as SharedCheckbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
@@ -107,30 +108,17 @@ function Checkbox({
   label: string;
   id?: string;
 }) {
-  // The house idiom: there is no shared checkbox.tsx in this repo, and the
-  // inventory table has always used a role="checkbox" button.
+  // The shared checkbox (components/ui/checkbox): one role="checkbox" button
+  // whose visible words are its name, as this option always was.
   return (
-    <button
-      type="button"
-      role="checkbox"
+    <SharedCheckbox
       id={id}
-      aria-checked={checked}
-      aria-label={label}
-      onClick={() => onChange(!checked)}
-      className="inline-flex items-center gap-2 text-[13.5px] text-[var(--ed-ink-2)]"
+      checked={checked}
+      onCheckedChange={onChange}
+      className="text-[13px] text-[var(--ed-ink-2)]"
     >
-      <span
-        aria-hidden
-        className={`inline-grid h-4 w-4 place-items-center rounded-[4px] border ${
-          checked ? 'border-foreground bg-foreground' : 'border-border bg-background'
-        }`}
-      >
-        {checked ? (
-          <span className="h-[9px] w-[5px] -translate-y-px rotate-45 border-b-2 border-r-2 border-background" />
-        ) : null}
-      </span>
       {label}
-    </button>
+    </SharedCheckbox>
   );
 }
 
@@ -200,6 +188,9 @@ export function ExportBuilderDialog({
   React.useEffect(() => {
     if (!open) return;
     const controller = new AbortController();
+    // Personal presets live in this browser's storage: read them again on
+    // every open, so a preset saved in another tab is offered.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- re-read browser storage on open
     setPresets(presetsFor(itemTypeKind));
     fetchExportPreview(
       {
@@ -219,6 +210,7 @@ export function ExportBuilderDialog({
     return () => controller.abort();
     // filters is a new object each render at the call site; serialise it so the
     // effect keys off its VALUE, not its identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the serialised filters and ids (above)
   }, [open, scope, itemType, itemTypeKind, JSON.stringify(filters), JSON.stringify(selectedIds)]);
 
   // Load the org's shared presets once per open. Any failure — table not
@@ -437,14 +429,14 @@ export function ExportBuilderDialog({
               aria-checked={state.format === f.value}
               aria-label={f.label}
               onClick={() => setState((s) => setFormat(s, f.value, itemTypeKind))}
-              className={`rounded-md border p-3 text-left transition-colors ${
+              className={`rounded-lg border p-3 text-left transition-colors ${
                 state.format === f.value
-                  ? 'border-foreground bg-muted'
-                  : 'border-border bg-background hover:border-[var(--ed-line-strong)]'
+                  ? 'border-foreground bg-card shadow-[0_0_0_1px_hsl(var(--foreground))]'
+                  : 'bg-card hover:bg-muted border-[var(--ed-line-strong)]'
               }`}
             >
-              <span className="block text-[14px] font-medium">{f.label}</span>
-              <span className="mt-1 block text-[12.5px] text-[var(--ed-ink-3)]">
+              <span className="block text-[13.5px] font-medium">{f.label}</span>
+              <span className="text-muted-foreground mt-1 block text-[12.5px]">
                 {f.description}
               </span>
             </button>
@@ -488,7 +480,7 @@ export function ExportBuilderDialog({
           <button
             type="button"
             onClick={() => setState((s) => restoreDefaults(s, itemTypeKind))}
-            className="text-[13px] text-[var(--ed-ink-3)] underline-offset-2 hover:underline"
+            className="text-muted-foreground hover:text-foreground text-[13px] underline-offset-2 hover:underline"
           >
             Restore recommended defaults
           </button>
@@ -501,7 +493,7 @@ export function ExportBuilderDialog({
                 setSaveName(activeSharedPreset ? '' : saveName);
               }}
               disabled={busy}
-              className="text-[13px] text-[var(--ed-ink-3)] underline-offset-2 hover:underline"
+              className="text-muted-foreground hover:text-foreground text-[13px] underline-offset-2 hover:underline"
             >
               Save as team preset
             </button>
@@ -511,7 +503,7 @@ export function ExportBuilderDialog({
               type="button"
               onClick={() => setConfirmingDelete(true)}
               disabled={busy || deleteBusy}
-              className="text-[13px] text-[var(--ed-ink-3)] underline-offset-2 hover:underline"
+              className="text-muted-foreground hover:text-foreground text-[13px] underline-offset-2 hover:underline"
             >
               Delete preset
             </button>
@@ -522,7 +514,7 @@ export function ExportBuilderDialog({
             and the dropped-fields note the load contract owes. All of it is
             absent while `shared` is null (table not migrated, list failed). */}
         {shared !== null && sharedPresets.length === 0 && !saveFormOpen ? (
-          <p className="text-[12.5px] text-[var(--ed-ink-3)]">
+          <p className="text-muted-foreground text-[12.5px]">
             No team presets yet. Set up an export and choose Save as team preset to share it with
             your organization.
           </p>
@@ -544,7 +536,7 @@ export function ExportBuilderDialog({
                     void saveSharedPreset();
                   }
                 }}
-                className="w-[220px] rounded-sm border border-border bg-background px-2 py-1"
+                className="h-8 w-[220px] max-w-full rounded-md border border-[var(--ed-line-strong)] bg-card px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-sm:h-11 max-sm:text-base"
               />
             </label>
             <Button
@@ -569,7 +561,7 @@ export function ExportBuilderDialog({
           </div>
         ) : null}
         {saveError ? (
-          <p role="alert" className="text-[13px] text-[var(--ed-danger,#b3261e)]">
+          <p role="alert" className="text-destructive text-[13px]">
             {saveError}
           </p>
         ) : null}
@@ -605,7 +597,7 @@ export function ExportBuilderDialog({
           </p>
         ) : null}
 
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <ExportBuilderFields
             key={fieldsResetKey}
             state={state}
@@ -616,8 +608,8 @@ export function ExportBuilderDialog({
           />
           <div className="flex flex-col gap-3">
             {/* Per-format settings */}
-            <fieldset className="rounded-md border border-border p-3">
-              <legend className="px-1 text-[12.5px] font-medium text-[var(--ed-ink-3)]">
+            <fieldset className="border-border rounded-lg border p-3">
+              <legend className="text-muted-foreground px-1 text-[12.5px] font-medium">
                 {state.format === 'pdf'
                   ? 'PDF layout'
                   : state.format === 'xlsx'
@@ -652,7 +644,7 @@ export function ExportBuilderDialog({
                           }),
                         )
                       }
-                      className="rounded-sm border border-border bg-background px-2 py-1"
+                      className="h-8 rounded-md border border-[var(--ed-line-strong)] bg-card px-2 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-sm:h-11 max-sm:text-base"
                     >
                       <option value="small">Small</option>
                       <option value="medium">Medium</option>
@@ -675,7 +667,7 @@ export function ExportBuilderDialog({
                             }),
                           )
                         }
-                        className="rounded-sm border border-border bg-background px-2 py-1"
+                        className="h-8 rounded-md border border-[var(--ed-line-strong)] bg-card px-2 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-sm:h-11 max-sm:text-base"
                       >
                         <option value="letter">Letter</option>
                         <option value="legal">Legal</option>
@@ -695,7 +687,7 @@ export function ExportBuilderDialog({
                             }),
                           )
                         }
-                        className="rounded-sm border border-border bg-background px-2 py-1"
+                        className="h-8 rounded-md border border-[var(--ed-line-strong)] bg-card px-2 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-sm:h-11 max-sm:text-base"
                       >
                         <option value="auto">Auto</option>
                         <option value="portrait">Portrait</option>
@@ -719,7 +711,7 @@ export function ExportBuilderDialog({
                             }),
                           )
                         }
-                        className="rounded-sm border border-border bg-background px-2 py-1"
+                        className="h-8 rounded-md border border-[var(--ed-line-strong)] bg-card px-2 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-sm:h-11 max-sm:text-base"
                       >
                         <option value="compact">Compact</option>
                         <option value="comfortable">Comfortable</option>
@@ -750,7 +742,7 @@ export function ExportBuilderDialog({
                               }),
                             );
                           }}
-                          className="rounded-sm border border-border bg-background px-2 py-1"
+                          className="h-8 rounded-md border border-[var(--ed-line-strong)] bg-card px-2 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-sm:h-11 max-sm:text-base"
                         >
                           <option value="table">Table</option>
                           <option value="catalog-1">Book catalog — single column</option>
@@ -820,22 +812,22 @@ export function ExportBuilderDialog({
           </div>
         </div>
 
-        <p className="text-[12.5px] text-[var(--ed-ink-3)]">
+        <p className="text-muted-foreground text-[12.5px]">
           {builderSummaryParts({ state, itemTypeKind, rowCount }).join(' · ')}
         </p>
 
         {!validation.ok ? (
-          <p role="alert" className="text-[13px] text-[var(--ed-danger,#b3261e)]">
+          <p role="alert" className="text-destructive text-[13px]">
             {validation.message}
           </p>
         ) : null}
         {error ? (
-          <p role="alert" className="text-[13px] text-[var(--ed-danger,#b3261e)]">
+          <p role="alert" className="text-destructive text-[13px]">
             {error}
           </p>
         ) : null}
         {stageLabel ? (
-          <p role="status" aria-live="polite" className="text-[13px] text-[var(--ed-ink-3)]">
+          <p role="status" aria-live="polite" className="text-muted-foreground text-[13px]">
             {stageLabel}
             {state.fieldKeys.includes('image')
               ? ' Cover images make this slower.'

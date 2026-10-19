@@ -48,18 +48,19 @@ export function BackfillCoversButton() {
   }
 
   return (
+    // A secondary header action: the page header's 32 px outline button, so it
+    // lines up with the other actions beside it.
     <Button
       type="button"
       variant="outline"
-      size="sm"
       onClick={run}
       disabled={busy}
       title="Re-download cover images for books that came in before the cover-rehost flow landed. Skips books that already have a primary photo."
     >
       {busy ? (
-        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        <Loader2 aria-hidden className="h-3.5 w-3.5 animate-spin" />
       ) : (
-        <ImageDown className="h-3.5 w-3.5" />
+        <ImageDown aria-hidden className="h-3.5 w-3.5" />
       )}
       Backfill covers
     </Button>

@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { Boxes } from 'lucide-react';
+import { cookies } from 'next/headers';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 
@@ -8,6 +9,8 @@ export const metadata: Metadata = { title: 'Inventory' };
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
 import { InventoryTable, type InstantAdoptedPayload } from '@/components/inventory/inventory-table';
+import { INVENTORY_VIEW_COOKIES, parseInventoryView } from '@/components/inventory/inventory-grid';
+import { PageHeader } from '@/components/patterns/page-header';
 import { PerfUseful } from '@/components/perf/perf-useful';
 import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown';
 import { Button } from '@/components/ui/button';
@@ -203,47 +206,57 @@ export default async function InventoryPage({
   const canCreate = can(sessionCtx, 'items:create');
 
   return (
-    <div className="container mx-auto max-w-7xl px-4 py-8 sm:px-6">
-      <div className="flex flex-wrap items-end justify-between gap-3 sm:gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{heading}</h1>
-          <p className="text-muted-foreground mt-1 text-sm">
-            {lifecycleStatus === 'archived'
-              ? 'Items you archived. Restore one by editing it and setting status to Active.'
-              : showingAllTypes
-                ? 'Showing every item type — products, books, assets, consumables.'
-                : 'Items, SKUs, stock levels — searchable and sortable.'}
-          </p>
-          {/* Warehouse-scoped users (staff/viewer): name the scope so an
-              empty-looking list reads as "you're narrowed", not "broken".
-              Renders null for all-access roles. */}
-          <ScopedWarehouseNotice placementNote />
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Inventory pages use ?status=active|archived|discontinued|all
-              (not ?view=); the toggle reads/writes that param so saved
-              views + deep links keep their existing shape. Active drops
-              the Archived view's "Auto-archived only" chip (?auto=1): no
-              active item is auto-archived, so it would list nothing. */}
-          <ArchiveViewToggle
-            paramName="status"
-            view={lifecycleStatus === 'archived' ? 'archived' : 'active'}
-            archivedOnlyParams={['auto']}
-          />
-          <RackFilterDropdown racks={racks} />
-          {canCreate && lifecycleStatus !== 'archived' && (
-            <>
-              <PageTour tour={ITEMS_PAGE_TOUR} />
-              <Button asChild variant="outline">
-                <Link href="/dashboard/inventory/import">Import CSV</Link>
-              </Button>
-              <Button asChild variant="gradient">
-                <Link href="/dashboard/inventory/new">+ New item</Link>
-              </Button>
-            </>
-          )}
-        </div>
-      </div>
+    // The page box every redesigned dashboard page shares (max 1320, 28 / 32
+    // / 64 padding, 16 px gutters on a phone; the route skeleton draws it too).
+    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <PageHeader
+        title={heading}
+        subline={
+          lifecycleStatus === 'archived'
+            ? ARCHIVED_SUBLINE
+            : showingAllTypes
+              ? 'Showing every item type — products, books, assets, consumables.'
+              : 'Items, SKUs, stock levels — searchable and sortable.'
+        }
+        // In the order they always sat: the view toggle, the rack filter, then
+        // (creators, outside the Archived view) the tour and Import CSV, with
+        // + New item last as the page's one accent action.
+        actions={
+          <>
+            {/* Inventory pages use ?status=active|archived|discontinued|all
+                (not ?view=); the toggle reads/writes that param so saved
+                views + deep links keep their existing shape. Active drops
+                the Archived view's "Auto-archived only" chip (?auto=1): no
+                active item is auto-archived, so it would list nothing. */}
+            <ArchiveViewToggle
+              paramName="status"
+              view={lifecycleStatus === 'archived' ? 'archived' : 'active'}
+              archivedOnlyParams={['auto']}
+            />
+            <RackFilterDropdown racks={racks} />
+            {canCreate && lifecycleStatus !== 'archived' && (
+              <>
+                <PageTour tour={ITEMS_PAGE_TOUR} />
+                <Button asChild variant="outline">
+                  <Link href="/dashboard/inventory/import">Import CSV</Link>
+                </Button>
+              </>
+            )}
+          </>
+        }
+        primaryAction={
+          canCreate && lifecycleStatus !== 'archived' ? (
+            <Button asChild variant="gradient">
+              <Link href="/dashboard/inventory/new">+ New item</Link>
+            </Button>
+          ) : undefined
+        }
+      >
+        {/* Warehouse-scoped users (staff/viewer): name the scope so an
+            empty-looking list reads as "you're narrowed", not "broken".
+            Renders null for all-access roles. */}
+        <ScopedWarehouseNotice placementNote />
+      </PageHeader>
 
       {/* ONE REVEAL. The table used to sit in its own <Suspense> under
           loading.tsx, so React revealed twice: skeleton -> header with an inner
@@ -260,10 +273,18 @@ export default async function InventoryPage({
           fallback React holds the page behind for 300 ms (the dataset
           adopter's fallback={null} boundary inside the table is fine: it
           draws nothing). */}
-      <div className="mt-8">{table}</div>
+      <div className="min-w-0">{table}</div>
     </div>
   );
 }
+
+/**
+ * The Archived view's line under the title. It used to say "Restore one by
+ * editing it and setting status to Active", but the item form has no status
+ * field (CONFLICTS D5): the way back is the selection bar's Restore.
+ */
+const ARCHIVED_SUBLINE =
+  'Items you archived. Select one and choose Restore to make it active again.';
 
 /**
  * Data both acquisition paths (cached default view / live filtered
@@ -375,10 +396,16 @@ async function inventoryTableSection({
   // Keep the rejection observed even if the data path throws before the
   // await below — an unobserved rejection would crash the lambda.
   savedViewsPromise.catch(() => {});
-  const [sessionCtx, warehouseFilter] = await Promise.all([
+  const [sessionCtx, warehouseFilter, cookieStore] = await Promise.all([
     requireOrgContext(),
     getActiveWarehouseFilter(),
+    cookies(),
   ]);
+  // The viewer's Table / Grid choice (a presentation preference, no database
+  // read): the table renders it in the first paint, so a Grid viewer never
+  // sees the table first. isDefaultInventoryView never sees it (not a URL
+  // parameter), so the cached default view serves both.
+  const initialView = parseInventoryView(cookieStore.get(INVENTORY_VIEW_COOKIES.items)?.value);
   // Warehouse-scoped users get the scoping explanation appended to any
   // zero-result empty state (mirrors the header's ScopedWarehouseNotice).
   // Manager-and-above are all-access by role — getWarehouseAccess answers
@@ -632,6 +659,7 @@ async function inventoryTableSection({
         currentUserId={sessionCtx.userId}
         instant={{ items: instantItems, placement: instantData.placement, view: 'items' }}
         productGroupUnits={productGroupUnits}
+        initialView={initialView}
       />
     );
   }
@@ -991,6 +1019,7 @@ async function inventoryTableSection({
       plannedPage={data.plannedPage ?? null}
       expectedCount={data.expectedCount}
       productGroupUnits={productGroupUnits}
+      initialView={initialView}
     />
   );
   // Never the partial figures presented as complete: when the stock in other

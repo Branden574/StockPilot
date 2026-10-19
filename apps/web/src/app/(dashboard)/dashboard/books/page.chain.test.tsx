@@ -38,6 +38,8 @@ const h = vi.hoisted(() => ({
   liveExtra: null as null | Record<string, unknown>,
   /** listPlanRows' answer (null: the view is over the cap, fixed pages). */
   planRows: null as null | { rows: unknown[]; total: number; valueOnHand: number },
+  /** The request's cookies (the Table / Grid choice, redesign P3.2). */
+  cookies: {} as Record<string, string>,
 }));
 
 const m = vi.hoisted(() => ({
@@ -100,6 +102,15 @@ vi.mock('@/components/books/books-inventory-table', () => ({
 }));
 
 vi.mock('@/lib/auth/session', () => ({ requireOrgContext: m.requireOrgContext }));
+// The request's cookies: the Books list reads its Table / Grid choice there.
+vi.mock('next/headers', () => ({
+  cookies: async () => ({
+    get: (name: string) =>
+      h.cookies[name] === undefined ? undefined : { name, value: h.cookies[name] },
+    getAll: () => Object.entries(h.cookies).map(([name, value]) => ({ name, value })),
+    set: () => {},
+  }),
+}));
 vi.mock('@/server/services/context', () => ({ withContext: m.withContext }));
 vi.mock('@/lib/nav-labels', () => ({ effectiveNavLabel: vi.fn(async () => 'Books') }));
 vi.mock('@/lib/warehouse-filter', () => ({ getActiveWarehouseFilter: vi.fn(async () => null) }));
@@ -197,6 +208,7 @@ function logged<T>(name: string, fn: () => Promise<T>): Promise<T> {
 beforeEach(() => {
   vi.clearAllMocks();
   events.length = 0;
+  h.cookies = {};
   h.role = 'manager';
   h.booksEnabled = true;
   h.booksGate = null;
@@ -536,5 +548,40 @@ describe('Books page: a staff page is planned group-aware', () => {
     expect(
       (m.tableProps.mock.calls[0]![0] as { plannedPage?: unknown }).plannedPage ?? null,
     ).toBeNull();
+  });
+});
+
+/**
+ * Redesign P3.2: the Books list keeps its own Table / Grid choice
+ * (sp_view_books), read on the server for the first paint.
+ */
+describe('Books page: the Table / Grid choice comes from its cookie', () => {
+  it.each<[string, Record<string, string>, 'table' | 'grid']>([
+    ['no cookie: Table, the default', {}, 'table'],
+    ['sp_view_books=grid', { sp_view_books: 'grid' }, 'grid'],
+    ['sp_view_books=table', { sp_view_books: 'table' }, 'table'],
+    ["only the Items list's cookie", { sp_view_items: 'grid' }, 'table'],
+  ])('%s (instant mode)', async (_label, cookies, view) => {
+    h.cookies = cookies;
+    render(await BooksPage({ searchParams: Promise.resolve({}) }));
+    expect(m.tableProps).toHaveBeenCalledTimes(1);
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ initialView: view });
+  });
+
+  it('staff on the live path get it too', async () => {
+    h.cookies = { sp_view_books: 'grid' };
+    h.role = 'staff';
+    render(await BooksPage({ searchParams: Promise.resolve({}) }));
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ initialView: 'grid' });
+  });
+
+  it('the Archived view points at Restore on the selection (CONFLICTS D5), never at a status field', async () => {
+    const { container } = render(
+      await BooksPage({ searchParams: Promise.resolve({ status: 'archived' }) }),
+    );
+    expect(container.textContent).toContain(
+      'Books you archived. Select one and choose Restore to make it active again.',
+    );
+    expect(container.textContent).not.toContain('setting status to Active');
   });
 });

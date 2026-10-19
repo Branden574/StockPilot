@@ -1,3 +1,4 @@
+import { Info } from 'lucide-react';
 import * as React from 'react';
 
 import { ELSEWHERE_UNAVAILABLE_NOTE } from '@stockpilot/core';
@@ -24,7 +25,11 @@ export function ElsewhereUnavailableNotice({
   if (!unavailable) return <>{children}</>;
   return (
     <>
-      <p role="status" className="text-muted-foreground mb-2 text-xs">
+      <p
+        role="status"
+        className="text-muted-foreground mb-3 flex items-start gap-2 text-[12.5px] leading-[18px]"
+      >
+        <Info aria-hidden className="mt-px size-3.5 shrink-0" strokeWidth={1.8} />
         {ELSEWHERE_UNAVAILABLE_NOTE}
       </p>
       {children}

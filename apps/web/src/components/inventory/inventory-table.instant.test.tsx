@@ -904,7 +904,9 @@ describe('InventoryTable books SKU grouping', () => {
     expect(screen.queryByRole('button', { name: /expand/i })).not.toBeInTheDocument();
     const rows = bodyRows(container);
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.className).not.toContain('bg-muted/30');
+    // Redesign P3.2 (visual locator only): a plain record row, not a header
+    // (was: no bg-muted/30 header tint).
+    expect(rows[0]!.getAttribute('data-row-kind')).toBe('record');
     expect(rows[0]!.children).toHaveLength(14);
   });
 
@@ -1040,8 +1042,11 @@ describe('InventoryTable SKU-group correctness (Items and Books)', () => {
 
   const bodyRows = (container: HTMLElement) =>
     Array.from(container.querySelectorAll('tbody tr')) as HTMLTableRowElement[];
+  // Redesign P3.2 (visual locator only): header rows were found by their old
+  // tint class (bg-muted/30); the redesign draws them on the sunk surface, so
+  // they are found by the row's own data-row-kind="header" mark instead.
   const headerRows = (container: HTMLElement) =>
-    bodyRows(container).filter((r) => r.className.includes('bg-muted/30'));
+    bodyRows(container).filter((r) => r.getAttribute('data-row-kind') === 'header');
   /** The pagination footer's "Showing X–Y of N" readout (top + bottom
    *  render the same string). */
   const showingText = () =>
@@ -1242,7 +1247,8 @@ describe('InventoryTable SKU-group correctness (Items and Books)', () => {
       expect(screen.queryByRole('button', { name: /expand/i })).not.toBeInTheDocument();
       const soloRows = bodyRows(solo.container);
       expect(soloRows).toHaveLength(1);
-      expect(soloRows[0]!.className).not.toContain('bg-muted/30');
+      // Redesign P3.2 (visual locator only): a plain record row, not a header.
+      expect(soloRows[0]!.getAttribute('data-row-kind')).toBe('record');
       expect(soloRows[0]!.children).toHaveLength(surface.cells);
       solo.unmount();
 
@@ -2206,8 +2212,11 @@ describe('InventoryTable count vocabulary (SKUs vs item rows vs placement rows)'
 
   const bodyRows = (container: HTMLElement) =>
     Array.from(container.querySelectorAll('tbody tr')) as HTMLTableRowElement[];
+  // Redesign P3.2 (visual locator only): header rows were found by their old
+  // tint class (bg-muted/30); the redesign draws them on the sunk surface, so
+  // they are found by the row's own data-row-kind="header" mark instead.
   const headerRows = (container: HTMLElement) =>
-    bodyRows(container).filter((r) => r.className.includes('bg-muted/30'));
+    bodyRows(container).filter((r) => r.getAttribute('data-row-kind') === 'header');
   const footerText = () =>
     Array.from(document.querySelectorAll('p'))
       .map((p) => p.textContent ?? '')
@@ -2397,7 +2406,8 @@ describe('InventoryTable count vocabulary (SKUs vs item rows vs placement rows)'
 
     const header = headerRows(container)[0]!;
     await user.click(screen.getByRole('button', { name: /expand/i }));
-    const row = bodyRows(container).find((r) => !r.className.includes('bg-muted/30'))!;
+    // Redesign P3.2 (visual locator only): the first row that is not a header.
+    const row = bodyRows(container).find((r) => r.getAttribute('data-row-kind') !== 'header')!;
 
     // Body: available 50 / par max(0, 100×1.5, 10) = 150 → 33.33%.
     // Header must summarise at the SAME fraction (100 / 300), not 66.67%.

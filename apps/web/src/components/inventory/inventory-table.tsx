@@ -4,6 +4,8 @@ import {
   ChevronDown,
   ChevronRight,
   Download,
+  LayoutGrid,
+  List,
   Loader2,
   Pin,
   Plus,
@@ -23,14 +25,32 @@ import {
   RemoveFromGroupDialog,
   RenameGroupDialog,
 } from '@/components/inventory/display-group-dialogs';
+import {
+  InventoryGrid,
+  inventoryViewCookieFor,
+  inventoryViewCookieString,
+  type GridEntry,
+  type GridGroupCard,
+  type GridRecordCard,
+  type InventoryView,
+} from '@/components/inventory/inventory-grid';
 import { StockStatusBadge } from '@/components/inventory/stock-status-badge';
+import { chipActionClass, filterChipClass, MetaChip } from '@/components/patterns/chip';
+import { FilterTrigger } from '@/components/patterns/filter-bar';
+import { SegmentedTabs } from '@/components/patterns/segmented-tabs';
+import { SizeBadge } from '@/components/patterns/size-badge';
+import { StatePanel } from '@/components/patterns/state-panel';
+import { Thumb } from '@/components/patterns/thumb';
+import { touchTargetClass } from '@/components/patterns/touch-target';
 import { usePerfUseful } from '@/components/perf/perf-useful';
+import { Checkbox, CheckboxGlyph } from '@/components/ui/checkbox';
 import { ExportBuilderDialog } from './export-builder/export-builder-dialog';
 import { GENERIC_CHARTER_LABEL } from '@/lib/charter-display';
 import { useCountSelection } from '@/lib/cycle-counts/use-count-selection';
 import { ELSEWHERE_PLACEMENT_KIND, elsewhereSuffix } from '@/lib/placements';
 import {
   countingUnitLabel,
+  extractSize,
   groupRollupLabel,
   placementPhysicalNames,
   resolvePlacement,
@@ -488,6 +508,14 @@ export interface InventoryTableProps {
    * the group and never inferred from the item.
    */
   productGroupUnits?: Record<string, string>;
+  /**
+   * The Table / Grid choice the list's server page read from its cookie
+   * (inventory-grid.tsx INVENTORY_VIEW_COOKIES), so a Grid viewer's first
+   * paint is already the grid: no table-then-grid swap and no second wave of
+   * images. Absent: Table, the default. A presentation preference only: it
+   * never reaches the URL, the derivation or isDefaultInventoryView.
+   */
+  initialView?: InventoryView;
 }
 
 interface SavedViewSummary {
@@ -729,6 +757,7 @@ export function InventoryTable({
   plannedPage,
   expectedCount = 0,
   productGroupUnits,
+  initialView = 'table',
 }: InventoryTableProps) {
   // Performance marker (lib/perf/marks.ts): "the list is useful". A mount-only
   // effect, so it fires when the INITIAL rows render — the cached page-1
@@ -828,6 +857,28 @@ export function InventoryTable({
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(STOCK_VIEW_KEY, stockView);
   }, [stockView]);
+
+  // TABLE / GRID (redesign P3.2). The server page read the viewer's choice
+  // from this list's cookie and passed it as `initialView`, so the first
+  // paint (SSR) is already right and hydration agrees with it. Switching is
+  // a client-only state change on this SAME mounted table, so selection,
+  // expanded headers, search text, scroll and page membership are untouched
+  // (the grid draws the same `styledRenderItems`); the cookie is written for
+  // the next visit. It never reaches the URL.
+  const [listView, setListView] = React.useState<InventoryView>(initialView);
+  const viewCookieName = inventoryViewCookieFor(basePath);
+  const selectListView = React.useCallback(
+    (next: InventoryView) => {
+      setListView(next);
+      try {
+        document.cookie = inventoryViewCookieString(viewCookieName, next);
+      } catch {
+        /* cookies blocked: the choice still applies to this visit */
+      }
+    },
+    [viewCookieName],
+  );
+  const gridIdPrefix = React.useId();
 
   const router = useRouter();
   const addToCount = useCountSelection((s) => s.add);
@@ -1294,13 +1345,8 @@ export function InventoryTable({
   // instant mode the "visible page" is the locally-derived one.
   // Select-all keys on rowKey (unique per rack row) — same identity the row
   // checkboxes and the `selected` Set use — so the header toggles exactly the
-  // rows on screen without co-selecting an item's other rack rows.
-  const pageIds = React.useMemo(
-    () => (instantRows ?? items).map((i) => i.rowKey ?? i.id),
-    [instantRows, items],
-  );
-  const allVisibleSelected = isPageFullySelected(selected, pageIds);
-  const someVisibleSelected = isPagePartiallySelected(selected, pageIds);
+  // rows on screen without co-selecting an item's other rack rows. `pageIds`
+  // (the rows on screen, `displayed`) is defined beside `displayed` below.
   function toggleAll(checked: boolean) {
     setSelected((prev) => (checked ? selectPage(prev, pageIds) : deselectPage(prev, pageIds)));
   }
@@ -1507,6 +1553,20 @@ export function InventoryTable({
   // synchronous local filter (covers in-page matches with zero
   // latency). On no search, the server-mode pair reduces to `items`.
   const displayed = instantRows ?? serverHits ?? localMatches;
+
+  // THE VISIBLE PAGE the select-all box acts on (the header box in Table, the
+  // box above the cards in Grid): exactly the rows on screen, members under
+  // collapsed headers included. CONFLICTS D9 (fixed here): this used to read
+  // `instantRows ?? items`, so during a server-mode search (staff, viewers,
+  // orgs over the instant cap) the box ticked and judged the server page's own
+  // rows while the search hits were on screen: rows that were not visible got
+  // ticked and the hits on screen did not. Without a search `displayed` IS
+  // `items` (server mode) or `instantRows` (instant mode), as before.
+  // A plain map over the page's rows (a page holds a few dozen): no hook
+  // depends on it, and the select-all reads it on each render anyway.
+  const pageIds = displayed.map((i) => i.rowKey ?? i.id);
+  const allVisibleSelected = isPageFullySelected(selected, pageIds);
+  const someVisibleSelected = isPagePartiallySelected(selected, pageIds);
 
   // Precompute each row's sparkline series ONCE per (displayed, sparkMode,
   // trends) instead of inside the row map. `displayed` is stable across
@@ -1797,7 +1857,8 @@ export function InventoryTable({
               e.rows.find((r) => r.display_group_name)?.display_group_name ??
               groupNames.get(e.groupId) ??
               null,
-            version: e.rows.find((r) => r.display_group_version != null)?.display_group_version ?? null,
+            version:
+              e.rows.find((r) => r.display_group_version != null)?.display_group_version ?? null,
             items: e.rows,
             rowIdx: idx++,
             partial: partial(`grp:${e.groupId}`, e.rows),
@@ -1811,7 +1872,10 @@ export function InventoryTable({
           placements: [],
           ...(partial(`sku:${e.sku}`, e.rows) ? { totalIsPartial: true } : {}),
         };
-        out.push({ kind: 'passthrough', entry: { kind: 'header', group, items: e.rows, rowIdx: idx++ } });
+        out.push({
+          kind: 'passthrough',
+          entry: { kind: 'header', group, items: e.rows, rowIdx: idx++ },
+        });
       } else if (e.kind === 'run') {
         const members: RenderEntry[] = e.run.members.map((item) => ({
           kind: 'row',
@@ -1877,8 +1941,427 @@ export function InventoryTable({
     });
   }
 
+  // ── Row and card pieces (one source for the Table and the Grid) ─────────
+
+  /** A record's category, site, and the health figures its row shows. */
+  function recordFacts(item: Item) {
+    // Status badge + coverage bar follow AVAILABLE (on-hand − reserved),
+    // matching the "{avail} avail · {out} out" indicator under On hand. A
+    // rental checkout reserves stock instead of decrementing on-hand, so a
+    // fully checked-out item (0 avail, 1 out) must read "Out of stock", not
+    // "In stock". reservedByItem is passed ONLY by the rentals items view;
+    // everywhere else reserved is 0, so available === on-hand and nothing
+    // changes.
+    const reservedForStatus = reservedByItem?.get(item.id) ?? 0;
+    const availableForStatus = Math.max(0, item.quantity_on_hand - reservedForStatus);
+    return {
+      category: item.category_id ? lookups.categories.get(item.category_id) : null,
+      location: item.primary_location_id ? lookups.locations.get(item.primary_location_id) : null,
+      availableForStatus,
+      status: deriveStatus(availableForStatus, item.reorder_point),
+      par: Math.max(item.reorder_point * 4, item.quantity_on_hand * 1.5, 10),
+    };
+  }
+
+  /** A record's checkbox: the row key (one per rack row), named for the record. */
+  function recordCheckbox(item: Item) {
+    const key = item.rowKey ?? item.id;
+    return (
+      <Checkbox
+        checked={selected.has(key)}
+        onCheckedChange={() => toggleOne(key)}
+        label={`Select ${item.name}`}
+      />
+    );
+  }
+
+  /** A record's name: its only link, to its own page with this list as `?return=`. */
+  function itemLink(item: Item, className: string, title?: string) {
+    return (
+      <IntentLink
+        href={`${rowLinkPrefix}/${item.id}?return=${encodeURIComponent(currentListUrl)}`}
+        // No viewport prefetch: a prefetch for EVERY row's detail page on
+        // mount measured 50+ requests at ~500 ms of server time each on a
+        // 50-row list, for the ~1 row a person clicks. next/link's
+        // prefetch={false} turns hover and touch prefetch off too, so the item
+        // route's shape was unknown until the click and its skeleton painted a
+        // server round trip late (166 ms vs 49 ms for warmed sidebar routes,
+        // lab 2026-09-22), which also starts React's 300 ms reveal hold that
+        // much later. IntentLink warms just this row's route, starting the
+        // moment the pointer arrives (hoverDwellMs 0: Next only reuses a
+        // warm-up that has FINISHED, so it needs a round trip's head start), on
+        // focus, or on pointer-down.
+        hoverDwellMs={0}
+        className={className}
+        title={title}
+      >
+        {item.name}
+      </IntentLink>
+    );
+  }
+
+  /** A row's group chip ("In group X", or "Same SKU as records in X" with Add to group). */
+  function rowChip(entry: Extract<RenderEntry, { kind: 'row' }>, item: Item) {
+    const chip = entry.chip;
+    if (!chip) return null;
+    return (
+      <DisplayGroupChipView
+        chip={chip}
+        name={groupNames.get(chip.groupId) ?? DISPLAY_GROUP_FALLBACK_NAME}
+        recordName={item.name}
+        onAddToGroup={
+          canUngroup && chip.kind === 'same-sku'
+            ? () => setGroupAction({ kind: 'add', ids: [item.id], groupId: chip.groupId })
+            : undefined
+        }
+      />
+    );
+  }
+
+  /** A named group's header facts: its name, count rule and its gated actions. */
+  function explicitGroupOf(entry: Extract<RenderEntry, { kind: 'explicit' }>) {
+    const name = entry.name ?? DISPLAY_GROUP_FALLBACK_NAME;
+    const memberIds = [...new Set(entry.items.map((it) => it.id))];
+    return {
+      groupId: entry.groupId,
+      name,
+      matching: listNarrowed,
+      onRename:
+        canUngroup && canRenameGroups
+          ? () => setGroupAction({ kind: 'rename', groupId: entry.groupId, memberIds })
+          : undefined,
+      onRemove: canUngroup ? () => setGroupAction({ kind: 'remove', ids: memberIds }) : undefined,
+    };
+  }
+
+  // What shows when the page has no rows: the quiet in-table line.
+  const noMatchLine = (
+    <StatePanel
+      kind="no-match"
+      surface="plain"
+      icon={null}
+      headingLevel={null}
+      title="No items match your filters."
+    />
+  );
+
+  /** One record's Grid card: what its row shows, nothing else. */
+  function recordCard(
+    entry: Extract<RenderEntry, { kind: 'row' }>,
+    { priority, sizeMember }: { priority: boolean; sizeMember: boolean },
+  ): GridRecordCard {
+    const { item } = entry;
+    const facts = recordFacts(item);
+    const key = item.rowKey ?? item.id;
+    // A size-run member says which size it is where other cards say their
+    // category (its name ends in the size; a stored family keeps it too).
+    const size = sizeMember ? (item.variant_size ?? extractSize(item.name)) : null;
+    const storage = showBookFields ? readBookStorage(item.custom_fields) : null;
+    return {
+      kind: 'record',
+      key,
+      selected: selected.has(key),
+      checkbox: recordCheckbox(item),
+      media: hasPhoto(item) ? (
+        <CardPhoto
+          photo={item}
+          title={item.name}
+          subtitle={item.sku}
+          meta={<OnHandMeta value={item.quantity_on_hand} />}
+          priority={priority}
+        />
+      ) : null,
+      name: itemLink(item, 'text-foreground hover:underline', item.name),
+      sku: item.sku,
+      meta: (
+        <MetaLine>
+          {size ? (
+            <span className="text-[var(--ed-ink-2)]">{size}</span>
+          ) : (
+            <CategoryLabel category={facts.category} />
+          )}
+          <CharterLabel item={item} lookups={lookups} />
+        </MetaLine>
+      ),
+      chip: entry.nested ? null : rowChip(entry, item),
+      status: (
+        <StockStatusBadge
+          quantity={facts.availableForStatus}
+          reorderPoint={item.reorder_point}
+          itemStatus={item.status}
+          autoArchived={item.auto_archived}
+          awaitingFirstReceipt={item.awaiting_first_receipt === true}
+        />
+      ),
+      quantity: formatNumber(onHandFigure(item, stockView)),
+      quantityNotes: hasOnHandNotes(item, reservedByItem) ? (
+        <OnHandNotes item={item} stockView={stockView} reservedByItem={reservedByItem} />
+      ) : undefined,
+      location: facts.location?.name ?? '—',
+      facts: storage
+        ? [
+            { label: 'Grade', value: <BookGradeLabel grade={storage.grade} /> },
+            { label: 'Rack', value: <BookRackContent item={item} /> },
+            {
+              label: 'Crate',
+              value: (
+                <BookCrateLabel crateNumber={storage.crateNumber} crateColor={storage.crateColor} />
+              ),
+            },
+          ]
+        : [{ label: 'Rack', value: <ItemsRackContent item={item} /> }],
+      coverage: (
+        <StockBar
+          stock={facts.availableForStatus}
+          par={facts.par}
+          status={facts.status}
+          className="!w-full"
+        />
+      ),
+    };
+  }
+
+  /** A size run's Grid card: its header row's label, roll-ups and drill-down. */
+  function styleGroupCard(
+    se: Extract<StyledEntry, { kind: 'style' }>,
+    priority: boolean,
+  ): GridGroupCard {
+    const f = styleHeaderFacts(se.group, se.items, lookups);
+    const expanded = expandedStyleGroups.has(se.group.styleKey);
+    const named = `${se.group.baseName} (${f.sizeLabel})`;
+    return {
+      kind: 'group',
+      key: `style-group:${se.group.styleKey}`,
+      media: hasPhoto(f.first) ? (
+        <CardPhoto
+          photo={f.first}
+          title={se.group.baseName}
+          subtitle={f.sizeLabel}
+          meta={<OnHandMeta value={se.group.total} />}
+          priority={priority}
+        />
+      ) : null,
+      name: (
+        <Link
+          href={`${rowLinkPrefix}/${f.first.id}?return=${encodeURIComponent(currentListUrl)}`}
+          prefetch={false}
+          className="text-foreground hover:underline"
+          title={se.group.baseName}
+        >
+          {se.group.baseName}
+        </Link>
+      ),
+      badge: <SizeBadge placement="grid">{f.sizeLabel}</SizeBadge>,
+      meta: (
+        <MetaLine>
+          <CategoryLabel category={f.category} />
+          <HeaderCharterContent
+            first={f.first}
+            distinctCharterIds={f.distinctCharterIds}
+            lookups={lookups}
+            multipleTitle="Sizes span multiple charters — expand to see each"
+          />
+        </MetaLine>
+      ),
+      status: (
+        <StockStatusBadge
+          quantity={se.group.total}
+          reorderPoint={f.first.reorder_point}
+          itemStatus={f.rolledUpStatus}
+        />
+      ),
+      quantity: formatNumber(se.group.total),
+      location: f.location?.name ?? '—',
+      facts: [{ label: 'Rack', value: f.rackContent }],
+      coverage: (
+        <StockBar stock={se.group.total} par={f.par} status={f.status} className="!w-full" />
+      ),
+      expanded,
+      toggleLabel: `${expanded ? 'Collapse' : 'Expand'} ${named}`,
+      toggleText: f.sizeLabel,
+      panelLabel: named,
+      onToggle: () => toggleStyleGroup(se.group.styleKey),
+      members: [],
+    };
+  }
+
+  /** A SKU family's or a named group's Grid card (the SkuGroupHeaderRow facts). */
+  function skuGroupCard(
+    entry: Extract<RenderEntry, { kind: 'header' }> | Extract<RenderEntry, { kind: 'explicit' }>,
+    priority: boolean,
+  ): GridGroupCard {
+    const items = entry.items;
+    const explicit = entry.kind === 'explicit' ? explicitGroupOf(entry) : null;
+    const sku = entry.kind === 'header' ? entry.group.sku : '';
+    const partial =
+      entry.kind === 'header'
+        ? !!entry.group.totalIsPartial
+        : entry.kind === 'explicit' && entry.partial;
+    const f = skuHeaderFacts({ items, explicit: !!explicit, stockView, reservedByItem, lookups });
+    const count = explicit ? GROUP_COPY.headerCount(f.distinctItems.length, explicit.matching) : '';
+    const partialTitle = partial ? (explicit ? GROUP_PARTIAL_TITLE : SKU_PARTIAL_TITLE) : undefined;
+    const expanded = explicit
+      ? expandedExplicitGroups.has(explicit.groupId)
+      : expandedSkuGroups.has(sku);
+    const named = explicit
+      ? `group ${explicit.name} (${count})`
+      : `${sku} (${items.length} placements)`;
+    const books = showBookFields ? booksHeaderContent(items, f.distinctItems) : null;
+    return {
+      kind: 'group',
+      key: explicit ? `display-group:${explicit.groupId}` : `sku-group:${sku}`,
+      media: hasPhoto(f.cover) ? (
+        <CardPhoto
+          photo={f.cover}
+          title={explicit ? explicit.name : f.first.name}
+          subtitle={explicit ? count : sku}
+          meta={<OnHandMeta value={f.displayedTotal} title={partialTitle} partial={partial} />}
+          priority={priority}
+        />
+      ) : null,
+      name: explicit ? (
+        <span title={explicit.name}>{explicit.name}</span>
+      ) : (
+        <Link
+          href={`${rowLinkPrefix}/${f.first.id}?return=${encodeURIComponent(currentListUrl)}`}
+          prefetch={false}
+          className="text-foreground hover:underline"
+          title={f.first.name}
+        >
+          {f.first.name}
+        </Link>
+      ),
+      sku: <HeaderSkuContent items={items} explicit={!!explicit} sku={sku} />,
+      meta: (
+        <MetaLine>
+          {explicit ? <span className="text-[var(--ed-ink-2)]">{count}</span> : null}
+          {f.categoryRollup.kind === 'multiple' ? (
+            <MultipleLabel title="Placements span multiple categories — expand to see each" />
+          ) : (
+            <CategoryLabel category={f.category} />
+          )}
+          <HeaderCharterContent
+            first={f.first}
+            distinctCharterIds={f.distinctCharterIds}
+            lookups={lookups}
+            multipleTitle="Placements span multiple charters — expand to see each"
+          />
+        </MetaLine>
+      ),
+      status: (
+        <StockStatusBadge
+          quantity={f.healthQuantity}
+          reorderPoint={f.groupReorderPoint}
+          itemStatus={f.rolledUpStatus}
+          autoArchived={f.allAutoArchived}
+          awaitingFirstReceipt={f.allAwaitingFirstReceipt}
+        />
+      ),
+      quantity: (
+        <>
+          <span title={partialTitle}>{formatNumber(f.displayedTotal)}</span>
+          {partial && (
+            <span aria-hidden className="text-muted-foreground ml-0.5">
+              *
+            </span>
+          )}
+        </>
+      ),
+      location:
+        f.locationRollup.kind === 'multiple' ? (
+          <MultipleLabel title="Placements span multiple sites — expand to see each" />
+        ) : (
+          (f.location?.name ?? '—')
+        ),
+      facts: books
+        ? [
+            { label: 'Grade', value: books.gradeContent },
+            { label: 'Rack', value: books.rackContent },
+            { label: 'Crate', value: books.crateContent },
+          ]
+        : [
+            {
+              label: 'Rack',
+              value: <ItemsHeaderRackContent items={items} distinctItems={f.distinctItems} />,
+            },
+          ],
+      actions:
+        explicit && (explicit.onRename || explicit.onRemove) ? (
+          <>
+            {explicit.onRename ? (
+              <button
+                type="button"
+                onClick={explicit.onRename}
+                aria-label={GROUP_COPY.renameFor(explicit.name)}
+                className={cn(touchTargetClass, chipActionClass)}
+              >
+                {GROUP_COPY.renameAction}
+              </button>
+            ) : null}
+            {explicit.onRemove ? (
+              <button
+                type="button"
+                onClick={explicit.onRemove}
+                aria-label={GROUP_COPY.removeFor(explicit.name)}
+                className={cn(touchTargetClass, chipActionClass)}
+              >
+                {GROUP_COPY.removeAction}
+              </button>
+            ) : null}
+          </>
+        ) : undefined,
+      coverage: (
+        <StockBar stock={f.healthQuantity} par={f.par} status={f.status} className="!w-full" />
+      ),
+      expanded,
+      toggleLabel: `${expanded ? 'Collapse' : 'Expand'} ${named}`,
+      toggleText: explicit ? count : `${items.length} placements`,
+      panelLabel: explicit ? `${explicit.name} (${count})` : named,
+      onToggle: () => (explicit ? toggleExplicitGroup(explicit.groupId) : toggleSkuGroup(sku)),
+      members: [],
+    };
+  }
+
+  /**
+   * THE GRID'S ENTRIES: the SAME `styledRenderItems` the table rows are drawn
+   * from, in the same order. A header becomes a group card; the rows an
+   * expanded header emits right after it (core composeDisplayList marks them
+   * nested) become its drill-down's cards, so a group opens inline, inside the
+   * page, and nothing is added to or taken from it.
+   */
+  function buildGridEntries(): GridEntry[] {
+    const out: GridEntry[] = [];
+    let open: GridGroupCard | null = null;
+    let openIsRun = false;
+    let shown = 0;
+    for (const se of styledRenderItems) {
+      const priority = shown++ < 12;
+      if (se.kind === 'style') {
+        open = styleGroupCard(se, priority);
+        openIsRun = true;
+        out.push(open);
+        continue;
+      }
+      const entry = se.entry;
+      if (entry.kind === 'explicit' || entry.kind === 'header') {
+        open = skuGroupCard(entry, priority);
+        openIsRun = false;
+        out.push(open);
+        continue;
+      }
+      const card = recordCard(entry, { priority, sizeMember: !!entry.nested && openIsRun });
+      if (entry.nested && open) {
+        open.members.push(card);
+      } else {
+        open = null;
+        out.push(card);
+      }
+    }
+    return out;
+  }
+
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-4">
       {/* Group selected (0400): a group header's Rename / Remove and a row
           chip's Add to group. Each reviews first and writes only on Save; a
           change refreshes the page (the server re-reads every row). */}
@@ -1927,106 +2410,112 @@ export function InventoryTable({
           <InstantDatasetAdopter promise={instantPromise} onResolve={handleAdopt} />
         </React.Suspense>
       )}
-      {/* Saved views — built-in chips first, then user-saved, then save button */}
-      <div className="flex flex-wrap items-center gap-2">
-        {VIEWS.map((v) => (
-          <Link
-            key={v}
-            href={hrefForView(v)}
-            scroll={false}
-            // No viewport prefetch: these hrefs embed the CURRENT q/filters,
-            // so every keystroke re-prefetched 3-4 full RSC renders of the
-            // low/out/archived variants (observed live) — pure server waste,
-            // doubly so in instant mode where the click never hits the
-            // server at all. Hover still warms in server mode.
-            prefetch={false}
-            // Instant mode: the stock filter derives locally, so the chip
-            // becomes a shallow push (same URL, zero server work).
-            onClick={
-              instantMode ? (e) => interceptShallowNav(e, hrefForView(v), shallowPush) : undefined
-            }
-            className={cn(
-              'inline-flex h-6 items-center gap-1 rounded-full border px-2.5 text-[11.5px] transition-colors',
-              v === view
-                ? 'border-foreground bg-foreground text-background'
-                : 'border-border bg-background text-[var(--ed-ink-2)] hover:border-[var(--ed-line-strong)]',
-            )}
-          >
-            {v}
-          </Link>
-        ))}
-        {isArchivedView && (
-          <Link
-            href={hrefForAutoArchivedToggle()}
-            scroll={false}
-            prefetch={false}
-            onClick={
-              instantMode
-                ? (e) => interceptShallowNav(e, hrefForAutoArchivedToggle(), shallowPush)
-                : undefined
-            }
-            aria-pressed={autoArchivedOnly}
-            className={cn(
-              'inline-flex h-6 items-center gap-1 rounded-full border px-2.5 text-[11.5px] transition-colors',
-              autoArchivedOnly
-                ? 'border-foreground bg-foreground text-background'
-                : 'border-border bg-background text-[var(--ed-ink-2)] hover:border-[var(--ed-line-strong)]',
-            )}
-          >
-            Auto-archived only
-          </Link>
-        )}
-        {(effectiveExpectedCount > 0 || expectedOnly) && (
-          // "Expected" chip (mig 0277): items auto-created from inbound
-          // POs, hidden from every default view until their first
-          // receipt. Rendered only when such items exist (or the view is
-          // already active, so it can be toggled off). The count badge
-          // mirrors exactly what the view lists.
-          <Link
-            href={hrefForExpectedToggle()}
-            scroll={false}
-            prefetch={false}
-            onClick={
-              instantMode
-                ? (e) => interceptShallowNav(e, hrefForExpectedToggle(), shallowPush)
-                : undefined
-            }
-            aria-pressed={expectedOnly}
-            title="Items created from purchase orders that haven't received any stock yet"
-            className={cn(
-              'inline-flex h-6 items-center gap-1 rounded-full border px-2.5 text-[11.5px] transition-colors',
-              expectedOnly
-                ? 'border-foreground bg-foreground text-background'
-                : 'border-border bg-background text-[var(--ed-ink-2)] hover:border-[var(--ed-line-strong)]',
-            )}
-          >
-            Expected
-            <span
-              className={cn(
-                'inline-flex min-w-[1.1rem] items-center justify-center rounded-full px-1 text-[10px] font-medium tabular-nums',
-                expectedOnly ? 'bg-background/20 text-background' : 'bg-muted text-[var(--ed-ink-2)]',
-              )}
+      {/* The views row (DESIGN-SPEC 6.5, 6.21): the stock views as a
+          segmented control, then the Expected / Auto-archived only toggles and
+          the saved views as chips, and the Table / Grid control at the right.
+          It stays usable while rows are ticked (only the toolbar below swaps
+          for the bulk bar), so the view can be switched with a selection: the
+          grid draws the same page with the same picks. */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
+          <SegmentedTabs
+            aria-label="Filter by stock"
+            activeId={view}
+            items={VIEWS.map((v) => ({
+              id: v,
+              label: v,
+              href: hrefForView(v),
+              scroll: false,
+              // No viewport prefetch: these hrefs embed the CURRENT q/filters,
+              // so every keystroke re-prefetched 3-4 full RSC renders of the
+              // low/out/archived variants (observed live) — pure server waste,
+              // doubly so in instant mode where the click never hits the
+              // server at all. Hover still warms in server mode.
+              prefetch: false,
+              // Instant mode: the stock filter derives locally, so the tab
+              // becomes a shallow push (same URL, zero server work).
+              onClick: instantMode
+                ? (e: React.MouseEvent<HTMLAnchorElement>) =>
+                    interceptShallowNav(e, hrefForView(v), shallowPush)
+                : undefined,
+            }))}
+          />
+          {isArchivedView && (
+            <Link
+              href={hrefForAutoArchivedToggle()}
+              scroll={false}
+              prefetch={false}
+              onClick={
+                instantMode
+                  ? (e) => interceptShallowNav(e, hrefForAutoArchivedToggle(), shallowPush)
+                  : undefined
+              }
+              aria-pressed={autoArchivedOnly}
+              className={filterChipClass({ active: autoArchivedOnly })}
             >
-              {effectiveExpectedCount}
-            </span>
-          </Link>
-        )}
-        {savedViews.map((sv) => (
-          <SavedViewChip
-            key={sv.id}
-            view={sv}
-            isActive={isSavedViewActive(sv, params, activeWarehouseId)}
-            scope={savedViewScope ?? (showBookFields ? 'books' : 'inventory')}
-            basePath={basePath}
-            isOwner={!!currentUserId && sv.ownerId === currentUserId}
-          />
-        ))}
-        {savedViewScope && (
-          <SaveCurrentViewButton
-            scope={savedViewScope}
-            currentState={readCurrentState(params, activeWarehouseId)}
-          />
-        )}
+              Auto-archived only
+            </Link>
+          )}
+          {(effectiveExpectedCount > 0 || expectedOnly) && (
+            // "Expected" chip (mig 0277): items auto-created from inbound
+            // POs, hidden from every default view until their first
+            // receipt. Rendered only when such items exist (or the view is
+            // already active, so it can be toggled off). The count badge
+            // mirrors exactly what the view lists.
+            <Link
+              href={hrefForExpectedToggle()}
+              scroll={false}
+              prefetch={false}
+              onClick={
+                instantMode
+                  ? (e) => interceptShallowNav(e, hrefForExpectedToggle(), shallowPush)
+                  : undefined
+              }
+              aria-pressed={expectedOnly}
+              title="Items created from purchase orders that haven't received any stock yet"
+              className={filterChipClass({ active: expectedOnly })}
+            >
+              Expected
+              <span
+                className={cn(
+                  'font-mono text-[11px] font-medium tabular-nums',
+                  expectedOnly ? 'text-background/80' : 'text-muted-foreground',
+                )}
+              >
+                {effectiveExpectedCount}
+              </span>
+            </Link>
+          )}
+          {savedViews.map((sv) => (
+            <SavedViewChip
+              key={sv.id}
+              view={sv}
+              isActive={isSavedViewActive(sv, params, activeWarehouseId)}
+              scope={savedViewScope ?? (showBookFields ? 'books' : 'inventory')}
+              basePath={basePath}
+              isOwner={!!currentUserId && sv.ownerId === currentUserId}
+            />
+          ))}
+          {savedViewScope && (
+            <SaveCurrentViewButton
+              scope={savedViewScope}
+              currentState={readCurrentState(params, activeWarehouseId)}
+            />
+          )}
+        </div>
+        {/* TABLE / GRID (P2.6 SegmentedTabs, button mode): a viewer's
+            preference, kept in this list's cookie; Table is the default. */}
+        <SegmentedTabs
+          aria-label="Show as"
+          size="sm"
+          className="ml-auto"
+          activeId={listView}
+          onSelect={(id) => selectListView(id === 'grid' ? 'grid' : 'table')}
+          items={[
+            { id: 'table', label: 'Table', icon: <List aria-hidden strokeWidth={1.8} /> },
+            { id: 'grid', label: 'Grid', icon: <LayoutGrid aria-hidden strokeWidth={1.8} /> },
+          ]}
+        />
       </div>
 
       {/* Toolbar row + bulk-actions bar: GRID-STACKED in the same cell and
@@ -2043,24 +2532,33 @@ export function InventoryTable({
       <div className="grid">
         <div
           className={cn(
-            'col-start-1 row-start-1 flex flex-wrap items-center gap-2',
+            'col-start-1 row-start-1 flex flex-wrap content-start items-center gap-x-1.5 gap-y-2',
             selected.size > 0 && 'invisible',
           )}
         >
-          <div className="relative min-w-[180px] max-w-md flex-1">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--ed-ink-4)]" />
+          <div className="relative w-full sm:w-[240px]">
+            <Search
+              aria-hidden
+              className="text-muted-foreground pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+              strokeWidth={1.8}
+            />
             <Input
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Search name, SKU, barcode…"
-              className={cn('h-8 pl-8 text-[12.5px]', onScanRequest && 'pr-8')}
+              className={cn('h-8 pl-8 text-[13px]', onScanRequest && 'pr-9')}
               aria-label="Search items"
             />
             {onScanRequest && (
               <button
                 type="button"
                 onClick={onScanRequest}
-                className="hover:text-foreground absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-[var(--ed-ink-4)] transition-colors"
+                className={cn(
+                  // The touch target first: its `relative` must lose to the
+                  // `absolute` that seats the button inside the field.
+                  touchTargetClass,
+                  'text-muted-foreground hover:bg-muted hover:text-foreground absolute right-1 top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded-md transition-colors max-sm:right-2.5',
+                )}
                 aria-label="Scan barcode"
               >
                 <ScanLine className="h-3.5 w-3.5" />
@@ -2111,93 +2609,28 @@ export function InventoryTable({
             <button
               type="button"
               onClick={clearAllFilters}
-              className="border-border hover:text-foreground inline-flex h-8 items-center gap-1 rounded-md border border-dashed px-2.5 text-[11.5px] text-[var(--ed-ink-3)] transition-colors hover:border-[var(--ed-line-strong)]"
+              className={cn(
+                touchTargetClass,
+                'text-muted-foreground hover:bg-muted hover:text-foreground inline-flex h-8 items-center gap-1 rounded-md px-2 text-[13px] transition-colors max-sm:min-h-11',
+              )}
               aria-label="Clear all filters"
             >
-              <X className="h-3 w-3" /> Clear
+              <X aria-hidden className="h-3.5 w-3.5" /> Clear
             </button>
           )}
 
-          <button
-            type="button"
+          <FilterTrigger
+            hideChevron
             onClick={() => setStockView((v) => (v === 'placed' ? 'total' : 'placed'))}
-            className="border-border hover:text-foreground inline-flex h-8 items-center gap-1 rounded-md border px-2.5 text-[11.5px] text-[var(--ed-ink-3)] transition-colors hover:border-[var(--ed-line-strong)]"
             aria-label="Toggle on-hand view"
             title="Switch between total on-hand and placed-only"
-          >
-            {stockView === 'placed' ? 'On hand: placed only' : 'On hand: total'}
-          </button>
+            label={stockView === 'placed' ? 'On hand: placed only' : 'On hand: total'}
+          />
 
           <ExportMenu
             params={params}
             itemType={showBookFields ? 'book' : (params.get('type') ?? 'product')}
           />
-
-          <p className="ml-auto flex items-center gap-1.5 font-mono text-[11px] tabular-nums text-[var(--ed-ink-3)]">
-            {/* Filter round-trip affordance: rows stay visible (dimmed) while
-              the new result set loads; this small spinner is the "working"
-              signal — mirrors the search box's "(searching…)" treatment. */}
-            {isFilterPending && (
-              <Loader2 aria-label="Updating results" className="h-3 w-3 animate-spin" />
-            )}
-            {(() => {
-              // Instant mode: the totals ARE the filtered set (the
-              // buildSumPage mirror runs locally over the full dataset),
-              // so the footer never needs the "Showing N matching" hedge
-              // or the "(searching…)" phase — every keystroke's answer is
-              // complete. The planned first page prints the same line from
-              // the counts the server took over the whole view, so the
-              // footer does not change when the dataset is adopted.
-              if (instantMode || planned) {
-                // Label and number must agree (see THE THREE COUNTS
-                // above): "SKUs" counts DISTINCT SKUs (count 3), "rows"
-                // counts the PLACEMENT rows actually rendered (count 2) —
-                // NOT `effectiveTotal`, which is item rows (count 1) and
-                // therefore understates the screen on the one surface
-                // where the two differ (the Items list, which expands one
-                // row per rack). The row term is worth showing only when
-                // it differs from the SKU count — that difference IS the
-                // collapsing the list just did.
-                const skus = distinctSkuCount ?? effectiveTotal;
-                const rows = placementRowCount ?? effectiveTotal;
-                // A staff member's planned Items page counts the view's
-                // records, not the rack rows they split into on screen
-                // (that needs every record's holdings), so it names them
-                // items (count 1). On Books a record is one row.
-                const rowsLabel = placementRowCount === null && !showBookFields ? 'items' : 'rows';
-                return (
-                  <>
-                    {formatNumber(skus)} SKUs ·{' '}
-                    {skus !== rows ? (
-                      <>
-                        {formatNumber(rows)} {rowsLabel} ·{' '}
-                      </>
-                    ) : null}
-                    {formatCurrency(valueOnHand)} on hand
-                  </>
-                );
-              }
-              const needle = q.trim();
-              if (!needle) {
-                return (
-                  <>
-                    {/* SERVER MODE holds ONE page, so it cannot count
-                        distinct SKUs across the result set — and `total`
-                        is an ITEM-ROW count (count 1), which grouping now
-                        collapses on Books too. Label it what it is rather
-                        than calling item rows "SKUs". */}
-                    {formatNumber(total)} items · {formatCurrency(valueOnHand)} on hand
-                  </>
-                );
-              }
-              return (
-                <>
-                  Showing {formatNumber(displayed.length)} matching &ldquo;{needle}&rdquo;
-                  {serverLoading ? ' (searching…)' : null}
-                </>
-              );
-            })()}
-          </p>
         </div>
 
         {/* Bulk actions layer — always mounted (see grid-stack note above),
@@ -2340,8 +2773,84 @@ export function InventoryTable({
           full filtered set up to the limit — pages recompose once `q`
           clears. INSTANT mode keeps it: search results are complete and
           paginate locally like any other filter. */}
-      {showPagination && (
-        <div className="flex items-center justify-end">
+      {/* The count and value of the whole result (THE THREE COUNTS), with
+          the top pager at the right. The redesign moved the count out of the
+          toolbar row, which wrapped it onto a line of its own, to sit under
+          the filters beside the pager. */}
+      <div className="flex min-h-7 flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <p
+          className={cn(
+            'text-muted-foreground flex items-center gap-1.5 font-mono text-[12px] tabular-nums',
+            // Hidden in place while rows are ticked, as it was inside the
+            // toolbar the bulk bar replaces (it keeps its space: no shift).
+            selected.size > 0 && 'invisible',
+          )}
+        >
+          {/* Filter round-trip affordance: rows stay visible (dimmed) while
+            the new result set loads; this small spinner is the "working"
+            signal — mirrors the search box's "(searching…)" treatment. */}
+          {isFilterPending && (
+            <Loader2 aria-label="Updating results" className="h-3 w-3 animate-spin" />
+          )}
+          {(() => {
+            // Instant mode: the totals ARE the filtered set (the
+            // buildSumPage mirror runs locally over the full dataset),
+            // so the footer never needs the "Showing N matching" hedge
+            // or the "(searching…)" phase — every keystroke's answer is
+            // complete. The planned first page prints the same line from
+            // the counts the server took over the whole view, so the
+            // footer does not change when the dataset is adopted.
+            if (instantMode || planned) {
+              // Label and number must agree (see THE THREE COUNTS
+              // above): "SKUs" counts DISTINCT SKUs (count 3), "rows"
+              // counts the PLACEMENT rows actually rendered (count 2) —
+              // NOT `effectiveTotal`, which is item rows (count 1) and
+              // therefore understates the screen on the one surface
+              // where the two differ (the Items list, which expands one
+              // row per rack). The row term is worth showing only when
+              // it differs from the SKU count — that difference IS the
+              // collapsing the list just did.
+              const skus = distinctSkuCount ?? effectiveTotal;
+              const rows = placementRowCount ?? effectiveTotal;
+              // A staff member's planned Items page counts the view's
+              // records, not the rack rows they split into on screen
+              // (that needs every record's holdings), so it names them
+              // items (count 1). On Books a record is one row.
+              const rowsLabel = placementRowCount === null && !showBookFields ? 'items' : 'rows';
+              return (
+                <>
+                  {formatNumber(skus)} SKUs ·{' '}
+                  {skus !== rows ? (
+                    <>
+                      {formatNumber(rows)} {rowsLabel} ·{' '}
+                    </>
+                  ) : null}
+                  {formatCurrency(valueOnHand)} on hand
+                </>
+              );
+            }
+            const needle = q.trim();
+            if (!needle) {
+              return (
+                <>
+                  {/* SERVER MODE holds ONE page, so it cannot count
+                      distinct SKUs across the result set — and `total`
+                      is an ITEM-ROW count (count 1), which grouping now
+                      collapses on Books too. Label it what it is rather
+                      than calling item rows "SKUs". */}
+                  {formatNumber(total)} items · {formatCurrency(valueOnHand)} on hand
+                </>
+              );
+            }
+            return (
+              <>
+                Showing {formatNumber(displayed.length)} matching &ldquo;{needle}&rdquo;
+                {serverLoading ? ' (searching…)' : null}
+              </>
+            );
+          })()}
+        </p>
+        {showPagination && (
           <Pagination
             page={effectivePage}
             pageSize={pageSize}
@@ -2351,14 +2860,14 @@ export function InventoryTable({
             onNavigate={instantMode ? shallowPush : undefined}
             pendingInstant={instantPending}
           />
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Table */}
       <div
         aria-busy={isFilterPending}
         className={cn(
-          'border-border bg-card overflow-x-auto rounded-[10px] border transition-opacity',
+          'border-border bg-card overflow-hidden rounded-lg border transition-opacity',
           // Subtle pending treatment ONLY — never pointer-events-none. The
           // old pointer-events-none silently swallowed every row-checkbox
           // click for the full filter round-trip (seconds at org scale),
@@ -2370,668 +2879,376 @@ export function InventoryTable({
           isFilterPending && 'opacity-60',
         )}
       >
-        <table className="w-full min-w-[720px] text-[12.5px]">
-          <thead>
-            <tr className="border-border border-b">
-              <th className="w-8 px-3">
-                <Checkbox
-                  checked={allVisibleSelected}
-                  indeterminate={someVisibleSelected}
-                  onChange={(c) => toggleAll(c)}
-                />
-              </th>
-              {(
-                [
-                  ['Item', 'left'],
-                  ['SKU', 'left'],
-                  ['Category', 'left'],
-                  ['Charter', 'left'],
-                  ['Location', 'left'],
-                  ...(showBookFields
-                    ? ([
-                        ['Grade', 'left'],
-                        ['Rack', 'left'],
-                        ['Crate', 'left'],
-                      ] as const)
-                    : ([['Rack', 'left']] as const)),
-                  ['On hand', 'right'],
-                  ['Coverage', 'left'],
-                  ['14-day', 'right'],
-                  ['Status', 'left'],
-                  ['Updated', 'right'],
-                ] as ReadonlyArray<readonly [string, 'left' | 'right']>
-              ).map(([label, align]) => (
-                <th
-                  key={label}
-                  className={cn(
-                    'h-9 px-3 text-[10.5px] font-medium uppercase tracking-[0.06em] text-[var(--ed-ink-4)]',
-                    align === 'right' ? 'text-right' : 'text-left',
-                  )}
-                >
-                  {label === '14-day' ? (
-                    <SparkModeToggle mode={sparkMode} onChange={setSparkMode} />
-                  ) : (
-                    label
-                  )}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {displayed.length === 0 && (
-              <tr>
-                <td
-                  colSpan={showBookFields ? 14 : 12}
-                  className="py-12 text-center text-[12.5px] text-[var(--ed-ink-4)]"
-                >
-                  No items match your filters.
-                </td>
-              </tr>
-            )}
-            {styledRenderItems.map((se) => {
-              // Size-run (apparel) header — one collapsed row per style base
-              // (e.g. "L4L - Pink Shirt"), stacked ABOVE the SKU grouping.
-              // Expanding splices its member rows (the SAME `<tr>`s below) in
-              // right after it.
-              if (se.kind === 'style') {
-                return (
-                  <StyleGroupHeaderRow
-                    key={`style-group:${se.group.styleKey}`}
-                    group={se.group}
-                    items={se.items}
-                    expanded={expandedStyleGroups.has(se.group.styleKey)}
-                    onToggle={() => toggleStyleGroup(se.group.styleKey)}
-                    lookups={lookups}
-                    rowLinkPrefix={rowLinkPrefix}
-                    currentListUrl={currentListUrl}
-                  />
-                );
-              }
-              const entry = se.entry;
-              // Model B SKU-group header: one collapsed row per SKU that
-              // has MORE than one placement, showing the summed on-hand
-              // total. A chevron toggles `expandedSkuGroups`, which
-              // re-derives `renderItems` to splice the group's own
-              // placement rows (the SAME `<tr>`s below, unchanged) in
-              // right after it. Not selectable — no checkbox.
-              // Group selected (0400): an explicit display group's header,
-              // the SAME row markup as a SKU header, named for the group. Its
-              // chevron reveals the group's own rows (the SAME `<tr>`s below).
-              // Not selectable; Rename and Remove act on the group's records
-              // on screen only (the server decides on what the viewer can
-              // edit; a hidden record is never named or moved).
-              if (entry.kind === 'explicit') {
-                const groupName = entry.name ?? DISPLAY_GROUP_FALLBACK_NAME;
-                const memberIds = [...new Set(entry.items.map((it) => it.id))];
-                return (
-                  <SkuGroupHeaderRow
-                    key={`display-group:${entry.groupId}`}
-                    group={{
-                      sku: '',
-                      name: groupName,
-                      total: 0,
-                      placements: [],
-                      ...(entry.partial ? { totalIsPartial: true } : {}),
-                    }}
-                    explicit={{
-                      groupId: entry.groupId,
-                      name: groupName,
-                      matching: listNarrowed,
-                      onRename:
-                        canUngroup && canRenameGroups
-                          ? () =>
-                              setGroupAction({ kind: 'rename', groupId: entry.groupId, memberIds })
-                          : undefined,
-                      onRemove: canUngroup
-                        ? () => setGroupAction({ kind: 'remove', ids: memberIds })
-                        : undefined,
-                    }}
-                    items={entry.items}
-                    expanded={expandedExplicitGroups.has(entry.groupId)}
-                    onToggle={() => toggleExplicitGroup(entry.groupId)}
-                    lookups={lookups}
-                    sparkMode={sparkMode}
-                    trends={effectiveTrends}
-                    rowLinkPrefix={rowLinkPrefix}
-                    currentListUrl={currentListUrl}
-                    rowIdx={entry.rowIdx}
-                    showBookFields={showBookFields}
-                    stockView={stockView}
-                    reservedByItem={reservedByItem}
-                  />
-                );
-              }
-              if (entry.kind === 'header') {
-                return (
-                  <SkuGroupHeaderRow
-                    key={`sku-group:${entry.group.sku}`}
-                    group={entry.group}
-                    items={entry.items}
-                    expanded={expandedSkuGroups.has(entry.group.sku)}
-                    onToggle={() => toggleSkuGroup(entry.group.sku)}
-                    lookups={lookups}
-                    sparkMode={sparkMode}
-                    trends={effectiveTrends}
-                    rowLinkPrefix={rowLinkPrefix}
-                    currentListUrl={currentListUrl}
-                    rowIdx={entry.rowIdx}
-                    showBookFields={showBookFields}
-                    stockView={stockView}
-                    reservedByItem={reservedByItem}
-                  />
-                );
-              }
-              const { item, rowIdx } = entry;
-              const category = item.category_id ? lookups.categories.get(item.category_id) : null;
-              const location = item.primary_location_id
-                ? lookups.locations.get(item.primary_location_id)
-                : null;
-              // Status badge + coverage bar follow AVAILABLE (on-hand −
-              // reserved), matching the "{avail} avail · {out} out" indicator
-              // below. A rental checkout reserves stock instead of decrementing
-              // on-hand, so a fully checked-out item (0 avail, 1 out) must read
-              // "Out of stock", not "In stock". reservedByItem is passed ONLY by
-              // the rentals items view; everywhere else reserved is 0, so
-              // available === on-hand and nothing changes.
-              const reservedForStatus = reservedByItem?.get(item.id) ?? 0;
-              const availableForStatus = Math.max(0, item.quantity_on_hand - reservedForStatus);
-              const status = deriveStatus(availableForStatus, item.reorder_point);
-              const par = Math.max(item.reorder_point * 4, item.quantity_on_hand * 1.5, 10);
-              // Stable per (displayed, sparkMode, trends) — see seriesByItem above.
-              const series = seriesByItem.get(item.id) ?? EMPTY_SERIES;
-              // Key selection on rowKey (unique per rack row) — NOT item.id,
-              // which is identical across an item's rack rows and made
-              // checking one rack visually check them all (owner's "both
-              // Chromebook rows checked but bar says 1 selected"). Bulk
-              // actions still collapse back to distinct item ids (see
-              // selectedItemIds).
-              const isSelected = selected.has(item.rowKey ?? item.id);
-              // Payload-diet rows (rank 5) carry only the thumb URL; the
-              // cell renders whichever is present (thumb preferred, exactly
-              // as before) and the hover preview lazy-loads the master.
-              const rowThumbSrc = item.image_thumb_url ?? item.image_url;
-
-              return (
-                <tr
-                  key={item.rowKey ?? item.id}
-                  className={cn(
-                    'border-border border-b transition-colors last:border-0',
-                    isSelected ? 'bg-[hsl(var(--accent)/0.10)]' : 'hover:bg-muted/60',
-                  )}
-                >
-                  <td className="px-3">
+        {listView === 'grid' ? (
+          <InventoryGrid
+            entries={buildGridEntries()}
+            idPrefix={gridIdPrefix}
+            selectionActive={selected.size > 0}
+            selectAll={
+              // The Table's header box is not on screen in Grid: this is the
+              // same page-scoped select-all (the visible page, members of
+              // collapsed group cards included), with the same mixed state.
+              <Checkbox
+                checked={allVisibleSelected}
+                indeterminate={someVisibleSelected}
+                onCheckedChange={(c) => toggleAll(c)}
+                className="text-muted-foreground hover:text-foreground min-h-7 text-[12.5px] max-sm:min-h-11"
+              >
+                Select all rows on this page
+              </Checkbox>
+            }
+            empty={noMatchLine}
+          />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[900px] text-[13.5px]">
+              <thead>
+                <tr className="border-border border-b">
+                  <th className="w-10 py-2.5 pl-4 pr-0 text-left">
                     <Checkbox
-                      checked={isSelected}
-                      onChange={() => toggleOne(item.rowKey ?? item.id)}
+                      checked={allVisibleSelected}
+                      indeterminate={someVisibleSelected}
+                      onCheckedChange={(c) => toggleAll(c)}
+                      label="Select all rows on this page"
                     />
-                  </td>
-                  <td className="py-2.5 pr-3">
-                    <div className="flex items-center gap-2.5">
-                      <ImageHoverPreview
-                        src={item.image_url ?? null}
-                        // Diet rows: master on demand (org-scoped route,
-                        // same 25-day-stable URL the row used to carry).
-                        srcLoader={
-                          !item.image_url && item.image_thumb_url
-                            ? () => loadMasterImageUrl(item.id)
-                            : undefined
-                        }
-                        alt={item.name}
-                        title={item.name}
-                        subtitle={item.sku}
-                        meta={
-                          <span>
-                            On hand{' '}
-                            <span className="text-foreground font-medium tabular-nums">
-                              {formatNumber(item.quantity_on_hand)}
-                            </span>
-                          </span>
-                        }
-                        className="shrink-0"
-                      >
-                        {rowThumbSrc ? (
-                          <Image
-                            // Prefer the pre-resized ~200px thumb
-                            // (item_images.thumb_path, populated by
-                            // uploads after 0122). Falls back to the
-                            // master URL for rows that pre-date the
-                            // thumb column — Vercel Image Optimizer
-                            // downscales it on first hit and caches.
-                            // Diet rows carry ONLY the thumb (rank 5).
-                            src={rowThumbSrc}
-                            // Thumbs are ALREADY ~200px WebPs — putting
-                            // them through /_next/image adds no bytes
-                            // saved, but the optimizer cache is
-                            // PER-DEPLOYMENT: the first viewer after
-                            // every deploy paid ~30 cold transforms
-                            // (~750ms each, concurrency-capped) and the
-                            // page "loaded" for 8-15s (owner-reported
-                            // 2026-07-06). Serve pre-sized thumbs
-                            // straight from storage; only legacy
-                            // master-URL rows still go through the
-                            // optimizer, which genuinely downscales
-                            // them.
-                            unoptimized={!!item.image_thumb_url}
-                            alt=""
-                            width={56}
-                            height={56}
-                            sizes="28px"
-                            // First ~12 rows are above the fold on a
-                            // typical 1080p screen — bypass lazy
-                            // loading so they start fetching with the
-                            // initial HTML instead of after JS paints.
-                            priority={rowIdx < 12}
-                            // 16x16 base64 WebP blur — paints a hint
-                            // of the photo immediately while the
-                            // 28x28 transform resolves. Omitted on
-                            // pre-0122 rows; next/image falls back
-                            // to the empty bg-muted background.
-                            placeholder={item.image_lqip ? 'blur' : 'empty'}
-                            blurDataURL={item.image_lqip ?? undefined}
-                            className="border-border bg-muted h-7 w-7 shrink-0 rounded-[5px] border object-cover"
-                          />
-                        ) : (
-                          <span
-                            aria-hidden
-                            className="border-border h-7 w-7 shrink-0 rounded-[5px] border"
-                            style={{
-                              background:
-                                'repeating-linear-gradient(45deg, hsl(var(--border)) 0 1px, transparent 1px 6px), hsl(var(--muted))',
-                            }}
-                          />
-                        )}
-                      </ImageHoverPreview>
-                      <IntentLink
-                        href={`${rowLinkPrefix}/${item.id}?return=${encodeURIComponent(currentListUrl)}`}
-                        // No viewport prefetch: a prefetch for EVERY row's
-                        // detail page on mount measured 50+ requests at
-                        // ~500 ms of server time each on a 50-row list,
-                        // for the ~1 row a person clicks. The comment that
-                        // stood here said Next still prefetched on hover;
-                        // it does not (next/link: prefetch={false} turns
-                        // hover and touch prefetch off too), so the item
-                        // route's shape was unknown until the click and
-                        // its skeleton painted a server round trip late
-                        // (166 ms vs 49 ms for warmed sidebar routes, lab
-                        // 2026-09-22), which also starts React's 300 ms
-                        // reveal hold that much later. IntentLink warms
-                        // just this row's route, starting the moment the
-                        // pointer arrives (hoverDwellMs 0: Next only reuses
-                        // a warm-up that has FINISHED, so it needs a round
-                        // trip's head start), on focus, or on pointer-down.
-                        hoverDwellMs={0}
-                        className="font-medium hover:underline"
-                      >
-                        {item.name}
-                      </IntentLink>
-                      {entry.chip ? (
-                        <DisplayGroupChipView
-                          chip={entry.chip}
-                          name={groupNames.get(entry.chip.groupId) ?? DISPLAY_GROUP_FALLBACK_NAME}
-                          recordName={item.name}
-                          onAddToGroup={
-                            canUngroup && entry.chip.kind === 'same-sku'
-                              ? () =>
-                                  setGroupAction({
-                                    kind: 'add',
-                                    ids: [item.id],
-                                    groupId: entry.chip!.groupId,
-                                  })
-                              : undefined
-                          }
-                        />
-                      ) : null}
-                    </div>
-                  </td>
-                  <td className="px-3 font-mono text-[11.5px] tracking-[-0.01em] text-[var(--ed-ink-3)]">
-                    {item.sku}
-                  </td>
-                  <td className="px-3">
-                    {category ? (
-                      <span
-                        className="inline-flex items-center gap-1.5 text-[12px]"
-                        style={category.color ? { color: category.color } : undefined}
-                      >
-                        {category.color && (
-                          <span
-                            aria-hidden
-                            className="h-1.5 w-1.5 rounded-full"
-                            style={{ backgroundColor: category.color }}
-                          />
-                        )}
-                        {category.name}
-                      </span>
-                    ) : (
-                      <span className="text-[12px] text-[var(--ed-ink-4)]">—</span>
-                    )}
-                  </td>
-                  <td className="px-3 text-[12px]">
-                    {(() => {
-                      const charter = item.charter_id
-                        ? (lookups.charters?.get(item.charter_id) ?? null)
-                        : null;
-                      if (charter) {
-                        return (
-                          <span className="text-[var(--ed-ink-2)]" title={charter.name}>
-                            {charter.code ?? charter.name}
-                          </span>
-                        );
-                      }
-                      // charter_id IS NULL = generic stock (any charter
-                      // serviced by the warehouse can pull from it).
-                      return (
-                        <span
-                          className="text-[11px] italic text-[var(--ed-ink-4)]"
-                          title="Generic stock — any charter serviced by this warehouse can use it"
+                  </th>
+                  {TABLE_COLUMNS(showBookFields).map(([label, align], i, all) => (
+                    <th
+                      key={label}
+                      className={cn(
+                        'text-muted-foreground h-[37px] whitespace-nowrap py-2.5 text-[11px] font-medium uppercase tracking-[0.06em]',
+                        align === 'right' ? 'text-right' : 'text-left',
+                        i === all.length - 1 ? 'pl-3 pr-4' : 'px-3',
+                      )}
+                    >
+                      {label === '14-day' ? (
+                        <SparkModeToggle mode={sparkMode} onChange={setSparkMode} />
+                      ) : (
+                        label
+                      )}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {displayed.length === 0 && (
+                  <tr>
+                    <td colSpan={showBookFields ? 14 : 12} className="p-0">
+                      {noMatchLine}
+                    </td>
+                  </tr>
+                )}
+                {styledRenderItems.map((se) => {
+                  // Size-run (apparel) header — one collapsed row per style
+                  // base (e.g. "L4L - Pink Shirt"), stacked ABOVE the SKU
+                  // grouping. Expanding splices its member rows (the SAME
+                  // `<tr>`s below) in right after it.
+                  if (se.kind === 'style') {
+                    return (
+                      <StyleGroupHeaderRow
+                        key={`style-group:${se.group.styleKey}`}
+                        group={se.group}
+                        items={se.items}
+                        expanded={expandedStyleGroups.has(se.group.styleKey)}
+                        onToggle={() => toggleStyleGroup(se.group.styleKey)}
+                        lookups={lookups}
+                        rowLinkPrefix={rowLinkPrefix}
+                        currentListUrl={currentListUrl}
+                      />
+                    );
+                  }
+                  const entry = se.entry;
+                  // Model B SKU-group header: one collapsed row per SKU that
+                  // has MORE than one placement, showing the summed on-hand
+                  // total. A chevron toggles `expandedSkuGroups`, which
+                  // re-derives `renderItems` to splice the group's own
+                  // placement rows (the SAME `<tr>`s below, unchanged) in
+                  // right after it. Not selectable — no checkbox.
+                  // Group selected (0400): an explicit display group's header,
+                  // the SAME row markup as a SKU header, named for the group.
+                  // Its chevron reveals the group's own rows (the SAME `<tr>`s
+                  // below). Not selectable; Rename and Remove act on the
+                  // group's records on screen only (the server decides on what
+                  // the viewer can edit; a hidden record is never named or
+                  // moved).
+                  if (entry.kind === 'explicit') {
+                    const g = explicitGroupOf(entry);
+                    return (
+                      <SkuGroupHeaderRow
+                        key={`display-group:${entry.groupId}`}
+                        group={{
+                          sku: '',
+                          name: g.name,
+                          total: 0,
+                          placements: [],
+                          ...(entry.partial ? { totalIsPartial: true } : {}),
+                        }}
+                        explicit={g}
+                        items={entry.items}
+                        expanded={expandedExplicitGroups.has(entry.groupId)}
+                        onToggle={() => toggleExplicitGroup(entry.groupId)}
+                        lookups={lookups}
+                        sparkMode={sparkMode}
+                        trends={effectiveTrends}
+                        rowLinkPrefix={rowLinkPrefix}
+                        currentListUrl={currentListUrl}
+                        rowIdx={entry.rowIdx}
+                        showBookFields={showBookFields}
+                        stockView={stockView}
+                        reservedByItem={reservedByItem}
+                      />
+                    );
+                  }
+                  if (entry.kind === 'header') {
+                    return (
+                      <SkuGroupHeaderRow
+                        key={`sku-group:${entry.group.sku}`}
+                        group={entry.group}
+                        items={entry.items}
+                        expanded={expandedSkuGroups.has(entry.group.sku)}
+                        onToggle={() => toggleSkuGroup(entry.group.sku)}
+                        lookups={lookups}
+                        sparkMode={sparkMode}
+                        trends={effectiveTrends}
+                        rowLinkPrefix={rowLinkPrefix}
+                        currentListUrl={currentListUrl}
+                        rowIdx={entry.rowIdx}
+                        showBookFields={showBookFields}
+                        stockView={stockView}
+                        reservedByItem={reservedByItem}
+                      />
+                    );
+                  }
+                  const { item, rowIdx } = entry;
+                  const facts = recordFacts(item);
+                  // Stable per (displayed, sparkMode, trends) — see seriesByItem above.
+                  const series = seriesByItem.get(item.id) ?? EMPTY_SERIES;
+                  // Key selection on rowKey (unique per rack row) — NOT
+                  // item.id, which is identical across an item's rack rows and
+                  // made checking one rack visually check them all (owner's
+                  // "both Chromebook rows checked but bar says 1 selected").
+                  // Bulk actions still collapse back to distinct item ids (see
+                  // selectedItemIds).
+                  const isSelected = selected.has(item.rowKey ?? item.id);
+                  const cell = 'px-3 py-[var(--row-py)]';
+
+                  return (
+                    <tr
+                      key={item.rowKey ?? item.id}
+                      data-row-kind={entry.nested ? 'member' : 'record'}
+                      data-row-key={item.rowKey ?? item.id}
+                      className={cn(
+                        'border-border border-b transition-colors last:border-0',
+                        // Selected: the accent wash, kept on hover (the ticked
+                        // box is the cue that does not rely on colour).
+                        isSelected
+                          ? 'bg-success-wash'
+                          : entry.nested
+                            ? 'bg-card hover:bg-muted'
+                            : 'hover:bg-muted',
+                      )}
+                    >
+                      <td className="w-10 py-[var(--row-py)] pl-4 pr-0">{recordCheckbox(item)}</td>
+                      <td className="min-w-[220px] py-[var(--row-py)] pl-3 pr-3">
+                        <div
+                          className={cn('flex min-w-0 items-center gap-3', entry.nested && 'pl-9')}
                         >
-                          {GENERIC_CHARTER_LABEL}
-                        </span>
-                      );
-                    })()}
-                  </td>
-                  <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
-                    {location?.name ?? '—'}
-                  </td>
-                  {!showBookFields && (
-                    <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
-                      {(() => {
-                        // Split "one line per rack" row: show THIS row's location
-                        // label (rack/crate name, or "Staging"/"Unplaced"). null
-                        // = no holding → em dash. Staging/unplaced buckets read
-                        // AMBER — this row's stock is awaiting put-away (owner
-                        // decision 2026-07-08, consistent with the item detail
-                        // card and the qty sub-line below).
-                        if (item.placement_label !== undefined) {
-                          // 0371: the row carrying this item's stock in
-                          // warehouses the viewer cannot see. Not a rack, and
-                          // never a place they can act on from here.
-                          if (item.placement_kind === ELSEWHERE_PLACEMENT_KIND) {
-                            return (
-                              <span className="text-[var(--ed-ink-4)]">
-                                {item.placement_label}
-                              </span>
-                            );
-                          }
-                          // A SITE is not a rack. Stock recorded at the
-                          // warehouse's own site location (a NULL-kind row such
-                          // as "DC4") used to print its name here, which read as
-                          // "rack DC4" (owner report 2026-09-24). Say what it is.
-                          if (item.placement_kind === 'site' && item.placement_label) {
-                            return (
-                              <span
-                                className="text-warning"
-                                title={`At ${item.placement_label} (the site), not on a rack. Use Set rack to put it away.`}
-                              >
-                                No rack
-                              </span>
-                            );
-                          }
-                          const awaiting =
-                            item.placement_kind === 'staging' || item.placement_kind === 'unplaced';
-                          return item.placement_label ? (
-                            <span
-                              className={
-                                awaiting
-                                  ? 'text-warning font-mono tabular-nums'
-                                  : 'font-mono tabular-nums'
-                              }
-                            >
-                              {item.placement_label}
-                            </span>
-                          ) : (
-                            <span className="text-[var(--ed-ink-4)]">—</span>
-                          );
-                        }
-                        // Prefer the ACTUAL placement (rack/crate locations the
-                        // stock sits in, from holdings). An empty array means the
-                        // stock is unplaced/staged — show "—", not a stale label.
-                        const placed = item.placed_racks;
-                        if (placed !== undefined) {
-                          const elsewhere = elsewhereSuffix(item);
-                          if (placed.length === 0) {
-                            return elsewhere ? (
-                              <span className="text-[var(--ed-ink-4)]">{elsewhere}</span>
-                            ) : (
-                              <span className="text-[var(--ed-ink-4)]">—</span>
-                            );
-                          }
-                          const shown = placed.slice(0, 2).join(', ');
-                          const extra = placed.length - 2;
+                          <ListThumb
+                            photo={item}
+                            alt={item.name}
+                            title={item.name}
+                            subtitle={item.sku}
+                            meta={<OnHandMeta value={item.quantity_on_hand} />}
+                            // First ~12 rows are above the fold on a typical
+                            // 1080p screen — bypass lazy loading so they start
+                            // fetching with the initial HTML instead of after
+                            // JS paints.
+                            priority={rowIdx < 12}
+                          />
+                          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+                            {itemLink(item, 'text-foreground font-medium hover:underline')}
+                            {entry.nested ? null : rowChip(entry, item)}
+                          </span>
+                        </div>
+                      </td>
+                      <td
+                        className={cn(
+                          cell,
+                          'text-muted-foreground whitespace-nowrap font-mono text-[11.5px]',
+                        )}
+                      >
+                        {item.sku}
+                      </td>
+                      <td className={cn(cell, 'whitespace-nowrap')}>
+                        <CategoryLabel category={facts.category} />
+                      </td>
+                      <td className={cn(cell, 'whitespace-nowrap text-[13px]')}>
+                        <CharterLabel item={item} lookups={lookups} />
+                      </td>
+                      <td className={cn(cell, 'min-w-[112px] text-[13px] text-[var(--ed-ink-2)]')}>
+                        {facts.location?.name ?? '—'}
+                      </td>
+                      {!showBookFields && (
+                        <td
+                          className={cn(
+                            cell,
+                            'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]',
+                          )}
+                        >
+                          <ItemsRackContent item={item} />
+                        </td>
+                      )}
+                      {showBookFields &&
+                        (() => {
+                          const storage = readBookStorage(item.custom_fields);
                           return (
                             <>
-                              <span className="font-mono tabular-nums" title={placed.join(', ')}>
-                                {shown}
-                                {extra > 0 ? ` +${extra}` : ''}
-                              </span>
-                              {elsewhere && (
-                                <div className="mt-0.5 text-[10.5px] leading-tight text-[var(--ed-ink-4)]">
-                                  {elsewhere}
-                                </div>
-                              )}
+                              <td
+                                className={cn(
+                                  cell,
+                                  'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]',
+                                )}
+                              >
+                                <BookGradeLabel grade={storage.grade} />
+                              </td>
+                              <td
+                                className={cn(
+                                  cell,
+                                  'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]',
+                                )}
+                              >
+                                <BookRackContent item={item} />
+                              </td>
+                              <td
+                                className={cn(
+                                  cell,
+                                  'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]',
+                                )}
+                              >
+                                <BookCrateLabel
+                                  crateNumber={storage.crateNumber}
+                                  crateColor={storage.crateColor}
+                                />
+                              </td>
                             </>
                           );
-                        }
-                        // Fallback for callers that don't compute holdings-based
-                        // placement (kept for backwards-compat).
-                        const rack = readItemRack(item.custom_fields);
-                        return rack.rackLabel ? (
-                          <span className="font-mono tabular-nums">{rack.rackLabel}</span>
-                        ) : (
-                          <span className="text-[var(--ed-ink-4)]">—</span>
-                        );
-                      })()}
-                    </td>
-                  )}
-                  {showBookFields &&
-                    (() => {
-                      const storage = readBookStorage(item.custom_fields);
-                      const color = getCrateColor(storage.crateColor);
-                      return (
-                        <>
-                          <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
-                            {storage.grade ? (
-                              <span className="font-mono">
-                                {/^\d{1,2}$/.test(storage.grade)
-                                  ? `Gr ${storage.grade}`
-                                  : storage.grade}
-                              </span>
-                            ) : (
-                              <span className="text-[var(--ed-ink-4)]">—</span>
-                            )}
-                          </td>
-                          <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
-                            {(() => {
-                              const rackLabel = bookRackLabelFor(item);
-                              // 0371: this cell describes the viewer's own
-                              // warehouses; the rest is counted, not named.
-                              const elsewhere = elsewhereSuffix(item);
-                              if (!rackLabel) {
-                                return (
-                                  <span className="text-[var(--ed-ink-4)]">
-                                    {elsewhere ?? '—'}
-                                  </span>
-                                );
-                              }
-                              return (
-                                <>
-                                  <span className="font-mono tabular-nums">{rackLabel}</span>
-                                  {elsewhere && (
-                                    <div className="mt-0.5 text-[10.5px] leading-tight text-[var(--ed-ink-4)]">
-                                      {elsewhere}
-                                    </div>
-                                  )}
-                                </>
-                              );
-                            })()}
-                          </td>
-                          <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
-                            {storage.crateNumber ? (
-                              <span className="inline-flex items-center gap-1.5">
-                                <span
-                                  aria-hidden
-                                  title={color ? color.label : 'No color set'}
-                                  className="border-border inline-block h-2.5 w-2.5 rounded-full border"
-                                  style={color ? { backgroundColor: color.hex } : undefined}
-                                />
-                                <span className="font-mono tabular-nums">
-                                  {storage.crateNumber}
-                                </span>
-                              </span>
-                            ) : (
-                              <span className="text-[var(--ed-ink-4)]">—</span>
-                            )}
-                          </td>
-                        </>
-                      );
-                    })()}
-                  <td className="px-3 text-right font-mono tabular-nums">
-                    {(() => {
-                      // Split "one line per rack" row: ON HAND is THIS rack's
-                      // quantity. If the bucket is staging/unplaced, add the
-                      // amber "awaiting put-away" line so a split row reads the
-                      // same as the item detail card (owner decision
-                      // 2026-07-08). Placed rack rows show just the number.
-                      if (item.line_quantity !== undefined) {
-                        const awaiting =
-                          item.placement_kind === 'staging' || item.placement_kind === 'unplaced';
-                        return (
-                          <>
-                            {formatNumber(item.line_quantity)}
-                            {awaiting && (
-                              <div className="text-warning mt-0.5 text-[10.5px] font-normal leading-tight">
-                                awaiting put-away
-                              </div>
-                            )}
-                          </>
-                        );
-                      }
-                      // Defensive defaults so rows without the new fields (older
-                      // callers, non-service code paths) render exactly as before.
-                      const staged = item.staged_quantity ?? 0;
-                      const unplaced = item.unplaced_quantity ?? 0;
-                      const placed = item.placed_quantity ?? item.quantity_on_hand;
-                      // Single source of truth with the SKU-group header,
-                      // which sums this exact function over its rows.
-                      const shown = rowDisplayQuantity(item, stockView);
-                      // Received/unassigned stock reads as ONE amber phrase —
-                      // "awaiting put-away" (staged + unplaced) — per owner
-                      // direction 2026-07-08: on-hand accounting is unchanged,
-                      // but not-yet-put-away stock must be unmistakable. The
-                      // staged/unplaced operational split still lives on the
-                      // Staging page.
-                      const awaiting = staged + unplaced;
-                      return (
-                        <>
-                          {formatNumber(shown)}
-                          {awaiting > 0 && (
-                            <div className="mt-0.5 text-[10.5px] font-normal leading-tight">
-                              {stockView === 'total' ? (
-                                <>
-                                  {/* Omit "0 placed" — for a fully-unplaced
-                                      item it reads as if the item is
-                                      unavailable. */}
-                                  {placed > 0 && (
-                                    <span className="text-[var(--ed-ink-4)]">
-                                      {formatNumber(placed)} placed ·{' '}
-                                    </span>
-                                  )}
-                                  <span className="text-warning">
-                                    {formatNumber(awaiting)} awaiting put-away
-                                  </span>
-                                </>
-                              ) : (
-                                <span className="text-warning">
-                                  +{formatNumber(awaiting)} awaiting put-away
-                                </span>
-                              )}
-                            </div>
-                          )}
-                        </>
-                      );
-                    })()}
-                    {(() => {
-                      // Rentals-only: reserve-not-decrement model means a
-                      // checkout never lowers on-hand. Surface available +
-                      // out-on-rental under the qty so reserved stock is
-                      // visible. `reservedByItem` is undefined on the
-                      // inventory + books lists → nothing renders.
-                      const reserved = reservedByItem?.get(item.id) ?? 0;
-                      if (reserved <= 0) return null;
-                      const available = Math.max(0, item.quantity_on_hand - reserved);
-                      return (
-                        <div className="mt-0.5 text-[10.5px] font-normal leading-tight text-[var(--ed-ink-4)]">
-                          {formatNumber(available)} avail · {formatNumber(reserved)} out
-                        </div>
-                      );
-                    })()}
-                  </td>
-                  <td className="px-3">
-                    <StockBar stock={availableForStatus} par={par} status={status} />
-                  </td>
-                  <td className="px-3 text-right">
-                    <Sparkline data={series} width={56} height={18} />
-                  </td>
-                  <td className="px-3">
-                    <StockStatusBadge
-                      quantity={availableForStatus}
-                      reorderPoint={item.reorder_point}
-                      itemStatus={item.status}
-                      autoArchived={item.auto_archived}
-                      awaitingFirstReceipt={item.awaiting_first_receipt === true}
-                    />
-                  </td>
-                  <td
-                    className="px-3 text-right text-[11.5px] text-[var(--ed-ink-4)]"
-                    // `formatRelative` reads `new Date()` at call time, so the
-                    // string produced during server SSR ("15 minutes ago") can
-                    // shift by the time the client hydrates ("16 minutes
-                    // ago"), tripping React error #418. Tolerate the drift —
-                    // exactly the case suppressHydrationWarning is for.
-                    suppressHydrationWarning
-                  >
-                    {formatRelative(item.updated_at)}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+                        })()}
+                      <td
+                        className={cn(
+                          cell,
+                          'text-right font-mono text-[13.5px] font-medium tabular-nums',
+                        )}
+                      >
+                        {formatNumber(onHandFigure(item, stockView))}
+                        <OnHandNotes
+                          item={item}
+                          stockView={stockView}
+                          reservedByItem={reservedByItem}
+                        />
+                      </td>
+                      <td className={cell}>
+                        <StockBar
+                          stock={facts.availableForStatus}
+                          par={facts.par}
+                          status={facts.status}
+                        />
+                      </td>
+                      <td className={cn(cell, 'text-right')}>
+                        <Sparkline data={series} width={56} height={18} />
+                      </td>
+                      <td className={cell}>
+                        <StockStatusBadge
+                          quantity={facts.availableForStatus}
+                          reorderPoint={item.reorder_point}
+                          itemStatus={item.status}
+                          autoArchived={item.auto_archived}
+                          awaitingFirstReceipt={item.awaiting_first_receipt === true}
+                        />
+                      </td>
+                      <td
+                        className="text-muted-foreground whitespace-nowrap py-[var(--row-py)] pl-3 pr-4 text-right text-[12.5px]"
+                        // `formatRelative` reads `new Date()` at call time, so
+                        // the string produced during server SSR ("15 minutes
+                        // ago") can shift by the time the client hydrates ("16
+                        // minutes ago"), tripping React error #418. Tolerate
+                        // the drift — exactly the case suppressHydrationWarning
+                        // is for.
+                        suppressHydrationWarning
+                      >
+                        {formatRelative(item.updated_at)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        {/* Pagination — hides when everything fits on one page so the
-            single-screen empty/typical case stays clean. URL-driven so
-            paginated views are bookmarkable + shareable. Server mode also
-            hides during an active search; instant mode paginates search
-            results locally (see top-pagination comment). */}
-        {showPagination ? (
-          <Pagination
-            page={effectivePage}
-            pageSize={pageSize}
-            total={effectiveTotal}
-            range={pageRange}
-            buildHref={hrefForPage}
-            onNavigate={instantMode ? shallowPush : undefined}
-            pendingInstant={instantPending}
-          />
-        ) : plannedPageStranded && pageRange ? (
-          // The stranded planned page (see plannedPageStranded): no page
-          // links, which would skip or repeat rows.
-          <p className="text-muted-foreground text-[12px]">
-            Showing {pageRange.startRow}–{pageRange.endRow} of {effectiveTotal}. Refresh to see
-            more.
-          </p>
-        ) : (
-          <span />
-        )}
-        {canCreate && (
-          <Button asChild>
-            <Link href={`${basePath}/new`}>+ New {showBookFields ? 'book' : 'item'}</Link>
-          </Button>
-        )}
+        {showPagination || (plannedPageStranded && pageRange) || canCreate ? (
+          <div className="border-border flex flex-wrap items-center justify-between gap-3 border-t px-4 py-2.5">
+            {/* Pagination — hides when everything fits on one page so the
+                single-screen empty/typical case stays clean. URL-driven so
+                paginated views are bookmarkable + shareable. Server mode also
+                hides during an active search; instant mode paginates search
+                results locally (see top-pagination comment). */}
+            {showPagination ? (
+              <Pagination
+                page={effectivePage}
+                pageSize={pageSize}
+                total={effectiveTotal}
+                range={pageRange}
+                buildHref={hrefForPage}
+                onNavigate={instantMode ? shallowPush : undefined}
+                pendingInstant={instantPending}
+              />
+            ) : plannedPageStranded && pageRange ? (
+              // The stranded planned page (see plannedPageStranded): no page
+              // links, which would skip or repeat rows.
+              <p className="text-muted-foreground text-[12.5px]">
+                Showing {pageRange.startRow}–{pageRange.endRow} of {effectiveTotal}. Refresh to see
+                more.
+              </p>
+            ) : (
+              <span />
+            )}
+            {canCreate && (
+              <Button asChild variant="gradient">
+                <Link href={`${basePath}/new`}>+ New {showBookFields ? 'book' : 'item'}</Link>
+              </Button>
+            )}
+          </div>
+        ) : null}
       </div>
     </div>
   );
+}
+
+/** The table's columns after the checkbox: 12 cells in all on Items, 14 on
+ *  Books (Grade, Rack, Crate in place of Rack). Every row kind emits the same
+ *  count (tests count them). */
+function TABLE_COLUMNS(
+  showBookFields: boolean,
+): ReadonlyArray<readonly [string, 'left' | 'right']> {
+  return [
+    ['Item', 'left'],
+    ['SKU', 'left'],
+    ['Category', 'left'],
+    ['Charter', 'left'],
+    ['Location', 'left'],
+    ...(showBookFields
+      ? ([
+          ['Grade', 'left'],
+          ['Rack', 'left'],
+          ['Crate', 'left'],
+        ] as const)
+      : ([['Rack', 'left']] as const)),
+    ['On hand', 'right'],
+    ['Coverage', 'left'],
+    ['14-day', 'right'],
+    ['Status', 'left'],
+    ['Updated', 'right'],
+  ];
 }
 
 export function Pagination({
@@ -3092,16 +3309,25 @@ export function Pagination({
   // settles (resuming only if it resolves null → server mode is final).
   const adjacentPrefetch = !onNavigate && !pendingInstant;
   return (
-    <div className="text-muted-foreground flex items-center gap-3 text-[12px]">
+    <div className="text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-2 text-[12.5px]">
       <span>
         Showing <span className="text-foreground font-medium">{startRow}</span>–
         <span className="text-foreground font-medium">{endRow}</span> of{' '}
         <span className="text-foreground font-medium">{total}</span>
       </span>
-      <div className="flex items-center gap-1">
-        <Button asChild variant="outline" size="sm" disabled={prevDisabled}>
+      {/* 8 px between the 28 px controls: each grows a 44 px touch area below
+          sm and on coarse pointers, and a later one paints over its
+          neighbour's edge (the Button's touch rule). */}
+      <div className="flex items-center gap-2">
+        <Button
+          asChild
+          variant="outline"
+          size="sm"
+          disabled={prevDisabled}
+          className={prevDisabled ? PAGER_EDGE_DISABLED : undefined}
+        >
           {prevDisabled ? (
-            <span aria-disabled className="pointer-events-none opacity-50">
+            <span aria-disabled className="pointer-events-none">
               ← Prev
             </span>
           ) : (
@@ -3119,7 +3345,10 @@ export function Pagination({
             <button
               type="button"
               aria-label="Jump to page"
-              className="hover:text-foreground hover:bg-muted/40 text-muted-foreground cursor-pointer rounded px-2 py-0.5 text-[11.5px] transition-colors"
+              className={cn(
+                touchTargetClass,
+                'text-muted-foreground hover:bg-muted hover:text-foreground inline-flex h-7 cursor-pointer items-center rounded-md px-2 text-[12.5px] tabular-nums transition-colors',
+              )}
             >
               Page {safePage} of {totalPages}
             </button>
@@ -3129,14 +3358,20 @@ export function Pagination({
             side="top"
             className="max-h-[360px] w-auto min-w-[260px] overflow-y-auto p-2"
           >
-            <div className="grid grid-cols-5 gap-1 sm:grid-cols-8">
+            {/* Five columns, eight from sm up, five again on a coarse pointer
+                so each column stays at least 44 px wide; the page buttons are
+                real 44 px targets below sm and on coarse pointers. At 28 px
+                with 4 px gaps, a page button's 44 px touch area reached over
+                the row above, so a tap on the bottom of page 1 opened page 6
+                (P2.2 hand-off, the same fix as ui/pagination.tsx). */}
+            <div className="pointer-coarse:grid-cols-5 grid grid-cols-5 gap-1 sm:grid-cols-8">
               {Array.from({ length: totalPages }, (_, i) => i + 1).map((n) => (
                 <Button
                   key={n}
                   asChild
                   variant={n === safePage ? 'default' : 'ghost'}
                   size="sm"
-                  className="h-7 w-full px-2 text-[12px]"
+                  className="pointer-coarse:h-11 h-7 w-full px-2 text-[12.5px] tabular-nums max-sm:h-11"
                 >
                   <Link
                     href={buildHref(n)}
@@ -3155,9 +3390,15 @@ export function Pagination({
             </div>
           </PopoverContent>
         </Popover>
-        <Button asChild variant="outline" size="sm" disabled={nextDisabled}>
+        <Button
+          asChild
+          variant="outline"
+          size="sm"
+          disabled={nextDisabled}
+          className={nextDisabled ? PAGER_EDGE_DISABLED : undefined}
+        >
           {nextDisabled ? (
-            <span aria-disabled className="pointer-events-none opacity-50">
+            <span aria-disabled className="pointer-events-none">
               Next →
             </span>
           ) : (
@@ -3172,6 +3413,320 @@ export function Pagination({
         </Button>
       </div>
     </div>
+  );
+}
+
+/** A pager end with nowhere to go (DESIGN-SPEC 6.2): no fill, the plain
+ *  hairline and the faint ink, instead of a faded secondary button. */
+const PAGER_EDGE_DISABLED =
+  'border-border bg-transparent text-[var(--ed-ink-4)] hover:bg-transparent';
+
+// ── Cell content shared by the Table rows and the Grid cards ──────────────
+// The Grid (redesign P3.2) shows what the row shows for the same record and
+// never a figure the row does not have (PLAN "Grid card content, per list"),
+// so every one of these renders the SAME words, figures, titles and tones in a
+// table cell and on a card. Changing one changes both.
+
+type CategoryLookup = { name: string; color: string | null };
+
+/** The Category cell: the category's name in its own colour with its dot, or a dash. */
+function CategoryLabel({ category }: { category: CategoryLookup | null | undefined }) {
+  return category ? (
+    <span
+      className="inline-flex items-center gap-1.5"
+      style={category.color ? { color: category.color } : undefined}
+    >
+      {category.color && (
+        <span
+          aria-hidden
+          className="h-1.5 w-1.5 shrink-0 rounded-full"
+          style={{ backgroundColor: category.color }}
+        />
+      )}
+      {category.name}
+    </span>
+  ) : (
+    <span className="text-muted-foreground">—</span>
+  );
+}
+
+/** The Charter cell: the charter's code (its name as the title), or "Generic". */
+function CharterLabel({ item, lookups }: { item: Item; lookups: Lookups }) {
+  const charter = item.charter_id ? (lookups.charters?.get(item.charter_id) ?? null) : null;
+  if (charter) {
+    return (
+      <span className="text-[var(--ed-ink-2)]" title={charter.name}>
+        {charter.code ?? charter.name}
+      </span>
+    );
+  }
+  // charter_id IS NULL = generic stock (any charter serviced by the
+  // warehouse can pull from it).
+  return (
+    <span
+      className="text-muted-foreground text-[12px] italic"
+      title="Generic stock — any charter serviced by this warehouse can use it"
+    >
+      {GENERIC_CHARTER_LABEL}
+    </span>
+  );
+}
+
+/**
+ * The Items layout's Rack cell: where THIS row's stock is (one line per rack,
+ * crate, staging or unplaced holding; a site holding as amber "No rack"; the
+ * 0371 "In other warehouses" row), else the record's racks (first two, then
+ * "+N", the full list in the title) with "+N in other warehouses" under them,
+ * else the stored rack label.
+ */
+function ItemsRackContent({ item }: { item: Item }) {
+  // Split "one line per rack" row: show THIS row's location label (rack/crate
+  // name, or "Staging"/"Unplaced"). null = no holding → em dash.
+  // Staging/unplaced buckets read AMBER — this row's stock is awaiting
+  // put-away (owner decision 2026-07-08, consistent with the item detail card
+  // and the qty sub-line).
+  if (item.placement_label !== undefined) {
+    // 0371: the row carrying this item's stock in warehouses the viewer cannot
+    // see. Not a rack, and never a place they can act on from here.
+    if (item.placement_kind === ELSEWHERE_PLACEMENT_KIND) {
+      return <span className="text-muted-foreground">{item.placement_label}</span>;
+    }
+    // A SITE is not a rack. Stock recorded at the warehouse's own site location
+    // (a NULL-kind row such as "DC4") used to print its name here, which read
+    // as "rack DC4" (owner report 2026-09-24). Say what it is.
+    if (item.placement_kind === 'site' && item.placement_label) {
+      return (
+        <span
+          className="text-warning"
+          title={`At ${item.placement_label} (the site), not on a rack. Use Set rack to put it away.`}
+        >
+          No rack
+        </span>
+      );
+    }
+    const awaiting = item.placement_kind === 'staging' || item.placement_kind === 'unplaced';
+    return item.placement_label ? (
+      <span className={awaiting ? 'text-warning font-mono tabular-nums' : 'font-mono tabular-nums'}>
+        {item.placement_label}
+      </span>
+    ) : (
+      <span className="text-muted-foreground">—</span>
+    );
+  }
+  // Prefer the ACTUAL placement (rack/crate locations the stock sits in, from
+  // holdings). An empty array means the stock is unplaced/staged — show "—",
+  // not a stale label.
+  const placed = item.placed_racks;
+  if (placed !== undefined) {
+    const elsewhere = elsewhereSuffix(item);
+    if (placed.length === 0) {
+      return elsewhere ? (
+        <span className="text-muted-foreground">{elsewhere}</span>
+      ) : (
+        <span className="text-muted-foreground">—</span>
+      );
+    }
+    const shown = placed.slice(0, 2).join(', ');
+    const extra = placed.length - 2;
+    return (
+      <>
+        <span className="font-mono tabular-nums" title={placed.join(', ')}>
+          {extra > 0 ? (
+            // "+N" hides racks from the eye; a screen reader hears the full
+            // list instead (the title is not read everywhere).
+            <>
+              <span aria-hidden>
+                {shown} +{extra}
+              </span>
+              <span className="sr-only">{placed.join(', ')}</span>
+            </>
+          ) : (
+            shown
+          )}
+        </span>
+        {elsewhere && (
+          <div className="text-muted-foreground mt-0.5 text-[11px] leading-tight">{elsewhere}</div>
+        )}
+      </>
+    );
+  }
+  // Fallback for callers that don't compute holdings-based placement (kept for
+  // backwards-compat).
+  const rack = readItemRack(item.custom_fields);
+  return rack.rackLabel ? (
+    <span className="font-mono tabular-nums">{rack.rackLabel}</span>
+  ) : (
+    <span className="text-muted-foreground">—</span>
+  );
+}
+
+/** The Books layout's Grade cell: "Gr N" for a one- or two-digit grade. */
+function BookGradeLabel({ grade }: { grade: string | null | undefined }) {
+  return grade ? (
+    <span className="font-mono">{/^\d{1,2}$/.test(grade) ? `Gr ${grade}` : grade}</span>
+  ) : (
+    <span className="text-muted-foreground">—</span>
+  );
+}
+
+/** The Books layout's Rack cell: the resolved rack label and "+N in other warehouses". */
+function BookRackContent({ item }: { item: Item }) {
+  const label = bookRackLabelFor(item);
+  // 0371: this cell describes the viewer's own warehouses; the rest is
+  // counted, not named.
+  const elsewhere = elsewhereSuffix(item);
+  if (!label) {
+    return <span className="text-muted-foreground">{elsewhere ?? '—'}</span>;
+  }
+  return (
+    <>
+      <span className="font-mono tabular-nums">{label}</span>
+      {elsewhere && (
+        <div className="text-muted-foreground mt-0.5 text-[11px] leading-tight">{elsewhere}</div>
+      )}
+    </>
+  );
+}
+
+/** The Books layout's Crate cell: the crate's colour dot (its name as the title) and number. */
+function BookCrateLabel({
+  crateNumber,
+  crateColor,
+}: {
+  crateNumber: string | null | undefined;
+  crateColor: string | null | undefined;
+}) {
+  const color = getCrateColor(crateColor);
+  return crateNumber ? (
+    <span className="inline-flex items-center gap-1.5">
+      <span
+        aria-hidden
+        title={color ? color.label : 'No color set'}
+        className="inline-block h-2.5 w-2.5 rounded-full border border-[var(--ed-line-strong)]"
+        style={color ? { backgroundColor: color.hex } : undefined}
+      />
+      <span className="font-mono tabular-nums">{crateNumber}</span>
+    </span>
+  ) : (
+    <span className="text-muted-foreground">—</span>
+  );
+}
+
+/** The number the On hand cell prints for a row (a split row: its holding). */
+function onHandFigure(item: Item, stockView: StockView): number {
+  return rowDisplayQuantity(item, stockView);
+}
+
+/** Whether OnHandNotes prints anything for this row (a card leaves the slot out). */
+function hasOnHandNotes(item: Item, reservedByItem?: Map<string, number>): boolean {
+  if ((reservedByItem?.get(item.id) ?? 0) > 0) return true;
+  if (item.line_quantity !== undefined) {
+    return item.placement_kind === 'staging' || item.placement_kind === 'unplaced';
+  }
+  return (item.staged_quantity ?? 0) + (item.unplaced_quantity ?? 0) > 0;
+}
+
+/** A grid card's one-line meta: its parts with a quiet "·" between them. */
+function MetaLine({ children }: { children: React.ReactNode }) {
+  const parts = React.Children.toArray(children);
+  return (
+    <span className="inline-flex min-w-0 max-w-full items-center gap-1.5">
+      {parts.map((part, i) => (
+        <React.Fragment key={i}>
+          {i > 0 ? (
+            <span aria-hidden className="text-muted-foreground">
+              ·
+            </span>
+          ) : null}
+          {part}
+        </React.Fragment>
+      ))}
+    </span>
+  );
+}
+
+/**
+ * The On hand cell's sub-lines: a split row's amber "awaiting put-away"; a
+ * record's "N placed · N awaiting put-away" (total) or "+N awaiting put-away"
+ * (placed only); and on Rentals items "{available} avail · {out} out".
+ */
+function OnHandNotes({
+  item,
+  stockView,
+  reservedByItem,
+}: {
+  item: Item;
+  stockView: StockView;
+  reservedByItem?: Map<string, number>;
+}) {
+  // Rentals-only: reserve-not-decrement model means a checkout never lowers
+  // on-hand. Surface available + out-on-rental under the qty so reserved stock
+  // is visible. `reservedByItem` is undefined on the inventory + books lists →
+  // nothing renders.
+  const reserved = reservedByItem?.get(item.id) ?? 0;
+  const rentals =
+    reserved > 0 ? (
+      <div className="text-muted-foreground mt-0.5 text-[11px] font-normal leading-tight">
+        {formatNumber(Math.max(0, item.quantity_on_hand - reserved))} avail ·{' '}
+        {formatNumber(reserved)} out
+      </div>
+    ) : null;
+  // Split "one line per rack" row: ON HAND is THIS rack's quantity. If the
+  // bucket is staging/unplaced, add the amber "awaiting put-away" line so a
+  // split row reads the same as the item detail card (owner decision
+  // 2026-07-08). Placed rack rows show just the number.
+  if (item.line_quantity !== undefined) {
+    const awaiting = item.placement_kind === 'staging' || item.placement_kind === 'unplaced';
+    return (
+      <>
+        {awaiting && (
+          <div className="text-warning mt-0.5 whitespace-nowrap text-[11px] font-normal leading-tight">
+            awaiting put-away
+          </div>
+        )}
+        {rentals}
+      </>
+    );
+  }
+  // Defensive defaults so rows without the new fields (older callers,
+  // non-service code paths) render exactly as before.
+  const staged = item.staged_quantity ?? 0;
+  const unplaced = item.unplaced_quantity ?? 0;
+  const placed = item.placed_quantity ?? item.quantity_on_hand;
+  // Received/unassigned stock reads as ONE amber phrase — "awaiting put-away"
+  // (staged + unplaced) — per owner direction 2026-07-08: on-hand accounting is
+  // unchanged, but not-yet-put-away stock must be unmistakable. The
+  // staged/unplaced operational split still lives on the Staging page.
+  const awaiting = staged + unplaced;
+  return (
+    <>
+      {awaiting > 0 && (
+        <div className="mt-0.5 text-[11px] font-normal leading-tight">
+          {stockView === 'total' ? (
+            <>
+              {/* Omit "0 placed" — for a fully-unplaced item it reads as if
+                  the item is unavailable. */}
+              {/* Each phrase stays whole; the line may break only between them. */}
+              {placed > 0 && (
+                <>
+                  <span className="text-muted-foreground whitespace-nowrap">
+                    {formatNumber(placed)} placed ·
+                  </span>{' '}
+                </>
+              )}
+              <span className="text-warning whitespace-nowrap">
+                {formatNumber(awaiting)} awaiting put-away
+              </span>
+            </>
+          ) : (
+            <span className="text-warning whitespace-nowrap">
+              +{formatNumber(awaiting)} awaiting put-away
+            </span>
+          )}
+        </div>
+      )}
+      {rentals}
+    </>
   );
 }
 
@@ -3237,9 +3792,7 @@ function hasElsewhere(distinctItems: readonly Item[]): boolean {
 function ElsewhereTail({ items }: { items: readonly Item[] }) {
   const suffix = elsewhereSuffix({ elsewhere_quantity: elsewhereUnits(items) });
   if (!suffix) return null;
-  return (
-    <div className="mt-0.5 text-[10.5px] leading-tight text-[var(--ed-ink-4)]">{suffix}</div>
-  );
+  return <div className="text-muted-foreground mt-0.5 text-[11px] leading-tight">{suffix}</div>;
 }
 
 /**
@@ -3304,6 +3857,562 @@ function rollupText(
   }
   return { kind: 'multiple', count: values.length };
 }
+
+/**
+ * The 34 px thumbnail a row or a header shows (DESIGN-SPEC 6.9, 6.14), inside
+ * its hover preview (title, SKU or label, "On hand N").
+ *
+ * Images as they always were: the pre-sized ~200 px thumb (item_images
+ * .thumb_path, 0122) is served as it is, never through /_next/image, whose
+ * cache is PER DEPLOYMENT (the first viewer after every deploy paid ~30 cold
+ * transforms of ~750 ms each and the page "loaded" for 8-15 s, owner report
+ * 2026-07-06); only a legacy row that has just the master goes through the
+ * optimizer, which genuinely downscales it. The first rows of a page load
+ * with `priority` (they are above the fold), the 16x16 LQIP paints a hint of
+ * the photo at once, the missing-photo hatch stands in for no photo, and the
+ * 2,048 px master loads only on hover intent (on demand for payload-diet rows
+ * that carry the thumb alone).
+ */
+function ListThumb({
+  photo,
+  alt,
+  title,
+  subtitle,
+  meta,
+  priority,
+}: {
+  /** The record whose photo shows: the row's own, or a header's cover. */
+  photo: Item | null;
+  alt: string;
+  title: string;
+  subtitle: string;
+  meta: React.ReactNode;
+  priority?: boolean;
+}) {
+  const thumbSrc = photo ? (photo.image_thumb_url ?? photo.image_url) : null;
+  return (
+    <ImageHoverPreview
+      src={photo?.image_url ?? null}
+      // Diet rows: master on demand (org-scoped route, same 25-day-stable URL
+      // the row used to carry).
+      srcLoader={
+        photo && !photo.image_url && photo.image_thumb_url
+          ? () => loadMasterImageUrl(photo.id)
+          : undefined
+      }
+      alt={alt}
+      title={title}
+      subtitle={subtitle}
+      meta={meta}
+      className="shrink-0"
+    >
+      <Thumb size={34}>
+        {photo && thumbSrc ? (
+          <Image
+            src={thumbSrc}
+            unoptimized={!!photo.image_thumb_url}
+            alt=""
+            width={68}
+            height={68}
+            sizes="34px"
+            priority={priority}
+            placeholder={photo.image_lqip ? 'blur' : 'empty'}
+            blurDataURL={photo.image_lqip ?? undefined}
+            className="absolute inset-0 h-full w-full object-cover"
+          />
+        ) : undefined}
+      </Thumb>
+    </ImageHoverPreview>
+  );
+}
+
+/** Whether a record has a photo to show (its thumb, or the master for a legacy row). */
+function hasPhoto(photo: Item | null): photo is Item {
+  return !!photo && !!(photo.image_thumb_url ?? photo.image_url);
+}
+
+/**
+ * A grid card's photo: the SAME thumb the row shows (never a master: O1),
+ * uncropped in the card's fixed square, with the row's hover preview and
+ * loading rules (ListThumb above). No photo: null, and the card draws the
+ * missing-photo hatch.
+ */
+function CardPhoto({
+  photo,
+  title,
+  subtitle,
+  meta,
+  priority,
+}: {
+  photo: Item | null;
+  title: string;
+  subtitle: string;
+  meta: React.ReactNode;
+  priority?: boolean;
+}) {
+  const thumbSrc = photo ? (photo.image_thumb_url ?? photo.image_url) : null;
+  if (!photo || !thumbSrc) return null;
+  return (
+    <ImageHoverPreview
+      src={photo.image_url ?? null}
+      srcLoader={
+        !photo.image_url && photo.image_thumb_url ? () => loadMasterImageUrl(photo.id) : undefined
+      }
+      alt={title}
+      title={title}
+      subtitle={subtitle}
+      meta={meta}
+      className="absolute inset-0"
+    >
+      <Image
+        src={thumbSrc}
+        unoptimized={!!photo.image_thumb_url}
+        alt=""
+        width={200}
+        height={200}
+        sizes="(max-width: 640px) 50vw, 240px"
+        priority={priority}
+        placeholder={photo.image_lqip ? 'blur' : 'empty'}
+        blurDataURL={photo.image_lqip ?? undefined}
+        style={{ objectFit: 'contain' }}
+        className="h-full w-full object-contain"
+      />
+    </ImageHoverPreview>
+  );
+}
+
+/** "On hand N" under a hover preview's title (a partial total keeps its "*"). */
+function OnHandMeta({
+  value,
+  title,
+  partial = false,
+}: {
+  value: number;
+  /** Why the figure may be partial (a header whose records span pages). */
+  title?: string;
+  partial?: boolean;
+}) {
+  return (
+    <span>
+      On hand{' '}
+      <span className="text-foreground font-medium tabular-nums" title={title}>
+        {formatNumber(value)}
+      </span>
+      {partial && (
+        <span aria-hidden className="text-muted-foreground ml-0.5">
+          *
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** The italic "Multiple" a header prints for a value its records do not share. */
+function MultipleLabel({ title }: { title: string }) {
+  return (
+    <span className="text-muted-foreground text-[12px] italic" title={title}>
+      Multiple
+    </span>
+  );
+}
+
+const SKU_PARTIAL_TITLE =
+  'This total only counts placements on the current page — other pages may hold more of this SKU.';
+const GROUP_PARTIAL_TITLE =
+  'This total only counts records on the current page — other pages may hold more of this group.';
+
+/**
+ * Everything a SKU or named-group header shows, derived once for its row
+ * (Table) and its card (Grid), so both read the same.
+ *
+ * Only IDENTITY fields come from the FIRST placement (first-seen order — see
+ * group-by-sku.ts): a SKU is one product identity (mig 0234 makes (org, sku,
+ * charter_id, bin_location) the uniqueness key), so name and cover image are
+ * shared by construction. Every field that is genuinely PER-ROW — status,
+ * charter, category, primary location, and the books grade/rack/crate — is
+ * rolled up instead, because showing one placement's value as if it were the
+ * group's is exactly the masking bug rollupStatus exists to prevent.
+ *
+ * WHAT A HEADER DERIVES EACH VALUE FROM (settled once, applied to every cell):
+ * a collapsed header is a SUMMARY OF THE ROWS IT EXPANDS TO, so every cell
+ * mirrors the SAME source its body-row counterpart reads:
+ *   • the ON-HAND NUMBER mirrors the body's quantity cell → sum of
+ *     rowDisplayQuantity over the PLACEMENT rows (honours the placed-only
+ *     toggle and the one-line-per-rack split).
+ *   • the HEALTH cells — status badge, coverage bar, sparkline — mirror the
+ *     body's health cells, which read the ITEM's on-hand minus reserved
+ *     (`availableForStatus`), independent of the toggle and identical on every
+ *     rack row of one item. They therefore sum over DISTINCT ITEMS: summing
+ *     placement rows would count one item's on-hand once per rack, and
+ *     following the toggle would let a header badge "Out of stock" over rows
+ *     all badging "In stock".
+ *   • every genuinely per-row TEXT field is rolled up (Multiple / a count / an
+ *     em dash) — never taken from one placement.
+ */
+function skuHeaderFacts({
+  items,
+  explicit,
+  stockView,
+  reservedByItem,
+  lookups,
+}: {
+  items: Item[];
+  explicit: boolean;
+  stockView: StockView;
+  reservedByItem?: Map<string, number>;
+  lookups: Lookups;
+}) {
+  const first = items[0]!;
+  const distinctItems = Array.from(new Map(items.map((it) => [it.id, it])).values());
+  const availableOf = (it: Item): number =>
+    Math.max(0, it.quantity_on_hand - (reservedByItem?.get(it.id) ?? 0));
+  const displayedTotal = items.reduce((sum, it) => sum + rowDisplayQuantity(it, stockView), 0);
+  const healthQuantity = distinctItems.reduce((sum, it) => sum + availableOf(it), 0);
+  // reorder_point is per-row too, and taking `first`'s let the
+  // quantity-derived badge read HEALTHIER than the group's worst placement —
+  // the exact masking rollupStatus exists to prevent. Roll it up as the SUM:
+  // the group's replenishment need is the sum of its placements' needs, which
+  // puts threshold and quantity on the same (group) scale. It is also the only
+  // rollup that guarantees the header can never out-rank a UNANIMOUS reading —
+  // if every placement is low then Σqty ≤ Σreorder, and if every placement is
+  // out then Σqty ≤ 0. A MIXED group falls back to the honest aggregate, the
+  // same every()-not-some() rule the lifecycle flags below follow.
+  const groupReorderPoint = distinctItems.reduce(
+    (sum, it) => sum + (Number(it.reorder_point) || 0),
+    0,
+  );
+  const status = deriveStatus(healthQuantity, groupReorderPoint);
+  // The coverage bar's PAR must be built from the same inputs the body rows
+  // use, or the header fills to a different fraction than the rows it
+  // summarises. A body row computes
+  //   par = max(reorder_point × 4, quantity_on_hand × 1.5, 10)
+  // — note the third term is ON-HAND, NOT available (on-hand − reserved), even
+  // though the BAR's fill is available. Substituting `healthQuantity` here
+  // shrank the header's par wherever stock is reserved (the rentals view), so
+  // an identical group read fuller in the header than in its own rows. Sum
+  // on-hand over DISTINCT ITEMS for the same reason `healthQuantity` does: an
+  // item's on-hand is repeated on each of its placement rows.
+  const parQuantity = distinctItems.reduce(
+    (sum, it) => sum + (Number(it.quantity_on_hand) || 0),
+    0,
+  );
+  const par = Math.max(groupReorderPoint * 4, parQuantity * 1.5, 10);
+  // category_id / primary_location_id are per-row and CAN differ across a
+  // SKU's placements (books imported by different POs land in different book
+  // categories; placements can sit at different sites). Roll up rather than
+  // taking `first` — same class of bug as the charter column, which already
+  // had this right.
+  const categoryRollup = rollupText(items.map((it) => it.category_id));
+  const category =
+    categoryRollup.kind === 'same' ? lookups.categories.get(categoryRollup.value) : null;
+  const locationRollup = rollupText(items.map((it) => it.primary_location_id));
+  const location =
+    locationRollup.kind === 'same' ? lookups.locations.get(locationRollup.value) : null;
+  const distinctCharterIds = new Set(items.map((it) => it.charter_id ?? ''));
+  // The picture. A SKU header shows its first placement's (one product
+  // identity, see above). A group's header shows the FIRST record, in the order
+  // it lists them (`items`, the rows it expands to), that has a picture, and
+  // its hover preview shows that same record's master. The people review (P5)
+  // had it show none; the owner overruled that on 2026-10-12 ("it should just
+  // use the first picture of whatever was chosen for the grouping"): an empty
+  // header read as the picture having disappeared. No picture anywhere in the
+  // group keeps the placeholder. core groupCoverRow is the phone's rule too.
+  const cover: Item | null = explicit
+    ? groupCoverRow(items, (it) => it.image_thumb_url ?? it.image_url)
+    : first;
+  // `status` is a PER-PLACEMENT field — placements of one SKU can legitimately
+  // differ (e.g. one discontinued at a site while others stay active). Never
+  // take just the first placement's status here: that can mask a
+  // discontinued/archived placement behind a healthy badge for the whole
+  // group. Roll up conservatively instead (see group-by-sku.ts).
+  const rolledUpStatus = rollupStatus(distinctItems.map((it) => it.status));
+  // LIFECYCLE FLAGS (migs 0277 / 0266) are per-placement too, and the header
+  // dropped both — so in the Expected view (?expected=1) a title whose rows ALL
+  // await their first receipt collapsed into one "Out of stock" badge, inside
+  // the very view that exists to show expected stock; and in the Archived view
+  // an auto-archived group read as a plain "Archived".
+  // ROLLUP RULE — every(), not some(), for both. These are the only two flags
+  // that make a zero-quantity group read as SOFTER than "out of stock" /
+  // "archived by a person". A group where only SOME rows await a first receipt
+  // has real received stock on the others, so an "Expected" pill would be the
+  // more-flattering, less-true reading — exactly what rollupStatus refuses to
+  // do. Requiring every() means the pill appears only when it is unambiguously
+  // the whole truth, and a mixed group falls back to the ordinary
+  // quantity-derived badge — never anything healthier than its worst
+  // placement.
+  const allAwaitingFirstReceipt = distinctItems.every((it) => it.awaiting_first_receipt === true);
+  const allAutoArchived = distinctItems.every((it) => it.auto_archived === true);
+  return {
+    first,
+    distinctItems,
+    availableOf,
+    displayedTotal,
+    healthQuantity,
+    groupReorderPoint,
+    status,
+    par,
+    categoryRollup,
+    category,
+    locationRollup,
+    location,
+    distinctCharterIds,
+    cover,
+    rolledUpStatus,
+    allAwaitingFirstReceipt,
+    allAutoArchived,
+  };
+}
+
+/** A header's charter cell: "Multiple" when its rows differ, else the shared one. */
+function HeaderCharterContent({
+  first,
+  distinctCharterIds,
+  lookups,
+  multipleTitle,
+}: {
+  first: Item;
+  distinctCharterIds: Set<string>;
+  lookups: Lookups;
+  multipleTitle: string;
+}) {
+  if (distinctCharterIds.size > 1) return <MultipleLabel title={multipleTitle} />;
+  if (first.charter_id) {
+    const charter = lookups.charters?.get(first.charter_id) ?? null;
+    return charter ? (
+      <span className="text-[var(--ed-ink-2)]" title={charter.name}>
+        {charter.code ?? charter.name}
+      </span>
+    ) : (
+      <span className="text-muted-foreground text-[12px] italic">{GENERIC_CHARTER_LABEL}</span>
+    );
+  }
+  return (
+    <span
+      className="text-muted-foreground text-[12px] italic"
+      title="Generic stock — any charter serviced by this warehouse can use it"
+    >
+      {GENERIC_CHARTER_LABEL}
+    </span>
+  );
+}
+
+/** A SKU header's SKU cell; a named group's rolls its records' SKUs up. */
+function HeaderSkuContent({
+  items,
+  explicit,
+  sku,
+}: {
+  items: Item[];
+  explicit: boolean;
+  sku: string;
+}) {
+  if (!explicit) return <>{sku}</>;
+  // The records of a display group keep their own SKUs (that is the point: no
+  // identifier is rewritten to group them).
+  const skus = rollupText(items.map((it) => it.sku));
+  return skus.kind === 'same' ? (
+    <>{skus.value}</>
+  ) : (
+    <span
+      className="text-muted-foreground font-sans text-[12px] italic"
+      title="These records keep their own SKUs — expand to see each"
+    >
+      Multiple
+    </span>
+  );
+}
+
+/**
+ * The Items layout's RACK cell on a header: the body rows print the rack/crate
+ * label(s) each row sits in. The header printed `items.length`, a count of
+ * placement ROWS labelled "locations", so three rows sharing two racks read "3
+ * locations" while expanding showed two. Count DISTINCT labels (same fix as the
+ * books Rack cell), and give rows with no rack at all their own explicit tail
+ * rather than counting them as a location that doesn't exist.
+ */
+function ItemsHeaderRackContent({
+  items,
+  distinctItems,
+}: {
+  items: Item[];
+  distinctItems: Item[];
+}) {
+  const labels = Array.from(new Set(items.flatMap(itemRackLabels)));
+  // The "In other warehouses" line (0371) names no rack, but it is not a
+  // placement with NO rack set either: it is stock the viewer cannot see, and
+  // it gets its own count below instead of "+1 unset".
+  const unset = items.filter(
+    (it) => it.placement_kind !== ELSEWHERE_PLACEMENT_KIND && itemRackLabels(it).length === 0,
+  ).length;
+  const elsewhereTail = <ElsewhereTail items={distinctItems} />;
+  if (labels.length === 0) {
+    return (
+      <>
+        {unset > 0 || !hasElsewhere(distinctItems) ? (
+          <span className="text-muted-foreground">—</span>
+        ) : null}
+        {elsewhereTail}
+      </>
+    );
+  }
+  if (labels.length === 1 && unset === 0) {
+    return (
+      <>
+        <span className="font-mono tabular-nums">{labels[0]}</span>
+        {elsewhereTail}
+      </>
+    );
+  }
+  return (
+    <>
+      <span
+        title={`Placements span: ${labels.join(', ')}${
+          unset > 0 ? ` (+${unset} with no rack set)` : ''
+        }`}
+      >
+        {labels.length} location{labels.length === 1 ? '' : 's'}
+        {unset > 0 ? ` +${unset} unset` : ''}
+      </span>
+      {elsewhereTail}
+    </>
+  );
+}
+
+/**
+ * The Books layout's three header cells (Grade, Rack, Crate). The body row
+ * emits THREE cells there, so the header must too or every cell right of
+ * Location shifts one column. Each is rolled up, never taken from `first`:
+ * these live in custom_fields PER inventory_items row and can genuinely differ
+ * across a SKU's placements (one row graded during a PO import, its sibling
+ * graded by hand).
+ */
+function booksHeaderContent(items: Item[], distinctItems: Item[]) {
+  const storages = items.map((it) => readBookStorage(it.custom_fields));
+  const grade = rollupText(storages.map((s) => s.grade));
+  // Rolled up from the RESOLVED label, not the raw custom_fields one —
+  // otherwise the collapsed header names a rack that its own expanded rows
+  // (which resolve) no longer show. Kept as NAMES per row, because the count
+  // below is a count of racks and a split row carries two of them inside one
+  // label.
+  const rackNames_ = items.map(bookRackNamesFor);
+  const rackLabels_ = rackNames_.map((names) => (names.length > 0 ? names.join(', ') : null));
+  const rack = rollupText(rackLabels_);
+  // Colour is only a visual aid attached to a crate NUMBER, so both must agree
+  // before a swatch is drawn — a coloured dot for a group whose placements sit
+  // in different crates sends staff to the wrong crate.
+  const crate = rollupText(
+    storages.map((s) => (s.crateNumber ? `${s.crateColor ?? ''}|${s.crateNumber}` : null)),
+  );
+  // `crate.value` is only a comparison KEY — read the display values back off
+  // the first placement rather than splitting it, so a crate number that ever
+  // contains the '|' separator can't render a truncated number.
+  // kind==='same' guarantees every placement carries this exact colour +
+  // number.
+  const crateColor = crate.kind === 'same' ? getCrateColor(storages[0]?.crateColor) : null;
+  const crateNumber = crate.kind === 'same' ? (storages[0]?.crateNumber ?? '') : '';
+  // Every DISTINCT rack present. The count below is a count of RACKS, not of
+  // placements and not of LABELS: three placements sharing two racks is "2
+  // racks", and printing items.length there said "3 racks" while this very
+  // tooltip listed only two. Counting the composed labels had the mirror-image
+  // fault — a single split placement's "39-B, 5-A" counted once, so the header
+  // said "1 rack" above a tooltip naming two.
+  const rackNames = Array.from(new Set(rackNames_.flat()));
+  // Placements with no rack set at all are not a rack — counting them into "N
+  // racks" would send staff looking for a shelf that doesn't exist, so they
+  // get their own explicit "unset" tail.
+  const rackUnset = rackNames_.filter((names) => names.length === 0).length;
+  const rackCountLabel = `${rackNames.length} rack${rackNames.length === 1 ? '' : 's'}${
+    rackUnset > 0 ? ` +${rackUnset} unset` : ''
+  }`;
+  const gradeContent =
+    grade.kind === 'same' ? (
+      <span className="font-mono">
+        {/^\d{1,2}$/.test(grade.value) ? `Gr ${grade.value}` : grade.value}
+      </span>
+    ) : grade.kind === 'multiple' ? (
+      <MultipleLabel title="Placements span multiple grades — expand to see each" />
+    ) : (
+      <span className="text-muted-foreground">—</span>
+    );
+  // Rack is the books layout's analogue of the items "N locations" cell — and
+  // the field the owner physically walks to. When every placement agrees the
+  // concrete label is strictly more useful than a count; when they differ a
+  // COUNT (never one placement's rack) is the only honest value, and it
+  // preserves the how-many-placements information the items header carries.
+  const rackContent = (
+    <>
+      {rack.kind === 'same' ? (
+        <span className="font-mono tabular-nums">{rack.value}</span>
+      ) : rack.kind === 'multiple' ? (
+        <span
+          title={
+            rackNames.length > 0
+              ? `Placements span: ${rackNames.join(', ')}${
+                  rackUnset > 0 ? ` (+${rackUnset} with no rack set)` : ''
+                }`
+              : 'Placements span multiple racks — expand to see each'
+          }
+        >
+          {rackCountLabel}
+        </span>
+      ) : hasElsewhere(distinctItems) ? null : (
+        <span className="text-muted-foreground">—</span>
+      )}
+      {/* 0371: the members' stock in warehouses the viewer cannot see. */}
+      <ElsewhereTail items={distinctItems} />
+    </>
+  );
+  const crateContent =
+    crate.kind === 'same' ? (
+      <span className="inline-flex items-center gap-1.5">
+        <span
+          aria-hidden
+          title={crateColor ? crateColor.label : 'No color set'}
+          className="inline-block h-2.5 w-2.5 rounded-full border border-[var(--ed-line-strong)]"
+          style={crateColor ? { backgroundColor: crateColor.hex } : undefined}
+        />
+        <span className="font-mono tabular-nums">{crateNumber}</span>
+      </span>
+    ) : crate.kind === 'multiple' ? (
+      <MultipleLabel title="Placements sit in different crates — expand to see each" />
+    ) : (
+      <span className="text-muted-foreground">—</span>
+    );
+  return { gradeContent, rackContent, crateContent };
+}
+
+/** The 24 x 24 chevron that opens and closes a header (6.21), with its name. */
+function HeaderChevron({
+  expanded,
+  onToggle,
+  label,
+}: {
+  expanded: boolean;
+  onToggle: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={expanded}
+      aria-label={label}
+      className={cn(
+        touchTargetClass,
+        'text-muted-foreground hover:bg-muted hover:text-foreground grid size-6 shrink-0 place-items-center rounded-md transition-colors',
+      )}
+    >
+      <ChevronRight
+        aria-hidden
+        strokeWidth={1.8}
+        className={cn('h-3.5 w-3.5 transition-transform', expanded && 'rotate-90')}
+      />
+    </button>
+  );
+}
+
+/** The body cells of a header row pad like the rows (`--row-py`, 16 / 12). */
+const HEADER_TD = 'px-3 py-[var(--row-py)]';
 
 /**
  * Model B: the collapsed SKU-group header row. Renders once per SKU that
@@ -3371,543 +4480,295 @@ function SkuGroupHeaderRow({
     onRemove?: () => void;
   };
 }) {
-  // Only IDENTITY fields come from the FIRST placement (first-seen order —
-  // see group-by-sku.ts): a SKU is one product identity (mig 0234 makes
-  // (org, sku, charter_id, bin_location) the uniqueness key), so name and
-  // cover image are shared by construction. Every field that is genuinely
-  // PER-ROW — status, charter, category, primary location, and the books
-  // grade/rack/crate — is rolled up instead, because showing one
-  // placement's value as if it were the group's is exactly the masking
-  // bug rollupStatus exists to prevent.
-  const first = items[0]!;
-  // ── WHAT A HEADER DERIVES EACH VALUE FROM (settled once, applied to
-  // every cell below) ────────────────────────────────────────────────
-  // A collapsed header is a SUMMARY OF THE ROWS IT EXPANDS TO, so every
-  // cell mirrors the SAME source its body-row counterpart reads:
-  //   • the ON-HAND NUMBER mirrors the body's quantity cell → sum of
-  //     rowDisplayQuantity over the PLACEMENT rows (honours the
-  //     placed-only toggle and the one-line-per-rack split).
-  //   • the HEALTH cells — status badge, coverage bar, sparkline —
-  //     mirror the body's health cells, which read the ITEM's on-hand
-  //     minus reserved (`availableForStatus`), independent of the toggle
-  //     and identical on every rack row of one item. They therefore sum
-  //     over DISTINCT ITEMS: summing placement rows would count one
-  //     item's on-hand once per rack, and following the toggle would let
-  //     a header badge "Out of stock" over rows all badging "In stock".
-  //   • every genuinely per-row TEXT field is rolled up (Multiple / a
-  //     count / an em dash) — never taken from one placement.
-  const distinctItems = Array.from(new Map(items.map((it) => [it.id, it])).values());
-  const availableOf = (it: Item): number =>
-    Math.max(0, it.quantity_on_hand - (reservedByItem?.get(it.id) ?? 0));
-  const displayedTotal = items.reduce((sum, it) => sum + rowDisplayQuantity(it, stockView), 0);
-  const healthQuantity = distinctItems.reduce((sum, it) => sum + availableOf(it), 0);
-  // reorder_point is per-row too, and taking `first`'s let the
-  // quantity-derived badge read HEALTHIER than the group's worst
-  // placement — the exact masking rollupStatus exists to prevent. Roll
-  // it up as the SUM: the group's replenishment need is the sum of its
-  // placements' needs, which puts threshold and quantity on the same
-  // (group) scale. It is also the only rollup that guarantees the
-  // header can never out-rank a UNANIMOUS reading — if every placement
-  // is low then Σqty ≤ Σreorder, and if every placement is out then
-  // Σqty ≤ 0. A MIXED group falls back to the honest aggregate, the
-  // same every()-not-some() rule the lifecycle flags below follow.
-  const groupReorderPoint = distinctItems.reduce(
-    (sum, it) => sum + (Number(it.reorder_point) || 0),
-    0,
-  );
-  const status = deriveStatus(healthQuantity, groupReorderPoint);
-  // The coverage bar's PAR must be built from the same inputs the body
-  // rows use, or the header fills to a different fraction than the rows
-  // it summarises. A body row computes
-  //   par = max(reorder_point × 4, quantity_on_hand × 1.5, 10)
-  // — note the third term is ON-HAND, NOT available (on-hand − reserved),
-  // even though the BAR's fill is available. Substituting `healthQuantity`
-  // here shrank the header's par wherever stock is reserved (the rentals
-  // view), so an identical group read fuller in the header than in its own
-  // rows. Sum on-hand over DISTINCT ITEMS for the same reason
-  // `healthQuantity` does: an item's on-hand is repeated on each of its
-  // placement rows.
-  const parQuantity = distinctItems.reduce(
-    (sum, it) => sum + (Number(it.quantity_on_hand) || 0),
-    0,
-  );
-  const par = Math.max(groupReorderPoint * 4, parQuantity * 1.5, 10);
+  const f = skuHeaderFacts({
+    items,
+    explicit: !!explicit,
+    stockView,
+    reservedByItem,
+    lookups,
+  });
+  const { first, distinctItems } = f;
   // The sparkline is the group's series, not one placement's. Plotting
   // `first`'s 14-day trend beside a SUMMED number presented one member's
   // history as the whole group's; sum the members' series element-wise
   // instead so the curve and the number describe the same scope.
   const series = (() => {
     const members = distinctItems.map((it) =>
-      seriesForRow(it.id, availableOf(it), sparkMode, trends),
+      seriesForRow(it.id, f.availableOf(it), sparkMode, trends),
     );
     const len = members.reduce((n, s) => Math.max(n, s.length), 0) || 14;
     return Array.from({ length: len }, (_, i) => members.reduce((sum, s) => sum + (s[i] ?? 0), 0));
   })();
-  // category_id / primary_location_id are per-row and CAN differ across a
-  // SKU's placements (books imported by different POs land in different
-  // book categories; placements can sit at different sites). Roll up
-  // rather than taking `first` — same class of bug as the charter column,
-  // which already had this right.
-  const categoryRollup = rollupText(items.map((it) => it.category_id));
-  const category =
-    categoryRollup.kind === 'same' ? lookups.categories.get(categoryRollup.value) : null;
-  const locationRollup = rollupText(items.map((it) => it.primary_location_id));
-  const location =
-    locationRollup.kind === 'same' ? lookups.locations.get(locationRollup.value) : null;
-  const distinctCharterIds = new Set(items.map((it) => it.charter_id ?? ''));
-  // The picture. A SKU header shows its first placement's (one product
-  // identity, see above). A group's header shows the FIRST record, in the
-  // order it lists them (`items`, the rows it expands to), that has a picture,
-  // and its hover preview shows that same record's master. The people review
-  // (P5) had it show none; the owner overruled that on 2026-10-12 ("it should
-  // just use the first picture of whatever was chosen for the grouping"): an
-  // empty header read as the picture having disappeared. No picture anywhere
-  // in the group keeps the placeholder. core groupCoverRow is the phone's
-  // rule too.
-  const cover: Item | null = explicit
-    ? groupCoverRow(items, (it) => it.image_thumb_url ?? it.image_url)
-    : first;
-  const rowThumbSrc = cover ? (cover.image_thumb_url ?? cover.image_url) : null;
-  // `status` is a PER-PLACEMENT field — placements of one SKU can
-  // legitimately differ (e.g. one discontinued at a site while others stay
-  // active). Never take just the first placement's status here: that can
-  // mask a discontinued/archived placement behind a healthy badge for the
-  // whole group. Roll up conservatively instead (see group-by-sku.ts).
-  const rolledUpStatus = rollupStatus(distinctItems.map((it) => it.status));
-  // LIFECYCLE FLAGS (migs 0277 / 0266) are per-placement too, and the
-  // header dropped both — so in the Expected view (?expected=1) a title
-  // whose rows ALL await their first receipt collapsed into one "Out of
-  // stock" badge, inside the very view that exists to show expected
-  // stock; and in the Archived view an auto-archived group read as a
-  // plain "Archived".
-  // ROLLUP RULE — every(), not some(), for both. These are the only two
-  // flags that make a zero-quantity group read as SOFTER than "out of
-  // stock" / "archived by a person". A group where only SOME rows await
-  // a first receipt has real received stock on the others, so an
-  // "Expected" pill would be the more-flattering, less-true reading —
-  // exactly what rollupStatus refuses to do. Requiring every() means the
-  // pill appears only when it is unambiguously the whole truth, and a
-  // mixed group falls back to the ordinary quantity-derived badge —
-  // never anything healthier than its worst placement.
-  const allAwaitingFirstReceipt = distinctItems.every((it) => it.awaiting_first_receipt === true);
-  const allAutoArchived = distinctItems.every((it) => it.auto_archived === true);
+  const count = explicit ? GROUP_COPY.headerCount(distinctItems.length, explicit.matching) : '';
+  const partialTitle = group.totalIsPartial
+    ? explicit
+      ? GROUP_PARTIAL_TITLE
+      : SKU_PARTIAL_TITLE
+    : undefined;
 
   return (
-    <tr className="border-border bg-muted/30 border-b transition-colors last:border-0">
+    <tr
+      data-row-kind="header"
+      data-group-key={explicit ? `display-group:${explicit.groupId}` : `sku-group:${group.sku}`}
+      className="border-border bg-sunk hover:bg-muted border-b transition-colors last:border-0"
+    >
       {/* Not selectable — no checkbox (bulk actions target placements). */}
-      <td className="px-3" />
-      <td className="py-2.5 pr-3">
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={onToggle}
-            aria-expanded={expanded}
-            aria-label={
+      <td className="w-10 py-[var(--row-py)] pl-4 pr-0" />
+      <td className="min-w-[220px] py-[var(--row-py)] pl-3 pr-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <HeaderChevron
+            expanded={expanded}
+            onToggle={onToggle}
+            label={
               explicit
-                ? `${expanded ? 'Collapse' : 'Expand'} group ${explicit.name} (${GROUP_COPY.headerCount(distinctItems.length, explicit.matching)})`
+                ? `${expanded ? 'Collapse' : 'Expand'} group ${explicit.name} (${count})`
                 : `${expanded ? 'Collapse' : 'Expand'} ${group.sku} (${items.length} placements)`
             }
-            className="hover:bg-muted hover:text-foreground grid h-5 w-5 shrink-0 place-items-center rounded-sm text-[var(--ed-ink-3)] transition-colors"
-          >
-            <ChevronRight
-              className={cn('h-3.5 w-3.5 transition-transform', expanded && 'rotate-90')}
-            />
-          </button>
-          <ImageHoverPreview
-            // `cover`: the first placement's picture on a SKU header, the
-            // first record's with a picture on a group's (owner 2026-10-12,
-            // overruling P5's "no cover"). A thumb-only row fetches its
-            // master on hover, from that same record.
-            src={cover?.image_url ?? null}
-            srcLoader={
-              cover && !cover.image_url && cover.image_thumb_url
-                ? () => loadMasterImageUrl(cover.id)
-                : undefined
-            }
+          />
+          <ListThumb
+            // `cover`: the first placement's picture on a SKU header, the first
+            // record's with a picture on a group's (owner 2026-10-12,
+            // overruling P5's "no cover"). A thumb-only row fetches its master
+            // on hover, from that same record.
+            photo={f.cover}
             alt={explicit ? explicit.name : first.name}
             title={explicit ? explicit.name : first.name}
-            subtitle={
-              explicit ? GROUP_COPY.headerCount(distinctItems.length, explicit.matching) : group.sku
-            }
+            subtitle={explicit ? count : group.sku}
+            priority={rowIdx < 12}
             meta={
-              <span>
-                On hand{' '}
-                <span
-                  className="text-foreground font-medium tabular-nums"
-                  title={
-                    group.totalIsPartial
-                      ? explicit
-                        ? 'This total only counts records on the current page — other pages may hold more of this group.'
-                        : 'This total only counts placements on the current page — other pages may hold more of this SKU.'
-                      : undefined
-                  }
-                >
-                  {formatNumber(displayedTotal)}
-                </span>
-                {group.totalIsPartial && (
-                  <span aria-hidden className="ml-0.5 text-[var(--ed-ink-4)]">
-                    *
-                  </span>
-                )}
-              </span>
+              <OnHandMeta
+                value={f.displayedTotal}
+                title={partialTitle}
+                partial={!!group.totalIsPartial}
+              />
             }
-            className="shrink-0"
-          >
-            {cover && rowThumbSrc ? (
-              <Image
-                src={rowThumbSrc}
-                unoptimized={!!cover.image_thumb_url}
-                alt=""
-                width={56}
-                height={56}
-                sizes="28px"
-                priority={rowIdx < 12}
-                placeholder={cover.image_lqip ? 'blur' : 'empty'}
-                blurDataURL={cover.image_lqip ?? undefined}
-                className="border-border bg-muted h-7 w-7 shrink-0 rounded-[5px] border object-cover"
-              />
-            ) : (
-              <span
-                aria-hidden
-                className="border-border h-7 w-7 shrink-0 rounded-[5px] border"
-                style={{
-                  background:
-                    'repeating-linear-gradient(45deg, hsl(var(--border)) 0 1px, transparent 1px 6px), hsl(var(--muted))',
-                }}
-              />
-            )}
-          </ImageHoverPreview>
+          />
           {explicit ? (
             <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
-              <span className="font-medium">{explicit.name}</span>
-              <span className="text-[11px] text-[var(--ed-ink-4)]">
-                {GROUP_COPY.headerCount(distinctItems.length, explicit.matching)}
-              </span>
-              {explicit.onRename ? (
-                <button
-                  type="button"
-                  onClick={explicit.onRename}
-                  aria-label={GROUP_COPY.renameFor(explicit.name)}
-                  className="text-[11px] text-[var(--ed-ink-3)] underline-offset-2 hover:underline"
-                >
-                  {GROUP_COPY.renameAction}
-                </button>
-              ) : null}
-              {explicit.onRemove ? (
-                <button
-                  type="button"
-                  onClick={explicit.onRemove}
-                  aria-label={GROUP_COPY.removeFor(explicit.name)}
-                  className="text-[11px] text-[var(--ed-ink-3)] underline-offset-2 hover:underline"
-                >
-                  {GROUP_COPY.removeAction}
-                </button>
+              <span className="text-foreground font-medium">{explicit.name}</span>
+              <span className="text-muted-foreground text-[12px]">{count}</span>
+              {explicit.onRename || explicit.onRemove ? (
+                // Rename and Remove share a line under the name and count.
+                <span className="flex basis-full items-center gap-x-3">
+                  {explicit.onRename ? (
+                    <button
+                      type="button"
+                      onClick={explicit.onRename}
+                      aria-label={GROUP_COPY.renameFor(explicit.name)}
+                      className={cn(
+                        touchTargetClass,
+                        chipActionClass,
+                        'shrink-0 whitespace-nowrap',
+                      )}
+                    >
+                      {GROUP_COPY.renameAction}
+                    </button>
+                  ) : null}
+                  {explicit.onRemove ? (
+                    <button
+                      type="button"
+                      onClick={explicit.onRemove}
+                      aria-label={GROUP_COPY.removeFor(explicit.name)}
+                      className={cn(
+                        touchTargetClass,
+                        chipActionClass,
+                        'shrink-0 whitespace-nowrap',
+                      )}
+                    >
+                      {GROUP_COPY.removeAction}
+                    </button>
+                  ) : null}
+                </span>
               ) : null}
             </span>
           ) : (
             <Link
               href={`${rowLinkPrefix}/${first.id}?return=${encodeURIComponent(currentListUrl)}`}
               prefetch={false}
-              className="font-medium hover:underline"
+              className="text-foreground font-medium hover:underline"
             >
               {first.name}
             </Link>
           )}
         </div>
       </td>
-      <td className="px-3 font-mono text-[11.5px] tracking-[-0.01em] text-[var(--ed-ink-3)]">
-        {explicit
-          ? (() => {
-              // The records of a display group keep their own SKUs (that is
-              // the point: no identifier is rewritten to group them).
-              const skus = rollupText(items.map((it) => it.sku));
-              return skus.kind === 'same' ? (
-                skus.value
-              ) : (
-                <span
-                  className="font-sans text-[11px] italic text-[var(--ed-ink-4)]"
-                  title="These records keep their own SKUs — expand to see each"
-                >
-                  Multiple
-                </span>
-              );
-            })()
-          : group.sku}
+      <td
+        className={cn(HEADER_TD, 'text-muted-foreground whitespace-nowrap font-mono text-[11.5px]')}
+      >
+        <HeaderSkuContent items={items} explicit={!!explicit} sku={group.sku} />
       </td>
-      <td className="px-3">
-        {categoryRollup.kind === 'multiple' ? (
-          <span
-            className="text-[11px] italic text-[var(--ed-ink-4)]"
-            title="Placements span multiple categories — expand to see each"
-          >
-            Multiple
-          </span>
-        ) : category ? (
-          <span
-            className="inline-flex items-center gap-1.5 text-[12px]"
-            style={category.color ? { color: category.color } : undefined}
-          >
-            {category.color && (
-              <span
-                aria-hidden
-                className="h-1.5 w-1.5 rounded-full"
-                style={{ backgroundColor: category.color }}
-              />
-            )}
-            {category.name}
-          </span>
+      <td className={cn(HEADER_TD, 'whitespace-nowrap')}>
+        {f.categoryRollup.kind === 'multiple' ? (
+          <MultipleLabel title="Placements span multiple categories — expand to see each" />
         ) : (
-          <span className="text-[12px] text-[var(--ed-ink-4)]">—</span>
+          <CategoryLabel category={f.category} />
         )}
       </td>
-      <td className="px-3 text-[12px]">
-        {distinctCharterIds.size > 1 ? (
-          <span
-            className="text-[11px] italic text-[var(--ed-ink-4)]"
-            title="Placements span multiple charters — expand to see each"
-          >
-            Multiple
-          </span>
-        ) : first.charter_id ? (
-          (() => {
-            const charter = lookups.charters?.get(first.charter_id!) ?? null;
-            return charter ? (
-              <span className="text-[var(--ed-ink-2)]" title={charter.name}>
-                {charter.code ?? charter.name}
-              </span>
-            ) : (
-              <span className="text-[11px] italic text-[var(--ed-ink-4)]">{GENERIC_CHARTER_LABEL}</span>
-            );
-          })()
+      <td className={cn(HEADER_TD, 'whitespace-nowrap text-[13px]')}>
+        <HeaderCharterContent
+          first={first}
+          distinctCharterIds={f.distinctCharterIds}
+          lookups={lookups}
+          multipleTitle="Placements span multiple charters — expand to see each"
+        />
+      </td>
+      <td className={cn(HEADER_TD, 'min-w-[112px] text-[13px] text-[var(--ed-ink-2)]')}>
+        {f.locationRollup.kind === 'multiple' ? (
+          <MultipleLabel title="Placements span multiple sites — expand to see each" />
         ) : (
-          <span
-            className="text-[11px] italic text-[var(--ed-ink-4)]"
-            title="Generic stock — any charter serviced by this warehouse can use it"
-          >
-            {GENERIC_CHARTER_LABEL}
-          </span>
+          // Plain em dash in the same token the BODY row's Location cell uses,
+          // so a collapsed group and its expanded placements read identically.
+          (f.location?.name ?? '—')
         )}
       </td>
-      <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
-        {locationRollup.kind === 'multiple' ? (
-          <span
-            className="text-[11px] italic text-[var(--ed-ink-4)]"
-            title="Placements span multiple sites — expand to see each"
-          >
-            Multiple
-          </span>
-        ) : (
-          // Plain em dash in the same ink-3 token the BODY row's Location
-          // cell uses, so a collapsed group and its expanded placements
-          // read identically.
-          (location?.name ?? '—')
-        )}
-      </td>
-      {!showBookFields &&
-        (() => {
-          // Items layout: this is the RACK cell — the body row prints the
-          // rack/crate label(s) that row sits in. The header printed
-          // `items.length`, a count of placement ROWS labelled
-          // "locations", so three rows sharing two racks read "3
-          // locations" while expanding showed two. Count DISTINCT labels
-          // (same fix as the books Rack cell), and give rows with no rack
-          // at all their own explicit tail rather than counting them as a
-          // location that doesn't exist.
-          const labels = Array.from(new Set(items.flatMap(itemRackLabels)));
-          // The "In other warehouses" line (0371) names no rack, but it is not
-          // a placement with NO rack set either: it is stock the viewer cannot
-          // see, and it gets its own count below instead of "+1 unset".
-          const unset = items.filter(
-            (it) => it.placement_kind !== ELSEWHERE_PLACEMENT_KIND && itemRackLabels(it).length === 0,
-          ).length;
-          const elsewhereTail = <ElsewhereTail items={distinctItems} />;
-          if (labels.length === 0) {
-            return (
-              <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
-                {unset > 0 || !hasElsewhere(distinctItems) ? (
-                  <span className="text-[var(--ed-ink-4)]">—</span>
-                ) : null}
-                {elsewhereTail}
-              </td>
-            );
-          }
-          if (labels.length === 1 && unset === 0) {
-            return (
-              <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
-                <span className="font-mono tabular-nums">{labels[0]}</span>
-                {elsewhereTail}
-              </td>
-            );
-          }
-          return (
-            <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
-              <span
-                title={`Placements span: ${labels.join(', ')}${
-                  unset > 0 ? ` (+${unset} with no rack set)` : ''
-                }`}
-              >
-                {labels.length} location{labels.length === 1 ? '' : 's'}
-                {unset > 0 ? ` +${unset} unset` : ''}
-              </span>
-              {elsewhereTail}
-            </td>
-          );
-        })()}
+      {!showBookFields && (
+        <td className={cn(HEADER_TD, 'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]')}>
+          <ItemsHeaderRackContent items={items} distinctItems={distinctItems} />
+        </td>
+      )}
       {showBookFields &&
         (() => {
-          // Books layout: the body row emits THREE cells here (grade /
-          // rack / crate — see the `showBookFields &&` block in the row
-          // map), so the header must too or every cell right of Location
-          // shifts one column. Each is rolled up, never taken from
-          // `first`: these live in custom_fields PER inventory_items row
-          // and can genuinely differ across a SKU's placements (one row
-          // graded during a PO import, its sibling graded by hand).
-          const storages = items.map((it) => readBookStorage(it.custom_fields));
-          const grade = rollupText(storages.map((s) => s.grade));
-          // Rolled up from the RESOLVED label, not the raw custom_fields one —
-          // otherwise the collapsed header names a rack that its own expanded
-          // rows (which resolve) no longer show. Kept as NAMES per row, because
-          // the count below is a count of racks and a split row carries two of
-          // them inside one label.
-          const rackNames_ = items.map(bookRackNamesFor);
-          const rackLabels_ = rackNames_.map((names) =>
-            names.length > 0 ? names.join(', ') : null,
-          );
-          const rack = rollupText(rackLabels_);
-          // Colour is only a visual aid attached to a crate NUMBER, so
-          // both must agree before a swatch is drawn — a coloured dot for
-          // a group whose placements sit in different crates sends staff
-          // to the wrong crate.
-          const crate = rollupText(
-            storages.map((s) => (s.crateNumber ? `${s.crateColor ?? ''}|${s.crateNumber}` : null)),
-          );
-          // `crate.value` is only a comparison KEY — read the display
-          // values back off the first placement rather than splitting it,
-          // so a crate number that ever contains the '|' separator can't
-          // render a truncated number. kind==='same' guarantees every
-          // placement carries this exact colour + number.
-          const crateColor = crate.kind === 'same' ? getCrateColor(storages[0]?.crateColor) : null;
-          const crateNumber = crate.kind === 'same' ? (storages[0]?.crateNumber ?? '') : '';
-          // Every DISTINCT rack present. The count below is a count of
-          // RACKS, not of placements and not of LABELS: three placements
-          // sharing two racks is "2 racks", and printing items.length
-          // there said "3 racks" while this very tooltip listed only two.
-          // Counting the composed labels had the mirror-image fault — a
-          // single split placement's "39-B, 5-A" counted once, so the
-          // header said "1 rack" above a tooltip naming two.
-          const rackLabels = Array.from(new Set(rackNames_.flat()));
-          // Placements with no rack set at all are not a rack — counting
-          // them into "N racks" would send staff looking for a shelf that
-          // doesn't exist, so they get their own explicit "unset" tail.
-          const rackUnset = rackNames_.filter((names) => names.length === 0).length;
-          const rackCountLabel = `${rackLabels.length} rack${rackLabels.length === 1 ? '' : 's'}${
-            rackUnset > 0 ? ` +${rackUnset} unset` : ''
-          }`;
+          const books = booksHeaderContent(items, distinctItems);
           return (
             <>
-              <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
-                {grade.kind === 'same' ? (
-                  <span className="font-mono">
-                    {/^\d{1,2}$/.test(grade.value) ? `Gr ${grade.value}` : grade.value}
-                  </span>
-                ) : grade.kind === 'multiple' ? (
-                  <span
-                    className="text-[11px] italic text-[var(--ed-ink-4)]"
-                    title="Placements span multiple grades — expand to see each"
-                  >
-                    Multiple
-                  </span>
-                ) : (
-                  <span className="text-[var(--ed-ink-4)]">—</span>
-                )}
+              <td
+                className={cn(HEADER_TD, 'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]')}
+              >
+                {books.gradeContent}
               </td>
-              <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
-                {/* Rack is the books layout's analogue of the items
-                    "N locations" cell — and the field the owner
-                    physically walks to. When every placement agrees the
-                    concrete label is strictly more useful than a count;
-                    when they differ a COUNT (never one placement's rack)
-                    is the only honest value, and it preserves the
-                    how-many-placements information the items header
-                    carries. */}
-                {rack.kind === 'same' ? (
-                  <span className="font-mono tabular-nums">{rack.value}</span>
-                ) : rack.kind === 'multiple' ? (
-                  <span
-                    title={
-                      rackLabels.length > 0
-                        ? `Placements span: ${rackLabels.join(', ')}${
-                            rackUnset > 0 ? ` (+${rackUnset} with no rack set)` : ''
-                          }`
-                        : 'Placements span multiple racks — expand to see each'
-                    }
-                  >
-                    {rackCountLabel}
-                  </span>
-                ) : hasElsewhere(distinctItems) ? null : (
-                  <span className="text-[var(--ed-ink-4)]">—</span>
-                )}
-                {/* 0371: the members' stock in warehouses the viewer cannot see. */}
-                <ElsewhereTail items={distinctItems} />
+              <td
+                className={cn(HEADER_TD, 'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]')}
+              >
+                {books.rackContent}
               </td>
-              <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
-                {crate.kind === 'same' ? (
-                  <span className="inline-flex items-center gap-1.5">
-                    <span
-                      aria-hidden
-                      title={crateColor ? crateColor.label : 'No color set'}
-                      className="border-border inline-block h-2.5 w-2.5 rounded-full border"
-                      style={crateColor ? { backgroundColor: crateColor.hex } : undefined}
-                    />
-                    <span className="font-mono tabular-nums">{crateNumber}</span>
-                  </span>
-                ) : crate.kind === 'multiple' ? (
-                  <span
-                    className="text-[11px] italic text-[var(--ed-ink-4)]"
-                    title="Placements sit in different crates — expand to see each"
-                  >
-                    Multiple
-                  </span>
-                ) : (
-                  <span className="text-[var(--ed-ink-4)]">—</span>
-                )}
+              <td
+                className={cn(HEADER_TD, 'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]')}
+              >
+                {books.crateContent}
               </td>
             </>
           );
         })()}
       <td
-        className="px-3 text-right font-mono font-medium tabular-nums"
-        title={
-          group.totalIsPartial
-            ? 'This total only counts placements on the current page — other pages may hold more of this SKU.'
-            : undefined
-        }
+        className={cn(HEADER_TD, 'text-right font-mono text-[13.5px] font-medium tabular-nums')}
+        // A named group's records are not placements of one SKU: its own
+        // words, as its hover card already said (they used to read "of this
+        // SKU" here too).
+        title={partialTitle}
       >
-        {formatNumber(displayedTotal)}
+        {formatNumber(f.displayedTotal)}
         {group.totalIsPartial && (
-          <span aria-hidden className="ml-0.5 text-[var(--ed-ink-4)]">
+          <span aria-hidden className="text-muted-foreground ml-0.5">
             *
           </span>
         )}
       </td>
-      <td className="px-3">
-        <StockBar stock={healthQuantity} par={par} status={status} />
+      <td className={HEADER_TD}>
+        <StockBar stock={f.healthQuantity} par={f.par} status={f.status} />
       </td>
-      <td className="px-3 text-right">
+      <td className={cn(HEADER_TD, 'text-right')}>
         <Sparkline data={series} width={56} height={18} />
       </td>
-      <td className="px-3">
+      <td className={HEADER_TD}>
         <StockStatusBadge
-          quantity={healthQuantity}
-          reorderPoint={groupReorderPoint}
-          itemStatus={rolledUpStatus}
-          autoArchived={allAutoArchived}
-          awaitingFirstReceipt={allAwaitingFirstReceipt}
+          quantity={f.healthQuantity}
+          reorderPoint={f.groupReorderPoint}
+          itemStatus={f.rolledUpStatus}
+          autoArchived={f.allAutoArchived}
+          awaitingFirstReceipt={f.allAwaitingFirstReceipt}
         />
       </td>
-      <td className="px-3 text-right text-[11.5px] text-[var(--ed-ink-4)]">—</td>
+      <td className="text-muted-foreground py-[var(--row-py)] pl-3 pr-4 text-right text-[12.5px]">
+        —
+      </td>
     </tr>
   );
+}
+
+/**
+ * Everything a size-run header shows (its row and its Grid card read it
+ * alike). A STORED group knows what it is and what it counts in, so its header
+ * reads "3 variants · 18 pairs total". A name-derived run knows neither — its
+ * "sizes" are tokens parsed out of a display string — so it keeps the older,
+ * weaker claim. Byte-identical for every ungrouped org.
+ */
+function styleHeaderFacts(group: SizeRunGroup<RenderEntry>, items: Item[], lookups: Lookups) {
+  const first = items[0]!;
+  const status = deriveStatus(group.total, first.reorder_point);
+  const par = Math.max(first.reorder_point * 4, group.total * 1.5, 10);
+  const category = first.category_id ? lookups.categories.get(first.category_id) : null;
+  const location = first.primary_location_id
+    ? lookups.locations.get(first.primary_location_id)
+    : null;
+  const distinctCharterIds = new Set(items.map((it) => it.charter_id ?? ''));
+  // Status is per-member and can differ; roll up conservatively (see group-by-sku).
+  const rolledUpStatus = rollupStatus(items.map((it) => it.status));
+  const sizeLabel =
+    group.groupId && group.countingUnit
+      ? groupRollupLabel(
+          group.sizeCount,
+          group.total,
+          countingUnitLabel(group.countingUnit as CountingUnit, group.total),
+        )
+      : group.groupId
+        ? `${group.sizeCount} variant${group.sizeCount === 1 ? '' : 's'}`
+        : `${group.sizeCount} size${group.sizeCount === 1 ? '' : 's'}`;
+  // Rack summary across the run's members. This cell used to render
+  // `sizeLabel`, which merely repeated the badge already shown next to the name
+  // — so the Rack column read "3 variants · 9 pairs total" and told you nothing
+  // about where the stock physically is, the one thing the column exists for.
+  //
+  // Mirrors the SKU header's cell deliberately (same source of truth, same
+  // wording): the concrete label when every member agrees, an honest COUNT when
+  // they differ — never one member's rack, which would send staff to the wrong
+  // shelf — and an explicit "+N unset" tail, because a member with no rack is
+  // not a rack. Reads `placed_racks` (where the stock actually sits, from
+  // holdings) and falls back to the free-text label only for callers that don't
+  // compute holdings, exactly as the member rows do.
+  const rackNames: string[] = [];
+  let rackUnset = 0;
+  for (const it of items) {
+    // `[]` is meaningful (holdings computed, nothing placed) so only a missing
+    // field falls through to the legacy label.
+    const placed =
+      it.placed_racks ??
+      (readItemRack(it.custom_fields).rackLabel
+        ? [readItemRack(it.custom_fields).rackLabel as string]
+        : []);
+    if (placed.length === 0) {
+      rackUnset += 1;
+      continue;
+    }
+    for (const label of placed) if (!rackNames.includes(label)) rackNames.push(label);
+  }
+  const rackCountLabel = `${rackNames.length} rack${rackNames.length === 1 ? '' : 's'}${
+    rackUnset > 0 ? ` +${rackUnset} unset` : ''
+  }`;
+  const rackContent =
+    rackNames.length === 0 ? (
+      <span className="text-muted-foreground">—</span>
+    ) : rackNames.length === 1 && rackUnset === 0 ? (
+      <span className="font-mono tabular-nums">{rackNames[0]}</span>
+    ) : (
+      <span
+        title={`Placements span: ${rackNames.join(', ')}${
+          rackUnset > 0 ? ` (+${rackUnset} with no rack set)` : ''
+        }`}
+      >
+        {rackCountLabel}
+      </span>
+    );
+  return {
+    first,
+    status,
+    par,
+    category,
+    location,
+    distinctCharterIds,
+    rolledUpStatus,
+    sizeLabel,
+    rackContent,
+  };
 }
 
 /**
@@ -3934,283 +4795,79 @@ function StyleGroupHeaderRow({
   rowLinkPrefix: string;
   currentListUrl: string;
 }) {
-  const first = items[0]!;
-  const status = deriveStatus(group.total, first.reorder_point);
-  const par = Math.max(first.reorder_point * 4, group.total * 1.5, 10);
-  const category = first.category_id ? lookups.categories.get(first.category_id) : null;
-  const location = first.primary_location_id
-    ? lookups.locations.get(first.primary_location_id)
-    : null;
-  const distinctCharterIds = new Set(items.map((it) => it.charter_id ?? ''));
-  const rowThumbSrc = first.image_thumb_url ?? first.image_url;
-  // Status is per-member and can differ; roll up conservatively (see group-by-sku).
-  const rolledUpStatus = rollupStatus(items.map((it) => it.status));
-  // A STORED group knows what it is and what it counts in, so its header reads
-  // "3 variants · 18 pairs total". A name-derived run knows neither — its
-  // "sizes" are tokens parsed out of a display string — so it keeps the older,
-  // weaker claim. Byte-identical for every ungrouped org.
-  const sizeLabel =
-    group.groupId && group.countingUnit
-      ? groupRollupLabel(
-          group.sizeCount,
-          group.total,
-          countingUnitLabel(group.countingUnit as CountingUnit, group.total),
-        )
-      : group.groupId
-        ? `${group.sizeCount} variant${group.sizeCount === 1 ? '' : 's'}`
-        : `${group.sizeCount} size${group.sizeCount === 1 ? '' : 's'}`;
-
-  // Rack summary across the run's members. This cell used to render
-  // `sizeLabel`, which merely repeated the badge already shown next to the name
-  // — so the Rack column read "3 variants · 9 pairs total" and told you nothing
-  // about where the stock physically is, the one thing the column exists for.
-  //
-  // Mirrors the SKU header's cell deliberately (same source of truth, same
-  // wording): the concrete label when every member agrees, an honest COUNT when
-  // they differ — never one member's rack, which would send staff to the wrong
-  // shelf — and an explicit "+N unset" tail, because a member with no rack is
-  // not a rack. Reads `placed_racks` (where the stock actually sits, from
-  // holdings) and falls back to the free-text label only for callers that don't
-  // compute holdings, exactly as the member rows below do.
-  const rackLabels: string[] = [];
-  let rackUnset = 0;
-  for (const it of items) {
-    // `[]` is meaningful (holdings computed, nothing placed) so only a missing
-    // field falls through to the legacy label.
-    const placed =
-      it.placed_racks ??
-      (readItemRack(it.custom_fields).rackLabel
-        ? [readItemRack(it.custom_fields).rackLabel as string]
-        : []);
-    if (placed.length === 0) {
-      rackUnset += 1;
-      continue;
-    }
-    for (const label of placed) if (!rackLabels.includes(label)) rackLabels.push(label);
-  }
-  const rackCountLabel = `${rackLabels.length} rack${rackLabels.length === 1 ? '' : 's'}${
-    rackUnset > 0 ? ` +${rackUnset} unset` : ''
-  }`;
-
+  const f = styleHeaderFacts(group, items, lookups);
+  const { first } = f;
   return (
-    <tr className="border-border bg-muted/30 border-b transition-colors last:border-0">
+    <tr
+      data-row-kind="header"
+      data-group-key={`style-group:${group.styleKey}`}
+      className="border-border bg-sunk hover:bg-muted border-b transition-colors last:border-0"
+    >
       {/* Not selectable — no checkbox (bulk actions target the member rows). */}
-      <td className="px-3" />
-      <td className="py-2.5 pr-3">
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={onToggle}
-            aria-expanded={expanded}
-            aria-label={`${expanded ? 'Collapse' : 'Expand'} ${group.baseName} (${sizeLabel})`}
-            className="hover:bg-muted hover:text-foreground grid h-5 w-5 shrink-0 place-items-center rounded-sm text-[var(--ed-ink-3)] transition-colors"
-          >
-            <ChevronRight
-              className={cn('h-3.5 w-3.5 transition-transform', expanded && 'rotate-90')}
-            />
-          </button>
-          <ImageHoverPreview
-            src={first.image_url ?? null}
-            srcLoader={
-              !first.image_url && first.image_thumb_url
-                ? () => loadMasterImageUrl(first.id)
-                : undefined
-            }
+      <td className="w-10 py-[var(--row-py)] pl-4 pr-0" />
+      <td className="min-w-[220px] py-[var(--row-py)] pl-3 pr-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <HeaderChevron
+            expanded={expanded}
+            onToggle={onToggle}
+            label={`${expanded ? 'Collapse' : 'Expand'} ${group.baseName} (${f.sizeLabel})`}
+          />
+          <ListThumb
+            photo={first}
             alt={first.name}
             title={group.baseName}
-            subtitle={sizeLabel}
-            meta={
-              <span>
-                On hand{' '}
-                <span className="text-foreground font-medium tabular-nums">
-                  {formatNumber(group.total)}
-                </span>
-              </span>
-            }
-            className="shrink-0"
-          >
-            {rowThumbSrc ? (
-              <Image
-                src={rowThumbSrc}
-                unoptimized={!!first.image_thumb_url}
-                alt=""
-                width={56}
-                height={56}
-                sizes="28px"
-                placeholder={first.image_lqip ? 'blur' : 'empty'}
-                blurDataURL={first.image_lqip ?? undefined}
-                className="border-border bg-muted h-7 w-7 shrink-0 rounded-[5px] border object-cover"
-              />
-            ) : (
-              <span
-                aria-hidden
-                className="border-border h-7 w-7 shrink-0 rounded-[5px] border"
-                style={{
-                  background:
-                    'repeating-linear-gradient(45deg, hsl(var(--border)) 0 1px, transparent 1px 6px), hsl(var(--muted))',
-                }}
-              />
-            )}
-          </ImageHoverPreview>
-          <Link
-            href={`${rowLinkPrefix}/${first.id}?return=${encodeURIComponent(currentListUrl)}`}
-            prefetch={false}
-            className="font-medium hover:underline"
-          >
-            {group.baseName}
-          </Link>
-          <span className="border-border shrink-0 rounded-full border px-1.5 py-0.5 text-[10.5px] font-medium text-[var(--ed-ink-3)]">
-            {sizeLabel}
+            subtitle={f.sizeLabel}
+            meta={<OnHandMeta value={group.total} />}
+          />
+          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+            <Link
+              href={`${rowLinkPrefix}/${first.id}?return=${encodeURIComponent(currentListUrl)}`}
+              prefetch={false}
+              className="text-foreground font-medium hover:underline"
+            >
+              {group.baseName}
+            </Link>
+            <SizeBadge>{f.sizeLabel}</SizeBadge>
           </span>
         </div>
       </td>
       {/* SKU — a run spans multiple SKUs, so no single value. */}
-      <td className="px-3 text-[11.5px] italic text-[var(--ed-ink-4)]">—</td>
-      <td className="px-3">
-        {category ? (
-          <span
-            className="inline-flex items-center gap-1.5 text-[12px]"
-            style={category.color ? { color: category.color } : undefined}
-          >
-            {category.color && (
-              <span
-                aria-hidden
-                className="h-1.5 w-1.5 rounded-full"
-                style={{ backgroundColor: category.color }}
-              />
-            )}
-            {category.name}
-          </span>
-        ) : (
-          <span className="text-[12px] text-[var(--ed-ink-4)]">—</span>
-        )}
+      <td className={cn(HEADER_TD, 'text-muted-foreground text-[12px] italic')}>—</td>
+      <td className={cn(HEADER_TD, 'whitespace-nowrap')}>
+        <CategoryLabel category={f.category} />
       </td>
-      <td className="px-3 text-[12px]">
-        {distinctCharterIds.size > 1 ? (
-          <span
-            className="text-[11px] italic text-[var(--ed-ink-4)]"
-            title="Sizes span multiple charters — expand to see each"
-          >
-            Multiple
-          </span>
-        ) : first.charter_id ? (
-          (() => {
-            const charter = lookups.charters?.get(first.charter_id!) ?? null;
-            return charter ? (
-              <span className="text-[var(--ed-ink-2)]" title={charter.name}>
-                {charter.code ?? charter.name}
-              </span>
-            ) : (
-              <span className="text-[11px] italic text-[var(--ed-ink-4)]">{GENERIC_CHARTER_LABEL}</span>
-            );
-          })()
-        ) : (
-          <span
-            className="text-[11px] italic text-[var(--ed-ink-4)]"
-            title="Generic stock — any charter serviced by this warehouse can use it"
-          >
-            {GENERIC_CHARTER_LABEL}
-          </span>
-        )}
+      <td className={cn(HEADER_TD, 'whitespace-nowrap text-[13px]')}>
+        <HeaderCharterContent
+          first={first}
+          distinctCharterIds={f.distinctCharterIds}
+          lookups={lookups}
+          multipleTitle="Sizes span multiple charters — expand to see each"
+        />
       </td>
-      <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">{location?.name ?? '—'}</td>
-      <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
-        {rackLabels.length === 0 ? (
-          <span className="text-[var(--ed-ink-4)]">—</span>
-        ) : rackLabels.length === 1 && rackUnset === 0 ? (
-          <span className="font-mono tabular-nums">{rackLabels[0]}</span>
-        ) : (
-          <span
-            title={`Placements span: ${rackLabels.join(', ')}${
-              rackUnset > 0 ? ` (+${rackUnset} with no rack set)` : ''
-            }`}
-          >
-            {rackCountLabel}
-          </span>
-        )}
+      <td className={cn(HEADER_TD, 'min-w-[112px] text-[13px] text-[var(--ed-ink-2)]')}>
+        {f.location?.name ?? '—'}
       </td>
-      <td className="px-3 text-right font-mono font-medium tabular-nums">
+      <td className={cn(HEADER_TD, 'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]')}>
+        {f.rackContent}
+      </td>
+      <td className={cn(HEADER_TD, 'text-right font-mono text-[13.5px] font-medium tabular-nums')}>
         {formatNumber(group.total)}
       </td>
-      <td className="px-3">
-        <StockBar stock={group.total} par={par} status={status} />
+      <td className={HEADER_TD}>
+        <StockBar stock={group.total} par={f.par} status={f.status} />
       </td>
-      <td className="px-3 text-right text-[11.5px] text-[var(--ed-ink-4)]">—</td>
-      <td className="px-3">
+      <td className={cn(HEADER_TD, 'text-muted-foreground text-right text-[12px]')}>—</td>
+      <td className={HEADER_TD}>
         <StockStatusBadge
           quantity={group.total}
           reorderPoint={first.reorder_point}
-          itemStatus={rolledUpStatus}
+          itemStatus={f.rolledUpStatus}
         />
       </td>
-      <td className="px-3 text-right text-[11.5px] text-[var(--ed-ink-4)]">—</td>
+      <td className="text-muted-foreground py-[var(--row-py)] pl-3 pr-4 text-right text-[12.5px]">
+        —
+      </td>
     </tr>
-  );
-}
-
-/** Shared box styling for the interactive Checkbox and the non-interactive
- *  CheckGlyph so the two can never drift apart visually. */
-function checkboxBoxClasses(checked: boolean): string {
-  return cn(
-    'inline-grid h-5 w-5 place-items-center rounded-[5px] border bg-card transition-colors',
-    checked ? 'border-foreground bg-foreground' : 'border-[var(--ed-line-strong)]',
-  );
-}
-
-/** CSS-drawn ✓: bottom+RIGHT borders rotated +45°. bottom+LEFT at -45°
- *  renders the MIRROR of a checkmark (owner-reported "backwards checkmark",
- *  hard to read at 14px). */
-function CheckTick() {
-  return (
-    <span
-      aria-hidden
-      className="border-background h-[11px] w-[6px] -translate-y-px rotate-45 border-b-2 border-r-2"
-    />
-  );
-}
-
-function Checkbox({
-  checked,
-  indeterminate = false,
-  onChange,
-}: {
-  checked: boolean;
-  /** Some-but-not-all state (header over a partially selected page). */
-  indeterminate?: boolean;
-  onChange: (c: boolean) => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="checkbox"
-      aria-checked={checked ? 'true' : indeterminate ? 'mixed' : 'false'}
-      onClick={() => onChange(!checked)}
-      className={checkboxBoxClasses(checked || indeterminate)}
-    >
-      {checked ? (
-        <CheckTick />
-      ) : indeterminate ? (
-        <span aria-hidden className="bg-background h-[2px] w-[10px] rounded-full" />
-      ) : null}
-    </button>
-  );
-}
-
-/**
- * NON-INTERACTIVE checkbox visual, for use INSIDE another interactive
- * element. MultiSelectFilter's option rows used to nest the <button>
- * Checkbox inside the row <button>: a click directly on the box fired the
- * inner onChange AND bubbled to the row's onClick — two toggles in one
- * click, batched by React into a visual no-op. That self-cancelling
- * double-toggle is the owner's "I had to click the filter boxes 3-4 times"
- * report (only clicks on the label text registered once). The wrapping
- * element owns role="checkbox" + aria-checked; this is just the picture.
- */
-function CheckGlyph({ checked }: { checked: boolean }) {
-  return (
-    <span aria-hidden className={checkboxBoxClasses(checked)}>
-      {checked && <CheckTick />}
-    </span>
   );
 }
 
@@ -4220,15 +4877,12 @@ function SortMenu({ value, onChange }: { value: SortKey; onChange: (k: SortKey) 
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button
-          type="button"
-          className="border-border bg-background inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] text-[var(--ed-ink-2)] transition-colors hover:border-[var(--ed-line-strong)]"
+        <FilterTrigger
+          label="Sort"
+          value={current.label}
+          active={value !== 'updated_desc'}
           aria-label={`Sort by ${current.label}`}
-        >
-          <span className="text-[var(--ed-ink-4)]">Sort:</span>
-          <span className="font-medium">{current.label}</span>
-          <ChevronDown className="h-3 w-3 text-[var(--ed-ink-4)]" />
-        </button>
+        />
       </PopoverTrigger>
       <PopoverContent align="start" className="w-[220px] p-1">
         <div className="flex flex-col">
@@ -4241,7 +4895,7 @@ function SortMenu({ value, onChange }: { value: SortKey; onChange: (k: SortKey) 
                 setOpen(false);
               }}
               className={cn(
-                'hover:bg-muted rounded-sm px-2 py-1.5 text-left text-[12.5px] transition-colors',
+                'hover:bg-muted flex min-h-8 items-center rounded-md px-2 text-left text-[13px] transition-colors max-sm:min-h-11',
                 opt.value === value && 'bg-muted font-medium',
               )}
             >
@@ -4266,7 +4920,7 @@ function SortMenu({ value, onChange }: { value: SortKey; onChange: (k: SortKey) 
  *     its Checkbox was a <button> NESTED inside the row <button>, so a
  *     direct click on the box fired both handlers and self-cancelled.
  * The row button is now the single interactive element (role="checkbox");
- * the box itself is the non-interactive CheckGlyph.
+ * the box itself is the non-interactive CheckboxGlyph (components/ui/checkbox).
  *
  * Exported for tests (inventory-table.filters.test.tsx).
  */
@@ -4295,41 +4949,22 @@ export function MultiSelectFilter({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button
-          type="button"
-          className={cn(
-            'bg-background inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] transition-colors hover:border-[var(--ed-line-strong)]',
-            selected.size > 0
-              ? 'border-foreground text-foreground'
-              : 'border-border text-[var(--ed-ink-2)]',
-          )}
-          aria-label={`Filter by ${label}`}
-        >
-          <span>{label}</span>
-          {selected.size > 0 && (
-            <span className="bg-foreground text-background grid h-4 min-w-4 place-items-center rounded-full px-1 font-mono text-[10px] tabular-nums">
-              {selected.size}
-            </span>
-          )}
-          <ChevronDown className="h-3 w-3 text-[var(--ed-ink-4)]" />
-        </button>
+        <FilterTrigger label={label} count={selected.size} aria-label={`Filter by ${label}`} />
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-[260px] p-2">
-        <div className="space-y-2">
+      <PopoverContent align="start" className="w-[260px] p-1.5">
+        <div className="space-y-1.5">
           {options.length > 8 && (
             <Input
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
               placeholder={`Search ${label.toLowerCase()}…`}
-              className="h-7 text-[12px]"
+              className="h-8 text-[13px]"
               aria-label={`Filter ${label} options`}
             />
           )}
           <div className="max-h-[260px] overflow-y-auto">
             {visible.length === 0 ? (
-              <p className="px-2 py-3 text-center text-[12px] text-[var(--ed-ink-4)]">
-                No matches.
-              </p>
+              <p className="text-muted-foreground px-2 py-3 text-center text-[13px]">No matches.</p>
             ) : (
               <ul className="flex flex-col">
                 {visible.map((opt) => {
@@ -4341,9 +4976,9 @@ export function MultiSelectFilter({
                         role="checkbox"
                         aria-checked={isOn}
                         onClick={() => toggle(opt.id)}
-                        className="hover:bg-muted flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[12.5px] transition-colors"
+                        className="hover:bg-muted flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors max-sm:min-h-11"
                       >
-                        <CheckGlyph checked={isOn} />
+                        <CheckboxGlyph checked={isOn} />
                         <span className="truncate">{opt.name}</span>
                       </button>
                     </li>
@@ -4353,11 +4988,11 @@ export function MultiSelectFilter({
             )}
           </div>
           {selected.size > 0 && (
-            <div className="border-border border-t pt-2">
+            <div className="border-border border-t px-1 pt-1.5">
               <button
                 type="button"
                 onClick={() => onChange(new Set())}
-                className="hover:text-foreground text-[11.5px] text-[var(--ed-ink-3)] underline-offset-2 hover:underline"
+                className={cn(touchTargetClass, chipActionClass, 'text-[12.5px]')}
               >
                 Clear {label.toLowerCase()}
               </button>
@@ -4391,35 +5026,31 @@ export function ExportMenu({ params, itemType }: { params: URLSearchParams; item
     <>
       <Popover>
         <PopoverTrigger asChild>
-          <button
-            type="button"
-            className="border-border bg-background inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] text-[var(--ed-ink-2)] transition-colors hover:border-[var(--ed-line-strong)]"
+          <FilterTrigger
+            icon={<Download aria-hidden className="h-3.5 w-3.5" />}
+            label="Export"
             aria-label="Export"
-          >
-            <Download className="h-3 w-3" />
-            <span className="font-medium">Export</span>
-            <ChevronDown className="h-3 w-3 text-[var(--ed-ink-4)]" />
-          </button>
+          />
         </PopoverTrigger>
-        <PopoverContent align="end" className="w-[240px] p-2">
-          <div className="flex flex-col gap-1">
+        <PopoverContent align="end" className="w-[240px] p-1.5">
+          <div className="flex flex-col gap-0.5">
             <button
               type="button"
               onClick={() => setScope('filtered')}
-              className="rounded-sm px-2 py-1.5 text-left text-[12.5px] hover:bg-muted"
+              className="hover:bg-muted rounded-md px-2 py-1.5 text-left text-[13px] transition-colors"
             >
               <span className="block font-medium">Export filtered</span>
-              <span className="block text-[11px] text-[var(--ed-ink-4)]">
+              <span className="text-muted-foreground block text-[12px]">
                 What&apos;s currently visible
               </span>
             </button>
             <button
               type="button"
               onClick={() => setScope('all')}
-              className="rounded-sm px-2 py-1.5 text-left text-[12.5px] hover:bg-muted"
+              className="hover:bg-muted rounded-md px-2 py-1.5 text-left text-[13px] transition-colors"
             >
               <span className="block font-medium">Export all</span>
-              <span className="block text-[11px] text-[var(--ed-ink-4)]">
+              <span className="text-muted-foreground block text-[12px]">
                 Full {itemType === 'book' ? 'books' : 'inventory'} dump
               </span>
             </button>
@@ -4575,23 +5206,35 @@ function SavedViewChip({
     router.refresh();
   }
 
+  // The owner's share and delete controls appear on hover with a mouse, and
+  // stay visible on a touch screen, below sm, and whenever keyboard focus is
+  // inside the chip (CONFLICTS D18: hover-only controls could not be reached
+  // by touch or by Tab-and-see).
+  const ownerControl = cn(
+    'grid size-5 shrink-0 place-items-center rounded-full opacity-0 transition-opacity group-hover/view:opacity-100 group-focus-within/view:opacity-100 focus-visible:opacity-100 pointer-coarse:size-8 pointer-coarse:opacity-100 max-sm:size-8 max-sm:opacity-100',
+    isActive ? 'hover:bg-background/20' : 'hover:bg-foreground/10',
+  );
   return (
     <span
       className={cn(
-        'group inline-flex h-6 items-center gap-1 rounded-full border pl-2 pr-1 text-[11.5px] transition-colors',
+        'group/view inline-flex h-7 items-center gap-0.5 rounded-full border pl-2.5 pr-1 text-[12.5px] transition-colors max-sm:min-h-11',
         isActive
           ? 'border-foreground bg-foreground text-background'
-          : 'border-border bg-background text-[var(--ed-ink-2)] hover:border-[var(--ed-line-strong)]',
+          : 'hover:bg-muted border-[var(--ed-line-strong)] text-[var(--ed-ink-2)]',
       )}
       title={view.isShared ? `Shared by ${isOwner ? 'you' : 'a teammate'}` : undefined}
     >
       <button
         type="button"
         onClick={apply}
-        className="inline-flex items-center gap-1"
+        className="inline-flex min-h-7 items-center gap-1.5 rounded-full pr-1 max-sm:min-h-11"
         aria-label={`Apply view ${view.name}`}
       >
-        {view.isShared ? <Users className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
+        {view.isShared ? (
+          <Users aria-hidden className="h-3 w-3" />
+        ) : (
+          <Pin aria-hidden className="h-3 w-3" />
+        )}
         <span className="max-w-[120px] truncate">{view.name}</span>
       </button>
       {isOwner && (
@@ -4602,10 +5245,7 @@ function SavedViewChip({
           aria-label={
             view.isShared ? `Make view ${view.name} private` : `Share view ${view.name} with team`
           }
-          className={cn(
-            'hover:bg-foreground/15 ml-0.5 grid h-4 w-4 place-items-center rounded-full opacity-0 transition-opacity group-hover:opacity-100',
-            isActive && 'hover:bg-background/20',
-          )}
+          className={ownerControl}
         >
           {sharing ? (
             <Loader2 className="h-2.5 w-2.5 animate-spin" />
@@ -4622,10 +5262,7 @@ function SavedViewChip({
           onClick={remove}
           disabled={deleting}
           aria-label={`Delete view ${view.name}`}
-          className={cn(
-            'hover:bg-foreground/15 ml-0.5 grid h-4 w-4 place-items-center rounded-full opacity-0 transition-opacity group-hover:opacity-100',
-            isActive && 'hover:bg-background/20',
-          )}
+          className={ownerControl}
         >
           {deleting ? (
             <Loader2 className="h-2.5 w-2.5 animate-spin" />
@@ -4664,6 +5301,8 @@ function SaveCurrentViewButton({
   const [shareWithTeam, setShareWithTeam] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const inputRef = React.useRef<HTMLInputElement>(null);
+  const nameId = React.useId();
+  const shareNoteId = React.useId();
 
   React.useEffect(() => {
     if (open) {
@@ -4702,20 +5341,21 @@ function SaveCurrentViewButton({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button
-          type="button"
-          className="border-border hover:text-foreground inline-flex h-6 items-center gap-1 rounded-full border border-dashed px-2.5 text-[11.5px] text-[var(--ed-ink-3)] transition-colors hover:border-[var(--ed-line-strong)]"
-        >
-          <Plus className="h-3 w-3" /> Save view
+        <button type="button" className={filterChipClass({ dashed: true })}>
+          <Plus aria-hidden className="h-3 w-3" /> Save view
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-[280px] p-3">
         <div className="space-y-3">
           <div>
-            <label className="text-[11px] font-medium uppercase tracking-[0.06em] text-[var(--ed-ink-4)]">
+            <label
+              htmlFor={nameId}
+              className="text-muted-foreground text-[11px] font-medium uppercase tracking-[0.06em]"
+            >
               Name
             </label>
             <Input
+              id={nameId}
               ref={inputRef}
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -4724,31 +5364,30 @@ function SaveCurrentViewButton({
               }}
               placeholder="Restock candidates"
               maxLength={80}
-              className="mt-1 h-8 text-[12.5px]"
+              className="mt-1 h-8 text-[13px]"
             />
           </div>
-          <div className="border-border bg-muted/30 rounded-md border px-2.5 py-2">
-            <div className="text-[10.5px] font-medium uppercase tracking-[0.06em] text-[var(--ed-ink-4)]">
+          <div className="border-border bg-sunk rounded-md border px-2.5 py-2">
+            <div className="text-muted-foreground text-[11px] font-medium uppercase tracking-[0.06em]">
               Saving
             </div>
-            <div className="mt-0.5 text-[12px] text-[var(--ed-ink-2)]">
+            <div className="mt-0.5 text-[12.5px] text-[var(--ed-ink-2)]">
               {describeState(currentState)}
             </div>
           </div>
-          <label className="flex cursor-pointer items-start gap-2">
-            <input
-              type="checkbox"
+          <div>
+            <Checkbox
               checked={shareWithTeam}
-              onChange={(e) => setShareWithTeam(e.target.checked)}
-              className="border-border text-primary focus:ring-primary mt-0.5 h-3.5 w-3.5 rounded"
-            />
-            <div className="flex-1">
-              <div className="text-[12px] font-medium">Share with team</div>
-              <div className="text-[11px] text-[var(--ed-ink-3)]">
-                Everyone in your org will see this view. Only you can edit or delete it.
-              </div>
-            </div>
-          </label>
+              onCheckedChange={setShareWithTeam}
+              aria-describedby={shareNoteId}
+              className="font-medium"
+            >
+              Share with team
+            </Checkbox>
+            <p id={shareNoteId} className="text-muted-foreground mt-1 pl-7 text-[12px]">
+              Everyone in your org will see this view. Only you can edit or delete it.
+            </p>
+          </div>
           <div className="flex justify-end gap-2">
             <Button variant="outline" size="sm" onClick={() => setOpen(false)} disabled={saving}>
               Cancel
@@ -4777,11 +5416,11 @@ function SparkModeToggle({
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="hover:text-foreground ml-auto inline-flex h-5 items-center gap-1 rounded-sm px-1 text-[10.5px] font-medium uppercase tracking-[0.06em] text-[var(--ed-ink-4)]"
+          className="text-muted-foreground hover:bg-muted hover:text-foreground -mr-1 ml-auto inline-flex h-6 items-center gap-1 whitespace-nowrap rounded-md px-1 text-[11px] font-medium uppercase tracking-[0.06em] transition-colors"
           aria-label={`Sparkline mode: ${mode === 'qty' ? 'quantity trend' : 'movement count'}`}
         >
           {label}
-          <ChevronDown className="h-3 w-3" />
+          <ChevronDown aria-hidden className="h-3 w-3" strokeWidth={2} />
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-[200px] p-1">
@@ -4800,7 +5439,7 @@ function SparkModeToggle({
                 setOpen(false);
               }}
               className={cn(
-                'hover:bg-muted rounded-sm px-2 py-1.5 text-left text-[12.5px] transition-colors',
+                'hover:bg-muted flex min-h-8 items-center rounded-md px-2 text-left text-[13px] transition-colors max-sm:min-h-11',
                 opt.value === mode && 'bg-muted font-medium',
               )}
             >
@@ -4833,20 +5472,21 @@ function DisplayGroupChipView({
   onAddToGroup?: () => void;
 }) {
   return (
-    <span className="inline-flex flex-wrap items-center gap-1.5 text-[10.5px] text-[var(--ed-ink-3)]">
-      <span className="border-border rounded-full border px-1.5 py-px">
-        {chip.kind === 'in-group' ? GROUP_COPY.chipInGroup(name) : GROUP_COPY.chipSameSku(name)}
-      </span>
-      {onAddToGroup ? (
-        <button
-          type="button"
-          onClick={onAddToGroup}
-          aria-label={GROUP_COPY.addToGroupFor(name, recordName)}
-          className="text-[var(--ed-ink-2)] underline-offset-2 hover:underline"
-        >
-          {GROUP_COPY.addToGroup}
-        </button>
-      ) : null}
-    </span>
+    <MetaChip
+      action={
+        onAddToGroup ? (
+          <button
+            type="button"
+            onClick={onAddToGroup}
+            aria-label={GROUP_COPY.addToGroupFor(name, recordName)}
+            className={cn(touchTargetClass, chipActionClass)}
+          >
+            {GROUP_COPY.addToGroup}
+          </button>
+        ) : undefined
+      }
+    >
+      {chip.kind === 'in-group' ? GROUP_COPY.chipInGroup(name) : GROUP_COPY.chipSameSku(name)}
+    </MetaChip>
   );
 }
