@@ -19,7 +19,8 @@ interface Point {
 }
 
 interface SignaturePadProps {
-  /** Optional className passed to the outer wrapper for layout overrides. */
+  /** Optional className passed to the outer wrapper (the pad and its Clear
+   *  row) for layout overrides. */
   className?: string;
   /** Fires the first time the user draws something (so parents can dismiss hints). */
   onChange?: (isEmpty: boolean) => void;
@@ -33,13 +34,11 @@ const STROKE_WIDTH = 2;
 // turn the captured signature into a near-invisible stroke on a too-
 // dark or too-light background when re-rendered in the PDF.
 const PAD_BACKGROUND = '#fafaf7';
-// The words drawn ON the pad ("Sign here", "Clear") sit on that fixed light
-// canvas in both themes, so their colours are fixed too: the light theme's
-// ink-3 (#5a5d56, 6.3:1 on the canvas) and its ink (#0e0f0d) on hover. The
-// theme tokens turned them into light grey (2.5:1) and, on hover, near-white
-// text on the light canvas in dark mode.
+// "Sign here" is drawn ON the pad, on that fixed light canvas in both themes,
+// so its colour is fixed too: the light theme's ink-3 (#5a5d56, 6.3:1 on the
+// canvas). The theme's muted token turned it into light grey (2.5:1) in dark
+// mode. Clear sits under the pad on the theme card, so it takes theme colours.
 export const PAD_INK_QUIET = '#5a5d56';
-export const PAD_INK = '#0e0f0d';
 
 /**
  * Vanilla-canvas signature pad — no dependency. Built for warehouse-loading-
@@ -334,55 +333,60 @@ export const SignaturePad = React.forwardRef<SignaturePadHandle, SignaturePadPro
 
     return (
       <div
-        ref={containerRef}
-        className={[
-          'relative w-full select-none',
-          'aspect-[3/1]',
-          'rounded-lg',
-          'border-line-strong border border-dashed',
-          className ?? '',
-        ]
-          .filter(Boolean)
-          .join(' ')}
-        style={{ backgroundColor: PAD_BACKGROUND }}
+        data-slot="signature-pad"
+        className={['w-full', className ?? ''].filter(Boolean).join(' ')}
       >
-        {/*
-          The hint sits absolutely behind the canvas. Hidden as soon as
-          the user starts drawing, restored on clear.
-        */}
-        {hintVisible ? (
-          <div className="pointer-events-none absolute inset-0 flex items-end justify-center pb-3">
-            <span
-              data-slot="signature-pad-hint"
-              className="text-[11px] font-medium uppercase tracking-[0.1em]"
-              style={{ color: PAD_INK_QUIET }}
-            >
-              Sign here
-            </span>
-          </div>
-        ) : null}
-        <canvas
-          ref={canvasRef}
-          className="block h-full w-full touch-none rounded-lg"
-          style={{ touchAction: 'none' }}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerCancel={onPointerCancel}
-          aria-label="Signature pad"
-          role="img"
-        />
-        {/* A 44 px target at the corner (one hand at a dock), drawn in the
-            canvas's own fixed ink; the hover colour comes from a CSS
-            variable so it stays dark on the light pad in both themes. */}
-        <button
-          type="button"
-          onClick={clear}
-          className="absolute right-0 top-0 inline-flex min-h-11 min-w-11 items-center justify-center rounded-md px-3 text-xs font-medium text-[var(--pad-ink-quiet)] underline-offset-2 hover:text-[var(--pad-ink)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--pad-ink)]"
-          style={{ '--pad-ink-quiet': PAD_INK_QUIET, '--pad-ink': PAD_INK } as React.CSSProperties}
+        <div
+          ref={containerRef}
+          data-slot="signature-pad-box"
+          className={[
+            'relative w-full select-none',
+            'aspect-[3/1]',
+            'rounded-lg',
+            'border-line-strong border border-dashed',
+          ].join(' ')}
+          style={{ backgroundColor: PAD_BACKGROUND }}
         >
-          Clear
-        </button>
+          {/*
+            The hint sits absolutely behind the canvas. Hidden as soon as
+            the user starts drawing, restored on clear.
+          */}
+          {hintVisible ? (
+            <div className="pointer-events-none absolute inset-0 flex items-end justify-center pb-3">
+              <span
+                data-slot="signature-pad-hint"
+                className="text-[11px] font-medium uppercase tracking-[0.1em]"
+                style={{ color: PAD_INK_QUIET }}
+              >
+                Sign here
+              </span>
+            </div>
+          ) : null}
+          <canvas
+            ref={canvasRef}
+            className="block h-full w-full touch-none rounded-lg"
+            style={{ touchAction: 'none' }}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            onPointerCancel={onPointerCancel}
+            aria-label="Signature pad"
+            role="img"
+          />
+        </div>
+        {/* Clear sits in its own row under the pad, never on it: on a phone
+            the pad is about 105 px tall, and a 44 px button over its corner
+            caught strokes that started there and wiped the signature on a
+            tap. 44 px target on phones (one hand at a dock), 32 px from sm. */}
+        <div className="mt-1 flex justify-end">
+          <button
+            type="button"
+            onClick={clear}
+            className="text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex min-h-11 min-w-11 items-center justify-center rounded-md px-3 text-xs font-medium underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 sm:min-h-8"
+          >
+            Clear
+          </button>
+        </div>
       </div>
     );
   },
