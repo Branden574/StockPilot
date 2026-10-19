@@ -1,11 +1,7 @@
 import { render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import {
-  DASHBOARD_WIDGETS,
-  resolveDashboardWidgets,
-  type DashboardLayout,
-} from '@stockpilot/core';
+import { DASHBOARD_WIDGETS, resolveDashboardWidgets, type DashboardLayout } from '@stockpilot/core';
 
 import { renderDashboardWidgets } from './index';
 import type { DashboardWidgetProps } from './types';
@@ -179,11 +175,52 @@ describe('renderDashboardWidgets + resolveDashboardWidgets', () => {
   it('groups value-chart + movements-breakdown into one shared 12-col grid row by default', () => {
     const ids = resolveDashboardWidgets(null, ALL_IDS);
     const { container } = renderBody(ids);
-    // Find the grid that holds BOTH the big-chart (value-chart, col-span-9) and
+    // Find the row that holds BOTH the big-chart (value-chart, col-span-9) and
     // the movements breakdown (col-span-3) — i.e. they share a parent grid row.
+    // Locator updated for the redesign (P3.1): the row is found by its
+    // data-slot; it was the lg:grid-cols-12 class, which is now a container
+    // query on the row's own width.
     const bigChart = container.querySelector('[data-testid="big-chart"]')!;
-    const chartRow = bigChart.closest('.lg\\:grid-cols-12');
+    const chartRow = bigChart.closest('[data-slot="chart-row"]');
     expect(chartRow).not.toBeNull();
     expect(chartRow!.textContent).toContain('Movements · 30 days');
+  });
+
+  // A lone chart-row member kept the 9-of-12 span it had beside its partner,
+  // so a layout that hid the movements breakdown left a quarter of the row
+  // empty beside the value card (found in the redesign, P3.1). The spans now
+  // apply only to a pair.
+  it('gives a lone value card the whole row when the breakdown is hidden', () => {
+    const layout: DashboardLayout = {
+      v: 1,
+      widgets: ALL_IDS.map((id) => ({ id, hidden: id === 'movements-breakdown' })),
+    };
+    const { container } = renderBody(resolveDashboardWidgets(layout, ALL_IDS));
+    const row = container
+      .querySelector('[data-testid="big-chart"]')!
+      .closest('[data-slot="chart-row"]')!;
+    expect(row.getAttribute('data-paired')).toBe('false');
+    expect(row.querySelectorAll('[data-widget]')).toHaveLength(1);
+    expect(row.innerHTML).not.toMatch(/col-span-|grid-cols-12/);
+  });
+
+  it('pairs the two in either order, each keeping its own share of the row', () => {
+    const { container } = renderBody(['movements-breakdown', 'value-chart']);
+    const rows = container.querySelectorAll('[data-slot="chart-row"]');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.getAttribute('data-paired')).toBe('true');
+    const cells = Array.from(rows[0]!.querySelectorAll('[data-widget]'));
+    expect(cells.map((c) => c.getAttribute('data-widget'))).toEqual([
+      'movements-breakdown',
+      'value-chart',
+    ]);
+    expect(cells[0]!.className).toContain('col-span-3');
+    expect(cells[1]!.className).toContain('col-span-9');
+  });
+
+  it('keeps non-adjacent chart widgets in separate full-width rows', () => {
+    const { container } = renderBody(['value-chart', 'stat-row', 'movements-breakdown']);
+    const rows = Array.from(container.querySelectorAll('[data-slot="chart-row"]'));
+    expect(rows.map((r) => r.getAttribute('data-paired'))).toEqual(['false', 'false']);
   });
 });

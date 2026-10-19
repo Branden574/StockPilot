@@ -111,10 +111,10 @@ export function InventoryBreakdownWidget({
           </ChartContainer>
 
           <div className="mt-1 text-center">
-            <div className="font-display text-[18px] font-medium tabular-nums leading-none">
+            <div className="font-display text-[20px] font-medium tabular-nums leading-none tracking-[-0.02em]">
               {formatCurrency(total)}
             </div>
-            <div className="mt-0.5 text-[10.5px] uppercase tracking-[0.08em] text-[var(--ed-ink-4)]">
+            <div className="text-muted-foreground mt-0.5 text-[11px] font-medium uppercase tracking-[0.06em]">
               Total value
             </div>
           </div>
@@ -123,7 +123,7 @@ export function InventoryBreakdownWidget({
             {slices.slice(0, 6).map((s, i) => {
               const pct = total > 0 ? Math.round((s.value / total) * 100) : 0;
               return (
-                <li key={s.key} className="flex items-center justify-between gap-2 text-[12px]">
+                <li key={s.key} className="flex items-center justify-between gap-2 text-[12.5px]">
                   <span className="flex min-w-0 items-center gap-1.5">
                     <span
                       aria-hidden
@@ -132,7 +132,7 @@ export function InventoryBreakdownWidget({
                     />
                     <span className="truncate">{s.name}</span>
                   </span>
-                  <span className="flex shrink-0 items-center gap-2 font-mono text-[11px] tabular-nums text-[var(--ed-ink-3)]">
+                  <span className="text-muted-foreground flex shrink-0 items-center gap-2 font-mono text-[11.5px] tabular-nums">
                     <span>{formatCurrency(s.value)}</span>
                     <span className="w-8 text-right">{pct}%</span>
                   </span>

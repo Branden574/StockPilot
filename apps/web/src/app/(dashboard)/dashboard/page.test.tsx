@@ -20,6 +20,8 @@ const calls = vi.hoisted(() => ({
   viewer: { role: 'owner', permissions: new Set<string>() },
   /** Orders staged for pickup or in transit (awaitingSignatureCount). */
   awaitingSignature: vi.fn(async () => 0),
+  /** The viewer's organization (the Demo Co check). */
+  orgId: 'org-1',
 }));
 
 // ── The fan-out's services. `summary` is held open by the timing tests. ──
@@ -69,7 +71,7 @@ vi.mock('@/server/services/reports', () => ({
 
 vi.mock('@/lib/auth/session', () => ({
   requireOrgContext: async () => ({
-    organizationId: 'org-1',
+    organizationId: calls.orgId,
     organizationName: 'Org One',
     userId: 'u1',
     email: 'a@b.com',
@@ -176,6 +178,7 @@ beforeEach(() => {
   calls.profile.onboarding_dismissed_at = null;
   calls.viewer = { role: 'owner', permissions: new Set<string>() };
   calls.awaitingSignature.mockResolvedValue(0);
+  calls.orgId = 'org-1';
   summaryGate = null;
   lowStockRows = [{ id: 'i1', quantity_on_hand: 2 }];
 });
@@ -298,5 +301,75 @@ describe('/dashboard: the waiting for signature card follows orders:approve (F10
       await startBody()
     ).done;
     expect(attention().map((i) => i.id)).not.toContain('orders-awaiting-signature');
+  });
+});
+
+// The header after the redesign (P3.1): the same words, links and gates, now
+// handed to the shared page header. Read off the element tree the page
+// returns (every prop, not only children: the header takes its actions as
+// props).
+function allElements(node: unknown, out: AnyElement[] = []): AnyElement[] {
+  if (!node || typeof node !== 'object') return out;
+  if (Array.isArray(node)) {
+    for (const child of node) allElements(child, out);
+    return out;
+  }
+  const el = node as AnyElement;
+  if (!('props' in el) || !el.props) return out;
+  out.push(el);
+  for (const value of Object.values(el.props)) allElements(value, out);
+  return out;
+}
+
+function textOf(node: unknown): string {
+  if (node == null || typeof node === 'boolean') return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(textOf).join('');
+  return textOf((node as AnyElement).props?.children);
+}
+
+async function headerLinks(): Promise<Record<string, string>> {
+  const tree = await DashboardHome();
+  return Object.fromEntries(
+    allElements(tree)
+      .filter((el) => typeof el.props.href === 'string')
+      .map((el) => [textOf(el.props.children).trim(), el.props.href as string]),
+  );
+}
+
+describe('/dashboard header: the same actions behind the same gates', () => {
+  it('shows Export to everyone, New item with items:create, Receive stock with purchase_orders:manage', async () => {
+    calls.viewer = {
+      role: 'manager',
+      permissions: new Set(['items:create', 'purchase_orders:manage']),
+    };
+    expect(await headerLinks()).toEqual({
+      Export: '/dashboard/reports',
+      'New item': '/dashboard/inventory/new',
+      'Receive stock': '/dashboard/purchase-orders/new',
+    });
+  });
+
+  it('hides New item and Receive stock from a viewer without those permissions', async () => {
+    calls.viewer = { role: 'viewer', permissions: new Set(['items:read']) };
+    expect(await headerLinks()).toEqual({ Export: '/dashboard/reports' });
+  });
+
+  it('greets in the org time zone with "filtered to" the topbar warehouse in the eyebrow', async () => {
+    const tree = await DashboardHome();
+    const header = findByTypeName(tree, 'PageHeader')!;
+    expect(header).not.toBeNull();
+    expect(header.props.variant).toBe('greeting');
+    expect(header.props.title).toMatch(/^Good (morning|afternoon|evening), Ann\.$/);
+    expect(textOf(header.props.eyebrow)).toMatch(
+      /^[A-Z][a-z]+day, [A-Z][a-z]+ \d{1,2} · filtered to Main$/,
+    );
+    expect(findByTypeName(header.props.tour, 'PageTour')).not.toBeNull();
+  });
+
+  it('offers the demo scenarios in Demo Co only', async () => {
+    expect(findByTypeName(await DashboardHome(), 'DemoScenarios')).toBeNull();
+    calls.orgId = 'demo-org';
+    expect(findByTypeName(await DashboardHome(), 'DemoScenarios')).not.toBeNull();
   });
 });

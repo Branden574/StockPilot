@@ -1,6 +1,8 @@
 import { Compass } from 'lucide-react';
 import Link from 'next/link';
 
+import { DetailSection } from '@/components/patterns/detail-section';
+
 /**
  * Demo-account scenario menu (owner PRD §8) — rendered ONLY inside the demo
  * organization (checked by the caller). Each scenario is a real guided path
@@ -46,31 +48,34 @@ const SCENARIOS: { title: string; body: string; href: string; cta: string }[] = 
 
 export function DemoScenarios() {
   return (
-    <section
+    <DetailSection
       aria-label="Demo scenarios"
-      className="bg-card mt-6 rounded-xl border p-4"
+      title={
+        <span className="inline-flex items-center gap-2">
+          <Compass aria-hidden className="text-accent size-4" /> Explore the demo
+        </span>
+      }
     >
-      <h2 className="flex items-center gap-2 text-sm font-semibold">
-        <Compass className="text-primary size-4" /> Explore the demo
-      </h2>
-      <p className="text-muted-foreground mt-1 text-xs">
+      <p className="text-muted-foreground text-[12.5px] leading-[18.75px]">
         This workspace is sample data — try anything, break nothing. Five guided scenarios:
       </p>
-      <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
-        {SCENARIOS.map((s) => (
-          <Link
-            key={s.href}
-            href={s.href}
-            className="hover:border-foreground/30 group rounded-lg border p-3 transition-colors"
-          >
-            <p className="text-sm font-medium">{s.title}</p>
-            <p className="text-muted-foreground mt-1 text-xs leading-relaxed">{s.body}</p>
-            <p className="text-primary mt-2 text-xs font-medium group-hover:underline">
-              {s.cta} →
-            </p>
-          </Link>
-        ))}
+      <div className="@container mt-3">
+        <div className="@min-[520px]:grid-cols-2 @min-[960px]:grid-cols-5 grid gap-2">
+          {SCENARIOS.map((s) => (
+            <Link
+              key={s.href}
+              href={s.href}
+              className="border-border hover:border-line-strong hover:bg-muted group flex flex-col rounded-md border p-3 transition-colors"
+            >
+              <p className="text-[13.5px] font-medium leading-5">{s.title}</p>
+              <p className="text-muted-foreground mt-1 text-[12.5px] leading-relaxed">{s.body}</p>
+              <p className="text-accent mt-auto pt-2 text-[12.5px] font-medium group-hover:underline">
+                {s.cta} →
+              </p>
+            </Link>
+          ))}
+        </div>
       </div>
-    </section>
+    </DetailSection>
   );
 }

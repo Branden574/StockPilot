@@ -42,8 +42,8 @@ const SERIES_PALETTE = [
 ] as const;
 
 /**
- * Quiet editorial line/area chart used on the dashboard overview.
- * No external chart lib — just SVG + simple gridlines.
+ * Quiet line/area chart used on the dashboard overview's value card.
+ * No external chart lib — just SVG.
  */
 export function BigChart({ data, series, height = 240, className }: BigChartProps) {
   const ref = React.useRef<SVGSVGElement | null>(null);
@@ -126,30 +126,19 @@ export function BigChart({ data, series, height = 240, className }: BigChartProp
       preserveAspectRatio="none"
       className={multi ? undefined : className}
     >
-      {[0, 1, 2, 3, 4].map((i) => {
-        const y = padY + (i * usableH) / 4;
-        return (
-          <line
-            key={i}
-            x1={padX}
-            x2={width - padX}
-            y1={y}
-            y2={y}
-            stroke="hsl(var(--border))"
-            strokeDasharray="2 4"
-          />
-        );
-      })}
-      {area ? <path d={area} fill="hsl(var(--accent))" opacity={0.1} /> : null}
+      {/* The reference value chart (DESIGN-SPEC 6.17): the accent wash under
+          the line, the accent line at 1.75, no gridlines. */}
+      {area ? <path d={area} fill="hsl(var(--success-wash))" /> : null}
       {lines.map((s, i) => (
         <path
           key={`line-${i}`}
           d={s.path}
           fill="none"
           stroke={s.color}
-          strokeWidth={1.8}
+          strokeWidth={1.75}
           strokeLinecap="round"
           strokeLinejoin="round"
+          vectorEffect="non-scaling-stroke"
         />
       ))}
       {lines.map((s, i) => (
@@ -157,10 +146,10 @@ export function BigChart({ data, series, height = 240, className }: BigChartProp
           key={`dot-${i}`}
           cx={s.last[0]}
           cy={s.last[1]}
-          r={4}
+          r={3}
           fill="hsl(var(--card))"
           stroke={s.color}
-          strokeWidth={1.6}
+          strokeWidth={1.5}
         />
       ))}
     </svg>
@@ -171,7 +160,7 @@ export function BigChart({ data, series, height = 240, className }: BigChartProp
 
   return (
     <div className={className}>
-      <ul className="flex flex-wrap gap-x-4 gap-y-1 px-5 pt-1 font-mono text-[11px] text-[var(--ed-ink-3)]">
+      <ul className="text-muted-foreground flex flex-wrap gap-x-4 gap-y-1 px-[18px] pt-1 font-mono text-[11.5px]">
         {lines.map((s, i) => (
           <li key={i} className="flex items-center gap-1.5">
             <span

@@ -1,5 +1,6 @@
 import { AnalyticsSection } from '@/components/dashboard/charts/analytics-section';
 
+import { WidgetHeading } from './shared';
 import type { DashboardWidgetProps } from './types';
 
 /**
@@ -10,19 +11,18 @@ import type { DashboardWidgetProps } from './types';
  * JSON-serializable series on the server (props.analytics). Keeping the lazy
  * island intact preserves the dashboard load-perf work — do NOT inline the
  * grid here.
+ *
+ * The wrapper is the size container the grid lays out against (its columns
+ * follow the space beside the sidebar, not the window).
  */
 export function AnalyticsWidget({ analytics }: DashboardWidgetProps) {
   return (
-    <>
-      <div className="mt-2 mb-4 flex items-end justify-between gap-3 border-b border-border pb-2">
-        <div>
-          <h2 className="font-display text-[18px] font-medium tracking-[-0.015em]">Analytics</h2>
-          <p className="text-[12px] text-[var(--ed-ink-3)]">
-            Value trend, composition, and movement volume.
-          </p>
-        </div>
-      </div>
-      <div className="mb-4">
+    <div className="flex min-w-0 flex-col gap-3">
+      <WidgetHeading
+        title="Analytics"
+        description="Value trend, composition, and movement volume."
+      />
+      <div className="@container min-w-0">
         <AnalyticsSection
           valueSeries={analytics.valueSeries}
           byCategory={analytics.byCategory}
@@ -30,6 +30,6 @@ export function AnalyticsWidget({ analytics }: DashboardWidgetProps) {
           movementBars={analytics.movementBars}
         />
       </div>
-    </>
+    </div>
   );
 }

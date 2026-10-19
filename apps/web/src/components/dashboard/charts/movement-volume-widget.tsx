@@ -24,7 +24,8 @@ export interface MovementVolumeWidgetProps {
    *  by count descending. */
   bars: MovementBar[];
   className?: string;
-  /** Chart drawing height in px. Defaults to 240. */
+  /** Chart drawing height in px. Defaults to 304: the 240 px of before plus room
+   *  for the angled axis labels. */
   height?: number;
 }
 
@@ -33,7 +34,7 @@ export interface MovementVolumeWidgetProps {
  * Fed by `toMovementBars(getThirtyDayMetrics(...))` mapped on the server.
  * Phase 2 reuses this with its own bar data.
  */
-export function MovementVolumeWidget({ bars, className, height = 240 }: MovementVolumeWidgetProps) {
+export function MovementVolumeWidget({ bars, className, height = 304 }: MovementVolumeWidgetProps) {
   return (
     <div className={cn('flex flex-col', className)}>
       {bars.length === 0 ? (
@@ -53,11 +54,17 @@ export function MovementVolumeWidget({ bars, className, height = 240 }: Movement
               tickLine={false}
               axisLine={false}
               tickMargin={8}
+              // Every type keeps its label (interval 0), angled so neighbours
+              // never overprint each other.
               interval={0}
+              angle={-35}
+              textAnchor="end"
+              height={96}
+              tick={{ fontSize: 11 }}
             />
             <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
             <ChartTooltip content={<ChartTooltipContent nameKey="label" hideLabel />} />
-            <Bar dataKey="count" fill="var(--color-count)" radius={[4, 4, 0, 0]} maxBarSize={56} />
+            <Bar dataKey="count" fill="var(--color-count)" radius={[3, 3, 0, 0]} maxBarSize={56} />
           </BarChart>
         </ChartContainer>
       )}
