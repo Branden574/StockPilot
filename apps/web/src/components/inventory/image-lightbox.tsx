@@ -63,6 +63,25 @@ export function ImageLightbox({
   // the viewer shows by the time it is confirmed.
   const [deleteTargetId, setDeleteTargetId] = React.useState<string | null>(null);
   const [deleteBusy, setDeleteBusy] = React.useState(false);
+  // The delete confirm is a dialog of its own with no trigger, so when it
+  // closed Radix had nothing to hand focus back to and it fell to the page
+  // body: a keyboard user lost their place in the viewer. Focus goes back to
+  // Delete (the next photo's, after a removal) once the confirm has closed.
+  const deleteButtonRef = React.useRef<HTMLButtonElement | null>(null);
+  const confirmWasOpen = React.useRef(false);
+  React.useEffect(() => {
+    const justClosed = confirmWasOpen.current && !confirmOpen;
+    confirmWasOpen.current = confirmOpen;
+    if (!justClosed || !open) return;
+    const id = window.setTimeout(() => deleteButtonRef.current?.focus(), 0);
+    return () => window.clearTimeout(id);
+  }, [confirmOpen, open]);
+  // The viewer has no Radix trigger either: every caller opens it from its
+  // own thumbnail button, so on close focus fell to the page body as well and
+  // a keyboard user started again from the top of the page. It goes back to
+  // what had focus when the viewer opened (the thumbnail), while that is
+  // still on the page.
+  const openerRef = React.useRef<HTMLElement | null>(null);
 
   const dragRef = React.useRef<{
     startX: number;
@@ -270,6 +289,19 @@ export function ImageLightbox({
           <DialogPrimitive.Content
             className="fixed inset-0 z-50 flex flex-col outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 max-sm:pb-[calc(4.5rem_+_env(safe-area-inset-bottom))]"
             onClick={onClose}
+            onOpenAutoFocus={() => {
+              const el = document.activeElement;
+              openerRef.current = el instanceof HTMLElement && el !== document.body ? el : null;
+            }}
+            onCloseAutoFocus={(e) => {
+              const opener = openerRef.current;
+              openerRef.current = null;
+              if (!opener) return;
+              // In place of Radix's own step (focus the trigger), which finds
+              // none here.
+              e.preventDefault();
+              opener.focus();
+            }}
           >
             <DialogPrimitive.Title className="sr-only">Image viewer</DialogPrimitive.Title>
             <DialogPrimitive.Description className="sr-only">
@@ -342,7 +374,12 @@ export function ImageLightbox({
                     <Download className="size-4" />
                   </a>
                   {onDelete && (
-                    <ToolbarButton onClick={handleDelete} ariaLabel="Delete image" tone="danger">
+                    <ToolbarButton
+                      onClick={handleDelete}
+                      ariaLabel="Delete image"
+                      tone="danger"
+                      buttonRef={deleteButtonRef}
+                    >
                       <Trash2 className="size-4" />
                     </ToolbarButton>
                   )}
@@ -369,7 +406,16 @@ export function ImageLightbox({
               onTouchEnd={onTouchEnd}
             >
               {loadFailure && failedUrls.has(current.url) ? (
-                <div className="absolute inset-0 z-10 flex items-center justify-center px-6">
+                <div
+                  data-testid="image-viewer-failure"
+                  className={cn(
+                    'absolute inset-0 z-10 flex items-center justify-center px-6',
+                    // At phone width the arrows sit 12px in from each edge and
+                    // are 44px wide; the card slid under the Next arrow, so it
+                    // keeps 64px clear of each edge while arrows are shown.
+                    (hasPrev || hasNext) && 'max-sm:px-16',
+                  )}
+                >
                   {/* A card on the dark surface, in the theme's colours. A
                       press on it (Try again included) stays in the viewer:
                       it used to close it as well, so the retry landed on a
@@ -515,15 +561,18 @@ function ToolbarButton({
   disabled,
   ariaLabel,
   tone = 'default',
+  buttonRef,
 }: {
   children: React.ReactNode;
   onClick: () => void;
   disabled?: boolean;
   ariaLabel: string;
   tone?: 'default' | 'danger';
+  buttonRef?: React.Ref<HTMLButtonElement>;
 }) {
   return (
     <button
+      ref={buttonRef}
       type="button"
       onClick={onClick}
       disabled={disabled}

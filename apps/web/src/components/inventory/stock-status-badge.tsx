@@ -27,22 +27,11 @@ interface StockStatusBadgeProps {
   expectedVerbose?: boolean;
 }
 
-/** The 5px dot that leads a stock status pill, in the label's own colour.
- *  P2.2's restyled Badge draws this same dot through its `dot` prop and has
- *  PILL's gap and nowrap in its base classes; when this branch rebases onto
- *  P2.2, each pill becomes `<Badge variant=... dot>` (its title kept) and
- *  StatusDot and PILL go, so the dot lives in one place. */
-function StatusDot() {
-  return <span aria-hidden className="size-[5px] shrink-0 rounded-full bg-current" />;
-}
-
-/** The gap between the dot and the label, kept on one line (a narrow Status
- *  column used to wrap "In stock" onto two lines, the dot left alone above). */
-const PILL = 'gap-1.5 whitespace-nowrap';
-
 /**
  * The stock status pill (DESIGN-SPEC 6.10): each label on one of the six Badge
- * tones, led by the dot. The words are the cue (colour is never the only one):
+ * tones, led by the Badge's own 5px dot in the label's colour (its `dot` prop),
+ * so the dot, the gap and the one-line rule live in the Badge alone and a pill
+ * never shows two dots. The words are the cue (colour is never the only one):
  * In stock, Low stock, Out of stock, Expected, Archived (+ Auto-archived) and
  * Discontinued, decided by the rule below. There is no other tier: nothing is
  * called "Critical".
@@ -59,10 +48,9 @@ export function StockStatusBadge({
     return (
       <Badge
         variant="secondary"
-        className={PILL}
+        dot
         title="Created from a purchase order — nothing has been received yet. It appears everywhere the moment the first stock arrives."
       >
-        <StatusDot />
         {expectedVerbose ? 'Expected — awaiting first receipt' : 'Expected'}
       </Badge>
     );
@@ -72,17 +60,15 @@ export function StockStatusBadge({
       // Badge renders a <div> — wrap in a <div> too (not <span>) so two
       // adjacent badges don't produce invalid div-inside-span nesting.
       <div className="inline-flex items-center gap-1">
-        <Badge variant="outline" className={PILL}>
-          <StatusDot />
+        <Badge variant="outline" dot>
           Archived
         </Badge>
         {autoArchived && (
           <Badge
             variant="secondary"
-            className={PILL}
+            dot
             title="The system archived this item automatically after it sat at zero stock past the org's dwell window."
           >
-            <StatusDot />
             Auto-archived
           </Badge>
         )}
@@ -91,31 +77,27 @@ export function StockStatusBadge({
   }
   if (itemStatus === 'discontinued') {
     return (
-      <Badge variant="outline" className={PILL}>
-        <StatusDot />
+      <Badge variant="outline" dot>
         Discontinued
       </Badge>
     );
   }
   if (quantity <= 0) {
     return (
-      <Badge variant="destructive" className={PILL}>
-        <StatusDot />
+      <Badge variant="destructive" dot>
         Out of stock
       </Badge>
     );
   }
   if (reorderPoint > 0 && quantity <= reorderPoint) {
     return (
-      <Badge variant="warning" className={PILL}>
-        <StatusDot />
+      <Badge variant="warning" dot>
         Low stock
       </Badge>
     );
   }
   return (
-    <Badge variant="success" className={PILL}>
-      <StatusDot />
+    <Badge variant="success" dot>
       In stock
     </Badge>
   );

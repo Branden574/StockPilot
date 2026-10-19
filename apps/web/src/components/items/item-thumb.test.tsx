@@ -27,7 +27,8 @@ import { ItemThumb } from './item-thumb';
 /**
  * ItemThumb (PO lines, command palette). The redesign (P2.4, DESIGN-SPEC
  * 6.14): the photo on a hairline tile, the hatch when there is none, and the
- * hover preview of the larger image kept.
+ * hover preview of the larger image kept. Since P2.4c the tile and the hatch
+ * are the shared Thumb and MissingPhoto patterns.
  */
 describe('ItemThumb', () => {
   it('shows the small image and hands the larger one to the hover preview', () => {
@@ -66,8 +67,18 @@ describe('ItemThumb', () => {
     const { rerender } = render(<ItemThumb imageUrl={null} alt="Polo" />);
     const hatch = screen.getByTestId('item-thumb-placeholder');
     expect(hatch).toHaveAttribute('aria-hidden', 'true');
-    expect(hatch.style.backgroundImage).toContain('repeating-linear-gradient');
-    expect(hatch).toHaveClass('bg-sunk');
+    // Look only (P2.4c, the rebase onto P2.6): the hatch is now the shared
+    // MissingPhoto pattern, which draws the strokes and the sunk fill in one
+    // `background` shorthand instead of a backgroundImage over a bg-sunk class.
+    // happy-dom's CSSOM drops a gradient in a shorthand that holds var(), so
+    // the line-on-sunk hatch is read from the server-rendered markup, which
+    // writes the style as given.
+    expect(hatch).toHaveAttribute('data-slot', 'missing-photo');
+    const markup = renderToString(<ItemThumb imageUrl={null} alt="Polo" />);
+    expect(markup).toContain('data-testid="item-thumb-placeholder"');
+    expect(markup).toMatch(
+      /background:repeating-linear-gradient\(45deg, var\(--ed-line\)[^"]*\), var\(--ed-bg-sunk\)/,
+    );
     expect(screen.queryByRole('img')).not.toBeInTheDocument();
     expect(screen.getByTestId('preview')).toHaveAttribute('data-src', '');
 
@@ -92,10 +103,37 @@ describe('ItemThumb', () => {
   });
 
   it('keeps its two sizes: 28px (sm) and 40px (md, the default)', () => {
+    // Look only (P2.4c): the size now sits on the shared Thumb frame around
+    // the hatch or the photo, not on the hatch itself; the sizes are the same.
+    const frame = () => screen.getByTestId('item-thumb-placeholder').closest('[data-slot="thumb"]');
     const { rerender } = render(<ItemThumb imageUrl={null} alt="Polo" size="sm" />);
-    expect(screen.getByTestId('item-thumb-placeholder')).toHaveClass('size-7');
+    expect(frame()).toHaveClass('size-7', 'rounded-[5px]');
     rerender(<ItemThumb imageUrl={null} alt="Polo" />);
-    expect(screen.getByTestId('item-thumb-placeholder')).toHaveClass('size-10');
+    expect(frame()).toHaveClass('size-10', 'rounded-md');
+    // The 32px frame it is built on gives way to the 40px box.
+    expect(frame()).not.toHaveClass('size-8');
+  });
+
+  // PLAN P2.4 / P2.6 "one owner per pattern": the frame and the hatch are the
+  // shared patterns (patterns/thumb.tsx, patterns/missing-photo.tsx), so
+  // ItemThumb, the grid card and the item cell show one frame and one hatch.
+  it('draws its frame and its hatch through the shared patterns', () => {
+    const { container, rerender } = render(
+      <ItemThumb imageUrl="https://x.test/thumb.webp" alt="Polo" size="sm" />,
+    );
+    const img = screen.getByRole('img', { name: 'Polo' });
+    const photoFrame = img.closest('[data-slot="thumb"]');
+    expect(photoFrame).toHaveClass('bg-white', 'border', 'border-border', 'overflow-hidden');
+    // The photo fills the frame, so the frame's rounded hairline clips it.
+    expect(img).toHaveClass('absolute', 'inset-0', 'h-full', 'w-full');
+
+    rerender(<ItemThumb imageUrl={null} alt="Polo" size="sm" />);
+    const hatch = screen.getByTestId('item-thumb-placeholder');
+    expect(hatch).toHaveAttribute('data-slot', 'missing-photo');
+    expect(hatch.closest('[data-slot="thumb"]')).not.toBeNull();
+    // One frame, one hatch: nothing of the old local tile is left beside them.
+    expect(container.querySelectorAll('[data-slot="thumb"]')).toHaveLength(1);
+    expect(container.querySelectorAll('[data-slot="missing-photo"]')).toHaveLength(1);
   });
 });
 

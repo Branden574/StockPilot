@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { ImageLightbox } from './image-lightbox';
@@ -172,6 +173,25 @@ describe('ImageLightbox: a photo that will not load', () => {
     expect(failure.onRetry).toHaveBeenCalledTimes(1);
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  // Defect found in the lab at 390 (P2.4c): with more than one photo the
+  // failure card ran under the Next arrow (12px in from the edge, 44px wide)
+  // while its own margin was 24px. With arrows shown it keeps 64px clear of
+  // each edge below sm; a single photo has no arrows and keeps its 24px.
+  it('keeps the failure card clear of the arrows on a phone', () => {
+    renderViewer({ loadFailure: loadFailure() });
+    fireEvent.error(viewer().querySelector('img')!);
+    expect(screen.getByRole('button', { name: 'Next image' })).toHaveClass('right-3', 'size-11');
+    expect(screen.getByTestId('image-viewer-failure')).toHaveClass('px-6', 'max-sm:px-16');
+  });
+
+  it('keeps the narrow margin when a single photo has no arrows', () => {
+    renderViewer({ images: [A], loadFailure: loadFailure() });
+    fireEvent.error(viewer().querySelector('img')!);
+    expect(screen.queryByRole('button', { name: 'Next image' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('image-viewer-failure')).toHaveClass('px-6');
+    expect(screen.getByTestId('image-viewer-failure')).not.toHaveClass('max-sm:px-16');
+  });
 });
 
 describe('ImageLightbox: Delete', () => {
@@ -205,5 +225,119 @@ describe('ImageLightbox: Delete', () => {
     expect(onDelete).toHaveBeenCalledWith('img-a');
     await waitFor(() => expect(screen.queryByText('Remove this image?')).not.toBeInTheDocument());
     expect(counter('1 of 2')).toBeInTheDocument();
+  });
+
+  // Defect found in the lab (P2.4c; the base build does the same): the
+  // confirm is a dialog of its own with no trigger, so when it closed Radix
+  // had nothing to hand focus back to and it fell to the page body. A
+  // keyboard user lost their place in the viewer. It goes back to Delete,
+  // whether the confirm was cancelled, escaped or the image removed.
+  it('hands keyboard focus back to Delete when the confirm closes', async () => {
+    const user = userEvent.setup();
+    const onDelete = vi.fn().mockResolvedValue(undefined);
+    renderViewer({ onDelete });
+    const deleteButton = () => screen.getByRole('button', { name: 'Delete image' });
+
+    await user.click(deleteButton());
+    const confirm = await screen.findByRole('dialog', { name: 'Remove this image?' });
+    await user.click(within(confirm).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByText('Remove this image?')).not.toBeInTheDocument());
+    await waitFor(() => expect(deleteButton()).toHaveFocus());
+    expect(onDelete).not.toHaveBeenCalled();
+
+    await user.click(deleteButton());
+    await screen.findByRole('dialog', { name: 'Remove this image?' });
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByText('Remove this image?')).not.toBeInTheDocument());
+    expect(viewer()).toBeInTheDocument();
+    await waitFor(() => expect(deleteButton()).toHaveFocus());
+
+    await user.click(deleteButton());
+    await screen.findByRole('dialog', { name: 'Remove this image?' });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    });
+    expect(onDelete).toHaveBeenCalledWith('img-a');
+    await waitFor(() => expect(screen.queryByText('Remove this image?')).not.toBeInTheDocument());
+    await waitFor(() => expect(deleteButton()).toHaveFocus());
+  });
+});
+
+describe('ImageLightbox: keyboard focus when it closes', () => {
+  // Defect found in the P2.4c re-check (the base build does the same): the
+  // viewer has no Radix trigger, since every caller opens it from its own
+  // thumbnail button, so when it closed Radix had nothing to hand focus back
+  // to and it fell to the page body. A keyboard user started again from the
+  // top of the page. It goes back to the thumbnail that opened it.
+  function Gallery({ keepMounted }: { keepMounted: boolean }) {
+    const [open, setOpen] = React.useState(false);
+    return (
+      <>
+        <button type="button" onClick={() => setOpen(true)}>
+          Open image full screen
+        </button>
+        {keepMounted || open ? (
+          <ImageLightbox
+            images={[A, B]}
+            startIndex={0}
+            open={open}
+            onClose={() => setOpen(false)}
+          />
+        ) : null}
+      </>
+    );
+  }
+  const viewerGone = () =>
+    waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Image viewer' })).not.toBeInTheDocument(),
+    );
+
+  it.each([
+    ['kept mounted while closed (maintenance photos)', true],
+    ['mounted only while open (item photos, order proof)', false],
+  ])('goes back to the thumbnail that opened it, %s', async (_, keepMounted) => {
+    const user = userEvent.setup();
+    render(<Gallery keepMounted={keepMounted} />);
+    const opener = screen.getByRole('button', { name: 'Open image full screen' });
+
+    await user.click(opener);
+    await screen.findByRole('dialog', { name: 'Image viewer' });
+    await waitFor(() => expect(viewer()).toContainElement(document.activeElement as HTMLElement));
+    await user.keyboard('{Escape}');
+    await viewerGone();
+    await waitFor(() => expect(opener).toHaveFocus());
+
+    await user.click(opener);
+    await screen.findByRole('dialog', { name: 'Image viewer' });
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+    await viewerGone();
+    await waitFor(() => expect(opener).toHaveFocus());
+  });
+
+  // The same walk in the development configuration (StrictMode is on in
+  // next.config.ts, so React runs effects twice): focus stays in the viewer
+  // while it is open, never bouncing out to the thumbnail (whose own focus
+  // handlers would fire), and goes back to the thumbnail once, on close.
+  it('does the same in the development configuration (StrictMode)', async () => {
+    const user = userEvent.setup();
+    render(
+      <React.StrictMode>
+        <Gallery keepMounted={false} />
+      </React.StrictMode>,
+    );
+    const opener = screen.getByRole('button', { name: 'Open image full screen' });
+    const onOpenerFocus = vi.fn();
+    opener.addEventListener('focus', onOpenerFocus);
+    await user.click(opener);
+    expect(onOpenerFocus).toHaveBeenCalledTimes(1);
+    await screen.findByRole('dialog', { name: 'Image viewer' });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(viewer()).toContainElement(document.activeElement as HTMLElement);
+    expect(onOpenerFocus).toHaveBeenCalledTimes(1);
+
+    await user.keyboard('{Escape}');
+    await viewerGone();
+    await waitFor(() => expect(opener).toHaveFocus());
+    expect(onOpenerFocus).toHaveBeenCalledTimes(2);
   });
 });
