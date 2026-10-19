@@ -84,3 +84,23 @@ describe('CatalogGrid with no match', () => {
     expect(onClear).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('ItemCard footer room', () => {
+  // Redesign P4.B2 review: on a narrow card the Add control kept a stepper-wide
+  // minimum, which cut the rack label to "1.". The minimum now holds only while
+  // the item is in the cart, and the cut SKU line names itself in a title.
+  it('reserves the stepper width only while the item is in the cart', () => {
+    renderCard(item({}));
+    const add = screen.getByRole('button', { name: /Add/ });
+    expect(add.parentElement!.className).not.toContain('min-w-[5.5rem]');
+    fireEvent.click(add);
+    const stepper = screen.getByLabelText('Quantity').closest('div')!.parentElement!;
+    expect(stepper.className).toContain('min-w-[5.5rem]');
+  });
+
+  it('keeps the rack label and gives the SKU line its full words as a title', () => {
+    renderCard(item({}));
+    expect(screen.getByTitle('12-A')).toBeTruthy();
+    expect(screen.getByTitle('SKU-1 · Furniture')).toBeTruthy();
+  });
+});

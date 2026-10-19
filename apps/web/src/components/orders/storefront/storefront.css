@@ -481,9 +481,35 @@
   font-weight: 500;
 }
 
-/* checkbox (availability popover) */
+/* checkbox (availability popover). The New order page draws the shared
+   CheckboxGlyph with this class (no data-checked), so it only needs to hold its
+   width. The public order page (/r/<token>, public-orders-v2.tsx) draws a bare
+   <span class="sf-cb" data-checked> and needs the box and tick below; they are
+   scoped to [data-checked] so they never reach the glyph. */
 .sp-storefront .sf-cb {
   flex-shrink: 0;
+}
+.sp-storefront .sf-cb[data-checked] {
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--sf-line-strong);
+  border-radius: 3px;
+  background: var(--sf-bg-elev);
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+.sp-storefront .sf-cb[data-checked='true'] {
+  background: var(--sf-ink);
+  border-color: var(--sf-ink);
+}
+.sp-storefront .sf-cb[data-checked='true']::after {
+  content: '';
+  width: 7px;
+  height: 4px;
+  border-left: 1.5px solid var(--sf-bg);
+  border-bottom: 1.5px solid var(--sf-bg);
+  transform: rotate(-45deg) translateY(-1px);
 }
 
 /* ---- Shell: catalog + cart ----------------------------------- */
@@ -1666,6 +1692,39 @@
 }
 
 /* ---- Empty search state ----------------------------------------- */
+/* The New order page draws its no-match state with the shared StatePanel.
+   The public order page keeps these rules: /r/<token> (app/r/[token]/page.tsx)
+   and public-orders-v2.tsx draw the closed link, the empty catalog and the
+   no-match state as .sf-empty with a .big icon tile, an h4 and a p. */
+.sp-storefront .sf-empty {
+  padding: 64px 24px;
+  text-align: center;
+  border: 1px dashed var(--sf-line-strong);
+  border-radius: 8px;
+  color: var(--sf-ink-3);
+}
+.sp-storefront .sf-empty .big {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 16px;
+  border-radius: 8px;
+  background: var(--sf-bg-elev);
+  border: 1px solid var(--sf-line);
+  display: grid;
+  place-items: center;
+  color: var(--sf-ink-4);
+}
+.sp-storefront .sf-empty h4 {
+  font-family: var(--sf-font-display);
+  font-size: 16px;
+  font-weight: 500;
+  margin: 0 0 4px;
+  color: var(--sf-ink);
+}
+.sp-storefront .sf-empty p {
+  font-size: 12.5px;
+  margin: 0 0 16px;
+}
 
 /* ---- Cart rail ---------------------------------------------------- */
 .sp-storefront .sf-rail {

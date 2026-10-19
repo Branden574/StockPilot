@@ -129,3 +129,43 @@ describe('the redesign rules for this page', () => {
     }
   });
 });
+
+describe('the rules the public order page still reads', () => {
+  // /r/<token> (app/r/[token]/page.tsx) and public-orders-v2.tsx draw the
+  // closed link, the empty catalog and the no-match state as
+  // <div class="sf-empty"><div class="big">…<h4>…<p>…, so these rules stay even
+  // though the New order page's own no-match state is the shared StatePanel.
+  it.each([
+    '.sp-storefront .sf-empty',
+    '.sp-storefront .sf-empty .big',
+    '.sp-storefront .sf-empty h4',
+    '.sp-storefront .sf-empty p',
+  ])('keeps %s', (selector) => {
+    const body = ruleBody(CODE, selector);
+    expect(body).toMatch(/[a-z-]+:\s*[^;]+;/);
+  });
+
+  it('draws the empty-state frame with a dashed border and the shared radius', () => {
+    const body = ruleBody(CODE, '.sp-storefront .sf-empty');
+    expect(body).toContain('border: 1px dashed var(--sf-line-strong);');
+    expect(body).toContain('padding: 64px 24px;');
+  });
+
+  // public-orders-v2.tsx draws the Availability popover's tick box as a bare
+  // <span class="sf-cb" data-checked={…} />: the box and its tick must exist,
+  // or a visitor cannot see which availability filters are on. They are
+  // scoped to [data-checked] so the dashboard's CheckboxGlyph is untouched.
+  it('keeps the public availability tick box, scoped to [data-checked]', () => {
+    const box = ruleBody(CODE, '.sp-storefront .sf-cb[data-checked]');
+    expect(box).toContain('width: 14px;');
+    expect(box).toContain('border: 1px solid var(--sf-line-strong);');
+    expect(ruleBody(CODE, ".sp-storefront .sf-cb[data-checked='true']")).toContain(
+      'background: var(--sf-ink);',
+    );
+    expect(ruleBody(CODE, ".sp-storefront .sf-cb[data-checked='true']::after")).toContain(
+      "content: '';",
+    );
+    // No unscoped box rule that would also draw on the dashboard's glyph.
+    expect(ruleBody(CODE, '.sp-storefront .sf-cb')).not.toMatch(/width|border|background/);
+  });
+});

@@ -163,7 +163,10 @@ export function ItemCard({ item }: ItemCardProps) {
         >
           {item.name}
         </h4>
-        <p className="text-muted-foreground truncate font-mono text-[11.5px]">
+        <p
+          className="text-muted-foreground truncate font-mono text-[11.5px]"
+          title={item.categoryName ? `${item.sku} · ${item.categoryName}` : item.sku}
+        >
           {item.sku}
           {item.categoryName ? (
             <span className="font-sans"> · {item.categoryName}</span>
@@ -199,8 +202,10 @@ export function ItemCard({ item }: ItemCardProps) {
               <div />
             )}
 
-            {/* Add / Stepper */}
-            <div className="flex-none min-w-[5.5rem] flex justify-end">
+            {/* Add / Stepper. The stepper's width is held only while the
+                item is in the cart, so the Add button leaves the rack label
+                the room it does not need (a narrow card cut it to "1."). */}
+            <div className={cn('flex flex-none justify-end', inCart && 'min-w-[5.5rem]')}>
               {inCart ? (
                 <div className="border-line-strong bg-card flex h-7 items-center overflow-hidden rounded-md border focus-within:border-accent focus-within:shadow-[0_0_0_1px_hsl(var(--accent))]">
                   <button
@@ -240,9 +245,10 @@ export function ItemCard({ item }: ItemCardProps) {
                   variant="outline"
                   onClick={handleAdd}
                   disabled={available <= 0}
-                  className="h-7 px-3 text-[12.5px]"
+                  className="h-7 px-2.5 text-[12.5px]"
                 >
-                  <Plus className="h-3 w-3 mr-1" />
+                  {/* The button's own gap spaces the icon from the word. */}
+                  <Plus className="h-3 w-3" />
                   Add
                 </Button>
               )}

@@ -580,7 +580,6 @@ export function EmptyResults({
   return (
     <StatePanel
       kind="no-match"
-      className="sf-empty"
       headingLevel={3}
       title={storefrontNothingMatchesCopy(query)}
       description={STOREFRONT_NOTHING_MATCHES_HINT_COPY}
