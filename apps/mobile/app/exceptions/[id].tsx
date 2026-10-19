@@ -38,7 +38,7 @@ import { ExceptionNoteSheet } from '@/components/exception-note-sheet';
 import { ExceptionRecountSheet } from '@/components/exception-recount-sheet';
 import { ItemVerificationCard, MIN_TAP, useItemVerification } from '@/components/item-verification-card';
 import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
+import { Card, Hair } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
@@ -336,7 +336,7 @@ export default function ExceptionDetailScreen() {
           </Card>
         </View>
       ) : state.kind === 'loading' ? (
-        <ActivityIndicator color={c.ink4} style={{ marginTop: 29 }} />
+        <ActivityIndicator color={c.ink3} style={{ marginTop: 29 }} />
       ) : state.kind === 'error' ? (
         <View style={{ paddingHorizontal: 20, marginTop: 9 }}>
           <Card padding={16}>
@@ -533,7 +533,9 @@ function Detail({
         </Card>
       ) : null}
       {notice ? (
-        <Card padding={12}>
+        // A confirm that closed the exception: the accent wash (the ok tone,
+        // DESIGN-SPEC 6.10), the words in ink.
+        <Card padding={12} style={{ backgroundColor: c.accentWash }}>
           <Body size={14} color={c.ink}>
             {notice}
           </Body>
@@ -543,7 +545,7 @@ function Detail({
       <View style={{ gap: 8 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
           {o.reference ? (
-            <Mono size={12} color={c.ink4}>
+            <Mono size={12} color={c.ink3}>
               {o.reference}
             </Mono>
           ) : null}
@@ -586,40 +588,61 @@ function Detail({
         />
       ) : null}
 
+      {/* The facts as one card's rows, a hairline between each (DESIGN-SPEC
+          6.7). */}
       <Card padding={14}>
-        <Fact label="ITEM" value={o.item ? `${o.item.name}${o.item.sku ? ` (${o.item.sku})` : ''}` : 'Not visible to you'} />
-        {o.location && o.locationId ? (
+        <RuledRows>
           <Fact
-            label="LOCATION"
-            value={`${o.location.name}${o.location.archived ? ' (archived)' : ''}`}
-            onPress={() => onNavigate(`/location/${o.locationId}`)}
-            hint="Opens the location"
+            label="ITEM"
+            value={
+              o.item
+                ? `${o.item.name}${o.item.sku ? ` (${o.item.sku})` : ''}`
+                : 'Not visible to you'
+            }
           />
-        ) : o.location ? (
-          <Fact label="LOCATION" value={`${o.location.name}${o.location.archived ? ' (archived)' : ''}`} />
-        ) : null}
-        <Fact
-          label="FIRST SEEN"
-          value={
-            o.presentWhenTrackingBegan
-              ? `Already present when tracking began, ${exceptionTimeLabel(o.firstSeenAt, detail.timeZone)}`
-              : exceptionTimeLabel(o.firstSeenAt, detail.timeZone)
-          }
-        />
-        {!resolved ? <Fact label="LAST SEEN BY A CHECK" value={exceptionTimeLabel(o.lastSeenAt, detail.timeZone)} /> : null}
-        {o.acknowledgedAt ? (
+          {o.location && o.locationId ? (
+            <Fact
+              label="LOCATION"
+              value={`${o.location.name}${o.location.archived ? ' (archived)' : ''}`}
+              onPress={() => onNavigate(`/location/${o.locationId}`)}
+              hint="Opens the location"
+            />
+          ) : o.location ? (
+            <Fact
+              label="LOCATION"
+              value={`${o.location.name}${o.location.archived ? ' (archived)' : ''}`}
+            />
+          ) : null}
           <Fact
-            label="ACKNOWLEDGED"
-            value={`${o.acknowledgedBy?.label ?? 'Former member'}, ${exceptionTimeLabel(o.acknowledgedAt, detail.timeZone)}`}
+            label="FIRST SEEN"
+            value={
+              o.presentWhenTrackingBegan
+                ? `Already present when tracking began, ${exceptionTimeLabel(o.firstSeenAt, detail.timeZone)}`
+                : exceptionTimeLabel(o.firstSeenAt, detail.timeZone)
+            }
           />
-        ) : null}
-        {o.resolvedAt ? (
-          <Fact
-            label="RESOLVED"
-            value={`${exceptionTimeLabel(o.resolvedAt, detail.timeZone)}${resolvedCopy ? `: ${resolvedCopy}` : ''}`}
-          />
-        ) : null}
-        {confirmedRow ? <Fact label={confirmedRow.label.toUpperCase()} value={confirmedRow.value} /> : null}
+          {!resolved ? (
+            <Fact
+              label="LAST SEEN BY A CHECK"
+              value={exceptionTimeLabel(o.lastSeenAt, detail.timeZone)}
+            />
+          ) : null}
+          {o.acknowledgedAt ? (
+            <Fact
+              label="ACKNOWLEDGED"
+              value={`${o.acknowledgedBy?.label ?? 'Former member'}, ${exceptionTimeLabel(o.acknowledgedAt, detail.timeZone)}`}
+            />
+          ) : null}
+          {o.resolvedAt ? (
+            <Fact
+              label="RESOLVED"
+              value={`${exceptionTimeLabel(o.resolvedAt, detail.timeZone)}${resolvedCopy ? `: ${resolvedCopy}` : ''}`}
+            />
+          ) : null}
+          {confirmedRow ? (
+            <Fact label={confirmedRow.label.toUpperCase()} value={confirmedRow.value} />
+          ) : null}
+        </RuledRows>
       </Card>
 
       <View style={{ gap: 8 }}>
@@ -676,10 +699,15 @@ function Detail({
       {showRecount ? (
         <Section title="RECOUNT">
           {o.recount ? (
+            // A 44pt target (it was its one line of words).
             <Pressable
               accessibilityRole="link"
               onPress={() => onNavigate(`/cycle-count/${o.recount!.cycleCountId}`)}
-              style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
+              style={({ pressed }) => ({
+                minHeight: MIN_TAP,
+                justifyContent: 'center',
+                opacity: pressed ? 0.7 : 1,
+              })}
             >
               <Body size={14.5} color={c.ink}>
                 {activeRecountCopy(o.recount)}
@@ -732,7 +760,7 @@ function Detail({
             </Body>
           ) : null}
           {escalation.escalatedAt ? (
-            <Mono size={11} color={c.ink4}>
+            <Mono size={11} color={c.ink3}>
               {`${escalation.escalatedBy ?? 'Former member'}, ${exceptionTimeLabel(escalation.escalatedAt, detail.timeZone)}`}
             </Mono>
           ) : null}
@@ -802,69 +830,79 @@ function Detail({
             No events yet.
           </Body>
         ) : (
-          detail.timeline.map((e) =>
-            e.kind === 'evidence_added' || e.kind === 'evidence_removed' ? (
-              <EvidenceEvent
-                key={e.id}
-                lines={evidenceTimelineLines({
-                  kind: e.kind,
-                  actorLabel: e.actor?.label ?? null,
-                  note: e.note,
-                  evidence: e.evidence,
-                  timeZone: detail.timeZone,
-                })}
-                at={exceptionTimeLabel(e.at, detail.timeZone)}
-              />
-            ) : (
-              <View key={e.id} style={{ gap: 2 }}>
-                <Body size={14} color={c.ink}>
-                  {describeTimelineEvent({
-                    kind: e.kind,
-                    actorLabel: e.actor?.label ?? null,
-                    cycleCountNumber: e.cycleCount?.countNumber ?? null,
-                    resolvedReason: o.resolvedReason,
-                    recountOutcome: e.cycleCount?.outcome ?? null,
-                    confirmation:
-                      e.kind === 'count_confirmed'
-                        ? countConfirmationFor(o.facts, o.confirmation?.as ?? null, e.cycleCount?.countNumber ?? null)
-                        : null,
-                    maintenanceRequestReference: e.maintenanceRequestReference,
-                  })}
-                </Body>
-                <Mono size={11} color={c.ink4}>
-                  {exceptionTimeLabel(e.at, detail.timeZone)}
-                </Mono>
-                {e.note ? (
-                  <Body size={14} muted>
-                    {e.note}
-                  </Body>
-                ) : null}
-              </View>
-            ),
-          )
+          // One card, a hairline between events (DESIGN-SPEC 6.7 list rows).
+          <Card padding={14}>
+            <RuledRows>
+              {detail.timeline.map((e) =>
+                e.kind === 'evidence_added' || e.kind === 'evidence_removed' ? (
+                  <EvidenceEvent
+                    key={e.id}
+                    lines={evidenceTimelineLines({
+                      kind: e.kind,
+                      actorLabel: e.actor?.label ?? null,
+                      note: e.note,
+                      evidence: e.evidence,
+                      timeZone: detail.timeZone,
+                    })}
+                    at={exceptionTimeLabel(e.at, detail.timeZone)}
+                  />
+                ) : (
+                  <View key={e.id} style={styles.event}>
+                    <Body size={14} color={c.ink}>
+                      {describeTimelineEvent({
+                        kind: e.kind,
+                        actorLabel: e.actor?.label ?? null,
+                        cycleCountNumber: e.cycleCount?.countNumber ?? null,
+                        resolvedReason: o.resolvedReason,
+                        recountOutcome: e.cycleCount?.outcome ?? null,
+                        confirmation:
+                          e.kind === 'count_confirmed'
+                            ? countConfirmationFor(o.facts, o.confirmation?.as ?? null, e.cycleCount?.countNumber ?? null)
+                            : null,
+                        maintenanceRequestReference: e.maintenanceRequestReference,
+                      })}
+                    </Body>
+                    <Mono size={11} color={c.ink3}>
+                      {exceptionTimeLabel(e.at, detail.timeZone)}
+                    </Mono>
+                    {e.note ? (
+                      <Body size={14} muted>
+                        {e.note}
+                      </Body>
+                    ) : null}
+                  </View>
+                ),
+              )}
+            </RuledRows>
+          </Card>
         )}
       </Section>
 
       {detail.history.length > 1 ? (
         <Section title="THIS CONDITION OVER TIME">
-          {detail.history.map((h) => (
-            <Pressable
-              key={h.id}
-              disabled={h.isCurrent}
-              accessibilityRole={h.isCurrent ? 'text' : 'link'}
-              onPress={() => onNavigate(`/exceptions/${h.id}`)}
-              style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1, gap: 2 })}
-            >
-              <Body size={14} color={c.ink}>
-                {`${h.reference ?? 'Exception'}${h.isCurrent ? ' (this one)' : ''}`}
-              </Body>
-              <Mono size={11} color={c.ink4}>
-                {h.resolvedAt
-                  ? `First seen ${exceptionTimeLabel(h.firstSeenAt, detail.timeZone)}, resolved ${exceptionTimeLabel(h.resolvedAt, detail.timeZone)}${historyReason(resolvedReasonCopy(h.resolvedReason, h.confirmedAs))}`
-                  : `First seen ${exceptionTimeLabel(h.firstSeenAt, detail.timeZone)}, still open`}
-              </Mono>
-            </Pressable>
-          ))}
+          {/* One card, a hairline between occurrences; each a 44pt target. */}
+          <Card padding={14}>
+            <RuledRows>
+              {detail.history.map((h) => (
+                <Pressable
+                  key={h.id}
+                  disabled={h.isCurrent}
+                  accessibilityRole={h.isCurrent ? 'text' : 'link'}
+                  onPress={() => onNavigate(`/exceptions/${h.id}`)}
+                  style={({ pressed }) => [styles.historyRow, { opacity: pressed ? 0.7 : 1 }]}
+                >
+                  <Body size={14} color={c.ink}>
+                    {`${h.reference ?? 'Exception'}${h.isCurrent ? ' (this one)' : ''}`}
+                  </Body>
+                  <Mono size={11} color={c.ink3}>
+                    {h.resolvedAt
+                      ? `First seen ${exceptionTimeLabel(h.firstSeenAt, detail.timeZone)}, resolved ${exceptionTimeLabel(h.resolvedAt, detail.timeZone)}${historyReason(resolvedReasonCopy(h.resolvedReason, h.confirmedAs))}`
+                      : `First seen ${exceptionTimeLabel(h.firstSeenAt, detail.timeZone)}, still open`}
+                  </Mono>
+                </Pressable>
+              ))}
+            </RuledRows>
+          </Card>
           {detail.historyTruncated ? (
             <Body size={12.5} muted>
               Only the most recent occurrences are shown.
@@ -997,7 +1035,7 @@ function EvidenceEvent({
 }) {
   const { c } = useTheme();
   return (
-    <View style={{ gap: 2 }}>
+    <View style={styles.event}>
       <Body size={14} color={c.ink}>
         {lines.headline}
       </Body>
@@ -1006,7 +1044,7 @@ function EvidenceEvent({
           {lines.detail}
         </Body>
       ) : null}
-      <Mono size={11} color={c.ink4}>
+      <Mono size={11} color={c.ink3}>
         {at}
       </Mono>
       {lines.note ? (
@@ -1053,6 +1091,27 @@ function Fact({
   );
 }
 
+/**
+ * Rows on one card with a hairline between each (DESIGN-SPEC 6.7). The rows
+ * that are not there (a fact this exception does not have) take no line.
+ */
+function RuledRows({ children }: { children: React.ReactNode }) {
+  const rows = React.Children.toArray(children);
+  return (
+    <>
+      {rows.map((row, i) => (
+        // Each row keeps its own key (toArray gives every child one), so a
+        // timeline that gains an event at the top moves its rows instead of
+        // redrawing each one under another's key.
+        <React.Fragment key={React.isValidElement(row) && row.key !== null ? row.key : i}>
+          {i > 0 ? <Hair /> : null}
+          {row}
+        </React.Fragment>
+      ))}
+    </>
+  );
+}
+
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <View style={{ gap: 8 }}>
@@ -1070,4 +1129,6 @@ const styles = StyleSheet.create({
   // spinner 32 -> 29): everything sits where it did.
   topbar: { paddingHorizontal: 9, paddingTop: 5, flexDirection: 'row', alignItems: 'center' },
   body: { paddingHorizontal: 20, paddingTop: 9, paddingBottom: 40, gap: 18 },
+  event: { gap: 2, paddingVertical: 8 },
+  historyRow: { gap: 2, paddingVertical: 8, minHeight: MIN_TAP, justifyContent: 'center' },
 });
