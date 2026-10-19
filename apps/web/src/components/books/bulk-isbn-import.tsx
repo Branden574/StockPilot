@@ -12,6 +12,7 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { MissingPhoto } from '@/components/patterns/missing-photo';
 import { touchTargetClass } from '@/components/patterns/touch-target';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -234,6 +235,13 @@ export function BulkIsbnImport({
 
     // Concurrency-limited fan-out so we don't hammer Google Books with
     // 200 simultaneous requests (gets us throttled).
+    //
+    // Each answer is written to the row with ITS ISBN (unique in a batch:
+    // parseIsbns de-duplicates), never to a position. A row can be removed
+    // while lookups run, which shifts every later row up one; writing by
+    // position then put one book's title, author and cover on the next
+    // ISBN's row, and Import created it under that ISBN. A removed row's
+    // answer now finds no row and is dropped.
     let cursor = 0;
     async function worker() {
       while (cursor < isbns.length) {
@@ -241,14 +249,10 @@ export function BulkIsbnImport({
         const isbn = isbns[i];
         if (!isbn) continue;
         setResolved((prev) =>
-          prev.map((r, idx) =>
-            idx === i ? { ...r, status: 'looking_up' as const } : r,
-          ),
+          prev.map((r) => (r.isbn === isbn ? { ...r, status: 'looking_up' as const } : r)),
         );
         const partial = await lookupOne(isbn);
-        setResolved((prev) =>
-          prev.map((r, idx) => (idx === i ? { ...r, ...partial } : r)),
-        );
+        setResolved((prev) => prev.map((r) => (r.isbn === isbn ? { ...r, ...partial } : r)));
       }
     }
     await Promise.all(
@@ -536,22 +540,25 @@ export function BulkIsbnImport({
         <ul className="border-border bg-card divide-border divide-y overflow-hidden rounded-lg border">
           {resolved.map((r, i) => (
             <li
-              key={r.isbn + i}
+              // The ISBN is unique in a batch, so a row keeps its inputs
+              // (and their focus) when a row above it is removed.
+              key={r.isbn}
               data-status={r.status}
               className={cn(
                 'flex items-start gap-3 px-4 py-3',
                 r.status === 'failed' && 'bg-destructive-wash',
               )}
             >
-              <div className="border-border bg-sunk grid h-12 w-9 shrink-0 place-items-center overflow-hidden rounded-[4px] border">
+              {/* The cover on the thumbnail's white tile (a cover shot on
+                  white reads the same in both themes), or the shared
+                  missing-photo hatch while there is none (DESIGN-SPEC 6.14). */}
+              <div className="border-border relative h-12 w-9 shrink-0 overflow-hidden rounded-[4px] border bg-white">
                 {r.thumbnailUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={r.thumbnailUrl}
-                    alt=""
-                    className="h-full w-full object-cover"
-                  />
-                ) : null}
+                  <img src={r.thumbnailUrl} alt="" className="h-full w-full object-cover" />
+                ) : (
+                  <MissingPhoto className="absolute inset-0" />
+                )}
               </div>
               <div className="min-w-0 flex-1 space-y-2">
                 <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">

@@ -6,6 +6,10 @@
  * - Remove <isbn>, and Import N books creating only the ready rows;
  * - CONFLICTS D20: the pasted list and looked-up rows register as unsaved
  *   work (lib/unsaved-work.ts), so "Refresh to update" asks before a reload.
+ * - Each lookup answer lands on the row with its own ISBN. Removing a row
+ *   while lookups ran used to shift the rows under the answers still on the
+ *   way, so one book's title landed on the next ISBN's row (and was created
+ *   under that ISBN on Import).
  */
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -184,5 +188,95 @@ describe('BulkIsbnImport', () => {
     expect(rows).toHaveLength(2);
     expect(within(rows[0]!).getByRole('button', { name: `Remove ${ISBN_A}` })).toBeInTheDocument();
     expect(within(rows[1]!).getByRole('button', { name: `Remove ${ISBN_B}` })).toBeInTheDocument();
+  });
+});
+
+describe('BulkIsbnImport lookups that finish after a row is removed', () => {
+  const ISBN_C = '9780140449136';
+
+  it('keeps each answer on its own ISBN: a removed row’s late answer is dropped, not written onto the next row', async () => {
+    let answerA: (value: { ok: boolean; json: () => Promise<unknown> }) => void = () => {};
+    fetchMock.mockImplementation((url: string) => {
+      const isbn = new URL(url, 'http://x').searchParams.get('isbn');
+      if (isbn === ISBN_A) {
+        return new Promise((resolve) => {
+          answerA = resolve;
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ title: `Book ${isbn}`, authors: [`Author ${isbn}`], grade: '3' }),
+      });
+    });
+    bulkCreate.mockResolvedValue({ ok: true, data: { created: 2, skipped: 0, errors: [] } });
+
+    renderImport();
+    fireEvent.change(list(), { target: { value: `${ISBN_A}\n${ISBN_B}\n${ISBN_C}` } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Look up' }));
+    });
+    // B and C have answered; A is still being looked up.
+    await waitFor(() =>
+      expect(screen.getByTestId('isbn-import-status')).toHaveTextContent(
+        '2 ready · 0 failed · 1 pending',
+      ),
+    );
+    expect(screen.getByText('looking up')).toBeInTheDocument();
+
+    // The person removes A while its lookup is still on the way...
+    fireEvent.click(screen.getByRole('button', { name: `Remove ${ISBN_A}` }));
+    expect(screen.queryByText(ISBN_A)).not.toBeInTheDocument();
+
+    // ...and then A's answer arrives.
+    await act(async () => {
+      answerA({ ok: true, json: async () => ({ title: 'The Wrong Book', authors: ['Nobody'] }) });
+    });
+
+    // B and C keep their own titles and authors; A's answer went nowhere.
+    expect(screen.getByLabelText(`Title for ${ISBN_B}`)).toHaveValue(`Book ${ISBN_B}`);
+    expect(screen.getByLabelText(`Author for ${ISBN_B}`)).toHaveValue(`Author ${ISBN_B}`);
+    expect(screen.getByLabelText(`Title for ${ISBN_C}`)).toHaveValue(`Book ${ISBN_C}`);
+    expect(screen.queryByDisplayValue('The Wrong Book')).not.toBeInTheDocument();
+    expect(screen.getByTestId('isbn-import-status')).toHaveTextContent('2 ready · 0 failed');
+
+    // Import creates each ISBN under its own title.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Import 2 books' }));
+    });
+    const input = bulkCreate.mock.calls[0]![0] as {
+      books: Array<{ isbn: string; title: string; author: string | null }>;
+    };
+    expect(input.books.map((b) => [b.isbn, b.title, b.author])).toEqual([
+      [ISBN_B, `Book ${ISBN_B}`, `Author ${ISBN_B}`],
+      [ISBN_C, `Book ${ISBN_C}`, `Author ${ISBN_C}`],
+    ]);
+  });
+});
+
+describe('BulkIsbnImport covers', () => {
+  it('shows the missing-photo hatch while a row has no cover, and the cover once it has one', async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      const isbn = new URL(url, 'http://x').searchParams.get('isbn');
+      return {
+        ok: true,
+        json: async () =>
+          isbn === ISBN_A
+            ? { title: 'With cover', thumbnailUrl: 'https://covers.example/a.jpg' }
+            : { title: 'No cover' },
+      };
+    });
+    renderImport();
+    fireEvent.change(list(), { target: { value: `${ISBN_A}\n${ISBN_B}` } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Look up' }));
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('isbn-import-status')).toHaveTextContent('2 ready'),
+    );
+    const [withCover, without] = screen.getAllByRole('listitem');
+    expect(withCover!.querySelector('img')).toHaveAttribute('src', 'https://covers.example/a.jpg');
+    expect(withCover!.querySelector('[data-slot="missing-photo"]')).toBeNull();
+    expect(without!.querySelector('img')).toBeNull();
+    expect(without!.querySelector('[data-slot="missing-photo"]')).not.toBeNull();
   });
 });

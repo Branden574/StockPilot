@@ -83,10 +83,15 @@ describe('Bulk ISBN import page (redesign)', () => {
       'href',
       '/dashboard/books',
     );
+    // The subline keeps every word (it is held to a reading measure so the
+    // action stays on the title's right).
     expect(
-      screen.getByText(/Paste up to 200 ISBNs, look them up across Google Books/),
+      screen.getByText(
+        'Paste up to 200 ISBNs, look them up across Google Books / Open Library / Library of Congress in parallel, then create them as a batch. Perfect for school-year donation drops.',
+      ),
     ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Backfill covers' })).toBeInTheDocument();
+    const backfill = screen.getByRole('button', { name: 'Backfill covers' });
+    expect(backfill.closest('[data-slot="page-header-actions"]')).not.toBeNull();
     expect(screen.getByTestId('isbn-import-form')).toBeInTheDocument();
   });
 

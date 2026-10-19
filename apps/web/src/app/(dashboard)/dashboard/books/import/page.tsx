@@ -62,7 +62,15 @@ export default async function BulkIsbnImportPage() {
       <PageHeader
         back={<PageHeaderBackLink href="/dashboard/books">← Back to books</PageHeaderBackLink>}
         title="Bulk ISBN import"
-        subline="Paste up to 200 ISBNs, look them up across Google Books / Open Library / Library of Congress in parallel, then create them as a batch. Perfect for school-year donation drops."
+        subline={
+          // A reading measure for the long sentence, so Backfill covers keeps
+          // its place on the title's right instead of wrapping under it.
+          <span className="block max-w-[600px]">
+            Paste up to 200 ISBNs, look them up across Google Books / Open Library / Library of
+            Congress in parallel, then create them as a batch. Perfect for school-year donation
+            drops.
+          </span>
+        }
         actions={<BackfillCoversButton />}
         className="max-w-[880px]"
       />
