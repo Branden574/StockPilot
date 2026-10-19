@@ -16,11 +16,7 @@ export default async function ChartersAdminPage({
   const isArchivedView = params.view === 'archived';
 
   const [orgRow, charters] = await Promise.all([
-    supabase
-      .from('organizations')
-      .select('terminology')
-      .eq('id', ctx.organizationId)
-      .maybeSingle(),
+    supabase.from('organizations').select('terminology').eq('id', ctx.organizationId).maybeSingle(),
     (await ChartersService.forCurrentUser()).list({ includeArchived: isArchivedView }),
   ]);
 
@@ -29,22 +25,21 @@ export default async function ChartersAdminPage({
   );
 
   return (
-    <div className="mx-auto w-full max-w-[1280px] px-8 pb-20 pt-7">
-      <div className="mb-6 border-b border-border pb-4">
-        <p className="mb-1.5 text-[11px] font-medium uppercase tracking-[0.1em] text-[var(--ed-ink-4)]">
-          Admin
-        </p>
-        <h1 className="font-display text-[28px] font-medium tracking-[-0.025em]">{term.charter_plural}</h1>
-        <p className="mt-1 text-[13.5px] text-[var(--ed-ink-3)]">
-          {isArchivedView
-            ? `${term.charter_plural} you archived. Restore one to bring it back into the active list.`
-            : 'Top-level groupings for warehouses. The label here is configurable — if your company calls them “Regions” or “Divisions”, change it in organization settings.'}
-        </p>
-      </div>
+    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
       <ChartersManager
         view={isArchivedView ? 'archived' : 'active'}
         initial={charters}
         termSingular={term.charter_singular}
+        eyebrow="Admin"
+        title={term.charter_plural}
+        // Bounded, so the view toggle and New sit beside the title block.
+        subline={
+          <p className="max-w-[72ch]">
+            {isArchivedView
+              ? `${term.charter_plural} you archived. Restore one to bring it back into the active list.`
+              : 'Top-level groupings for warehouses. The label here is configurable — if your company calls them “Regions” or “Divisions”, change it in organization settings.'}
+          </p>
+        }
       />
     </div>
   );

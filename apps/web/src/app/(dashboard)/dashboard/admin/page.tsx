@@ -1,8 +1,21 @@
-import { Building2, FileLock, type LucideIcon, PlusCircle, Users, Warehouse } from 'lucide-react';
+import {
+  Building2,
+  ChevronRight,
+  FileLock,
+  type LucideIcon,
+  PlusCircle,
+  Users,
+  Warehouse,
+} from 'lucide-react';
 import Link from 'next/link';
+import type { ReactNode } from 'react';
 
+import { DetailSection } from '@/components/patterns/detail-section';
+import { PageHeader } from '@/components/patterns/page-header';
+import { Button } from '@/components/ui/button';
 import { currentUserIsPlatformAdmin } from '@/lib/auth/platform-admin';
 import { requireOrgContext } from '@/lib/auth/session';
+import { effectiveNavLabel } from '@/lib/nav-labels';
 import { createClient } from '@/lib/supabase/server';
 
 interface AdminCard {
@@ -13,12 +26,19 @@ interface AdminCard {
   count?: number;
 }
 
+/**
+ * The Admin hub (matrix W-AD-01): a navigation page, so it draws the
+ * reference's compact rows (the Overview "Needs attention" list: icon, title,
+ * detail, a mono count and a chevron) instead of big tiles. Which rows exist,
+ * where they link and every count rule are unchanged: five exact head-counts,
+ * never a row read (audit_logs is large).
+ */
 export default async function AdminOverviewPage() {
   const ctx = await requireOrgContext();
   const platformAdmin = await currentUserIsPlatformAdmin();
   const supabase = await createClient();
 
-  const [chartersRes, warehousesRes, membersRes, invitesRes, auditRes] = await Promise.all([
+  const [chartersRes, warehousesRes, membersRes, invitesRes, auditRes, title] = await Promise.all([
     supabase
       .from('charters')
       .select('id', { count: 'exact', head: true })
@@ -44,6 +64,9 @@ export default async function AdminOverviewPage() {
       .from('audit_logs')
       .select('id', { count: 'exact', head: true })
       .eq('organization_id', ctx.organizationId),
+    // A Settings > Navigation rename of the sidebar entry reaches the heading
+    // too (no read of its own: the org row is cached for the request).
+    effectiveNavLabel('/dashboard/admin', 'Admin overview'),
   ]);
 
   const cards: AdminCard[] = [
@@ -81,80 +104,104 @@ export default async function AdminOverviewPage() {
   ];
 
   return (
-    <div className="mx-auto w-full max-w-[1280px] px-8 pb-20 pt-7">
-      <div className="mb-6 border-b border-border pb-4">
-        <p className="mb-1.5 text-[11px] font-medium uppercase tracking-[0.1em] text-[var(--ed-ink-4)]">
-          Admin
-        </p>
-        <h1 className="font-display text-[28px] font-medium tracking-[-0.025em]">Admin overview</h1>
-        <p className="mt-1 text-[13.5px] text-[var(--ed-ink-3)]">
-          Configure the company structure, manage user access, and review what changed.
-        </p>
-      </div>
+    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <PageHeader
+        eyebrow="Admin"
+        title={title}
+        subline="Configure the company structure, manage user access, and review what changed."
+      />
 
       {platformAdmin && (
-        <div className="mb-6 rounded-[10px] border border-border bg-card p-5">
-          <div className="mb-1 flex items-center gap-2">
-            <PlusCircle className="h-4 w-4 text-foreground" strokeWidth={1.5} />
-            <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-[var(--ed-ink-4)]">
+        // Only allowlisted platform admins see this card: it is labelled as
+        // theirs and kept apart from the org's own admin rows.
+        <DetailSection
+          data-testid="admin-platform-block"
+          title={
+            <span className="inline-flex items-center gap-2">
+              <PlusCircle className="text-muted-foreground h-4 w-4" strokeWidth={1.6} aria-hidden />
               Platform admin
             </span>
-          </div>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="font-display text-[15px] font-medium tracking-[-0.01em]">
-                Provision a new organization
-              </div>
-              <p className="text-[12.5px] leading-[1.55] text-[var(--ed-ink-3)]">
-                Create a customer account + org + magic-link invite in one step. Audit-logged.
-              </p>
-            </div>
-            <Link
+          }
+          flush
+        >
+          <ul className="divide-border divide-y">
+            <PlatformRow
+              title="Provision a new organization"
+              description="Create a customer account + org + magic-link invite in one step. Audit-logged."
               href="/dashboard/admin/orgs/new"
-              className="rounded-md border border-border bg-background px-3 py-1.5 text-[12.5px] font-medium hover:border-[var(--ed-line-strong)]"
-            >
-              Open
-            </Link>
-          </div>
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
-            <div>
-              <div className="font-display text-[15px] font-medium tracking-[-0.01em]">
-                Support tickets
-              </div>
-              <p className="text-[12.5px] leading-[1.55] text-[var(--ed-ink-3)]">
-                Triage &ldquo;report a problem&rdquo; tickets from the public support page.
-              </p>
-            </div>
-            <Link
+            />
+            <PlatformRow
+              title="Support tickets"
+              description={
+                <>Triage &ldquo;report a problem&rdquo; tickets from the public support page.</>
+              }
               href="/dashboard/admin/support"
-              className="rounded-md border border-border bg-background px-3 py-1.5 text-[12.5px] font-medium hover:border-[var(--ed-line-strong)]"
-            >
-              Open
-            </Link>
-          </div>
-        </div>
+            />
+          </ul>
+        </DetailSection>
       )}
 
-      <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2">
-        {cards.map((c) => (
-          <Link
-            key={c.href}
-            href={c.href}
-            className="group flex flex-col gap-3 rounded-[10px] border border-border bg-card p-5 transition-colors hover:border-[var(--ed-line-strong)]"
-          >
-            <div className="flex items-center justify-between">
-              <c.icon className="h-5 w-5 text-foreground" strokeWidth={1.5} />
-              {c.count != null && (
-                <span className="font-mono text-[11px] tabular-nums text-[var(--ed-ink-3)]">
-                  {c.count}
+      <div className="border-border bg-card overflow-hidden rounded-lg border">
+        <ul className="divide-border divide-y">
+          {cards.map((c) => (
+            <li key={c.href}>
+              <Link
+                href={c.href}
+                className="hover:bg-muted group grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3.5 px-[18px] py-[13px] transition-colors focus-visible:ring-inset focus-visible:ring-offset-0"
+              >
+                <span
+                  aria-hidden
+                  className="border-border bg-sunk text-ink-2 flex size-8 items-center justify-center rounded-md border"
+                >
+                  <c.icon className="h-4 w-4" strokeWidth={1.6} />
                 </span>
-              )}
-            </div>
-            <div className="font-display text-[16px] font-medium tracking-[-0.01em]">{c.title}</div>
-            <p className="text-[12.5px] leading-[1.55] text-[var(--ed-ink-3)]">{c.description}</p>
-          </Link>
-        ))}
+                <span className="min-w-0">
+                  <span className="text-foreground block text-[13.5px] font-medium leading-5">
+                    {c.title}
+                  </span>
+                  <span className="text-muted-foreground block text-[12.5px] leading-[18.75px] [text-wrap:pretty]">
+                    {c.description}
+                  </span>
+                </span>
+                <span className="flex items-center gap-2">
+                  {c.count != null && (
+                    <span className="text-muted-foreground font-mono text-[12px] tabular-nums">
+                      {c.count}
+                    </span>
+                  )}
+                  <ChevronRight
+                    aria-hidden
+                    className="text-muted-foreground h-3.5 w-3.5"
+                    strokeWidth={1.8}
+                  />
+                </span>
+              </Link>
+            </li>
+          ))}
+        </ul>
       </div>
     </div>
+  );
+}
+
+function PlatformRow({
+  title,
+  description,
+  href,
+}: {
+  title: string;
+  description: ReactNode;
+  href: string;
+}) {
+  return (
+    <li className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-[18px] py-[13px]">
+      <div className="min-w-0 flex-1 basis-60">
+        <div className="text-foreground text-[13.5px] font-medium leading-5">{title}</div>
+        <p className="text-muted-foreground text-[12.5px] leading-[18.75px]">{description}</p>
+      </div>
+      <Button asChild variant="outline" size="sm">
+        <Link href={href}>Open</Link>
+      </Button>
+    </li>
   );
 }
