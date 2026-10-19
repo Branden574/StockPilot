@@ -2,7 +2,6 @@ import { Search, X } from 'lucide-react';
 import Link from 'next/link';
 
 import { FilterChipLink } from '@/components/patterns/chip';
-import { FilterBar } from '@/components/patterns/filter-bar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
@@ -49,38 +48,35 @@ export function ProcedureFilters({
   const hasFilters = state.q.length > 0 || state.cat.length > 0 || state.wh.length > 0;
   return (
     <form action={PROCEDURES_PATH} method="get" className="flex flex-col gap-3">
-      <FilterBar
-        leading={
-          <>
-            <div className="relative w-full sm:w-[280px]">
-              <Search
-                className="text-muted-foreground pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
-                aria-hidden
-              />
-              <Input
-                type="search"
-                name="q"
-                defaultValue={state.q}
-                placeholder="Search procedures…"
-                className="pl-8"
-              />
-            </div>
-            {state.cat && <input type="hidden" name="cat" value={state.cat} />}
-            {state.archived && <input type="hidden" name="view" value="archived" />}
-            <Button type="submit" variant="outline" className="max-sm:h-11">
-              Search
-            </Button>
-            {hasFilters && (
-              <Button asChild variant="ghost" className="text-muted-foreground max-sm:h-11">
-                <Link href={procedureListClearHref(state)}>
-                  <X className="mr-1 h-3.5 w-3.5" /> Clear
-                </Link>
-              </Button>
-            )}
-          </>
-        }
-      >
-        <div className="flex min-w-0 items-center gap-2">
+      {/* The filter row (FilterBar's look: wrapping, 8 px gaps). Written out
+          here so the search field can take the full row on a phone. */}
+      <div data-slot="filter-bar" className="flex min-w-0 flex-wrap items-center gap-2">
+        <div className="relative w-full sm:w-[280px]">
+          <Search
+            className="text-muted-foreground pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+            aria-hidden
+          />
+          <Input
+            type="search"
+            name="q"
+            defaultValue={state.q}
+            placeholder="Search procedures…"
+            className="pl-8"
+          />
+        </div>
+        {state.cat && <input type="hidden" name="cat" value={state.cat} />}
+        {state.archived && <input type="hidden" name="view" value="archived" />}
+        <Button type="submit" variant="outline" className="max-sm:h-11">
+          Search
+        </Button>
+        {hasFilters && (
+          <Button asChild variant="ghost" className="text-muted-foreground max-sm:h-11">
+            <Link href={procedureListClearHref(state)}>
+              <X className="mr-1 h-3.5 w-3.5" /> Clear
+            </Link>
+          </Button>
+        )}
+        <div className="flex min-w-0 max-w-full items-center gap-2 sm:ml-auto">
           <label className="text-muted-foreground shrink-0 text-[12.5px]" htmlFor="wh-filter">
             Warehouse
           </label>
@@ -98,7 +94,7 @@ export function ProcedureFilters({
             ))}
           </select>
         </div>
-      </FilterBar>
+      </div>
 
       {categories.length > 0 && (
         <div data-slot="procedure-category-chips" className="flex flex-wrap gap-2">
