@@ -1,5 +1,6 @@
 import { notFound } from 'next/navigation';
 
+import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { PoImportDetail } from '@/components/po-imports/po-import-detail';
 import { PoImportLineageNotice } from '@/components/po-imports/po-import-lineage-notice';
@@ -12,6 +13,7 @@ import { LocationsService } from '@/server/services/locations';
 import { PoImportsService } from '@/server/services/po-imports';
 import { SuppliersService } from '@/server/services/suppliers';
 import { WarehousesService } from '@/server/services/warehouses';
+import { checkModuleAccess } from '@/lib/modules/module-gate';
 
 import { poImportUploaderLabel } from '@stockpilot/core';
 
@@ -19,6 +21,16 @@ import { poImportUploaderLabel } from '@stockpilot/core';
 const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
 
 export default async function PoImportDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  // The imports list's own module gate. With PO imports switched off the
+  // service refuses every read (assertModuleEnabled), which used to take this
+  // page to the error screen; an old link or notification now lands on the
+  // module-off panel, as the list does. The module set is the request-cached
+  // read the dashboard layout already made, so this adds no query.
+  const moduleAccess = await checkModuleAccess('po_imports');
+  if (!moduleAccess.enabled) {
+    return <ModuleNotEnabled moduleId="po_imports" canManage={moduleAccess.canManage} />;
+  }
+
   const { id } = await params;
   const svc = await PoImportsService.forCurrentUser();
 

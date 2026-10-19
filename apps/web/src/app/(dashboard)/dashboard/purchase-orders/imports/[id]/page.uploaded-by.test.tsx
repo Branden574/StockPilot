@@ -32,6 +32,11 @@ vi.mock('next/navigation', () => ({
     throw new Error('NEXT_NOT_FOUND');
   }),
 }));
+// The page's po_imports module gate (page.module-gate.test.tsx covers it);
+// here the module is on.
+vi.mock('@/lib/modules/module-gate', () => ({
+  checkModuleAccess: vi.fn(async () => ({ enabled: true, canManage: true })),
+}));
 vi.mock('@/server/services/context', () => ({
   ServiceError: class ServiceError extends Error {
     constructor(

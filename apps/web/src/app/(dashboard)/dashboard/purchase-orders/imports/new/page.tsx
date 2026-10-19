@@ -1,6 +1,8 @@
+import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { PoScanForm } from '@/components/po-imports/po-scan-form';
 import { PoUploadForm } from '@/components/po-imports/po-upload-form';
+import { checkModuleAccess } from '@/lib/modules/module-gate';
 
 /** The page area (DESIGN-SPEC 4 and 5.3), the same box the imports list draws. */
 const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
@@ -8,7 +10,17 @@ const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 
 /** Both upload cards at a reading width. */
 const FORM_WIDTH = 'w-full max-w-[880px]';
 
-export default function NewPoImportPage() {
+export default async function NewPoImportPage() {
+  // The imports list's own module gate. With PO imports switched off every
+  // upload and scan action refuses on the server, so the page says the module
+  // is off (the list's words and Enable link) instead of offering two forms
+  // that cannot work. The module set is the request-cached read the dashboard
+  // layout already made, so this adds no query.
+  const moduleAccess = await checkModuleAccess('po_imports');
+  if (!moduleAccess.enabled) {
+    return <ModuleNotEnabled moduleId="po_imports" canManage={moduleAccess.canManage} />;
+  }
+
   return (
     <div className={PAGE}>
       <PageHeader
