@@ -13,6 +13,7 @@ import {
   type ApparelAlphaSize,
 } from '@stockpilot/core';
 
+import { touchTargetClass } from '@/components/patterns/touch-target';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -201,8 +202,11 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
                           : [...prev, { size: s, quantity: 0 }],
                       )
                     }
-                    // The form's size chip: the filter-chip recipe, ink when picked.
+                    // The form's size chip: the filter-chip recipe, ink when
+                    // picked, 44 px on a phone and the shared chip's touch area
+                    // on a coarse pointer (the row's gap-2 keeps them apart).
                     className={cn(
+                      touchTargetClass,
                       'inline-flex h-7 min-w-9 items-center justify-center rounded-full border px-3 font-mono text-[12.5px] transition-colors max-sm:h-11 max-sm:min-w-11',
                       picked
                         ? 'border-foreground bg-foreground text-background'

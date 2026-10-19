@@ -7,6 +7,9 @@ import {
   type TrackingMode,
 } from '@stockpilot/core';
 
+import { touchTargetClass } from '@/components/patterns/touch-target';
+import { cn } from '@/lib/utils';
+
 /**
  * The Add Item "this will be saved as" card (Sports Task 11).
  *
@@ -72,12 +75,21 @@ export function GroupingPreview({
           </div>
           <ul className="space-y-1">
             {candidates.map((c) => (
-              <li key={c.id} className="flex items-center justify-between gap-2">
+              <li
+                key={c.id}
+                // On a phone or a touch screen each row is a full 44 px tall, so
+                // one button's touch area never reaches into the next row's.
+                className="pointer-coarse:min-h-11 flex items-center justify-between gap-2 max-sm:min-h-11"
+              >
                 <span className="min-w-0 [overflow-wrap:anywhere]">{c.name}</span>
                 <button
                   type="button"
-                  // A 12 px text button (DESIGN-SPEC 6.21), ink on hover.
-                  className="text-muted-foreground hover:text-foreground shrink-0 text-[12px] underline underline-offset-2"
+                  // A 12 px text button (DESIGN-SPEC 6.21), ink on hover, with the
+                  // shared 44 px touch area below sm and on coarse pointers.
+                  className={cn(
+                    touchTargetClass,
+                    'text-muted-foreground hover:text-foreground shrink-0 text-[12px] underline underline-offset-2',
+                  )}
                   onClick={() => onUseCandidate?.(c.id)}
                 >
                   Use this group

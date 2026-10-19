@@ -11,7 +11,8 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 //    their inputs to point at again (the inputs had lost their name when they
 //    moved to the blank-zero number box, so both steps were skipped);
 //  - a staged photo's Remove button is always shown (it was invisible until a
-//    mouse hovered the tile, so phones, tablets and keyboards could not see it);
+//    mouse hovered the tile, so phones, tablets and keyboards could not see it),
+//    with the shared 44 px touch area on touch screens;
 //  - the shared-SKU banner follows the theme's caution tokens;
 //  - an org custom checkbox field is the shared checkbox, named by its label,
 //    and toggling it still counts as unsaved work.
@@ -189,10 +190,59 @@ describe('ItemForm (redesign): staged photos', () => {
     // It used to be opacity-0 until the tile was hovered.
     expect(remove.className).not.toMatch(/(^|\s)opacity-0(\s|$)/);
     expect(remove.className).not.toMatch(/group-hover:opacity-100/);
+    // A 28 px button on the tile: the shared 44 px touch area on a phone or a
+    // touch screen, still seated on the tile's corner (absolute, not relative).
+    const classes = remove.className.split(/\s+/);
+    expect(classes).toEqual(
+      expect.arrayContaining([
+        'absolute',
+        'before:min-h-11',
+        'before:min-w-11',
+        "max-sm:before:content-['']",
+        "pointer-coarse:before:content-['']",
+      ]),
+    );
+    expect(classes).not.toContain('relative');
     expect(screen.getByText('Primary')).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: 'Create item & upload 1 photo' }),
     ).toBeInTheDocument();
+  });
+});
+
+describe('ItemForm (redesign): size chips and tag pills on a touch screen (P2.2 hand-off)', () => {
+  it('are 44 px on a phone and carry the shared chip’s touch area on a coarse pointer', async () => {
+    const user = userEvent.setup();
+    renderForm({
+      categories: [
+        { id: '11111111-1111-4111-8111-111111111111', name: 'Shirts', supports_sizes: true },
+      ],
+      defaults: { categoryId: '11111111-1111-4111-8111-111111111111' },
+      tags: [{ id: 'tag-1', name: 'Clearance', color: null }],
+    });
+    const classes = (el: Element) => (el.getAttribute('class') ?? '').split(/\s+/);
+    const touch = [
+      'relative',
+      'before:min-h-11',
+      'before:min-w-11',
+      "max-sm:before:content-['']",
+      "pointer-coarse:before:content-['']",
+      'max-sm:h-11',
+    ];
+    const chip = screen.getByRole('button', { name: 'S' });
+    const pill = screen.getByRole('button', { name: 'Clearance' });
+    for (const control of [chip, pill]) {
+      expect(classes(control)).toEqual(expect.arrayContaining(touch));
+      // 8 px between neighbours, so one control's area never covers the next.
+      expect(classes(control.parentElement!)).toEqual(expect.arrayContaining(['gap-2']));
+    }
+    // Still toggles, as before.
+    expect(chip).toHaveAttribute('aria-pressed', 'false');
+    await user.click(chip);
+    expect(chip).toHaveAttribute('aria-pressed', 'true');
+    expect(pill).toHaveAttribute('aria-pressed', 'false');
+    await user.click(pill);
+    expect(pill).toHaveAttribute('aria-pressed', 'true');
   });
 });
 

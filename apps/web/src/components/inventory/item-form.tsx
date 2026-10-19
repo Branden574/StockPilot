@@ -12,6 +12,7 @@ import { toast } from 'sonner';
 import { AddSizedVariantsButton } from '@/components/inventory/add-sized-variants-button';
 import { CustomFieldsInputs } from '@/components/inventory/custom-fields-inputs';
 import { GroupingPreview } from '@/components/inventory/grouping-preview';
+import { touchTargetClass } from '@/components/patterns/touch-target';
 import { BatchProgress, uploadWithProgress } from '@/lib/upload-with-progress';
 import {
   EMPTY_SPORTS_GROUP_FIELDS,
@@ -1650,7 +1651,13 @@ export function ItemForm({
                     // hovered the tile, so on a phone, a tablet or the keyboard
                     // a staged photo could not be seen to be removable.
                     data-slot="staged-photo-remove"
-                    className="hover:bg-destructive hover:text-destructive-foreground absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-md bg-black/65 text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+                    className={cn(
+                      // The shared 44 px touch area on a phone or a touch screen;
+                      // first, so its `relative` loses to the `absolute` that
+                      // seats the button on the tile.
+                      touchTargetClass,
+                      'hover:bg-destructive hover:text-destructive-foreground absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-md bg-black/65 text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70',
+                    )}
                     aria-label="Remove photo"
                   >
                     <X className="h-3.5 w-3.5" />
@@ -2586,6 +2593,9 @@ export function ItemForm({
                   onClick={() => toggleTag(t.id)}
                   aria-pressed={on}
                   className={cn(
+                    // 44 px on a phone; the shared chip's touch area on a
+                    // coarse pointer (the row's gap-2 keeps the areas apart).
+                    touchTargetClass,
                     'inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[12.5px] transition-colors max-sm:h-11 max-sm:px-3.5',
                     on
                       ? 'border-transparent text-white'
@@ -2765,9 +2775,14 @@ const HINT = 'text-muted-foreground text-[12px] leading-[17px]';
 const NOTE =
   'border-border bg-sunk text-muted-foreground rounded-md border px-3 py-2 text-[12px] leading-[17px]';
 
-/** A size chip: the filter-chip recipe at 28 px (44 below sm), ink when picked. */
+/**
+ * A size chip: the filter-chip recipe at 28 px (44 below sm), ink when picked,
+ * with the shared chip's 44 px touch area on a coarse pointer (its row's gap-2
+ * keeps neighbouring areas apart).
+ */
 function sizeChipClass(picked: boolean): string {
   return cn(
+    touchTargetClass,
     'inline-flex h-7 min-w-9 items-center justify-center rounded-full border px-3 font-mono text-[12.5px] transition-colors max-sm:h-11 max-sm:min-w-11',
     picked
       ? 'border-foreground bg-foreground text-background'
