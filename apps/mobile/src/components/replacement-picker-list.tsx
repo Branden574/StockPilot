@@ -14,7 +14,7 @@ import { MIN_TAP } from '@/components/item-verification-card';
 import { Body, FieldLabel, Mono } from '@/components/ui/text';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { describeReturnError } from '@/lib/returns-api';
-import { capTo, TYPE_CEILING } from '@/lib/theme';
+import { capTo, FONT, TYPE_CEILING } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 const INPUT_CAP = capTo(15, TYPE_CEILING.input);
@@ -36,7 +36,7 @@ const INPUT_CAP = capTo(15, TYPE_CEILING.input);
  * The look (redesign P5.7b): each row a control with the stronger border,
  * the chosen one the ink edge on the recessed fill; the SKU in mono; a short
  * row's availability and a refusal in the mode's refusal ink; the search box
- * on the shared Field's recipe.
+ * on the shared Field's recipe, its typed words in the body face, at 44pt.
  */
 export function ReplacementPickerList({
   load,
@@ -200,5 +200,15 @@ export function ReplacementPickerList({
 
 const styles = StyleSheet.create({
   row: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, gap: 10 },
-  input: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 15 },
+  // The search box: the shared text box's recipe, in the body face, and a
+  // 44pt target (its padding and one line of words made it about 40pt).
+  input: {
+    minHeight: MIN_TAP,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontFamily: FONT.displayRegular,
+    fontSize: 15,
+  },
 });

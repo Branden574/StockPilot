@@ -35,7 +35,9 @@ import { palette, type Palette } from './theme';
  *     and the reload on focus; the iPad split at 900pt with the list 380pt;
  *   - the filters as the reference's filter chips in 44pt frames, still
  *     buttons with a selected state; every control a 44pt target (the order
- *     links and the filters took hitSlop, the small buttons were 36pt);
+ *     links and the filters took hitSlop, the small buttons were 36pt, the
+ *     picker's search box about 40pt);
+ *   - every text box typing in the body face (they typed in the system face);
  *   - statuses on the shared pill tones, photos on the white photo ground,
  *     no fixed colours, no single-mode accents, no word in the faint inks,
  *     and the colours each screen names measured in both modes;
@@ -215,6 +217,33 @@ describe('the per-mode palette on every returns screen', () => {
       expect(wells.length).toBe(grounds.length);
     },
   );
+});
+
+// Mutation caught: a text box back in the system face (every other word on
+// these screens is Inter Tight), or the picker's search box back under 44pt.
+describe('every text box types in the body face', () => {
+  it.each([
+    [SHEET, 2],
+    [RELEASE, 1],
+    [REQUESTER, 2],
+    [PICKER, 1],
+  ] as const)('%s: each of its %i text boxes draws with styles.input', (file, count) => {
+    const { sf, els } = elements(file, (el, s) => tagOf(el, s) === 'TextInput');
+    expect(els).toHaveLength(count);
+    for (const { el } of els) {
+      expect(attrText(el, 'style', sf), el.getText(sf)).toMatch(/^\[\s*styles\.input,/);
+    }
+    expect(styleBlock(file, 'input')).toMatch(/\bfontFamily: FONT\.displayRegular,/);
+    expect(styleBlock(file, 'input')).toMatch(/\bfontSize: 15,/);
+  });
+
+  it("the picker's search box is a 44pt target, as every other control here", () => {
+    expect(styleBlock(PICKER, 'input')).toMatch(/\bminHeight: MIN_TAP,/);
+    // The reason and note boxes were taller than 44pt already.
+    expect(styleBlock(SHEET, 'input')).toMatch(/\bminHeight: 96,/);
+    expect(styleBlock(RELEASE, 'input')).toMatch(/\bminHeight: 80,/);
+    expect(styleBlock(REQUESTER, 'input')).toMatch(/\bminHeight: 80,/);
+  });
 });
 
 describe('Returns list', () => {

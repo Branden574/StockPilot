@@ -156,7 +156,8 @@ export interface ReturnSheetDone {
  * The look (redesign P5.7b): the per-mode palette; every choice a control
  * with the stronger border, a chosen row the ink edge on the recessed fill
  * and a chosen chip the ink fill; the text boxes on the shared Field's
- * recipe (the card with the stronger border, the muted placeholder);
+ * recipe (the card with the stronger border, the muted placeholder, the
+ * typed words in the body face);
  * refusals and the over-limit count in the mode's refusal ink; the item-is-
  * here switch in the shared switch colours (tones.ts toggleTone).
  */
@@ -1289,7 +1290,16 @@ function LineDestination({
 const styles = StyleSheet.create({
   sheet: { borderTopLeftRadius: 18, borderTopRightRadius: 18, padding: 18, paddingBottom: 32, gap: 12 },
   header: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  input: { minHeight: 96, borderWidth: 1, borderRadius: 10, padding: 12, fontSize: 15, textAlignVertical: 'top' },
+  // A typed reason: the shared text box's recipe, in the body face.
+  input: {
+    minHeight: 96,
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 12,
+    fontFamily: FONT.displayRegular,
+    fontSize: 15,
+    textAlignVertical: 'top',
+  },
   switchRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   lineCard: { borderWidth: 1, borderRadius: 12, padding: 12, gap: 8 },
   radioRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },

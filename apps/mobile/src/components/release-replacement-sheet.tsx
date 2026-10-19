@@ -56,8 +56,8 @@ interface ReleaseSheetProps {
  *
  * The look (redesign P5.7b): the per-mode palette; each preset a control
  * with the stronger border, the chosen one the ink edge on the recessed
- * fill; the reason box on the shared Field's recipe; refusals and the
- * over-limit count in the mode's refusal ink.
+ * fill; the reason box on the shared Field's recipe, its typed words in the
+ * body face; refusals and the over-limit count in the mode's refusal ink.
  */
 export function ReleaseReplacementSheet({
   visible,
@@ -255,11 +255,13 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     justifyContent: 'center',
   },
+  // A typed reason: the shared text box's recipe, in the body face.
   input: {
     minHeight: 80,
     borderWidth: 1,
     borderRadius: 10,
     padding: 12,
+    fontFamily: FONT.displayRegular,
     fontSize: 15,
     textAlignVertical: 'top',
   },

@@ -132,8 +132,9 @@ interface RequesterSheetProps {
  * when not; DESIGN-SPEC 6.6), each a 44pt target; the size rows as controls
  * with the stronger border, the chosen one the ink edge on the recessed
  * fill; photos on the white photo ground (6.14); the text boxes on the
- * shared Field's recipe; "Not in stock right now" in the mode's warning ink
- * (the web's warning dot); refusals in its refusal ink.
+ * shared Field's recipe, their typed words in the body face; "Not in stock
+ * right now" in the mode's warning ink (the web's warning dot); refusals in
+ * its refusal ink.
  */
 export function RequesterReturnSheet(props: RequesterSheetProps) {
   const { c, mode } = useTheme();
@@ -772,5 +773,14 @@ const styles = StyleSheet.create({
   photo: { width: 64, height: 64, borderRadius: 10, borderWidth: 1 },
   option: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, gap: 10 },
   optionPhoto: { width: 44, height: 44, borderRadius: 8, borderWidth: 1 },
-  input: { minHeight: 80, borderWidth: 1, borderRadius: 10, padding: 12, fontSize: 15, textAlignVertical: 'top' },
+  // A typed note: the shared text box's recipe, in the body face.
+  input: {
+    minHeight: 80,
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 12,
+    fontFamily: FONT.displayRegular,
+    fontSize: 15,
+    textAlignVertical: 'top',
+  },
 });
