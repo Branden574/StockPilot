@@ -1,7 +1,17 @@
 import { type Href, useFocusEffect, useNavigation, useRouter } from 'expo-router';
-import { ArrowLeft, Menu, Undo2 } from 'lucide-react-native';
+import { ArrowLeft, Menu, TriangleAlert, Undo2 } from 'lucide-react-native';
 import * as React from 'react';
-import { ActivityIndicator, FlatList, Image, Pressable, RefreshControl, StyleSheet, useWindowDimensions, View } from 'react-native';
+import {
+  ActivityIndicator,
+  FlatList,
+  Image,
+  Pressable,
+  RefreshControl,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
@@ -11,6 +21,7 @@ import {
   type ReturnListFilterId,
 } from '@stockpilot/core';
 
+import { MIN_TAP } from '@/components/item-verification-card';
 import { ReturnWorkbenchView } from '@/components/return-workbench-view';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -18,6 +29,7 @@ import { Field } from '@/components/ui/field';
 import { IconChip } from '@/components/ui/row';
 import { Pill } from '@/components/ui/pill';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { createDebouncedScheduler, createSequenceGuard } from '@/lib/debounced-list-load';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import { describeReturnError, listReturns, type MobileReturnListRow } from '@/lib/returns-api';
@@ -29,7 +41,7 @@ import {
   returnRowWaiting,
   returnStatusTone,
 } from '@/lib/returns-view';
-import { FONT } from '@/lib/theme';
+import { capTo, FONT, TYPE_CEILING } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useTheme } from '@/lib/use-theme';
 import { showWriteCta } from '@/lib/cta-gating';
@@ -47,10 +59,19 @@ import { showWriteCta } from '@/lib/cta-gating';
  * Gated like the drawer entry: the returns module on, and returns:read or
  * returns:manage. Reading works offline only as far as the last load; no
  * return action lives here (the workbench holds them, online only).
+ *
+ * The look (redesign P5.7b): the per-mode palette; the filters as the
+ * reference's filter chips (DESIGN-SPEC 6.6) in 44pt frames; each RMA a card
+ * with its status on the shared pill tones and its photos on the white photo
+ * ground (6.14); on the iPad the chosen RMA carries the accent rail of the
+ * reference's master-detail list (6.18). A failed read says so in its own
+ * words with the warning glyph.
  */
 const SEARCH_DEBOUNCE_MS = 250;
 /** From this window width the list keeps the RMA beside it (iPad split view). */
 const SPLIT_MIN_WIDTH = 900;
+/** The filter chips' words are control labels: the control ceiling. */
+const CONTROL_CAP = capTo(13, TYPE_CEILING.control);
 
 export default function ReturnsListScreen() {
   const { c } = useTheme();
@@ -173,8 +194,10 @@ export default function ReturnsListScreen() {
           <View style={styles.toolbar}>
             {/* Buttons with a selected state, like the shared Chip: iOS gives
                 the "tab" role no trait, so VoiceOver read the filters without
-                saying they can be pressed (RX-1 simulator matrix). */}
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                saying they can be pressed (RX-1 simulator matrix). Each chip
+                is the reference's filter chip (DESIGN-SPEC 6.6) in a 44pt
+                frame, the whole frame the target (it took hitSlop before). */}
+            <View style={styles.chipRow}>
               {filters.map((f) => (
                 <Pressable
                   key={f.id}
@@ -182,11 +205,23 @@ export default function ReturnsListScreen() {
                   accessibilityRole="button"
                   accessibilityState={{ selected: filter === f.id }}
                   accessibilityLabel={f.label}
-                  hitSlop={6}
+                  style={({ pressed }) => [styles.chipFrame, { opacity: pressed ? 0.7 : 1 }]}
                 >
-                  <Pill status={filter === f.id ? 'ok' : 'default'} dot={false}>
-                    {f.label}
-                  </Pill>
+                  <View
+                    style={[
+                      styles.chip,
+                      filter === f.id
+                        ? { backgroundColor: c.ink, borderColor: c.ink }
+                        : { backgroundColor: 'transparent', borderColor: c.hair2 },
+                    ]}
+                  >
+                    <Text
+                      style={[styles.chipLabel, { color: filter === f.id ? c.paper : c.ink2 }]}
+                      maxFontSizeMultiplier={CONTROL_CAP}
+                    >
+                      {f.label}
+                    </Text>
+                  </View>
                 </Pressable>
               ))}
             </View>
@@ -203,89 +238,134 @@ export default function ReturnsListScreen() {
           </View>
 
           {loadError && rows.length === 0 ? (
-            <View style={{ paddingHorizontal: 20, marginTop: 8 }}>
-              <Card padding={16}>
-                <Body size={14.5}>{loadError}</Body>
-                <View style={{ marginTop: 14, alignSelf: 'flex-start' }}>
-                  <Button variant="outline" size="sm" onPress={() => void load()}>
-                    Try again
-                  </Button>
-                </View>
-              </Card>
+            // The read failed and nothing was read before: its own words,
+            // with the warning glyph (the shared list's failed panel).
+            <View style={styles.failed}>
+              <TriangleAlert
+                size={32}
+                color={c.warnText}
+                strokeWidth={1.3}
+                style={{ marginBottom: 12 }}
+              />
+              <Body
+                size={14.5}
+                accessibilityRole="alert"
+                style={{ textAlign: 'center', maxWidth: 320 }}
+              >
+                {loadError}
+              </Body>
+              <View style={{ marginTop: 14 }}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  style={{ minHeight: MIN_TAP }}
+                  onPress={() => void load()}
+                >
+                  Try again
+                </Button>
+              </View>
             </View>
           ) : loading ? (
-            <ActivityIndicator color={c.ink4} style={{ marginTop: 32 }} />
+            <ActivityIndicator color={c.ink} style={{ marginTop: 32 }} />
           ) : (
             <View style={split ? styles.split : { flex: 1 }}>
-            <FlatList
-              style={split ? styles.splitList : undefined}
-              data={rows}
-              keyExtractor={(r) => r.id}
-              contentContainerStyle={styles.list}
-              keyboardDismissMode="on-drag"
-              // A refresh or next page that failed while rows are shown says so
-              // above them (returns review), instead of failing silently.
-              ListHeaderComponent={
-                loadError && rows.length > 0 ? (
-                  <Card padding={12}>
-                    <Body size={13.5} accessibilityRole="alert">
-                      {loadError}
-                    </Body>
-                    <View style={{ marginTop: 10, alignSelf: 'flex-start' }}>
-                      <Button variant="outline" size="sm" onPress={() => void load()}>
-                        Try again
-                      </Button>
+              <FlatList
+                style={split ? styles.splitList : undefined}
+                data={rows}
+                keyExtractor={(r) => r.id}
+                contentContainerStyle={styles.list}
+                keyboardDismissMode="on-drag"
+                // A refresh or next page that failed while rows are shown says so
+                // above them (returns review), instead of failing silently: on
+                // the warning wash, with the warning glyph beside the words.
+                ListHeaderComponent={
+                  loadError && rows.length > 0 ? (
+                    <View style={styles.reloadNote}>
+                      <View style={[styles.banner, { backgroundColor: c.warnWash }]}>
+                        <TriangleAlert
+                          size={16}
+                          color={c.warnText}
+                          strokeWidth={1.75}
+                          style={{ marginTop: 2 }}
+                        />
+                        <Body
+                          size={13.5}
+                          color={c.warnText}
+                          accessibilityRole="alert"
+                          style={{ flex: 1 }}
+                        >
+                          {loadError}
+                        </Body>
+                      </View>
+                      <View style={{ alignSelf: 'flex-start' }}>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          style={{ minHeight: MIN_TAP }}
+                          onPress={() => void load()}
+                        >
+                          Try again
+                        </Button>
+                      </View>
                     </View>
-                  </Card>
-                ) : null
-              }
-              onEndReachedThreshold={0.4}
-              onEndReached={() => void loadMore()}
-              refreshControl={
-                <RefreshControl
-                  refreshing={refreshing}
-                  onRefresh={() => {
-                    setRefreshing(true);
-                    void load();
-                  }}
-                  tintColor={c.ink}
-                />
-              }
-              ListEmptyComponent={
-                <View style={styles.empty}>
-                  <Undo2 size={32} color={c.ink4} strokeWidth={1.3} style={{ marginBottom: 12 }} />
-                  <Display size={18}>{RETURNS_COPY.listEmpty}</Display>
-                </View>
-              }
-              ListFooterComponent={
-                loadingMore ? <ActivityIndicator color={c.ink4} style={{ marginVertical: 16 }} /> : null
-              }
-              renderItem={({ item }) => (
-                <ReturnRow
-                  row={item}
-                  selected={split && selectedId === item.id}
-                  onPress={() => (split ? setSelectedId(item.id) : router.push(`/returns/${item.id}` as Href))}
-                />
-              )}
-            />
-            {split ? (
-              <View style={[styles.splitDetail, { borderColor: c.hair }]}>
-                {selectedId ? (
-                  <ReturnWorkbenchView
-                    key={selectedId}
-                    returnId={selectedId}
-                    compact
-                    // The list sits beside the workbench and is never re-focused:
-                    // reload it after each action so the row's status follows.
-                    onChanged={() => scheduler.schedule(() => void load())}
+                  ) : null
+                }
+                onEndReachedThreshold={0.4}
+                onEndReached={() => void loadMore()}
+                refreshControl={
+                  <RefreshControl
+                    refreshing={refreshing}
+                    onRefresh={() => {
+                      setRefreshing(true);
+                      void load();
+                    }}
+                    tintColor={c.ink}
                   />
-                ) : (
+                }
+                ListEmptyComponent={
                   <View style={styles.empty}>
-                    <Body muted>Choose a return to see it here.</Body>
+                    <Undo2
+                      size={32}
+                      color={c.ink4}
+                      strokeWidth={1.3}
+                      style={{ marginBottom: 12 }}
+                    />
+                    <Display size={18}>{RETURNS_COPY.listEmpty}</Display>
                   </View>
+                }
+                ListFooterComponent={
+                  loadingMore ? (
+                    <ActivityIndicator color={c.ink} style={{ marginVertical: 16 }} />
+                  ) : null
+                }
+                renderItem={({ item }) => (
+                  <ReturnRow
+                    row={item}
+                    selected={split && selectedId === item.id}
+                    onPress={() =>
+                      split ? setSelectedId(item.id) : router.push(`/returns/${item.id}` as Href)
+                    }
+                  />
                 )}
-              </View>
-            ) : null}
+              />
+              {split ? (
+                <View style={[styles.splitDetail, { borderColor: c.hair }]}>
+                  {selectedId ? (
+                    <ReturnWorkbenchView
+                      key={selectedId}
+                      returnId={selectedId}
+                      compact
+                      // The list sits beside the workbench and is never re-focused:
+                      // reload it after each action so the row's status follows.
+                      onChanged={() => scheduler.schedule(() => void load())}
+                    />
+                  ) : (
+                    <View style={styles.empty}>
+                      <Body muted>Choose a return to see it here.</Body>
+                    </View>
+                  )}
+                </View>
+              ) : null}
             </View>
           )}
         </>
@@ -294,7 +374,15 @@ export default function ReturnsListScreen() {
   );
 }
 
-function ReturnRow({ row, selected = false, onPress }: { row: MobileReturnListRow; selected?: boolean; onPress: () => void }) {
+function ReturnRow({
+  row,
+  selected = false,
+  onPress,
+}: {
+  row: MobileReturnListRow;
+  selected?: boolean;
+  onPress: () => void;
+}) {
   const { c } = useTheme();
   const waiting = returnRowWaiting(row);
   const exchange = returnRowExchange(row);
@@ -309,12 +397,35 @@ function ReturnRow({ row, selected = false, onPress }: { row: MobileReturnListRo
       accessibilityState={{ selected }}
       style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
     >
-      <Card padding={16} style={selected ? { borderColor: c.ink, borderWidth: 1 } : undefined}>
+      {/* The iPad split's chosen RMA (DESIGN-SPEC 6.18): a 3pt accent rail on
+          the recessed fill. The padding gives back the rail's extra 2pt, so
+          the words stay where they are. */}
+      <Card
+        padding={16}
+        style={
+          selected
+            ? {
+                borderLeftWidth: 3,
+                borderLeftColor: c.accent,
+                backgroundColor: c.sunk,
+                paddingLeft: 14,
+              }
+            : undefined
+        }
+      >
         {/* The status pill wraps below the meta at the largest text sizes,
             so the requester is never cut to a letter (returns review, AX5). */}
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+        <View
+          style={{
+            flexDirection: 'row',
+            flexWrap: 'wrap',
+            justifyContent: 'space-between',
+            alignItems: 'flex-start',
+            gap: 12,
+          }}
+        >
           <View style={{ flexGrow: 1, flexShrink: 1, flexBasis: 180, minWidth: 0 }}>
-            <Mono size={9.5} tracking={0.2} upper color={c.ink4}>
+            <Mono size={9.5} tracking={0.2} upper color={c.ink3}>
               {returnRowTitle(row)}
             </Mono>
             <Body size={15.5} color={c.ink} style={{ marginTop: 6, fontFamily: FONT.display }}>
@@ -326,11 +437,21 @@ function ReturnRow({ row, selected = false, onPress }: { row: MobileReturnListRo
           </Pill>
         </View>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 }}>
+          {/* Photos on the white photo ground in both modes; an item without
+              one keeps its place as a recessed square (DESIGN-SPEC 6.14). */}
           {row.items.map((it) =>
             it.thumbUrl ? (
-              <Image key={it.itemId} source={{ uri: it.thumbUrl }} style={[styles.thumb, { backgroundColor: c.paper2 }]} accessibilityIgnoresInvertColors />
+              <Image
+                key={it.itemId}
+                source={{ uri: it.thumbUrl }}
+                style={[styles.thumb, { backgroundColor: PHOTO_BACKGROUND, borderColor: c.hair }]}
+                accessibilityIgnoresInvertColors
+              />
             ) : (
-              <View key={it.itemId} style={[styles.thumb, { backgroundColor: c.paper2 }]} />
+              <View
+                key={it.itemId}
+                style={[styles.thumb, { backgroundColor: c.sunk, borderColor: c.hair }]}
+              />
             ),
           )}
           <Body size={13} muted numberOfLines={2} style={{ flex: 1 }}>
@@ -343,7 +464,13 @@ function ReturnRow({ row, selected = false, onPress }: { row: MobileReturnListRo
           </Body>
         ) : null}
         {waiting ? (
-          <Mono size={11} tracking={0.04} color={waiting.overdue ? c.ink : c.ink4} style={{ marginTop: 8 }}>
+          // Past the 14-day prompt the wait is said in the warning ink.
+          <Mono
+            size={11}
+            tracking={0.04}
+            color={waiting.overdue ? c.warnText : c.ink3}
+            style={{ marginTop: 8 }}
+          >
             {waiting.label}
           </Mono>
         ) : null}
@@ -354,13 +481,41 @@ function ReturnRow({ row, selected = false, onPress }: { row: MobileReturnListRo
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  topbar: { paddingHorizontal: 12, paddingTop: 5, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  topbar: {
+    paddingHorizontal: 12,
+    paddingTop: 5,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
   chips: { flexDirection: 'row', alignItems: 'center', gap: 2, marginLeft: -3 },
   head: { paddingHorizontal: 20, paddingTop: 9, paddingBottom: 4 },
   toolbar: { paddingHorizontal: 20, paddingTop: 16 },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 8 },
+  // The 44pt target; the 32pt chip sits in its middle.
+  chipFrame: { minHeight: 44, minWidth: 44, justifyContent: 'center' },
+  chip: {
+    minHeight: 32,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chipLabel: { fontFamily: FONT.displayRegular, fontSize: 13 },
   list: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 24, gap: 10 },
   empty: { paddingTop: 40, paddingHorizontal: 24, alignItems: 'center' },
-  thumb: { width: 36, height: 36, borderRadius: 6 },
+  failed: { paddingTop: 40, paddingHorizontal: 24, alignItems: 'center' },
+  reloadNote: { gap: 10 },
+  banner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    padding: 12,
+    borderRadius: 10,
+  },
+  thumb: { width: 36, height: 36, borderRadius: 7, borderWidth: 1 },
   split: { flex: 1, flexDirection: 'row' },
   splitList: { width: 380, flexGrow: 0 },
   splitDetail: { flex: 1, borderLeftWidth: 1 },

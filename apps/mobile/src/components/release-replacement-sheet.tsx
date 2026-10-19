@@ -13,13 +13,17 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { READINESS_NEEDS_CONNECTION_COPY, RETURN_RELEASE_REASON_MAX, RETURNS_COPY } from '@stockpilot/core';
+import {
+  READINESS_NEEDS_CONNECTION_COPY,
+  RETURN_RELEASE_REASON_MAX,
+  RETURNS_COPY,
+} from '@stockpilot/core';
 
 import { MIN_TAP } from '@/components/item-verification-card';
 import { Button } from '@/components/ui/button';
 import { Body, FieldLabel, Mono } from '@/components/ui/text';
 import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';
-import { ACCENT, capTo, FONT, TYPE_CEILING } from '@/lib/theme';
+import { capTo, FONT, TYPE_CEILING } from '@/lib/theme';
 import { useSheetKeyboard } from '@/lib/use-sheet-keyboard';
 import { useTheme } from '@/lib/use-theme';
 
@@ -49,8 +53,16 @@ interface ReleaseSheetProps {
  * simulator finding SIM-2: as a plain card with no height bound it ran off
  * the top of an iPhone at AX5, taking the title, Close and the first preset.
  * The content remounts per opening, so the reason starts empty each time.
+ *
+ * The look (redesign P5.7b): the per-mode palette; each preset a control
+ * with the stronger border, the chosen one the ink edge on the recessed
+ * fill; the reason box on the shared Field's recipe; refusals and the
+ * over-limit count in the mode's refusal ink.
  */
-export function ReleaseReplacementSheet({ visible, ...props }: ReleaseSheetProps & { visible: boolean }) {
+export function ReleaseReplacementSheet({
+  visible,
+  ...props
+}: ReleaseSheetProps & { visible: boolean }) {
   const close = () => {
     if (props.submitting) return;
     props.onClose();
@@ -88,7 +100,10 @@ function ReleaseSheetContent({ online, submitting, error, onClose, onConfirm }: 
     onClose();
   };
   return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      style={{ flex: 1 }}
+    >
       <View
         accessibilityViewIsModal
         onAccessibilityEscape={close}
@@ -100,7 +115,10 @@ function ReleaseSheetContent({ online, submitting, error, onClose, onConfirm }: 
           onAccessibilityTap={close}
           accessibilityRole="button"
           accessibilityLabel="Close"
-          style={[StyleSheet.absoluteFill, { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' }]}
+          style={[
+            StyleSheet.absoluteFill,
+            { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' },
+          ]}
         />
         <View
           onStartShouldSetResponder={kb.claimTapOutside}
@@ -108,7 +126,13 @@ function ReleaseSheetContent({ online, submitting, error, onClose, onConfirm }: 
           style={[styles.sheet, { backgroundColor: c.card, maxHeight: layout.sheetMaxHeight }]}
         >
           <View style={styles.header}>
-            <Body size={16} color={c.ink} accessibilityRole="header" maxFontSizeMultiplier={TITLE_CAP} style={{ fontFamily: FONT.display, flex: 1 }}>
+            <Body
+              size={16}
+              color={c.ink}
+              accessibilityRole="header"
+              maxFontSizeMultiplier={TITLE_CAP}
+              style={{ fontFamily: FONT.display, flex: 1 }}
+            >
               {RETURNS_COPY.releaseEarly}
             </Body>
             <Pressable
@@ -117,9 +141,14 @@ function ReleaseSheetContent({ online, submitting, error, onClose, onConfirm }: 
               accessibilityRole="button"
               accessibilityLabel="Close"
               accessibilityState={{ disabled: submitting }}
-              style={{ minWidth: MIN_TAP, minHeight: MIN_TAP, alignItems: 'flex-end', justifyContent: 'center' }}
+              style={{
+                minWidth: MIN_TAP,
+                minHeight: MIN_TAP,
+                alignItems: 'flex-end',
+                justifyContent: 'center',
+              }}
             >
-              <X size={18} color={c.ink4} />
+              <X size={18} color={c.ink3} />
             </Pressable>
           </View>
 
@@ -137,21 +166,30 @@ function ReleaseSheetContent({ online, submitting, error, onClose, onConfirm }: 
             <Body size={13.5} muted>
               {RETURNS_COPY.releaseEarlyConfirm}
             </Body>
-            {[RETURNS_COPY.releasePresetInPerson, RETURNS_COPY.releasePresetDeliverySwap].map((preset) => (
-              <Pressable
-                key={preset}
-                disabled={submitting}
-                onPress={() => setReason(preset)}
-                accessibilityRole="button"
-                accessibilityLabel={preset}
-                accessibilityState={{ selected: reason === preset }}
-                style={[styles.option, { borderColor: reason === preset ? c.ink : c.hair, minHeight: MIN_TAP }]}
-              >
-                <Body size={14} color={c.ink}>
-                  {preset}
-                </Body>
-              </Pressable>
-            ))}
+            {[RETURNS_COPY.releasePresetInPerson, RETURNS_COPY.releasePresetDeliverySwap].map(
+              (preset) => (
+                <Pressable
+                  key={preset}
+                  disabled={submitting}
+                  onPress={() => setReason(preset)}
+                  accessibilityRole="button"
+                  accessibilityLabel={preset}
+                  accessibilityState={{ selected: reason === preset }}
+                  style={[
+                    styles.option,
+                    {
+                      borderColor: reason === preset ? c.ink : c.hair2,
+                      backgroundColor: reason === preset ? c.sunk : 'transparent',
+                      minHeight: MIN_TAP,
+                    },
+                  ]}
+                >
+                  <Body size={14} color={c.ink}>
+                    {preset}
+                  </Body>
+                </Pressable>
+              ),
+            )}
             <View style={{ gap: 6 }} onLayout={kb.onNoteBlockLayout}>
               <FieldLabel>{RETURNS_COPY.releaseEarlyReasonLabel.toUpperCase()}</FieldLabel>
               <TextInput
@@ -164,11 +202,14 @@ function ReleaseSheetContent({ online, submitting, error, onClose, onConfirm }: 
                 multiline
                 maxFontSizeMultiplier={NOTE_FONT_CAP}
                 placeholder="Why"
-                placeholderTextColor={c.ink4}
+                placeholderTextColor={c.ink3}
                 accessibilityLabel={RETURNS_COPY.releaseEarlyReasonLabel}
-                style={[styles.input, { borderColor: c.hair, backgroundColor: c.paper2, color: c.ink }]}
+                style={[
+                  styles.input,
+                  { borderColor: c.hair2, backgroundColor: c.card, color: c.ink },
+                ]}
               />
-              <Mono size={11} color={count > RETURN_RELEASE_REASON_MAX ? ACCENT.crit : c.ink4}>
+              <Mono size={11} color={count > RETURN_RELEASE_REASON_MAX ? c.critText : c.ink3}>
                 {`${count} / ${RETURN_RELEASE_REASON_MAX}`}
               </Mono>
             </View>
@@ -180,11 +221,16 @@ function ReleaseSheetContent({ online, submitting, error, onClose, onConfirm }: 
             </Body>
           ) : null}
           {error ? (
-            <Body size={13} color={ACCENT.crit} accessibilityRole="alert">
+            <Body size={13} color={c.critText} accessibilityRole="alert">
               {error}
             </Body>
           ) : null}
-          <Button block disabled={disabledReason !== null || submitting} accessibilityHint={disabledReason ?? undefined} onPress={() => onConfirm(text)}>
+          <Button
+            block
+            disabled={disabledReason !== null || submitting}
+            accessibilityHint={disabledReason ?? undefined}
+            onPress={() => onConfirm(text)}
+          >
             {submitting ? 'Saving…' : RETURNS_COPY.releaseBeforeReturn}
           </Button>
         </View>
@@ -194,8 +240,27 @@ function ReleaseSheetContent({ online, submitting, error, onClose, onConfirm }: 
 }
 
 const styles = StyleSheet.create({
-  sheet: { borderTopLeftRadius: 18, borderTopRightRadius: 18, padding: 18, paddingBottom: 32, gap: 10 },
+  sheet: {
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    padding: 18,
+    paddingBottom: 32,
+    gap: 10,
+  },
   header: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  option: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, justifyContent: 'center' },
-  input: { minHeight: 80, borderWidth: 1, borderRadius: 10, padding: 12, fontSize: 15, textAlignVertical: 'top' },
+  option: {
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    justifyContent: 'center',
+  },
+  input: {
+    minHeight: 80,
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 12,
+    fontSize: 15,
+    textAlignVertical: 'top',
+  },
 });

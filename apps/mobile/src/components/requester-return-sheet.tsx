@@ -28,6 +28,7 @@ import { ReplacementQuantityStepper } from '@/components/replacement-quantity-st
 import { Button } from '@/components/ui/button';
 import { CachedImage } from '@/components/ui/cached-image';
 import { Body, Eyebrow, FieldLabel, Mono } from '@/components/ui/text';
+import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';
 import { RETURN_REASONS } from '@/lib/order-returns';
@@ -65,13 +66,13 @@ import {
   requesterDraftAfterRefusal,
   sendRequesterReturn,
 } from '@/lib/requester-returns-api';
-import { ACCENT, capTo, FONT, TYPE_CEILING } from '@/lib/theme';
+import { capTo, FONT, TYPE_CEILING } from '@/lib/theme';
 import { useSheetKeyboard } from '@/lib/use-sheet-keyboard';
 import { useTheme } from '@/lib/use-theme';
 
 const TITLE_CAP = capTo(16, TYPE_CEILING.display);
 const CONTROL_CAP = capTo(15, TYPE_CEILING.control);
-const CHOICE_CAP = capTo(10.5, TYPE_CEILING.control);
+const CHOICE_CAP = capTo(13, TYPE_CEILING.control);
 const INPUT_CAP = capTo(15, TYPE_CEILING.input);
 /** The block id of the request's own notes (every other block is a line's note). */
 const NOTES_BLOCK = '__notes';
@@ -124,6 +125,15 @@ interface RequesterSheetProps {
  * REPLACEMENT sit side by side (they wrap on the phone). Mounted per opening,
  * so every opening starts from the remembered draft. Nothing here can be
  * dismissed while a request is under way.
+ *
+ * The look (redesign P5.7b): the per-mode palette; Return only / Exchange
+ * and the reasons as the reference's chips (the ink fill with the page
+ * colour's words when chosen, the stronger border round the secondary ink
+ * when not; DESIGN-SPEC 6.6), each a 44pt target; the size rows as controls
+ * with the stronger border, the chosen one the ink edge on the recessed
+ * fill; photos on the white photo ground (6.14); the text boxes on the
+ * shared Field's recipe; "Not in stock right now" in the mode's warning ink
+ * (the web's warning dot); refusals in its refusal ink.
  */
 export function RequesterReturnSheet(props: RequesterSheetProps) {
   const { c, mode } = useTheme();
@@ -251,13 +261,13 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
   };
 
   const choiceStyle = (on: boolean) => ({
-    paddingHorizontal: 10,
+    paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: 8,
+    borderRadius: 999,
     borderWidth: 1,
     minHeight: MIN_TAP,
     justifyContent: 'center' as const,
-    borderColor: on ? c.ink : c.hair,
+    borderColor: on ? c.ink : c.hair2,
     backgroundColor: on ? c.ink : 'transparent',
   });
 
@@ -278,7 +288,13 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
             {load.message}
           </Body>
           <View style={{ alignSelf: 'flex-start' }}>
-            <Button variant="outline" size="sm" disabled={!online} onPress={onReloadSheet}>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!online}
+              style={{ minHeight: MIN_TAP }}
+              onPress={onReloadSheet}
+            >
               Try again
             </Button>
           </View>
@@ -286,7 +302,7 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
       ) : (
         <ActivityIndicator
           key="loading"
-          color={c.ink4}
+          color={c.ink}
           style={{ marginVertical: 24 }}
           accessible
           accessibilityLabel={RETURNS_COPY.requesterLoadingForm}
@@ -307,7 +323,13 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
             {load.message}
           </Body>
           <View style={{ alignSelf: 'flex-start' }}>
-            <Button variant="outline" size="sm" disabled={!online} onPress={onReloadSheet}>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!online}
+              style={{ minHeight: MIN_TAP }}
+              onPress={onReloadSheet}
+            >
               Try again
             </Button>
           </View>
@@ -347,9 +369,10 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
             minWidth: MIN_TAP,
             minHeight: MIN_TAP,
             paddingHorizontal: 8,
-            borderRadius: 8,
+            borderRadius: 10,
             borderWidth: 1,
-            borderColor: c.hair,
+            borderColor: c.hair2,
+            backgroundColor: c.card,
             alignItems: 'center',
             justifyContent: 'center',
             opacity: off ? 0.35 : 1,
@@ -368,17 +391,25 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
               {/* RETURNING only on a line that comes back, as on the web (RX-3 fix round 1, L4). */}
               {d.quantity > 0 ? <Eyebrow>{RETURNS_COPY.returning}</Eyebrow> : null}
               <View style={{ flexDirection: stacked ? 'column' : 'row', gap: 12 }}>
+                {/* The photo on the white photo ground in both modes; none, a
+                    recessed square in its place (DESIGN-SPEC 6.14). */}
                 {photo ? (
-                  <CachedImage uri={photo} style={[styles.photo, { backgroundColor: c.paper2 }]} />
+                  <CachedImage
+                    uri={photo}
+                    style={[
+                      styles.photo,
+                      { backgroundColor: PHOTO_BACKGROUND, borderColor: c.hair },
+                    ]}
+                  />
                 ) : (
-                  <View style={[styles.photo, { backgroundColor: c.paper2 }]} />
+                  <View style={[styles.photo, { backgroundColor: c.sunk, borderColor: c.hair }]} />
                 )}
                 <View style={stacked ? { gap: 2 } : { flex: 1, minWidth: 0, gap: 2 }}>
                   {/* An item's name is never capped (the app's policy). */}
                   <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
                     {label}
                   </Body>
-                  <Mono size={11} color={c.ink4}>
+                  <Mono size={11} color={c.ink3}>
                     {requesterLineAvailability(l)}
                   </Mono>
                 </View>
@@ -423,9 +454,13 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
                           accessibilityState={{ checked: on, disabled: sending }}
                           style={choiceStyle(on)}
                         >
-                          <Mono size={10.5} color={on ? c.paper : c.ink3} maxFontSizeMultiplier={CHOICE_CAP}>
+                          <Body
+                            size={13}
+                            color={on ? c.paper : c.ink2}
+                            maxFontSizeMultiplier={CHOICE_CAP}
+                          >
                             {words}
-                          </Mono>
+                          </Body>
                         </Pressable>
                       );
                     })}
@@ -453,7 +488,11 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
                   </Body>
                 )}
                 {view.kind === 'loading' ? (
-                  <ActivityIndicator color={c.ink4} accessible accessibilityLabel={RETURNS_COPY.requesterLoadingSizes} />
+                  <ActivityIndicator
+                    color={c.ink}
+                    accessible
+                    accessibilityLabel={RETURNS_COPY.requesterLoadingSizes}
+                  />
                 ) : null}
                 {view.kind === 'offline' ? (
                   <Body size={13} muted>
@@ -466,7 +505,13 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
                       {view.message}
                     </Body>
                     <View style={{ alignSelf: 'flex-start' }}>
-                      <Button variant="outline" size="sm" disabled={!online || sending} onPress={() => void loadSizes()}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!online || sending}
+                        style={{ minHeight: MIN_TAP }}
+                        onPress={() => void loadSizes()}
+                      >
                         Try again
                       </Button>
                     </View>
@@ -498,22 +543,33 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
                             {
                               flexDirection: stacked ? 'column' : 'row',
                               alignItems: stacked ? 'stretch' : 'center',
-                              borderColor: checked ? c.ink : c.hair,
-                              backgroundColor: checked ? c.paper2 : 'transparent',
+                              borderColor: checked ? c.ink : c.hair2,
+                              backgroundColor: checked ? c.sunk : 'transparent',
                               minHeight: MIN_TAP,
                             },
                           ]}
                         >
                           {row.photoUrl ? (
-                            <CachedImage uri={row.photoUrl} style={[styles.optionPhoto, { backgroundColor: c.paper2 }]} />
+                            <CachedImage
+                              uri={row.photoUrl}
+                              style={[
+                                styles.optionPhoto,
+                                { backgroundColor: PHOTO_BACKGROUND, borderColor: c.hair },
+                              ]}
+                            />
                           ) : (
-                            <View style={[styles.optionPhoto, { backgroundColor: c.paper2 }]} />
+                            <View
+                              style={[
+                                styles.optionPhoto,
+                                { backgroundColor: c.sunk, borderColor: c.hair },
+                              ]}
+                            />
                           )}
                           <View style={stacked ? { gap: 2 } : { flex: 1, minWidth: 0, gap: 2 }}>
                             <Body size={14} color={c.ink}>
                               {row.label}
                             </Body>
-                            <Body size={12.5} color={row.available ? c.ink3 : c.ink4}>
+                            <Body size={12.5} color={row.available ? c.ink3 : c.warnText}>
                               {row.availability}
                             </Body>
                           </View>
@@ -547,11 +603,14 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
               multiline
               maxLength={RETURN_EXCHANGE_NOTE_MAX}
               maxFontSizeMultiplier={INPUT_CAP}
-              placeholderTextColor={c.ink4}
+              placeholderTextColor={c.ink3}
               accessibilityLabel={`${RETURNS_COPY.warehouseReviewNote}, ${label}`}
-              style={[styles.input, { borderColor: c.hair, backgroundColor: c.paper2, color: c.ink }]}
+              style={[
+                styles.input,
+                { borderColor: c.hair2, backgroundColor: c.card, color: c.ink },
+              ]}
             />
-            <Mono size={11} color={count > RETURN_EXCHANGE_NOTE_MAX ? ACCENT.crit : c.ink4}>
+            <Mono size={11} color={count > RETURN_EXCHANGE_NOTE_MAX ? c.critText : c.ink3}>
               {`${count} / ${RETURN_EXCHANGE_NOTE_MAX}`}
             </Mono>
           </View>,
@@ -575,9 +634,13 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
                 accessibilityState={{ checked: on, disabled: sending }}
                 style={choiceStyle(on)}
               >
-                <Mono size={10.5} color={on ? c.paper : c.ink3} maxFontSizeMultiplier={CHOICE_CAP}>
+                <Body
+                  size={13}
+                  color={on ? c.paper : c.ink2}
+                  maxFontSizeMultiplier={CHOICE_CAP}
+                >
                   {r.label}
-                </Mono>
+                </Body>
               </Pressable>
             );
           })}
@@ -600,9 +663,9 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
           maxLength={RETURN_NOTES_MAX}
           maxFontSizeMultiplier={INPUT_CAP}
           placeholder={RETURNS_COPY.requesterNotesPlaceholder}
-          placeholderTextColor={c.ink4}
+          placeholderTextColor={c.ink3}
           accessibilityLabel={RETURNS_COPY.requesterNotesLabel}
-          style={[styles.input, { borderColor: c.hair, backgroundColor: c.paper2, color: c.ink }]}
+          style={[styles.input, { borderColor: c.hair2, backgroundColor: c.card, color: c.ink }]}
         />
       </View>,
     );
@@ -641,7 +704,7 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
                   {requesterEntryWords(load)}
                 </Body>
                 {sheet?.orderNumber ? (
-                  <Mono size={11} color={c.ink4}>
+                  <Mono size={11} color={c.ink3}>
                     {sheet.orderNumber}
                   </Mono>
                 ) : null}
@@ -654,7 +717,7 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
                 accessibilityState={{ disabled: sending }}
                 style={{ minWidth: MIN_TAP, minHeight: MIN_TAP, alignItems: 'flex-end', justifyContent: 'center' }}
               >
-                <X size={18} color={c.ink4} />
+                <X size={18} color={c.ink3} />
               </Pressable>
             </View>
 
@@ -675,7 +738,7 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
             </ScrollView>
 
             {error ? (
-              <Body size={13} color={ACCENT.crit} accessibilityRole="alert">
+              <Body size={13} color={c.critText} accessibilityRole="alert">
                 {error}
               </Body>
             ) : null}
@@ -706,8 +769,8 @@ const styles = StyleSheet.create({
   // RETURNING and REPLACEMENT side by side on the iPad; on the phone they wrap.
   pair: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   side: { flexGrow: 1, flexBasis: 300, gap: 10, borderWidth: 1, borderRadius: 12, padding: 12 },
-  photo: { width: 64, height: 64, borderRadius: 10 },
+  photo: { width: 64, height: 64, borderRadius: 10, borderWidth: 1 },
   option: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, gap: 10 },
-  optionPhoto: { width: 44, height: 44, borderRadius: 8 },
+  optionPhoto: { width: 44, height: 44, borderRadius: 8, borderWidth: 1 },
   input: { minHeight: 80, borderWidth: 1, borderRadius: 10, padding: 12, fontSize: 15, textAlignVertical: 'top' },
 });

@@ -43,6 +43,7 @@ import { ReplacementPickerList } from '@/components/replacement-picker-list';
 import { ReplacementQuantityStepper } from '@/components/replacement-quantity-stepper';
 import { Button } from '@/components/ui/button';
 import { Body, FieldLabel, Mono } from '@/components/ui/text';
+import { PHOTO_BACKGROUND, toggleTone } from '@/components/ui/tones';
 import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';
 import {
   cancelReturn,
@@ -90,7 +91,7 @@ import {
   stepOutcomeMessage,
   whatHappensLines,
 } from '@/lib/returns-view';
-import { ACCENT, capTo, FONT, TYPE_CEILING } from '@/lib/theme';
+import { capTo, FONT, TYPE_CEILING } from '@/lib/theme';
 import { useSheetKeyboard } from '@/lib/use-sheet-keyboard';
 import { useTheme } from '@/lib/use-theme';
 
@@ -151,6 +152,13 @@ export interface ReturnSheetDone {
  * accessibilityViewIsModal, onAccessibilityTap on the scrim, the body the one
  * part that scrolls, sized by exceptionSheetLayout, the keyboard handled by
  * useSheetKeyboard).
+ *
+ * The look (redesign P5.7b): the per-mode palette; every choice a control
+ * with the stronger border, a chosen row the ink edge on the recessed fill
+ * and a chosen chip the ink fill; the text boxes on the shared Field's
+ * recipe (the card with the stronger border, the muted placeholder);
+ * refusals and the over-limit count in the mode's refusal ink; the item-is-
+ * here switch in the shared switch colours (tones.ts toggleTone).
  */
 export function ReturnActionSheet({
   visible,
@@ -574,7 +582,7 @@ function SheetContent({
               accessibilityState={{ disabled: submitting }}
               style={{ minWidth: MIN_TAP, minHeight: MIN_TAP, alignItems: 'flex-end', justifyContent: 'center' }}
             >
-              <X size={18} color={c.ink4} />
+              <X size={18} color={c.ink3} />
             </Pressable>
           </View>
 
@@ -593,7 +601,7 @@ function SheetContent({
             style={{ maxHeight: layout.bodyMaxHeight, flexShrink: 1 }}
           >
             {wb.return.returnNumber ? (
-              <Mono size={12} color={c.ink4}>
+              <Mono size={12} color={c.ink3}>
                 {wb.return.returnNumber}
               </Mono>
             ) : null}
@@ -605,7 +613,7 @@ function SheetContent({
               <Body
                 key={t.key}
                 size={13.5}
-                color={t.key === 'effect' ? c.ink3 : ACCENT.crit}
+                color={t.key === 'effect' ? c.ink3 : c.critText}
                 accessibilityRole={t.key === 'effect' ? 'text' : 'alert'}
               >
                 {t.text}
@@ -640,12 +648,17 @@ function SheetContent({
                       {RETURNS_COPY.itemIsHereHelp}
                     </Body>
                   </View>
+                  {/* The native switch in the shared switch colours (the ink
+                      track when on, the stronger border when off). */}
                   <Switch
                     value={itemIsHere}
                     onValueChange={setItemIsHere}
                     disabled={submitting}
                     accessibilityLabel={RETURNS_COPY.itemIsHere}
                     accessibilityHint={RETURNS_COPY.itemIsHereHelp}
+                    trackColor={{ false: toggleTone(false, c).track, true: toggleTone(true, c).track }}
+                    ios_backgroundColor={toggleTone(false, c).track}
+                    thumbColor={toggleTone(itemIsHere, c).knob}
                   />
                 </View>
                 <ExchangeReview
@@ -745,7 +758,14 @@ function SheetContent({
                     accessibilityRole="button"
                     accessibilityLabel={preset}
                     accessibilityState={{ selected: reason === preset }}
-                    style={[styles.option, { borderColor: reason === preset ? c.ink : c.hair, minHeight: MIN_TAP }]}
+                    style={[
+                      styles.option,
+                      {
+                        borderColor: reason === preset ? c.ink : c.hair2,
+                        backgroundColor: reason === preset ? c.sunk : 'transparent',
+                        minHeight: MIN_TAP,
+                      },
+                    ]}
                   >
                     <Body size={14} color={c.ink}>
                       {preset}
@@ -768,7 +788,14 @@ function SheetContent({
                     accessibilityRole="radio"
                     accessibilityLabel={o.label}
                     accessibilityState={{ checked: siteKey === o.key }}
-                    style={[styles.option, { borderColor: siteKey === o.key ? c.ink : c.hair, minHeight: MIN_TAP }]}
+                    style={[
+                      styles.option,
+                      {
+                        borderColor: siteKey === o.key ? c.ink : c.hair2,
+                        backgroundColor: siteKey === o.key ? c.sunk : 'transparent',
+                        minHeight: MIN_TAP,
+                      },
+                    ]}
                   >
                     <Body size={14} color={c.ink}>
                       {o.label}
@@ -791,7 +818,7 @@ function SheetContent({
               <View style={{ gap: 6 }}>
                 <View style={{ gap: 6 }} accessibilityRole="alert">
                   {shortLines.map((t) => (
-                    <Body key={t} size={13.5} color={ACCENT.crit}>
+                    <Body key={t} size={13.5} color={c.critText}>
                       {t}
                     </Body>
                   ))}
@@ -839,11 +866,11 @@ function SheetContent({
                           : 'Why the return is cancelled (optional)'
                         : 'Why'
                   }
-                  placeholderTextColor={c.ink4}
+                  placeholderTextColor={c.ink3}
                   accessibilityLabel={reasonFieldLabel(mode, ex.hasApprovedExchange)}
-                  style={[styles.input, { borderColor: c.hair, backgroundColor: c.paper2, color: c.ink }]}
+                  style={[styles.input, { borderColor: c.hair2, backgroundColor: c.card, color: c.ink }]}
                 />
-                <Mono size={11} color={reasonCount > reasonMax ? ACCENT.crit : c.ink4}>
+                <Mono size={11} color={reasonCount > reasonMax ? c.critText : c.ink3}>
                   {`${reasonCount.toLocaleString('en-US')} / ${reasonMax.toLocaleString('en-US')}`}
                 </Mono>
               </View>
@@ -856,7 +883,7 @@ function SheetContent({
             </Body>
           ) : null}
           {error ? (
-            <Body size={13} color={ACCENT.crit} accessibilityRole="alert">
+            <Body size={13} color={c.critText} accessibilityRole="alert">
               {error}
             </Body>
           ) : null}
@@ -938,11 +965,17 @@ function ExchangeReview({
 }) {
   const { c } = useTheme();
   const ex = exchangeOf(wb);
+  // A photo on the white photo ground in both modes; none, a recessed
+  // square in its place (DESIGN-SPEC 6.14).
   const thumb = (uri: string | null) =>
     uri ? (
-      <Image source={{ uri }} style={[styles.thumb, { backgroundColor: c.paper2 }]} accessibilityIgnoresInvertColors />
+      <Image
+        source={{ uri }}
+        style={[styles.thumb, { backgroundColor: PHOTO_BACKGROUND, borderColor: c.hair }]}
+        accessibilityIgnoresInvertColors
+      />
     ) : (
-      <View style={[styles.thumb, { backgroundColor: c.paper2 }]} />
+      <View style={[styles.thumb, { backgroundColor: c.sunk, borderColor: c.hair }]} />
     );
   const rows = wb.lines.map((l) => {
     const x = ex.lines.find((e) => e.returnLineId === l.id) ?? null;
@@ -976,7 +1009,13 @@ function ExchangeReview({
                 onChange={(quantity) => onAdd(l.id, { ...add, quantity })}
               />
               {/* Review fix P27: the undo reads as the action it is. */}
-              <Button size="sm" variant="outline" disabled={disabled} onPress={() => onAdd(l.id, null)}>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={disabled}
+                style={{ minHeight: MIN_TAP }}
+                onPress={() => onAdd(l.id, null)}
+              >
                 {RETURNS_COPY.keepAsReturnOnly}
               </Button>
             </>
@@ -985,6 +1024,7 @@ function ExchangeReview({
               size="sm"
               variant="outline"
               disabled={disabled || !online}
+              style={{ minHeight: MIN_TAP }}
               onPress={() => onAdd(l.id, { itemId: null, label: null, quantity: l.quantity, free: null })}
             >
               {RETURNS_COPY.addReplacement}
@@ -1055,8 +1095,8 @@ function ExchangeReview({
                 style={[
                   styles.option,
                   {
-                    borderColor: checked ? c.ink : c.hair,
-                    backgroundColor: checked ? c.paper2 : 'transparent',
+                    borderColor: checked ? c.ink : c.hair2,
+                    backgroundColor: checked ? c.sunk : 'transparent',
                     opacity: option.disabled ? 0.6 : 1,
                     minHeight: MIN_TAP,
                   },
@@ -1098,10 +1138,10 @@ function ExchangeReview({
             multiline
             maxFontSizeMultiplier={NOTE_FONT_CAP}
             placeholder={v.kind === 'decline' ? RETURNS_COPY.declineReasonLabel : RETURNS_COPY.replacementReasonLabel}
-            placeholderTextColor={c.ink4}
+            placeholderTextColor={c.ink3}
             accessibilityLabel={v.kind === 'decline' ? RETURNS_COPY.declineReasonLabel : RETURNS_COPY.replacementReasonLabel}
             accessibilityHint={RETURNS_COPY.replacementReasonHelp}
-            style={[styles.input, { borderColor: c.hair, backgroundColor: c.paper2, color: c.ink, minHeight: 64 }]}
+            style={[styles.input, { borderColor: c.hair2, backgroundColor: c.card, color: c.ink, minHeight: 64 }]}
           />
         ) : null}
       </View>
@@ -1165,9 +1205,17 @@ function LineDestination({
               accessibilityRole="radio"
               accessibilityLabel={d === 'restock' ? RETURNS_COPY.restock : RETURNS_COPY.scrap}
               accessibilityState={{ checked, disabled }}
-              style={[styles.chip, { borderColor: checked ? c.ink : c.hair, backgroundColor: checked ? c.paper2 : 'transparent' }]}
+              // The reference's chip: the ink fill when chosen, the stronger
+              // border when not (DESIGN-SPEC 6.6).
+              style={[
+                styles.chip,
+                {
+                  borderColor: checked ? c.ink : c.hair2,
+                  backgroundColor: checked ? c.ink : 'transparent',
+                },
+              ]}
             >
-              <Body size={14} color={c.ink}>
+              <Body size={14} color={checked ? c.paper : c.ink2}>
                 {d === 'restock' ? RETURNS_COPY.restock : RETURNS_COPY.scrap}
               </Body>
             </Pressable>
@@ -1201,7 +1249,12 @@ function LineDestination({
                   accessibilityState={{ checked, disabled: off }}
                   style={[
                     styles.option,
-                    { borderColor: checked ? c.ink : c.hair, backgroundColor: checked ? c.paper2 : 'transparent', opacity: row.enabled ? 1 : 0.6, minHeight: MIN_TAP },
+                    {
+                      borderColor: checked ? c.ink : c.hair2,
+                      backgroundColor: checked ? c.sunk : 'transparent',
+                      opacity: row.enabled ? 1 : 0.6,
+                      minHeight: MIN_TAP,
+                    },
                   ]}
                 >
                   <Body size={14} color={c.ink}>
@@ -1242,5 +1295,5 @@ const styles = StyleSheet.create({
   radioRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   chip: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8, minHeight: MIN_TAP, justifyContent: 'center' },
   option: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, justifyContent: 'center', gap: 2 },
-  thumb: { width: 40, height: 40, borderRadius: 8 },
+  thumb: { width: 40, height: 40, borderRadius: 8, borderWidth: 1 },
 });
