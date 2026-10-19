@@ -3,6 +3,8 @@ import { redirect } from 'next/navigation';
 
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { PageHeader } from '@/components/patterns/page-header';
+import { SegmentedTabs } from '@/components/patterns/segmented-tabs';
 import { RentalsListTable } from '@/components/rentals/rentals-list-table';
 import { RentalsTabs } from '@/components/rentals/rentals-tabs';
 import { Button } from '@/components/ui/button';
@@ -18,7 +20,6 @@ import {
   overdueReminderState,
   resolveOrgTimezone,
 } from '@stockpilot/core';
-import { cn } from '@/lib/utils';
 
 type StatusParam = 'out' | 'overdue' | 'returned' | 'cancelled' | 'all';
 
@@ -54,16 +55,17 @@ function reminderMarksFor(
   const marks: Record<string, string> = {};
   for (const rental of rentals) {
     if (!isRentalOverdue(rental, nowMs)) continue;
-    const mark = overdueReminderListMark(overdueReminderState(rental, remindersOn, nowMs), timeZone);
+    const mark = overdueReminderListMark(
+      overdueReminderState(rental, remindersOn, nowMs),
+      timeZone,
+    );
     if (mark) marks[rental.id] = mark;
   }
   return marks;
 }
 
 function parseStatus(value: string | undefined): StatusParam {
-  return value && VALID_STATUSES.has(value as StatusParam)
-    ? (value as StatusParam)
-    : 'out';
+  return value && VALID_STATUSES.has(value as StatusParam) ? (value as StatusParam) : 'out';
 }
 
 export default async function RentalsPage({
@@ -114,45 +116,37 @@ export default async function RentalsPage({
   const itemNames = new Map(itemRows.map((i) => [i.id, i.name]));
 
   return (
-    <div className="container mx-auto max-w-7xl px-4 py-8 sm:px-6">
-      {/* Page header */}
-      <div className="flex flex-wrap items-end justify-between gap-3 mb-6">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Rentals</h1>
-          <p className="text-muted-foreground mt-1 text-sm">
-            Track items checked out to staff, vendors, and event coordinators.
-          </p>
-        </div>
-        {canCreate && (
-          <Button asChild variant="gradient">
-            <Link href="/dashboard/rentals/new">+ New rental</Link>
-          </Button>
-        )}
-      </div>
+    // The page box every redesigned dashboard page shares (max 1320, 16 px
+    // gutters on a phone).
+    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <PageHeader
+        title="Rentals"
+        subline="Track items checked out to staff, vendors, and event coordinators."
+        primaryAction={
+          canCreate ? (
+            <Button asChild variant="gradient">
+              <Link href="/dashboard/rentals/new">+ New rental</Link>
+            </Button>
+          ) : undefined
+        }
+      />
 
       {/* Section tabs: Activity | Items */}
       <RentalsTabs activeTab="activity" />
 
-      {/* Sub-tabs: Out | Overdue | Returned | Cancelled | All */}
-      <div className="flex items-center gap-1 mt-4 mb-6 overflow-x-auto pb-0.5">
-        {SUB_TABS.map((tab) => {
-          const isActive = tab.id === status;
-          return (
-            <Link
-              key={tab.id}
-              href={`/dashboard/rentals?status=${tab.id}`}
-              className={cn(
-                'flex-none whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium transition-colors',
-                isActive
-                  ? 'bg-foreground text-background'
-                  : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-              )}
-            >
-              {tab.label}
-            </Link>
-          );
-        })}
-      </div>
+      {/* Status views: Out | Overdue | Returned | Cancelled | All, the same
+          links and default (Out). Overdue stays derived (out and past due).
+          No counts: none is read for these views (CONFLICTS K6, O2). */}
+      <SegmentedTabs
+        semantics="nav"
+        aria-label="Filter by status"
+        activeId={status}
+        items={SUB_TABS.map((tab) => ({
+          id: tab.id,
+          label: tab.label,
+          href: `/dashboard/rentals?status=${tab.id}`,
+        }))}
+      />
 
       {/* Table */}
       <RentalsListTable

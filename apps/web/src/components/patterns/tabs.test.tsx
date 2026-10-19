@@ -324,6 +324,63 @@ describe('Tabs: link mode click feedback', () => {
   });
 });
 
+describe('Tabs: activeLinksToHref (a section strip whose current tab resets the view)', () => {
+  const SECTION: TabItem[] = [
+    { id: 'activity', label: 'Activity', href: '/dashboard/rentals' },
+    { id: 'items', label: 'Items', href: '/dashboard/rentals/items' },
+  ];
+  function Section({ active, opt = true }: { active: string; opt?: boolean }) {
+    return (
+      <Tabs
+        aria-label="Rentals section"
+        items={SECTION}
+        activeId={active}
+        activeLinksToHref={opt}
+      />
+    );
+  }
+
+  it('the current tab keeps its own href, and a click on a filtered URL navigates to it', () => {
+    nav.pathname = '/dashboard/rentals/items';
+    nav.search = 'q=tent&page=2';
+    render(<Section active="items" />);
+
+    expect(tab('Items')).toHaveAttribute('href', '/dashboard/rentals/items');
+    fireEvent.click(tab('Items'));
+    expect(nav.navigate).toHaveBeenCalledWith('/dashboard/rentals/items');
+    expect(selected()).toEqual(['Items']);
+  });
+
+  it('on the plain URL a click on the current tab still does nothing', () => {
+    nav.pathname = '/dashboard/rentals/items';
+    nav.search = '';
+    render(<Section active="items" />);
+
+    expect(fireEvent.click(tab('Items'))).toBe(false);
+    expect(nav.navigate).not.toHaveBeenCalled();
+  });
+
+  it('a tab still loading from a click keeps ignoring further clicks', () => {
+    nav.pathname = '/dashboard/rentals';
+    nav.search = 'status=returned';
+    render(<Section active="activity" />);
+    fireEvent.click(tab('Items'));
+    fireEvent.click(tab('Items'));
+
+    expect(nav.navigate).toHaveBeenCalledTimes(1);
+    expect(selected()).toEqual(['Items']);
+  });
+
+  it('without the prop the current tab links to the address bar as it is (default unchanged)', () => {
+    nav.pathname = '/dashboard/rentals/items';
+    nav.search = 'q=tent';
+    render(<Section active="items" opt={false} />);
+
+    expect(tab('Items')).toHaveAttribute('href', '/dashboard/rentals/items?q=tent');
+    expect(fireEvent.click(tab('Items'))).toBe(false);
+  });
+});
+
 describe('Tabs: button mode', () => {
   it('reports the clicked id and follows activeId', () => {
     const onSelect = vi.fn();

@@ -1,9 +1,12 @@
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
+import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
+import { StatePanel } from '@/components/patterns/state-panel';
 import { RentalCreateForm } from '@/components/rentals/rental-create-form';
 import type { AisleSummary, CatalogItem } from '@/components/orders/v2/types';
 import { requireOrgContext } from '@/lib/auth/session';
+import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { createAdminClient } from '@/lib/supabase/admin';
 import {
   CATALOG_ROW_CEILING,
@@ -66,6 +69,16 @@ export default async function NewRentalPage({
   if (!can(ctx, 'rentals:create')) {
     redirect('/dashboard/rentals');
   }
+  // With the Rentals module off, the rentals service refuses the borrower
+  // read below, and this page fell to the error screen ("Something broke
+  // loading this page", sign out and back in) instead of saying the module
+  // is off. It now shows the checkouts list's module-off panel. The module
+  // set came with the request's membership, so this costs no extra round
+  // trip; a member without rentals:create is still sent to the list first.
+  const moduleAccess = await checkModuleAccess('rentals');
+  if (!moduleAccess.enabled) {
+    return <ModuleNotEnabled moduleId="rentals" canManage={moduleAccess.canManage} />;
+  }
 
   const params = await searchParams;
 
@@ -85,24 +98,26 @@ export default async function NewRentalPage({
 
   if (warehouses.length === 0) {
     return (
-      <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-        <div className="mb-6">
-          <Link href="/dashboard/rentals" className="text-muted-foreground hover:text-foreground text-sm">
-            ← Back to rentals
-          </Link>
-          <h1 className="mt-2 text-2xl font-semibold tracking-tight">New rental</h1>
-        </div>
-        <div className="bg-card rounded-xl border p-6 text-sm text-muted-foreground">
-          No active warehouses are configured. Ask an admin to add one.
-        </div>
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+        <PageHeader
+          back={
+            <PageHeaderBackLink href="/dashboard/rentals">← Back to rentals</PageHeaderBackLink>
+          }
+          title="New rental"
+        />
+        <StatePanel
+          kind="empty"
+          size="sm"
+          headingLevel={null}
+          title="No active warehouses are configured. Ask an admin to add one."
+        />
       </div>
     );
   }
 
   const requestedId = params.warehouseId;
   const fallbackId = warehouses[0]?.id ?? '';
-  const warehouseId =
-    warehouses.find((w) => w.id === requestedId)?.id ?? fallbackId;
+  const warehouseId = warehouses.find((w) => w.id === requestedId)?.id ?? fallbackId;
 
   // Load rental items (is_rental=true) for the selected warehouse.
   //
@@ -141,58 +156,55 @@ export default async function NewRentalPage({
   // map itself never leaves the server (the Orders storefront's rule,
   // loadCatalogBundle).
   const supabase = createAdminClient();
-  const [
-    { data: rentalItemsData, error: rentalItemsError },
-    mediaByItemId,
-    members,
-  ] = await Promise.all([
-    // Every rental item, paged past PostgREST's 1000-row max_rows. This was a
-    // 500-row limit by name, the same limit that hid 65 DC4 items from the
-    // Orders catalog on 2026-09-25. The rentals-only photo request
-    // (api/orders/catalog-thumbnails) repeats this read filter for filter.
-    fetchAllRows(
-      (from, to) =>
-        callerClient
-          .from('inventory_items')
-          .select(
-            'id, name, sku, quantity_on_hand, warehouse_id, item_type, custom_fields, bin_location, category_id, retail_price, unit_cost, reorder_point',
-          )
-          .eq('organization_id', ctx.organizationId)
-          .eq('warehouse_id', warehouseId)
-          .eq('status', 'active')
-          .eq('is_rental', true)
-          .is('deleted_at', null)
-          .order('name', { ascending: true })
-          .order('id', { ascending: true })
-          .range(from, to),
-      { cap: CATALOG_ROW_CEILING },
-    ).then(
-      (data) => ({ data, error: null }),
-      (err: unknown) => ({
-        data: null,
-        error: {
-          message:
-            err instanceof ServiceError
-              ? (err.internalDetail ?? err.message)
-              : err instanceof Error
-                ? err.message
-                : String(err),
-        },
+  const [{ data: rentalItemsData, error: rentalItemsError }, mediaByItemId, members] =
+    await Promise.all([
+      // Every rental item, paged past PostgREST's 1000-row max_rows. This was a
+      // 500-row limit by name, the same limit that hid 65 DC4 items from the
+      // Orders catalog on 2026-09-25. The rentals-only photo request
+      // (api/orders/catalog-thumbnails) repeats this read filter for filter.
+      fetchAllRows(
+        (from, to) =>
+          callerClient
+            .from('inventory_items')
+            .select(
+              'id, name, sku, quantity_on_hand, warehouse_id, item_type, custom_fields, bin_location, category_id, retail_price, unit_cost, reorder_point',
+            )
+            .eq('organization_id', ctx.organizationId)
+            .eq('warehouse_id', warehouseId)
+            .eq('status', 'active')
+            .eq('is_rental', true)
+            .is('deleted_at', null)
+            .order('name', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to),
+        { cap: CATALOG_ROW_CEILING },
+      ).then(
+        (data) => ({ data, error: null }),
+        (err: unknown) => ({
+          data: null,
+          error: {
+            message:
+              err instanceof ServiceError
+                ? (err.internalDetail ?? err.message)
+                : err instanceof Error
+                  ? err.message
+                  : String(err),
+          },
+        }),
+      ),
+      // A failed map is not cached (the loader throws); this visit shows the
+      // cards without photos and the form's deferred request fills them.
+      loadCatalogThumbMapCached(ctx.organizationId, warehouseId).catch((err: unknown) => {
+        console.warn(
+          `[rentals/new] thumb map unavailable: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return {} as Record<string, CatalogItemMedia>;
       }),
-    ),
-    // A failed map is not cached (the loader throws); this visit shows the
-    // cards without photos and the form's deferred request fills them.
-    loadCatalogThumbMapCached(ctx.organizationId, warehouseId).catch((err: unknown) => {
-      console.warn(
-        `[rentals/new] thumb map unavailable: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      return {} as Record<string, CatalogItemMedia>;
-    }),
-    // The borrower picker's team members: the same query the phone's picker
-    // reads through GET /api/v1/rentals/borrowers (accepted members only, the
-    // ones create_rental accepts).
-    rentalsSvc.listBorrowerMembers(),
-  ]);
+      // The borrower picker's team members: the same query the phone's picker
+      // reads through GET /api/v1/rentals/borrowers (accepted members only, the
+      // ones create_rental accepts).
+      rentalsSvc.listBorrowerMembers(),
+    ]);
   // An ignored error here was an empty catalog: "no rental items" for a
   // warehouse that has them. The error boundary offers a retry instead.
   if (rentalItemsError) {
@@ -237,9 +249,7 @@ export default async function NewRentalPage({
     // available. The service batches and pages the read and THROWS on a
     // failed batch. (Every org member can read the org's reservations, so the
     // caller's own client sees what the admin client did.)
-    InventoryService.forCurrentUser().then((svc) =>
-      svc.reservedQuantityByItemIds(rentalItemIds),
-    ),
+    InventoryService.forCurrentUser().then((svc) => svc.reservedQuantityByItemIds(rentalItemIds)),
     fetchAllRowsByIds<{ id: string; name: string }>(
       categoryIds,
       (batch) => (from, to) =>
@@ -259,20 +269,22 @@ export default async function NewRentalPage({
     ),
   ]);
 
-  const items: CatalogItem[] = ((rentalItemsData ?? []) as Array<{
-    id: string;
-    name: string;
-    sku: string;
-    quantity_on_hand: number;
-    warehouse_id: string;
-    item_type: string | null;
-    custom_fields: Record<string, unknown> | null;
-    bin_location: string | null;
-    category_id: string | null;
-    retail_price: number | null;
-    unit_cost: number | null;
-    reorder_point: number;
-  }>).map((it) => {
+  const items: CatalogItem[] = (
+    (rentalItemsData ?? []) as Array<{
+      id: string;
+      name: string;
+      sku: string;
+      quantity_on_hand: number;
+      warehouse_id: string;
+      item_type: string | null;
+      custom_fields: Record<string, unknown> | null;
+      bin_location: string | null;
+      category_id: string | null;
+      retail_price: number | null;
+      unit_cost: number | null;
+      reorder_point: number;
+    }>
+  ).map((it) => {
     // The card's walk-to label. The rack pair used to be lifted off
     // custom_fields and preferred over bin_location right here — the exact
     // INVERSION of the sibling orders catalog loader (server/loaders/
@@ -288,7 +300,10 @@ export default async function NewRentalPage({
     });
     const rackLabel =
       res.source === 'holdings'
-        ? res.holdings.map((h) => h.name).sort((a, b) => a.localeCompare(b)).join(', ')
+        ? res.holdings
+            .map((h) => h.name)
+            .sort((a, b) => a.localeCompare(b))
+            .join(', ')
         : res.source === 'structured'
           ? res.rackLabel
           : res.source === 'bin'
@@ -326,17 +341,14 @@ export default async function NewRentalPage({
   const aisles = buildAisles(items);
 
   return (
-    <div className="container mx-auto max-w-7xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link href="/dashboard/rentals" className="text-muted-foreground hover:text-foreground text-sm">
-          ← Back to rentals
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">New rental</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Choose a borrower (a team member or anyone else), pick the items to check out,
-          and set a return date.
-        </p>
-      </div>
+    // The page box every redesigned dashboard page shares (max 1320, 16 px
+    // gutters on a phone).
+    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <PageHeader
+        back={<PageHeaderBackLink href="/dashboard/rentals">← Back to rentals</PageHeaderBackLink>}
+        title="New rental"
+        subline="Choose a borrower (a team member or anyone else), pick the items to check out, and set a return date."
+      />
 
       <RentalCreateForm
         warehouses={warehouses}

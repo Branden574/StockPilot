@@ -1,4 +1,4 @@
-import { render } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -11,7 +11,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const list = vi.fn();
 const overdueRemindersOn = vi.fn(async (): Promise<boolean | null> => true);
-const orgRow = vi.fn(async (): Promise<{ timezone: string | null } | null> => ({ timezone: 'America/Los_Angeles' }));
+const orgRow = vi.fn(async (): Promise<{ timezone: string | null } | null> => ({
+  timezone: 'America/Los_Angeles',
+}));
 const tableProps = vi.fn();
 
 vi.mock('next/navigation', () => ({
@@ -22,8 +24,20 @@ vi.mock('next/navigation', () => ({
 vi.mock('next/link', async () => {
   const React = await import('react');
   return {
-    default: ({ href, children }: { href: string; children: React.ReactNode }) =>
-      React.createElement('a', { href }, children),
+    default: ({
+      href,
+      children,
+      prefetch: _prefetch,
+      scroll: _scroll,
+      replace: _replace,
+      ...rest
+    }: {
+      href: string;
+      children: React.ReactNode;
+      prefetch?: unknown;
+      scroll?: unknown;
+      replace?: unknown;
+    } & Record<string, unknown>) => React.createElement('a', { href, ...rest }, children),
   };
 });
 vi.mock('@/lib/modules/module-gate', () => ({
@@ -76,7 +90,8 @@ function row(id: string, over: Record<string, unknown> = {}) {
 
 async function marks(): Promise<Record<string, string>> {
   render(await RentalsPage({ searchParams: Promise.resolve({ status: 'all' }) }));
-  return (tableProps.mock.calls.at(-1)?.[0] as { reminderMarks: Record<string, string> }).reminderMarks;
+  return (tableProps.mock.calls.at(-1)?.[0] as { reminderMarks: Record<string, string> })
+    .reminderMarks;
 }
 
 beforeEach(() => {
@@ -124,7 +139,9 @@ describe('rentals list: reminder marks on overdue rows', () => {
 
   it('an unreadable switch: no guess for the undecided rows', async () => {
     overdueRemindersOn.mockResolvedValue(null);
-    list.mockResolvedValue({ rentals: [row('waiting'), row('no-email', { borrower_email: null })] });
+    list.mockResolvedValue({
+      rentals: [row('waiting'), row('no-email', { borrower_email: null })],
+    });
     const m = await marks();
     expect(m).toEqual({ 'no-email': 'No email on file' });
   });
@@ -136,5 +153,54 @@ describe('rentals list: reminder marks on overdue rows', () => {
       rentals: [row('sent', { overdue_reminder_sent_at: '2026-09-20T20:00:00.000Z' })],
     });
     expect((await marks()).sent).toBe('Reminder sent Sep 21');
+  });
+});
+
+// Redesign P4.D1: the page header and the status views. The same five links
+// and default, now a navigation named "Filter by status" with aria-current on
+// the open view (the cycle counts list's strip); no counts are read.
+describe('rentals list: header and status views', () => {
+  beforeEach(() => list.mockResolvedValue({ rentals: [] }));
+
+  it('one h1, the subline and the gated + New rental', async () => {
+    render(await RentalsPage({ searchParams: Promise.resolve({}) }));
+    expect(screen.getAllByRole('heading', { level: 1 }).map((x) => x.textContent)).toEqual([
+      'Rentals',
+    ]);
+    expect(
+      screen.getByText('Track items checked out to staff, vendors, and event coordinators.'),
+    ).toBeTruthy();
+    expect(screen.getByRole('link', { name: '+ New rental' }).getAttribute('href')).toBe(
+      '/dashboard/rentals/new',
+    );
+  });
+
+  it('the five status links, Out by default, the open one current', async () => {
+    render(await RentalsPage({ searchParams: Promise.resolve({}) }));
+    const nav = screen.getByRole('navigation', { name: 'Filter by status' });
+    const links = within(nav).getAllByRole('link');
+    expect(links.map((l) => [l.textContent, l.getAttribute('href')])).toEqual([
+      ['Out', '/dashboard/rentals?status=out'],
+      ['Overdue', '/dashboard/rentals?status=overdue'],
+      ['Returned', '/dashboard/rentals?status=returned'],
+      ['Cancelled', '/dashboard/rentals?status=cancelled'],
+      ['All', '/dashboard/rentals?status=all'],
+    ]);
+    expect(
+      links.filter((l) => l.getAttribute('aria-current') === 'page').map((l) => l.textContent),
+    ).toEqual(['Out']);
+    expect(list).toHaveBeenCalledWith({ status: 'out' });
+  });
+
+  it('an invalid status falls back to Out; a valid one is current', async () => {
+    render(await RentalsPage({ searchParams: Promise.resolve({ status: 'nope' }) }));
+    expect(list).toHaveBeenLastCalledWith({ status: 'out' });
+    document.body.innerHTML = '';
+    render(await RentalsPage({ searchParams: Promise.resolve({ status: 'overdue' }) }));
+    const nav = screen.getByRole('navigation', { name: 'Filter by status' });
+    expect(within(nav).getByRole('link', { name: 'Overdue' }).getAttribute('aria-current')).toBe(
+      'page',
+    );
+    expect(list).toHaveBeenLastCalledWith({ status: 'overdue' });
   });
 });

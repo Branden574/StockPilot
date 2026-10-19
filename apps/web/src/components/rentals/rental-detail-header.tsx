@@ -1,9 +1,12 @@
+import type * as React from 'react';
+
+import { deriveRentalStatus, RentalStatusBadge } from '@/components/rentals/rental-status-badge';
+import { Badge } from '@/components/ui/badge';
 import { cn, formatRelative } from '@/lib/utils';
 import type { RentalRow } from '@/server/services/rentals';
 
 import {
   formatRentalDateTime,
-  isRentalOverdue,
   RENTAL_BORROWER_NOT_LINKED,
   RENTAL_BORROWER_TEAM_MEMBER,
   RENTAL_NO_EMAIL_NOTE,
@@ -11,37 +14,38 @@ import {
   rentalEmailOnFile,
 } from '@stockpilot/core';
 
-type StatusDisplay = 'out' | 'returned' | 'cancelled' | 'overdue';
-
-function deriveStatus(rental: RentalRow, nowMs: number): StatusDisplay {
-  if (rental.status === 'returned') return 'returned';
-  if (rental.status === 'cancelled') return 'cancelled';
-  if (isRentalOverdue(rental, nowMs)) return 'overdue';
-  return 'out';
+/** A label over its value in the details grid. */
+function Detail({
+  label,
+  children,
+  valueClassName,
+}: {
+  label: string;
+  children: React.ReactNode;
+  valueClassName?: string;
+}) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-muted-foreground text-[12px] leading-[18px]">{label}</dt>
+      <dd
+        className={cn(
+          'text-foreground mt-0.5 text-[13.5px] [overflow-wrap:anywhere]',
+          valueClassName,
+        )}
+      >
+        {children}
+      </dd>
+    </div>
+  );
 }
 
-function StatusPill({ status }: { status: StatusDisplay }) {
-  const styles: Record<StatusDisplay, string> = {
-    out: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300',
-    returned: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300',
-    cancelled: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400',
-    overdue: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300',
-  };
-  const labels: Record<StatusDisplay, string> = {
-    out: 'Out',
-    returned: 'Returned',
-    cancelled: 'Cancelled',
-    overdue: 'Overdue',
-  };
+/** One of the three note blocks: a quiet inset panel, its label in front. */
+function NoteBlock({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <span
-      className={cn(
-        'inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold',
-        styles[status],
-      )}
-    >
-      {labels[status]}
-    </span>
+    <div className="bg-sunk border-border rounded-md border px-3 py-2 text-[13.5px] [overflow-wrap:anywhere]">
+      <span className="text-muted-foreground font-medium">{label}: </span>
+      {children}
+    </div>
   );
 }
 
@@ -64,122 +68,78 @@ export function RentalDetailHeader({
   timeZone,
   nowMs,
 }: RentalDetailHeaderProps) {
-  const status = deriveStatus(rental, nowMs);
+  const status = deriveRentalStatus(rental, nowMs);
   const isMember = Boolean(rental.borrower_user_id);
   // The address the rental emails go to (the same check the sender makes).
   const email = rentalEmailOnFile(rental.borrower_email);
 
   return (
-    <div className="rounded-xl border bg-card p-6 space-y-4">
-      {/* Top row: borrower + status */}
-      <div className="flex items-start justify-between gap-4">
+    <div className="border-border bg-card text-card-foreground rounded-lg border pb-[18px]">
+      {/* Top: borrower and status */}
+      <div className="flex items-start justify-between gap-4 px-[18px] pt-[18px]">
         <div className="min-w-0">
-          <p className="text-muted-foreground text-xs font-medium uppercase tracking-wide">Borrower</p>
-          <div className="mt-1 flex flex-wrap items-center gap-2">
-            <h2 className="text-lg font-semibold break-words">{rental.borrower_name}</h2>
-            <span
-              data-testid="borrower-kind"
-              className={cn(
-                'inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium',
-                isMember ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground',
-              )}
-            >
+          <p className="text-muted-foreground text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.1em]">
+            Borrower
+          </p>
+          <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1">
+            <h2 className="text-foreground font-display text-[20px] font-medium leading-[28px] tracking-[-0.02em] [overflow-wrap:anywhere]">
+              {rental.borrower_name}
+            </h2>
+            <Badge data-testid="borrower-kind" variant={isMember ? 'success' : 'outline'}>
               {isMember ? RENTAL_BORROWER_TEAM_MEMBER : RENTAL_BORROWER_NOT_LINKED}
-            </span>
+            </Badge>
           </div>
           {email ? (
             <>
-              <p className="text-sm text-muted-foreground mt-0.5 break-all">
+              <p className="text-ink-2 mt-1 break-all text-[13.5px]">
                 <span className="sr-only">Email on file: </span>
                 {email}
               </p>
               {!isMember ? (
-                <p className="text-xs text-muted-foreground mt-0.5">{RENTAL_NON_MEMBER_EMAIL_NOTE}</p>
+                <p className="text-muted-foreground mt-0.5 text-[12.5px]">
+                  {RENTAL_NON_MEMBER_EMAIL_NOTE}
+                </p>
               ) : null}
             </>
           ) : (
-            <p className="text-sm text-amber-700 dark:text-amber-400 mt-0.5">{RENTAL_NO_EMAIL_NOTE}</p>
+            <p className="text-warning mt-1 text-[13.5px]">{RENTAL_NO_EMAIL_NOTE}</p>
           )}
         </div>
-        <StatusPill status={status} />
+        <RentalStatusBadge status={status} className="shrink-0" />
       </div>
 
       {/* Details grid */}
-      <dl className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
-        <div>
-          <dt className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
-            Warehouse
-          </dt>
-          <dd className="mt-1 font-medium">{warehouseName}</dd>
-        </div>
-
-        <div>
-          <dt className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
-            Checked out
-          </dt>
-          <dd className="mt-1">{formatRelative(rental.checked_out_at)}</dd>
-        </div>
-
-        <div>
-          <dt className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
-            Expected return
-          </dt>
-          <dd
-            className={cn(
-              'mt-1',
-              status === 'overdue' ? 'text-red-600 dark:text-red-400 font-medium' : '',
-            )}
-          >
-            {/* Core's rental spelling, which the phone's EXPECTED RETURN uses
-                too: the same words on every engine ("Oct 2, 2026, 9:51 PM"). */}
-            {formatRentalDateTime(rental.expected_return_at, timeZone, { withYear: true })}
-          </dd>
-        </div>
-
+      <dl className="border-border mx-[18px] mt-4 grid grid-cols-2 gap-x-4 gap-y-3 border-t pt-4 sm:grid-cols-3">
+        <Detail label="Warehouse">{warehouseName}</Detail>
+        <Detail label="Checked out">{formatRelative(rental.checked_out_at)}</Detail>
+        <Detail
+          label="Expected return"
+          valueClassName={status === 'overdue' ? 'text-destructive font-medium' : undefined}
+        >
+          {/* Core's rental spelling, which the phone's EXPECTED RETURN uses
+              too: the same words on every engine ("Oct 2, 2026, 9:51 PM"). */}
+          {formatRentalDateTime(rental.expected_return_at, timeZone, { withYear: true })}
+        </Detail>
         {rental.returned_at && (
-          <div>
-            <dt className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
-              Returned
-            </dt>
-            <dd className="mt-1 text-emerald-700 dark:text-emerald-400 font-medium">
-              {formatRelative(rental.returned_at)}
-            </dd>
-          </div>
+          <Detail label="Returned" valueClassName="text-success font-medium">
+            {formatRelative(rental.returned_at)}
+          </Detail>
         )}
-
         {rental.cancelled_at && (
-          <div>
-            <dt className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
-              Cancelled
-            </dt>
-            <dd className="mt-1">{formatRelative(rental.cancelled_at)}</dd>
-          </div>
+          <Detail label="Cancelled">{formatRelative(rental.cancelled_at)}</Detail>
         )}
       </dl>
 
-      {/* Cancellation reason */}
-      {rental.cancellation_reason && (
-        <div className="rounded-md bg-muted/50 px-3 py-2 text-sm">
-          <span className="font-medium text-muted-foreground">Cancellation reason: </span>
-          {rental.cancellation_reason}
+      {/* Cancellation reason, return notes, notes */}
+      {rental.cancellation_reason || rental.return_notes || rental.notes ? (
+        <div className="mt-4 space-y-2 px-[18px]">
+          {rental.cancellation_reason && (
+            <NoteBlock label="Cancellation reason">{rental.cancellation_reason}</NoteBlock>
+          )}
+          {rental.return_notes && <NoteBlock label="Return notes">{rental.return_notes}</NoteBlock>}
+          {rental.notes && <NoteBlock label="Notes">{rental.notes}</NoteBlock>}
         </div>
-      )}
-
-      {/* Return notes */}
-      {rental.return_notes && (
-        <div className="rounded-md bg-muted/50 px-3 py-2 text-sm">
-          <span className="font-medium text-muted-foreground">Return notes: </span>
-          {rental.return_notes}
-        </div>
-      )}
-
-      {/* Notes */}
-      {rental.notes && (
-        <div className="rounded-md bg-muted/50 px-3 py-2 text-sm">
-          <span className="font-medium text-muted-foreground">Notes: </span>
-          {rental.notes}
-        </div>
-      )}
+      ) : null}
     </div>
   );
 }

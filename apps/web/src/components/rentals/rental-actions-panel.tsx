@@ -4,6 +4,7 @@ import { Loader2 } from 'lucide-react';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { DetailSection } from '@/components/patterns/detail-section';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -24,13 +25,7 @@ interface RentalActionsPanelProps {
   canManage: boolean;
 }
 
-function MarkReturnedDialog({
-  rentalId,
-  onClose,
-}: {
-  rentalId: string;
-  onClose: () => void;
-}) {
+function MarkReturnedDialog({ rentalId, onClose }: { rentalId: string; onClose: () => void }) {
   const [notes, setNotes] = React.useState('');
   const [isPending, startTransition] = React.useTransition();
 
@@ -51,8 +46,8 @@ function MarkReturnedDialog({
       <DialogHeader>
         <DialogTitle>Mark returned</DialogTitle>
         <DialogDescription>
-          Confirm all items are back. Reservations will be released so the items are
-          available for future rentals.
+          Confirm all items are back. Reservations will be released so the items are available for
+          future rentals.
         </DialogDescription>
       </DialogHeader>
       <div className="space-y-2">
@@ -71,7 +66,7 @@ function MarkReturnedDialog({
           Cancel
         </Button>
         <Button onClick={handleSubmit} disabled={isPending}>
-          {isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+          {isPending ? <Loader2 className="animate-spin" /> : null}
           Confirm return
         </Button>
       </DialogFooter>
@@ -79,13 +74,7 @@ function MarkReturnedDialog({
   );
 }
 
-function CancelDialog({
-  rentalId,
-  onClose,
-}: {
-  rentalId: string;
-  onClose: () => void;
-}) {
+function CancelDialog({ rentalId, onClose }: { rentalId: string; onClose: () => void }) {
   const [reason, setReason] = React.useState('');
   const [isPending, startTransition] = React.useTransition();
 
@@ -110,13 +99,12 @@ function CancelDialog({
       <DialogHeader>
         <DialogTitle>Cancel rental</DialogTitle>
         <DialogDescription>
-          This marks the rental as cancelled and releases all reservations. A reason
-          is required.
+          This marks the rental as cancelled and releases all reservations. A reason is required.
         </DialogDescription>
       </DialogHeader>
       <div className="space-y-2">
         <Label htmlFor="panel-cancel-reason">
-          Reason <span className="text-red-500">*</span>
+          Reason <span className="text-destructive">*</span>
         </Label>
         <Textarea
           id="panel-cancel-reason"
@@ -131,12 +119,8 @@ function CancelDialog({
         <Button variant="outline" onClick={onClose} disabled={isPending}>
           Back
         </Button>
-        <Button
-          variant="destructive"
-          onClick={handleSubmit}
-          disabled={isPending || !reason.trim()}
-        >
-          {isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+        <Button variant="destructive" onClick={handleSubmit} disabled={isPending || !reason.trim()}>
+          {isPending ? <Loader2 className="animate-spin" /> : null}
           Cancel rental
         </Button>
       </DialogFooter>
@@ -144,11 +128,7 @@ function CancelDialog({
   );
 }
 
-export function RentalActionsPanel({
-  rentalId,
-  status,
-  canManage,
-}: RentalActionsPanelProps) {
+export function RentalActionsPanel({ rentalId, status, canManage }: RentalActionsPanelProps) {
   const [showReturn, setShowReturn] = React.useState(false);
   const [showCancel, setShowCancel] = React.useState(false);
 
@@ -158,17 +138,16 @@ export function RentalActionsPanel({
   }
 
   return (
-    <div className="rounded-xl border bg-card p-4">
-      <h3 className="text-sm font-semibold mb-3">Actions</h3>
+    // The card for the work in front of you: Mark returned is the ink commit
+    // button (DESIGN-SPEC 6.2); it releases this rental's holds only, and is
+    // not a Returns RMA (no receipt, no dispositions).
+    <DetailSection title="Actions" headingLevel={3}>
       <div className="flex flex-wrap gap-2">
-        <Button onClick={() => setShowReturn(true)} size="sm">
-          Mark returned
-        </Button>
+        <Button onClick={() => setShowReturn(true)}>Mark returned</Button>
 
         {canManage && (
           <Button
             variant="outline"
-            size="sm"
             className="text-destructive hover:text-destructive"
             onClick={() => setShowCancel(true)}
           >
@@ -177,13 +156,23 @@ export function RentalActionsPanel({
         )}
       </div>
 
-      <Dialog open={showReturn} onOpenChange={(o) => { if (!o) setShowReturn(false); }}>
+      <Dialog
+        open={showReturn}
+        onOpenChange={(o) => {
+          if (!o) setShowReturn(false);
+        }}
+      >
         <MarkReturnedDialog rentalId={rentalId} onClose={() => setShowReturn(false)} />
       </Dialog>
 
-      <Dialog open={showCancel} onOpenChange={(o) => { if (!o) setShowCancel(false); }}>
+      <Dialog
+        open={showCancel}
+        onOpenChange={(o) => {
+          if (!o) setShowCancel(false);
+        }}
+      >
         <CancelDialog rentalId={rentalId} onClose={() => setShowCancel(false)} />
       </Dialog>
-    </div>
+    </DetailSection>
   );
 }

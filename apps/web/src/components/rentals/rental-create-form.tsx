@@ -22,6 +22,7 @@ import type { AisleSummary, CatalogItem } from '@/components/orders/v2/types';
 import { BorrowerPicker } from '@/components/rentals/borrower-picker';
 import type { BorrowerValue } from '@/components/rentals/borrower-picker';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
   Select,
@@ -35,6 +36,13 @@ import { useCatalogThumbnails } from '@/lib/use-catalog-thumbnails';
 import { createRentalAction } from '@/server/actions/rentals';
 
 const RENTAL_PREFS_KEY = 'rental-new-prefs';
+
+// The cart's small controls: 28 px on desktop and 44 px on a phone or a touch
+// screen (the plain buttons have no Button hit area of their own).
+const STEP_BUTTON =
+  'text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring flex h-full w-7 items-center justify-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset disabled:pointer-events-none disabled:opacity-40 max-sm:w-11 pointer-coarse:w-11';
+const ICON_BUTTON =
+  'text-muted-foreground hover:bg-muted hover:text-destructive focus-visible:ring-ring flex size-7 flex-none items-center justify-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 max-sm:size-11 pointer-coarse:size-11';
 
 // Default expected return = now + 7 days, formatted for datetime-local
 function defaultReturnAt(): string {
@@ -138,7 +146,9 @@ function RentalCreateFormInner({
         if (parsed.cols) setCols(parsed.cols);
         if (typeof parsed.groupByAisle === 'boolean') setGroupByAisle(parsed.groupByAisle);
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }, []);
 
   // Setup form state
@@ -175,9 +185,7 @@ function RentalCreateFormInner({
     const q = searchQuery.trim().toLowerCase();
     if (q) {
       result = result.filter(
-        (it) =>
-          it.name.toLowerCase().includes(q) ||
-          it.sku.toLowerCase().includes(q),
+        (it) => it.name.toLowerCase().includes(q) || it.sku.toLowerCase().includes(q),
       );
     }
     if (availabilityFilter !== 'any') {
@@ -200,7 +208,10 @@ function RentalCreateFormInner({
   }, [items, activeAisleId, searchQuery, availabilityFilter, sortKey, availByItem]);
 
   const hasActiveFilters =
-    searchQuery !== '' || availabilityFilter !== 'any' || sortKey !== 'name' || activeAisleId !== 'all';
+    searchQuery !== '' ||
+    availabilityFilter !== 'any' ||
+    sortKey !== 'name' ||
+    activeAisleId !== 'all';
 
   function clearFilters() {
     setActiveAisleId('all');
@@ -209,10 +220,7 @@ function RentalCreateFormInner({
     setSortKey('name');
   }
 
-  const itemMap = React.useMemo(
-    () => new Map(items.map((it) => [it.id, it])),
-    [items],
-  );
+  const itemMap = React.useMemo(() => new Map(items.map((it) => [it.id, it])), [items]);
 
   const lines = state.lines;
   const totalQty = lines.reduce((s, l) => s + l.quantity, 0);
@@ -278,13 +286,13 @@ function RentalCreateFormInner({
   return (
     <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
       {/* Main column */}
-      <div className="flex-1 min-w-0 space-y-4">
+      <div className="min-w-0 flex-1 space-y-4">
         {/* Setup card */}
-        <div className="rounded-xl border bg-card p-4 space-y-4">
-          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+        <div className="border-border bg-card space-y-4 rounded-lg border p-[18px]">
+          <h2 className="text-muted-foreground text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.1em]">
             Setup
           </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {/* Warehouse */}
             <div className="space-y-1.5">
               <Label htmlFor="rental-warehouse">Warehouse</Label>
@@ -316,13 +324,12 @@ function RentalCreateFormInner({
             {/* Expected return date */}
             <div className="space-y-1.5">
               <Label htmlFor="rental-return-date">Expected return</Label>
-              <input
+              <Input
                 id="rental-return-date"
                 type="datetime-local"
                 value={expectedReturnAt}
                 onChange={(e) => setExpectedReturnAt(e.target.value)}
                 min={new Date().toISOString().slice(0, 16)}
-                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
               />
             </div>
           </div>
@@ -373,24 +380,26 @@ function RentalCreateFormInner({
 
       {/* Cart / Checkout rail */}
       <aside
-        className="lg:sticky lg:top-4 lg:self-start w-full lg:w-[360px] lg:flex-none"
+        className="w-full lg:sticky lg:top-4 lg:w-[360px] lg:flex-none lg:self-start"
         aria-label="Checkout cart"
       >
-        <div className="rounded-xl border bg-card p-4 space-y-4">
+        <div className="border-border bg-card space-y-4 rounded-lg border p-[18px]">
           {/* Header */}
           <div className="flex items-center gap-2">
-            <ShoppingCart className="h-4 w-4 text-muted-foreground" />
-            <h2 className="text-sm font-semibold">
+            <ShoppingCart aria-hidden className="text-muted-foreground h-4 w-4" />
+            <h2 className="text-foreground text-[13.5px] font-medium">
               Checkout
               {totalQty > 0 && (
-                <span className="ml-1.5 text-muted-foreground font-normal">({totalQty})</span>
+                <span className="text-muted-foreground ml-1.5 font-normal tabular-nums">
+                  ({totalQty})
+                </span>
               )}
             </h2>
           </div>
 
           {/* Lines */}
           {lines.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-4">
+            <p className="text-muted-foreground py-4 text-center text-[13.5px]">
               Add items from the catalog.
             </p>
           ) : (
@@ -401,16 +410,16 @@ function RentalCreateFormInner({
                   return (
                     <li
                       key={line.itemId}
-                      className="flex items-center gap-2 rounded-md border border-destructive/40 p-2 text-sm"
+                      className="border-destructive/40 bg-destructive-wash flex items-center gap-2 rounded-md border p-2 text-[13px]"
                     >
-                      <span className="flex-1 min-w-0 text-muted-foreground">
+                      <span className="text-foreground min-w-0 flex-1">
                         An item saved in this cart is no longer available to rent here
                         {line.quantity > 1 ? ` (${line.quantity})` : ''}.
                       </span>
                       <button
                         type="button"
                         onClick={() => dispatch({ type: 'remove', itemId: line.itemId })}
-                        className="text-muted-foreground hover:text-destructive transition-colors"
+                        className={ICON_BUTTON}
                         aria-label="Remove unavailable item"
                       >
                         <Trash2 className="h-4 w-4" />
@@ -421,26 +430,33 @@ function RentalCreateFormInner({
                 return (
                   <li
                     key={line.itemId}
-                    className="flex items-center gap-2 rounded-md border p-2 text-sm"
+                    className="border-border flex items-center gap-2 rounded-md border p-2 text-[13px]"
                   >
-                    <span className="flex-1 font-medium truncate min-w-0">{it.name}</span>
-                    <div className="flex items-center border rounded-md overflow-hidden h-7 flex-none">
+                    <span
+                      className="text-foreground min-w-0 flex-1 truncate font-medium"
+                      title={it.name}
+                    >
+                      {it.name}
+                    </span>
+                    {/* The stepper: 28 px on desktop, 44 px on a phone or a
+                        touch screen, so each control is a thumb-sized target. */}
+                    <div className="border-line-strong pointer-coarse:h-11 flex h-7 flex-none items-center overflow-hidden rounded-md border max-sm:h-11">
                       <button
                         type="button"
                         onClick={() => dispatch({ type: 'dec', itemId: line.itemId })}
-                        className="flex items-center justify-center w-7 h-7 hover:bg-muted transition-colors text-muted-foreground"
+                        className={STEP_BUTTON}
                         aria-label="Decrease quantity"
                       >
                         <Minus className="h-3 w-3" />
                       </button>
-                      <span className="w-7 text-center text-xs font-semibold tabular-nums">
+                      <span className="text-foreground w-7 text-center font-mono text-[12.5px] font-medium tabular-nums">
                         {line.quantity}
                       </span>
                       <button
                         type="button"
                         onClick={() => dispatch({ type: 'inc', itemId: line.itemId })}
                         disabled={line.quantity >= it.quantityOnHand}
-                        className="flex items-center justify-center w-7 h-7 hover:bg-muted transition-colors text-muted-foreground disabled:opacity-40"
+                        className={STEP_BUTTON}
                         aria-label="Increase quantity"
                       >
                         <Plus className="h-3 w-3" />
@@ -449,7 +465,7 @@ function RentalCreateFormInner({
                     <button
                       type="button"
                       onClick={() => dispatch({ type: 'remove', itemId: line.itemId })}
-                      className="text-muted-foreground hover:text-destructive transition-colors"
+                      className={ICON_BUTTON}
                       aria-label="Remove"
                     >
                       <Trash2 className="h-4 w-4" />
@@ -479,7 +495,7 @@ function RentalCreateFormInner({
             onClick={handleSubmit}
             disabled={isPending || lines.length === 0 || switchingWarehouse}
           >
-            {isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+            {isPending ? <Loader2 className="animate-spin" /> : null}
             Check out
           </Button>
         </div>
@@ -498,11 +514,7 @@ export function RentalCreateForm(props: RentalCreateFormProps) {
     // Keyed by the catalog's warehouse: switching warehouses (or going Back)
     // starts a fresh cart for that warehouse, restored from its own draft,
     // instead of carrying lines from a catalog that is no longer on screen.
-    <CartProvider
-      key={props.warehouseId}
-      initial={initial}
-      draftPrefix={RENTAL_DRAFT_PREFIX}
-    >
+    <CartProvider key={props.warehouseId} initial={initial} draftPrefix={RENTAL_DRAFT_PREFIX}>
       <RentalCreateFormInner {...props} />
     </CartProvider>
   );

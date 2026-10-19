@@ -1,10 +1,12 @@
 'use client';
 
-import { Loader2 } from 'lucide-react';
+import { Loader2, PackageOpen } from 'lucide-react';
 import Link from 'next/link';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { StatePanel } from '@/components/patterns/state-panel';
+import { deriveRentalStatus, RentalStatusBadge } from '@/components/rentals/rental-status-badge';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -15,17 +17,20 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { cn, formatRelative } from '@/lib/utils';
 import { cancelRentalAction, markRentalReturnedAction } from '@/server/actions/rentals';
 import type { RentalLineRow, RentalRow } from '@/server/services/rentals';
 
-import {
-  hasPermission,
-  isRentalOverdue,
-  RENTAL_BORROWER_TEAM_MEMBER,
-  startOfOrgDay,
-} from '@stockpilot/core';
+import { hasPermission, RENTAL_BORROWER_TEAM_MEMBER, startOfOrgDay } from '@stockpilot/core';
 
 type RentalWithLines = RentalRow & { lines: RentalLineRow[] };
 
@@ -46,18 +51,22 @@ interface RentalsListTableProps {
   timeZone: string;
 }
 
-type StatusDisplay = 'out' | 'returned' | 'cancelled' | 'overdue';
-
 const HOUR_MS = 60 * 60 * 1000;
-const DAY_MS = 24 * HOUR_MS;
 
-/** The pill: core's overdue rule, the one the detail page's pill uses. */
-function deriveStatus(rental: RentalRow, nowMs: number): StatusDisplay {
-  if (rental.status === 'returned') return 'returned';
-  if (rental.status === 'cancelled') return 'cancelled';
-  if (isRentalOverdue(rental, nowMs)) return 'overdue';
-  return 'out';
-}
+/**
+ * Below sm the borrower and return cells keep a reading width, so the table
+ * scrolls sideways inside its card. The Actions column (header and cells)
+ * stays pinned to the card's right edge there, on the card's own fill with a
+ * divider, so View, Mark returned and Cancel… are always on screen and the
+ * other columns scroll underneath. From sm up the table fits and nothing is
+ * pinned. The divider is an inset shadow, not a border: the table collapses
+ * its borders, and a collapsed border stays with the grid instead of moving
+ * with a sticky cell.
+ */
+const ACTIONS_PINNED =
+  'max-sm:sticky max-sm:right-0 max-sm:z-[1] max-sm:bg-card max-sm:shadow-[inset_1px_0_0_var(--color-border)]';
+
+const DAY_MS = 24 * HOUR_MS;
 
 // The pill, the due label and the "Checked out" and "Returned" times are
 // worked out from the clock while rendering, on the server and again in the
@@ -66,32 +75,6 @@ function deriveStatus(rental: RentalRow, nowMs: number): StatusDisplay {
 // ago", web walk 2026-09-25). Each of those elements carries
 // suppressHydrationWarning, as the other client tables with relative times do
 // (inventory-table.tsx, team-manager.tsx): the drift is expected.
-
-function StatusPill({ status }: { status: StatusDisplay }) {
-  const styles: Record<StatusDisplay, string> = {
-    out: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300',
-    returned: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300',
-    cancelled: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400',
-    overdue: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300',
-  };
-  const labels: Record<StatusDisplay, string> = {
-    out: 'Out',
-    returned: 'Returned',
-    cancelled: 'Cancelled',
-    overdue: 'Overdue',
-  };
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold leading-none',
-        styles[status],
-      )}
-      suppressHydrationWarning
-    >
-      {labels[status]}
-    </span>
-  );
-}
 
 function plural(n: number, unit: string): string {
   return `${n} ${unit}${n === 1 ? '' : 's'}`;
@@ -121,7 +104,8 @@ function dueLabel(
   const diffMs = dueMs - nowMs;
   if (diffMs < 0) {
     const lateMs = -diffMs;
-    if (lateMs >= DAY_MS) return { text: `Overdue by ${plural(Math.floor(lateMs / DAY_MS), 'day')}`, tone: 'late' };
+    if (lateMs >= DAY_MS)
+      return { text: `Overdue by ${plural(Math.floor(lateMs / DAY_MS), 'day')}`, tone: 'late' };
     const hours = Math.floor(lateMs / HOUR_MS);
     return {
       text: hours < 1 ? 'Overdue by less than an hour' : `Overdue by ${plural(hours, 'hour')}`,
@@ -131,7 +115,8 @@ function dueLabel(
   // Midnight to midnight in the zone. Rounded, because a day that a clock
   // change shortens or lengthens is 23 or 25 hours long.
   const days = Math.round(
-    (startOfOrgDay(new Date(dueMs), timeZone).getTime() - startOfOrgDay(new Date(nowMs), timeZone).getTime()) /
+    (startOfOrgDay(new Date(dueMs), timeZone).getTime() -
+      startOfOrgDay(new Date(nowMs), timeZone).getTime()) /
       DAY_MS,
   );
   if (days <= 0) return { text: 'Due today', tone: 'today' };
@@ -151,10 +136,10 @@ function DueLabel({
   return (
     <span
       className={cn(
-        'text-xs',
-        tone === 'late' && 'text-red-600 dark:text-red-400 font-medium',
-        tone === 'today' && 'text-amber-600 dark:text-amber-400 font-medium',
-        tone === 'later' && 'text-muted-foreground',
+        'text-[12.5px]',
+        tone === 'late' && 'text-destructive font-medium',
+        tone === 'today' && 'text-warning font-medium',
+        tone === 'later' && 'text-ink-2',
       )}
       suppressHydrationWarning
     >
@@ -163,13 +148,7 @@ function DueLabel({
   );
 }
 
-function MarkReturnedDialog({
-  rental,
-  onClose,
-}: {
-  rental: RentalWithLines;
-  onClose: () => void;
-}) {
+function MarkReturnedDialog({ rental, onClose }: { rental: RentalWithLines; onClose: () => void }) {
   const [notes, setNotes] = React.useState('');
   const [isPending, startTransition] = React.useTransition();
 
@@ -190,8 +169,8 @@ function MarkReturnedDialog({
       <DialogHeader>
         <DialogTitle>Mark returned</DialogTitle>
         <DialogDescription>
-          Confirm that <strong>{rental.borrower_name}</strong> has returned the items.
-          Reservations will be released.
+          Confirm that <strong>{rental.borrower_name}</strong> has returned the items. Reservations
+          will be released.
         </DialogDescription>
       </DialogHeader>
       <div className="space-y-2">
@@ -210,7 +189,7 @@ function MarkReturnedDialog({
           Cancel
         </Button>
         <Button onClick={handleSubmit} disabled={isPending}>
-          {isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+          {isPending ? <Loader2 className="animate-spin" /> : null}
           Mark returned
         </Button>
       </DialogFooter>
@@ -218,13 +197,7 @@ function MarkReturnedDialog({
   );
 }
 
-function CancelRentalDialog({
-  rental,
-  onClose,
-}: {
-  rental: RentalWithLines;
-  onClose: () => void;
-}) {
+function CancelRentalDialog({ rental, onClose }: { rental: RentalWithLines; onClose: () => void }) {
   const [reason, setReason] = React.useState('');
   const [isPending, startTransition] = React.useTransition();
 
@@ -255,7 +228,7 @@ function CancelRentalDialog({
       </DialogHeader>
       <div className="space-y-2">
         <Label htmlFor="cancel-reason">
-          Reason <span className="text-red-500">*</span>
+          Reason <span className="text-destructive">*</span>
         </Label>
         <Textarea
           id="cancel-reason"
@@ -271,7 +244,7 @@ function CancelRentalDialog({
           Back
         </Button>
         <Button variant="destructive" onClick={handleSubmit} disabled={isPending || !reason.trim()}>
-          {isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+          {isPending ? <Loader2 className="animate-spin" /> : null}
           Cancel rental
         </Button>
       </DialogFooter>
@@ -296,47 +269,62 @@ export function RentalsListTable({
 
   if (rentals.length === 0) {
     return (
-      <div className="rounded-lg border bg-card px-6 py-12 text-center text-muted-foreground text-sm">
-        No rentals found for this filter.
-      </div>
+      <StatePanel
+        kind="empty"
+        icon={PackageOpen}
+        headingLevel={null}
+        title="No rentals found for this filter."
+      />
     );
   }
 
   return (
     <>
       {/* Return dialog */}
-      <Dialog open={returnTarget !== null} onOpenChange={(o) => { if (!o) setReturnTarget(null); }}>
+      <Dialog
+        open={returnTarget !== null}
+        onOpenChange={(o) => {
+          if (!o) setReturnTarget(null);
+        }}
+      >
         {returnTarget && (
           <MarkReturnedDialog rental={returnTarget} onClose={() => setReturnTarget(null)} />
         )}
       </Dialog>
 
       {/* Cancel dialog */}
-      <Dialog open={cancelTarget !== null} onOpenChange={(o) => { if (!o) setCancelTarget(null); }}>
+      <Dialog
+        open={cancelTarget !== null}
+        onOpenChange={(o) => {
+          if (!o) setCancelTarget(null);
+        }}
+      >
         {cancelTarget && (
           <CancelRentalDialog rental={cancelTarget} onClose={() => setCancelTarget(null)} />
         )}
       </Dialog>
 
-      <div className="rounded-lg border bg-card overflow-hidden">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b bg-muted/50">
-              <th className="px-4 py-3 text-left font-medium text-muted-foreground">Borrower</th>
-              <th className="px-4 py-3 text-left font-medium text-muted-foreground hidden sm:table-cell">
-                Items
-              </th>
-              <th className="px-4 py-3 text-left font-medium text-muted-foreground hidden md:table-cell">
-                Checked out
-              </th>
-              <th className="px-4 py-3 text-left font-medium text-muted-foreground">Return</th>
-              <th className="px-4 py-3 text-left font-medium text-muted-foreground">Status</th>
-              <th className="px-4 py-3 text-right font-medium text-muted-foreground">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y">
+      {/* The table card (DESIGN-SPEC 6.9). Items hides below sm and Checked
+          out below md, as before; their facts then ride as quiet lines under
+          the borrower's name (the accessible alternative: hidden with
+          display:none at the widths where the column shows, so a screen
+          reader never hears them twice). The cells keep their order:
+          Borrower, Items, Checked out, Return, Status, Actions. */}
+      <div className="border-border bg-card overflow-hidden rounded-lg border">
+        <Table aria-label="Rentals">
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead>Borrower</TableHead>
+              <TableHead className="hidden sm:table-cell">Items</TableHead>
+              <TableHead className="hidden whitespace-nowrap md:table-cell">Checked out</TableHead>
+              <TableHead>Return</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead className={cn('text-right', ACTIONS_PINNED)}>Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {rentals.map((rental) => {
-              const status = deriveStatus(rental, nowMs);
+              const status = deriveRentalStatus(rental, nowMs);
               const firstLine = rental.lines[0];
               const firstName = firstLine
                 ? (itemNames?.get(firstLine.item_id) ?? `Item ×${firstLine.quantity}`)
@@ -347,74 +335,105 @@ export function RentalsListTable({
                   : firstName;
 
               return (
-                <tr key={rental.id} className="hover:bg-muted/30 transition-colors">
+                <TableRow key={rental.id} className="group">
                   {/* Borrower */}
-                  <td className="px-4 py-3">
-                    <p className="font-medium leading-tight">{rental.borrower_name}</p>
+                  <TableCell className="min-w-[150px]">
+                    <p className="text-foreground font-medium leading-tight [overflow-wrap:anywhere]">
+                      {rental.borrower_name}
+                    </p>
                     {/* The detail page's words (core). Only a team member is
                         tagged: most rows are borrowers not linked to an
                         account, and the detail says so for them. */}
                     {rental.borrower_user_id && (
-                      <span data-testid="borrower-kind" className="block text-[11px] text-muted-foreground">
+                      <span
+                        data-testid="borrower-kind"
+                        className="text-muted-foreground block text-[12px] leading-[18px]"
+                      >
                         {RENTAL_BORROWER_TEAM_MEMBER}
                       </span>
                     )}
-                  </td>
-
-                  {/* Items summary */}
-                  <td className="px-4 py-3 hidden sm:table-cell">
-                    <span className="text-muted-foreground truncate max-w-[200px] block">
+                    {/* Narrow widths: the hidden Items and Checked out cells. */}
+                    <span
+                      data-testid="rental-items-narrow"
+                      className="text-ink-2 mt-0.5 block text-[12px] leading-[18px] [overflow-wrap:anywhere] sm:hidden"
+                    >
                       {lineLabel}
                     </span>
-                  </td>
+                    <span
+                      data-testid="rental-checked-out-narrow"
+                      className="text-muted-foreground block text-[12px] leading-[18px] md:hidden"
+                      suppressHydrationWarning
+                    >
+                      Checked out {formatRelative(rental.checked_out_at)}
+                    </span>
+                  </TableCell>
+
+                  {/* Items summary */}
+                  <TableCell className="hidden sm:table-cell">
+                    <span className="text-ink-2 block max-w-[220px] truncate" title={lineLabel}>
+                      {lineLabel}
+                    </span>
+                  </TableCell>
 
                   {/* Checkout date */}
-                  <td className="px-4 py-3 hidden md:table-cell text-muted-foreground" suppressHydrationWarning>
+                  <TableCell
+                    className="text-muted-foreground hidden whitespace-nowrap text-[12.5px] md:table-cell"
+                    suppressHydrationWarning
+                  >
                     {formatRelative(rental.checked_out_at)}
-                  </td>
+                  </TableCell>
 
                   {/* Expected return */}
-                  <td className="px-4 py-3">
+                  <TableCell className="min-w-[120px]">
                     {rental.status === 'out' ? (
                       <>
-                        <DueLabel expectedReturnAt={rental.expected_return_at} nowMs={nowMs} timeZone={timeZone} />
+                        <DueLabel
+                          expectedReturnAt={rental.expected_return_at}
+                          nowMs={nowMs}
+                          timeZone={timeZone}
+                        />
                         {reminderMarks?.[rental.id] ? (
                           <span
                             data-testid="reminder-mark"
-                            className="block text-[11px] text-muted-foreground"
+                            className="text-muted-foreground block text-[12px] leading-[18px]"
                           >
                             {reminderMarks[rental.id]}
                           </span>
                         ) : null}
                       </>
                     ) : rental.returned_at ? (
-                      <span className="text-muted-foreground text-xs" suppressHydrationWarning>
+                      <span
+                        className="text-muted-foreground text-[12.5px]"
+                        suppressHydrationWarning
+                      >
                         {formatRelative(rental.returned_at)}
                       </span>
                     ) : (
-                      <span className="text-muted-foreground text-xs">—</span>
+                      <span className="text-muted-foreground text-[12.5px]">—</span>
                     )}
-                  </td>
+                  </TableCell>
 
                   {/* Status */}
-                  <td className="px-4 py-3">
-                    <StatusPill status={status} />
-                  </td>
+                  <TableCell>
+                    <RentalStatusBadge status={status} />
+                  </TableCell>
 
-                  {/* Actions */}
-                  <td className="px-4 py-3">
-                    <div className="flex items-center justify-end gap-1.5 flex-wrap">
-                      <Button asChild variant="ghost" size="sm" className="h-7 px-2 text-xs">
+                  {/* Actions: 28 px buttons 8 px apart (the touch rule in
+                      button.tsx): one row from sm up, stacked on a phone. The
+                      borrower and return cells keep a reading width there, so
+                      a phone scrolls the table inside its card instead of
+                      squeezing the names to a word a line, and this cell stays
+                      pinned to the card's right edge there (ACTIONS_PINNED) so
+                      View, Mark returned and Cancel… are on screen without
+                      scrolling. */}
+                  <TableCell className={cn(ACTIONS_PINNED, 'max-sm:group-hover:bg-muted')}>
+                    <div className="flex flex-col items-end gap-2 sm:flex-row sm:items-center sm:justify-end">
+                      <Button asChild variant="ghost" size="sm">
                         <Link href={`/dashboard/rentals/${rental.id}`}>View</Link>
                       </Button>
 
                       {canCreate && rental.status === 'out' && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-7 px-2 text-xs"
-                          onClick={() => setReturnTarget(rental)}
-                        >
+                        <Button variant="outline" size="sm" onClick={() => setReturnTarget(rental)}>
                           Mark returned
                         </Button>
                       )}
@@ -423,19 +442,19 @@ export function RentalsListTable({
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="h-7 px-2 text-xs text-destructive hover:text-destructive"
+                          className="text-destructive hover:text-destructive"
                           onClick={() => setCancelTarget(rental)}
                         >
                           Cancel…
                         </Button>
                       )}
                     </div>
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               );
             })}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
     </>
   );
