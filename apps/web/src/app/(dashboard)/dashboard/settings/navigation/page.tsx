@@ -1,7 +1,8 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
+import { SettingsPage } from '@/components/settings/settings-nav';
 import { NavCustomizer } from '@/components/settings/nav-customizer';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getModulesForRequest, getOrgRowForRequest } from '@/lib/dashboard/request-cache';
@@ -54,26 +55,23 @@ export default async function NavigationSettingsPage() {
       : null;
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href="/dashboard/settings"
-          className="text-muted-foreground hover:text-foreground inline-flex items-center text-sm"
-        >
-          ← Back to settings
-        </Link>
-        <div className="mt-2 flex flex-wrap items-center gap-3">
-          <h1 className="text-2xl font-semibold tracking-tight">Navigation</h1>
-          <PageTour tour={NAV_SETTINGS_TOUR} />
-        </div>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Hide, rename, and reorder sidebar items, or add custom links, for your whole
-          organization. Items follow each member&apos;s role and your enabled modules — hiding an
-          item never enables a feature you&apos;ve turned off.
-        </p>
-      </div>
+    <SettingsPage>
+      <PageHeader
+        title="Navigation"
+        subline={
+          <>
+            Hide, rename, and reorder sidebar items, or add custom links, for your whole
+            organization. Items follow each member&apos;s role and your enabled modules — hiding an
+            item never enables a feature you&apos;ve turned off.
+          </>
+        }
+        back={
+          <PageHeaderBackLink href="/dashboard/settings">← Back to settings</PageHeaderBackLink>
+        }
+        tour={<PageTour tour={NAV_SETTINGS_TOUR} />}
+      />
 
       <NavCustomizer baseSections={baseSections} initialOverrides={initialOverrides} />
-    </div>
+    </SettingsPage>
   );
 }

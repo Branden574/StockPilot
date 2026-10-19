@@ -9,10 +9,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-  updateTerminologyAction,
-  type TerminologyInput,
-} from '@/server/actions/organization';
+import { updateTerminologyAction, type TerminologyInput } from '@/server/actions/organization';
 
 interface TerminologyEditorProps {
   current: TerminologyInput;
@@ -93,16 +90,16 @@ export function TerminologyEditor({ current, defaults }: TerminologyEditorProps)
   return (
     <form onSubmit={onSubmit} className="space-y-6" noValidate>
       <div className="space-y-1.5">
-        <Label className="text-xs uppercase tracking-wider text-muted-foreground">
+        <p className="text-muted-foreground text-[11px] font-medium uppercase tracking-[0.06em]">
           Quick presets
-        </Label>
+        </p>
         <div className="flex flex-wrap gap-2">
           {presets.map((p) => (
             <button
               key={p.label}
               type="button"
               onClick={() => applyPreset(p.value)}
-              className="rounded-full border border-border bg-card px-3 py-1 text-xs hover:bg-muted"
+              className="border-line-strong bg-card text-ink-2 hover:bg-muted hover:text-foreground focus-visible:ring-ring focus-visible:ring-offset-background inline-flex h-7 items-center rounded-full border px-3 text-[12.5px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 max-sm:h-11"
             >
               {p.label}
             </button>
@@ -112,29 +109,51 @@ export function TerminologyEditor({ current, defaults }: TerminologyEditorProps)
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Field
+          id="term-charter-singular"
           label="Charter (singular)"
           hint="Top-level grouping. e.g. Charter, Region, Division"
           error={errors.charter_singular?.message}
         >
-          <Input {...register('charter_singular', { required: true, maxLength: 40 })} />
-        </Field>
-        <Field label="Charter (plural)" error={errors.charter_plural?.message}>
-          <Input {...register('charter_plural', { required: true, maxLength: 40 })} />
+          <Input
+            id="term-charter-singular"
+            {...register('charter_singular', { required: true, maxLength: 40 })}
+          />
         </Field>
         <Field
+          id="term-charter-plural"
+          label="Charter (plural)"
+          error={errors.charter_plural?.message}
+        >
+          <Input
+            id="term-charter-plural"
+            {...register('charter_plural', { required: true, maxLength: 40 })}
+          />
+        </Field>
+        <Field
+          id="term-warehouse-singular"
           label="Warehouse (singular)"
           hint="Physical location. e.g. Warehouse, Branch, Site"
           error={errors.warehouse_singular?.message}
         >
-          <Input {...register('warehouse_singular', { required: true, maxLength: 40 })} />
+          <Input
+            id="term-warehouse-singular"
+            {...register('warehouse_singular', { required: true, maxLength: 40 })}
+          />
         </Field>
-        <Field label="Warehouse (plural)" error={errors.warehouse_plural?.message}>
-          <Input {...register('warehouse_plural', { required: true, maxLength: 40 })} />
+        <Field
+          id="term-warehouse-plural"
+          label="Warehouse (plural)"
+          error={errors.warehouse_plural?.message}
+        >
+          <Input
+            id="term-warehouse-plural"
+            {...register('warehouse_plural', { required: true, maxLength: 40 })}
+          />
         </Field>
       </div>
 
-      <div className="rounded-lg border border-border bg-muted/30 p-4 text-sm">
-        <p className="text-xs uppercase tracking-wider text-muted-foreground mb-2">
+      <div className="bg-sunk rounded-lg border p-4 text-[13px]">
+        <p className="text-muted-foreground mb-2 text-[11px] font-medium uppercase tracking-[0.06em]">
           Preview
         </p>
         <p>
@@ -146,9 +165,10 @@ export function TerminologyEditor({ current, defaults }: TerminologyEditorProps)
         </p>
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-2">
         <Button type="submit" disabled={isSubmitting || !isDirty}>
-          {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save labels'}
+          {isSubmitting ? <Loader2 aria-hidden className="animate-spin" /> : null}
+          Save labels
         </Button>
         {isDirty && (
           <Button
@@ -160,24 +180,29 @@ export function TerminologyEditor({ current, defaults }: TerminologyEditorProps)
             Discard
           </Button>
         )}
-        <button
+        <Button
           type="button"
-          className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+          variant="ghost"
+          size="sm"
+          className="text-muted-foreground ml-auto"
           onClick={() => applyPreset(defaults)}
         >
           Reset to factory defaults
-        </button>
+        </Button>
       </div>
     </form>
   );
 }
 
 function Field({
+  id,
   label,
   hint,
   error,
   children,
 }: {
+  /** The input's id, so the label names it (it named nothing before). */
+  id: string;
   label: string;
   hint?: string;
   error?: string;
@@ -185,10 +210,10 @@ function Field({
 }) {
   return (
     <div className="space-y-1.5">
-      <Label>{label}</Label>
+      <Label htmlFor={id}>{label}</Label>
       {children}
-      {hint && !error && <p className="text-[11px] text-muted-foreground">{hint}</p>}
-      {error && <p className="text-[11px] text-destructive">{error}</p>}
+      {hint && !error && <p className="text-muted-foreground text-[12px]">{hint}</p>}
+      {error && <p className="text-destructive text-[12px]">{error}</p>}
     </div>
   );
 }

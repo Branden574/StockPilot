@@ -1,7 +1,8 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
+import { SettingsPage } from '@/components/settings/settings-nav';
 import { IndustryPacks } from '@/components/settings/industry-packs';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
@@ -22,28 +23,22 @@ export default async function IndustrySettingsPage() {
     .eq('id', ctx.organizationId)
     .maybeSingle();
 
-  const activePack = ((row as { domain_pack?: string } | null)?.domain_pack ?? null) as
-    | DomainPack
-    | null;
+  const activePack = ((row as { domain_pack?: string } | null)?.domain_pack ??
+    null) as DomainPack | null;
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href="/dashboard/settings"
-          className="text-muted-foreground hover:text-foreground inline-flex items-center text-sm"
-        >
-          ← Back to settings
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">Industry template</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Set up StockPilot for your industry in one click. This turns on the modules for
-          the template and suggests labels — it never turns off modules you already enabled,
-          and it keeps any labels you have already customized.
-        </p>
-      </div>
+    <SettingsPage>
+      <PageHeader
+        title="Industry template"
+        subline={
+          'Set up StockPilot for your industry in one click. This turns on the modules for the template and suggests labels — it never turns off modules you already enabled, and it keeps any labels you have already customized.'
+        }
+        back={
+          <PageHeaderBackLink href="/dashboard/settings">← Back to settings</PageHeaderBackLink>
+        }
+      />
 
       <IndustryPacks presets={[...PACK_PRESET_LIST]} activePack={activePack} />
-    </div>
+    </SettingsPage>
   );
 }

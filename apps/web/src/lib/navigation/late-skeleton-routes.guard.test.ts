@@ -59,8 +59,12 @@ function upward(dir: string): string[] {
 
 const has = (dir: string, file: string) => existsSync(path.join(DASH, dir, file));
 
-const LOADINGS = FILES.map(rel).filter((f) => f.endsWith('/loading.tsx') || f === 'loading.tsx').sort();
-const PAGES = FILES.map(rel).filter((f) => f.endsWith('/page.tsx') || f === 'page.tsx').sort();
+const LOADINGS = FILES.map(rel)
+  .filter((f) => f.endsWith('/loading.tsx') || f === 'loading.tsx')
+  .sort();
+const PAGES = FILES.map(rel)
+  .filter((f) => f.endsWith('/page.tsx') || f === 'page.tsx')
+  .sort();
 
 /** The directory of the nearest loading.tsx at or above a page, below the group; null when none. */
 function nearestLoading(pageFile: string): string | null {
@@ -71,6 +75,17 @@ function nearestLoading(pageFile: string): string | null {
 function layoutsAbove(loadingDir: string): string[] {
   return upward(loadingDir).filter((d) => d !== '.' && has(d, 'layout.tsx'));
 }
+
+const isAsyncLayout = (layoutDir: string) =>
+  /export default async function/.test(
+    readFileSync(path.join(DASH, layoutDir, 'layout.tsx'), 'utf8'),
+  );
+
+/**
+ * Only an ASYNC layout holds its loading.tsx back: a synchronous one renders at
+ * once, so the boundary below it shows as if the layout were not there.
+ */
+const asyncLayoutsAbove = (loadingDir: string) => layoutsAbove(loadingDir).filter(isAsyncLayout);
 
 function kindOfLoading(dir: string): RouteSkeletonKind | null {
   const source = readFileSync(path.join(DASH, dir, 'loading.tsx'), 'utf8');
@@ -155,9 +170,37 @@ describe('routes that rely on the late skeleton', () => {
 
   const ASYNC_LAYOUT_SECTIONS = [
     ...new Set(
-      PAGES.map(nearestLoading).filter((d): d is string => d !== null && layoutsAbove(d).length > 0),
+      PAGES.map(nearestLoading).filter(
+        (d): d is string => d !== null && asyncLayoutsAbove(d).length > 0,
+      ),
     ),
   ].sort();
+
+  // A synchronous layout above a loading.tsx does not change which skeleton
+  // shows, so those sections stay under D5. They are pinned too, so making one
+  // of them async (which would move its pages under D4) fails here on purpose.
+  // settings (redesign P4.G1): the sub-nav frame reads nothing itself and
+  // keeps its nav in its own Suspense boundary.
+  const SYNC_LAYOUT_SECTIONS = [
+    ...new Set(
+      PAGES.map(nearestLoading).filter(
+        (d): d is string =>
+          d !== null && layoutsAbove(d).length > 0 && asyncLayoutsAbove(d).length === 0,
+      ),
+    ),
+  ].sort();
+
+  it('D7 the sections whose layouts above their loading.tsx are all synchronous are exactly settings', () => {
+    expect(SYNC_LAYOUT_SECTIONS).toEqual(['settings']);
+    for (const section of SYNC_LAYOUT_SECTIONS) {
+      for (const layoutDir of layoutsAbove(section)) {
+        const layout = readFileSync(path.join(DASH, layoutDir, 'layout.tsx'), 'utf8');
+        expect(layout, `${layoutDir}/layout.tsx`).not.toMatch(
+          /\basync function\s+\w*Layout\b|export default async\b/,
+        );
+      }
+    }
+  });
 
   it('D4 the sections with an async layout above their loading.tsx are exactly admin, purchase-orders and reports', () => {
     expect(ASYNC_LAYOUT_SECTIONS).toEqual(['admin', 'purchase-orders', 'reports']);

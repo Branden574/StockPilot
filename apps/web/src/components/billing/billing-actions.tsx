@@ -5,10 +5,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
-import {
-  createCheckoutSessionAction,
-  createPortalSessionAction,
-} from '@/server/actions/billing';
+import { createCheckoutSessionAction, createPortalSessionAction } from '@/server/actions/billing';
 
 import type { PlanId } from '@stockpilot/core';
 
@@ -51,18 +48,16 @@ export function BillingActions({
           onClick={() => startCheckout('pro', 'monthly')}
           disabled={loading === 'pro-monthly'}
         >
-          {loading === 'pro-monthly' ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Upgrade to Pro'}
+          {loading === 'pro-monthly' ? <Loader2 aria-hidden className="animate-spin" /> : null}
+          Upgrade to Pro
         </Button>
         <Button
           variant="outline"
           onClick={() => startCheckout('business', 'monthly')}
           disabled={loading === 'business-monthly'}
         >
-          {loading === 'business-monthly' ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            'Upgrade to Business'
-          )}
+          {loading === 'business-monthly' ? <Loader2 aria-hidden className="animate-spin" /> : null}
+          Upgrade to Business
         </Button>
       </div>
     );
@@ -70,7 +65,7 @@ export function BillingActions({
 
   if (currentPlan === 'enterprise') {
     return (
-      <p className="pt-2 text-sm text-muted-foreground">
+      <p className="text-muted-foreground pt-1 text-[13px]">
         Enterprise billing is managed manually. Contact your account manager for changes.
       </p>
     );
@@ -80,13 +75,9 @@ export function BillingActions({
     <div className="flex flex-wrap gap-2 pt-2">
       {hasStripeCustomer && (
         <Button variant="default" onClick={openPortal} disabled={loading === 'portal'}>
-          {loading === 'portal' ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <>
-              Manage subscription <ExternalLink className="h-3.5 w-3.5" />
-            </>
-          )}
+          {loading === 'portal' ? <Loader2 aria-hidden className="animate-spin" /> : null}
+          Manage subscription
+          {loading === 'portal' ? null : <ExternalLink aria-hidden className="h-3.5 w-3.5" />}
         </Button>
       )}
       {currentPlan === 'pro' && (
@@ -95,11 +86,8 @@ export function BillingActions({
           onClick={() => startCheckout('business', 'monthly')}
           disabled={loading === 'business-monthly'}
         >
-          {loading === 'business-monthly' ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            'Upgrade to Business'
-          )}
+          {loading === 'business-monthly' ? <Loader2 aria-hidden className="animate-spin" /> : null}
+          Upgrade to Business
         </Button>
       )}
     </div>

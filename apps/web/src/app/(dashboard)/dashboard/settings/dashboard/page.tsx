@@ -1,7 +1,8 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
+import { SettingsPage } from '@/components/settings/settings-nav';
 import { DashboardCustomizer } from '@/components/settings/dashboard-customizer';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
@@ -39,22 +40,18 @@ export default async function DashboardSettingsPage() {
   const widgets = DASHBOARD_WIDGETS.map((w) => ({ id: w.id, title: w.title }));
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href="/dashboard/settings"
-          className="text-muted-foreground hover:text-foreground inline-flex items-center text-sm"
-        >
-          ← Back to settings
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">Dashboard</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Choose which cards appear on the dashboard and in what order, for your whole
-          organization. Use the arrows to reorder and the eye toggle to show or hide a card.
-        </p>
-      </div>
+    <SettingsPage>
+      <PageHeader
+        title="Dashboard"
+        subline={
+          'Choose which cards appear on the dashboard and in what order, for your whole organization. Use the arrows to reorder and the eye toggle to show or hide a card.'
+        }
+        back={
+          <PageHeaderBackLink href="/dashboard/settings">← Back to settings</PageHeaderBackLink>
+        }
+      />
 
       <DashboardCustomizer widgets={widgets} initialLayout={initialLayout} />
-    </div>
+    </SettingsPage>
   );
 }

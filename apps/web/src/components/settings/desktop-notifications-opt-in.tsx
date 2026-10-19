@@ -5,10 +5,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
-import {
-  isDesktopNotificationsEnabled,
-  setDesktopOptIn,
-} from '@/lib/notifications/live-toast';
+import { isDesktopNotificationsEnabled, setDesktopOptIn } from '@/lib/notifications/live-toast';
 
 type PermissionState = 'loading' | 'unsupported' | 'default' | 'granted' | 'denied';
 
@@ -85,7 +82,7 @@ export function DesktopNotificationsOptIn() {
 
   if (perm === 'loading') {
     return (
-      <div className="text-muted-foreground flex items-center gap-2 text-sm">
+      <div className="text-muted-foreground flex items-center gap-2 text-[13px]">
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
         Checking browser support…
       </div>
@@ -94,7 +91,7 @@ export function DesktopNotificationsOptIn() {
 
   if (perm === 'unsupported') {
     return (
-      <div className="text-muted-foreground text-sm">
+      <div className="text-muted-foreground text-[13px]">
         This browser doesn&apos;t support desktop notifications.
       </div>
     );
@@ -102,11 +99,10 @@ export function DesktopNotificationsOptIn() {
 
   if (perm === 'denied') {
     return (
-      <div className="space-y-2 text-sm">
+      <div className="space-y-2 text-[13px]">
         <p className="text-muted-foreground">
-          Your browser is blocking notifications for StockPilot. Open the
-          lock / shield icon next to the URL, allow notifications, and
-          reload this page.
+          Your browser is blocking notifications for StockPilot. Open the lock / shield icon next to
+          the URL, allow notifications, and reload this page.
         </p>
       </div>
     );
@@ -115,16 +111,15 @@ export function DesktopNotificationsOptIn() {
   if (optIn) {
     return (
       <div className="flex items-start justify-between gap-4">
-        <div className="text-sm">
+        <div className="text-[13px]">
           <p className="font-medium">Enabled on this device</p>
-          <p className="text-muted-foreground text-xs">
-            New notifications pop up while this tab is in the background.
-            We won&apos;t disturb you while the StockPilot tab is in focus —
-            you&apos;ll see a toast instead.
+          <p className="text-muted-foreground text-[12.5px]">
+            New notifications pop up while this tab is in the background. We won&apos;t disturb you
+            while the StockPilot tab is in focus — you&apos;ll see a toast instead.
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={disable} disabled={pending}>
-          <BellOff className="mr-1 h-3.5 w-3.5" /> Pause
+          <BellOff aria-hidden className="h-3.5 w-3.5" /> Pause
         </Button>
       </div>
     );
@@ -132,21 +127,20 @@ export function DesktopNotificationsOptIn() {
 
   return (
     <div className="flex items-start justify-between gap-4">
-      <div className="text-sm">
+      <div className="text-[13px]">
         <p className="font-medium">Off on this device</p>
-        <p className="text-muted-foreground text-xs">
-          When StockPilot isn&apos;t the focused tab, new notifications
-          stay in the bell. Enable to also see an OS-level pop-up.
+        <p className="text-muted-foreground text-[12.5px]">
+          When StockPilot isn&apos;t the focused tab, new notifications stay in the bell. Enable to
+          also see an OS-level pop-up.
         </p>
       </div>
       <Button onClick={enable} disabled={pending} size="sm">
         {pending ? (
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          <Loader2 aria-hidden className="h-3.5 w-3.5 animate-spin" />
         ) : (
-          <>
-            <Bell className="mr-1 h-3.5 w-3.5" /> Enable
-          </>
+          <Bell aria-hidden className="h-3.5 w-3.5" />
         )}
+        Enable
       </Button>
     </div>
   );

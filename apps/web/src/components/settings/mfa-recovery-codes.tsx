@@ -96,11 +96,11 @@ export function MfaRecoveryCodes({ total, unused }: MfaRecoveryCodesProps) {
 
   return (
     <div className="space-y-3">
-      <div className="text-sm">
+      <div className="text-[13px]">
         {total === 0 ? (
           <p className="text-muted-foreground">
-            You don't have any recovery codes yet. Generate a set of 10 codes
-            you can use if you ever lose access to your authenticator.
+            You don't have any recovery codes yet. Generate a set of 10 codes you can use if you
+            ever lose access to your authenticator.
           </p>
         ) : (
           <p className="text-muted-foreground">
@@ -116,7 +116,11 @@ export function MfaRecoveryCodes({ total, unused }: MfaRecoveryCodesProps) {
 
       <div className="flex flex-wrap gap-2">
         <Button onClick={startGenerate} disabled={busy} variant="outline">
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldAlert className="h-4 w-4" />}
+          {busy ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <ShieldAlert className="h-4 w-4" />
+          )}
           {total === 0 ? 'Generate codes' : 'Regenerate codes'}
         </Button>
       </div>
@@ -136,14 +140,13 @@ export function MfaRecoveryCodes({ total, unused }: MfaRecoveryCodesProps) {
           <DialogHeader>
             <DialogTitle>Save your recovery codes</DialogTitle>
             <DialogDescription>
-              Each code works once. Keep them somewhere safe — a password
-              manager works well. They're not retrievable after this dialog
-              closes.
+              Each code works once. Keep them somewhere safe — a password manager works well.
+              They're not retrievable after this dialog closes.
             </DialogDescription>
           </DialogHeader>
 
           {codes && (
-            <div className="border-border bg-muted/40 rounded-md border p-3 font-mono text-sm">
+            <div className="border-border bg-sunk rounded-lg border p-3.5 font-mono text-[13px]">
               <ul className="grid grid-cols-2 gap-x-6 gap-y-1.5 tabular-nums">
                 {codes.map((c) => (
                   <li key={c}>{c}</li>

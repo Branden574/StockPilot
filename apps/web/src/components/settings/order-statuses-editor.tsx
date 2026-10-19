@@ -124,17 +124,22 @@ export function OrderStatusesEditor({ initialConfig }: { initialConfig: unknown 
 
   return (
     <div className="space-y-6">
-      <ul className="divide-border divide-y rounded-md border">
+      <ul className="bg-card divide-border divide-y rounded-lg border">
         {ORDER_STATUS_KEYS.map((key) => {
           const row = rows[key];
           const def = ORDER_STATUS_META[key];
           const changed = row.label.trim() !== def.label || row.color !== def.color;
           return (
-            <li key={key} className="grid items-end gap-3 px-3 py-3 sm:grid-cols-[1fr_10rem_8rem]">
+            <li
+              key={key}
+              className="grid items-end gap-3 px-[18px] py-3.5 sm:grid-cols-[minmax(0,1fr)_10rem_auto]"
+            >
               <div className="min-w-0 space-y-1.5">
                 <Label htmlFor={`label-${key}`} className="flex items-center gap-2">
                   <Badge variant={row.color}>{row.label.trim() || def.label}</Badge>
-                  <code className="text-muted-foreground text-xs">{key}</code>
+                  <code className="text-muted-foreground font-mono text-[11.5px] font-normal">
+                    {key}
+                  </code>
                 </Label>
                 <Input
                   id={`label-${key}`}
@@ -146,12 +151,14 @@ export function OrderStatusesEditor({ initialConfig }: { initialConfig: unknown 
                 />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-muted-foreground text-xs">Color</Label>
+                <Label htmlFor={`color-${key}`} className="text-muted-foreground">
+                  Color
+                </Label>
                 <Select
                   value={row.color}
                   onValueChange={(v) => setRow(key, { color: v as OrderStatusColor })}
                 >
-                  <SelectTrigger disabled={pending}>
+                  <SelectTrigger id={`color-${key}`} disabled={pending}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -172,7 +179,7 @@ export function OrderStatusesEditor({ initialConfig }: { initialConfig: unknown 
                   onClick={() => setRow(key, { label: def.label, color: def.color })}
                   aria-label={`Reset ${key} to default`}
                 >
-                  <RotateCcw className="mr-1 h-3.5 w-3.5" /> Default
+                  <RotateCcw aria-hidden className="h-3.5 w-3.5" /> Default
                 </Button>
               </div>
             </li>
@@ -180,7 +187,7 @@ export function OrderStatusesEditor({ initialConfig }: { initialConfig: unknown 
         })}
       </ul>
 
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <Button onClick={save} disabled={pending}>
           Save changes
         </Button>

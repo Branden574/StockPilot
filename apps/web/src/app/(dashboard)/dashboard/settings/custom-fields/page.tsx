@@ -1,7 +1,8 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
+import { SettingsPage } from '@/components/settings/settings-nav';
 import { CustomFieldsEditor } from '@/components/settings/custom-fields-editor';
 import { requireOrgContext } from '@/lib/auth/session';
 import { CustomFieldsService } from '@/server/services/custom-fields';
@@ -26,23 +27,18 @@ export default async function CustomFieldsSettingsPage() {
   const definitions = await service.listDefinitions('item', { includeArchived: true });
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href="/dashboard/settings"
-          className="text-muted-foreground hover:text-foreground inline-flex items-center text-sm"
-        >
-          ← Back to settings
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">Custom fields</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Define extra fields to capture on every item — warranty length, voltage, color, and
-          anything else specific to your inventory. Fields appear on the item form and detail
-          view for your whole organization.
-        </p>
-      </div>
+    <SettingsPage>
+      <PageHeader
+        title="Custom fields"
+        subline={
+          'Define extra fields to capture on every item — warranty length, voltage, color, and anything else specific to your inventory. Fields appear on the item form and detail view for your whole organization.'
+        }
+        back={
+          <PageHeaderBackLink href="/dashboard/settings">← Back to settings</PageHeaderBackLink>
+        }
+      />
 
       <CustomFieldsEditor initialDefinitions={definitions} />
-    </div>
+    </SettingsPage>
   );
 }

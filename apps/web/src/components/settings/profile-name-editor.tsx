@@ -58,7 +58,8 @@ export function ProfileNameEditor({ current }: { current: string }) {
       </div>
       <div className="flex justify-end">
         <Button onClick={save} disabled={!dirty || busy} variant="gradient">
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save name'}
+          {busy ? <Loader2 aria-hidden className="animate-spin" /> : null}
+          Save name
         </Button>
       </div>
     </div>

@@ -1,16 +1,14 @@
 'use client';
 
-import { Loader2, Mail } from 'lucide-react';
+import { Loader2, Mail, TriangleAlert } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
-import {
-  sendDigestPreviewAction,
-  setDigestPrefsAction,
-} from '@/server/actions/digest';
-import { cn } from '@/lib/utils';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Switch } from '@/components/ui/switch';
+import { sendDigestPreviewAction, setDigestPrefsAction } from '@/server/actions/digest';
 
 interface SectionFlags {
   lowStock: boolean;
@@ -49,7 +47,11 @@ const SECTION_DEFS: Array<{
   },
 ];
 
-export function DigestControls({ initialOptIn, initialSections, scheduleLabel }: DigestControlsProps) {
+export function DigestControls({
+  initialOptIn,
+  initialSections,
+  scheduleLabel,
+}: DigestControlsProps) {
   const router = useRouter();
   const [optIn, setOptIn] = React.useState(initialOptIn);
   const [sections, setSections] = React.useState<SectionFlags>(initialSections);
@@ -57,8 +59,7 @@ export function DigestControls({ initialOptIn, initialSections, scheduleLabel }:
   const [savingSection, setSavingSection] = React.useState<keyof SectionFlags | null>(null);
   const [previewing, setPreviewing] = React.useState(false);
 
-  const noSectionsOn =
-    !sections.lowStock && !sections.openPos && !sections.cycleCounts;
+  const noSectionsOn = !sections.lowStock && !sections.openPos && !sections.cycleCounts;
 
   async function toggleMaster(next: boolean) {
     setSavingToggle(true);
@@ -70,7 +71,9 @@ export function DigestControls({ initialOptIn, initialSections, scheduleLabel }:
       toast.error(res.error.message);
       return;
     }
-    toast.success(next ? 'Subscribed to the weekly digest.' : 'Unsubscribed from the weekly digest.');
+    toast.success(
+      next ? 'Subscribed to the weekly digest.' : 'Unsubscribed from the weekly digest.',
+    );
     router.refresh();
   }
 
@@ -102,86 +105,71 @@ export function DigestControls({ initialOptIn, initialSections, scheduleLabel }:
     <div className="space-y-6">
       {/* Master toggle */}
       <div className="flex items-start justify-between gap-6">
-        <div className="flex-1">
-          <div className="text-sm font-medium">Email me a weekly inventory digest</div>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Sent {scheduleLabel}, in your workspace's time zone. It covers
-            only the warehouses, items and purchase orders you can see in
-            StockPilot. We skip the email entirely on weeks where every section
-            you've opted into is empty.
+        <div className="min-w-0 flex-1">
+          <div className="text-[13.5px] font-medium">Email me a weekly inventory digest</div>
+          <p className="text-muted-foreground mt-1 text-[12.5px]">
+            Sent {scheduleLabel}, in your workspace's time zone. It covers only the warehouses,
+            items and purchase orders you can see in StockPilot. We skip the email entirely on weeks
+            where every section you've opted into is empty.
           </p>
         </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={optIn}
-          aria-label="Toggle weekly digest"
-          onClick={() => !savingToggle && toggleMaster(!optIn)}
-          disabled={savingToggle}
-          className={cn(
-            'relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors',
-            optIn ? 'bg-primary' : 'bg-muted',
-            savingToggle && 'opacity-60',
-          )}
-        >
-          <span
-            aria-hidden
-            className={cn(
-              'inline-block h-5 w-5 rounded-full bg-background shadow-sm transition-transform',
-              optIn ? 'translate-x-[22px]' : 'translate-x-[2px]',
-            )}
-          />
-        </button>
+        <Switch
+          checked={optIn}
+          label="Toggle weekly digest"
+          pending={savingToggle}
+          onCheckedChange={(next) => void toggleMaster(next)}
+          className="mt-0.5"
+        />
       </div>
 
       {/* Per-section sub-toggles, visible only when master is on */}
       {optIn && (
-        <div className="border-l-2 border-border pl-4 space-y-3">
-          <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        <div className="border-border space-y-3 border-l-2 pl-4">
+          <div className="text-muted-foreground text-[11px] font-medium uppercase tracking-[0.06em]">
             Sections to include
           </div>
           {SECTION_DEFS.map(({ key, label, hint }) => {
             const checked = sections[key];
             const busy = savingSection === key;
             return (
-              <label
+              <Checkbox
                 key={key}
-                className={cn(
-                  'flex items-start gap-3 cursor-pointer',
-                  busy && 'opacity-60',
-                )}
+                checked={checked}
+                aria-busy={busy || undefined}
+                disabled={busy}
+                onCheckedChange={(next) => {
+                  if (!busy) void toggleSection(key, next);
+                }}
+                className="flex w-full items-start gap-3"
               >
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={(e) => !busy && toggleSection(key, e.target.checked)}
-                  disabled={busy}
-                  className="mt-0.5 h-4 w-4 rounded border-border text-primary focus:ring-primary"
-                />
-                <div className="flex-1">
-                  <div className="text-sm font-medium">{label}</div>
-                  <div className="text-xs text-muted-foreground">{hint}</div>
-                </div>
-              </label>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[13.5px] font-medium">{label}</span>
+                  <span className="text-muted-foreground block text-[12.5px] font-normal">
+                    {hint}
+                  </span>
+                </span>
+              </Checkbox>
             );
           })}
           {noSectionsOn && (
-            <p className="text-xs text-amber-600 dark:text-amber-400">
-              All sections off — you won't receive any digest emails until
-              you turn at least one back on.
+            <p className="text-warning flex items-start gap-1.5 text-[12.5px]">
+              <TriangleAlert aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>
+                All sections off — you won't receive any digest emails until you turn at least one
+                back on.
+              </span>
             </p>
           )}
         </div>
       )}
 
       {/* Preview button */}
-      <div className="border-t border-border pt-4">
-        <div className="text-sm font-medium">Preview the digest now</div>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Sends the latest digest content to your email immediately, honoring
-          your section choices. Bypasses the empty-skip rule, so you'll get
-          the email even when nothing's flagged (renders an "all clear"
-          panel).
+      <div className="border-border border-t pt-4">
+        <div className="text-[13.5px] font-medium">Preview the digest now</div>
+        <p className="text-muted-foreground mt-1 text-[12.5px]">
+          Sends the latest digest content to your email immediately, honoring your section choices.
+          Bypasses the empty-skip rule, so you'll get the email even when nothing's flagged (renders
+          an "all clear" panel).
         </p>
         <Button
           type="button"

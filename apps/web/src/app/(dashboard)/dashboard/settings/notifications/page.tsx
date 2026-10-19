@@ -1,16 +1,9 @@
-import Link from 'next/link';
-
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { DesktopNotificationsOptIn } from '@/components/settings/desktop-notifications-opt-in';
 import { DigestControls } from '@/components/settings/digest-controls';
 import { NotificationPreferencesForm } from '@/components/settings/notification-preferences-form';
 import { NotificationSoundToggle } from '@/components/settings/notification-sound-toggle';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
+import { SettingsPage, SettingsPanel } from '@/components/settings/settings-nav';
 import { requireOrgContext, requireSession } from '@/lib/auth/session';
 import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 import { digestScheduleLabel, digestSendAt } from '@/lib/email/es/families/digest';
@@ -65,78 +58,46 @@ export default async function NotificationsSettingsPage() {
     });
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href="/dashboard/settings"
-          className="text-muted-foreground hover:text-foreground inline-flex items-center text-sm"
-        >
-          ← Back to settings
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">Notifications</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Control which emails and in-app notifications StockPilot sends you.
-        </p>
-      </div>
+    <SettingsPage>
+      <PageHeader
+        title="Notifications"
+        subline="Control which emails and in-app notifications StockPilot sends you."
+        back={
+          <PageHeaderBackLink href="/dashboard/settings">← Back to settings</PageHeaderBackLink>
+        }
+      />
 
-      <div className="space-y-6">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Desktop notifications</CardTitle>
-            <CardDescription>
-              Get a pop-up from your operating system when something happens
-              in StockPilot while this tab isn&apos;t focused. Stored
-              per-device — enable separately on each browser you use.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <DesktopNotificationsOptIn />
-          </CardContent>
-        </Card>
+      <SettingsPanel
+        title="Desktop notifications"
+        description="Get a pop-up from your operating system when something happens in StockPilot while this tab isn't focused. Stored per-device — enable separately on each browser you use."
+      >
+        <DesktopNotificationsOptIn />
+      </SettingsPanel>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Notification sound</CardTitle>
-            <CardDescription>
-              A short chime plays whenever an in-app notification toast
-              appears. Stored per-device so a noisy workstation can mute
-              without affecting your phone.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <NotificationSoundToggle />
-          </CardContent>
-        </Card>
+      <SettingsPanel
+        title="Notification sound"
+        description="A short chime plays whenever an in-app notification toast appears. Stored per-device so a noisy workstation can mute without affecting your phone."
+      >
+        <NotificationSoundToggle />
+      </SettingsPanel>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Per-event notifications</CardTitle>
-            <CardDescription>
-              Granular control over each event StockPilot can email or push
-              you about.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <NotificationPreferencesForm initial={prefs} />
-          </CardContent>
-        </Card>
+      <SettingsPanel
+        title="Per-event notifications"
+        description="Granular control over each event StockPilot can email or push you about."
+      >
+        <NotificationPreferencesForm initial={prefs} />
+      </SettingsPanel>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Weekly inventory digest</CardTitle>
-            <CardDescription>
-              One email per week summarizing what needs attention.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <DigestControls
-              initialOptIn={optIn}
-              initialSections={sections}
-              scheduleLabel={digestSchedule}
-            />
-          </CardContent>
-        </Card>
-      </div>
-    </div>
+      <SettingsPanel
+        title="Weekly inventory digest"
+        description="One email per week summarizing what needs attention."
+      >
+        <DigestControls
+          initialOptIn={optIn}
+          initialSections={sections}
+          scheduleLabel={digestSchedule}
+        />
+      </SettingsPanel>
+    </SettingsPage>
   );
 }
