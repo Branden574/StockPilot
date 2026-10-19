@@ -7,7 +7,14 @@ import { toast } from 'sonner';
 
 import { RequesterReturnSheetForm } from '@/components/returns/requester-return-sheet';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
 import { readPublicOptionsResponse, readPublicSubmitResponse } from '@/lib/returns/requester-sheet';
 
 import { requesterEntryLabel, RETURNS_COPY, type RequesterReturnSheet } from '@stockpilot/core';
@@ -24,18 +31,24 @@ const JSON_HEADERS = { 'content-type': 'application/json' } as const;
 function isSheet(v: unknown): v is RequesterReturnSheet {
   if (!v || typeof v !== 'object') return false;
   const s = v as Record<string, unknown>;
-  return typeof s.exchangesEnabled === 'boolean' && Array.isArray(s.lines) && Array.isArray(s.tracking);
+  return (
+    typeof s.exchangesEnabled === 'boolean' && Array.isArray(s.lines) && Array.isArray(s.tracking)
+  );
 }
 
 async function readSheet(orderId: string): Promise<SheetState> {
   try {
-    const res = await fetch(`/api/v1/orders/${encodeURIComponent(orderId)}/return-request`, { cache: 'no-store' });
+    const res = await fetch(`/api/v1/orders/${encodeURIComponent(orderId)}/return-request`, {
+      cache: 'no-store',
+    });
     const data: unknown = await res.json().catch(() => null);
     if (!res.ok) {
       const m = data && typeof data === 'object' ? (data as Record<string, unknown>).message : null;
       return { status: 'failed', message: typeof m === 'string' && m.trim() ? m : SHEET_FAILED };
     }
-    return isSheet(data) ? { status: 'ready', sheet: data } : { status: 'failed', message: SHEET_FAILED };
+    return isSheet(data)
+      ? { status: 'ready', sheet: data }
+      : { status: 'failed', message: SHEET_FAILED };
   } catch {
     return { status: 'failed', message: SHEET_FAILED };
   }
@@ -58,7 +71,13 @@ async function readSheet(orderId: string): Promise<SheetState> {
  * otherwise), every answer is no-store. An order WITH a token keeps its link
  * to the token page, as before.
  */
-export function MemberReturnDialog({ orderId, exchangesEnabled }: { orderId: string; exchangesEnabled: boolean }) {
+export function MemberReturnDialog({
+  orderId,
+  exchangesEnabled,
+}: {
+  orderId: string;
+  exchangesEnabled: boolean;
+}) {
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const [state, setState] = React.useState<SheetState>({ status: 'idle' });
@@ -77,12 +96,18 @@ export function MemberReturnDialog({ orderId, exchangesEnabled }: { orderId: str
     if (next.status === 'ready') setState(next);
   }, [orderId, router]);
 
-  const label = requesterEntryLabel(state.status === 'ready' ? state.sheet.exchangesEnabled : exchangesEnabled);
+  const label = requesterEntryLabel(
+    state.status === 'ready' ? state.sheet.exchangesEnabled : exchangesEnabled,
+  );
 
   let body: React.ReactNode = null;
   if (state.status === 'loading' || state.status === 'idle') {
     body = (
-      <p className="text-muted-foreground flex items-center gap-2 text-sm" role="status" aria-live="polite">
+      <p
+        className="text-muted-foreground flex items-center gap-2 text-[13px]"
+        role="status"
+        aria-live="polite"
+      >
         <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
         {RETURNS_COPY.requesterLoadingForm}
       </p>
@@ -90,7 +115,7 @@ export function MemberReturnDialog({ orderId, exchangesEnabled }: { orderId: str
   } else if (state.status === 'failed') {
     body = (
       <div className="space-y-2">
-        <p role="alert" className="text-destructive text-sm">
+        <p role="alert" className="text-destructive text-[13px]">
           {state.message}
         </p>
         <Button size="sm" variant="outline" onClick={() => void load()}>
@@ -99,7 +124,7 @@ export function MemberReturnDialog({ orderId, exchangesEnabled }: { orderId: str
       </div>
     );
   } else if (state.sheet.lines.length === 0) {
-    body = <p className="text-muted-foreground text-sm">{RETURNS_COPY.requesterNothingLeft}</p>;
+    body = <p className="text-muted-foreground text-[13px]">{RETURNS_COPY.requesterNothingLeft}</p>;
   } else {
     body = (
       <RequesterReturnSheetForm
@@ -108,11 +133,18 @@ export function MemberReturnDialog({ orderId, exchangesEnabled }: { orderId: str
         idPrefix={`member-return-${orderId}`}
         density="inline"
         loadOptions={async () =>
-          readPublicOptionsResponse(await fetch(`${base}/options`, { method: 'POST', cache: 'no-store' }))
+          readPublicOptionsResponse(
+            await fetch(`${base}/options`, { method: 'POST', cache: 'no-store' }),
+          )
         }
         submit={async (b) =>
           readPublicSubmitResponse(
-            await fetch(base, { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(b), cache: 'no-store' }),
+            await fetch(base, {
+              method: 'POST',
+              headers: JSON_HEADERS,
+              body: JSON.stringify(b),
+              cache: 'no-store',
+            }),
           )
         }
         onSubmitted={(result) => {
@@ -121,7 +153,11 @@ export function MemberReturnDialog({ orderId, exchangesEnabled }: { orderId: str
           const received = result.hasExchange
             ? RETURNS_COPY.requesterReceivedExchangeRequest
             : RETURNS_COPY.requesterReceivedReturnRequest;
-          toast.success(result.returnNumber ? `${received} ${RETURNS_COPY.requesterReference(result.returnNumber)}` : received);
+          toast.success(
+            result.returnNumber
+              ? `${received} ${RETURNS_COPY.requesterReference(result.returnNumber)}`
+              : received,
+          );
           router.refresh();
         }}
         onStale={() => void readAgain()}
@@ -148,8 +184,8 @@ export function MemberReturnDialog({ orderId, exchangesEnabled }: { orderId: str
         <DialogHeader>
           <DialogTitle>{label}</DialogTitle>
           <DialogDescription>
-            The warehouse reviews every request before anything happens. This order then lists it under{' '}
-            {RETURNS_COPY.requesterYourRequests}.
+            The warehouse reviews every request before anything happens. This order then lists it
+            under {RETURNS_COPY.requesterYourRequests}.
           </DialogDescription>
         </DialogHeader>
         {body}

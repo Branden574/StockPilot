@@ -24,9 +24,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { ReplacementPicker } from '@/components/returns/replacement-picker';
-import { createReturnFromOrderAction, orderExchangeCandidatesAction } from '@/server/actions/returns';
+import {
+  cardClass,
+  choiceRowClass,
+  nativeCheckboxClass,
+  nativeRadioClass,
+} from '@/components/returns/returns-ui';
+import { cn } from '@/lib/utils';
+import {
+  createReturnFromOrderAction,
+  orderExchangeCandidatesAction,
+} from '@/server/actions/returns';
 
 import type { ReturnableLine } from '@/server/services/returns';
 
@@ -86,6 +97,7 @@ export function CreateReturnDialog({ orderId, lines, exchangesEnabled = false }:
   // the database, so keeping it after a refusal loses nothing. The phone's
   // create sheet does the same per sheet open.
   const keyRef = React.useRef<string | null>(null);
+  const itemIsHereId = React.useId();
 
   function reset() {
     setError(null);
@@ -123,7 +135,8 @@ export function CreateReturnDialog({ orderId, lines, exchangesEnabled = false }:
           quantity: Number(st.quantity),
           disposition: st.disposition,
           remaining: l.quantityRemaining,
-          exchange: exchangesEnabled && st.mode === 'exchange' ? (st.exchangeItemId ?? null) : undefined,
+          exchange:
+            exchangesEnabled && st.mode === 'exchange' ? (st.exchangeItemId ?? null) : undefined,
         };
       });
 
@@ -204,10 +217,9 @@ export function CreateReturnDialog({ orderId, lines, exchangesEnabled = false }:
         <DialogHeader>
           <DialogTitle>Create a return</DialogTitle>
           <DialogDescription>
-            Pick the lines to return, set a whole quantity (up to what was handed
-            over and not already returned) and a disposition. You choose where a
-            restocked item goes when you approve. Nothing moves until the return
-            is received and processed.
+            Pick the lines to return, set a whole quantity (up to what was handed over and not
+            already returned) and a disposition. You choose where a restocked item goes when you
+            approve. Nothing moves until the return is received and processed.
           </DialogDescription>
         </DialogHeader>
 
@@ -218,22 +230,26 @@ export function CreateReturnDialog({ orderId, lines, exchangesEnabled = false }:
               return (
                 <div
                   key={l.orderRequestLineId}
-                  className="flex flex-wrap items-center gap-3 rounded-lg border p-3"
+                  className={cn(
+                    cardClass,
+                    'flex flex-wrap items-center gap-3 p-3 transition-colors',
+                    st.selected && 'border-foreground shadow-[0_0_0_1px_hsl(var(--foreground))]',
+                  )}
                 >
-                  <label className="flex min-w-0 flex-1 items-center gap-2">
+                  <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5">
                     <input
                       type="checkbox"
                       checked={st.selected}
                       onChange={(e) =>
                         updateLine(l.orderRequestLineId, { selected: e.target.checked })
                       }
-                      className="h-4 w-4 shrink-0"
+                      className={nativeCheckboxClass}
                     />
                     <span className="min-w-0">
-                      <span className="block truncate text-sm font-medium">
+                      <span className="block truncate text-[13.5px] font-medium">
                         {l.itemName ?? 'Item'}
                       </span>
-                      <span className="text-muted-foreground block font-mono text-[11px]">
+                      <span className="text-muted-foreground block font-mono text-[11.5px] tabular-nums">
                         {l.itemSku ?? l.itemId.slice(0, 8)} · {l.quantityRemaining} of{' '}
                         {l.quantityFulfilled} returnable
                       </span>
@@ -250,7 +266,7 @@ export function CreateReturnDialog({ orderId, lines, exchangesEnabled = false }:
                       onChange={(e) =>
                         updateLine(l.orderRequestLineId, { quantity: e.target.value })
                       }
-                      className="w-20 tabular-nums"
+                      className="w-20 text-right font-mono tabular-nums"
                       aria-label="Return quantity"
                     />
                     <Select
@@ -287,14 +303,22 @@ export function CreateReturnDialog({ orderId, lines, exchangesEnabled = false }:
                             ['exchange', RETURNS_COPY.exchangeStaff],
                           ] as const
                         ).map(([mode, words]) => (
-                          <label key={mode} className="inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm">
+                          <label
+                            key={mode}
+                            className={cn(
+                              choiceRowClass({ checked: (st.mode ?? 'return') === mode }),
+                              'inline-flex min-h-9 items-center gap-2.5 px-3 py-1.5',
+                            )}
+                          >
                             <input
                               type="radio"
                               name={`mode-${l.orderRequestLineId}`}
                               value={mode}
                               checked={(st.mode ?? 'return') === mode}
-                              onChange={() => updateLine(l.orderRequestLineId, { mode, exchangeItemId: null })}
-                              className="h-3.5 w-3.5"
+                              onChange={() =>
+                                updateLine(l.orderRequestLineId, { mode, exchangeItemId: null })
+                              }
+                              className={nativeRadioClass}
                             />
                             {words}
                           </label>
@@ -303,10 +327,18 @@ export function CreateReturnDialog({ orderId, lines, exchangesEnabled = false }:
                       {/* Loaded on the first Exchange only (one read per line). */}
                       {st.mode === 'exchange' ? (
                         <ReplacementPicker
-                          load={(q) => orderExchangeCandidatesAction({ orderRequestId: orderId, line: l.orderRequestLineId, q })}
+                          load={(q) =>
+                            orderExchangeCandidatesAction({
+                              orderRequestId: orderId,
+                              line: l.orderRequestLineId,
+                              q,
+                            })
+                          }
                           needed={Math.max(1, Number(st.quantity) || 1)}
                           selectedItemId={st.exchangeItemId ?? null}
-                          onSelect={(row) => updateLine(l.orderRequestLineId, { exchangeItemId: row.itemId })}
+                          onSelect={(row) =>
+                            updateLine(l.orderRequestLineId, { exchangeItemId: row.itemId })
+                          }
                           label={l.itemName ?? 'Item'}
                           disabled={busy}
                         />
@@ -321,10 +353,7 @@ export function CreateReturnDialog({ orderId, lines, exchangesEnabled = false }:
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="return-reason">Reason</Label>
-              <Select
-                value={reason}
-                onValueChange={(v) => setReason(v as ReasonCode)}
-              >
+              <Select value={reason} onValueChange={(v) => setReason(v as ReasonCode)}>
                 <SelectTrigger id="return-reason">
                   <SelectValue placeholder="Select a reason" />
                 </SelectTrigger>
@@ -339,20 +368,33 @@ export function CreateReturnDialog({ orderId, lines, exchangesEnabled = false }:
             </div>
           </div>
 
-          <label className="flex items-start gap-2 rounded-lg border p-3 text-sm">
-            <input
-              type="checkbox"
-              role="switch"
-              aria-checked={itemIsHere}
+          {/* "The item is here" as the shared switch (P2.2 hand-off): off by
+              default, its name the visible words, its help the description. */}
+          <div className={cn(cardClass, 'flex items-start gap-3 p-3')}>
+            <Switch
+              id={itemIsHereId}
               checked={itemIsHere}
-              onChange={(e) => setItemIsHere(e.target.checked)}
-              className="mt-0.5 h-4 w-4"
+              onCheckedChange={setItemIsHere}
+              aria-labelledby={`${itemIsHereId}-label`}
+              aria-describedby={`${itemIsHereId}-help`}
+              className="mt-0.5"
             />
-            <span>
-              <span className="font-medium">{RETURNS_COPY.itemIsHere}</span>
-              <span className="text-muted-foreground block text-xs">{RETURNS_COPY.itemIsHereHelp}</span>
+            <span className="min-w-0 text-[13px] leading-5">
+              <label
+                id={`${itemIsHereId}-label`}
+                htmlFor={itemIsHereId}
+                className="cursor-pointer font-medium"
+              >
+                {RETURNS_COPY.itemIsHere}
+              </label>
+              <span
+                id={`${itemIsHereId}-help`}
+                className="text-muted-foreground block text-[12px] leading-[18px]"
+              >
+                {RETURNS_COPY.itemIsHereHelp}
+              </span>
             </span>
-          </label>
+          </div>
 
           <div className="space-y-1.5">
             <Label htmlFor="return-notes">Notes</Label>
@@ -368,7 +410,7 @@ export function CreateReturnDialog({ orderId, lines, exchangesEnabled = false }:
         </div>
 
         {error ? (
-          <p className="text-destructive text-sm" role="alert">
+          <p className="text-destructive text-[13px]" role="alert">
             {error}
           </p>
         ) : null}
