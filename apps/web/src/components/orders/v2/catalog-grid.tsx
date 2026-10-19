@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 
+import { StatePanel } from '@/components/patterns/state-panel';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -49,14 +50,17 @@ export function CatalogGrid({
 
   if (items.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-20 text-center gap-3">
-        <p className="text-muted-foreground text-sm">
-          No items match your filters.
-        </p>
-        <Button variant="outline" size="sm" onClick={onClearFilters}>
-          Clear filters
-        </Button>
-      </div>
+      <StatePanel
+        kind="no-match"
+        surface="plain"
+        headingLevel={null}
+        title="No items match your filters."
+        action={
+          <Button variant="outline" size="sm" onClick={onClearFilters}>
+            Clear filters
+          </Button>
+        }
+      />
     );
   }
 
@@ -74,9 +78,9 @@ export function CatalogGrid({
     <div className="space-y-8">
       {aisleSections.map(({ aisle, items: sectionItems }) => (
         <section key={aisle.id ?? 'uncategorized'}>
-          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3 flex items-center gap-2">
+          <h2 className="text-muted-foreground mb-3 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.06em]">
             <span>{aisle.name}</span>
-            <span className="font-normal normal-case text-[11px]">
+            <span className="font-mono font-normal normal-case">
               ({sectionItems.length})
             </span>
           </h2>
