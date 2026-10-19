@@ -1,6 +1,8 @@
 import Link from 'next/link';
 
+import { ExternalShell, ExternalStatusCard } from '@/components/auth/external-shell';
 import { PortalShop } from '@/components/portal/portal-shop';
+import { Button } from '@/components/ui/button';
 import { exchangeCreateEnabled } from '@/lib/returns/exchange-switch';
 import {
   portalCatalog,
@@ -20,21 +22,26 @@ export default async function PortalPage() {
   const ctx = await resolvePortalContext();
 
   if (!ctx) {
+    // The not-a-portal-user prompt on the shared external frame (P5.1): one
+    // status card with its own words and its one way in.
     return (
-      <main className="mx-auto flex min-h-screen max-w-md flex-col items-center justify-center gap-4 px-6 text-center">
-        <h1 className="text-xl font-semibold">Supplier ordering portal</h1>
-        <p className="text-muted-foreground text-sm">
-          Sign in with the email address your supplier invited, and this page
-          becomes your catalog. If you believe you should have access, contact
-          your supplier for an invite.
-        </p>
-        <Link
-          href="/signin?redirect=%2Fportal"
-          className="bg-foreground text-background rounded-lg px-4 py-2 text-sm font-medium"
-        >
-          Sign in
-        </Link>
-      </main>
+      <ExternalShell width="md">
+        <ExternalStatusCard
+          title="Supplier ordering portal"
+          body={
+            <>
+              Sign in with the email address your supplier invited, and this page
+              becomes your catalog. If you believe you should have access, contact
+              your supplier for an invite.
+            </>
+          }
+          action={
+            <Button asChild className="h-11 px-5">
+              <Link href="/signin?redirect=%2Fportal">Sign in</Link>
+            </Button>
+          }
+        />
+      </ExternalShell>
     );
   }
 
