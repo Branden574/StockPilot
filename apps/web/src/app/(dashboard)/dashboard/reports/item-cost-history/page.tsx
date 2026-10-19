@@ -178,7 +178,7 @@ export default async function ItemCostHistoryPage({
       {/* Item switcher and date range: one wrapping filter row. */}
       <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
         <div className="w-full min-w-0 max-w-xl">
-          <p className="text-muted-foreground mb-1.5 text-[12.5px]">Switch item</p>
+          <p className="text-muted-foreground mb-1.5 text-[12.5px] leading-none">Switch item</p>
           <ItemCostHistorySearch items={items} selectedItemId={itemId} />
         </div>
 

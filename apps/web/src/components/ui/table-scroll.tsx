@@ -26,8 +26,11 @@ const TABBABLE =
  * hide it and the rows cannot cover it (a row's hover, selected or footer
  * background and its 1 px separators paint above an inset shadow, but below
  * an outline; an outline also stays under forced colors, which drop every
- * box-shadow). While the table overflows the wrapper carries data-overflow="true"
- * for an edge treatment. Overflow and the controls are measured after mount,
+ * box-shadow). As the first or last child of a rounded card the wrapper takes
+ * the card's top or bottom corner radius, so the outline follows the card's
+ * corners instead of cutting square across them. While the table overflows
+ * the wrapper carries data-overflow="true" for an edge treatment. Overflow
+ * and the controls are measured after mount,
  * again whenever the wrapper or the table resizes, and whenever the table's
  * rows, links, disabled states or tab stops change, so the server HTML and
  * the first client render match and nothing moves. With a `label` (or
@@ -90,7 +93,7 @@ export function TableScroll({
   return (
     <div
       ref={ref}
-      className="focus-visible:outline-ring focus-visible:outline-solid relative w-full overflow-auto focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:ring-0 focus-visible:ring-offset-0"
+      className="focus-visible:outline-ring focus-visible:outline-solid relative w-full overflow-auto first:rounded-t-[inherit] last:rounded-b-[inherit] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:ring-0 focus-visible:ring-offset-0"
       role={named ? 'region' : undefined}
       aria-label={label || undefined}
       aria-labelledby={label ? undefined : labelledBy || undefined}

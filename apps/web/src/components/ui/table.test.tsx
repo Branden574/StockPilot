@@ -124,6 +124,15 @@ describe('Table scroll wrapper', () => {
     expect(focusClasses).not.toContain('focus-visible:ring-inset');
   });
 
+  it("takes a rounded card's corner radius as its first or last child, never a blanket radius", () => {
+    widths = { scroll: 1100, client: 900 };
+    render(<Orders />);
+    const wrapper = wrapperOf();
+    // The inset focus outline then follows the card's corners.
+    expect(wrapper).toHaveClass('first:rounded-t-[inherit]', 'last:rounded-b-[inherit]');
+    expect(wrapper).not.toHaveClass('rounded-[inherit]');
+  });
+
   it('starts and stops being a tab stop when a resize changes the overflow', () => {
     widths = { scroll: 800, client: 800 };
     render(<Orders />);

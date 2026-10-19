@@ -31,6 +31,33 @@ describe('SheetContent edge', () => {
     );
   });
 
+  it('a right sheet fills a phone, so it draws its edge (and rounds) only from sm', () => {
+    render(
+      <Sheet open>
+        <SheetContent side="right">
+          <SheetTitle>Release notes</SheetTitle>
+          <SheetDescription>What changed</SheetDescription>
+        </SheetContent>
+      </Sheet>,
+    );
+    const c = classes(screen.getByRole('dialog'));
+    expect(c).toEqual(expect.arrayContaining(['w-full', 'max-sm:border-l-0', 'sm:rounded-l-lg']));
+  });
+
+  it('a left sheet is three quarters wide on a phone, so it keeps its edge there', () => {
+    render(
+      <Sheet open>
+        <SheetContent side="left">
+          <SheetTitle>Menu</SheetTitle>
+          <SheetDescription>Navigation</SheetDescription>
+        </SheetContent>
+      </Sheet>,
+    );
+    const c = classes(screen.getByRole('dialog'));
+    expect(c).toContain('w-3/4');
+    expect(c.some((k) => k.startsWith('max-sm:border'))).toBe(false);
+  });
+
   it("a caller's own border colour still wins", () => {
     render(
       <Sheet open>
