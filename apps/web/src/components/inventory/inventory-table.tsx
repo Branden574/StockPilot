@@ -4555,7 +4555,11 @@ function SkuGroupHeaderRow({
                       type="button"
                       onClick={explicit.onRename}
                       aria-label={GROUP_COPY.renameFor(explicit.name)}
-                      className={cn(touchTargetClass, chipActionClass)}
+                      className={cn(
+                        touchTargetClass,
+                        chipActionClass,
+                        'shrink-0 whitespace-nowrap',
+                      )}
                     >
                       {GROUP_COPY.renameAction}
                     </button>
@@ -4565,7 +4569,11 @@ function SkuGroupHeaderRow({
                       type="button"
                       onClick={explicit.onRemove}
                       aria-label={GROUP_COPY.removeFor(explicit.name)}
-                      className={cn(touchTargetClass, chipActionClass)}
+                      className={cn(
+                        touchTargetClass,
+                        chipActionClass,
+                        'shrink-0 whitespace-nowrap',
+                      )}
                     >
                       {GROUP_COPY.removeAction}
                     </button>
