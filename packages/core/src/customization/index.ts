@@ -142,9 +142,13 @@ export function isSafeNavHref(href: unknown): boolean {
  * sections its links came from, in the order the old sidebar drew those.
  * Orgs that saved an order before the regroup keep it under the old keys
  * (order.inventory, order.workspace): nothing rewrites nav_overrides in the
- * database, so a rollback still reads every save. orderNavSectionItems reads
- * the old lists for a new section until an admin saves the editor again,
- * which writes the new keys.
+ * database, so a build from before the regroup still reads those saves.
+ * orderNavSectionItems reads the old lists for a new section until an admin
+ * saves the editor again, which writes the new keys. Such a build ignores
+ * order lists under the new keys, but a custom link saved under one of them
+ * disappears from its sidebar and makes its editor refuse every save, so a
+ * rollback past the regroup moves those links first:
+ * docs/runbooks/2026-10-19-nav-sections-rollback.md.
  */
 export const NAV_SECTIONS_SPLIT_FROM: Readonly<
   Partial<Record<NavSectionKey, readonly NavSectionKey[]>>
