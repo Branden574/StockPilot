@@ -242,8 +242,11 @@ export function StockImpactPreview({
   const unmapped = rows.filter((r) => r.status === 'unmapped');
   const skipped = rows.filter((r) => r.status === 'skipped' || r.status === 'non-inventory');
 
+  // The heading names the table's scroll region, not this section: the rows
+  // hold no control, so on a phone that region is the Tab stop and needs the
+  // name, and naming the section too would list Stock impact preview twice.
   return (
-    <section aria-labelledby={headingId} className="flex min-w-0 flex-col gap-3">
+    <section className="flex min-w-0 flex-col gap-3">
       <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
         <h2
           id={headingId}

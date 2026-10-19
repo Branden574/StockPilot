@@ -508,6 +508,14 @@ export interface SettingsPanelProps {
   title: React.ReactNode;
   /** id on the title's heading, for an `aria-labelledby` elsewhere (a table's scroll region). */
   headingId?: string;
+  /**
+   * Whether the card is a `region` landmark named by its title (the default).
+   * Pass `false` when a region inside the card already takes the title as its
+   * name (a wide table's scroll region named by `headingId`), so the page
+   * lists that name once: the <section> then carries no name. The title stays
+   * the card's h2 either way.
+   */
+  landmark?: boolean;
   description?: React.ReactNode;
   /** Right side of the header: a badge, a status, a small button. */
   aside?: React.ReactNode;
@@ -528,6 +536,7 @@ export interface SettingsPanelProps {
 export function SettingsPanel({
   title,
   headingId: headingIdProp,
+  landmark = true,
   description,
   aside,
   tone = 'default',
@@ -541,7 +550,7 @@ export function SettingsPanel({
   return (
     <section
       data-slot="settings-panel"
-      aria-labelledby={headingId}
+      aria-labelledby={landmark ? headingId : undefined}
       className={cn(
         'bg-card text-card-foreground min-w-0 rounded-lg border',
         tone === 'danger' && 'border-destructive/40',

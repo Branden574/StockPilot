@@ -74,8 +74,13 @@ export default async function RestorePointsPage() {
             <CreateRestorePointButton />
           </SettingsPanel>
 
+          {/* The card title names one region, so the page lists Snapshots
+              once: the table's scroll area while there is a table (with one
+              point, its row has no control while the restore runs, so a phone
+              can make that area a Tab stop), else the card itself. */}
           <SettingsPanel
             headingId="restore-points-snapshots-heading"
+            landmark={snapshots.length === 0}
             title="Snapshots"
             description={`The most recent ${snapshots.length} kept (older ones are pruned automatically).`}
             flush

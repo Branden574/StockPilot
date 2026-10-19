@@ -170,8 +170,12 @@ export default async function RolesPage() {
           members={members}
         />
       ) : (
+        // The matrix's scroll area is the region named All roles at a glance
+        // (its rows hold no control, so it is a Tab stop); the card around it
+        // stays unnamed, so the page lists that name once.
         <SettingsPanel
           title="All roles at a glance"
+          landmark={false}
           description="Checkmark means the role has that permission. Hover any permission for a description."
           flush
         >

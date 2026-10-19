@@ -126,10 +126,14 @@ describe('PublicLinkEditor bulk remove', () => {
 describe('PublicLinkEditor select names', () => {
   it('names every select: the stock display and the five catalog filters', () => {
     renderEditor();
-    // The Catalog card title names the catalog table's scroll region.
+    // The Catalog card title names the catalog table's scroll region, and
+    // only that region: the card itself is not a second region named Catalog.
     const scroll = screen.getByRole('table').parentElement;
     expect(scroll).toHaveAttribute('role', 'region');
     expect(scroll).toHaveAccessibleName('Catalog');
+    const regions = screen.getAllByRole('region', { name: 'Catalog' });
+    expect(regions).toHaveLength(1);
+    expect(regions[0]).toBe(scroll);
     for (const name of [
       'Stock shown to the public',
       'Filter by category',

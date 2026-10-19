@@ -791,8 +791,13 @@ export function PublicLinkEditor({
       </SettingsPanel>
 
       {/* ── Catalog editor ────────────────────────────────────────────────── */}
+      {/* The table's scroll region takes the card title as its name (while it
+          loads, or when no item matches, the disabled select-all is its only
+          control, so it can be a Tab stop), and the card itself goes unnamed,
+          so the page lists Catalog once. */}
       <SettingsPanel
         headingId="public-link-catalog-heading"
+        landmark={false}
         title="Catalog"
         description="Pick exactly which items and books this link exposes. Select rows, then add or remove them in bulk — nothing changes until you confirm."
         flush

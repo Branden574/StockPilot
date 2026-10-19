@@ -251,5 +251,9 @@ describe('PoImportDetail placement sections and preview (redesign)', () => {
     const [lines, preview] = screen.getAllByRole('table');
     expect(preview!.parentElement).toHaveAttribute('aria-labelledby', heading.id);
     expect(lines!.parentElement).toHaveAttribute('aria-labelledby', 'po-import-title');
+    // The page lists Stock impact preview once: the section is not a region too.
+    const regions = screen.getAllByRole('region', { name: 'Stock impact preview' });
+    expect(regions).toHaveLength(1);
+    expect(regions[0]).toBe(preview!.parentElement);
   });
 });

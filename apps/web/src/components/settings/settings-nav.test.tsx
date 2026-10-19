@@ -87,19 +87,49 @@ describe('settings gate table', () => {
 });
 
 describe('SettingsPanel', () => {
-  it('puts headingId on the heading, so a table in the card can be named by it', () => {
+  it('is a region named by its title by default, with headingId on the heading', () => {
     const { container } = render(
       <SettingsPanel title="Snapshots" headingId="snapshots-heading" flush>
-        <div role="region" aria-labelledby="snapshots-heading" />
+        <p>No restore points yet.</p>
       </SettingsPanel>,
     );
     expect(screen.getByRole('heading', { level: 2, name: 'Snapshots' })).toHaveAttribute(
       'id',
       'snapshots-heading',
     );
-    // The card itself stays named by the same heading.
-    expect(container.querySelector('section')).toHaveAccessibleName('Snapshots');
-    expect(container.querySelector('div[role="region"]')).toHaveAccessibleName('Snapshots');
+    const section = container.querySelector('section');
+    expect(section).toHaveAttribute('aria-labelledby', 'snapshots-heading');
+    expect(section).toHaveAccessibleName('Snapshots');
+    const regions = screen.getAllByRole('region', { name: 'Snapshots' });
+    expect(regions).toHaveLength(1);
+    expect(regions[0]).toBe(section);
+  });
+
+  it('is a region named by its title by default when no headingId is passed', () => {
+    const { container } = render(<SettingsPanel title="Create a restore point" />);
+    const heading = screen.getByRole('heading', { level: 2, name: 'Create a restore point' });
+    expect(heading.id).not.toBe('');
+    expect(container.querySelector('section')).toHaveAttribute('aria-labelledby', heading.id);
+    expect(screen.getByRole('region', { name: 'Create a restore point' })).toBe(
+      container.querySelector('section'),
+    );
+  });
+
+  it('with landmark={false} leaves the title to the table region inside, so the name is listed once', () => {
+    const { container } = render(
+      <SettingsPanel title="Snapshots" headingId="snapshots-heading" landmark={false} flush>
+        <div role="region" aria-labelledby="snapshots-heading" />
+      </SettingsPanel>,
+    );
+    // The title is still the card's heading, and still carries the id.
+    expect(screen.getByRole('heading', { level: 2, name: 'Snapshots' })).toHaveAttribute(
+      'id',
+      'snapshots-heading',
+    );
+    expect(container.querySelector('section')).not.toHaveAttribute('aria-labelledby');
+    const regions = screen.getAllByRole('region', { name: 'Snapshots' });
+    expect(regions).toHaveLength(1);
+    expect(regions[0]).toBe(container.querySelector('div[role="region"]'));
   });
 });
 

@@ -265,8 +265,12 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
   return (
     <>
       {/* ── Role matrix ──────────────────────────────────────────────── */}
+      {/* MatrixScroll below is the region named Permissions by role (a Tab
+          stop that scrolls the wide matrix); the card around it stays
+          unnamed, so the page lists that name once. */}
       <SettingsPanel
         title="Permissions by role"
+        landmark={false}
         description={
           <>
             <p>

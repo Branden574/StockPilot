@@ -60,6 +60,19 @@ describe('RolePermissionMatrix', () => {
     expect(screen.getByLabelText('Member')).toHaveValue('u-2');
   });
 
+  it('lists Permissions by role once: the matrix scroll area is the region, not the card around it', () => {
+    render(<RolePermissionMatrix roleOverrides={[]} userOverrides={[]} members={[]} />);
+    const regions = screen.getAllByRole('region', { name: 'Permissions by role' });
+    expect(regions).toHaveLength(1);
+    expect(regions[0]!.tagName).toBe('DIV');
+    expect(regions[0]).toHaveAttribute('tabindex', '0');
+    expect(within(regions[0]!).getByRole('table')).toBeInTheDocument();
+    // The card keeps the title as its heading.
+    expect(
+      screen.getByRole('heading', { level: 2, name: 'Permissions by role' }).closest('section'),
+    ).not.toHaveAttribute('aria-labelledby');
+  });
+
   it('saves on click with a spinner in the box’s place, keeps the box focused, and ignores a second press while saving', async () => {
     render(<RolePermissionMatrix roleOverrides={[]} userOverrides={[]} members={[]} />);
     const box = screen.getByRole('checkbox', { name: label('Viewer', FIRST) });

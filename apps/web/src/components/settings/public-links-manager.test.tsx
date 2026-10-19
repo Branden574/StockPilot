@@ -56,11 +56,27 @@ const LINK: PublicLinkRow = {
 };
 
 describe('PublicLinksManager table', () => {
-  it('names the scroll region by the card title', () => {
+  it('lists the card title once: the card is the region, and the table scrolls inside it unnamed', () => {
     render(<PublicLinksManager appUrl="https://stockpilotusa.com" links={[LINK]} />);
-    const scroll = screen.getByRole('table').parentElement;
-    expect(scroll).toHaveAttribute('role', 'region');
-    expect(scroll).toHaveAccessibleName('Public request links');
+    const regions = screen.getAllByRole('region', { name: 'Public request links' });
+    expect(regions).toHaveLength(1);
+    expect(regions[0]!.tagName).toBe('SECTION');
+    const table = screen.getByRole('table');
+    expect(regions[0]).toContainElement(table);
+    // Every row holds its name link and Edit, so the scroll area never
+    // becomes a Tab stop and takes no name of its own.
+    const scroll = table.parentElement;
+    expect(scroll).not.toHaveAttribute('role');
+    expect(scroll).not.toHaveAttribute('aria-labelledby');
+    const [, row] = within(table).getAllByRole('row');
+    expect(within(row!).getByRole('link', { name: 'Fall supplies' })).toHaveAttribute(
+      'href',
+      '/dashboard/settings/public-requests/l1',
+    );
+    expect(within(row!).getByRole('link', { name: 'Edit' })).toHaveAttribute(
+      'href',
+      '/dashboard/settings/public-requests/l1',
+    );
   });
 });
 

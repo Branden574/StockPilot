@@ -174,7 +174,10 @@ export function PublicLinksManager({ appUrl, links }: { appUrl: string; links: P
           }
         />
       ) : (
-        <Table scrollLabelledBy="public-links-heading" className="min-w-[760px]">
+        // No name on the table's scroll area: every row holds its name link
+        // and Edit, so the area never becomes a Tab stop, and the card's own
+        // section is already the Public request links region.
+        <Table className="min-w-[760px]">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead>Name</TableHead>
