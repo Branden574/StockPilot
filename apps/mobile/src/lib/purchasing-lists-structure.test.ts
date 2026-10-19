@@ -734,6 +734,8 @@ describe('security: a supplier link opens only what the card shows', () => {
     // A bracketed trunk 0 after the country code is not dialled.
     expect(tel('+44 (0)20 7946 0958')).toBe('tel:+442079460958');
     expect(tel('+49 (0)30 1234567')).toBe('tel:+49301234567');
+    expect(tel('+33 (0)1 23 45 67 89')).toBe('tel:+33123456789');
+    expect(tel('+353 (0)1 234 5678')).toBe('tel:+35312345678');
     // Non-breaking spaces from a pasted signature read as spaces.
     expect(tel('555\u00a0010\u00a00100')).toBe('tel:5550100100');
   });
@@ -796,6 +798,14 @@ describe('security: a supplier link opens only what the card shows', () => {
       '+0 20 7946 0958',
       '+(0)20 7946 0958',
       '(555)--010-0100',
+      // A bracketed 0 that is not exactly '(0)' straight after the real
+      // country code would dial a digit or drop one the card shows.
+      '+44 ( 0 )20 7946 0958',
+      '+44 ((0))20 7946 0958',
+      '+44 (0)(0)20 7946 0958',
+      '+44 0 (0) 20 7946 0958',
+      '+712(0)34567890',
+      '+442(0)079460958',
     ]) {
       expect(tel(phone), JSON.stringify(phone)).toBeNull();
     }
