@@ -2495,11 +2495,17 @@ function TabButton({
     >
       {/* Chrome cap: three equal `flex: 1` columns with no break opportunity
           inside a word — uncapped, Movements breaks mid-word at 2x. The
-          control ceiling is the segmented-control policy from lib/theme. */}
+          control ceiling is the segmented-control policy from lib/theme.
+          The segmented track takes about 23pt from each column, so at the
+          larger sizes on a narrow screen a label can still outgrow its
+          segment: iOS shrinks it to fit (down to TAB_MIN_FONT_SCALE) instead
+          of cutting Movements to "Moveme…". */}
       <Body
         size={13}
         numberOfLines={1}
         maxFontSizeMultiplier={TAB_CAP}
+        adjustsFontSizeToFit
+        minimumFontScale={TAB_MIN_FONT_SCALE}
         color={active ? c.ink : c.ink3}
         style={{ fontFamily: active ? FONT.displaySemi : FONT.display }}
       >
@@ -2511,6 +2517,16 @@ function TabButton({
 
 /** The tab labels are segmented-control chrome: 13pt against the control ceiling. */
 const TAB_CAP = capTo(13, TYPE_CEILING.control);
+
+/**
+ * How far a tab label may shrink to fit its segment rather than be cut. Each
+ * segment is (screen - 56) / 3 - 18pt wide: 70pt on a 320pt zoomed screen.
+ * Movements in Inter Tight semibold advances about 117.3pt at the 22pt cap,
+ * so 0.6 (70.4pt) would sit on the edge there; 0.55 (64.5pt) fits with room.
+ * iOS takes the largest scale that fits, so the floor is reached only when
+ * nothing larger fits.
+ */
+const TAB_MIN_FONT_SCALE = 0.55;
 
 /**
  * One quick-adjust step (−5 / −1 / +1 / +5): the reference's stepper button,
@@ -2938,6 +2954,7 @@ function MovementNoteModalContent({
               <TextInput
                 value={text}
                 onChangeText={setText}
+                accessibilityLabel="Note"
                 placeholder="Add context for this movement…"
                 placeholderTextColor={c.ink3}
                 multiline
