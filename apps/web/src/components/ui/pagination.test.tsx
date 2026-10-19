@@ -73,3 +73,35 @@ describe('Pagination jump-to-page grid', () => {
     expect(onPageChange).toHaveBeenCalledWith(6);
   });
 });
+
+/**
+ * Redesign P2.2c (from P3.7): with nothing to show the range read
+ * "Showing 1–0 of 0" (the Movements no-match state). A total of 0 prints no
+ * range; the pager and its words stay.
+ */
+describe('Pagination row range', () => {
+  it('prints "Showing X–Y of Z" when there are rows', () => {
+    const { container } = render(
+      <Pagination page={2} pageSize={25} total={60} onPageChange={() => {}} />,
+    );
+    expect(container).toHaveTextContent('Showing 26–50 of 60');
+  });
+
+  it('the last page ends at the total', () => {
+    const { container } = render(
+      <Pagination page={3} pageSize={25} total={60} onPageChange={() => {}} />,
+    );
+    expect(container).toHaveTextContent('Showing 51–60 of 60');
+  });
+
+  it('with total 0 there is no range (never "Showing 1–0 of 0"); Prev, Page 1 of 1 and Next stay', () => {
+    const { container } = render(
+      <Pagination page={1} pageSize={25} total={0} basePath="/dashboard/movements" />,
+    );
+    expect(container).not.toHaveTextContent('Showing');
+    expect(container).not.toHaveTextContent('1–0');
+    expect(screen.getByRole('button', { name: 'Jump to page' })).toHaveTextContent('Page 1 of 1');
+    expect(screen.getByRole('button', { name: '← Prev' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Next →' })).toBeDisabled();
+  });
+});
