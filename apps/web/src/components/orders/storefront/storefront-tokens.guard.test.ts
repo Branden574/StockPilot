@@ -240,42 +240,29 @@ describe('an out-of-stock compact row', () => {
   });
 });
 
-describe('the rules the public order page still reads', () => {
-  // /r/<token> (app/r/[token]/page.tsx) and public-orders-v2.tsx draw the
-  // closed link, the empty catalog and the no-match state as
-  // <div class="sf-empty"><div class="big">…<h4>…<p>…, so these rules stay even
-  // though the New order page's own no-match state is the shared StatePanel.
-  it.each([
-    '.sp-storefront .sf-empty',
-    '.sp-storefront .sf-empty .big',
-    '.sp-storefront .sf-empty h4',
-    '.sp-storefront .sf-empty p',
-  ])('keeps %s', (selector) => {
-    const body = ruleBody(CODE, selector);
-    expect(body).toMatch(/[a-z-]+:\s*[^;]+;/);
+describe('the public order page draws its states with the shared primitives', () => {
+  // Since P5.1 step B, /r/<token> draws its closed link, empty catalog and
+  // no-match state with ExternalStatusCard and StatePanel, and its Availability
+  // ticks with the shared CheckboxGlyph (className="sf-cb"), as the New order
+  // page does. The old .sf-empty frame and the bare [data-checked] tick box
+  // are gone; keep them gone, so nothing styles markup that no longer exists.
+  it.each(['.sp-storefront .sf-empty', '.sp-storefront .sf-cb[data-checked]'])(
+    'has no %s rule',
+    (selector) => {
+      expect(CODE).not.toContain(selector);
+    },
+  );
+
+  it('draws the Availability ticks with the shared CheckboxGlyph on both pages', () => {
+    expect(PUBLIC_PAGE).toContain(
+      '<CheckboxGlyph checked={availability.has(id)} className="sf-cb" />',
+    );
+    expect(PUBLIC_PAGE).not.toMatch(/sf-empty|data-checked/);
   });
 
-  it('draws the empty-state frame with a dashed border and the shared radius', () => {
-    const body = ruleBody(CODE, '.sp-storefront .sf-empty');
-    expect(body).toContain('border: 1px dashed var(--sf-line-strong);');
-    expect(body).toContain('padding: 64px 24px;');
-  });
-
-  // public-orders-v2.tsx draws the Availability popover's tick box as a bare
-  // <span class="sf-cb" data-checked={…} />: the box and its tick must exist,
-  // or a visitor cannot see which availability filters are on. They are
-  // scoped to [data-checked] so the dashboard's CheckboxGlyph is untouched.
-  it('keeps the public availability tick box, scoped to [data-checked]', () => {
-    const box = ruleBody(CODE, '.sp-storefront .sf-cb[data-checked]');
-    expect(box).toContain('width: 14px;');
-    expect(box).toContain('border: 1px solid var(--sf-line-strong);');
-    expect(ruleBody(CODE, ".sp-storefront .sf-cb[data-checked='true']")).toContain(
-      'background: var(--sf-ink);',
-    );
-    expect(ruleBody(CODE, ".sp-storefront .sf-cb[data-checked='true']::after")).toContain(
-      "content: '';",
-    );
-    // No unscoped box rule that would also draw on the dashboard's glyph.
+  // .sf-cb only holds the glyph's width: a box rule here would draw over the
+  // shared glyph on both pages.
+  it('keeps .sf-cb a width holder only', () => {
     expect(ruleBody(CODE, '.sp-storefront .sf-cb')).not.toMatch(/width|border|background/);
   });
 });
