@@ -307,7 +307,7 @@ export function ItemHistoryDialog({
             <span className="text-foreground font-medium">
               {loadedIdentity?.name || itemName}
             </span>{' '}
-            <span className="font-mono text-xs">{loadedIdentity?.sku || itemSku}</span>
+            <span className="font-mono text-[12px]">{loadedIdentity?.sku || itemSku}</span>
             {recordCount > 1 && (
               <>
                 {' '}
