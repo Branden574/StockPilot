@@ -150,8 +150,11 @@ export default async function OrderPrintPage({
           script, style, link, noscript, template { display: none !important; }
 
           /* Hide dashboard chrome — Sidebar renders as <aside>, Topbar
-             as <header>, plus the keyboard skip link. */
-          aside, header { display: none !important; }
+             as <header>, plus the keyboard skip link. Not the slip's own
+             <header> (logo, org, "Packing Slip", status and dates): the
+             bare "header" selector matched it too, so the printed slip
+             lost its whole title block (CONFLICTS D6). */
+          aside, header:not([data-print-slip-header]) { display: none !important; }
           a[href="#main-content"] { display: none !important; }
 
           /* Reset document-level paint. */
@@ -188,7 +191,10 @@ export default async function OrderPrintPage({
 
       <div className="print-slip mx-auto max-w-3xl bg-white px-6 py-6 text-black print:px-0 print:py-0">
         {/* ── HEADER: logo + org on left, slip metadata on right ────── */}
-        <header className="flex items-start justify-between gap-6 border-b-2 border-black pb-4">
+        <header
+          data-print-slip-header=""
+          className="flex items-start justify-between gap-6 border-b-2 border-black pb-4"
+        >
           <div className="flex items-start gap-3">
             {org?.logo_url ? (
               /* eslint-disable-next-line @next/next/no-img-element */
