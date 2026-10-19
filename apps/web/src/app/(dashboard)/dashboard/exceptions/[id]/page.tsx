@@ -1,10 +1,16 @@
 import { ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { Suspense } from 'react';
+import { Suspense, type ReactNode } from 'react';
 
-import { ConfirmCountProvider, ConfirmCountStatus } from '@/components/exceptions/confirm-count-dialog';
-import { CountVarianceClearCard, countVarianceClearCopyFor } from '@/components/exceptions/count-variance-clear-card';
+import {
+  ConfirmCountProvider,
+  ConfirmCountStatus,
+} from '@/components/exceptions/confirm-count-dialog';
+import {
+  CountVarianceClearCard,
+  countVarianceClearCopyFor,
+} from '@/components/exceptions/count-variance-clear-card';
 import { OccurrenceActions } from '@/components/exceptions/occurrence-actions';
 import { OccurrencePhotos } from '@/components/exceptions/occurrence-photos';
 import { RecountButton } from '@/components/exceptions/recount-selection';
@@ -23,8 +29,11 @@ import {
   ItemVerificationCard,
   ItemVerificationCardSkeleton,
 } from '@/components/inventory/item-verification-card';
+import { DetailSection } from '@/components/patterns/detail-section';
+import { KeyValueList, KeyValueRow } from '@/components/patterns/key-value-row';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
+import { Timeline, TimelineEntry, type TimelineTone } from '@/components/patterns/timeline';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
 import { ServiceError, withContext, type ServiceContext } from '@/server/services/context';
 import {
@@ -131,7 +140,29 @@ export const metadata = { title: 'Exception' };
  * Reads only, never syncs. Not found and not visible are the same answer
  * (404), so existence is not leaked; any other failed read renders
  * "unavailable", never an empty page.
+ *
+ * LAYOUT (redesign, DESIGN-SPEC 6.1, 6.7 and the detail pattern): the shared
+ * page header (the back link, the title as the page's one h1 with the
+ * severity beside it, the reference and rule under it, the detail, then the
+ * state chips) carries the rule's action links and Recount as its secondary
+ * buttons. Below it, two columns once the content area holds them (measured
+ * on the content, as the purchase order page does): the main column is what
+ * to do (What clears this for a count difference, the Recount card,
+ * Acknowledge or add a note, Photos, what causes and clears it, the
+ * Timeline); the side rail is the record (its facts as label / value rows,
+ * the last physical count, Maintenance, This condition over time). One
+ * column below that, main first. Every block, word, gate and link is the one
+ * this page had.
  */
+const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
+
+/** The marker tone of a timeline entry: raised in the caution tone, closed
+ *  in the accent, everything else neutral (the words carry the meaning). */
+function timelineTone(kind: OccurrenceEvent['kind']): TimelineTone {
+  if (kind === 'raised') return 'warning';
+  if (kind === 'resolved' || kind === 'count_confirmed') return 'accent';
+  return 'neutral';
+}
 async function orgTimeZone(organizationId: string): Promise<string> {
   try {
     return await getCachedOrgTimezone(organizationId);
@@ -180,7 +211,11 @@ function timelineLine(
       maintenanceRequestReference: e.maintenanceRequestReference ?? null,
       confirmation:
         e.kind === 'count_confirmed'
-          ? countConfirmationFor(o.facts, o.confirmation?.as ?? null, e.cycleCount?.countNumber ?? null)
+          ? countConfirmationFor(
+              o.facts,
+              o.confirmation?.as ?? null,
+              e.cycleCount?.countNumber ?? null,
+            )
           : null,
     }),
     detail: null,
@@ -217,21 +252,42 @@ export default async function ExceptionDetailPage({ params }: { params: Promise<
   }
   const timeZone = await orgTimeZone(ctx.organizationId);
 
+  const back = (
+    <PageHeaderBackLink
+      href={
+        detail?.occurrence.resolvedAt
+          ? '/dashboard/exceptions?tab=resolved'
+          : '/dashboard/exceptions'
+      }
+    >
+      <ArrowLeft className="size-4" aria-hidden />
+      Exceptions
+    </PageHeaderBackLink>
+  );
+
   return (
-    <div className="mx-auto w-full max-w-3xl px-4 py-6 sm:py-8">
-      <Link
-        href={detail?.occurrence.resolvedAt ? '/dashboard/exceptions?tab=resolved' : '/dashboard/exceptions'}
-        className="text-muted-foreground hover:text-foreground mb-4 inline-flex items-center gap-1 text-sm"
-      >
-        <ArrowLeft className="size-4" aria-hidden />
-        Exceptions
-      </Link>
-      {detail === null ? <ExceptionsUnavailable /> : <Detail detail={detail} timeZone={timeZone} />}
+    <div className={PAGE}>
+      {detail === null ? (
+        <>
+          <div>{back}</div>
+          <ExceptionsUnavailable />
+        </>
+      ) : (
+        <Detail detail={detail} timeZone={timeZone} back={back} />
+      )}
     </div>
   );
 }
 
-function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: string }) {
+function Detail({
+  detail,
+  timeZone,
+  back,
+}: {
+  detail: OccurrenceDetail;
+  timeZone: string;
+  back: ReactNode;
+}) {
   const o = detail.occurrence;
   const meta = EXCEPTION_RULES[o.rule];
   const d = describeOccurrence(o.rule, o.facts, {
@@ -249,7 +305,9 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
   // The card's own words decide whether Confirm is offered (core
   // offerConfirm); the Acknowledge step's "instead" follows the same value.
   const offerConfirm =
-    countVariance && !resolved ? countVarianceClearCopyFor(o, displayed, countConfirm).offerConfirm : false;
+    countVariance && !resolved
+      ? countVarianceClearCopyFor(o, displayed, countConfirm).offerConfirm
+      : false;
   const resolvedCopy = resolvedReasonCopy(o.resolvedReason, o.confirmation?.as ?? null);
   const confirmedRow = o.confirmation
     ? confirmationFactsRow(o.confirmation, exceptionTime(o.confirmation.at, timeZone))
@@ -259,9 +317,12 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
   // it (visibleToReader true: read through their own RLS), and only while
   // the module is on (the request page says "not enabled" otherwise).
   const requestHref =
-    escalation?.requestId && escalation.visibleToReader === true && o.escalateUnavailableReason !== 'module_disabled'
+    escalation?.requestId &&
+    escalation.visibleToReader === true &&
+    o.escalateUnavailableReason !== 'module_disabled'
       ? `/dashboard/maintenance/${escalation.requestId}`
       : null;
+  const recountOffered = o.canRecount && !countVariance;
 
   return (
     <ConfirmCountProvider
@@ -272,21 +333,48 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
       recountAbility={recountAbilityOf(o.canRecount, o.recountUnavailableReason)}
       recountNumber={o.recount?.countNumber ?? null}
     >
-    <div className="space-y-6">
-      <header className="space-y-2">
-        <div className="flex flex-wrap items-center gap-2">
-          {o.reference && <span className="text-muted-foreground font-mono text-sm">{o.reference}</span>}
-          <span className="text-muted-foreground text-sm">{meta.label}</span>
-          <SeverityChip rule={o.rule} />
-        </div>
-        <h1 className="text-2xl font-semibold tracking-tight break-words">{d.title}</h1>
-        <p className="text-base">{d.detail}</p>
-        <div className="flex flex-wrap items-center gap-1.5">
+      <PageHeader
+        back={back}
+        title={d.title}
+        titleAside={<SeverityChip rule={o.rule} />}
+        meta={
+          <>
+            {o.reference && <span className="text-ink-2 font-mono">{o.reference}</span>}
+            {o.reference && <span aria-hidden="true">·</span>}
+            <span>{meta.label}</span>
+          </>
+        }
+        subline={
+          <p className="text-foreground mt-1 max-w-[720px] text-[14px] leading-[21px]">
+            {d.detail}
+          </p>
+        }
+        actions={
+          meta.actions.length > 0 || recountOffered ? (
+            <>
+              {meta.actions.map((kind) => (
+                <Button key={kind} asChild variant="outline">
+                  <Link href={actionHref(kind, o.itemId)}>{EXCEPTION_ACTION_LABELS[kind]}</Link>
+                </Button>
+              ))}
+              {recountOffered ? (
+                <RecountButton
+                  occurrenceId={o.id}
+                  reference={o.reference}
+                  timeZone={timeZone}
+                  size="default"
+                />
+              ) : null}
+            </>
+          ) : null
+        }
+      >
+        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
           <StateChip state={displayed} />
           <RecurrenceChip recurrenceIndex={o.recurrenceIndex} />
           <EscalationChip escalation={escalation} href={requestHref} />
         </div>
-      </header>
+      </PageHeader>
 
       {/* "Count confirmed. EX-... is closed.", once a confirm succeeds. */}
       {countVariance ? <ConfirmCountStatus /> : null}
@@ -297,271 +385,285 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
         <CheckedAt syncState={detail.syncState} timeZone={timeZone} />
       )}
 
-      {countVariance && !resolved ? (
-        <CountVarianceClearCard
-          occurrence={o}
-          displayed={displayed}
-          countConfirm={countConfirm}
-          timeZone={timeZone}
-        />
-      ) : null}
+      <div className="@container min-w-0">
+        <div className="@min-[856px]:grid-cols-[minmax(0,1.7fr)_minmax(280px,1fr)] grid items-start gap-4">
+          <div className="flex min-w-0 flex-col gap-4">
+            {countVariance && !resolved ? (
+              <CountVarianceClearCard
+                occurrence={o}
+                displayed={displayed}
+                countConfirm={countConfirm}
+                timeZone={timeZone}
+              />
+            ) : null}
 
-      <Card>
-        <CardContent className="pt-6">
-          <dl className="grid gap-3 text-sm sm:grid-cols-[10rem_1fr]">
-            <dt className="text-muted-foreground">Item</dt>
-            <dd>
-              {o.item ? (
-                <Link href={`/dashboard/inventory/${o.itemId}`} className="font-medium hover:underline">
-                  {o.item.name}
-                  {o.item.sku ? <span className="text-muted-foreground font-mono"> ({o.item.sku})</span> : null}
-                </Link>
+            {isRecountableRule(o.rule) && !countVariance && !resolved ? (
+              <DetailSection
+                title="Recount"
+                data-testid="recount-card"
+                bodyClassName="space-y-2 text-[13.5px]"
+              >
+                {o.recount ? (
+                  <p data-testid="active-recount">
+                    <Link
+                      href={`/dashboard/cycle-counts/${o.recount.cycleCountId}`}
+                      className="font-medium hover:underline"
+                    >
+                      {activeRecountCopy(o.recount)}
+                    </Link>
+                  </p>
+                ) : (
+                  <p className="text-muted-foreground">{RECOUNT_NONE_LINKED_COPY}</p>
+                )}
+                <p className="text-muted-foreground">
+                  {o.canRecount
+                    ? RECOUNT_COUNTS_TOTAL_COPY
+                    : recountUnavailableCopy(o.recountUnavailableReason)}
+                </p>
+              </DetailSection>
+            ) : null}
+
+            <DetailSection title="Acknowledge or add a note">
+              {disabledReason === null ? (
+                <OccurrenceActions
+                  occurrenceId={o.id}
+                  acknowledged={o.acknowledgedAt !== null}
+                  rule={o.rule}
+                  ackHelp={
+                    countVariance
+                      ? countVarianceAcknowledgeHelp({
+                          facts: o.facts,
+                          displayed,
+                          recount: o.recount,
+                          canRecount: o.canRecount,
+                          confirm: countConfirm,
+                        })
+                      : null
+                  }
+                />
               ) : (
-                <span className="text-muted-foreground">Not visible to you</span>
+                <p className="text-muted-foreground text-[13.5px]" data-testid="act-unavailable">
+                  {disabledReason}
+                </p>
               )}
-            </dd>
-            {o.location ? (
-              <>
-                <dt className="text-muted-foreground">Location</dt>
-                <dd>
-                  {o.locationId ? (
-                    <Link href={`/dashboard/locations/${o.locationId}`} className="font-medium hover:underline">
-                      {o.location.name}
-                    </Link>
-                  ) : (
-                    o.location.name
-                  )}
-                  {o.location.archived ? <span className="text-muted-foreground"> (archived)</span> : null}
-                </dd>
-              </>
-            ) : null}
-            <dt className="text-muted-foreground">First seen</dt>
-            <dd>
-              {o.presentWhenTrackingBegan
-                ? `Already present when tracking began, ${exceptionTime(o.firstSeenAt, timeZone)}`
-                : exceptionTime(o.firstSeenAt, timeZone)}
-            </dd>
-            {!resolved ? (
-              <>
-                <dt className="text-muted-foreground">Last seen by a check</dt>
-                <dd>{exceptionTime(o.lastSeenAt, timeZone)}</dd>
-              </>
-            ) : null}
-            {o.acknowledgedAt ? (
-              <>
-                <dt className="text-muted-foreground">Acknowledged</dt>
-                <dd>
-                  {o.acknowledgedBy?.label ?? 'Former member'}, {exceptionTime(o.acknowledgedAt, timeZone)}
-                </dd>
-              </>
-            ) : null}
-            {o.resolvedAt ? (
-              <>
-                <dt className="text-muted-foreground">Resolved</dt>
-                <dd>
-                  {exceptionTime(o.resolvedAt, timeZone)}
-                  {resolvedCopy ? `: ${resolvedCopy}` : null}
-                </dd>
-              </>
-            ) : null}
-            {confirmedRow ? (
-              <>
-                <dt className="text-muted-foreground">{confirmedRow.label}</dt>
-                <dd>{confirmedRow.value}</dd>
-              </>
-            ) : null}
-          </dl>
-        </CardContent>
-      </Card>
+            </DetailSection>
 
-      {o.item ? (
-        // The item's last physical count, off this page's critical path.
-        <Suspense fallback={<ItemVerificationCardSkeleton />}>
-          <ItemVerificationCard
-            itemId={o.itemId}
-            movementsHref={`/dashboard/inventory/${o.itemId}?tab=movements`}
-            excludeIssueId={o.id}
-          />
-        </Suspense>
-      ) : null}
-
-      <div className="flex flex-wrap gap-2">
-        {meta.actions.map((kind) => (
-          <Button key={kind} asChild variant="outline" size="sm">
-            <Link href={actionHref(kind, o.itemId)}>{EXCEPTION_ACTION_LABELS[kind]}</Link>
-          </Button>
-        ))}
-        {o.canRecount && !countVariance ? (
-          <RecountButton occurrenceId={o.id} reference={o.reference} timeZone={timeZone} />
-        ) : null}
-      </div>
-
-      {isRecountableRule(o.rule) && !countVariance && !resolved ? (
-        <Card data-testid="recount-card">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">Recount</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2 text-sm">
-            {o.recount ? (
-              <p data-testid="active-recount">
-                <Link href={`/dashboard/cycle-counts/${o.recount.cycleCountId}`} className="font-medium hover:underline">
-                  {activeRecountCopy(o.recount)}
-                </Link>
-              </p>
-            ) : (
-              <p className="text-muted-foreground">{RECOUNT_NONE_LINKED_COPY}</p>
-            )}
-            <p className="text-muted-foreground">
-              {o.canRecount ? RECOUNT_COUNTS_TOTAL_COPY : recountUnavailableCopy(o.recountUnavailableReason)}
-            </p>
-          </CardContent>
-        </Card>
-      ) : null}
-
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">Acknowledge or add a note</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {disabledReason === null ? (
-            <OccurrenceActions
+            <OccurrencePhotos
               occurrenceId={o.id}
-              acknowledged={o.acknowledgedAt !== null}
-              rule={o.rule}
-              ackHelp={
-                countVariance
-                  ? countVarianceAcknowledgeHelp({
-                      facts: o.facts,
-                      displayed,
-                      recount: o.recount,
-                      canRecount: o.canRecount,
-                      confirm: countConfirm,
-                    })
-                  : null
-              }
+              evidence={detail.evidence}
+              resolved={resolved}
+              canAct={o.canAct}
+              timeZone={timeZone}
             />
-          ) : (
-            <p className="text-muted-foreground text-sm" data-testid="act-unavailable">
-              {disabledReason}
-            </p>
-          )}
-        </CardContent>
-      </Card>
 
-      {escalation || o.canEscalate ? (
-        <EscalationCard
-          occurrenceId={o.id}
-          escalation={escalation}
-          canEscalate={o.canEscalate}
-          alreadyEscalated={o.escalateUnavailableReason === 'already_escalated'}
-          requestHref={requestHref}
-          timeZone={timeZone}
-        />
-      ) : null}
+            {/* A count difference says what clears it at the top; "What can
+                cause this" then spans the column. */}
+            <div className="@container min-w-0">
+              <div
+                className={
+                  countVariance
+                    ? 'grid items-start gap-4'
+                    : '@min-[520px]:grid-cols-2 grid items-start gap-4'
+                }
+              >
+                <DetailSection title="What can cause this">
+                  <ul className="list-disc space-y-1 pl-5 text-[13.5px] leading-5">
+                    {meta.explanations.map((e) => (
+                      <li key={e}>{e}</li>
+                    ))}
+                  </ul>
+                </DetailSection>
+                {countVariance ? null : (
+                  <DetailSection title="What clears this">
+                    <p className="text-[13.5px] leading-5">{meta.clearedBy}</p>
+                  </DetailSection>
+                )}
+              </div>
+            </div>
 
-      <OccurrencePhotos
-        occurrenceId={o.id}
-        evidence={detail.evidence}
-        resolved={resolved}
-        canAct={o.canAct}
-        timeZone={timeZone}
-      />
+            <DetailSection title="Timeline">
+              {detail.timeline.length === 0 ? (
+                <p className="text-muted-foreground text-[13.5px]">No events yet.</p>
+              ) : (
+                <Timeline>
+                  {detail.timeline.map((e) => {
+                    const cc = e.cycleCount
+                      ? formatCycleCountNumber(e.cycleCount.countNumber)
+                      : null;
+                    const line = timelineLine(e, o, timeZone);
+                    return (
+                      <TimelineEntry
+                        key={e.id}
+                        tone={timelineTone(e.kind)}
+                        title={<span className="font-medium">{line.headline}</span>}
+                        meta={
+                          <>
+                            {exceptionTime(e.at, timeZone)}
+                            {e.cycleCount ? (
+                              <>
+                                {' · '}
+                                <Link
+                                  href={`/dashboard/cycle-counts/${e.cycleCount.id}`}
+                                  className="hover:underline"
+                                >
+                                  {cc ?? 'Open the count'}
+                                </Link>
+                              </>
+                            ) : null}
+                          </>
+                        }
+                      >
+                        {line.detail || line.note ? (
+                          <>
+                            {line.detail ? (
+                              <p className="text-muted-foreground text-[12px]">{line.detail}</p>
+                            ) : null}
+                            {line.note ? (
+                              <p className="mt-1 whitespace-pre-wrap text-[13.5px] leading-5">
+                                {line.note}
+                              </p>
+                            ) : null}
+                          </>
+                        ) : null}
+                      </TimelineEntry>
+                    );
+                  })}
+                </Timeline>
+              )}
+            </DetailSection>
+          </div>
 
-      {/* A count difference says what clears it at the top; "What can cause
-          this" then spans the row. */}
-      <div className={countVariance ? 'grid gap-4' : 'grid gap-4 sm:grid-cols-2'}>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">What can cause this</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ul className="list-disc space-y-1 pl-5 text-sm">
-              {meta.explanations.map((e) => (
-                <li key={e}>{e}</li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
-        {countVariance ? null : (
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">What clears this</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm">{meta.clearedBy}</p>
-            </CardContent>
-          </Card>
-        )}
-      </div>
-
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">Timeline</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {detail.timeline.length === 0 ? (
-            <p className="text-muted-foreground text-sm">No events yet.</p>
-          ) : (
-            <ol className="space-y-3">
-              {detail.timeline.map((e) => {
-                const cc = e.cycleCount ? formatCycleCountNumber(e.cycleCount.countNumber) : null;
-                const line = timelineLine(e, o, timeZone);
-                return (
-                  <li key={e.id} className="text-sm">
-                    <p className="font-medium">{line.headline}</p>
-                    {line.detail ? <p className="text-muted-foreground text-xs">{line.detail}</p> : null}
-                    <p className="text-muted-foreground text-xs">
-                      {exceptionTime(e.at, timeZone)}
-                      {e.cycleCount ? (
-                        <>
-                          {' · '}
-                          <Link href={`/dashboard/cycle-counts/${e.cycleCount.id}`} className="hover:underline">
-                            {cc ?? 'Open the count'}
-                          </Link>
-                        </>
+          <div className="flex min-w-0 flex-col gap-4">
+            {/* The record's facts as label / value rows (DESIGN-SPEC 6.7). */}
+            <DetailSection flush data-testid="occurrence-facts">
+              <KeyValueList>
+                <KeyValueRow label="Item">
+                  {o.item ? (
+                    <Link
+                      href={`/dashboard/inventory/${o.itemId}`}
+                      className="font-medium hover:underline"
+                    >
+                      {o.item.name}
+                      {o.item.sku ? (
+                        <span className="text-muted-foreground whitespace-nowrap font-mono">
+                          {' '}
+                          ({o.item.sku})
+                        </span>
                       ) : null}
-                    </p>
-                    {line.note ? <p className="mt-1 whitespace-pre-wrap">{line.note}</p> : null}
-                  </li>
-                );
-              })}
-            </ol>
-          )}
-        </CardContent>
-      </Card>
-
-      {detail.history.length > 1 ? (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">This condition over time</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ul className="divide-border divide-y text-sm">
-              {detail.history.map((h) => (
-                <li key={h.id} className="flex flex-wrap items-baseline justify-between gap-2 py-2">
-                  {h.isCurrent ? (
-                    <span className="font-mono font-medium">
-                      {h.reference ?? 'Exception'} <span className="text-muted-foreground font-sans">(this one)</span>
-                    </span>
-                  ) : (
-                    <Link href={`/dashboard/exceptions/${h.id}`} className="font-mono hover:underline">
-                      {h.reference ?? 'Exception'}
                     </Link>
+                  ) : (
+                    <span className="text-muted-foreground">Not visible to you</span>
                   )}
-                  <span className="text-muted-foreground text-xs">
-                    First seen {exceptionTime(h.firstSeenAt, timeZone)}
-                    {h.resolvedAt ? `, resolved ${historyResolved(h, timeZone)}` : ', still open'}
-                  </span>
-                </li>
-              ))}
-            </ul>
-            {detail.historyTruncated ? (
-              <p className="text-muted-foreground mt-2 text-xs">Only the most recent occurrences are shown.</p>
+                </KeyValueRow>
+                {o.location ? (
+                  <KeyValueRow label="Location">
+                    {o.locationId ? (
+                      <Link
+                        href={`/dashboard/locations/${o.locationId}`}
+                        className="font-medium hover:underline"
+                      >
+                        {o.location.name}
+                      </Link>
+                    ) : (
+                      o.location.name
+                    )}
+                    {o.location.archived ? (
+                      <span className="text-muted-foreground"> (archived)</span>
+                    ) : null}
+                  </KeyValueRow>
+                ) : null}
+                <KeyValueRow label="First seen">
+                  {o.presentWhenTrackingBegan
+                    ? `Already present when tracking began, ${exceptionTime(o.firstSeenAt, timeZone)}`
+                    : exceptionTime(o.firstSeenAt, timeZone)}
+                </KeyValueRow>
+                {!resolved ? (
+                  <KeyValueRow label="Last seen by a check">
+                    {exceptionTime(o.lastSeenAt, timeZone)}
+                  </KeyValueRow>
+                ) : null}
+                {o.acknowledgedAt ? (
+                  <KeyValueRow label="Acknowledged">
+                    {o.acknowledgedBy?.label ?? 'Former member'},{' '}
+                    {exceptionTime(o.acknowledgedAt, timeZone)}
+                  </KeyValueRow>
+                ) : null}
+                {o.resolvedAt ? (
+                  <KeyValueRow label="Resolved">
+                    {exceptionTime(o.resolvedAt, timeZone)}
+                    {resolvedCopy ? `: ${resolvedCopy}` : null}
+                  </KeyValueRow>
+                ) : null}
+                {confirmedRow ? (
+                  <KeyValueRow label={confirmedRow.label}>{confirmedRow.value}</KeyValueRow>
+                ) : null}
+              </KeyValueList>
+            </DetailSection>
+
+            {o.item ? (
+              // The item's last physical count, off this page's critical path.
+              <Suspense fallback={<ItemVerificationCardSkeleton />}>
+                <ItemVerificationCard
+                  itemId={o.itemId}
+                  movementsHref={`/dashboard/inventory/${o.itemId}?tab=movements`}
+                  excludeIssueId={o.id}
+                />
+              </Suspense>
             ) : null}
-          </CardContent>
-        </Card>
-      ) : null}
-    </div>
+
+            {escalation || o.canEscalate ? (
+              <EscalationCard
+                occurrenceId={o.id}
+                escalation={escalation}
+                canEscalate={o.canEscalate}
+                alreadyEscalated={o.escalateUnavailableReason === 'already_escalated'}
+                requestHref={requestHref}
+                timeZone={timeZone}
+              />
+            ) : null}
+
+            {detail.history.length > 1 ? (
+              <DetailSection title="This condition over time" flush>
+                <ul className="divide-border divide-y text-[13.5px]">
+                  {detail.history.map((h) => (
+                    <li
+                      key={h.id}
+                      className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 px-[18px] py-2.5"
+                    >
+                      {h.isCurrent ? (
+                        <span className="font-mono font-medium">
+                          {h.reference ?? 'Exception'}{' '}
+                          <span className="text-muted-foreground font-sans font-normal">
+                            (this one)
+                          </span>
+                        </span>
+                      ) : (
+                        <Link
+                          href={`/dashboard/exceptions/${h.id}`}
+                          className="font-mono hover:underline"
+                        >
+                          {h.reference ?? 'Exception'}
+                        </Link>
+                      )}
+                      <span className="text-muted-foreground text-[12px]">
+                        First seen {exceptionTime(h.firstSeenAt, timeZone)}
+                        {h.resolvedAt
+                          ? `, resolved ${historyResolved(h, timeZone)}`
+                          : ', still open'}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                {detail.historyTruncated ? (
+                  <p className="text-muted-foreground border-border border-t px-[18px] py-2.5 text-[12px]">
+                    Only the most recent occurrences are shown.
+                  </p>
+                ) : null}
+              </DetailSection>
+            ) : null}
+          </div>
+        </div>
+      </div>
     </ConfirmCountProvider>
   );
 }
@@ -600,41 +702,45 @@ function EscalationCard({
 }) {
   const stateLine = escalation ? escalationRequestStateCopy(escalation.request) : null;
   return (
-    <Card data-testid="escalation-card">
-      <CardHeader className="pb-2">
-        <CardTitle className="text-base">Maintenance</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3 text-sm">
-        {escalation ? (
-          <div className="space-y-0.5" data-testid="escalation-status">
-            <p className="font-medium">{escalationBadgeCopy(escalation.reference, escalation.requestCancelled)}</p>
-            <p className="text-muted-foreground text-xs">
-              {escalation.escalatedBy?.label ?? 'Former member'}, {exceptionTime(escalation.escalatedAt, timeZone)}
-            </p>
-            {stateLine ? <p data-testid="escalation-request-state">{stateLine}</p> : null}
-          </div>
-        ) : null}
-        {canEscalate ? (
-          <div className="space-y-2">
-            <Button asChild size="sm">
-              <Link href={`/dashboard/maintenance/new?exceptionOccurrenceId=${occurrenceId}`}>
-                {ESCALATE_TO_MAINTENANCE_LABEL}
-              </Link>
-            </Button>
-            <p className="text-muted-foreground">{ESCALATE_TO_MAINTENANCE_HELP}</p>
-          </div>
-        ) : alreadyEscalated && escalation ? (
-          requestHref ? (
-            <Button asChild variant="outline" size="sm">
-              <Link href={requestHref}>{escalationOpenRequestLabel(escalation.reference)}</Link>
-            </Button>
-          ) : (
-            <p className="text-muted-foreground" data-testid="escalate-unavailable">
-              {escalationAlreadyEscalatedCopy(escalation.reference)}
-            </p>
-          )
-        ) : null}
-      </CardContent>
-    </Card>
+    <DetailSection
+      title="Maintenance"
+      data-testid="escalation-card"
+      bodyClassName="space-y-3 text-[13.5px]"
+    >
+      {escalation ? (
+        <div className="space-y-0.5" data-testid="escalation-status">
+          <p className="font-medium">
+            {escalationBadgeCopy(escalation.reference, escalation.requestCancelled)}
+          </p>
+          <p className="text-muted-foreground text-[12px]">
+            {escalation.escalatedBy?.label ?? 'Former member'},{' '}
+            {exceptionTime(escalation.escalatedAt, timeZone)}
+          </p>
+          {stateLine ? <p data-testid="escalation-request-state">{stateLine}</p> : null}
+        </div>
+      ) : null}
+      {canEscalate ? (
+        <div className="space-y-2">
+          {/* Outline: the page's one ink-filled button is Acknowledge
+              (DESIGN-SPEC 6.2, at most one commit per page). */}
+          <Button asChild variant="outline">
+            <Link href={`/dashboard/maintenance/new?exceptionOccurrenceId=${occurrenceId}`}>
+              {ESCALATE_TO_MAINTENANCE_LABEL}
+            </Link>
+          </Button>
+          <p className="text-muted-foreground">{ESCALATE_TO_MAINTENANCE_HELP}</p>
+        </div>
+      ) : alreadyEscalated && escalation ? (
+        requestHref ? (
+          <Button asChild variant="outline">
+            <Link href={requestHref}>{escalationOpenRequestLabel(escalation.reference)}</Link>
+          </Button>
+        ) : (
+          <p className="text-muted-foreground" data-testid="escalate-unavailable">
+            {escalationAlreadyEscalatedCopy(escalation.reference)}
+          </p>
+        )
+      ) : null}
+    </DetailSection>
   );
 }
