@@ -93,6 +93,32 @@ interface UiLine {
 
 const SAVE_DEBOUNCE_MS = 300;
 
+/** Said when the copy of this count saved on the phone cannot be read. */
+const COUNT_UNREADABLE_ON_PHONE = 'This count could not be read on this phone.';
+
+/**
+ * The count a box holds, as the line saver reads it: a finite number of zero
+ * or more, or null for an empty box and anything else (an emptied box never
+ * saves a clear, and a lone minus sign is not a count). The saver and Post
+ * both read a box through this one rule, so they cannot disagree.
+ */
+function countFromBox(raw: string): number | null {
+  if (raw.trim() === '') return null;
+  const num = Number.parseFloat(raw);
+  return Number.isFinite(num) && num >= 0 ? num : null;
+}
+
+/**
+ * Whether a typed count is still waiting for its save: the line saver writes
+ * a box SAVE_DEBOUNCE_MS after the last keystroke and only then queues it,
+ * so until then the count is on screen but neither saved nor queued. A box
+ * holding no count (emptied, or a lone minus sign) is never saved, so it is
+ * not waiting.
+ */
+function hasUnsavedCount(draft: Readonly<Record<string, string>>): boolean {
+  return Object.values(draft).some((raw) => countFromBox(raw) !== null);
+}
+
 export default function CycleCountDetail() {
   const router = useRouter();
   // The device's palette (it was the light-only legacy alias, so the screen
@@ -213,9 +239,10 @@ export default function CycleCountDetail() {
   const [lineSaver] = React.useState(() =>
     createDraftDebouncer(SAVE_DEBOUNCE_MS, (lineId, raw) => {
       void (async () => {
-        if (raw.trim() === '') return; // empty input — don't persist a clear here
-        const num = Number.parseFloat(raw);
-        if (!Number.isFinite(num) || num < 0) return;
+        // An empty box persists no clear; nor does anything that is not a
+        // count of zero or more (countFromBox).
+        const num = countFromBox(raw);
+        if (num === null) return;
 
         await updateLocalLine(lineId, num);
         setLines((curr) =>
@@ -270,7 +297,17 @@ export default function CycleCountDetail() {
   const load = React.useCallback(async () => {
     if (!id) return;
 
-    const cached = await getCycleCount(id);
+    // The copy saved on this phone. A read that fails is said, never a
+    // spinner that does not end: load() is fire-and-forget, so a throw here
+    // went unhandled and left the screen loading with nothing to explain it.
+    // Online, the fetch below still runs (and stores and re-reads the count).
+    let cached: Awaited<ReturnType<typeof getCycleCount>> = null;
+    let cacheUnreadable = false;
+    try {
+      cached = await getCycleCount(id);
+    } catch {
+      cacheUnreadable = true;
+    }
     if (cached) {
       hydrateFromSnapshot(cached);
       setLoading(false);
@@ -286,7 +323,14 @@ export default function CycleCountDetail() {
 
     if (!online) {
       if (!cached) {
-        setEmptyState('offline-uncached');
+        // "Not cached" only when the phone's store answered that it has no
+        // copy; a store that could not be read says so.
+        if (cacheUnreadable) {
+          setReadError(COUNT_UNREADABLE_ON_PHONE);
+          setEmptyState('read-failed');
+        } else {
+          setEmptyState('offline-uncached');
+        }
         setLoading(false);
       }
       return;
@@ -510,11 +554,26 @@ export default function CycleCountDetail() {
       );
       return;
     }
+    // A count typed a moment ago is still waiting for its save (the pause
+    // after the last keystroke), so it is neither saved nor queued, and a post
+    // sent now could reach the server before it: the count would post without
+    // it, and the queued count would be refused afterwards. Save it at once;
+    // it is an unsynced edit like any other, so posting waits for it.
+    const unsaved = hasUnsavedCount(draft);
+    if (unsaved) lineSaver.flushAll();
     // Only THIS count's unsynced edits block posting it. The engine's global
     // pendingCount includes every kind on the device (a queued PO line, a
     // bundle distribution, another count) — none of which this post depends
     // on, and one permanently-refused row used to block every count forever.
-    if (pendingForThis > 0) {
+    // Read from the phone now: the tally on screen can trail a save that just
+    // finished by a moment.
+    let pending = pendingForThis;
+    try {
+      pending = await pendingCountFor(header.id);
+    } catch {
+      // The phone's outbox could not be read: the tally on screen decides.
+    }
+    if (unsaved || pending > 0) {
       Alert.alert(
         'Sync first',
         'There are unsynced edits. Wait for sync to finish (or tap the badge to retry) before posting.',
@@ -522,7 +581,9 @@ export default function CycleCountDetail() {
       return;
     }
 
-    const uncounted = lines.filter((l) => l.counted === null && draft[l.id] === undefined);
+    // Every box that holds a count is saved by now, so a line with no saved
+    // count is one the post skips (an emptied box holds none).
+    const uncounted = lines.filter((l) => l.counted === null);
     const proceed = await new Promise<boolean>((resolve) => {
       Alert.alert(
         'Post cycle count?',
@@ -1244,6 +1305,8 @@ const styles = StyleSheet.create({
   varianceRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
   variance: { fontFamily: FONT.displaySemi, fontWeight: '600', fontSize: 13 },
   countBox: { alignItems: 'flex-end', justifyContent: 'center', minWidth: 110 },
+  // A 44pt target (the box was about 36pt tall); minHeight, so the typed
+  // number still grows the box at the larger text sizes.
   countInput: {
     fontFamily: FONT.mono,
     fontSize: 18,
@@ -1251,6 +1314,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
     paddingHorizontal: space.sm,
     paddingVertical: 6,
+    minHeight: MIN_TAP,
     minWidth: 80,
     textAlign: 'right',
   },

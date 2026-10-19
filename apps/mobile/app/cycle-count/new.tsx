@@ -238,7 +238,9 @@ function ItemPicker({ selectedCount }: { selectedCount: number }) {
       for (const group of plan.orGroups) req = req.or(group);
       const { data, count, error } = await req;
       if (error) {
-        console.warn('count picker', error);
+        // The message only, never the whole PostgREST error (its details and
+        // hint can quote row values).
+        console.warn('count picker', error.message);
         return null;
       }
       const mapped: CountPickerRow[] = (data ?? []).map((row) => {
@@ -344,7 +346,9 @@ function ItemPicker({ selectedCount }: { selectedCount: number }) {
         ) : null}
       </View>
 
-      <Card padding={0}>
+      {/* Clipped to its corners: a picked first or last row's wash otherwise
+          paints square corners over the card's rounded edge. */}
+      <Card padding={0} style={styles.pickerCard}>
         {status === 'loading' ? (
           <ActivityIndicator color={c.ink} style={{ paddingVertical: 28 }} />
         ) : status === 'failed' ? (
@@ -369,6 +373,8 @@ function ItemPicker({ selectedCount }: { selectedCount: number }) {
                   onPress={() => void loadMore()}
                   disabled={loadingMore}
                   accessibilityRole="button"
+                  // Its words, also while the spinner stands in for them.
+                  accessibilityLabel={`Load more (${remaining} remaining)`}
                   accessibilityState={{ disabled: loadingMore, busy: loadingMore }}
                   style={({ pressed }) => [
                     styles.loadMore,
@@ -620,6 +626,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  pickerCard: { overflow: 'hidden' },
   listNotice: {
     paddingHorizontal: 16,
     paddingVertical: 24,

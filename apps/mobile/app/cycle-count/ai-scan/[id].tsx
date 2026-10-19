@@ -111,7 +111,18 @@ export default function AiScanScreen() {
   React.useEffect(() => {
     if (!user || !cycleCountId) return;
     void (async () => {
-      const snap = await getCycleCount(cycleCountId);
+      // The lines saved on this phone. A read that fails is said, and the
+      // screen goes back: it used to be an unhandled rejection that left
+      // "0 books in this count" over a camera that could only scan nothing.
+      let snap: Awaited<ReturnType<typeof getCycleCount>>;
+      try {
+        snap = await getCycleCount(cycleCountId);
+      } catch {
+        Alert.alert('Could not load this count', 'This count could not be read on this phone.', [
+          { text: 'OK', onPress: () => router.back() },
+        ]);
+        return;
+      }
       if (!snap) {
         Alert.alert(
           'No cached lines',
@@ -927,7 +938,10 @@ const styles = StyleSheet.create({
   },
   rowName: { fontFamily: FONT.display, fontWeight: '500', fontSize: 14 },
   rowMeta: { fontFamily: FONT.displayRegular, fontSize: 12, marginTop: 2 },
+  // A 44pt target (the box was about 29pt tall); minHeight and minWidth, so
+  // the typed number grows the box instead of clipping.
   rowQty: {
+    minHeight: 44,
     minWidth: 70,
     paddingHorizontal: space.sm,
     paddingVertical: space.xs,

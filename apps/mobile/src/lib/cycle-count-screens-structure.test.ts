@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import * as vm from 'node:vm';
 
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
@@ -172,6 +173,30 @@ function cameraTokens(file: string): Record<string, string> {
   return out;
 }
 
+/**
+ * Top-level helper functions of a screen, compiled from the repository's own
+ * source (never from input) and run in an empty context: the pure helpers
+ * whose answers are the behaviour (what a box counts as), as
+ * scanner-structure.test.ts runs the Scan tab's.
+ */
+function screenFunctions(
+  file: string,
+  names: string[],
+): Record<string, (...args: unknown[]) => unknown> {
+  const sf = treeOf(file);
+  const parts = sf.statements
+    .filter(
+      (st): st is ts.FunctionDeclaration =>
+        ts.isFunctionDeclaration(st) && !!st.name && names.includes(st.name.text),
+    )
+    .map((st) => st.getText(sf));
+  expect(parts, `${names.join(', ')} in ${file}`).toHaveLength(names.length);
+  const js = ts.transpileModule(`${parts.join('\n')}\n({ ${names.join(', ')} });`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  return new vm.Script(js).runInNewContext({}) as Record<string, (...args: unknown[]) => unknown>;
+}
+
 /** An opaque colour laid at `alpha` over another, as '#rrggbb'. */
 function over(top: string, alpha: number, under: string): string {
   const ch = (hex: string, i: number) => parseInt(hex.slice(i, i + 2), 16);
@@ -277,6 +302,7 @@ describe('count screen: every word, name and role survives the restyle', () => {
     'Check again',
     'Could not load this count',
     'If the app was just updated, the server may still be catching up.',
+    'This count could not be read on this phone.',
     'Not cached for offline use',
     'Open this cycle count once while online to use it offline next time.',
     'Retry',
@@ -379,28 +405,100 @@ describe('count screen: the gates are unchanged', () => {
 describe('count screen: offline capture and the Post rule', () => {
   const src = sourceOf(COUNT);
 
-  // Post is refused offline, then while THIS count has unsynced edits, and
-  // only then asks to confirm and posts.
+  // Post is refused offline, then while THIS count has unsynced edits (a
+  // count still waiting for its save among them), and only then asks to
+  // confirm and posts.
   it('Post is blocked offline and while this count has unsynced edits', () => {
     const body = functionBody(COUNT, 'postCount');
     const offline = body.indexOf("if (syncSnapshot.status === 'offline') {");
-    const pending = body.indexOf('if (pendingForThis > 0) {');
+    const unsaved = body.indexOf('const unsaved = hasUnsavedCount(draft);');
+    const flush = body.indexOf('if (unsaved) lineSaver.flushAll();');
+    const read = body.indexOf('pending = await pendingCountFor(header.id);');
+    const pending = body.indexOf('if (unsaved || pending > 0) {');
     const confirm = body.indexOf("'Post cycle count?'");
     const post = body.indexOf('await postCycleCount(header.id);');
     expect(offline).toBeGreaterThan(-1);
-    expect(pending).toBeGreaterThan(offline);
+    expect(unsaved).toBeGreaterThan(offline);
+    expect(flush).toBeGreaterThan(unsaved);
+    expect(read).toBeGreaterThan(flush);
+    expect(pending).toBeGreaterThan(read);
     expect(confirm).toBeGreaterThan(pending);
     expect(post).toBeGreaterThan(confirm);
     expect(body).toMatch(
-      /if \(pendingForThis > 0\) \{\s*Alert\.alert\(\s*'Sync first',[\s\S]*?\);\s*return;\s*\}/,
+      /if \(unsaved \|\| pending > 0\) \{\s*Alert\.alert\(\s*'Sync first',[\s\S]*?\);\s*return;\s*\}/,
     );
+    // The tally starts from the one on screen, so an outbox that cannot be
+    // read blocks exactly as before, never less.
+    expect(body).toContain('let pending = pendingForThis;');
+  });
+
+  // Fix: a count typed within SAVE_DEBOUNCE_MS (300 ms) of tapping Post was
+  // neither saved nor queued, so Post was not blocked; the post could reach
+  // the server before that line's count, which then posted without it and
+  // had its queued count refused. The screen's own rule, run: which boxes
+  // hold a count, and whether one is still waiting for its save.
+  it('a count still waiting for its save blocks Post; an emptied box or a lone minus does not', () => {
+    const { countFromBox, hasUnsavedCount } = screenFunctions(COUNT, [
+      'countFromBox',
+      'hasUnsavedCount',
+    ]);
+    const verdicts = Object.fromEntries(
+      ['', '   ', '0', ' 0 ', '12', '2.5', '-1', '-', 'abc', '.'].map((raw) => [
+        raw,
+        countFromBox!(raw),
+      ]),
+    );
+    expect(verdicts).toEqual({
+      '': null,
+      '   ': null,
+      '0': 0,
+      ' 0 ': 0,
+      '12': 12,
+      '2.5': 2.5,
+      '-1': null,
+      '-': null,
+      abc: null,
+      '.': null,
+    });
+    expect(hasUnsavedCount!({})).toBe(false);
+    expect(hasUnsavedCount!({ l1: '' })).toBe(false);
+    expect(hasUnsavedCount!({ l1: '', l2: '-' })).toBe(false);
+    expect(hasUnsavedCount!({ l1: '', l2: '7' })).toBe(true);
+    expect(hasUnsavedCount!({ l1: '0' })).toBe(true);
   });
 
   it('a typed count is saved on the phone first and queued, never posted from the box', () => {
     expect(codeOnly(src)).toMatch(
-      /createDraftDebouncer\(SAVE_DEBOUNCE_MS, \(lineId, raw\) => \{[\s\S]*?if \(raw\.trim\(\) === ''\) return;[\s\S]*?await updateLocalLine\(lineId, num\);[\s\S]*?void cycleCountSync\.forceSync\(\);/,
+      /createDraftDebouncer\(SAVE_DEBOUNCE_MS, \(lineId, raw\) => \{[\s\S]*?const num = countFromBox\(raw\);\s*if \(num === null\) return;\s*await updateLocalLine\(lineId, num\);[\s\S]*?void cycleCountSync\.forceSync\(\);/,
     );
     expect(codeOnly(src)).toContain('onChangeText={(v) => setDraftValue(l.id, v)}');
+  });
+
+  // Every box that holds a count is saved before the confirm, so the lines
+  // the post skips are the ones with no saved count (an emptied box among
+  // them; it used to be left out of "not counted").
+  it('"not counted will be skipped" counts every line with no saved count', () => {
+    const body = functionBody(COUNT, 'postCount');
+    expect(body).toContain('const uncounted = lines.filter((l) => l.counted === null);');
+    expect(body.indexOf('const uncounted')).toBeGreaterThan(
+      body.indexOf('if (unsaved || pending > 0) {'),
+    );
+  });
+
+  // Fix: load() is fire-and-forget, so a throw from the phone's store left
+  // the screen loading for good. Offline, a store that cannot be read is
+  // said ("not cached" would be untrue); online, the fetch still runs.
+  it('a copy on the phone that cannot be read is said, never an endless spinner', () => {
+    const code = codeOnly(src);
+    expect(code).toMatch(
+      /let cacheUnreadable = false;\s*try \{\s*cached = await getCycleCount\(id\);\s*\} catch \{\s*cacheUnreadable = true;\s*\}/,
+    );
+    expect(code).toMatch(
+      /if \(!online\) \{\s*if \(!cached\) \{\s*if \(cacheUnreadable\) \{\s*setReadError\(COUNT_UNREADABLE_ON_PHONE\);\s*setEmptyState\('read-failed'\);\s*\} else \{\s*setEmptyState\('offline-uncached'\);\s*\}\s*setLoading\(false\);/,
+    );
+    expect(code).toContain(
+      "const COUNT_UNREADABLE_ON_PHONE = 'This count could not be read on this phone.';",
+    );
   });
 
   it('the Post button: its role and disabled state for VoiceOver, its words from the footer, wrapping', () => {
@@ -457,6 +555,9 @@ describe('count screen: offline capture and the Post rule', () => {
     expect(attrText(box, 'placeholder', sf)).toBe('—');
     expect(attrText(box, 'style', sf)).toContain('backgroundColor: c.sunk, borderColor: c.hair2');
     expect(styleBlock(COUNT, 'countInput')).toContain('fontFamily: FONT.mono');
+    // A 44pt target (it was about 36pt), grown, never fixed.
+    expect(styleBlock(COUNT, 'countInput')).toMatch(/minHeight: MIN_TAP\b/);
+    expect(styleBlock(COUNT, 'countInput')).not.toMatch(/(^|[^a-zA-Z])height:/);
     // The typed number is content: never capped.
     expect(attrText(box, 'maxFontSizeMultiplier', sf)).toBeUndefined();
   });
@@ -753,9 +854,33 @@ describe('count picker: the shared selection, as checkbox rows', () => {
   });
 
   // DESIGN-SPEC 6.21 and the Items / Books rows: paper2 showed nothing in
-  // dark mode, where it is the card colour.
-  it('a picked row takes the accent wash', () => {
+  // dark mode, where it is the card colour. The list's card clips to its
+  // corners, so a picked first or last row never paints square ones.
+  it('a picked row takes the accent wash, inside the card’s rounded corners', () => {
     expect(code).toContain("backgroundColor: picked ? c.accentWash : 'transparent'");
+    expect(code).toContain('<Card padding={0} style={styles.pickerCard}>');
+    expect(styleBlock(PICKER, 'pickerCard')).toContain("overflow: 'hidden'");
+  });
+
+  it('Load more keeps its words as its name while the spinner stands in for them', () => {
+    const { sf, els } = elements(
+      PICKER,
+      (el, s) =>
+        tagOf(el, s) === 'Pressable' && attrText(el, 'onPress', s) === '() => void loadMore()',
+    );
+    expect(els).toHaveLength(1);
+    expect(attrText(els[0]!, 'accessibilityLabel', sf)).toBe(
+      '`Load more (${remaining} remaining)`',
+    );
+    expect(attrText(els[0]!, 'accessibilityState', sf)).toBe(
+      '{ disabled: loadingMore, busy: loadingMore }',
+    );
+  });
+
+  // A PostgREST error's details and hint can quote row values.
+  it('a failed read logs its message only', () => {
+    expect(code).toContain("console.warn('count picker', error.message);");
+    expect(code).not.toContain("console.warn('count picker', error);");
   });
 
   it('the tabs are tabs (role and selected state), 44pt segments on a recessed track', () => {
@@ -941,6 +1066,28 @@ describe('Counts tab: words, the filters and the offline view', () => {
     );
   });
 
+  // Fix: a failed read of the phone's unsynced lines was an unhandled
+  // rejection that left PENDING at "0 to sync" and every open card SYNCED,
+  // claims made from a store that was never read.
+  it('unsynced lines that cannot be read are unknown: PENDING shows a dash and no card claims SYNCED', () => {
+    expect(code).toMatch(
+      /React\.useState<Map<string, number> \| null>\(\s*\(\) => new Map\(\),\s*\)/,
+    );
+    expect(code).toMatch(
+      /void dirtyLineCounts\(\)\.then\(\s*\(dirty\) => \{\s*if \(guard\.current\.isCurrent\(token\)\) setPendingByCount\(dirty\);\s*\},\s*\(\) => \{\s*if \(guard\.current\.isCurrent\(token\)\) setPendingByCount\(null\);\s*\},\s*\);/,
+    );
+    expect(code).toMatch(
+      /try \{\s*const dirty = await dirtyLineCounts\(\);\s*setPendingByCount\(dirty\);\s*\} catch \{\s*setPendingByCount\(null\);\s*\}/,
+    );
+    expect(code).toContain("value={pendingTotal === null ? '—' : String(pendingTotal)}");
+    expect(code).toContain('pending={pendingByCount ? (pendingByCount.get(item.id) ?? 0) : null}');
+    const card = functionBody(COUNTS_TAB, 'CountCard');
+    expect(card).toContain('const syncUnknown = pending === null;');
+    expect(card).toMatch(
+      /: !syncUnknown && pending > 0 \? \(\s*<Pill status="warn">PENDING<\/Pill>\s*\) : row\.source === 'downloaded' \? \(\s*<Pill>DOWNLOADED<\/Pill>\s*\) : syncUnknown \? null : \(\s*<Pill status="ok">SYNCED<\/Pill>\s*\);/,
+    );
+  });
+
   it('the offline banner is a recessed panel, never claiming "none downloaded" about an unread store', () => {
     expect(code).toContain(
       '<View style={[styles.offlineBanner, { backgroundColor: c.sunk, borderColor: c.hair }]}>',
@@ -988,6 +1135,8 @@ describe('AI shelf scan: every word, name and step survives the restyle', () => 
     'Tap a line to confirm the AI count or enter a manual value.',
     'No cached lines',
     'Open this cycle count from the list once while online so it can be cached for AI scanning.',
+    'Could not load this count',
+    'This count could not be read on this phone.',
     'Capture failed',
     'Scan failed',
     'This count has no books to scan.',
@@ -995,6 +1144,14 @@ describe('AI shelf scan: every word, name and step survives the restyle', () => 
     'Save failed',
   ])('says "%s"', (word) => {
     expect(wordsOf(AI_SCAN)).toContain(word);
+  });
+
+  // Fix: a throw from the phone's store was an unhandled rejection that left
+  // "0 books in this count" over a camera with nothing to match.
+  it('lines on the phone that cannot be read are said, and the screen goes back', () => {
+    expect(code).toMatch(
+      /try \{\s*snap = await getCycleCount\(cycleCountId\);\s*\} catch \{\s*Alert\.alert\('Could not load this count', 'This count could not be read on this phone\.', \[\s*\{ text: 'OK', onPress: \(\) => router\.back\(\) \},\s*\]\);\s*return;\s*\}\s*if \(!snap\) \{\s*Alert\.alert\(\s*'No cached lines',/,
+    );
   });
 
   it('the review never writes an AI count the person did not approve', () => {
@@ -1032,6 +1189,8 @@ describe('AI shelf scan: every word, name and step survives the restyle', () => 
     expect(attrText(els[0]!, 'editable', sf)).toBe('!disabled');
     expect(styleBlock(AI_SCAN, 'rowQty')).toMatch(/minWidth: 70\b/);
     expect(styleBlock(AI_SCAN, 'rowQty')).not.toMatch(/\bwidth: 70\b/);
+    // A 44pt target (it was about 29pt tall).
+    expect(styleBlock(AI_SCAN, 'rowQty')).toMatch(/minHeight: 44\b/);
     const scroll = elements(AI_SCAN, (el, s) => tagOf(el, s) === 'ScrollView').els;
     expect(scroll).toHaveLength(1);
     expect(attrText(scroll[0]!, 'automaticallyAdjustKeyboardInsets', sf)).toBe('true');

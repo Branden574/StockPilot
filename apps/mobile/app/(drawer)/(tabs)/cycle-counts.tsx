@@ -171,7 +171,11 @@ export default function CycleCounts() {
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [refreshing, setRefreshing] = React.useState(false);
-  const [pendingByCount, setPendingByCount] = React.useState<Map<string, number>>(new Map());
+  // This phone's unsynced count lines per count. Null when the phone's store
+  // could not be read: then nothing claims "0 to sync" or SYNCED.
+  const [pendingByCount, setPendingByCount] = React.useState<Map<string, number> | null>(
+    () => new Map(),
+  );
 
   const guard = React.useRef(createSequenceGuard());
   const debounce = React.useRef(createDebouncedScheduler(SEARCH_DEBOUNCE_MS));
@@ -207,9 +211,14 @@ export default function CycleCounts() {
       }
       if (!guard.current.isCurrent(token)) return;
       setOffline(!online);
-      void dirtyLineCounts().then((dirty) => {
-        if (guard.current.isCurrent(token)) setPendingByCount(dirty);
-      });
+      void dirtyLineCounts().then(
+        (dirty) => {
+          if (guard.current.isCurrent(token)) setPendingByCount(dirty);
+        },
+        () => {
+          if (guard.current.isCurrent(token)) setPendingByCount(null);
+        },
+      );
 
       if (!activeOrg) return; // the workspace is still resolving; its switch loads
       if (!online) {
@@ -321,8 +330,13 @@ export default function CycleCounts() {
 
   React.useEffect(() => {
     void (async () => {
-      const dirty = await dirtyLineCounts();
-      setPendingByCount(dirty);
+      try {
+        const dirty = await dirtyLineCounts();
+        setPendingByCount(dirty);
+      } catch {
+        // Unknown, never a count of 0: the PENDING tile shows a dash.
+        setPendingByCount(null);
+      }
     })();
   }, [sync.pendingCount, sync.status]);
 
@@ -356,7 +370,9 @@ export default function CycleCounts() {
     ? searchDownloadedCounts(downloaded ?? [], view).map(fromDownload)
     : (page?.items ?? []).map(fromServer);
   const searching = view.q !== '' || view.status !== null;
-  const pendingTotal = Array.from(pendingByCount.values()).reduce((a, b) => a + b, 0);
+  const pendingTotal = pendingByCount
+    ? Array.from(pendingByCount.values()).reduce((a, b) => a + b, 0)
+    : null;
   const tz = summary?.timezone;
   const inProgressText = offline || !summary ? '—' : String(summary.inProgress);
   const todayText = offline || !summary ? '—' : String(summary.startedToday);
@@ -397,7 +413,7 @@ export default function CycleCounts() {
         <SummaryTile label="ACTIVE" value={inProgressText} sub="in progress" stacked={stackedSummary} />
         <SummaryTile
           label="PENDING"
-          value={String(pendingTotal)}
+          value={pendingTotal === null ? '—' : String(pendingTotal)}
           sub="to sync"
           kind="warn"
           stacked={stackedSummary}
@@ -606,7 +622,7 @@ export default function CycleCounts() {
           renderItem={({ item }) => (
             <CountCard
               row={item}
-              pending={pendingByCount.get(item.id) ?? 0}
+              pending={pendingByCount ? (pendingByCount.get(item.id) ?? 0) : null}
               timeZone={tz}
               onPress={() => router.push(`/cycle-count/${item.id}`)}
             />
@@ -756,7 +772,9 @@ function CountCard({
   onPress,
 }: {
   row: ListRow;
-  pending: number;
+  /** This phone's unsynced lines for the count; null when they could not be
+   *  read, so the card makes no sync claim. */
+  pending: number | null;
   timeZone: string | undefined;
   onPress: () => void;
 }) {
@@ -765,17 +783,19 @@ function CountCard({
   const progress = row.lineTotal > 0 ? Math.round((row.lineCounted / row.lineTotal) * 100) : 0;
   const isCompleted = row.status === 'completed';
   const isCanceled = row.status === 'canceled';
+  // The phone's unsynced lines could not be read: SYNCED would be a guess,
+  // so an open count shows no sync pill.
+  const syncUnknown = pending === null;
   // A downloaded row is the device's copy (offline, or under a failed read).
-  const syncStatus = row.source === 'downloaded' ? 'DOWNLOADED' : pending > 0 ? 'PENDING' : 'SYNCED';
   const statusPill = isCompleted ? (
     <Pill status="ok">POSTED</Pill>
   ) : isCanceled ? (
     <Pill>CANCELED</Pill>
-  ) : pending > 0 ? (
+  ) : !syncUnknown && pending > 0 ? (
     <Pill status="warn">PENDING</Pill>
-  ) : syncStatus === 'DOWNLOADED' ? (
+  ) : row.source === 'downloaded' ? (
     <Pill>DOWNLOADED</Pill>
-  ) : (
+  ) : syncUnknown ? null : (
     <Pill status="ok">SYNCED</Pill>
   );
   const progressLabel = isCompleted
