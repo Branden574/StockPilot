@@ -160,7 +160,12 @@ export function AddItemsDialog({
         Add items
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="sm:max-w-2xl">
+        {/* One column that never grows past the dialog: the content is a grid
+            whose implicit track took the width of the longest item name (a
+            truncated name is one unbroken line), so a 120-character name made
+            the column 860 px in a 672 px dialog and pushed the search, the
+            list, Selected and the buttons off its right edge. */}
+        <DialogContent className="grid-cols-[minmax(0,1fr)] sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Add items to this order</DialogTitle>
             <DialogDescription>

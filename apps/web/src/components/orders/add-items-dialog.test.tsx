@@ -107,6 +107,25 @@ describe('AddItemsDialog', () => {
     },
   );
 
+  // Redesign P4.B1 screenshot pass: a 120-character item name is one
+  // unbroken line (truncate), and the dialog's grid gave its one column that
+  // width, pushing the search, the list and the buttons off the dialog.
+  it('keeps its one column inside the dialog, so a long item name truncates instead of widening it', async () => {
+    fetchSpy.mockResolvedValue(
+      jsonResponse([
+        row({
+          id: 'a',
+          name: 'Heavy-Duty Mobile Storage Cabinet with Four Adjustable Shelves, Two Locking Doors, Casters and Labeled Bins for Art Room',
+        }),
+      ]),
+    );
+    await open();
+    await screen.findByText(/Heavy-Duty Mobile Storage Cabinet/);
+    expect(screen.getByRole('dialog').className).toMatch(
+      /(^|\s)grid-cols-\[minmax\(0,1fr\)\](\s|$)/,
+    );
+  });
+
   // ── Warehouse pinning ────────────────────────────────────────────
   it('pins the browse search to THIS order’s warehouse and never offers a switcher', async () => {
     fetchSpy.mockResolvedValue(jsonResponse([row({ id: 'a', name: 'Alpha Charger' })]));
