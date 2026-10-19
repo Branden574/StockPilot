@@ -52,7 +52,6 @@ export function DeliveryLocationShare({ orderId }: { orderId: string }) {
         type="button"
         variant={sharing ? 'outline' : 'default'}
         size="sm"
-        aria-pressed={sharing}
         onClick={sharing ? stop : start}
       >
         {sharing ? 'Stop sharing' : 'Share my location'}
