@@ -30,12 +30,15 @@ export default function PublicOrderRequestLayout({ children }: { children: React
           <head>. crossOrigin matches the <img> anonymous fetch. */}
       <link rel="preconnect" href="https://covers.openlibrary.org" crossOrigin="anonymous" />
       <link rel="dns-prefetch" href="https://covers.openlibrary.org" />
-      {/* The redesign's content width (1320 px, as the New order page):
-          the storefront's two-column shell (catalog + 372px request rail)
-          from 1281 px; /r/track and /r/confirm keep their own md column
-          (the ExternalShell column). */}
-      <main className="mx-auto w-full max-w-[1320px] px-4 py-8 sm:px-6 sm:py-10">{children}</main>
-      <ExternalFooter className="max-w-[1320px]" />
+      {/* The public page's own width (1480 px, as in production): it has no
+          sidebar, so the dashboard main's 1320 px rule does not apply. The
+          storefront's two-column shell (catalog + 372px request rail) starts
+          at 1281 px, and from 1352 px the catalog column holds four 220 px
+          cards, so a category's four-card preview stays one row (at 1320 px
+          it wrapped to three plus one). /r/track and /r/confirm keep their
+          own md column (the ExternalShell column). */}
+      <main className="mx-auto w-full max-w-[1480px] px-4 py-8 sm:px-6 sm:py-10">{children}</main>
+      <ExternalFooter className="max-w-[1480px]" />
     </div>
   );
 }
