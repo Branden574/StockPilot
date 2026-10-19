@@ -13,6 +13,14 @@ import {
 } from 'lucide-react';
 import * as React from 'react';
 
+import { chipActionClass } from '@/components/patterns/chip';
+import { StatePanel } from '@/components/patterns/state-panel';
+import {
+  DeltaText,
+  Timeline,
+  TimelineEntry,
+  type TimelineTone,
+} from '@/components/patterns/timeline';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -106,6 +114,14 @@ const MOVEMENT_ICONS: Record<string, LucideIcon> = {
   receive_po: PackagePlus,
   cycle_count: ClipboardCheck,
   return: Undo2,
+};
+
+/** The formatter's tone → the timeline marker's tone. */
+const TONE: Record<ReturnType<typeof formatHistoryMovement>['tone'], TimelineTone> = {
+  pos: 'accent',
+  neg: 'destructive',
+  warn: 'warning',
+  neutral: 'neutral',
 };
 
 function iconFor(movementType: string): LucideIcon {
@@ -291,7 +307,7 @@ export function ItemHistoryDialog({
             <span className="text-foreground font-medium">
               {loadedIdentity?.name || itemName}
             </span>{' '}
-            <span className="font-mono text-xs">{loadedIdentity?.sku || itemSku}</span>
+            <span className="font-mono text-[12px]">{loadedIdentity?.sku || itemSku}</span>
             {recordCount > 1 && (
               <>
                 {' '}
@@ -311,86 +327,76 @@ export function ItemHistoryDialog({
         </DialogHeader>
 
         {error && (
-          <p role="alert" className="text-destructive text-sm">
+          <p
+            role="alert"
+            className="bg-destructive-wash text-destructive rounded-md px-3 py-2 text-[13px]"
+          >
             {error}
           </p>
         )}
 
         {loading && rows.length === 0 && !error && (
-          <p className="text-muted-foreground flex items-center gap-2 py-6 text-sm">
-            <Loader2 className="h-4 w-4 animate-spin" /> Loading history…
+          <p className="text-muted-foreground flex items-center gap-2 py-6 text-[13px]">
+            <Loader2 aria-hidden className="h-4 w-4 animate-spin" /> Loading history…
           </p>
         )}
 
         {!loading && !error && rows.length === 0 && (
-          <p className="text-muted-foreground py-6 text-sm">
-            No stock movements recorded for this item yet.
-          </p>
+          <StatePanel
+            kind="empty"
+            surface="plain"
+            size="sm"
+            icon={History}
+            headingLevel={null}
+            title="No stock movements recorded for this item yet."
+          />
         )}
 
         {rows.length > 0 && (
-          <ol className="relative space-y-0">
-            {rows.map((row, i) => {
+          // The ledger as a rail timeline (DESIGN-SPEC 6.16, matrix W-BK-06c):
+          // an icon in a tone circle per movement, joined by a hairline.
+          <Timeline className="-mx-1 px-1">
+            {rows.map((row) => {
               const f = formatHistoryMovement(row);
               const Icon = iconFor(row.movementType);
-              const isLast = i === rows.length - 1;
               const counterpartId = row.reversal?.counterpartMovementId ?? null;
               return (
-                <li
+                <TimelineEntry
                   key={row.id}
-                  ref={(el) => {
+                  ref={(el: HTMLLIElement | null) => {
                     rowRefs.current[row.id] = el;
                   }}
                   data-testid={`history-row-${row.id}`}
+                  tone={TONE[f.tone]}
+                  icon={<Icon strokeWidth={1.75} />}
                   className={cn(
-                    'relative flex gap-3 rounded-md pl-2 pr-1 transition-colors',
-                    highlightId === row.id && 'bg-warning/10 ring-warning/40 ring-1',
+                    'rounded-md transition-colors',
+                    highlightId === row.id && 'bg-warning-wash ring-warning/40 ring-1',
                   )}
-                >
-                  {!isLast && (
-                    <span
-                      aria-hidden
-                      className="bg-border absolute left-[19px] top-9 h-[calc(100%-1.25rem)] w-px"
-                    />
-                  )}
-                  <div
-                    className={cn(
-                      'relative z-10 mt-1 grid h-7 w-7 shrink-0 place-items-center rounded-full border',
-                      f.tone === 'pos' && 'border-success/30 bg-success/10 text-success',
-                      f.tone === 'neg' &&
-                        'border-destructive/30 bg-destructive/10 text-destructive',
-                      f.tone === 'warn' && 'border-warning/30 bg-warning/10 text-warning',
-                      f.tone === 'neutral' && 'border-border bg-muted text-foreground',
-                    )}
-                  >
-                    <Icon className="h-3.5 w-3.5" strokeWidth={1.75} />
-                  </div>
-
-                  <div className="flex-1 border-b border-border/60 pb-3 pt-1.5 last:border-b-0">
-                    <div className="flex flex-wrap items-baseline gap-x-2">
-                      <span className="text-sm font-medium">{f.title}</span>
+                  title={
+                    <span className="flex flex-wrap items-baseline gap-x-2">
+                      <span className="font-medium">{f.title}</span>
                       {f.deltaLabel && (
-                        <span
-                          className={cn(
-                            'font-mono text-xs tabular-nums',
-                            row.quantityChange > 0 && 'text-success',
-                            row.quantityChange < 0 && 'text-destructive',
-                          )}
+                        <DeltaText
+                          value={row.quantityChange}
+                          negativeTone="destructive"
+                          className="text-[12.5px]"
                         >
                           {f.deltaLabel}
-                        </span>
+                        </DeltaText>
                       )}
                       {f.movedLabel && (
-                        <span className="text-muted-foreground font-mono text-xs tabular-nums">
+                        <span className="text-muted-foreground font-mono text-[12px] tabular-nums">
                           {f.movedLabel}
                         </span>
                       )}
-                      <span className="text-muted-foreground text-[11px] tabular-nums">
+                      <span className="text-muted-foreground text-[12px] tabular-nums">
                         {f.onHandLabel}
                       </span>
-                    </div>
-
-                    <div className="text-muted-foreground mt-0.5 text-xs">
+                    </span>
+                  }
+                  meta={
+                    <>
                       {/* Rule 5: a movement with no recorded user shows no
                           person. We say the record has none rather than
                           inventing "System" as an actor. */}
@@ -402,60 +408,64 @@ export function ItemHistoryDialog({
                       {f.actorEmailLabel && (
                         <span className="ml-1 text-[11px]">({f.actorEmailLabel})</span>
                       )}
-                      <span className="mx-1.5">·</span>
+                      <span aria-hidden className="mx-1.5">
+                        ·
+                      </span>
                       {/* Relative for scanability + the exact viewer-local
                           date and time, same as the activity feed. */}
                       <time dateTime={f.whenIso}>{formatRelative(f.whenIso)}</time>
                       <LocalDateTime iso={f.whenIso} prefix=" · " />
                       {f.routeLabel && (
                         <>
-                          <span className="mx-1.5">·</span>
+                          <span aria-hidden className="mx-1.5">
+                            ·
+                          </span>
                           <span>{f.routeLabel}</span>
                         </>
                       )}
+                    </>
+                  }
+                >
+                  {f.sourceLabel && (
+                    <div className="text-muted-foreground text-[12px] leading-[18px]">
+                      {f.sourceLabel}
                     </div>
+                  )}
 
-                    {f.sourceLabel && (
-                      <div className="text-muted-foreground mt-0.5 text-xs">
-                        {f.sourceLabel}
-                      </div>
-                    )}
+                  {/* The operator's own typed words. The formatter has
+                      already dropped machine tokens and raw ids, so anything
+                      that reaches here really was typed by a person. */}
+                  {f.noteLabel && (
+                    <div className="text-ink-2 mt-0.5 text-[12px] italic leading-[18px]">
+                      &ldquo;{f.noteLabel}&rdquo;
+                    </div>
+                  )}
 
-                    {/* The operator's own typed words. The formatter has
-                        already dropped machine tokens and raw ids, so anything
-                        that reaches here really was typed by a person. */}
-                    {f.noteLabel && (
-                      <div className="text-muted-foreground mt-0.5 text-xs italic">
-                        &ldquo;{f.noteLabel}&rdquo;
-                      </div>
-                    )}
-
-                    {/* Rule 3: a received-then-reversed pair nets to zero, and
-                        a reader who cannot see the pairing misreads the whole
-                        history. Mark both halves, and let the reader jump to
-                        the other half when it is on screen. */}
-                    {f.reversalLabel && (
-                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                        <span className="bg-warning/10 text-warning border-warning/30 inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px]">
-                          <Undo2 className="h-3 w-3" />
-                          {f.reversalLabel}
-                        </span>
-                        {counterpartId && (
-                          <button
-                            type="button"
-                            onClick={() => jumpTo(counterpartId)}
-                            className="text-muted-foreground hover:text-foreground text-[11px] underline underline-offset-2"
-                          >
-                            Show the other half
-                          </button>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </li>
+                  {/* Rule 3: a received-then-reversed pair nets to zero, and
+                      a reader who cannot see the pairing misreads the whole
+                      history. Mark both halves, and let the reader jump to
+                      the other half when it is on screen. */}
+                  {f.reversalLabel && (
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      <span className="bg-warning-wash text-warning inline-flex items-center gap-1 rounded-full px-2 py-px text-[11px] leading-[16.5px]">
+                        <Undo2 aria-hidden className="h-3 w-3" />
+                        {f.reversalLabel}
+                      </span>
+                      {counterpartId && (
+                        <button
+                          type="button"
+                          onClick={() => jumpTo(counterpartId)}
+                          className={chipActionClass}
+                        >
+                          Show the other half
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </TimelineEntry>
               );
             })}
-          </ol>
+          </Timeline>
         )}
 
         {hasMore && (

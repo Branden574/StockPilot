@@ -722,7 +722,8 @@ export function PlaceFromStagingDialog({
           {/* Fixed source */}
           <div className="space-y-1.5">
             <Label>From</Label>
-            <div className="bg-muted text-muted-foreground flex h-9 items-center rounded-md border px-3 text-sm">
+            {/* Read only: the input's box on the sunk fill. */}
+            <div className="border-border bg-sunk text-muted-foreground flex h-8 items-center rounded-md border px-2.5 text-[13px] max-sm:h-11 max-sm:text-base">
               {sourceLabel}
             </div>
           </div>
@@ -767,9 +768,9 @@ export function PlaceFromStagingDialog({
             <>
               {/* Destination picker */}
               <div className="space-y-1.5">
-                <Label>To location</Label>
+                <Label id="place-to-label">To location</Label>
                 <Select value={destId} onValueChange={pickExisting}>
-                  <SelectTrigger>
+                  <SelectTrigger aria-labelledby="place-to-label">
                     <SelectValue placeholder="Select destination" />
                   </SelectTrigger>
                   <SelectContent>
@@ -785,7 +786,7 @@ export function PlaceFromStagingDialog({
 
               {/* Inline new rack inputs */}
               {isNew && (
-                <div className="space-y-3 rounded-md border p-3">
+                <div className="border-border space-y-3 rounded-md border p-3">
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1.5">
                       <Label htmlFor="place-rack-number">
@@ -812,7 +813,7 @@ export function PlaceFromStagingDialog({
                   {/* The planner's refusal, said where the fields are. Without
                       it a half-filled form would just have a dead Place button
                       and no explanation. */}
-                  {newProblem && <p className="text-destructive text-xs">{newProblem}</p>}
+                  {newProblem && <p className="text-destructive text-[12px]">{newProblem}</p>}
                 </div>
               )}
             </>
@@ -836,7 +837,7 @@ export function PlaceFromStagingDialog({
               onChange={(e) => setQuantity(e.target.value)}
             />
             {quantity !== '' && !qtyValid && (
-              <p className="text-destructive text-[11px]">
+              <p className="text-destructive text-[12px]">
                 Must be between 1 and {availableQuantity}.
               </p>
             )}
@@ -857,7 +858,7 @@ export function PlaceFromStagingDialog({
         </div>
 
         {serverError && (
-          <p role="alert" className="text-sm text-destructive">
+          <p role="alert" className="text-destructive text-[13px]">
             {serverError}
           </p>
         )}
@@ -867,7 +868,7 @@ export function PlaceFromStagingDialog({
             Cancel
           </Button>
           <Button onClick={submit} disabled={!canSubmit}>
-            {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Place stock'}
+            {submitting ? <Loader2 aria-hidden className="h-4 w-4 animate-spin" /> : 'Place stock'}
           </Button>
         </DialogFooter>
       </DialogContent>

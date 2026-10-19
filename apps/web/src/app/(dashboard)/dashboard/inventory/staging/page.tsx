@@ -4,6 +4,7 @@ import { Suspense } from 'react';
 
 import { StagingTableSection } from '@/components/inventory/staging-table-section';
 import { TableBodySkeleton } from '@/components/dashboard/skeletons';
+import { PageHeader } from '@/components/patterns/page-header';
 import { can, parseStagingItemFilter } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { canMintPlacementDestination } from '@/lib/locations/placement-destination';
@@ -59,28 +60,23 @@ export default async function StagingPage({
   const itemFilter = parseStagingItemFilter({ item: params.item, order: params.order });
 
   return (
-    <div className="container mx-auto max-w-7xl px-4 py-8 sm:px-6">
-      <div className="flex flex-wrap items-end justify-between gap-3 sm:gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Staging</h1>
-          <PageTour tour={STAGING_TOUR} />
-          <p className="text-muted-foreground mt-1 text-sm">
-            Stock waiting to be placed into a rack or crate — received from POs
-            (staged) or on hand but never placed (unplaced).
-          </p>
-        </div>
-      </div>
+    // The page area (DESIGN-SPEC 4 and 5.3): 1320 wide at most, 28 / 32 / 64
+    // around it and a 16 px gutter on a phone, as the other list pages.
+    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <PageHeader
+        title="Staging"
+        tour={<PageTour tour={STAGING_TOUR} />}
+        subline="Stock waiting to be placed into a rack or crate — received from POs (staged) or on hand but never placed (unplaced)."
+      />
 
-      <div className="mt-8">
-        <Suspense fallback={<TableBodySkeleton rows={8} />}>
-          <StagingTableSection
-            itemType={itemTypeParam}
-            filter={itemFilter}
-            canPlace={canPlace}
-            canMintDestination={canMintDestination}
-          />
-        </Suspense>
-      </div>
+      <Suspense fallback={<TableBodySkeleton rows={8} />}>
+        <StagingTableSection
+          itemType={itemTypeParam}
+          filter={itemFilter}
+          canPlace={canPlace}
+          canMintDestination={canMintDestination}
+        />
+      </Suspense>
     </div>
   );
 }
