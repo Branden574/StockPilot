@@ -185,14 +185,15 @@ export function BinsManager({
             }
             flush
           >
-            <Table className="min-w-[520px]">
+            {/* Fixed column widths, so every warehouse card lines up with the next. */}
+            <Table className="min-w-[520px] table-fixed">
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
-                  <TableHead>Code</TableHead>
+                  <TableHead className="w-[22%]">Code</TableHead>
                   <TableHead>Name</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead className="text-center">Default</TableHead>
-                  <TableHead className="w-12 text-right" />
+                  <TableHead className="w-[20%]">Type</TableHead>
+                  <TableHead className="w-24 text-center">Default</TableHead>
+                  <TableHead className="w-16 text-right" />
                 </TableRow>
               </TableHeader>
               <TableBody>

@@ -32,10 +32,13 @@ export default async function ChartersAdminPage({
         termSingular={term.charter_singular}
         eyebrow="Admin"
         title={term.charter_plural}
+        // Bounded, so the view toggle and New sit beside the title block.
         subline={
-          isArchivedView
-            ? `${term.charter_plural} you archived. Restore one to bring it back into the active list.`
-            : 'Top-level groupings for warehouses. The label here is configurable — if your company calls them “Regions” or “Divisions”, change it in organization settings.'
+          <p className="max-w-[72ch]">
+            {isArchivedView
+              ? `${term.charter_plural} you archived. Restore one to bring it back into the active list.`
+              : 'Top-level groupings for warehouses. The label here is configurable — if your company calls them “Regions” or “Divisions”, change it in organization settings.'}
+          </p>
         }
       />
     </div>

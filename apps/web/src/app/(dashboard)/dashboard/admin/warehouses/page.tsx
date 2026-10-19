@@ -54,7 +54,12 @@ export default async function WarehousesAdminPage({
         charterSingular={term.charter_singular}
         eyebrow="Admin"
         title={term.warehouse_plural}
-        subline={`Physical locations stock lives in. Each ${term.warehouse_singular.toLowerCase()} can service multiple ${term.charter_plural.toLowerCase()} and have a manager.`}
+        // Bounded, so the view toggle and New sit beside the title block.
+        subline={
+          <p className="max-w-[72ch]">
+            {`Physical locations stock lives in. Each ${term.warehouse_singular.toLowerCase()} can service multiple ${term.charter_plural.toLowerCase()} and have a manager.`}
+          </p>
+        }
       />
     </div>
   );

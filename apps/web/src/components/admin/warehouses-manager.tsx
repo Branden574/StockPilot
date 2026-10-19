@@ -39,6 +39,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
+import { cn } from '@/lib/utils';
 import {
   archiveWarehouseAction,
   createWarehouseAction,
@@ -83,6 +84,11 @@ interface FormValues {
 }
 
 const NONE_VALUE = '__none';
+
+/** Pins the Actions column to the right of a narrow screen (sticky cell on
+ *  the card fill, with a hairline where the scrolled columns pass under it). */
+const STICKY_ACTIONS =
+  'max-md:sticky max-md:right-0 max-md:z-[1] max-md:bg-card max-md:shadow-[inset_1px_0_0_hsl(var(--border))]';
 
 export function WarehousesManager({
   initial,
@@ -163,7 +169,10 @@ export function WarehousesManager({
                 <TableHead>Manager</TableHead>
                 <TableHead className="text-right">Users</TableHead>
                 <TableHead className="text-right">Items</TableHead>
-                <TableHead className="w-32 text-right">Actions</TableHead>
+                {/* Below md the Actions column stays pinned to the card's right edge
+                    while the other columns scroll under it, so Edit and Archive
+                    are always on screen. */}
+                <TableHead className={cn('w-32 text-right', STICKY_ACTIONS)}>Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -268,7 +277,7 @@ function WarehouseTableRow({
       <TableCell className="text-ink-2">{row.manager_name ?? '—'}</TableCell>
       <TableCell className="text-right font-mono tabular-nums">{row.user_count}</TableCell>
       <TableCell className="text-right font-mono tabular-nums">{row.item_count}</TableCell>
-      <TableCell className="whitespace-nowrap">
+      <TableCell className={cn('whitespace-nowrap', STICKY_ACTIONS)}>
         {/* The buttons sit in their own flex box: a flex table cell stops
             being a table cell (its row border and alignment break). */}
         <div className="flex items-center justify-end gap-2">
