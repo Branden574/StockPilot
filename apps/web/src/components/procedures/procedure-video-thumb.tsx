@@ -1,7 +1,8 @@
 'use client';
 
-import { BookOpen } from 'lucide-react';
 import * as React from 'react';
+
+import { ProcedureFallbackBand } from './procedure-fallback-band';
 
 /**
  * The procedures-grid thumbnail. Two modes:
@@ -10,7 +11,9 @@ import * as React from 'react';
  *   - kind="video" (legacy rows without a poster): the muted
  *     <video preload="metadata"> first-frame trick.
  * Either way, an expired signed URL or decode failure falls back to the same
- * category-colored band the no-video card uses — never a silent gray tile.
+ * flat band the no-video card uses — never a silent gray tile.
+ *
+ * It fills its frame: the card's media box is `relative` with a 16:9 ratio.
  */
 export function ProcedureVideoThumb({
   src,
@@ -22,17 +25,17 @@ export function ProcedureVideoThumb({
   fallbackColor: string;
 }) {
   const [failed, setFailed] = React.useState(false);
+  // A server-rendered poster can fail before hydration attaches onError (an
+  // expired signed URL), and React never hears about it. When the element is
+  // attached, a finished request with no pixels means exactly that: set the
+  // same source again so the browser retries and reports to the handler now
+  // listening (the shared photo pattern does the same).
+  const retryMissedError = React.useCallback((img: HTMLImageElement | null) => {
+    const current = img?.getAttribute('src');
+    if (img && current && img.complete && img.naturalWidth === 0) img.src = current;
+  }, []);
   if (failed) {
-    return (
-      <div
-        className="flex h-full w-full items-center justify-center"
-        style={{
-          backgroundImage: `linear-gradient(135deg, ${fallbackColor}, ${fallbackColor}cc)`,
-        }}
-      >
-        <BookOpen className="h-10 w-10 opacity-80" aria-hidden />
-      </div>
-    );
+    return <ProcedureFallbackBand color={fallbackColor} />;
   }
   if (kind === 'poster') {
     return (
@@ -43,8 +46,9 @@ export function ProcedureVideoThumb({
         alt=""
         loading="lazy"
         decoding="async"
+        ref={retryMissedError}
         onError={() => setFailed(true)}
-        className="h-full w-full object-cover"
+        className="absolute inset-0 h-full w-full object-cover"
       />
     );
   }
@@ -55,7 +59,7 @@ export function ProcedureVideoThumb({
       playsInline
       muted
       onError={() => setFailed(true)}
-      className="h-full w-full object-cover"
+      className="absolute inset-0 h-full w-full object-cover"
     />
   );
 }

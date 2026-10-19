@@ -25,9 +25,7 @@ export function UploadRecoveryToast() {
   React.useEffect(() => {
     if (flag !== '1' || firedRef.current) return;
     firedRef.current = true;
-    toast.warning(
-      "Some video uploads didn't finish. Re-drop the missing files.",
-    );
+    toast.warning("Some video uploads didn't finish. Re-drop the missing files.");
     // Strip the query param. Use replace so back-button doesn't re-toast.
     const params = new URLSearchParams(search.toString());
     params.delete('upload_recovery');

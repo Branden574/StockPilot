@@ -56,8 +56,8 @@ export function ArchiveButton({ procedureId }: ArchiveButtonProps) {
         title="Archive this procedure?"
         description={
           <>
-            The procedure is hidden from the list. Existing videos and comments stay in
-            storage. You can restore it from the <strong>Archived view</strong>.
+            The procedure is hidden from the list. Existing videos and comments stay in storage. You
+            can restore it from the <strong>Archived view</strong>.
           </>
         }
         confirmLabel="Archive"

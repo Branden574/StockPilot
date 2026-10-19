@@ -1,8 +1,7 @@
 import { ArrowLeft } from 'lucide-react';
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
-import { Button } from '@/components/ui/button';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { ProcedureForm } from '@/components/procedures/procedure-form';
 import { UploadRecoveryToast } from '@/components/procedures/upload-recovery-toast';
 import { requireOrgContext } from '@/lib/auth/session';
@@ -14,11 +13,7 @@ import { ServiceError } from '@/server/services/context';
 
 export const dynamic = 'force-dynamic';
 
-export default async function EditProcedurePage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
+export default async function EditProcedurePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const ctx = await requireOrgContext();
   if (!can(ctx, 'categories:manage')) {
@@ -53,20 +48,18 @@ export default async function EditProcedurePage({
   }));
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Button asChild variant="ghost" size="sm">
-          <Link href={`/dashboard/procedures/${id}`}>
-            <ArrowLeft className="mr-1 h-3.5 w-3.5" /> Back to procedure
-          </Link>
-        </Button>
-      </div>
+    <div className="mx-auto flex w-full max-w-[760px] flex-col gap-6 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
       <UploadRecoveryToast />
-      <h1 className="text-2xl font-semibold tracking-tight">Edit procedure</h1>
-      <p className="mt-1 text-sm text-muted-foreground">
-        Update the body or attach more videos. Changes save when you click Save.
-      </p>
-      <div className="mt-6">
+      <PageHeader
+        back={
+          <PageHeaderBackLink href={`/dashboard/procedures/${id}`}>
+            <ArrowLeft className="h-3.5 w-3.5" aria-hidden /> Back to procedure
+          </PageHeaderBackLink>
+        }
+        title="Edit procedure"
+        subline="Update the body or attach more videos. Changes save when you click Save."
+      />
+      <div>
         <ProcedureForm
           mode="edit"
           categories={categories.map((c) => ({ id: c.id, name: c.name, color: c.color }))}
