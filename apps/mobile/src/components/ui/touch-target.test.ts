@@ -131,6 +131,11 @@ function footprint(style: Record<string, unknown>): number {
 
 const LIGHT = palette('light');
 
+/** The two tests that parse every screen in the app take about 4s alone and
+ *  over 20s when the full suite runs beside other suites on a loaded machine,
+ *  past vitest's 5s default. */
+const SCAN = { timeout: 60_000 };
+
 // ── 1. Button size sm ────────────────────────────────────────────────────
 
 function button(props: Partial<Parameters<typeof Button>[0]> = {}, pressed = false): Node {
@@ -245,7 +250,7 @@ describe('Button size sm: a 44pt target round the 36pt button', () => {
   // Every sm Button on a screen keeps its look: no caller hands the drawn
   // button a key the split would move off it (a height or width cap on the
   // frame would squeeze the 44pt target).
-  it('no screen passes an sm Button a style that would cap its 44pt frame', () => {
+  it('no screen passes an sm Button a style that would cap its 44pt frame', SCAN, () => {
     const files = listTsx(at('app'), at('src')).filter((f) => !f.includes('components/ui/'));
     const smButtons: string[] = [];
     for (const file of files) {
@@ -637,7 +642,7 @@ describe("Pill's tone prop says who uses it", () => {
     expect(src).toMatch(/tone\?: \{ fg: string; bg: string; border: string \};/);
   });
 
-  it('no screen passes it (the doc stays true)', () => {
+  it('no screen passes it (the doc stays true)', SCAN, () => {
     const files = listTsx(at('app'), at('src'));
     const callers: string[] = [];
     for (const file of files) {
