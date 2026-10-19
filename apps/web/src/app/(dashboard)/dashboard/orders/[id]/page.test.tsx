@@ -44,7 +44,10 @@ const orderGet = vi.fn();
 const attachmentsList = vi.fn(async () => []);
 const returnableLinesForOrder = vi.fn(async () => []);
 const checkModuleAccessMock = vi.fn();
-const getWarehouseAccessMock = vi.fn(async (_ctx?: unknown) => ({ hasAllAccess: true, writableIds: [] as string[] }));
+const getWarehouseAccessMock = vi.fn(async (_ctx?: unknown) => ({
+  hasAllAccess: true,
+  writableIds: [] as string[],
+}));
 const reportProblemButtonProps = vi.fn();
 
 vi.mock('next/navigation', () => ({
@@ -100,9 +103,13 @@ vi.mock('@/components/orders/order-line-actions', () => ({
 // The readiness strip (rendered for real) offers "Hold available stock"
 // through this server action (F2-2).
 vi.mock('@/server/actions/order-requests', () => ({ holdOrderStockAction: vi.fn() }));
-vi.mock('@/components/orders/delivery-location-share', () => ({ DeliveryLocationShare: () => null }));
+vi.mock('@/components/orders/delivery-location-share', () => ({
+  DeliveryLocationShare: () => null,
+}));
 vi.mock('@/components/returns/create-return-dialog', () => ({ CreateReturnDialog: () => null }));
-vi.mock('@/components/orders/order-attachments-panel', () => ({ OrderAttachmentsPanel: () => null }));
+vi.mock('@/components/orders/order-attachments-panel', () => ({
+  OrderAttachmentsPanel: () => null,
+}));
 vi.mock('@/components/orders/order-realtime-refresh', () => ({ OrderRealtimeRefresh: () => null }));
 // F2-4: the timeline prints a needed-by change's dates in the org's zone, so
 // the zone it is handed is recorded.
@@ -146,7 +153,9 @@ vi.mock('@/components/orders/draft-shortfall-po-dialog', () => ({
 }));
 /** The views the page handed its dialog (null: no Change offered). */
 const handedViews = () =>
-  reviseDialogProps.mock.calls.map(([p]) => (p as { change: unknown }).change).filter((c) => c !== null);
+  reviseDialogProps.mock.calls
+    .map(([p]) => (p as { change: unknown }).change)
+    .filter((c) => c !== null);
 // L50b: whether the shipping panel mounts, recorded.
 const shippingPanelProps = vi.fn();
 vi.mock('@/components/orders/shipping-panel', () => ({
@@ -226,7 +235,8 @@ vi.mock('@/server/services/context', async (importOriginal) => ({
 // F2-4: the page asks the real rule whether the role alone gives every
 // warehouse (roleSeesEveryWarehouse); only the access read is recorded.
 vi.mock('@/lib/auth/warehouse', async (importOriginal) => ({
-  roleSeesEveryWarehouse: (await importOriginal<typeof import('@/lib/auth/warehouse')>()).roleSeesEveryWarehouse,
+  roleSeesEveryWarehouse: (await importOriginal<typeof import('@/lib/auth/warehouse')>())
+    .roleSeesEveryWarehouse,
   getWarehouseAccess: (ctx: unknown) => getWarehouseAccessMock(ctx),
 }));
 
@@ -265,7 +275,9 @@ vi.mock('@/server/services/order-requests', () => ({
 // Order readiness (F2-1): the service's settled result. The default is a
 // failed read, so a test that does not care about readiness never sees a
 // green answer by accident.
-const readinessResult = vi.fn(async (_orderId: string): Promise<OrderReadinessResult> => READINESS_FAILED);
+const readinessResult = vi.fn(
+  async (_orderId: string): Promise<OrderReadinessResult> => READINESS_FAILED,
+);
 const readinessForCurrentUser = vi.fn(async () => ({ result: readinessResult }));
 vi.mock('@/server/services/order-readiness', () => ({
   OrderReadinessService: { forCurrentUser: () => readinessForCurrentUser() },
@@ -418,7 +430,9 @@ beforeEach(() => {
 describe('orders/[id]: the timeline knows whether the viewer can see activity (L89)', () => {
   it('a staff requester without activity_logs:read', async () => {
     await renderPage();
-    expect(orderTimelineProps).toHaveBeenCalledWith(expect.objectContaining({ canReadActivity: false }));
+    expect(orderTimelineProps).toHaveBeenCalledWith(
+      expect.objectContaining({ canReadActivity: false }),
+    );
   });
 
   it('a viewer granted activity_logs:read', async () => {
@@ -427,7 +441,9 @@ describe('orders/[id]: the timeline knows whether the viewer can see activity (L
       permissions: new Set(['orders:read', 'activity_logs:read']),
     };
     await renderPage();
-    expect(orderTimelineProps).toHaveBeenCalledWith(expect.objectContaining({ canReadActivity: true }));
+    expect(orderTimelineProps).toHaveBeenCalledWith(
+      expect.objectContaining({ canReadActivity: true }),
+    );
   });
 });
 
@@ -472,7 +488,9 @@ describe('orders/[id]: Cancel request (L85)', () => {
   it('the requester (no approve) is offered it while the order waits for approval', async () => {
     asRequester();
     orderGet.mockResolvedValue(
-      detailFixture({ request: requestFixture({ status: 'pending_approval', requester_user_id: 'u1' }) }),
+      detailFixture({
+        request: requestFixture({ status: 'pending_approval', requester_user_id: 'u1' }),
+      }),
     );
     await renderPage();
     expect(cancelButtonProps).toHaveBeenCalledWith(
@@ -482,7 +500,9 @@ describe('orders/[id]: Cancel request (L85)', () => {
 
   it('the requester (no approve) is not offered it once the order is approved', async () => {
     asRequester();
-    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'approved', requester_user_id: 'u1' }) }));
+    orderGet.mockResolvedValue(
+      detailFixture({ request: requestFixture({ status: 'approved', requester_user_id: 'u1' }) }),
+    );
     await renderPage();
     expect(cancelButtonProps).not.toHaveBeenCalled();
   });
@@ -511,7 +531,9 @@ describe('orders/[id]: Cancel request (L85)', () => {
     vi.clearAllMocks();
     ctxHolder.current = { role: 'staff', permissions: new Set(['orders:read']) };
     orderGet.mockResolvedValue(
-      detailFixture({ request: requestFixture({ status: 'pending_approval', requester_user_id: 'u1' }) }),
+      detailFixture({
+        request: requestFixture({ status: 'pending_approval', requester_user_id: 'u1' }),
+      }),
     );
     await renderPage();
     expect(cancelButtonProps).not.toHaveBeenCalled();
@@ -544,18 +566,28 @@ describe('orders/[id]: the Collect signature link (migration 0389)', () => {
   let admin: ReturnType<typeof makeSupabaseStub>;
 
   beforeEach(() => {
-    ctxHolder.current = { role: 'manager', permissions: new Set(['orders:read', 'orders:approve']) };
+    ctxHolder.current = {
+      role: 'manager',
+      permissions: new Set(['orders:read', 'orders:approve']),
+    };
     admin = makeSupabaseStub({
-      'order_request_secrets.select': servedLikePostgrest([{ order_request_id: ORDER_ID, signature_token: RAW }]),
+      'order_request_secrets.select': servedLikePostgrest([
+        { order_request_id: ORDER_ID, signature_token: RAW },
+      ]),
     });
     adminHolder.client = admin.client;
   });
 
-  const panelProps = () => managerActionsProps.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined;
+  const panelProps = () =>
+    managerActionsProps.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined;
   const sideReads = () => admin.fromCalls.filter((t) => t === 'order_request_secrets').length;
 
   it('an approver at staged for pickup gets the RAW token (its sha256 is the column), never the digest', async () => {
-    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'staged_for_pickup', signature_token: DIGEST }) }));
+    orderGet.mockResolvedValue(
+      detailFixture({
+        request: requestFixture({ status: 'staged_for_pickup', signature_token: DIGEST }),
+      }),
+    );
     await renderPage();
     expect(panelProps()?.signatureToken).toBe(RAW);
     expect(panelProps()?.handOverMfaMessage).toBeNull();
@@ -563,12 +595,24 @@ describe('orders/[id]: the Collect signature link (migration 0389)', () => {
 
   it('F2: an approver who owes an MFA step-up gets no link, the words instead, and the raw token is never read', async () => {
     withContextMock.mockImplementation(
-      async () => ({ organizationId: 'org-1', mfaRequired: true, mfaSatisfied: false, mfaEnrolled: true }) as never,
+      async () =>
+        ({
+          organizationId: 'org-1',
+          mfaRequired: true,
+          mfaSatisfied: false,
+          mfaEnrolled: true,
+        }) as never,
     );
-    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'staged_for_pickup', signature_token: DIGEST }) }));
+    orderGet.mockResolvedValue(
+      detailFixture({
+        request: requestFixture({ status: 'staged_for_pickup', signature_token: DIGEST }),
+      }),
+    );
     await renderPage();
     expect(panelProps()?.signatureToken).toBeNull();
-    expect(panelProps()?.handOverMfaMessage).toBe('Re-authenticate with MFA to collect a signature.');
+    expect(panelProps()?.handOverMfaMessage).toBe(
+      'Re-authenticate with MFA to collect a signature.',
+    );
     expect(sideReads()).toBe(0);
   });
 
@@ -576,7 +620,9 @@ describe('orders/[id]: the Collect signature link (migration 0389)', () => {
     withContextMock.mockImplementation(async () => {
       throw new Error('factors unreadable');
     });
-    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'in_transit', signature_token: DIGEST }) }));
+    orderGet.mockResolvedValue(
+      detailFixture({ request: requestFixture({ status: 'in_transit', signature_token: DIGEST }) }),
+    );
     await renderPage();
     expect(panelProps()?.signatureToken).toBeNull();
     expect(panelProps()?.handOverMfaMessage).toBeNull();
@@ -585,7 +631,11 @@ describe('orders/[id]: the Collect signature link (migration 0389)', () => {
 
   it("review 1: a staff approver gets the link only for an order in a warehouse they may write to (the mint's rule)", async () => {
     ctxHolder.current = { role: 'staff', permissions: new Set(['orders:read', 'orders:approve']) };
-    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'staged_for_pickup', signature_token: DIGEST }) }));
+    orderGet.mockResolvedValue(
+      detailFixture({
+        request: requestFixture({ status: 'staged_for_pickup', signature_token: DIGEST }),
+      }),
+    );
     getWarehouseAccessMock.mockResolvedValue({ hasAllAccess: false, writableIds: ['wh-other'] });
     await renderPage();
     expect(panelProps()?.signatureToken).toBeNull();
@@ -598,7 +648,9 @@ describe('orders/[id]: the Collect signature link (migration 0389)', () => {
 
   it('review 1: a failed warehouse access read gives a staff approver no link (fail closed)', async () => {
     ctxHolder.current = { role: 'staff', permissions: new Set(['orders:read', 'orders:approve']) };
-    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'in_transit', signature_token: DIGEST }) }));
+    orderGet.mockResolvedValue(
+      detailFixture({ request: requestFixture({ status: 'in_transit', signature_token: DIGEST }) }),
+    );
     getWarehouseAccessMock.mockRejectedValue(new Error('assignments unreadable'));
     await renderPage();
     expect(panelProps()?.signatureToken).toBeNull();
@@ -606,7 +658,11 @@ describe('orders/[id]: the Collect signature link (migration 0389)', () => {
   });
 
   it('no link before the order can be signed (packing slip generated): the raw token is not read', async () => {
-    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'packing_slip_generated', signature_token: DIGEST }) }));
+    orderGet.mockResolvedValue(
+      detailFixture({
+        request: requestFixture({ status: 'packing_slip_generated', signature_token: DIGEST }),
+      }),
+    );
     await renderPage();
     expect(panelProps()?.signatureToken).toBeNull();
     expect(sideReads()).toBe(0);
@@ -617,11 +673,17 @@ describe('orders/[id] host — ReportProblemButton gating (I1, fix wave 2)', () 
   it('permission GRANTED + module ENABLED -> canSubmit=true, moduleEnabled=true, prefill.orderRequestId=this order', async () => {
     setPermissions(true);
     checkModuleAccessMock.mockImplementation(async (moduleId: string) =>
-      moduleId === 'maintenance_requests' ? { enabled: true, canManage: false } : { enabled: false, canManage: false },
+      moduleId === 'maintenance_requests'
+        ? { enabled: true, canManage: false }
+        : { enabled: false, canManage: false },
     );
     await renderPage();
     expect(reportProblemButtonProps).toHaveBeenCalledWith(
-      expect.objectContaining({ canSubmit: true, moduleEnabled: true, prefill: { orderRequestId: ORDER_ID } }),
+      expect.objectContaining({
+        canSubmit: true,
+        moduleEnabled: true,
+        prefill: { orderRequestId: ORDER_ID },
+      }),
     );
   });
 
@@ -723,9 +785,7 @@ describe('orders/[id] host — delivery-request assistant re-entry gating + prop
       neededBy: '2026-08-20T17:00:00Z',
       orgTimezone: 'America/Chicago',
       notes: 'Front office, ask for Jane',
-      lines: [
-        { itemId: 'i1', quantity: 3, name: 'Google Chrome Book', sku: 'SP-BVK31-LH9' },
-      ],
+      lines: [{ itemId: 'i1', quantity: 3, name: 'Google Chrome Book', sku: 'SP-BVK31-LH9' }],
     });
     expect(getCachedOrgTimezoneMock).toHaveBeenCalledWith('org-1');
     expect(getOrgEmailRoutingMock).toHaveBeenCalledWith('org-1', 'delivery_request');
@@ -742,7 +802,8 @@ describe('orders/[id] host — delivery-request assistant re-entry gating + prop
     orderGet.mockResolvedValue(ownDeliveryDetail());
     getOrgEmailRoutingMock.mockResolvedValueOnce({
       state: 'invalid',
-      reason: 'Email recipient "cc" must be exactly one plain email address with no display name, separator or whitespace.',
+      reason:
+        'Email recipient "cc" must be exactly one plain email address with no display name, separator or whitespace.',
     } as never);
     await renderPage();
     expect(sendDeliveryRequestProps).not.toHaveBeenCalled();
@@ -782,7 +843,6 @@ describe('orders/[id] host — delivery-request assistant re-entry gating + prop
   });
 });
 
-
 /**
  * ORDER READINESS (F2-1). The page's own stock check (on hand minus a
  * reservations read, which threw into the error boundary when the read
@@ -793,7 +853,12 @@ describe('orders/[id] host — delivery-request assistant re-entry gating + prop
  * page never throws for it.
  */
 describe('orders/[id]: order readiness (F2-1)', () => {
-  function orderLine(id: string, itemId: string, requested: number, over: Record<string, unknown> = {}) {
+  function orderLine(
+    id: string,
+    itemId: string,
+    requested: number,
+    over: Record<string, unknown> = {},
+  ) {
     return {
       id,
       order_request_id: ORDER_ID,
@@ -819,7 +884,9 @@ describe('orders/[id]: order readiness (F2-1)', () => {
   const LINE_B = orderLine('LB', 'iB', 25);
 
   function orderAt(status: string, lines: unknown[], request: Record<string, unknown> = {}) {
-    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status, ...request }), lines }));
+    orderGet.mockResolvedValue(
+      detailFixture({ request: requestFixture({ status, ...request }), lines }),
+    );
   }
   function as(role: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer', perms: string[]) {
     ctxHolder.current = { role, permissions: new Set(['orders:read', ...perms]) };
@@ -835,7 +902,10 @@ describe('orders/[id]: order readiness (F2-1)', () => {
         { lineId: 'LA', itemId: 'iA', requested: 20 },
         { lineId: 'LB', itemId: 'iB', requested: 25 },
       ],
-      [visibleItemFacts('iA', { here: { rack: 40 } }), visibleItemFacts('iB', { here: { rack: 10, staging: 30 } })],
+      [
+        visibleItemFacts('iA', { here: { rack: 40 } }),
+        visibleItemFacts('iB', { here: { rack: 10, staging: 30 } }),
+      ],
     );
 
   const lastPanelProps = () => managerActionsProps.mock.calls.at(-1)![0] as Record<string, unknown>;
@@ -877,9 +947,12 @@ describe('orders/[id]: order readiness (F2-1)', () => {
     );
     readinessResult.mockResolvedValue(
       readinessOk(
-        orderReadinessFacts(ORDER_ID, 'approved', [{ lineId: 'LA', itemId: 'iA', requested: 1 }], [
-          visibleItemFacts('iA', { here: { rack: 6 }, heldOwn: 1 }),
-        ]),
+        orderReadinessFacts(
+          ORDER_ID,
+          'approved',
+          [{ lineId: 'LA', itemId: 'iA', requested: 1 }],
+          [visibleItemFacts('iA', { here: { rack: 6 }, heldOwn: 1 })],
+        ),
       ),
     );
     await renderPage();
@@ -906,8 +979,12 @@ describe('orders/[id]: order readiness (F2-1)', () => {
     expect(readinessResult).toHaveBeenCalledWith(ORDER_ID);
     const strip = screen.getByTestId('readiness-strip');
     expect(strip).toHaveAttribute('data-mode', 'full');
-    expect(within(strip).getByTestId('readiness-headline')).toHaveTextContent('1 line needs put-away');
-    expect(within(strip).getByTestId('readiness-details')).toHaveTextContent('1 of 2 lines ready to pick');
+    expect(within(strip).getByTestId('readiness-headline')).toHaveTextContent(
+      '1 line needs put-away',
+    );
+    expect(within(strip).getByTestId('readiness-details')).toHaveTextContent(
+      '1 of 2 lines ready to pick',
+    );
     // The org's zone as the facts carry it (America/Los_Angeles here): 17:42Z
     // is 10:42 AM.
     expect(within(strip).getByTestId('readiness-checked-at')).toHaveTextContent(
@@ -919,7 +996,9 @@ describe('orders/[id]: order readiness (F2-1)', () => {
     const cells = screen.getAllByTestId('readiness-line');
     expect(cells.map((c) => c.closest('td')!.cellIndex)).toEqual([0, 0]);
     expect(cells.map((c) => c.getAttribute('data-state'))).toEqual(['ready', 'needs_put_away']);
-    expect(within(cells[0]!).getByTestId('readiness-sentence')).toHaveTextContent('20 on the shelf for this order.');
+    expect(within(cells[0]!).getByTestId('readiness-sentence')).toHaveTextContent(
+      '20 on the shelf for this order.',
+    );
     expect(within(cells[1]!).getByTestId('readiness-sentence')).toHaveTextContent(
       '10 on the shelf. 15 more are in Staging and must be put away before picking can take them.',
     );
@@ -935,9 +1014,12 @@ describe('orders/[id]: order readiness (F2-1)', () => {
     orderAt('pending_approval', [LINE_A]);
     readinessResult.mockResolvedValue(
       readinessOk(
-        orderReadinessFacts(ORDER_ID, 'pending_approval', [{ lineId: 'LA', itemId: 'iA', requested: 20 }], [
-          visibleItemFacts('iA', { here: { rack: 5 } }),
-        ]),
+        orderReadinessFacts(
+          ORDER_ID,
+          'pending_approval',
+          [{ lineId: 'LA', itemId: 'iA', requested: 20 }],
+          [visibleItemFacts('iA', { here: { rack: 5 } })],
+        ),
       ),
     );
 
@@ -947,11 +1029,12 @@ describe('orders/[id]: order readiness (F2-1)', () => {
     expect(screen.getByTestId('readiness-line')).toHaveAttribute('data-state', 'short');
     expect(lastPanelProps()).toMatchObject({
       stockGates: { approvePartial: 'enabled', notice: null },
-      approveNotice: '1 line asks for more than is available now, so Approve will be refused. Use Approve partial or change the lines.',
+      approveNotice:
+        '1 line asks for more than is available now, so Approve will be refused. Use Approve partial or change the lines.',
     });
   });
 
-  it("a FAILED read says \"Couldn't check readiness\" with Try again, disables Approve partial with the reason, and never throws", async () => {
+  it('a FAILED read says "Couldn\'t check readiness" with Try again, disables Approve partial with the reason, and never throws', async () => {
     asManager();
     orderAt('pending_approval', [LINE_A, LINE_B]);
     readinessResult.mockResolvedValue(READINESS_FAILED);
@@ -960,7 +1043,9 @@ describe('orders/[id]: order readiness (F2-1)', () => {
 
     const strip = screen.getByTestId('readiness-strip');
     expect(strip).toHaveAttribute('data-failed', 'true');
-    expect(within(strip).getByTestId('readiness-headline')).toHaveTextContent("Couldn't check readiness. Try again.");
+    expect(within(strip).getByTestId('readiness-headline')).toHaveTextContent(
+      "Couldn't check readiness. Try again.",
+    );
     expect(within(strip).getByTestId('readiness-recheck')).toHaveTextContent('Try again');
     expect(within(strip).queryByTestId('readiness-checked-at')).toBeNull();
     expect(strip.textContent).not.toMatch(/Ready|in stock/);
@@ -971,7 +1056,8 @@ describe('orders/[id]: order readiness (F2-1)', () => {
     expect(lastPanelProps()).toMatchObject({
       stockGates: {
         approvePartial: 'disabled',
-        notice: 'Could not check stock for this order. Approve partial is unavailable until it loads.',
+        notice:
+          'Could not check stock for this order. Approve partial is unavailable until it loads.',
         canRetry: true,
       },
       approveNotice: null,
@@ -989,7 +1075,8 @@ describe('orders/[id]: order readiness (F2-1)', () => {
       stockGates: {
         approvePartial: 'hidden',
         resume: 'disabled',
-        notice: 'Could not check stock for this order. Resume fulfillment is unavailable until it loads.',
+        notice:
+          'Could not check stock for this order. Resume fulfillment is unavailable until it loads.',
         canRetry: true,
       },
     });
@@ -1000,9 +1087,12 @@ describe('orders/[id]: order readiness (F2-1)', () => {
     orderAt('backordered', [orderLine('LA', 'iA', 20, { quantity_fulfilled: 5 })]);
     readinessResult.mockResolvedValue(
       readinessOk(
-        orderReadinessFacts(ORDER_ID, 'backordered', [{ lineId: 'LA', itemId: 'iA', requested: 20, fulfilled: 5 }], [
-          visibleItemFacts('iA', { here: { rack: 3 } }),
-        ]),
+        orderReadinessFacts(
+          ORDER_ID,
+          'backordered',
+          [{ lineId: 'LA', itemId: 'iA', requested: 20, fulfilled: 5 }],
+          [visibleItemFacts('iA', { here: { rack: 3 } })],
+        ),
       ),
     );
 
@@ -1012,7 +1102,7 @@ describe('orders/[id]: order readiness (F2-1)', () => {
     expect(screen.getByTestId('readiness-headline')).toHaveTextContent('1 line short');
   });
 
-  it("an item the viewer cannot read is \"Can't confirm\" on its line, and Approve partial is disabled with why", async () => {
+  it('an item the viewer cannot read is "Can\'t confirm" on its line, and Approve partial is disabled with why', async () => {
     asManager();
     orderAt('pending_approval', [LINE_A, LINE_B]);
     readinessResult.mockResolvedValue(
@@ -1054,16 +1144,21 @@ describe('orders/[id]: order readiness (F2-1)', () => {
     orderAt('picking_in_progress', [LINE_A]);
     readinessResult.mockResolvedValue(
       readinessOk(
-        orderReadinessFacts(ORDER_ID, 'picking_in_progress', [{ lineId: 'LA', itemId: 'iA', requested: 20 }], [
-          visibleItemFacts('iA', { here: { rack: 40 }, heldOwn: 20 }),
-        ]),
+        orderReadinessFacts(
+          ORDER_ID,
+          'picking_in_progress',
+          [{ lineId: 'LA', itemId: 'iA', requested: 20 }],
+          [visibleItemFacts('iA', { here: { rack: 40 }, heldOwn: 20 })],
+        ),
       ),
     );
 
     await renderPage();
 
     expect(screen.getByTestId('readiness-strip')).toHaveAttribute('data-mode', 'full');
-    expect(screen.getByTestId('readiness-headline')).toHaveTextContent('Ready to pick (1 of 1 line)');
+    expect(screen.getByTestId('readiness-headline')).toHaveTextContent(
+      'Ready to pick (1 of 1 line)',
+    );
     const cell = screen.getByTestId('readiness-line');
     expect(within(cell).getByTestId('readiness-hold')).toHaveTextContent('Held for this order');
     expect(within(cell).getByTestId('readiness-why')).toHaveTextContent('Held for this order 20');
@@ -1083,7 +1178,9 @@ describe('orders/[id]: order readiness (F2-1)', () => {
 
     const strip = screen.getByTestId('readiness-strip');
     expect(strip).toHaveAttribute('data-mode', 'requester');
-    expect(within(strip).getByTestId('readiness-headline')).toHaveTextContent('All items are in stock.');
+    expect(within(strip).getByTestId('readiness-headline')).toHaveTextContent(
+      'All items are in stock.',
+    );
     expect(strip.textContent).not.toMatch(/\d+ (on the shelf|lines?)/);
     expect(screen.queryAllByTestId('readiness-line')).toEqual([]);
     expect(screen.queryByRole('columnheader', { name: 'Readiness' })).toBeNull();
@@ -1096,7 +1193,9 @@ describe('orders/[id]: order readiness (F2-1)', () => {
 
     await renderPage();
 
-    expect(screen.getByTestId('readiness-headline')).toHaveTextContent("Stock couldn't be checked just now.");
+    expect(screen.getByTestId('readiness-headline')).toHaveTextContent(
+      "Stock couldn't be checked just now.",
+    );
     expect(screen.getByTestId('readiness-recheck')).toHaveTextContent('Try again');
     expect(screen.queryByTestId('readiness-checked-at')).toBeNull();
   });
@@ -1116,7 +1215,15 @@ describe('orders/[id]: order readiness (F2-1)', () => {
     expect(document.body.textContent).not.toMatch(/on the shelf|Ready to pick|put-away/);
   });
 
-  it.each(['picking_complete', 'staged_for_pickup', 'in_transit', 'pending_confirmation', 'completed', 'cancelled', 'denied'])(
+  it.each([
+    'picking_complete',
+    'staged_for_pickup',
+    'in_transit',
+    'pending_confirmation',
+    'completed',
+    'cancelled',
+    'denied',
+  ])(
     'nothing at %s (readiness is for orders still to be picked): the early read is dropped',
     async (status) => {
       asManager();
@@ -1125,7 +1232,8 @@ describe('orders/[id]: order readiness (F2-1)', () => {
       expect(screen.queryByTestId('readiness-strip')).toBeNull();
       expect(screen.queryAllByTestId('readiness-line')).toEqual([]);
       // The dropped answer (the default mock's failed read) disables nothing.
-      const panel = managerActionsProps.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined;
+      const panel = managerActionsProps.mock.calls.at(-1)?.[0] as
+        Record<string, unknown> | undefined;
       if (panel) {
         expect(panel).toMatchObject({ stockGates: { approvePartial: 'hidden', notice: null } });
       }
@@ -1137,7 +1245,10 @@ describe('orders/[id]: order readiness (F2-1)', () => {
     orderAt('pending_approval', []);
     await renderPage();
     expect(screen.queryByTestId('readiness-strip')).toBeNull();
-    expect(lastPanelProps()).toMatchObject({ stockGates: { approvePartial: 'hidden' }, approveNotice: null });
+    expect(lastPanelProps()).toMatchObject({
+      stockGates: { approvePartial: 'hidden' },
+      approveNotice: null,
+    });
   });
 
   it('a service that cannot even start is a failed read in the strip, not a thrown page', async () => {
@@ -1147,15 +1258,20 @@ describe('orders/[id]: order readiness (F2-1)', () => {
 
     await renderPage();
 
-    expect(screen.getByTestId('readiness-headline')).toHaveTextContent("Couldn't check readiness. Try again.");
+    expect(screen.getByTestId('readiness-headline')).toHaveTextContent(
+      "Couldn't check readiness. Try again.",
+    );
     expect(lastPanelProps()).toMatchObject({ stockGates: { approvePartial: 'disabled' } });
   });
 
   describe('Count this item where on record and the locations disagree', () => {
     const disagreeFacts = () =>
-      orderReadinessFacts(ORDER_ID, 'pending_approval', [{ lineId: 'LA', itemId: 'iA', requested: 5 }], [
-        visibleItemFacts('iA', { here: { rack: 7 }, onHand: 10 }),
-      ]);
+      orderReadinessFacts(
+        ORDER_ID,
+        'pending_approval',
+        [{ lineId: 'LA', itemId: 'iA', requested: 5 }],
+        [visibleItemFacts('iA', { here: { rack: 7 }, onHand: 10 })],
+      );
 
     it('a viewer who can start a count gets the button on that line', async () => {
       asManager();
@@ -1172,7 +1288,10 @@ describe('orders/[id]: order readiness (F2-1)', () => {
       );
       expect(within(cell).getByRole('button', { name: 'Count this item' })).toBeInTheDocument();
       // The org's zone as the facts carry it.
-      expect(countThisItemProps).toHaveBeenCalledWith({ itemId: 'iA', timeZone: 'America/Los_Angeles' });
+      expect(countThisItemProps).toHaveBeenCalledWith({
+        itemId: 'iA',
+        timeZone: 'America/Los_Angeles',
+      });
     });
 
     it('a viewer who cannot start a count does not', async () => {
@@ -1193,9 +1312,12 @@ describe('orders/[id]: order readiness (F2-1)', () => {
       orderAt('pending_approval', [LINE_A]);
       readinessResult.mockResolvedValue(
         readinessOk(
-          orderReadinessFacts(ORDER_ID, 'pending_approval', [{ lineId: 'LA', itemId: 'iA', requested: 5 }], [
-            visibleItemFacts('iA', { here: { rack: 7 }, onHand: 10, isBundle: true }),
-          ]),
+          orderReadinessFacts(
+            ORDER_ID,
+            'pending_approval',
+            [{ lineId: 'LA', itemId: 'iA', requested: 5 }],
+            [visibleItemFacts('iA', { here: { rack: 7 }, onHand: 10, isBundle: true })],
+          ),
         ),
       );
 
@@ -1210,9 +1332,12 @@ describe('orders/[id]: order readiness (F2-1)', () => {
     orderAt('pending_approval', [LINE_A, LINE_B]);
     readinessResult.mockResolvedValue(
       readinessOk(
-        orderReadinessFacts(ORDER_ID, 'pending_approval', [{ lineId: 'LA', itemId: 'iA', requested: 20 }], [
-          visibleItemFacts('iA', { here: { rack: 40 } }),
-        ]),
+        orderReadinessFacts(
+          ORDER_ID,
+          'pending_approval',
+          [{ lineId: 'LA', itemId: 'iA', requested: 20 }],
+          [visibleItemFacts('iA', { here: { rack: 40 } })],
+        ),
       ),
     );
 
@@ -1220,7 +1345,9 @@ describe('orders/[id]: order readiness (F2-1)', () => {
 
     const strip = screen.getByTestId('readiness-strip');
     expect(strip).toHaveAttribute('data-failed', 'true');
-    expect(within(strip).getByTestId('readiness-headline')).toHaveTextContent("Couldn't check readiness. Try again.");
+    expect(within(strip).getByTestId('readiness-headline')).toHaveTextContent(
+      "Couldn't check readiness. Try again.",
+    );
     expect(within(strip).getByTestId('readiness-detail')).toHaveTextContent(
       'The order changed while it was being checked. Check again.',
     );
@@ -1234,9 +1361,12 @@ describe('orders/[id]: order readiness (F2-1)', () => {
     // would describe an approved order above a header that still says pending.
     readinessResult.mockResolvedValue(
       readinessOk(
-        orderReadinessFacts(ORDER_ID, 'approved', [{ lineId: 'LA', itemId: 'iA', requested: 20 }], [
-          visibleItemFacts('iA', { here: { rack: 5 }, heldOwn: 5 }),
-        ]),
+        orderReadinessFacts(
+          ORDER_ID,
+          'approved',
+          [{ lineId: 'LA', itemId: 'iA', requested: 20 }],
+          [visibleItemFacts('iA', { here: { rack: 5 }, heldOwn: 5 })],
+        ),
       ),
     );
 
@@ -1254,7 +1384,7 @@ describe('orders/[id]: order readiness (F2-1)', () => {
     });
   });
 
-  it("the screen-reader \"Line N\" is the row's place on the page, whatever order core numbered the lines in", async () => {
+  it('the screen-reader "Line N" is the row\'s place on the page, whatever order core numbered the lines in', async () => {
     asManager();
     // The page lists LB first; core numbers the lines by (created_at, id), LA first.
     orderAt('pending_approval', [LINE_B, LINE_A]);
@@ -1267,7 +1397,9 @@ describe('orders/[id]: order readiness (F2-1)', () => {
     expect(within(cells[0]!).getByTestId('readiness-sr-label')).toHaveTextContent(
       'Line 1, Needs put-away, 15 in Staging.',
     );
-    expect(within(cells[1]!).getByTestId('readiness-sr-label')).toHaveTextContent('Line 2, Ready to pick, 20 on the shelf.');
+    expect(within(cells[1]!).getByTestId('readiness-sr-label')).toHaveTextContent(
+      'Line 2, Ready to pick, 20 on the shelf.',
+    );
   });
 
   it('a backordered order: a handed-over line says so and is not counted as ready', async () => {
@@ -1295,7 +1427,9 @@ describe('orders/[id]: order readiness (F2-1)', () => {
     const cells = screen.getAllByTestId('readiness-line');
     expect(cells.map((c) => c.getAttribute('data-state'))).toEqual(['handed_over', 'short']);
     expect(within(cells[0]!).getByTestId('readiness-chip')).toHaveTextContent('Handed over');
-    expect(screen.getByTestId('readiness-details')).toHaveTextContent('0 of 1 line ready to pick · 1 line handed over');
+    expect(screen.getByTestId('readiness-details')).toHaveTextContent(
+      '0 of 1 line ready to pick · 1 line handed over',
+    );
   });
 
   // F2-1 local walk D-1: a Readiness column (13rem floor) made the lines
@@ -1337,14 +1471,19 @@ describe('orders/[id]: order readiness (F2-1)', () => {
       () =>
         new Promise((resolve) => {
           releaseOrder = () =>
-            resolve(detailFixture({ request: requestFixture({ status: 'approved' }), lines: [LINE_A] }));
+            resolve(
+              detailFixture({ request: requestFixture({ status: 'approved' }), lines: [LINE_A] }),
+            );
         }),
     );
     readinessResult.mockResolvedValue(
       readinessOk(
-        orderReadinessFacts(ORDER_ID, 'approved', [{ lineId: 'LA', itemId: 'iA', requested: 20 }], [
-          visibleItemFacts('iA', { here: { rack: 40 }, heldOwn: 20 }),
-        ]),
+        orderReadinessFacts(
+          ORDER_ID,
+          'approved',
+          [{ lineId: 'LA', itemId: 'iA', requested: 20 }],
+          [visibleItemFacts('iA', { here: { rack: 40 }, heldOwn: 20 })],
+        ),
       ),
     );
 
@@ -1357,7 +1496,9 @@ describe('orders/[id]: order readiness (F2-1)', () => {
 
     expect(readinessForCurrentUser).toHaveBeenCalledTimes(1);
     expect(readinessResult).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId('readiness-headline')).toHaveTextContent('Ready to pick (1 of 1 line)');
+    expect(screen.getByTestId('readiness-headline')).toHaveTextContent(
+      'Ready to pick (1 of 1 line)',
+    );
   });
 
   it("no organizations read for readiness: its times are in the zone the facts carry (0377's order.timeZone)", async () => {
@@ -1392,9 +1533,11 @@ describe('orders/[id]: order readiness (F2-1)', () => {
   // said "Deleted item" here and "Unknown item" on the phone. A line's item
   // cannot be deleted (order_request_lines.item_id is ON DELETE RESTRICT), so
   // a missing item is one the viewer's access hides: core's one label says so.
-  it("a line whose item the viewer cannot read says \"An item you can't see\", in the row and to its edit controls", async () => {
+  it('a line whose item the viewer cannot read says "An item you can\'t see", in the row and to its edit controls', async () => {
     as('staff', ['items:update']);
-    orderAt('pending_approval', [LINE_A, orderLine('LB', 'iB', 25, { item: null })], { requester_user_id: 'u1' });
+    orderAt('pending_approval', [LINE_A, orderLine('LB', 'iB', 25, { item: null })], {
+      requester_user_id: 'u1',
+    });
     readinessResult.mockResolvedValue(
       readinessOk(
         orderReadinessFacts(
@@ -1440,7 +1583,9 @@ describe('orders/[id]: one stock check, one definition of owed (pattern #26)', (
     const start = src.indexOf(
       'const readinessRead = OrderReadinessService.forCurrentUser().then((svc) => svc.result(id));',
     );
-    const orderRead = src.indexOf('OrderRequestsService.forCurrentUser().then((svc) => svc.get(id))');
+    const orderRead = src.indexOf(
+      'OrderRequestsService.forCurrentUser().then((svc) => svc.get(id))',
+    );
     expect(start).toBeGreaterThan(0);
     // Started before the order read is awaited (so before its gate is known),
     // and observed at once so a dropped read never rejects unhandled.
@@ -1477,7 +1622,12 @@ describe('orders/[id]: one stock check, one definition of owed (pattern #26)', (
 
 describe('orders/[id]: held, and caught before it leaves (F2-2)', () => {
   const PENS = 'L4L - Pen Black & Rose Gold';
-  function orderLine(id: string, itemId: string, requested: number, over: Record<string, unknown> = {}) {
+  function orderLine(
+    id: string,
+    itemId: string,
+    requested: number,
+    over: Record<string, unknown> = {},
+  ) {
     return {
       id,
       order_request_id: ORDER_ID,
@@ -1500,7 +1650,9 @@ describe('orders/[id]: held, and caught before it leaves (F2-2)', () => {
     };
   }
   function orderAt(status: string, lines: unknown[], request: Record<string, unknown> = {}) {
-    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status, ...request }), lines }));
+    orderGet.mockResolvedValue(
+      detailFixture({ request: requestFixture({ status, ...request }), lines }),
+    );
   }
   function as(role: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer', perms: string[]) {
     ctxHolder.current = { role, permissions: new Set(['orders:read', ...perms]) };
@@ -1508,7 +1660,9 @@ describe('orders/[id]: held, and caught before it leaves (F2-2)', () => {
   const asManager = () => as('manager', ['orders:approve']);
   const lastPanelProps = () => managerActionsProps.mock.calls.at(-1)![0] as Record<string, unknown>;
   const fixesFor = (lineId: string) =>
-    shortLineFixesProps.mock.calls.map((c) => c[0] as Record<string, unknown>).find((p) => p.lineId === lineId);
+    shortLineFixesProps.mock.calls
+      .map((c) => c[0] as Record<string, unknown>)
+      .find((p) => p.lineId === lineId);
 
   /** SO-000100 at picking: notebooks held and on the rack, the pens gone. */
   const so100Facts = (status: string) =>
@@ -1534,9 +1688,9 @@ describe('orders/[id]: held, and caught before it leaves (F2-2)', () => {
 
       await renderPage();
 
-      expect(within(screen.getByTestId('readiness-strip')).getByTestId('readiness-hold-stock')).toHaveTextContent(
-        'Hold available stock',
-      );
+      expect(
+        within(screen.getByTestId('readiness-strip')).getByTestId('readiness-hold-stock'),
+      ).toHaveTextContent('Hold available stock');
     });
 
     it('never when every line is held, to a picker who may not approve, or on a failed read', async () => {
@@ -1544,9 +1698,12 @@ describe('orders/[id]: held, and caught before it leaves (F2-2)', () => {
       orderAt('approved', [orderLine('LN', 'iN', 60)]);
       readinessResult.mockResolvedValue(
         readinessOk(
-          orderReadinessFacts(ORDER_ID, 'approved', [{ lineId: 'LN', itemId: 'iN', requested: 60 }], [
-            visibleItemFacts('iN', { here: { rack: 60 }, heldOwn: 60 }),
-          ]),
+          orderReadinessFacts(
+            ORDER_ID,
+            'approved',
+            [{ lineId: 'LN', itemId: 'iN', requested: 60 }],
+            [visibleItemFacts('iN', { here: { rack: 60 }, heldOwn: 60 })],
+          ),
         ),
       );
       const held = await renderPage();
@@ -1606,9 +1763,12 @@ describe('orders/[id]: held, and caught before it leaves (F2-2)', () => {
       orderAt('pick_slip_generated', [orderLine('LN', 'iN', 60)]);
       readinessResult.mockResolvedValue(
         readinessOk(
-          orderReadinessFacts(ORDER_ID, 'pick_slip_generated', [{ lineId: 'LN', itemId: 'iN', requested: 60 }], [
-            visibleItemFacts('iN', { here: { rack: 60 }, heldOwn: 60 }),
-          ]),
+          orderReadinessFacts(
+            ORDER_ID,
+            'pick_slip_generated',
+            [{ lineId: 'LN', itemId: 'iN', requested: 60 }],
+            [visibleItemFacts('iN', { here: { rack: 60 }, heldOwn: 60 })],
+          ),
         ),
       );
 
@@ -1642,8 +1802,20 @@ describe('orders/[id]: held, and caught before it leaves (F2-2)', () => {
       await renderPage();
 
       expect(lastPanelProps().departureLines).toEqual([
-        { lineId: 'LN', itemName: 'Item iN', quantityRequested: 60, quantityFulfilled: 0, quantityPicked: 60 },
-        { lineId: 'LP', itemName: PENS, quantityRequested: 60, quantityFulfilled: 0, quantityPicked: 0 },
+        {
+          lineId: 'LN',
+          itemName: 'Item iN',
+          quantityRequested: 60,
+          quantityFulfilled: 0,
+          quantityPicked: 60,
+        },
+        {
+          lineId: 'LP',
+          itemName: PENS,
+          quantityRequested: 60,
+          quantityFulfilled: 0,
+          quantityPicked: 0,
+        },
       ]);
     });
 
@@ -1668,7 +1840,10 @@ describe('orders/[id]: held, and caught before it leaves (F2-2)', () => {
               { lineId: 'LA', itemId: 'iA', requested: 20 },
               { lineId: 'LB', itemId: 'iB', requested: 25 },
             ],
-            [visibleItemFacts('iA', { here: { rack: 40 } }), visibleItemFacts('iB', { here: { rack: 10 } })],
+            [
+              visibleItemFacts('iA', { here: { rack: 40 } }),
+              visibleItemFacts('iB', { here: { rack: 10 } }),
+            ],
           ),
         ),
       );
@@ -1715,7 +1890,13 @@ describe('orders/[id]: held, and caught before it leaves (F2-2)', () => {
               visibleItemFacts('iP', {
                 inbound: {
                   rows: [
-                    { poId: 'po-1', poNumber: 'PO-2026-0042', status: 'ordered', expectedAt: '2026-10-03T16:00:00Z', remaining: 60 },
+                    {
+                      poId: 'po-1',
+                      poNumber: 'PO-2026-0042',
+                      status: 'ordered',
+                      expectedAt: '2026-10-03T16:00:00Z',
+                      remaining: 60,
+                    },
                   ],
                   hiddenRemaining: 0,
                   truncated: false,
@@ -1749,7 +1930,10 @@ describe('orders/[id]: held, and caught before it leaves (F2-2)', () => {
       // Judged from the lines alone: the picked phase shows no readiness.
       expect(screen.queryByTestId('readiness-strip')).toBeNull();
       expect(fixesFor('LN')).toMatchObject({
-        fixes: { actions: [{ kind: 'lower', quantity: 30, label: 'Lower to what was picked (30)' }], note: null },
+        fixes: {
+          actions: [{ kind: 'lower', quantity: 30, label: 'Lower to what was picked (30)' }],
+          note: null,
+        },
       });
       expect(fixesFor('LP')).toMatchObject({
         fixes: { actions: [{ kind: 'remove', label: 'Remove from order' }], note: null },
@@ -1758,7 +1942,10 @@ describe('orders/[id]: held, and caught before it leaves (F2-2)', () => {
 
     it('out for delivery the lines are final: the note, to the people who could have edited them', async () => {
       asManager();
-      orderAt('in_transit', [orderLine('LN', 'iN', 60, { quantity_picked: 60 }), orderLine('LP', 'iP', 60, { quantity_picked: 0 })]);
+      orderAt('in_transit', [
+        orderLine('LN', 'iN', 60, { quantity_picked: 60 }),
+        orderLine('LP', 'iP', 60, { quantity_picked: 0 }),
+      ]);
       await renderPage();
       expect(fixesFor('LN')).toBeUndefined();
       expect(fixesFor('LP')).toMatchObject({ fixes: { actions: [], note: SHORT_LINE_FINAL_NOTE } });
@@ -1781,14 +1968,19 @@ describe('orders/[id]: held, and caught before it leaves (F2-2)', () => {
               { lineId: 'LB', itemId: 'iB', requested: 25 },
               { lineId: 'LA', itemId: 'iA', requested: 5 },
             ],
-            [visibleItemFacts('iB', { here: { rack: 10 } }), visibleItemFacts('iA', { here: { rack: 10 } })],
+            [
+              visibleItemFacts('iB', { here: { rack: 10 } }),
+              visibleItemFacts('iA', { here: { rack: 10 } }),
+            ],
           ),
         ),
       );
 
       await renderPage();
 
-      expect(screen.getAllByTestId('readiness-line').map((c) => c.getAttribute('data-state'))).toContain('short');
+      expect(
+        screen.getAllByTestId('readiness-line').map((c) => c.getAttribute('data-state')),
+      ).toContain('short');
       expect(shortLineFixesProps).not.toHaveBeenCalled();
     });
   });
@@ -1801,7 +1993,12 @@ describe('orders/[id]: held, and caught before it leaves (F2-2)', () => {
  * preview handed to the actions panel.
  */
 describe('orders/[id]: put away and partial fulfilment from the order (F2-3)', () => {
-  function orderLine(id: string, itemId: string, requested: number, over: Record<string, unknown> = {}) {
+  function orderLine(
+    id: string,
+    itemId: string,
+    requested: number,
+    over: Record<string, unknown> = {},
+  ) {
     return {
       id,
       order_request_id: ORDER_ID,
@@ -1830,10 +2027,13 @@ describe('orders/[id]: put away and partial fulfilment from the order (F2-3)', (
     ctxHolder.current = { role, permissions: new Set(['orders:read', ...perms]) };
   }
   const lastPanelProps = () => managerActionsProps.mock.calls.at(-1)![0] as Record<string, unknown>;
-  const stagingHref = (...items: string[]) => `/dashboard/inventory/staging?order=${ORDER_ID}&item=${items.join(',')}`;
+  const stagingHref = (...items: string[]) =>
+    `/dashboard/inventory/staging?order=${ORDER_ID}&item=${items.join(',')}`;
   /** The line cells' put-away links, by row. */
   const lineLinks = () =>
-    screen.getAllByTestId('readiness-line').map((cell) => within(cell).queryByTestId('readiness-put-away-line'));
+    screen
+      .getAllByTestId('readiness-line')
+      .map((cell) => within(cell).queryByTestId('readiness-put-away-line'));
 
   /**
    * A ready on a rack; B needs put-away (10 rack + 30 Staging, 25 asked); C
@@ -1867,11 +2067,9 @@ describe('orders/[id]: put away and partial fulfilment from the order (F2-3)', (
 
       // One read, the page's own: nothing added for put-away.
       expect(readinessForCurrentUser).toHaveBeenCalledTimes(1);
-      expect(screen.getAllByTestId('readiness-line').map((c) => c.getAttribute('data-state'))).toEqual([
-        'ready',
-        'needs_put_away',
-        'short',
-      ]);
+      expect(
+        screen.getAllByTestId('readiness-line').map((c) => c.getAttribute('data-state')),
+      ).toEqual(['ready', 'needs_put_away', 'short']);
       const [a, b, c] = lineLinks();
       expect(a).toBeNull();
       expect(b!.querySelector('a')).toHaveAttribute('href', stagingHref('iB'));
@@ -1925,10 +2123,11 @@ describe('orders/[id]: put away and partial fulfilment from the order (F2-3)', (
 
       await renderPage();
 
-      expect(within(screen.getByTestId('readiness-strip')).getByRole('link', { name: 'Put away 2 items' })).toHaveAttribute(
-        'href',
-        stagingHref('iB', 'iC'),
-      );
+      expect(
+        within(screen.getByTestId('readiness-strip')).getByRole('link', {
+          name: 'Put away 2 items',
+        }),
+      ).toHaveAttribute('href', stagingHref('iB', 'iC'));
     });
 
     it('two lines of one item name it once: "Put away 1 item"', async () => {
@@ -1950,10 +2149,11 @@ describe('orders/[id]: put away and partial fulfilment from the order (F2-3)', (
 
       await renderPage();
 
-      expect(within(screen.getByTestId('readiness-strip')).getByRole('link', { name: 'Put away 1 item' })).toHaveAttribute(
-        'href',
-        stagingHref('iB'),
-      );
+      expect(
+        within(screen.getByTestId('readiness-strip')).getByRole('link', {
+          name: 'Put away 1 item',
+        }),
+      ).toHaveAttribute('href', stagingHref('iB'));
     });
 
     it('nothing when nothing is in Staging, on a failed read, or for the requester', async () => {
@@ -1961,9 +2161,12 @@ describe('orders/[id]: put away and partial fulfilment from the order (F2-3)', (
       orderAt('pending_approval', [orderLine('LA', 'iA', 20)]);
       readinessResult.mockResolvedValue(
         readinessOk(
-          orderReadinessFacts(ORDER_ID, 'pending_approval', [{ lineId: 'LA', itemId: 'iA', requested: 20 }], [
-            visibleItemFacts('iA', { here: { rack: 40 } }),
-          ]),
+          orderReadinessFacts(
+            ORDER_ID,
+            'pending_approval',
+            [{ lineId: 'LA', itemId: 'iA', requested: 20 }],
+            [visibleItemFacts('iA', { here: { rack: 40 } })],
+          ),
         ),
       );
       const ready = await renderPage();
@@ -1980,9 +2183,15 @@ describe('orders/[id]: put away and partial fulfilment from the order (F2-3)', (
       failed.unmount();
 
       // The requester's own order: one sentence, no actions (with Transfer stock too).
-      ctxHolder.current = { role: 'viewer', permissions: new Set(['orders:read', 'stock:transfer', 'items:read']) };
+      ctxHolder.current = {
+        role: 'viewer',
+        permissions: new Set(['orders:read', 'stock:transfer', 'items:read']),
+      };
       orderGet.mockResolvedValue(
-        detailFixture({ request: requestFixture({ status: 'pending_approval', requester_user_id: 'u1' }), lines: LINES }),
+        detailFixture({
+          request: requestFixture({ status: 'pending_approval', requester_user_id: 'u1' }),
+          lines: LINES,
+        }),
       );
       readinessResult.mockResolvedValue(readinessOk(facts('pending_approval')));
       await renderPage();
@@ -1996,7 +2205,11 @@ describe('orders/[id]: put away and partial fulfilment from the order (F2-3)', (
   describe('the approve-partial / resume preview', () => {
     it("pending: the panel gets core's per-item preview from the page's own read, duplicate lines combined", async () => {
       as('manager', ['orders:approve']);
-      orderAt('pending_approval', [orderLine('L1', 'iM', 25), orderLine('L2', 'iM', 15), orderLine('L3', 'iN', 10)]);
+      orderAt('pending_approval', [
+        orderLine('L1', 'iM', 25),
+        orderLine('L2', 'iM', 15),
+        orderLine('L3', 'iN', 10),
+      ]);
       readinessResult.mockResolvedValue(
         readinessOk(
           orderReadinessFacts(
@@ -2029,7 +2242,14 @@ describe('orders/[id]: put away and partial fulfilment from the order (F2-3)', (
         backorder: 4,
         items: [
           { itemId: 'iM', itemName: 'Maus I', lineCount: 2, asked: 40, willHold: 36, backorder: 4 },
-          { itemId: 'iN', itemName: 'Notebook', lineCount: 1, asked: 10, willHold: 10, backorder: 0 },
+          {
+            itemId: 'iN',
+            itemName: 'Notebook',
+            lineCount: 1,
+            asked: 10,
+            willHold: 10,
+            backorder: 0,
+          },
         ],
       });
     });
@@ -2134,18 +2354,31 @@ describe('orders/[id]: the Dates card prints the needed-by in the org zone', () 
     returned_quantity: 0,
     unit_cost_at_request: 0,
     notes: null,
-    item: { id: 'iA', name: 'Item iA', sku: 'SKU-iA', quantity_on_hand: 10, charter_name: null, charter_code: null },
+    item: {
+      id: 'iA',
+      name: 'Item iA',
+      sku: 'SKU-iA',
+      quantity_on_hand: 10,
+      charter_name: null,
+      charter_code: null,
+    },
   };
   function neededByRow(): HTMLElement {
     const dt = screen.getByText('Needed by', { selector: 'dt' });
     return dt.nextElementSibling as HTMLElement;
   }
   function asManager() {
-    ctxHolder.current = { role: 'manager', permissions: new Set(['orders:read', 'orders:approve']) };
+    ctxHolder.current = {
+      role: 'manager',
+      permissions: new Set(['orders:read', 'orders:approve']),
+    };
   }
   function orderAt(status: string, request: Record<string, unknown> = {}) {
     orderGet.mockResolvedValue(
-      detailFixture({ request: requestFixture({ status, needed_by: NEEDED_BY, ...request }), lines: [LINE] }),
+      detailFixture({
+        request: requestFixture({ status, needed_by: NEEDED_BY, ...request }),
+        lines: [LINE],
+      }),
     );
   }
   function factsIn(status: string, timeZone: string) {
@@ -2218,7 +2451,9 @@ describe('orders/[id]: the Dates card prints the needed-by in the org zone', () 
   });
 
   it('no needed-by: no Needed by row and no organizations read', async () => {
-    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'completed' }), lines: [LINE] }));
+    orderGet.mockResolvedValue(
+      detailFixture({ request: requestFixture({ status: 'completed' }), lines: [LINE] }),
+    );
 
     await renderPage();
 
@@ -2320,7 +2555,7 @@ describe('orders/[id]: the way back to Book Order Totals (plan D17)', () => {
 // no round trip of its own. Each assertion fails if the page stops passing
 // the entry (the call-site pins).
 
-describe("orders/[id]: change the needed-by date (F2-4)", () => {
+describe('orders/[id]: change the needed-by date (F2-4)', () => {
   // Exactly as PostgREST prints it, microseconds included: 2:00 PM on Thu Oct
   // 1 in New York.
   const NEEDED_BY = '2026-10-01T18:00:00.123456+00:00';
@@ -2334,14 +2569,28 @@ describe("orders/[id]: change the needed-by date (F2-4)", () => {
     returned_quantity: 0,
     unit_cost_at_request: 0,
     notes: null,
-    item: { id: 'iA', name: 'Item iA', sku: 'SKU-iA', quantity_on_hand: 10, charter_name: null, charter_code: null },
+    item: {
+      id: 'iA',
+      name: 'Item iA',
+      sku: 'SKU-iA',
+      quantity_on_hand: 10,
+      charter_name: null,
+      charter_code: null,
+    },
   };
   function as(role: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer', perms: string[]) {
     ctxHolder.current = { role, permissions: new Set(['orders:read', ...perms]) };
   }
-  function orderAt(status: string, request: Record<string, unknown> = {}, lines: unknown[] = [LINE]) {
+  function orderAt(
+    status: string,
+    request: Record<string, unknown> = {},
+    lines: unknown[] = [LINE],
+  ) {
     orderGet.mockResolvedValue(
-      detailFixture({ request: requestFixture({ status, needed_by: NEEDED_BY, ...request }), lines }),
+      detailFixture({
+        request: requestFixture({ status, needed_by: NEEDED_BY, ...request }),
+        lines,
+      }),
     );
   }
   function factsAt(status: string, timeZone: string | null = 'America/New_York') {
@@ -2355,9 +2604,12 @@ describe("orders/[id]: change the needed-by date (F2-4)", () => {
       ),
     );
   }
-  const lastChange = () => (reviseDialogProps.mock.calls.at(-1)![0] as { change: Record<string, unknown> }).change;
-  const inStrip = () => within(screen.getByTestId('readiness-strip')).queryByTestId('needed-by-change');
-  const inDates = () => within(screen.getByTestId('dates-needed-by')).queryByTestId('needed-by-change');
+  const lastChange = () =>
+    (reviseDialogProps.mock.calls.at(-1)![0] as { change: Record<string, unknown> }).change;
+  const inStrip = () =>
+    within(screen.getByTestId('readiness-strip')).queryByTestId('needed-by-change');
+  const inDates = () =>
+    within(screen.getByTestId('dates-needed-by')).queryByTestId('needed-by-change');
 
   it('the dialog is mounted ONCE, at the top of the page, so a refresh that moves or removes Change never takes an open dialog with it', () => {
     // Change moves from the strip to the Dates card when picking completes,
@@ -2368,7 +2620,10 @@ describe("orders/[id]: change the needed-by date (F2-4)", () => {
     expect(src).toMatch(
       /<OrderRealtimeRefresh orderId=\{id\} \/>\s*<ReviseNeededByDialog change=\{neededByChange\} trigger=\{false\} \/>/,
     );
-    const strip = readFileSync(path.resolve(__dirname, '../../../../../components/orders/readiness-strip.tsx'), 'utf8');
+    const strip = readFileSync(
+      path.resolve(__dirname, '../../../../../components/orders/readiness-strip.tsx'),
+      'utf8',
+    );
     expect(strip).not.toContain('<ReviseNeededByDialog');
   });
 
@@ -2379,7 +2634,9 @@ describe("orders/[id]: change the needed-by date (F2-4)", () => {
 
     await renderPage();
 
-    const row = within(screen.getByTestId('readiness-strip')).getByTestId('readiness-needed-by-change');
+    const row = within(screen.getByTestId('readiness-strip')).getByTestId(
+      'readiness-needed-by-change',
+    );
     expect(row).toHaveTextContent('Needed by Thu, Oct 1, 2:00 PM');
     expect(within(row).getByTestId('needed-by-change')).toBeInTheDocument();
     // One way to it: not in the Dates card too.
@@ -2414,9 +2671,9 @@ describe("orders/[id]: change the needed-by date (F2-4)", () => {
     orderAt('approved', { needed_by: null });
     readinessResult.mockResolvedValue(factsAt('approved'));
     await renderPage();
-    expect(within(screen.getByTestId('readiness-strip')).getByTestId('readiness-needed-by-change')).toHaveTextContent(
-      'No needed-by date',
-    );
+    expect(
+      within(screen.getByTestId('readiness-strip')).getByTestId('readiness-needed-by-change'),
+    ).toHaveTextContent('No needed-by date');
     expect(lastChange()).toMatchObject({ neededBy: null, rowLabel: 'No needed-by date' });
   });
 
@@ -2431,7 +2688,10 @@ describe("orders/[id]: change the needed-by date (F2-4)", () => {
     expect(inDates()).not.toBeNull();
     // 18:00Z is 1:00 PM in Chicago.
     expect(screen.getByTestId('dates-needed-by')).toHaveTextContent('Thu, Oct 1, 1:00 PM');
-    expect(lastChange()).toMatchObject({ status: 'staged_for_delivery', timeZone: 'America/Chicago' });
+    expect(lastChange()).toMatchObject({
+      status: 'staged_for_delivery',
+      timeZone: 'America/Chicago',
+    });
     expect(readinessResult).toHaveBeenCalledTimes(1);
     expect(getCachedOrgTimezoneMock).not.toHaveBeenCalled();
   });
@@ -2462,7 +2722,12 @@ describe("orders/[id]: change the needed-by date (F2-4)", () => {
       () =>
         new Promise((resolve) => {
           releaseOrder = () =>
-            resolve(detailFixture({ request: requestFixture({ status: 'approved', needed_by: NEEDED_BY }), lines: [LINE] }));
+            resolve(
+              detailFixture({
+                request: requestFixture({ status: 'approved', needed_by: NEEDED_BY }),
+                lines: [LINE],
+              }),
+            );
         }),
     );
     readinessResult.mockResolvedValue(factsAt('approved'));
@@ -2564,7 +2829,10 @@ describe("orders/[id]: change the needed-by date (F2-4)", () => {
     orderAt('approved');
     readinessResult.mockResolvedValue(factsAt('approved', null));
     await renderPage();
-    expect(lastChange()).toMatchObject({ timeZone: 'America/Los_Angeles', rowLabel: 'Needed by Thu, Oct 1, 11:00 AM' });
+    expect(lastChange()).toMatchObject({
+      timeZone: 'America/Los_Angeles',
+      rowLabel: 'Needed by Thu, Oct 1, 11:00 AM',
+    });
   });
 
   it("the timeline is handed the org's zone, so a change's dates print in it", async () => {
@@ -2592,7 +2860,14 @@ describe('orders/[id]: draft a PO for what is short (F2-5)', () => {
       returned_quantity: 0,
       unit_cost_at_request: 0,
       notes: null,
-      item: { id: itemId, name: `Item ${itemId}`, sku: null, quantity_on_hand: 2, charter_name: null, charter_code: null },
+      item: {
+        id: itemId,
+        name: `Item ${itemId}`,
+        sku: null,
+        quantity_on_hand: 2,
+        charter_name: null,
+        charter_code: null,
+      },
     };
   }
   const LINES = [orderLine('LA', ITEM_A, 10), orderLine('LB', ITEM_B, 5)];
@@ -2601,7 +2876,10 @@ describe('orders/[id]: draft a PO for what is short (F2-5)', () => {
   }
   /** The service context the page already started (its modules). */
   function modules(ids: string[]) {
-    withContextMock.mockResolvedValue({ organizationId: 'org-1', enabledModules: new Set(ids) } as never);
+    withContextMock.mockResolvedValue({
+      organizationId: 'org-1',
+      enabledModules: new Set(ids),
+    } as never);
   }
   /** A: 10 owed, 2 on the shelf (8 to draft). B: 5 owed, 5 on the shelf. */
   function factsWith(aOver: Record<string, unknown> = {}, bOver: Record<string, unknown> = {}) {
@@ -2620,11 +2898,14 @@ describe('orders/[id]: draft a PO for what is short (F2-5)', () => {
       ),
     );
   }
-  const handedOffers = () => shortfallDialogProps.mock.calls.map(([p]) => (p as { offer: unknown }).offer);
+  const handedOffers = () =>
+    shortfallDialogProps.mock.calls.map(([p]) => (p as { offer: unknown }).offer);
   const strip = () => screen.getByTestId('readiness-strip');
 
   beforeEach(() => {
-    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'approved' }), lines: LINES }));
+    orderGet.mockResolvedValue(
+      detailFixture({ request: requestFixture({ status: 'approved' }), lines: LINES }),
+    );
     modules(['orders', 'purchase_orders']);
   });
   afterEach(() => {
@@ -2637,10 +2918,9 @@ describe('orders/[id]: draft a PO for what is short (F2-5)', () => {
 
     await renderPage();
 
-    expect(within(strip()).getByRole('button', { name: 'Draft PO for what is short' })).toHaveAttribute(
-      'data-shortfall-po',
-      ORDER_ID,
-    );
+    expect(
+      within(strip()).getByRole('button', { name: 'Draft PO for what is short' }),
+    ).toHaveAttribute('data-shortfall-po', ORDER_ID);
     expect(within(strip()).queryByTestId('readiness-shortfall-po-permission')).toBeNull();
     // Mounted once, and handed the order, the view core made of the page's
     // own readiness read, and the org's zone the strip prints in.
@@ -2648,13 +2928,19 @@ describe('orders/[id]: draft a PO for what is short (F2-5)', () => {
     const offer = handedOffers()[0] as {
       orderId: string;
       timeZone: string;
-      view: { orderId: string; draftableCount: number; rows: Array<{ itemId: string; draftable: number; supplierId: string | null }> };
+      view: {
+        orderId: string;
+        draftableCount: number;
+        rows: Array<{ itemId: string; draftable: number; supplierId: string | null }>;
+      };
     };
     expect(offer.orderId).toBe(ORDER_ID);
     expect(offer.timeZone).toBe('America/Los_Angeles');
     expect(offer.view.orderId).toBe(ORDER_ID);
     expect(offer.view.draftableCount).toBe(1);
-    expect(offer.view.rows.map((r) => [r.itemId, r.draftable, r.supplierId])).toEqual([[ITEM_A, 8, 'sup-1']]);
+    expect(offer.view.rows.map((r) => [r.itemId, r.draftable, r.supplierId])).toEqual([
+      [ITEM_A, 8, 'sup-1'],
+    ]);
     // No read of its own: one readiness read, and no supplier names on the page.
     expect(readinessForCurrentUser).toHaveBeenCalledTimes(1);
   });
@@ -2668,7 +2954,9 @@ describe('orders/[id]: draft a PO for what is short (F2-5)', () => {
       as(role, [...perms]);
       readinessResult.mockResolvedValue(factsWith());
       const { unmount } = await renderPage();
-      expect(within(strip()).queryByRole('button', { name: 'Draft PO for what is short' })).toBeNull();
+      expect(
+        within(strip()).queryByRole('button', { name: 'Draft PO for what is short' }),
+      ).toBeNull();
       expect(within(strip()).getByTestId('readiness-shortfall-po-permission')).toHaveTextContent(
         'Drafting a PO needs a manager with purchase-order access.',
       );
@@ -2683,7 +2971,15 @@ describe('orders/[id]: draft a PO for what is short (F2-5)', () => {
       // A's 8 already on an ordered PO.
       factsWith({
         inbound: {
-          rows: [{ poId: 'po-1', poNumber: 'PO-2026-0021', status: 'ordered', expectedAt: null, remaining: 8 }],
+          rows: [
+            {
+              poId: 'po-1',
+              poNumber: 'PO-2026-0021',
+              status: 'ordered',
+              expectedAt: null,
+              remaining: 8,
+            },
+          ],
           hiddenRemaining: 0,
           truncated: false,
           truncatedRemaining: 0,
@@ -2721,7 +3017,10 @@ describe('orders/[id]: draft a PO for what is short (F2-5)', () => {
   it('the requester gets no numbers, so no offer and no sentence', async () => {
     as('viewer', []);
     orderGet.mockResolvedValue(
-      detailFixture({ request: requestFixture({ status: 'approved', requester_user_id: 'u1' }), lines: LINES }),
+      detailFixture({
+        request: requestFixture({ status: 'approved', requester_user_id: 'u1' }),
+        lines: LINES,
+      }),
     );
     readinessResult.mockResolvedValue(factsWith());
     await renderPage();
@@ -2748,13 +3047,16 @@ describe('orders/[id]: draft a PO for what is short (F2-5)', () => {
 // RX-2 review fix (counter taps): the RMA's Hand over arrives with
 // ?sign=physical; the page asks the panel to open the physical signature
 // (the panel opens it only when the order is ready and the viewer may).
-describe('orders/[id]: ?sign=physical from the RMA\'s Hand over', () => {
+describe("orders/[id]: ?sign=physical from the RMA's Hand over", () => {
   // Re-pinned by fix round 1 (verification V-2), claim narrowed: the request
   // is honoured only on an exchange replacement (the RMA's Hand over is its
   // only source), so a link to any other order opens nothing; the dialog
   // names the order.
   it('passes the request to the manager panel only for a live exchange replacement; without it, or on another order, the panel opens nothing', async () => {
-    ctxHolder.current = { role: 'manager', permissions: new Set(['orders:read', 'orders:approve']) };
+    ctxHolder.current = {
+      role: 'manager',
+      permissions: new Set(['orders:read', 'orders:approve']),
+    };
     const replacement = {
       returnId: 'rma-1',
       returnNumber: 'RMA-20261006-C27F66',
@@ -2780,19 +3082,41 @@ describe('orders/[id]: ?sign=physical from the RMA\'s Hand over', () => {
       held: 0,
     };
     orderGet.mockResolvedValue(
-      detailFixture({ request: requestFixture({ status: 'staged_for_pickup', replacement_for_return_id: 'rma-1' }), replacement }),
+      detailFixture({
+        request: requestFixture({
+          status: 'staged_for_pickup',
+          replacement_for_return_id: 'rma-1',
+        }),
+        replacement,
+      }),
     );
-    render(await OrderDetailPage({ params: Promise.resolve({ id: ORDER_ID }), searchParams: Promise.resolve({ sign: 'physical' }) }));
+    render(
+      await OrderDetailPage({
+        params: Promise.resolve({ id: ORDER_ID }),
+        searchParams: Promise.resolve({ sign: 'physical' }),
+      }),
+    );
     const props = managerActionsProps.mock.calls.at(-1)![0] as Record<string, unknown>;
     expect(props.openPhysicalSignature).toBe(true);
     expect(props.orderLabel).toMatch(/^SO-\d{6}$/);
     managerActionsProps.mockClear();
     render(await OrderDetailPage({ params: Promise.resolve({ id: ORDER_ID }) }));
-    expect((managerActionsProps.mock.calls.at(-1)![0] as Record<string, unknown>).openPhysicalSignature).toBe(false);
+    expect(
+      (managerActionsProps.mock.calls.at(-1)![0] as Record<string, unknown>).openPhysicalSignature,
+    ).toBe(false);
     managerActionsProps.mockClear();
-    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'staged_for_pickup' }) }));
-    render(await OrderDetailPage({ params: Promise.resolve({ id: ORDER_ID }), searchParams: Promise.resolve({ sign: 'physical' }) }));
-    expect((managerActionsProps.mock.calls.at(-1)![0] as Record<string, unknown>).openPhysicalSignature).toBe(false);
+    orderGet.mockResolvedValue(
+      detailFixture({ request: requestFixture({ status: 'staged_for_pickup' }) }),
+    );
+    render(
+      await OrderDetailPage({
+        params: Promise.resolve({ id: ORDER_ID }),
+        searchParams: Promise.resolve({ sign: 'physical' }),
+      }),
+    );
+    expect(
+      (managerActionsProps.mock.calls.at(-1)![0] as Record<string, unknown>).openPhysicalSignature,
+    ).toBe(false);
   });
 });
 

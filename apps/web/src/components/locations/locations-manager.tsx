@@ -287,40 +287,41 @@ export function LocationsManager({
                             leaves the table's cell layout. 8 px apart, the
                             gap their 44 px touch areas need. */}
                         <div className="flex items-center justify-end gap-2">
-                        {canManage && (isArchivedView ? (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setRestoreTarget(row)}
-                          >
-                            <RotateCcw className="h-3.5 w-3.5" /> Restore
-                          </Button>
-                        ) : isSystemLocation(row) ? (
-                          // Staging/Unplaced are created + owned by the
-                          // receiving flow; editing or archiving one breaks
-                          // put-away. The service refuses too — this just
-                          // keeps the footgun out of the UI.
-                          <span className="text-muted-foreground whitespace-nowrap text-[11px] uppercase tracking-[0.06em]">
-                            Auto-managed
-                          </span>
-                        ) : (
-                          <>
-                            <Button variant="outline" size="sm" onClick={() => openEdit(row)}>
-                              Edit
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => {
-                                setArchiveStockBlock(null);
-                                setArchiveTarget(row);
-                              }}
-                              aria-label={`Archive ${row.name}`}
-                            >
-                              <Trash2 className="h-4 w-4 text-muted-foreground" />
-                            </Button>
-                          </>
-                        ))}
+                          {canManage &&
+                            (isArchivedView ? (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setRestoreTarget(row)}
+                              >
+                                <RotateCcw className="h-3.5 w-3.5" /> Restore
+                              </Button>
+                            ) : isSystemLocation(row) ? (
+                              // Staging/Unplaced are created + owned by the
+                              // receiving flow; editing or archiving one breaks
+                              // put-away. The service refuses too — this just
+                              // keeps the footgun out of the UI.
+                              <span className="text-muted-foreground whitespace-nowrap text-[11px] uppercase tracking-[0.06em]">
+                                Auto-managed
+                              </span>
+                            ) : (
+                              <>
+                                <Button variant="outline" size="sm" onClick={() => openEdit(row)}>
+                                  Edit
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => {
+                                    setArchiveStockBlock(null);
+                                    setArchiveTarget(row);
+                                  }}
+                                  aria-label={`Archive ${row.name}`}
+                                >
+                                  <Trash2 className="text-muted-foreground h-4 w-4" />
+                                </Button>
+                              </>
+                            ))}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -350,8 +351,8 @@ export function LocationsManager({
             <span className="text-destructive">{archiveStockBlock}</span>
           ) : (
             <>
-              The location is hidden from pick lists and item forms. Items currently assigned to
-              it keep their assignment until you move them. You can restore it from the{' '}
+              The location is hidden from pick lists and item forms. Items currently assigned to it
+              keep their assignment until you move them. You can restore it from the{' '}
               <strong>Archived view</strong>.
             </>
           )
@@ -414,7 +415,7 @@ function LocationDialog({
     const payload = {
       name: values.name,
       type: (values.type || undefined) as
-        | 'warehouse' | 'room' | 'shelf' | 'bin' | 'vehicle' | 'jobsite' | 'other' | undefined,
+        'warehouse' | 'room' | 'shelf' | 'bin' | 'vehicle' | 'jobsite' | 'other' | undefined,
       notes: values.notes || undefined,
     };
     const res = editing
@@ -441,13 +442,17 @@ function LocationDialog({
         <form onSubmit={onSubmit} className="space-y-4" noValidate>
           <div className="space-y-1.5">
             <Label htmlFor="name">Name</Label>
-            <Input id="name" placeholder="Main warehouse" {...register('name', { required: true })} />
-            {errors.name && <p className="text-xs text-destructive">Name is required.</p>}
+            <Input
+              id="name"
+              placeholder="Main warehouse"
+              {...register('name', { required: true })}
+            />
+            {errors.name && <p className="text-destructive text-xs">Name is required.</p>}
           </div>
           <div className="space-y-1.5">
             <Label>
               Type
-              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+              <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
             </Label>
             <Select value={watch('type')} onValueChange={(v: string) => setValue('type', v)}>
               <SelectTrigger>
@@ -465,12 +470,17 @@ function LocationDialog({
           <div className="space-y-1.5">
             <Label htmlFor="notes">
               Notes
-              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+              <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
             </Label>
             <Textarea id="notes" rows={3} {...register('notes')} />
           </div>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              disabled={isSubmitting}
+            >
               Cancel
             </Button>
             <Button type="submit" variant="gradient" disabled={isSubmitting}>

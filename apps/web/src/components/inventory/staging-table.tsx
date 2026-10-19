@@ -316,7 +316,8 @@ export function StagingTable({
   /** Click-to-filter from a row's PO cell: snap to the picker's canonical
    *  spelling of that PO so the Select shows it as chosen. */
   function filterByPo(po: string) {
-    const canonical = poOptions.options.find((o) => isSamePoNumber(o.value, po))?.value ?? po.trim();
+    const canonical =
+      poOptions.options.find((o) => isSamePoNumber(o.value, po))?.value ?? po.trim();
     updateFilters({ poNumber: canonical });
   }
 
@@ -328,8 +329,7 @@ export function StagingTable({
   // The bulk-place bar: only for people who may place, only while VISIBLE
   // rows are ticked (as before).
   const showBulkBar = canPlace && selectedRows.length > 0;
-  const allSelected =
-    placeableKeys.length > 0 && placeableKeys.every((k) => selectedKeys.has(k));
+  const allSelected = placeableKeys.length > 0 && placeableKeys.every((k) => selectedKeys.has(k));
   function toggleRow(key: string) {
     setSelectedKeys((prev) => {
       const next = new Set(prev);
@@ -358,12 +358,11 @@ export function StagingTable({
   // Resolved current filter — normalise 'all' for the tab highlight
   const currentType: ItemTypeFilter = activeItemType;
 
-  const poSelectValue =
-    filters.poNumber === null ? ALL_POS : filters.poNumber;
-  const poChipLabel =
-    filters.poNumber === NO_PO ? 'No PO' : filters.poNumber;
+  const poSelectValue = filters.poNumber === null ? ALL_POS : filters.poNumber;
+  const poChipLabel = filters.poNumber === NO_PO ? 'No PO' : filters.poNumber;
   const sourceChipLabel = SOURCE_OPTIONS.find((o) => o.value === filters.source)?.label;
-  const ageChipLabel = filters.age === 'recent' ? 'Recent' : filters.age === 'stale' ? 'Stale' : null;
+  const ageChipLabel =
+    filters.age === 'recent' ? 'Recent' : filters.age === 'stale' ? 'Stale' : null;
 
   return (
     <div className="flex min-w-0 flex-col gap-3">
@@ -564,7 +563,7 @@ export function StagingTable({
           // pointers, where each grows a 44 px touch area.
           <div
             data-slot="staging-bulk-bar"
-            className="border-border bg-card col-start-1 row-start-1 flex min-h-9 min-w-0 flex-wrap items-center gap-1 rounded-lg border px-3 py-1 pointer-coarse:gap-2 max-sm:gap-2 max-sm:py-2"
+            className="border-border bg-card pointer-coarse:gap-2 col-start-1 row-start-1 flex min-h-9 min-w-0 flex-wrap items-center gap-1 rounded-lg border px-3 py-1 max-sm:gap-2 max-sm:py-2"
           >
             <span className="text-foreground mr-1 font-mono text-[12.5px] tabular-nums">
               {selectedRows.length} selected
@@ -655,10 +654,10 @@ export function StagingTable({
                     Item
                     <HelpTip label="the staged / unplaced badge">
                       <p>
-                        <strong>staged</strong> = received from a purchase order into
-                        staging. <strong>unplaced</strong> = on-hand stock that was never
-                        put into a rack or crate. Either way it counts in your totals but
-                        cannot be picked until you place it.
+                        <strong>staged</strong> = received from a purchase order into staging.{' '}
+                        <strong>unplaced</strong> = on-hand stock that was never put into a rack or
+                        crate. Either way it counts in your totals but cannot be picked until you
+                        place it.
                       </p>
                     </HelpTip>
                   </span>
@@ -712,7 +711,7 @@ export function StagingTable({
                         </span>
                         <Badge
                           variant={row.sourceKind === 'unplaced' ? 'outline' : 'secondary'}
-                          className="px-1.5 text-[11px] leading-4 capitalize"
+                          className="px-1.5 text-[11px] capitalize leading-4"
                         >
                           {row.sourceKind}
                         </Badge>

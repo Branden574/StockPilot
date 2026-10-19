@@ -274,7 +274,8 @@ function MemberRow({
     .slice(0, 2)
     .join('');
 
-  const canManage = (currentUserRole === 'owner' || currentUserRole === 'admin') && member.role !== 'owner';
+  const canManage =
+    (currentUserRole === 'owner' || currentUserRole === 'admin') && member.role !== 'owner';
   // Same admin-only predicate that gates the row's action menu and the
   // "Invite member" button — status-only visibility (never the reason or
   // who disabled them; those columns aren't sent to this page at all, see
@@ -386,11 +387,15 @@ function MemberRow({
       <TableCell>
         <div className="flex items-center gap-3">
           <Avatar className="h-8 w-8">
-            {member.avatarUrl && <AvatarImage src={member.avatarUrl} alt={member.fullName ?? member.email} />}
+            {member.avatarUrl && (
+              <AvatarImage src={member.avatarUrl} alt={member.fullName ?? member.email} />
+            )}
             <AvatarFallback>{initials}</AvatarFallback>
           </Avatar>
           <div className="min-w-0">
-            <p className="text-foreground truncate font-medium">{member.fullName ?? member.email}</p>
+            <p className="text-foreground truncate font-medium">
+              {member.fullName ?? member.email}
+            </p>
             <p className="text-muted-foreground truncate text-[12px]">{member.email}</p>
           </div>
         </div>
@@ -483,10 +488,7 @@ function MemberRow({
                   Transfer ownership…
                 </DropdownMenuItem>
               )}
-              <DropdownMenuItem
-                onClick={() => setRemoveOpen(true)}
-                className="text-destructive"
-              >
+              <DropdownMenuItem onClick={() => setRemoveOpen(true)} className="text-destructive">
                 <Trash2 className="mr-2 h-4 w-4" /> Remove
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -551,9 +553,8 @@ function MemberRow({
             <DialogHeader>
               <DialogTitle>Category access — {displayName}</DialogTitle>
               <DialogDescription>
-                Restrict which inventory categories this viewer can see. New
-                categories appear here automatically — re-open this dialog
-                later to grant access to them.
+                Restrict which inventory categories this viewer can see. New categories appear here
+                automatically — re-open this dialog later to grant access to them.
               </DialogDescription>
             </DialogHeader>
             <CategoryAccessCard
@@ -579,10 +580,10 @@ function MemberRow({
             <DialogHeader>
               <DialogTitle>Transfer ownership to {displayName}?</DialogTitle>
               <DialogDescription>
-                {displayName} will become the new owner of this workspace. You'll
-                be demoted to <strong>admin</strong> and lose owner-only
-                permissions (billing, ownership transfer, deleting the workspace).
-                This action is reversible only if the new owner transfers it back.
+                {displayName} will become the new owner of this workspace. You'll be demoted to{' '}
+                <strong>admin</strong> and lose owner-only permissions (billing, ownership transfer,
+                deleting the workspace). This action is reversible only if the new owner transfers
+                it back.
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-3">
@@ -603,9 +604,8 @@ function MemberRow({
                 className="text-muted-foreground items-start text-[12.5px] leading-5"
               >
                 <span>
-                  I understand I will be demoted to admin and {displayName} will
-                  control billing, role policy, and ownership of this workspace
-                  going forward.
+                  I understand I will be demoted to admin and {displayName} will control billing,
+                  role policy, and ownership of this workspace going forward.
                 </span>
               </Checkbox>
             </div>
@@ -622,11 +622,7 @@ function MemberRow({
                 onClick={confirmTransfer}
                 disabled={transferBusy || !transferPassword || !transferAck}
               >
-                {transferBusy ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  'Transfer ownership'
-                )}
+                {transferBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Transfer ownership'}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -764,8 +760,8 @@ function CharterChecklist({
     <div
       className={
         disabled
-          ? 'border-border bg-sunk max-h-[180px] divide-y divide-border overflow-y-auto rounded-lg border opacity-60'
-          : 'border-border max-h-[180px] divide-y divide-border overflow-y-auto rounded-lg border'
+          ? 'border-border bg-sunk divide-border max-h-[180px] divide-y overflow-y-auto rounded-lg border opacity-60'
+          : 'border-border divide-border max-h-[180px] divide-y overflow-y-auto rounded-lg border'
       }
       aria-disabled={disabled}
     >
@@ -823,9 +819,7 @@ function MemberChartersDialog({
   // Charters this member's warehouse actually services.
   const chartersForWarehouse = React.useMemo(() => {
     const allowed = new Set(
-      warehouseCharters
-        .filter((wc) => wc.warehouse_id === warehouseId)
-        .map((wc) => wc.charter_id),
+      warehouseCharters.filter((wc) => wc.warehouse_id === warehouseId).map((wc) => wc.charter_id),
     );
     return charters.filter((c) => allowed.has(c.id));
   }, [charters, warehouseCharters, warehouseId]);
@@ -841,9 +835,7 @@ function MemberChartersDialog({
   const [busy, setBusy] = React.useState(false);
 
   const toggleCharter = (id: string) => {
-    setSelected((prev) =>
-      prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id],
-    );
+    setSelected((prev) => (prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id]));
   };
 
   async function save() {
@@ -937,12 +929,8 @@ function MemberWarehouseAccessDialog({
 }) {
   const router = useRouter();
   const whLower = warehouseSingular.toLowerCase();
-  const [mode, setMode] = React.useState<'all' | 'one'>(
-    currentAllWarehouses ? 'all' : 'one',
-  );
-  const [warehouseId, setWarehouseId] = React.useState<string>(
-    currentWarehouseId ?? '',
-  );
+  const [mode, setMode] = React.useState<'all' | 'one'>(currentAllWarehouses ? 'all' : 'one');
+  const [warehouseId, setWarehouseId] = React.useState<string>(currentWarehouseId ?? '');
   const [busy, setBusy] = React.useState(false);
 
   async function save() {
@@ -1012,9 +1000,7 @@ function MemberWarehouseAccessDialog({
               <Label htmlFor="member-warehouse">{warehouseSingular}</Label>
               <Select
                 value={warehouseId || NONE_VALUE}
-                onValueChange={(v: string) =>
-                  setWarehouseId(v === NONE_VALUE ? '' : v)
-                }
+                onValueChange={(v: string) => setWarehouseId(v === NONE_VALUE ? '' : v)}
               >
                 <SelectTrigger id="member-warehouse">
                   <SelectValue placeholder={`Pick a ${whLower}`} />
@@ -1111,9 +1097,7 @@ function InviteDialog({
   const chartersForWarehouse = React.useMemo(() => {
     if (!warehouseId) return charters;
     const allowedCharterIds = new Set(
-      warehouseCharters
-        .filter((wc) => wc.warehouse_id === warehouseId)
-        .map((wc) => wc.charter_id),
+      warehouseCharters.filter((wc) => wc.warehouse_id === warehouseId).map((wc) => wc.charter_id),
     );
     return charters.filter((c) => allowedCharterIds.has(c.id));
   }, [charters, warehouseCharters, warehouseId]);
@@ -1141,9 +1125,7 @@ function InviteDialog({
   }, [warehouseRequired, allSelected, setValue]);
 
   const toggleCharter = (id: string) => {
-    const next = charterIds.includes(id)
-      ? charterIds.filter((c) => c !== id)
-      : [...charterIds, id];
+    const next = charterIds.includes(id) ? charterIds.filter((c) => c !== id) : [...charterIds, id];
     setValue('charterIds', next);
   };
 
@@ -1215,23 +1197,19 @@ function InviteDialog({
                   ))}
                 </SelectContent>
               </Select>
-              <p className="text-muted-foreground text-[12px]">
-                {ROLE_LABELS[role].description}
-              </p>
+              <p className="text-muted-foreground text-[12px]">{ROLE_LABELS[role].description}</p>
             </div>
 
             <div className="space-y-1.5">
               <Label htmlFor="invite-warehouse">
                 {warehouseSingular}
                 {!warehouseRequired && (
-                  <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+                  <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
                 )}
               </Label>
               <Select
                 value={warehouseId || NONE_VALUE}
-                onValueChange={(v: string) =>
-                  setValue('warehouseId', v === NONE_VALUE ? '' : v)
-                }
+                onValueChange={(v: string) => setValue('warehouseId', v === NONE_VALUE ? '' : v)}
               >
                 <SelectTrigger id="invite-warehouse">
                   <SelectValue
@@ -1266,7 +1244,7 @@ function InviteDialog({
           <div className="space-y-1.5">
             <Label>
               {charterSingular}s
-              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+              <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
             </Label>
             {allSelected ? (
               <div className="border-line-strong bg-sunk text-muted-foreground rounded-lg border border-dashed px-3 py-3 text-[12px]">
@@ -1288,19 +1266,19 @@ function InviteDialog({
               {allSelected
                 ? `They'll see every ${warehouseSingular.toLowerCase()}, including ones created later.`
                 : !warehouseId
-                ? `Pick a ${warehouseSingular.toLowerCase()} above to see its ${charterSingular.toLowerCase()}s.`
-                : chartersForWarehouse.length === 0
-                ? `Or invite without a ${charterSingular.toLowerCase()} (they'll see all stock at this ${warehouseSingular.toLowerCase()}).`
-                : charterIds.length > 0
-                ? `Scoped to the selected ${charterSingular.toLowerCase()}${charterIds.length === 1 ? '' : 's'} at this ${warehouseSingular.toLowerCase()}.`
-                : `No ${charterSingular.toLowerCase()} picked — they'll see every ${charterSingular.toLowerCase()} this ${warehouseSingular.toLowerCase()} services.`}
+                  ? `Pick a ${warehouseSingular.toLowerCase()} above to see its ${charterSingular.toLowerCase()}s.`
+                  : chartersForWarehouse.length === 0
+                    ? `Or invite without a ${charterSingular.toLowerCase()} (they'll see all stock at this ${warehouseSingular.toLowerCase()}).`
+                    : charterIds.length > 0
+                      ? `Scoped to the selected ${charterSingular.toLowerCase()}${charterIds.length === 1 ? '' : 's'} at this ${warehouseSingular.toLowerCase()}.`
+                      : `No ${charterSingular.toLowerCase()} picked — they'll see every ${charterSingular.toLowerCase()} this ${warehouseSingular.toLowerCase()} services.`}
             </p>
           </div>
 
           <div className="space-y-1.5">
             <Label htmlFor="invite-message">
               Message
-              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+              <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
             </Label>
             <Input
               id="invite-message"

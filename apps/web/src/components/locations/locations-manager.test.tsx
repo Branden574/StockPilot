@@ -80,7 +80,9 @@ describe('LocationsManager warehouse column + system-row lock', () => {
   it('keeps Edit/Archive on normal rows (Sites tab)', () => {
     render(<LocationsManager initial={ROWS} canManage />);
     const siteRow = screen.getByRole('link', { name: 'DC4' }).closest('tr')!;
-    expect(within(siteRow as HTMLElement).getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+    expect(
+      within(siteRow as HTMLElement).getByRole('button', { name: 'Edit' }),
+    ).toBeInTheDocument();
     expect(
       within(siteRow as HTMLElement).getByRole('button', { name: /archive dc4/i }),
     ).toBeInTheDocument();
@@ -91,7 +93,10 @@ describe('LocationsManager rows open the location page (F1-3)', () => {
   it('each row name links to /dashboard/locations/<id>, on every tab', async () => {
     const user = userEvent.setup();
     render(<LocationsManager initial={ROWS} canManage={false} />);
-    expect(screen.getByRole('link', { name: 'DC4' })).toHaveAttribute('href', '/dashboard/locations/site-1');
+    expect(screen.getByRole('link', { name: 'DC4' })).toHaveAttribute(
+      'href',
+      '/dashboard/locations/site-1',
+    );
     await user.click(screen.getByRole('button', { name: /system/i }));
     expect(
       screen.getAllByRole('link', { name: 'Staging' }).map((a) => a.getAttribute('href')),
@@ -100,7 +105,10 @@ describe('LocationsManager rows open the location page (F1-3)', () => {
 
   it('archived rows link too (the page shows them as archived)', () => {
     render(<LocationsManager initial={[ROWS[0]!]} view="archived" canManage />);
-    expect(screen.getByRole('link', { name: 'DC4' })).toHaveAttribute('href', '/dashboard/locations/site-1');
+    expect(screen.getByRole('link', { name: 'DC4' })).toHaveAttribute(
+      'href',
+      '/dashboard/locations/site-1',
+    );
   });
 });
 
