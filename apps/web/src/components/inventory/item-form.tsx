@@ -1656,7 +1656,7 @@ export function ItemForm({
                       // first, so its `relative` loses to the `absolute` that
                       // seats the button on the tile.
                       touchTargetClass,
-                      'hover:bg-destructive hover:text-destructive-foreground absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-md bg-black/65 text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70',
+                      'hover:bg-destructive hover:text-destructive-foreground absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-md bg-black/65 text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-black',
                     )}
                     aria-label="Remove photo"
                   >

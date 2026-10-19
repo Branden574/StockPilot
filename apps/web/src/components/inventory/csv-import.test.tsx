@@ -249,6 +249,22 @@ describe('CsvImport — the review table says what will happen', () => {
     expect(headers).not.toContain('unit_cost');
   });
 
+  // Redesign (P4.A1 review fix): at 390 px `overflow-wrap:anywhere` on the Name
+  // cell lowered the column's min-content to one letter, so names split mid-word
+  // ("Noteb / ook"). break-word keeps whole words and a min width keeps the
+  // column readable inside the table's scroll box. Look-only expectation.
+  it('keeps item names whole: the Name cell wraps by word and has a min width', async () => {
+    const user = userEvent.setup();
+    render(<CsvImport sportsEnabled={false} warehouses={WH} />);
+    await upload(user);
+
+    const table = await screen.findByRole('table');
+    const cell = within(table).getByText('Wireless Mouse').closest('td')!;
+    const classes = cell.className.split(/\s+/);
+    expect(classes).not.toContain('[overflow-wrap:anywhere]');
+    expect(classes).toEqual(expect.arrayContaining(['min-w-[9rem]', '[overflow-wrap:break-word]']));
+  });
+
   it('renders the per-row Result label from the shared vocabulary', async () => {
     vi.mocked(prepareItemImportAction).mockResolvedValue(
       preview({

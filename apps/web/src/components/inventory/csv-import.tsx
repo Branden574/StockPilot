@@ -625,7 +625,9 @@ export function CsvImport({
                     <td className="text-muted-foreground py-2.5 pl-4 pr-3 font-mono text-[12px] tabular-nums">
                       {r.sourceRow}
                     </td>
-                    <td className="px-3 py-2.5 [overflow-wrap:anywhere]">{r.name || '—'}</td>
+                    <td className="min-w-[9rem] px-3 py-2.5 [overflow-wrap:break-word]">
+                      {r.name || '—'}
+                    </td>
                     {showSportsColumns && (
                       <>
                         <td className="px-3 py-2.5">{r.group ?? '—'}</td>

@@ -350,13 +350,13 @@ function LabelCell({
   );
 }
 
-/** A native select in the shared input look (32 px, 44 px and 16 px text on a
- *  phone, the stronger hairline, the visible focus ring). */
 /**
  * One control with its label stacked above it, never wider than the card: on a
  * phone a long template name used to push its select past the card's edge, and
  * a short label (Format) sat beside its select instead of above it.
  */
 const CONTROL_FIELD = 'flex min-w-0 max-w-full flex-col gap-1.5';
+/** A native select in the shared input look (32 px, 44 px and 16 px text on a
+ *  phone, the stronger hairline, the visible focus ring). */
 const NATIVE_SELECT =
   'border-line-strong bg-card text-foreground focus-visible:ring-ring focus-visible:ring-offset-background h-8 max-w-full rounded-md border px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 max-sm:h-11 max-sm:text-base';

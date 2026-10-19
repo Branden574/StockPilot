@@ -203,6 +203,18 @@ describe('ItemForm (redesign): staged photos', () => {
       ]),
     );
     expect(classes).not.toContain('relative');
+    // Its focus ring shows on any photo, light or dark: a black gap, then a
+    // white ring (white/70 with no offset vanished on a white product shot).
+    expect(classes).toEqual(
+      expect.arrayContaining([
+        'focus-visible:outline-none',
+        'focus-visible:ring-2',
+        'focus-visible:ring-white',
+        'focus-visible:ring-offset-2',
+        'focus-visible:ring-offset-black',
+      ]),
+    );
+    expect(classes).not.toContain('focus-visible:ring-white/70');
     expect(screen.getByText('Primary')).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: 'Create item & upload 1 photo' }),
