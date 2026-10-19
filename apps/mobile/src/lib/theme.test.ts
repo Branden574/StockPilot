@@ -330,26 +330,6 @@ describe('exports other screens still read', () => {
     });
   });
 
-  it('the legacy `theme` alias keeps every key, light only, until P5.4 removes it', async () => {
-    // Light only by design: a screen still on it renders light in dark mode
-    // until its owner moves it to useTheme().
-    const { ACCENT, palette, theme } = await import('./theme');
-    const light = palette('light');
-    expect(theme).toEqual({
-      bg: light.paper,
-      bgElevated: light.paper2,
-      border: light.hair,
-      text: light.ink,
-      textMuted: light.ink3,
-      primary: light.ink,
-      primaryDark: light.ink2,
-      success: ACCENT.mintInk,
-      warning: ACCENT.warn,
-      destructive: ACCENT.crit,
-      card: light.card,
-    });
-  });
-
   it('radius, space, RADIUS, SPACE and SHADOW are unchanged', async () => {
     const { RADIUS, SHADOW, SPACE, radius, space } = await import('./theme');
     expect(RADIUS).toEqual({ tile: 8, card: 10, cardHero: 14, pill: 999 });

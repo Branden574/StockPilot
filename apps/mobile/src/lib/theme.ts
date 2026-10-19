@@ -260,29 +260,5 @@ export const SHADOW = {
   },
 } as const;
 
-/**
- * Legacy alias kept so existing screens that haven't been migrated yet
- * still compile. New code should import `palette()` + `ACCENT` directly
- * and not reach into `theme.*`. Maps the warm-paper light palette into
- * the original prop names so the dark-navy palette is fully retired.
- *
- * LIGHT ONLY: a screen on this alias renders light in dark mode. Each
- * screen's owner moves it to `useTheme()`; the alias is deleted once the
- * last one has (redesign package P5.4).
- */
-export const theme = {
-  bg: LIGHT.paper,
-  bgElevated: LIGHT.paper2,
-  border: LIGHT.hair,
-  text: LIGHT.ink,
-  textMuted: LIGHT.ink3,
-  primary: LIGHT.ink,
-  primaryDark: LIGHT.ink2,
-  success: ACCENT.mintInk,
-  warning: ACCENT.warn,
-  destructive: ACCENT.crit,
-  card: LIGHT.card,
-};
-
 export const radius = { sm: 6, md: RADIUS.card, lg: RADIUS.cardHero, xl: 20 };
 export const space = SPACE;
