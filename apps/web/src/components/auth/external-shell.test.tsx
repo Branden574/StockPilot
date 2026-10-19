@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { ExternalCard, ExternalHeader, ExternalShell, ExternalStatusCard } from './external-shell';
@@ -55,6 +55,27 @@ describe('ExternalShell', () => {
       </ExternalShell>,
     );
     expect(screen.getByRole('link', { name: 'Home' })).toBeInTheDocument();
+  });
+
+  it('the top bar is the page banner landmark, outside the main column (invite and onboarding had one before the shared frame)', () => {
+    const { rerender } = render(
+      <ExternalShell topBar={<a href="#top">Home</a>}>
+        <p>Body</p>
+      </ExternalShell>,
+    );
+    const banner = screen.getByRole('banner');
+    expect(banner.tagName).toBe('HEADER');
+    expect(banner).toHaveAttribute('data-slot', 'external-top-bar');
+    expect(within(banner).getByRole('link', { name: 'Home' })).toHaveAttribute('href', '#top');
+    expect(screen.getByRole('main')).not.toContainElement(banner);
+    expect(within(banner).queryByText('Body')).toBeNull();
+
+    rerender(
+      <ExternalShell>
+        <p>Body</p>
+      </ExternalShell>,
+    );
+    expect(screen.queryByRole('banner')).toBeNull();
   });
 });
 

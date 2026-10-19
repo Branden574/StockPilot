@@ -35,7 +35,8 @@ export interface ExternalShellProps {
   width?: ExternalWidth;
   /**
    * An optional bar above the column, for the pages that already show the
-   * brand link and the theme menu (invite, onboarding). Most external pages
+   * brand link and the theme menu (invite, onboarding). It is drawn as the
+   * page's banner (a <header> outside the main column). Most external pages
    * show neither and follow the device theme.
    */
   topBar?: React.ReactNode;
@@ -82,13 +83,15 @@ export function ExternalShell({
       data-slot="external-shell"
       className="bg-background text-foreground flex min-h-screen flex-col"
     >
+      {/* A <header> outside the column's <main>: the page's banner landmark,
+          as the invite and onboarding pages had before the shared frame. */}
       {topBar ? (
-        <div
+        <header
           data-slot="external-top-bar"
           className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between px-4 sm:px-6"
         >
           {topBar}
-        </div>
+        </header>
       ) : null}
       {column}
       {poweredBy ? <ExternalFooter className={WIDTH[width]} /> : null}
