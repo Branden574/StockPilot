@@ -46,9 +46,14 @@ interface ItemComboboxProps {
  * value, lit up together and the keyboard could only ever pick the first. The
  * filter still scores the `sku name` haystack alone (the row's keyword).
  *
- * Look (DESIGN-SPEC 6.4): the filter-trigger recipe, 32px on a mouse and 44px
- * where a finger is the pointer; the search box keeps 16px text below sm so
- * iOS does not zoom on focus.
+ * Look: a form field, so the trigger is the restyled Select trigger's recipe
+ * (DESIGN-SPEC 2.4 item 3: a form control does not rely on the faint
+ * hairline; it takes the stronger --line2 border on the card fill and a
+ * visible focus ring), not the hairline of a toolbar filter (6.4). It picks a
+ * PO import line's item beside Select fields and the outline Create button,
+ * which already draw that border. 32px on a mouse and 44px where a finger is
+ * the pointer; the search box keeps 16px text below sm so iOS does not zoom
+ * on focus.
  */
 export function ItemCombobox({
   items,
@@ -78,10 +83,13 @@ export function ItemCombobox({
         type="button"
         disabled={disabled}
         className={cn(
-          'border-border bg-card flex w-full items-center gap-1.5 rounded-md border px-2.5 text-left text-[13px] text-[var(--ed-ink-2)] outline-none transition-colors',
+          'bg-card flex w-full items-center gap-1.5 rounded-md border border-[var(--ed-line-strong)] px-2.5 text-left text-[13px] text-[var(--ed-ink-2)] outline-none transition-colors',
           TOUCH_HEIGHT,
-          'focus-visible:ring-ring hover:border-[var(--ed-line-strong)] focus-visible:ring-2',
-          'disabled:hover:border-border disabled:cursor-not-allowed disabled:opacity-60',
+          'focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:ring-2 focus-visible:ring-offset-2',
+          // A disabled picker is how an approved or canceled import shows its
+          // final mapping, so it fades to 60% as before (the Select's 50%
+          // would take the item name under 4.5:1).
+          'disabled:cursor-not-allowed disabled:opacity-60',
           className,
         )}
       >

@@ -68,11 +68,12 @@ export function CountThisItemButton({ itemId, timeZone }: { itemId: string; time
       {/* From sm up the height is auto so the item page's action row can
           stretch it to its neighbours. In a plain block (the order page's
           line readiness) auto height collapsed it to its 16px text, so it
-          keeps at least the small button's 32px. */}
+          keeps at least the small button's own height (28px since the
+          restyled primitives: h-7). */}
       <Button
         variant="outline"
         size="sm"
-        className="sm:size-auto sm:min-h-8"
+        className="sm:size-auto sm:min-h-7"
         onClick={() => void openDialog()}
         data-testid="count-this-item"
       >

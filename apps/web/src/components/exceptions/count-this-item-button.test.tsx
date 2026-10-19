@@ -28,6 +28,8 @@ vi.mock('@/server/actions/exceptions', () => ({
   startRecountAction: (...args: unknown[]) => startRecountAction(...args),
 }));
 
+import { buttonVariants } from '@/components/ui/button';
+
 import { CountThisItemButton } from './count-this-item-button';
 
 const ITEM = '22222222-2222-4222-8222-222222222222';
@@ -90,7 +92,7 @@ describe('CountThisItemButton', () => {
 // Mutation caught: `sm:size-auto` (there so the item page's flex row can
 // stretch the button to its neighbours) also set height:auto inside the order
 // page's line readiness, a plain block, where the button collapsed to its
-// 16px text from sm up. A minimum height now keeps the small button's 32px.
+// 16px text from sm up. A minimum height now keeps the small button's height.
 describe('CountThisItemButton size', () => {
   it('never collapses below the small button height where nothing stretches it', async () => {
     await act(async () => {
@@ -98,6 +100,14 @@ describe('CountThisItemButton size', () => {
     });
     const button = screen.getByTestId('count-this-item');
     expect(button).toHaveClass('sm:size-auto');
-    expect(button).toHaveClass('sm:min-h-8');
+    // Look only (P2.4c): the floor was sm:min-h-8, the small button's 32px
+    // before P2.2's restyle. It now follows the small button's own height in
+    // the live Button recipe (h-7, 28px), so it never falls below it and never
+    // stands taller than the other small buttons where nothing stretches it.
+    const smallHeight = buttonVariants({ size: 'sm' })
+      .split(/\s+/)
+      .find((c) => /^h-\d+$/.test(c));
+    expect(smallHeight).toBeDefined();
+    expect(button).toHaveClass(`sm:min-${smallHeight}`);
   });
 });
