@@ -38,6 +38,9 @@ import { palette, type Palette } from './theme';
  *     links and the filters took hitSlop, the small buttons were 36pt, the
  *     picker's search box about 40pt);
  *   - every text box typing in the body face (they typed in the system face);
+ *   - the three sheets' shape (a Close scrim beside a plain card, VoiceOver
+ *     kept inside) and their lock: none closes while its request is under
+ *     way, so its answer is never lost;
  *   - statuses on the shared pill tones, photos on the white photo ground,
  *     no fixed colours, no single-mode accents, no word in the faint inks,
  *     and the colours each screen names measured in both modes;
@@ -100,6 +103,27 @@ function elements(file: string, match: (el: JsxNode, sf: ts.SourceFile) => boole
     if (match(el, sf)) els.push({ el, ancestors: [...ancestors] });
   });
   return { sf, els };
+}
+
+/** The JSX elements of one top-level function of a file, in source order. */
+function functionElements(file: string, name: string) {
+  const sf = treeOf(file);
+  const fn = sf.statements.find(
+    (st): st is ts.FunctionDeclaration => ts.isFunctionDeclaration(st) && st.name?.text === name,
+  );
+  expect(fn, `${name} in ${file}`).toBeDefined();
+  const els: JsxNode[] = [];
+  walkJsx(fn!, (el) => els.push(el));
+  return { sf, els, text: fn!.getText(sf).replace(/\s+/g, ' ') };
+}
+
+/** An element's element children (its text and expressions left out). */
+function childElements(el: JsxNode): JsxNode[] {
+  if (!ts.isJsxElement(el)) return [];
+  return el.children.filter(
+    (ch): ch is ts.JsxElement | ts.JsxSelfClosingElement =>
+      ts.isJsxElement(ch) || ts.isJsxSelfClosingElement(ch),
+  );
 }
 
 /** A StyleSheet entry `  name: { ... }` of a file, as source text. */
@@ -732,6 +756,96 @@ describe("the requester's Return or exchange sheet and request card", () => {
     expect(card).toContain('<Mono size={10.5} color={c.ink3}> {v.date} </Mono>');
     const { els } = elements(TRACKING, (el, s) => TOUCHABLE_TAG.test(tagOf(el, s)));
     expect(els).toHaveLength(0);
+  });
+});
+
+// Mutation caught: a sheet that can be closed while its request is under way
+// (by Close, the scrim, the VoiceOver escape or Android's back button), so
+// the answer is lost; the scrim folded into the card; VoiceOver let out of
+// the open sheet. The action sheet's shape and lock were pinned nowhere else.
+describe('the three sheets keep their shape, and none closes while its request is under way', () => {
+  const SHAPES = [
+    { file: SHEET, fn: 'SheetContent', close: 'requestClose', busy: 'submitting' },
+    { file: RELEASE, fn: 'ReleaseSheetContent', close: 'close', busy: 'submitting' },
+    { file: REQUESTER, fn: 'RequesterReturnSheet', close: 'close', busy: 'sending' },
+  ] as const;
+
+  it.each(SHAPES)(
+    '$fn: a Close scrim beside a plain card, VoiceOver kept inside the open sheet',
+    ({ file, fn, close }) => {
+      const { sf, els } = functionElements(file, fn);
+      const containers = els.filter(
+        (el) => attrText(el, 'accessibilityViewIsModal', sf) === 'true',
+      );
+      expect(containers).toHaveLength(1);
+      const container = containers[0]!;
+      expect(attrText(container, 'onAccessibilityEscape', sf)).toBe(close);
+      const [scrim, card, ...rest] = childElements(container);
+      expect(rest).toHaveLength(0);
+      expect(tagOf(scrim!, sf)).toBe('Pressable');
+      expect(ts.isJsxSelfClosingElement(scrim!)).toBe(true);
+      expect(attrText(scrim!, 'onPress', sf)).toBe(close);
+      expect(attrText(scrim!, 'onAccessibilityTap', sf)).toBe(close);
+      expect(attrText(scrim!, 'accessibilityRole', sf)).toBe('button');
+      expect(attrText(scrim!, 'accessibilityLabel', sf)).toBe('Close');
+      expect(tagOf(card!, sf)).toBe('View');
+      expect(attrText(card!, 'accessible', sf)).toBeUndefined();
+      expect(attrText(card!, 'style', sf)).toContain('styles.sheet');
+    },
+  );
+
+  it.each(SHAPES)(
+    '$fn: Close, the scrim and the escape do nothing while the request is under way',
+    ({ file, fn, close, busy }) => {
+      const { sf, els, text } = functionElements(file, fn);
+      expect(text).toMatch(
+        new RegExp(
+          `(?:function ${close}\\(\\) \\{|const ${close} = \\(\\) => \\{) if \\(${busy}\\) return; onClose\\(\\); \\}`,
+        ),
+      );
+      // The header's X: the same close, off (and said to be off) meanwhile.
+      const xs = els.filter(
+        (el) =>
+          tagOf(el, sf) === 'Pressable' &&
+          attrText(el, 'accessibilityLabel', sf) === 'Close' &&
+          ts.isJsxElement(el),
+      );
+      expect(xs).toHaveLength(1);
+      expect(attrText(xs[0]!, 'onPress', sf)).toBe(close);
+      expect(attrText(xs[0]!, 'disabled', sf)).toBe(busy);
+      expect(attrText(xs[0]!, 'accessibilityState', sf)).toBe(`{ disabled: ${busy} }`);
+    },
+  );
+
+  it("the Modal's own close (Android's back button) waits for the answer too", () => {
+    const sheet = functionElements(SHEET, 'ReturnActionSheet').text;
+    expect(sheet).toContain(
+      'function requestCloseIfIdle() { if (busyRef.current) return; onClose(); }',
+    );
+    expect(sheet).toContain('onRequestClose={requestCloseIfIdle}');
+    expect(functionElements(SHEET, 'SheetContent').text).toContain(
+      'function setBusy(v: boolean) { busyRef.current = v; setSubmitting(v); }',
+    );
+    const release = functionElements(RELEASE, 'ReleaseReplacementSheet').text;
+    expect(release).toContain(
+      'const close = () => { if (props.submitting) return; props.onClose(); };',
+    );
+    expect(release).toContain('onRequestClose={close}');
+    expect(functionElements(REQUESTER, 'RequesterReturnSheet').text).toContain(
+      '<Modal visible transparent animationType="slide" onRequestClose={close}>',
+    );
+  });
+
+  it('a request under way keeps each submit off, its words in place of the action', () => {
+    expect(flatCode(SHEET)).toContain('const canSubmit = disabledReason === null && !submitting;');
+    expect(flatCode(SHEET)).toContain("{submitting ? 'Saving…' : cta}");
+    expect(flatCode(RELEASE)).toContain('disabled={disabledReason !== null || submitting}');
+    expect(flatCode(RELEASE)).toContain(
+      "{submitting ? 'Saving…' : RETURNS_COPY.releaseBeforeReturn}",
+    );
+    expect(flatCode(REQUESTER)).toContain(
+      '{sending ? RETURNS_COPY.requesterSending : RETURNS_COPY.requesterSubmit}',
+    );
   });
 });
 
