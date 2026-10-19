@@ -207,6 +207,17 @@ describe('the next-step bar', () => {
     expect(sw).toHaveAccessibleDescription(RETURNS_COPY.itemIsHereHelp);
   });
 
+  // The Button touch rule (P2.2): the switch's 44 px hit area reaches 12 px
+  // above its 20 px track, so a wrapped row needs 12 px between rows or the
+  // switch takes taps meant for the button row above it on a phone.
+  it('keeps 12 px between its wrapped rows so the switch never takes a button tap', () => {
+    render(<ReturnWorkbench workbench={requested()} />);
+    const bar = screen.getByRole('region', { name: 'Next step' });
+    const row = within(bar).getByRole('button', { name: 'Approve return' }).parentElement!;
+    expect(row).toContainElement(within(bar).getByRole('switch'));
+    expect(row.className).toContain('gap-y-3');
+  });
+
   it('the visible words switch it on, and the primary then reads "Approve and receive"', () => {
     render(
       <ReturnWorkbench

@@ -936,7 +936,11 @@ export function ReturnWorkbench({
           them under a hairline. */}
       <section className={cn(cardClass, 'overflow-hidden')} aria-label="Next step">
         {hasControls ? (
-          <div className="flex flex-wrap items-center gap-2 px-[18px] py-3.5">
+          // 12 px between wrapped rows: on a phone the switch's 44 px hit
+          // area reaches 12 px above its 20 px track, so with 8 px it took
+          // the bottom edge of the button row above it (the Button touch
+          // rule; measured with elementFromPoint at 390).
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-3 px-[18px] py-3.5">
             {actions.primary ? (
               <Button
                 variant="default"
