@@ -25,6 +25,9 @@ import { useTheme } from '@/lib/use-theme';
  * verification L10), and past the AX threshold (shouldStackRow) the label sits
  * above the stepper so the row never runs out of width. The glyphs are
  * control labels, capped at the control ceiling.
+ *
+ * The look (redesign P5.7b): the reference stepper's buttons (DESIGN-SPEC
+ * 6.20), the card fill with the stronger border, at the 44pt target.
  */
 export function ReplacementQuantityStepper({
   value,
@@ -60,9 +63,10 @@ export function ReplacementQuantityStepper({
         minWidth: MIN_TAP,
         minHeight: MIN_TAP,
         paddingHorizontal: 8,
-        borderRadius: 8,
+        borderRadius: 10,
         borderWidth: 1,
-        borderColor: c.hair,
+        borderColor: c.hair2,
+        backgroundColor: c.card,
         alignItems: 'center',
         justifyContent: 'center',
         opacity: off ? 0.35 : 1,

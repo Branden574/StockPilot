@@ -1,5 +1,6 @@
 import { useNetworkState } from 'expo-network';
 import { type Href, useRouter } from 'expo-router';
+import { TriangleAlert, WifiOff } from 'lucide-react-native';
 import * as React from 'react';
 import {
   AccessibilityInfo,
@@ -24,11 +25,14 @@ import {
   type ReturnAction,
 } from '@stockpilot/core';
 
+import { MIN_TAP } from '@/components/item-verification-card';
 import { ReturnActionSheet, type ReturnSheetMode } from '@/components/return-action-sheet';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
+import { PHOTO_BACKGROUND } from '@/components/ui/tones';
+import { createSequenceGuard } from '@/lib/debounced-list-load';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { isOfflineState } from '@/lib/exceptions-api';
 import {
@@ -59,7 +63,7 @@ import {
   workbenchActions,
   workbenchStillWaiting,
 } from '@/lib/returns-view';
-import { ACCENT, FONT } from '@/lib/theme';
+import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -74,6 +78,11 @@ import { useTheme } from '@/lib/use-theme';
  * step, one transaction); Approve, Process, Change destination, Deny and
  * Cancel open the action sheet. After any answer the screen redraws from the
  * server (the steps route returns the whole workbench).
+ *
+ * The look (redesign P5.7b): the per-mode palette; statuses on the shared
+ * pill tones; photos on the white photo ground (DESIGN-SPEC 6.14); the
+ * offline and unreadable-destination notes on the warning wash with their
+ * glyphs; the order links and every button a 44pt target.
  */
 export function ReturnWorkbenchView({
   returnId,
@@ -102,17 +111,30 @@ export function ReturnWorkbenchView({
   const [sheet, setSheet] = React.useState<ReturnSheetMode | null>(null);
   const [notice, setNotice] = React.useState<string | null>(null);
 
+  // Every read is numbered (the list's sequence guard): only the newest one
+  // paints the screen, and an action's answer takes a number too (adopt), so
+  // a pull to refresh sent before Receive can never paint the RMA back to how
+  // it was before (it offered Receive again until the next read).
+  const [reads] = React.useState(() => createSequenceGuard());
   const load = React.useCallback(async () => {
+    const seq = reads.next();
     setLoadError(null);
     try {
-      setWb(await getReturnWorkbench(returnId));
+      const next = await getReturnWorkbench(returnId);
+      if (reads.isCurrent(seq)) setWb(next);
     } catch (e) {
-      setLoadError(describeReturnError(e));
+      if (reads.isCurrent(seq)) setLoadError(describeReturnError(e));
     } finally {
-      setLoading(false);
+      if (reads.isCurrent(seq)) setLoading(false);
       setRefreshing(false);
     }
-  }, [returnId]);
+  }, [returnId, reads]);
+
+  /** An action's answer is the newest workbench: it outranks every read still on its way. */
+  function adopt(next: MobileReturnWorkbench) {
+    reads.next();
+    setWb(next);
+  }
 
   // A new returnId (the iPad split view picks another row) starts from a
   // clean slate: reset during render, not in the effect (no cascading render).
@@ -134,18 +156,38 @@ export function ReturnWorkbenchView({
     if (notice) AccessibilityInfo.announceForAccessibility(notice);
   }, [notice]);
 
-  if (loading && !wb) return <ActivityIndicator color={c.ink4} style={{ marginTop: 32 }} />;
+  if (loading && !wb) return <ActivityIndicator color={c.ink} style={{ marginTop: 32 }} />;
   if (!wb) {
+    // Nothing could be read: the words, with the no-connection glyph offline
+    // and the warning glyph otherwise (the shared list's failed panel).
     return (
-      <View style={{ paddingHorizontal: 20, marginTop: 8 }}>
-        <Card padding={16}>
-          <Body size={14.5}>{offline ? READINESS_NEEDS_CONNECTION_COPY : (loadError ?? "This return isn't available.")}</Body>
-          <View style={{ marginTop: 14, alignSelf: 'flex-start' }}>
-            <Button variant="outline" size="sm" disabled={offline} onPress={() => void load()}>
-              Try again
-            </Button>
-          </View>
-        </Card>
+      <View style={styles.failed}>
+        {offline ? (
+          <WifiOff size={32} color={c.ink3} strokeWidth={1.3} style={{ marginBottom: 12 }} />
+        ) : (
+          <TriangleAlert
+            size={32}
+            color={c.warnText}
+            strokeWidth={1.3}
+            style={{ marginBottom: 12 }}
+          />
+        )}
+        <Body size={14.5} style={{ textAlign: 'center', maxWidth: 320 }}>
+          {offline
+            ? READINESS_NEEDS_CONNECTION_COPY
+            : (loadError ?? "This return isn't available.")}
+        </Body>
+        <View style={{ marginTop: 14 }}>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={offline}
+            style={{ minHeight: MIN_TAP }}
+            onPress={() => void load()}
+          >
+            Try again
+          </Button>
+        </View>
       </View>
     );
   }
@@ -177,7 +219,7 @@ export function ReturnWorkbenchView({
     setNotice(null);
     try {
       const res = await prepareReturnReplacement(wb.return.id);
-      setWb(res.workbench);
+      adopt(res.workbench);
       setNotice(prepareOutcomeMessage(res.answer));
       onChanged?.();
     } catch (e) {
@@ -194,7 +236,7 @@ export function ReturnWorkbenchView({
     setNotice(null);
     try {
       const res = await runReturnSteps(wb.return.id, { steps: ['receive'], expectedRevision: wb.revision, expectedPlanSeq: wb.planSeq });
-      setWb(res.workbench);
+      adopt(res.workbench);
       const step = res.ran[0];
       setNotice(step ? stepOutcomeMessage(step, res.workbench, false) : null);
       onChanged?.();
@@ -292,11 +334,12 @@ export function ReturnWorkbenchView({
               </Pill>
             ) : null}
           </View>
+          {/* A 44pt frame, the whole frame the target (it took hitSlop before). */}
           <Pressable
             onPress={() => router.push(`/order/${r.orderRequestId}` as Href)}
             accessibilityRole="link"
             accessibilityLabel={`Against order ${so}`}
-            hitSlop={6}
+            style={({ pressed }) => [styles.link, { opacity: pressed ? 0.7 : 1 }]}
           >
             <Body size={14} color={c.ink}>
               Against order <Body size={14} color={c.ink} style={{ textDecorationLine: 'underline' }}>{so}</Body>
@@ -309,17 +352,28 @@ export function ReturnWorkbenchView({
           </Body>
         </View>
 
+        {/* Notes that hold the actions back: on the warning wash, each with
+            its glyph beside the words (never the colour alone). */}
         {offline ? (
-          <Card padding={12}>
-            <Body size={13.5}>{RETURNS_COPY.offlineActionsWait}</Body>
-          </Card>
+          <View style={[styles.banner, { backgroundColor: c.warnWash }]}>
+            <WifiOff size={16} color={c.warnText} strokeWidth={1.75} style={{ marginTop: 2 }} />
+            <Body size={13.5} color={c.warnText} style={{ flex: 1 }}>
+              {RETURNS_COPY.offlineActionsWait}
+            </Body>
+          </View>
         ) : null}
         {wb.destinationsUnavailable && wb.viewer.canManageReturns && (actions.primary || actions.secondary.length > 0) ? (
-          <Card padding={12}>
-            <Body size={13.5} accessibilityRole="alert">
+          <View style={[styles.banner, { backgroundColor: c.warnWash }]}>
+            <TriangleAlert
+              size={16}
+              color={c.warnText}
+              strokeWidth={1.75}
+              style={{ marginTop: 2 }}
+            />
+            <Body size={13.5} color={c.warnText} accessibilityRole="alert" style={{ flex: 1 }}>
               {RETURNS_COPY.destinationsUnavailable}
             </Body>
-          </Card>
+          </View>
         ) : null}
 
         <Card padding={14}>
@@ -349,6 +403,7 @@ export function ReturnWorkbenchView({
                     size="sm"
                     variant={a === 'deny' ? 'destructive' : 'outline'}
                     disabled={disabled}
+                    style={{ minHeight: MIN_TAP }}
                     accessibilityHint={workbenchActionHint(a, { disabledReason: actions.disabledReason, stillWaiting })}
                     onPress={() => onAction(a)}
                   >
@@ -410,7 +465,7 @@ export function ReturnWorkbenchView({
                       onPress={() => router.push(`/order/${ex.replacement!.orderId}` as Href)}
                       accessibilityRole="link"
                       accessibilityLabel={t.text}
-                      hitSlop={6}
+                      style={({ pressed }) => [styles.link, { opacity: pressed ? 0.7 : 1 }]}
                     >
                       <Body size={14} color={c.ink} style={{ textDecorationLine: 'underline' }}>
                         {t.text}
@@ -437,74 +492,99 @@ export function ReturnWorkbenchView({
             const photo = x ? replacementPhotoUrl(x) : null;
             return (
               <View key={l.id} style={compact ? { gap: 10 } : styles.pair}>
-              <Card padding={14} style={compact ? undefined : styles.card}>
-                <View
-                  style={{ flexDirection: cardsStacked ? 'column' : 'row', gap: 12 }}
-                  accessible
-                  accessibilityLabel={`${name}${sub ? `, ${sub}` : ''}, ${qtyReturningLabel(l.quantity)}, ${l.inboundState}`}
-                >
-                  {l.item.thumbUrl || l.item.imageUrl ? (
-                    <Image
-                      source={{ uri: l.item.thumbUrl ?? l.item.imageUrl ?? '' }}
-                      style={[styles.photo, { backgroundColor: c.paper2 }]}
-                      accessibilityIgnoresInvertColors
-                    />
-                  ) : (
-                    <View style={[styles.photo, { backgroundColor: c.paper2 }]} />
-                  )}
-                  <View style={cardsStacked ? { gap: 4 } : { flex: 1, minWidth: 0, gap: 4 }}>
-                    {/* An item's name is never capped (the app's policy). */}
-                    <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
-                      {name}
-                    </Body>
-                    {sub ? (
-                      <Body size={12.5} muted>
-                        {sub}
-                      </Body>
-                    ) : null}
-                    <Body size={13.5}>{qtyReturningLabel(l.quantity)}</Body>
-                    <View style={{ alignSelf: 'flex-start' }}>
-                      <Pill status={l.applied ? 'ok' : 'default'} dot={false}>
-                        {l.inboundState}
-                      </Pill>
-                    </View>
-                  </View>
-                </View>
-              </Card>
-              {x ? (
-                // The REPLACEMENT side: stacked on the phone, beside the
-                // returning card on the iPad; a text label and an arrow, never
-                // colour alone.
-                <Card padding={14} style={{ ...(compact ? {} : styles.card), borderLeftWidth: 4, borderLeftColor: c.ink }}>
+                <Card padding={14} style={compact ? undefined : styles.card}>
                   <View
                     style={{ flexDirection: cardsStacked ? 'column' : 'row', gap: 12 }}
                     accessible
-                    accessibilityLabel={replacementCardLabel(name, x, ex.replacement)}
+                    accessibilityLabel={`${name}${sub ? `, ${sub}` : ''}, ${qtyReturningLabel(l.quantity)}, ${l.inboundState}`}
                   >
-                    {photo ? (
-                      <Image source={{ uri: photo }} style={[styles.photo, { backgroundColor: c.paper2 }]} accessibilityIgnoresInvertColors />
+                    {/* The photo on the white photo ground in both modes; none, a
+                        recessed square in its place (DESIGN-SPEC 6.14). */}
+                    {l.item.thumbUrl || l.item.imageUrl ? (
+                      <Image
+                        source={{ uri: l.item.thumbUrl ?? l.item.imageUrl ?? '' }}
+                        style={[
+                          styles.photo,
+                          { backgroundColor: PHOTO_BACKGROUND, borderColor: c.hair },
+                        ]}
+                        accessibilityIgnoresInvertColors
+                      />
                     ) : (
-                      <View style={[styles.photo, { backgroundColor: c.paper2 }]} />
+                      <View
+                        style={[styles.photo, { backgroundColor: c.sunk, borderColor: c.hair }]}
+                      />
                     )}
                     <View style={cardsStacked ? { gap: 4 } : { flex: 1, minWidth: 0, gap: 4 }}>
-                      <Eyebrow>→ {RETURNS_COPY.replacement}</Eyebrow>
-                      {replacementSideLines(x, ex.replacement).map((t) => (
-                        <Body
-                          key={t.key}
-                          size={t.tone === 'ink' ? 14.5 : 13}
-                          color={t.tone === 'ink' ? c.ink : t.tone === 'crit' ? ACCENT.crit : undefined}
-                          muted={t.tone === 'muted'}
-                        >
-                          {t.text}
+                      {/* An item's name is never capped (the app's policy). */}
+                      <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
+                        {name}
+                      </Body>
+                      {sub ? (
+                        <Body size={12.5} muted>
+                          {sub}
                         </Body>
-                      ))}
+                      ) : null}
+                      <Body size={13.5}>{qtyReturningLabel(l.quantity)}</Body>
                       <View style={{ alignSelf: 'flex-start' }}>
-                        <Pill dot={false}>{replacementCardStatus(x, ex.replacement)}</Pill>
+                        <Pill status={l.applied ? 'ok' : 'default'} dot={false}>
+                          {l.inboundState}
+                        </Pill>
                       </View>
                     </View>
                   </View>
                 </Card>
-              ) : null}
+                {x ? (
+                  // The REPLACEMENT side: stacked on the phone, beside the
+                  // returning card on the iPad; a text label and an arrow, never
+                  // colour alone.
+                  <Card
+                    padding={14}
+                    style={{
+                      ...(compact ? {} : styles.card),
+                      borderLeftWidth: 4,
+                      borderLeftColor: c.ink,
+                    }}
+                  >
+                    <View
+                      style={{ flexDirection: cardsStacked ? 'column' : 'row', gap: 12 }}
+                      accessible
+                      accessibilityLabel={replacementCardLabel(name, x, ex.replacement)}
+                    >
+                      {photo ? (
+                        <Image
+                          source={{ uri: photo }}
+                          style={[
+                            styles.photo,
+                            { backgroundColor: PHOTO_BACKGROUND, borderColor: c.hair },
+                          ]}
+                          accessibilityIgnoresInvertColors
+                        />
+                      ) : (
+                        <View
+                          style={[styles.photo, { backgroundColor: c.sunk, borderColor: c.hair }]}
+                        />
+                      )}
+                      <View style={cardsStacked ? { gap: 4 } : { flex: 1, minWidth: 0, gap: 4 }}>
+                        <Eyebrow>→ {RETURNS_COPY.replacement}</Eyebrow>
+                        {replacementSideLines(x, ex.replacement).map((t) => (
+                          <Body
+                            key={t.key}
+                            size={t.tone === 'ink' ? 14.5 : 13}
+                            color={
+                              t.tone === 'ink' ? c.ink : t.tone === 'crit' ? c.critText : undefined
+                            }
+                            muted={t.tone === 'muted'}
+                          >
+                            {t.text}
+                          </Body>
+                        ))}
+                        <View style={{ alignSelf: 'flex-start' }}>
+                          <Pill dot={false}>{replacementCardStatus(x, ex.replacement)}</Pill>
+                        </View>
+                      </View>
+                    </View>
+                  </Card>
+                ) : null}
               </View>
             );
           })}
@@ -532,7 +612,7 @@ export function ReturnWorkbenchView({
                   <Body size={13.5} color={c.ink}>
                     {e.label}
                   </Body>
-                  <Mono size={11} color={c.ink4}>
+                  <Mono size={11} color={c.ink3}>
                     {new Date(e.at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
                     {e.actorName ? ` · ${e.actorName}` : ''}
                   </Mono>
@@ -553,7 +633,7 @@ export function ReturnWorkbenchView({
           onDone={(done) => {
             setSheet(null);
             setNotice(done.message);
-            if (done.workbench) setWb(done.workbench);
+            if (done.workbench) adopt(done.workbench);
             else void load();
             onChanged?.();
           }}
@@ -569,5 +649,16 @@ const styles = StyleSheet.create({
   // RX-2: a returning card and its REPLACEMENT side by side on the iPad.
   pair: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   card: { flexGrow: 1, flexBasis: 320 },
-  photo: { width: 72, height: 72, borderRadius: 10 },
+  photo: { width: 72, height: 72, borderRadius: 10, borderWidth: 1 },
+  // An order link: a frame at least 44pt tall around its words.
+  link: { minHeight: MIN_TAP, justifyContent: 'center', alignSelf: 'flex-start' },
+  // The warning wash's note (the Rentals list's stale banner recipe).
+  banner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    padding: 12,
+    borderRadius: 10,
+  },
+  failed: { paddingTop: 40, paddingHorizontal: 24, alignItems: 'center' },
 });

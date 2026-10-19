@@ -106,7 +106,18 @@ describe('the workbench', () => {
   // approval review's heading small thumbnails of both sides.
   it("shows the replacement's photo beside the returned item's (review fix P11)", () => {
     expect(view).toContain('const photo = x ? replacementPhotoUrl(x) : null;');
-    expect(view.match(/style=\{\[styles\.photo, \{ backgroundColor: c\.paper2 \}\]\}/g)?.length).toBe(4);
+    // Re-pinned by redesign P5.7b (look only; the claim is kept: each card
+    // draws its photo, or the placeholder in its place, in the same 72 pt
+    // styles.photo box, four boxes in all): a photo now sits on the white
+    // photo ground and a missing one is the recessed square, both with the
+    // hairline edge (DESIGN-SPEC 6.14), where both were paper2 before.
+    const ground =
+      /style=\{\[\s*styles\.photo,\s*\{ backgroundColor: PHOTO_BACKGROUND, borderColor: c\.hair \},?\s*\]\}/g;
+    const well =
+      /style=\{\[\s*styles\.photo,\s*\{ backgroundColor: c\.sunk, borderColor: c\.hair \},?\s*\]\}/g;
+    expect(view.match(ground)?.length).toBe(2);
+    expect(view.match(well)?.length).toBe(2);
+    expect(view.match(/styles\.photo\b/g)?.length).toBe(4);
     const sheet = code(read('src/components/return-action-sheet.tsx'));
     expect(sheet).toContain('itemPhotoUrl(l.item)');
     expect(sheet).toContain('itemPhotoUrl(x.requestedItem)');

@@ -32,7 +32,7 @@ export function RequesterTrackingCard({ request }: { request: RequesterTrackingR
           <Mono size={12} color={c.ink} style={{ flexShrink: 1 }}>
             {v.title}
           </Mono>
-          <Mono size={10.5} color={c.ink4}>
+          <Mono size={10.5} color={c.ink3}>
             {v.date}
           </Mono>
         </View>
