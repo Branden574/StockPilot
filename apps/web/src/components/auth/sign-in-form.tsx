@@ -115,9 +115,13 @@ export function SignInForm() {
       <div className="auth-field space-y-2">
         <div className="flex items-center justify-between">
           <Label htmlFor="password">Password</Label>
+          {/* A 44 px hit area on phones and touch screens without moving
+              anything (the Button's ::before pattern): the 16 px line plus
+              20 px above and 8 px below. Below stops at the 8 px gap, so the
+              password field under it keeps every tap on its own box. */}
           <Link
             href="/reset"
-            className="text-muted-foreground hover:text-foreground focus-visible:ring-ring rounded-sm text-xs focus-visible:outline-none focus-visible:ring-2"
+            className="text-muted-foreground hover:text-foreground focus-visible:ring-ring pointer-coarse:before:content-[''] relative rounded-sm text-xs before:absolute before:-inset-x-2 before:-bottom-2 before:-top-5 before:content-none focus-visible:outline-none focus-visible:ring-2 max-sm:before:content-['']"
           >
             Forgot?
           </Link>

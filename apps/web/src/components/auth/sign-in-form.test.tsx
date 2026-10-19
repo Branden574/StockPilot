@@ -29,6 +29,34 @@ describe('SignInForm', () => {
     expect(screen.getByRole('link', { name: 'Forgot?' })).toHaveAttribute('href', '/reset');
   });
 
+  it('gives Forgot? a 44 px hit area on phones and touch screens without moving anything, and never over the password field', () => {
+    render(<SignInForm />);
+    const forgot = screen.getByRole('link', { name: 'Forgot?' });
+    const classes = forgot.className.split(/\s+/);
+    // An invisible ::before only: the link keeps its place, word and target.
+    expect(classes).toEqual(
+      expect.arrayContaining([
+        'relative',
+        'text-xs',
+        'before:absolute',
+        'before:-inset-x-2',
+        'before:-top-5',
+        'before:-bottom-2',
+        'before:content-none',
+        "max-sm:before:content-['']",
+        "pointer-coarse:before:content-['']",
+      ]),
+    );
+    // 16 px line (text-xs) + 20 px above (-top-5) + 8 px below (-bottom-2) = 44.
+    // Below ends on the 8 px gap (space-y-2) to the password field, so the
+    // field's own top edge stays the field's.
+    expect(forgot.closest('.auth-field')?.className.split(/\s+/)).toContain('space-y-2');
+    expect(forgot).toHaveAttribute('href', '/reset');
+    expect(classes).toEqual(
+      expect.arrayContaining(['focus-visible:ring-2', 'focus-visible:ring-ring']),
+    );
+  });
+
   it('always renders both error slots, empty until a field is invalid', () => {
     const { container } = render(<SignInForm />);
     const slots = container.querySelectorAll('.auth-msg[role="alert"]');
