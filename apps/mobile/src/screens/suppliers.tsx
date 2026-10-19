@@ -160,8 +160,10 @@ export default function SuppliersScreen() {
  * (never '?', '&', ',', ';', '#', '%', '/', quotes, brackets, colons or
  * spaces, which make a mailto: link do more than address one person). The
  * domain is two or more dot-separated labels of letters, digits and inner
- * hyphens. So no control, invisible, look-alike or other non-ASCII character
- * can reach the link. The name and the domain go out percent-encoded
+ * hyphens. The name is at most 64 characters, each domain label at most 63
+ * and the whole address at most 254 (RFC 5321). So no control, invisible,
+ * look-alike or other non-ASCII character, and no over-long address, can
+ * reach the link. The name and the domain go out percent-encoded
  * (encodeURIComponent) on either side of a literal '@': RFC 6068 keeps the
  * separating '@' literal (addr-spec = local-part "@" domain), and an encoded
  * %40 would be a character inside the name, leaving no domain.
@@ -182,28 +184,40 @@ function supplierMailtoUrl(email: string | null): string | null {
 /**
  * The tel: link for a supplier's phone, or null when the stored text is not
  * one plain phone number (the card then shows the text, not a link). Plain is
- * an allow-list that fails closed: the text without its outer spaces holds
- * only ASCII digits, spaces, dots, dashes and round brackets, with at most one
- * '+' and only at the start, and its digits make one number. With a '+' that
- * is 8 to 15 digits (E.164), and exactly 11 for +1; without one it is a North
- * American number of 7, 10 or 11 digits (11 only after a leading 1). So an
- * extension, a second number ("555-1234 or 555-9999", or two numbers side by
- * side), letters, a service code ('*', '#'), a pause (',', ';') or a parameter
- * never becomes a link that dials something other than the one number shown.
- * Only the digits and the leading '+' reach the dialler.
+ * an allow-list that fails closed. The text, with its outer spaces trimmed and
+ * any non-breaking space read as a space, holds only ASCII digits, spaces,
+ * dots, dashes and round brackets, with at most one '+' and only at the start.
+ * Without a '+', and after '+1', the text must be grouped as one North
+ * American number: 555-0100, (555) 010-0100, 555.010.0100 or 1-555-010-0100,
+ * never a number with a trailing group such as '555-0100 123'. After '+7' it
+ * is 11 digits. After any other '+' it is 8 to 15 digits (E.164), and a
+ * bracketed trunk 0 right after the country code, as in '+44 (0)20 7946
+ * 0958', is not dialled. A number written with a dialling prefix such as 011
+ * instead of '+' is shown as text. So an extension, a second number,
+ * letters, a service code ('*', '#'), a pause (',', ';') or a parameter never
+ * becomes a link. Only the digits and the leading '+' reach the dialler. One
+ * case a pattern cannot tell apart: an international '+' number followed by
+ * an unmarked extension that still totals 15 digits or fewer is linked as one
+ * longer number; the digits dialled are still the digits shown.
  */
 function supplierTelUrl(phone: string | null): string | null {
-  const text = (phone ?? '').trim();
+  const text = (phone ?? '').replace(/[\u00a0\u2007\u202f]/g, ' ').trim();
   if (!/^\+?[0-9 .()-]+$/.test(text)) return null;
-  const digits = text.replace(/[^0-9]/g, '');
-  if (text.startsWith('+')) {
-    if (digits.length < 8 || digits.length > 15) return null;
-    if (digits.startsWith('1') && digits.length !== 11) return null;
-    return `tel:+${digits}`;
+  const digits = (t: string) => t.replace(/[^0-9]/g, '');
+  // North American shapes: a 7-digit local number, a 10-digit one with its
+  // area code, and the 10-digit one after a leading 1 or +1.
+  const local = '[0-9]{3}[ .-]?[0-9]{4}';
+  const withArea = `(?:\\([0-9]{3}\\) ?|[0-9]{3}[ .-]?)${local}`;
+  if (!text.startsWith('+')) {
+    const northAmerican = new RegExp(`^(?:${local}|${withArea}|1[ .-]?${withArea})$`);
+    return northAmerican.test(text) ? `tel:${digits(text)}` : null;
   }
-  const northAmerican =
-    digits.length === 7 || digits.length === 10 || (digits.length === 11 && digits.startsWith('1'));
-  return northAmerican ? `tel:${digits}` : null;
+  if (text.startsWith('+1')) {
+    return new RegExp(`^\\+1[ .-]?${withArea}$`).test(text) ? `tel:+${digits(text)}` : null;
+  }
+  const dialled = digits(text.replace(/^(\+[0-9]{1,3})[ .-]*\(0\)/, '$1 '));
+  if (dialled.startsWith('7')) return dialled.length === 11 ? `tel:+${dialled}` : null;
+  return dialled.length >= 8 && dialled.length <= 15 ? `tel:+${dialled}` : null;
 }
 
 /**

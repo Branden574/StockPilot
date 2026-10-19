@@ -728,6 +728,12 @@ describe('security: a supplier link opens only what the card shows', () => {
     expect(tel('1-800-555-0100')).toBe('tel:18005550100');
     expect(tel('+44 20 7946 0958')).toBe('tel:+442079460958');
     expect(tel('+49 30 1234567')).toBe('tel:+49301234567');
+    expect(tel('+7 495 123-45-67')).toBe('tel:+74951234567');
+    // A bracketed trunk 0 after the country code is not dialled.
+    expect(tel('+44 (0)20 7946 0958')).toBe('tel:+442079460958');
+    expect(tel('+49 (0)30 1234567')).toBe('tel:+49301234567');
+    // Non-breaking spaces from a pasted signature read as spaces.
+    expect(tel('555\u00a0010\u00a00100')).toBe('tel:5550100100');
   });
 
   // Mutation caught: the digits of any text dialled as one number, so
@@ -763,6 +769,19 @@ describe('security: a supplier link opens only what the card shows', () => {
       '٥٥٥-٠١٠٠',
       '555‑010‑0100',
       '555-0100​',
+      // Digit groups that do not make one North American number, which a
+      // count of digits alone would have linked as one longer number.
+      '555-0100 123',
+      '555-0100 - 123',
+      '555-0100 (12) 3',
+      '555-0100 911',
+      '555 0100 555',
+      '1 555 010 010',
+      '1-555-010',
+      '1 555 0100',
+      '+1 555-0100',
+      '+7 555 0100 555 0101',
+      '011 44 20 7946 0958',
     ]) {
       expect(tel(phone), JSON.stringify(phone)).toBeNull();
     }
