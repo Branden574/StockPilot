@@ -29,7 +29,10 @@ vi.mock('@/lib/supabase/server', () => ({
     };
   }),
 }));
-vi.mock('@/lib/auth/platform-admin', () => ({ isPlatformAdmin: () => false }));
+/** Whether the viewer is a platform admin (the raw metadata disclosure). A
+ *  plain flag, not a mock implementation, for the reason above. */
+const platformAdmin = vi.hoisted(() => ({ on: false }));
+vi.mock('@/lib/auth/platform-admin', () => ({ isPlatformAdmin: () => platformAdmin.on }));
 vi.mock('@/components/ui/local-datetime', () => ({ LocalDateTime: () => null }));
 
 import { OrderTimeline } from './order-timeline';
@@ -338,5 +341,22 @@ describe('OrderTimeline — on the shared history rail (P4.B1)', () => {
       await OrderTimeline({ orderId: 'order-1', organizationId: 'org-1', canReadActivity: false }),
     );
     expect(document.querySelector('[data-slot="timeline"]')).toBeNull();
+  });
+
+  it("a platform admin's raw event sits inside its entry, its summary in the muted ink at full strength", async () => {
+    platformAdmin.on = true;
+    try {
+      await renderTimeline([
+        stockHeld('e1', { trigger: 'manual', held: 4, requested: 4, items: 1 }),
+      ]);
+      const summary = screen.getByText('Raw event · platform admin');
+      expect(summary.tagName).toBe('SUMMARY');
+      expect(summary.closest('[data-slot="timeline-entry"]')).not.toBeNull();
+      // A 70 % opacity on the muted ink fell under the 4.5:1 text contrast.
+      expect(summary.className).not.toMatch(/(^|\s)opacity-/);
+      expect(summary.closest('details')!.className).toContain('text-muted-foreground');
+    } finally {
+      platformAdmin.on = false;
+    }
   });
 });

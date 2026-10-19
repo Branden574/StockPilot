@@ -386,7 +386,9 @@ export async function OrderTimeline({ orderId, organizationId, timeZone, canRead
                 )}
                 {showRaw && row.metadata && (
                   <details className="text-muted-foreground mt-1 text-[12px]">
-                    <summary className="cursor-pointer opacity-70">
+                    {/* The muted ink at full strength: a 70 % opacity on it
+                        fell under the 4.5:1 text contrast in both themes. */}
+                    <summary className="hover:text-foreground cursor-pointer">
                       Raw event · platform admin
                     </summary>
                     <pre className="mt-1 whitespace-pre-wrap text-[11px]">

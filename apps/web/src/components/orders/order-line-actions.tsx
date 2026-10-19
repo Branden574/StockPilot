@@ -443,7 +443,6 @@ export function ShortLineFixes({
                 type="button"
                 size="sm"
                 variant="outline"
-                className="h-7 px-2 text-xs"
                 data-short-line-fix=""
                 aria-label={`${a.label}: ${itemName}`}
                 disabled={busy}
@@ -462,7 +461,7 @@ export function ShortLineFixes({
                 type="button"
                 size="sm"
                 variant="outline"
-                className="text-destructive hover:text-destructive h-7 px-2 text-xs"
+                className="text-destructive hover:text-destructive"
                 data-short-line-fix=""
                 aria-label={`${a.label}: ${itemName}`}
                 disabled={busy}
@@ -476,7 +475,10 @@ export function ShortLineFixes({
         </div>
       )}
       {fixes.note && (
-        <p className="text-muted-foreground text-[11px] leading-snug" data-testid="short-line-note">
+        <p
+          className="text-muted-foreground text-[12px] leading-[18px]"
+          data-testid="short-line-note"
+        >
           {fixes.note}
         </p>
       )}
