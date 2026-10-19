@@ -145,4 +145,14 @@ describe('ArchiveViewToggle through the SegmentedTabs pattern', () => {
     expect(screen.getByRole('tab', { name: 'Active' })).toHaveAttribute('data-state', 'inactive');
     for (const tab of screen.getAllByRole('tab')) expect(tab).toHaveClass('h-[26px]');
   });
+
+  it('never shrinks in a crowded flex row, so the Archived tab stays in view', () => {
+    // P2.6c review: SegmentedTabs makes the track a scrolling strip, and on the
+    // Categories header at 390 px the flex row squeezed it until Archived was
+    // clipped to its first letter. shrink-0 keeps both tabs whole, as before.
+    const { rerender } = render(<ArchiveViewToggle className="ml-auto" />);
+    expect(screen.getByRole('tablist', { name: 'View filter' })).toHaveClass('shrink-0', 'ml-auto');
+    rerender(<ArchiveViewToggle />);
+    expect(screen.getByRole('tablist', { name: 'View filter' })).toHaveClass('shrink-0');
+  });
 });

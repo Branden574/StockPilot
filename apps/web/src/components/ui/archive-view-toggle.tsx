@@ -3,6 +3,7 @@
 import { usePathname, useSearchParams } from 'next/navigation';
 
 import { SegmentedTabs } from '@/components/patterns/segmented-tabs';
+import { cn } from '@/lib/utils';
 
 /**
  * Small pill toggle for the Active / Archived view on manager pages.
@@ -25,6 +26,11 @@ import { SegmentedTabs } from '@/components/patterns/segmented-tabs';
  * so it is still a "View filter" tablist of two `role="tab"` links with
  * `aria-selected`, the same hrefs and words, and Next's default prefetch and
  * scroll (the toggle passes no link options, as before).
+ *
+ * The track is `shrink-0`: SegmentedTabs makes it a sideways-scrolling strip,
+ * which as a flex item could shrink until the Archived tab was hidden (the
+ * Categories header at 390 px squeezed it to 73 px). The two-tab toggle never
+ * shrinks below its content, as before the redesign.
  */
 export function ArchiveViewToggle({
   basePath,
@@ -91,7 +97,7 @@ export function ArchiveViewToggle({
     <SegmentedTabs
       aria-label="View filter"
       size="sm"
-      className={className}
+      className={cn('shrink-0', className)}
       activeId={current}
       items={[
         { id: 'active', label: activeLabel, href: buildHref('active') },
