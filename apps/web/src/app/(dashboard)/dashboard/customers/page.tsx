@@ -1,11 +1,13 @@
 import { redirect } from 'next/navigation';
-import { Handshake } from 'lucide-react';
+import { TriangleAlert } from 'lucide-react';
 
 import { CustomersPanel } from '@/components/customers/customers-panel';
 import { PortalPricingModePanel } from '@/components/customers/portal-pricing-mode-panel';
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { PageHeader } from '@/components/patterns/page-header';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { requireOrgContext } from '@/lib/auth/session';
+import { effectiveNavLabel } from '@/lib/nav-labels';
 import { createClient } from '@/lib/supabase/server';
 import { withContext } from '@/server/services/context';
 import { CustomersService } from '@/server/services/customers';
@@ -30,7 +32,7 @@ export default async function CustomersPage() {
   }
 
   const supabase = await createClient();
-  const [orgBillingRes, portalModuleRes, svcCtx, inventorySvc] = await Promise.all([
+  const [orgBillingRes, portalModuleRes, svcCtx, inventorySvc, title] = await Promise.all([
     supabase
       .from('organizations')
       .select(
@@ -46,6 +48,10 @@ export default async function CustomersPage() {
       .maybeSingle(),
     withContext(),
     InventoryService.forCurrentUser(),
+    // The heading follows a Settings > Navigation rename of Accounts (PLAN
+    // rule 10), from the request-cached org row the layout already holds;
+    // an unreadable row keeps the page's own heading.
+    effectiveNavLabel('/dashboard/customers', 'Accounts').catch(() => 'Accounts'),
   ]);
   const pricingMode = resolvePortalPricingMode(
     (portalModuleRes.data as { settings?: unknown } | null)?.settings,
@@ -86,31 +92,27 @@ export default async function CustomersPage() {
   }));
 
   return (
-    <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-          <Handshake className="h-6 w-6" /> Accounts
-        </h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          B2B accounts that order through your portal — each with its own users,
-          price list, and catalog. The catalog alone decides what an account can
-          see and order.
-        </p>
-      </div>
+    <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <PageHeader
+        title={title}
+        subline="B2B accounts that order through your portal — each with its own users, price list, and catalog. The catalog alone decides what an account can see and order."
+      />
 
       {!entitled && (
-        <div className="border-warning/40 bg-warning/10 mb-6 rounded-xl border p-4 text-sm">
-          The B2B customer portal is a <strong>Business</strong> feature. You can
-          review existing data, but creating customers and inviting portal users
-          needs a Business or Enterprise plan.
+        <div
+          data-slot="plan-notice"
+          className="border-warning/40 bg-warning-wash text-foreground flex items-start gap-2.5 rounded-lg border px-[18px] py-3.5 text-[13.5px]"
+        >
+          <TriangleAlert aria-hidden className="text-warning mt-0.5 h-4 w-4 shrink-0" />
+          <p>
+            The B2B customer portal is a <strong className="font-medium">Business</strong> feature.
+            You can review existing data, but creating customers and inviting portal users needs a
+            Business or Enterprise plan.
+          </p>
         </div>
       )}
 
-      {canSetPricingMode && (
-        <div className="mb-6">
-          <PortalPricingModePanel initial={pricingMode} />
-        </div>
-      )}
+      {canSetPricingMode && <PortalPricingModePanel initial={pricingMode} />}
 
       <CustomersPanel
         customers={customers}
