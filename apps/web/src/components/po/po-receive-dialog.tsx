@@ -412,7 +412,7 @@ export function PoReceiveDialog({
                     </p>
                   </div>
                   <div className="min-w-0 space-y-1 sm:col-span-4">
-                    <Label htmlFor={receivedId} className="text-muted-foreground text-[11px]">
+                    <Label htmlFor={receivedId} className="text-muted-foreground block text-[11px]">
                       Received now
                     </Label>
                     <div className="flex items-center gap-1.5">

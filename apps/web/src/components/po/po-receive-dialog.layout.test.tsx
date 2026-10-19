@@ -61,6 +61,15 @@ describe('PoReceiveDialog fields', () => {
     expect(payload.lines).toEqual([expect.objectContaining({ poLineId: 'b', qtyReceived: 2 })]);
   });
 
+  it('draws the "Received now" label as a block box so its column lines up with Variance (review fix)', async () => {
+    // The Label primitive is an inline <label>; inline, its line box took the
+    // parent's strut and sat about 6 px below the block Variance caption.
+    const { dialog } = await open([line('a', 10)]);
+    const label = within(dialog).getByText('Received now', { selector: 'label' });
+    expect(label).toHaveClass('block');
+    expect(within(dialog).getByText('Variance').tagName).toBe('P');
+  });
+
   it('says what is still to come, what is over ordered, and when the line is fully received', async () => {
     const { user, dialog } = await open([line('a', 10, 'none', 2)]);
     expect(within(dialog).getByText('Ordered 10 · Already received 2')).toBeInTheDocument();
