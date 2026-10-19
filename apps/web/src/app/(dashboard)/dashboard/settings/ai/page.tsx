@@ -3,8 +3,9 @@ import { notFound } from 'next/navigation';
 
 import { can } from '@stockpilot/core';
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { PageHeader } from '@/components/patterns/page-header';
 import { EmbeddingsBackfillPanel } from '@/components/settings/embeddings-backfill-panel';
+import { SettingsPage, SettingsPanel } from '@/components/settings/settings-panel';
 import { requireOrgContext } from '@/lib/auth/session';
 import { withContext } from '@/server/services/context';
 
@@ -41,36 +42,39 @@ export default async function AiSettingsPage() {
   const initialTotal = totalRes.count ?? 0;
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
-        <Link href="/dashboard/settings" className="hover:text-foreground">
-          Settings
-        </Link>
-        <span>/</span>
-        <span>AI</span>
-      </div>
-      <h1 className="text-2xl font-semibold tracking-tight">AI</h1>
-      <p className="mt-1 text-sm text-muted-foreground">
-        Configure the AI assistant&apos;s knowledge of your inventory.
-      </p>
+    <SettingsPage>
+      <PageHeader
+        title="AI"
+        subline="Configure the AI assistant's knowledge of your inventory."
+        back={
+          <nav
+            aria-label="Breadcrumb"
+            className="text-muted-foreground flex items-center gap-2 text-[12.5px]"
+          >
+            <Link href="/dashboard/settings" className="hover:text-foreground transition-colors">
+              Settings
+            </Link>
+            <span aria-hidden className="text-ink-4">
+              /
+            </span>
+            <span>AI</span>
+          </nav>
+        }
+      />
 
-      <Card className="mt-6">
-        <CardHeader>
-          <CardTitle className="text-base">Semantic search embeddings</CardTitle>
-          <CardDescription>
+      <SettingsPanel
+        title="Semantic search embeddings"
+        description={
+          <>
             Embeddings let the assistant find items by meaning (
-            <span className="font-medium">&quot;something for cleaning spills&quot;</span>
-            ) instead of exact keyword. New and edited items embed automatically;
-            run a backfill once to cover existing inventory.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <EmbeddingsBackfillPanel
-            initialRemaining={initialRemaining}
-            initialTotal={initialTotal}
-          />
-        </CardContent>
-      </Card>
-    </div>
+            <span className="font-medium">&quot;something for cleaning spills&quot;</span>) instead
+            of exact keyword. New and edited items embed automatically; run a backfill once to cover
+            existing inventory.
+          </>
+        }
+      >
+        <EmbeddingsBackfillPanel initialRemaining={initialRemaining} initialTotal={initialTotal} />
+      </SettingsPanel>
+    </SettingsPage>
   );
 }
