@@ -76,6 +76,16 @@ describe('OrderAttachmentsPanel — the redesigned proof of delivery card (P4.B1
     );
   });
 
+  // The 1280 shots: the 32 px picker made this card's header 53 px beside
+  // the 49 px of every other titled card with a small control aside.
+  it('the kind picker is the small size, like Add beside it', () => {
+    renderPanel({ canAttach: true, canManage: true });
+    const picker = screen.getByRole('combobox', { name: 'Attachment kind' });
+    expect(picker.className).toMatch(/(^|\s)h-7(\s|$)/);
+    expect(picker.className).not.toMatch(/(^|\s)h-8(\s|$)/);
+    expect(screen.getByRole('button', { name: 'Add' }).className).toMatch(/(^|\s)h-7(\s|$)/);
+  });
+
   it('a reader who may not attach: no picker, no Add, and the short empty line', () => {
     renderPanel({});
     expect(screen.queryByRole('combobox')).toBeNull();

@@ -166,7 +166,10 @@ export function OrderAttachmentsPanel({
         canAttach ? (
           <div className="flex flex-wrap items-center gap-2">
             <Select value={kind} onValueChange={(v) => setKind(v as OrderAttachmentKind)}>
-              <SelectTrigger className="h-8 w-[160px] text-[13px]" aria-label="Attachment kind">
+              {/* 28 px like Add beside it, so the card's header keeps the
+                  49 px every titled card has with a small control aside (a
+                  32 px control makes it 53); a phone still gets 44 px. */}
+              <SelectTrigger className="h-7 w-[160px] text-[12.5px]" aria-label="Attachment kind">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
