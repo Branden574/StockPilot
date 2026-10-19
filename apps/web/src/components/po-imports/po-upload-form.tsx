@@ -159,9 +159,9 @@ export function PoUploadForm() {
           accept={ACCEPT.join(',')}
           onChange={(e) => pickFile(e.target.files?.[0] ?? null)}
         />
-        <p className="text-xs text-muted-foreground">
-          Max 25 MB. Inventory will not be updated by this upload — receiving
-          posts the actual stock change in a separate step.
+        <p className="text-muted-foreground text-[12.5px]">
+          Max 25 MB. Inventory will not be updated by this upload — receiving posts the actual stock
+          change in a separate step.
         </p>
       </div>
 
@@ -174,9 +174,9 @@ export function PoUploadForm() {
           maxLength={PO_IMPORT_DISPLAY_NAME_MAX}
           placeholder="Example: August DC4 Book Order"
         />
-        <p className="text-xs text-muted-foreground">
-          Give this import a name so it is easy to find later. Prefilled from the
-          file name — edit it freely; the uploaded file keeps its own name.
+        <p className="text-muted-foreground text-[12.5px]">
+          Give this import a name so it is easy to find later. Prefilled from the file name — edit
+          it freely; the uploaded file keeps its own name.
         </p>
       </div>
       <Button type="submit" disabled={!file || submitting} variant="gradient">

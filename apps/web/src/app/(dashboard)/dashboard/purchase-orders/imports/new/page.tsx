@@ -1,54 +1,77 @@
-import Link from 'next/link';
-
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { PoScanForm } from '@/components/po-imports/po-scan-form';
 import { PoUploadForm } from '@/components/po-imports/po-upload-form';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+
+/** The page area (DESIGN-SPEC 4 and 5.3), the same box the imports list draws. */
+const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
+
+/** Both upload cards at a reading width. */
+const FORM_WIDTH = 'w-full max-w-[880px]';
 
 export default function NewPoImportPage() {
   return (
-    <div className="container mx-auto max-w-2xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href="/dashboard/purchase-orders/imports"
-          className="text-muted-foreground hover:text-foreground text-sm"
+    <div className={PAGE}>
+      <PageHeader
+        back={
+          <PageHeaderBackLink href="/dashboard/purchase-orders/imports">
+            ← Back to imports
+          </PageHeaderBackLink>
+        }
+        title="New PO import"
+        subline="Two ways to bring a PO in: scan a photo or PDF for AI extraction, or upload a CSV / structured PDF for the deterministic parser."
+        className={FORM_WIDTH}
+      />
+
+      {/* The two ways in, one card each (DESIGN-SPEC 6.7), with the card's
+          own explanation under its title. */}
+      <div className={`${FORM_WIDTH} flex flex-col gap-4`}>
+        <UploadCard
+          id="po-import-scan"
+          title="Scan with AI"
+          description="Photo of a printed PO or a PDF — AI vision extracts vendor, line items, qty, and totals. Confidence is shown per line; you review and approve."
         >
-          ← Back to imports
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">New PO import</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Two ways to bring a PO in: scan a photo or PDF for AI extraction,
-          or upload a CSV / structured PDF for the deterministic parser.
-        </p>
-      </div>
+          <PoScanForm />
+        </UploadCard>
 
-      <div className="space-y-6">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Scan with AI</CardTitle>
-            <CardDescription>
-              Photo of a printed PO or a PDF — AI vision extracts vendor,
-              line items, qty, and totals. Confidence is shown per line; you
-              review and approve.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <PoScanForm />
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Upload CSV / structured PDF</CardTitle>
-            <CardDescription>
-              Faster and 100% accurate when your supplier exports a clean CSV
-              or structured PDF (Amazon Business, QuickBooks, NetSuite, etc.).
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <PoUploadForm />
-          </CardContent>
-        </Card>
+        <UploadCard
+          id="po-import-upload"
+          title="Upload CSV / structured PDF"
+          description="Faster and 100% accurate when your supplier exports a clean CSV or structured PDF (Amazon Business, QuickBooks, NetSuite, etc.)."
+        >
+          <PoUploadForm />
+        </UploadCard>
       </div>
     </div>
+  );
+}
+
+/** A form card: the 13.5 / 500 title and its quiet explanation in the header,
+ *  the form in an 18 px body. */
+function UploadCard({
+  id,
+  title,
+  description,
+  children,
+}: {
+  id: string;
+  title: string;
+  description: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section
+      aria-labelledby={id}
+      className="border-border bg-card text-card-foreground min-w-0 rounded-lg border"
+    >
+      <div className="border-border border-b px-[18px] py-3.5">
+        <h2 id={id} className="text-foreground text-[13.5px] font-medium leading-5">
+          {title}
+        </h2>
+        <p className="text-muted-foreground mt-0.5 text-[12.5px] leading-[18.75px]">
+          {description}
+        </p>
+      </div>
+      <div className="p-[18px]">{children}</div>
+    </section>
   );
 }
