@@ -152,11 +152,13 @@ export default async function ScheduleEventDetailPage({
         subline={formatRange(event.startsAt, event.endsAt, event.allDay)}
         actions={
           canManage ? (
+            // Secondary first, the ink commit button last (DESIGN-SPEC 6.1,
+            // PageHeader's order): Edit, Cancel, Start (or Mark complete).
             <>
-              <ScheduleStatusActions eventId={id} currentStatus={event.status} />
               <Button asChild variant="outline">
                 <Link href={`/dashboard/schedule/${id}/edit`}>Edit</Link>
               </Button>
+              <ScheduleStatusActions eventId={id} currentStatus={event.status} />
             </>
           ) : undefined
         }
