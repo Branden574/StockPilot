@@ -84,8 +84,8 @@ export function PoImportRenameButton({
         <DialogHeader>
           <DialogTitle>Edit import name</DialogTitle>
           <DialogDescription>
-            Give this import a name so it is easy to find later. This only changes
-            the label — the uploaded file keeps its own name.
+            Give this import a name so it is easy to find later. This only changes the label — the
+            uploaded file keeps its own name.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-1.5">
@@ -101,7 +101,10 @@ export function PoImportRenameButton({
             placeholder="Example: August DC4 Book Order"
             autoFocus
           />
-          <p className="text-muted-foreground text-xs">Source file: {fileName}</p>
+          {/* A long file name wraps inside the dialog instead of widening it. */}
+          <p className="text-muted-foreground text-[12.5px] [overflow-wrap:anywhere]">
+            Source file: {fileName}
+          </p>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => setOpen(false)} disabled={busy}>
