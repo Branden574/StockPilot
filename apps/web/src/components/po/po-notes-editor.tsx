@@ -59,13 +59,16 @@ export function PoNotesEditor({
 
   const hasNotes = Boolean((currentNotes ?? '').trim());
 
+  // The last row of the Summary card, under its label / value rows: the same
+  // 18 px sides, the label in the rows' quiet ink, and Add or Edit as a small
+  // ghost button that lines its words up with the card's edge.
   return (
-    <div className="space-y-1 border-t pt-3">
-      <div className="flex items-center justify-between">
-        <p className="text-muted-foreground text-xs uppercase tracking-wider">Notes</p>
+    <div className="border-border border-t px-[18px] py-3">
+      <div className="flex min-h-7 items-center justify-between gap-3">
+        <p className="text-muted-foreground text-[13.5px] leading-[20.25px]">Notes</p>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
-            <Button variant="ghost" size="sm" className="h-6 gap-1 px-2 text-xs">
+            <Button variant="ghost" size="sm" className="-mr-2 [&_svg]:size-3.5">
               {hasNotes ? (
                 <>
                   <Pencil className="h-3 w-3" /> Edit
@@ -106,9 +109,13 @@ export function PoNotesEditor({
         </Dialog>
       </div>
       {hasNotes ? (
-        <p className="whitespace-pre-wrap text-sm">{currentNotes}</p>
+        <p className="mt-1 whitespace-pre-wrap text-[13.5px] leading-[20.25px] [overflow-wrap:anywhere]">
+          {currentNotes}
+        </p>
       ) : (
-        <p className="text-muted-foreground text-sm italic">No notes yet.</p>
+        <p className="text-muted-foreground mt-1 text-[13.5px] italic leading-[20.25px]">
+          No notes yet.
+        </p>
       )}
     </div>
   );

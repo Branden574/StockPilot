@@ -13,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { cn } from '@/lib/utils';
 import { setPoDestinationWarehouseAction } from '@/server/actions/purchase-orders';
 
 interface Props {
@@ -54,37 +55,47 @@ export function PoSetDestination({ poId, warehouses, hasUnreceivableDestination 
     router.refresh();
   }
 
+  // A quiet caution banner under the page header (the caution wash with its
+  // hairline, words in ink, the icon in the caution tone), in both themes:
+  // the old fixed-amber tint was all but invisible in dark.
   if (warehouses.length === 0) {
     return (
-      <div className="border-warning/40 bg-warning/5 rounded-md border px-3 py-2 text-xs">
-        This PO has no destination warehouse and no warehouses exist yet.
-        Create one in Admin → Warehouses, then come back here.
+      <div className={cn(BANNER, 'flex items-start gap-2.5')}>
+        <Warehouse aria-hidden className="text-warning mt-0.5 h-4 w-4 shrink-0" />
+        <p>
+          This PO has no destination warehouse and no warehouses exist yet. Create one in Admin →
+          Warehouses, then come back here.
+        </p>
       </div>
     );
   }
 
   return (
-    <div className="border-warning/40 bg-warning/5 rounded-md border px-3 py-3">
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        <Warehouse className="h-3.5 w-3.5" />
-        <span>
+    <div className={BANNER}>
+      <div className="flex items-start gap-2.5">
+        <Warehouse aria-hidden className="text-warning mt-0.5 h-4 w-4 shrink-0" />
+        <p>
           {hasUnreceivableDestination ? (
             <>
-              <strong>This PO&apos;s destination isn&apos;t linked to a warehouse.</strong>{' '}
-              Received stock has nowhere to go, so the Receive button is hidden.
-              Pick a warehouse below to fix it.
+              <strong className="font-medium">
+                This PO&apos;s destination isn&apos;t linked to a warehouse.
+              </strong>{' '}
+              Received stock has nowhere to go, so the Receive button is hidden. Pick a warehouse
+              below to fix it.
             </>
           ) : (
             <>
-              <strong>No destination set.</strong> Pick a warehouse so receiving
-              can post stock against this PO.
+              <strong className="font-medium">No destination set.</strong> Pick a warehouse so
+              receiving can post stock against this PO.
             </>
           )}
-        </span>
+        </p>
       </div>
-      <div className="mt-2 flex flex-wrap items-center gap-2">
+      {/* The secondary button: on a draft the page's one ink button is Mark as
+          ordered, which shows beside this banner. */}
+      <div className="mt-3 flex flex-wrap items-center gap-2 sm:pl-[26px]">
         <Select value={warehouseId} onValueChange={setWarehouseId}>
-          <SelectTrigger className="h-8 max-w-[280px] text-xs">
+          <SelectTrigger className="w-full sm:w-[280px]">
             <SelectValue placeholder="Pick warehouse" />
           </SelectTrigger>
           <SelectContent>
@@ -95,10 +106,14 @@ export function PoSetDestination({ poId, warehouses, hasUnreceivableDestination 
             ))}
           </SelectContent>
         </Select>
-        <Button size="sm" onClick={save} disabled={busy || !warehouseId}>
-          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Set destination'}
+        <Button variant="outline" onClick={save} disabled={busy || !warehouseId}>
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          Set destination
         </Button>
       </div>
     </div>
   );
 }
+
+const BANNER =
+  'border-warning/40 bg-warning-wash text-foreground rounded-lg border px-4 py-3 text-[13px] leading-5';
