@@ -102,8 +102,10 @@ export default async function PlatformOrgsPage({
         subline="Every organization on the platform. Click one to view its data, manage billing, or act as it."
       />
 
-      {/* Platform-wide traction metrics (across all orgs). */}
-      <StatStrip aria-label="Platform totals">
+      {/* Platform-wide traction metrics (across all orgs). Seven figures: the
+          150 px tracks keep all seven on one row at a desktop width (the
+          180 px ones left Movements alone on a second row). */}
+      <StatStrip variant="detail" aria-label="Platform totals">
         <StatStripItem label="Organizations" value={NUM.format(metrics.totalOrgs)} />
         <StatStripItem label="Users" value={NUM.format(metrics.totalUsers)} />
         <StatStripItem label="Items" value={NUM.format(metrics.totalItems)} />
