@@ -31,7 +31,9 @@ export const ITEMS_PAGE_TOUR: TourDefinition = {
       body: 'Import a spreadsheet or a purchase order to create lots of records in one pass — the usual path when a shipment arrives.',
     },
     {
-      target: 'table tbody tr',
+      // The first row in Table view, or the first card in Grid view (the
+      // redesign's Grid draws no table).
+      target: 'table tbody tr, [data-slot="grid-card"]',
       title: 'Dig into any item',
       body: 'Click a row for full detail: quantities on hand vs reserved, rack placement, source purchase orders, and complete movement history.',
       optional: true,

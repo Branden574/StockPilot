@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
+import { ITEMS_PAGE_TOUR } from '@/lib/onboarding/tours';
 import userEvent from '@testing-library/user-event';
 import * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -768,5 +769,17 @@ describe('Grid group cards: the header row, as a card', () => {
       '[data-group-key="sku-group:SP-THV69-MG8"]',
     )! as HTMLElement;
     expect(within(card).getByText('2 racks +1 unset')).toBeInTheDocument();
+  });
+});
+
+describe('the Items tour reaches a record in both views', () => {
+  it("'Dig into any item' lands on a table row in Table and on a card in Grid", () => {
+    const step = ITEMS_PAGE_TOUR.steps.find((s) => s.title === 'Dig into any item');
+    expect(step?.target).toBeTruthy();
+    const table = renderTable();
+    expect(table.container.querySelector(step!.target!)?.tagName).toBe('TR');
+    table.unmount();
+    const grid = renderTable({ initialView: 'grid' });
+    expect(grid.container.querySelector(step!.target!)?.getAttribute('data-slot')).toBe('grid-card');
   });
 });
