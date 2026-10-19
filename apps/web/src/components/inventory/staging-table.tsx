@@ -805,7 +805,7 @@ function FilterSelectLabel({ children }: { children: React.ReactNode }) {
 // button are siblings, never one inside the other.
 function ActiveFilterChip({ label, onRemove }: { label: string; onRemove: () => void }) {
   return (
-    <span className="text-foreground inline-flex h-7 max-w-full items-center gap-1 rounded-full border border-[var(--ed-line-strong)] bg-transparent pl-2.5 pr-1 text-[12.5px]">
+    <span className="text-foreground border-line-strong inline-flex h-7 max-w-full items-center gap-1 rounded-full border bg-transparent pl-2.5 pr-1 text-[12.5px]">
       <span className="min-w-0 truncate">{label}</span>
       <button
         type="button"

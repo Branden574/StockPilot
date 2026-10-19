@@ -517,7 +517,7 @@ export function BulkIsbnImport({
               {Math.round((done / resolved.length) * 100)}%
             </span>
           </div>
-          <div className="h-1 w-full overflow-hidden rounded-sm bg-[var(--ed-line-strong)]">
+          <div className="bg-line-strong h-1 w-full overflow-hidden rounded-sm">
             <div
               className="bg-accent h-full rounded-sm transition-[width] duration-300 ease-out motion-reduce:transition-none"
               style={{ width: `${(done / resolved.length) * 100}%` }}
