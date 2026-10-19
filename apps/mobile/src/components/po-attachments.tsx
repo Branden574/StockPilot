@@ -1,11 +1,14 @@
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
+import { Paperclip, Plus, ScanText } from 'lucide-react-native';
 import * as React from 'react';
 import { ActivityIndicator, Alert, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { isManagerOrAbove, type Role } from '@stockpilot/core';
 
 import { ScannerTip } from '@/components/scanner-tip';
+import { Button } from '@/components/ui/button';
+import { StockBar } from '@/components/ui/stock-bar';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import {
@@ -21,7 +24,8 @@ import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { resizeForUpload } from '@/lib/image-resize';
 import { fileSizeOf, uploadFileToBucket } from '@/lib/storage-upload';
 import { supabase } from '@/lib/supabase';
-import { radius, space, theme } from '@/lib/theme';
+import { FONT, RADIUS, SPACE, palette, type Palette, type ThemeMode } from '@/lib/theme';
+import { useTheme } from '@/lib/use-theme';
 import { useWorkspace } from '@/lib/use-workspace';
 
 const BUCKET = 'po-attachments';
@@ -83,10 +87,16 @@ function mimeForExt(ext: string): string {
  * (PDFs / images via expo-document-picker, uploaded raw), and the native
  * document scanner (1 page → image, 2+ pages → one PDF). 15 MB cap, matching
  * the bucket.
+ *
+ * Drawn in the device's mode (it was on the light-only legacy theme, so in
+ * dark mode a light card sat on the dark PO screen, and the one-time scanner
+ * tip it hosts opened dark over it).
  */
 export function PoAttachments({ poId }: { poId: string }) {
   const { user } = useAuth();
   const { activeRole } = useWorkspace();
+  const { c, mode } = useTheme();
+  const styles = ATTACHMENT_STYLES[mode];
   const permissions = useEffectivePermissions();
   // When the effective permission set is loaded, trust it (it reflects org
   // overrides). Until it loads (e.g. a freshly-launched build before its first
@@ -133,9 +143,10 @@ export function PoAttachments({ poId }: { poId: string }) {
 
     const signed = new Map<string, string>();
     if (list.length > 0) {
-      const { data: urls } = await supabase.storage
-        .from(BUCKET)
-        .createSignedUrls(list.map((r) => r.storage_path), 60 * 60);
+      const { data: urls } = await supabase.storage.from(BUCKET).createSignedUrls(
+        list.map((r) => r.storage_path),
+        60 * 60,
+      );
       for (const u of (urls ?? []) as { path?: string | null; signedUrl: string }[]) {
         if (u.path) signed.set(u.path, u.signedUrl);
       }
@@ -427,7 +438,22 @@ export function PoAttachments({ poId }: { poId: string }) {
         style: 'destructive',
         onPress: async () => {
           await supabase.storage.from(BUCKET).remove([row.storage_path]);
-          await supabase.from('po_attachments').delete().eq('id', row.id);
+          // The row decides whether the file is gone. A refused delete used to
+          // pass in silence: the list re-read with the file still in it and
+          // nothing said why. Row-level security answers a delete it refuses
+          // with no rows and no error, so the deleted rows are asked for and
+          // counted, and a removal that did not happen is said.
+          const { data: removed, error: removeError } = await supabase
+            .from('po_attachments')
+            .delete()
+            .eq('id', row.id)
+            .select('id');
+          if (removeError || !removed || removed.length === 0) {
+            Alert.alert(
+              'Could not remove',
+              removeError?.message || 'The file is still attached. Try again in a moment.',
+            );
+          }
           await load();
         },
       },
@@ -437,61 +463,79 @@ export function PoAttachments({ poId }: { poId: string }) {
   return (
     <View style={styles.card}>
       <View style={styles.headerRow}>
-        <Text style={styles.title}>Attachments</Text>
+        <Text style={styles.title} accessibilityRole="header">
+          Attachments
+        </Text>
         {canManage && (
-          <Pressable
+          // An outlined control (the PO's ink button is Post receipt), its
+          // words kept beside the spinner while a file uploads; the "＋" glyph
+          // in the words became an icon.
+          <Button
+            variant="outline"
+            size="sm"
             onPress={addFile}
             disabled={busy}
-            style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.7 }]}
+            style={styles.smallButton}
+            leading={
+              busy ? (
+                <ActivityIndicator color={c.ink} size="small" />
+              ) : (
+                <Plus size={15} color={c.ink} strokeWidth={1.75} />
+              )
+            }
           >
-            {busy ? (
-              <ActivityIndicator color={theme.bg} size="small" />
-            ) : (
-              <Text style={styles.addBtnText}>＋ Attach</Text>
-            )}
-          </Pressable>
+            Attach
+          </Button>
         )}
       </View>
 
       {canManage && (
-        <Pressable
+        // The document emoji in the words became an icon beside them.
+        <Button
+          variant="outline"
+          size="sm"
+          block
           onPress={() => void scanDocument()}
           disabled={busy}
-          style={({ pressed }) => [
-            styles.scanBtn,
-            pressed && { opacity: 0.7 },
-            busy && { opacity: 0.5 },
-          ]}
+          style={styles.scanButton}
+          leading={<ScanText size={15} color={c.ink} strokeWidth={1.75} />}
         >
-          <Text style={styles.scanBtnText}>📄 Scan Document</Text>
-        </Pressable>
+          Scan Document
+        </Button>
       )}
 
       {busy && uploadPercent !== null && (
-        // Real transported progress for the in-flight upload — same track/fill
-        // idiom as the maintenance photo rows (app/maintenance/new.tsx).
-        <View style={styles.progressTrack}>
-          <View style={[styles.progressFill, { width: `${Math.max(4, uploadPercent)}%` }]} />
+        // Real transported progress for the in-flight upload: the reference's
+        // 4pt progress bar (the accent on the stronger-border track).
+        <View style={styles.progress}>
+          <StockBar value={Math.max(4, uploadPercent)} max={100} kind="ok" height={4} />
         </View>
       )}
 
       {loading ? (
-        <ActivityIndicator color={theme.primary} style={{ marginTop: space.sm }} />
+        <ActivityIndicator color={c.ink} style={{ marginTop: SPACE.sm }} />
       ) : loadError && items.length === 0 ? (
-        <Pressable onPress={() => void load()}>
+        <Pressable
+          onPress={() => void load()}
+          accessibilityRole="button"
+          style={({ pressed }) => [styles.errorRow, pressed && { opacity: 0.7 }]}
+        >
           <Text style={styles.errorText}>
             Couldn’t load attachments — tap to retry. ({loadError})
           </Text>
         </Pressable>
       ) : items.length === 0 ? (
         <Text style={styles.muted}>
-          {canManage ? 'No files yet. Add a photo or PDF of the packing slip.' : 'No files attached.'}
+          {canManage
+            ? 'No files yet. Add a photo or PDF of the packing slip.'
+            : 'No files attached.'}
         </Text>
       ) : (
         items.map((row) => (
           <View key={row.id} style={styles.fileRow}>
             <Pressable
-              style={{ flex: 1 }}
+              accessibilityRole="button"
+              style={({ pressed }) => [styles.fileOpen, pressed && { opacity: 0.7 }]}
               onPress={() => {
                 if (row.url) {
                   void Linking.openURL(row.url);
@@ -505,12 +549,21 @@ export function PoAttachments({ poId }: { poId: string }) {
                 }
               }}
             >
+              {/* The paperclip emoji in the words became an icon. */}
+              <Paperclip size={15} color={c.ink3} strokeWidth={1.75} />
               <Text style={styles.fileName} numberOfLines={1}>
-                📎 {row.file_name ?? 'File'}
+                {row.file_name ?? 'File'}
               </Text>
             </Pressable>
             {canManage && (
-              <Pressable onPress={() => confirmDelete(row)} hitSlop={10}>
+              // Each row's Remove says which file it removes (VoiceOver heard
+              // several "Remove"s), in a frame at least 44pt tall.
+              <Pressable
+                onPress={() => confirmDelete(row)}
+                accessibilityRole="button"
+                accessibilityLabel={`Remove ${row.file_name ?? 'File'}`}
+                style={({ pressed }) => [styles.removeFrame, pressed && { opacity: 0.7 }]}
+              >
                 <Text style={styles.delete}>Remove</Text>
               </Pressable>
             )}
@@ -527,59 +580,68 @@ export function PoAttachments({ poId }: { poId: string }) {
   );
 }
 
-const styles = StyleSheet.create({
-  card: {
-    backgroundColor: theme.bg,
-    borderWidth: 1,
-    borderColor: theme.border,
-    borderRadius: radius.md,
-    padding: space.md,
-    marginTop: space.md,
-  },
-  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  title: { color: theme.text, fontSize: 15, fontWeight: '700' },
-  addBtn: {
-    backgroundColor: theme.text,
-    borderRadius: radius.sm,
-    paddingHorizontal: space.sm,
-    paddingVertical: 6,
-    minWidth: 78,
-    alignItems: 'center',
-  },
-  addBtnText: { color: theme.bg, fontWeight: '700', fontSize: 13 },
-  scanBtn: {
-    borderWidth: 1,
-    borderColor: theme.border,
-    borderRadius: radius.sm,
-    paddingVertical: 8,
-    alignItems: 'center',
-    marginTop: space.sm,
-  },
-  scanBtnText: { color: theme.text, fontWeight: '700', fontSize: 13 },
-  progressTrack: {
-    marginTop: space.sm,
-    height: 4,
-    borderRadius: 2,
-    overflow: 'hidden',
-    backgroundColor: theme.border,
-  },
-  progressFill: {
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: theme.text,
-  },
-  muted: { color: theme.textMuted, fontSize: 13, marginTop: space.sm },
-  errorText: { color: '#c0392b', fontSize: 13, marginTop: space.sm },
-  fileRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: space.sm,
-    paddingVertical: 10,
-    borderTopWidth: 1,
-    borderTopColor: theme.border,
-    marginTop: space.sm,
-  },
-  fileName: { color: theme.text, fontSize: 14 },
-  delete: { color: '#c0392b', fontSize: 13, fontWeight: '600' },
-});
+/** The panel's styles for one mode's palette, built once per mode at load. */
+function makeStyles(c: Palette) {
+  return StyleSheet.create({
+    // The reference card: the card fill, a hairline, radius 10 (it was the
+    // page colour with a border, on the page).
+    card: {
+      backgroundColor: c.card,
+      borderWidth: 1,
+      borderColor: c.hair,
+      borderRadius: RADIUS.card,
+      padding: 14,
+      marginTop: SPACE.md,
+    },
+    headerRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: SPACE.sm,
+    },
+    title: { color: c.ink, fontFamily: FONT.display, fontSize: 15, flexShrink: 1 },
+    // The small button is 36pt; its frame is taken to the 44pt minimum.
+    smallButton: { minHeight: 44 },
+    scanButton: { minHeight: 44, marginTop: SPACE.sm },
+    progress: { marginTop: SPACE.sm },
+    muted: {
+      color: c.ink3,
+      fontFamily: FONT.displayRegular,
+      fontSize: 13.5,
+      lineHeight: 19,
+      marginTop: SPACE.sm,
+    },
+    errorRow: { minHeight: 44, justifyContent: 'center', marginTop: SPACE.xs },
+    errorText: {
+      color: c.critText,
+      fontFamily: FONT.displayRegular,
+      fontSize: 13.5,
+      lineHeight: 19,
+    },
+    fileRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: SPACE.sm,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: c.hair,
+      marginTop: SPACE.sm,
+    },
+    fileOpen: {
+      flex: 1,
+      minWidth: 0,
+      minHeight: 44,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: SPACE.sm,
+    },
+    fileName: { flex: 1, color: c.ink, fontFamily: FONT.displayRegular, fontSize: 14 },
+    removeFrame: { minHeight: 44, minWidth: 44, justifyContent: 'center', alignItems: 'flex-end' },
+    delete: { color: c.critText, fontFamily: FONT.display, fontSize: 13.5 },
+  });
+}
+
+const ATTACHMENT_STYLES: Record<ThemeMode, ReturnType<typeof makeStyles>> = {
+  light: makeStyles(palette('light')),
+  dark: makeStyles(palette('dark')),
+};

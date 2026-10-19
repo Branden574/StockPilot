@@ -513,7 +513,11 @@ describe('the PO screen opens a draft read-only', () => {
   // "Could not load this PO" had no way out); a Back under 44 pt or unnamed;
   // no way home when the screen was opened with nothing to go back to.
   it('a Back chip, 44 pt and named, sits above every state of the screen', () => {
-    expect(po).toContain("import { ArrowLeft } from 'lucide-react-native';");
+    // Re-pinned by the redesign (P5.8, 2026-10-18; was the exact line
+    // `import { ArrowLeft } from 'lucide-react-native';`): the screen now
+    // imports its Scan and check-mark icons from the same module, which the
+    // linter keeps on one import line. Same pin: Back is the ArrowLeft chip.
+    expect(po).toMatch(/import \{[^}]*\bArrowLeft\b[^}]*\} from 'lucide-react-native';/);
     expect(po).toContain("import { IconChip } from '@/components/ui/row';");
     expect(count(po, '<IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />')).toBe(1);
     expect(po).toMatch(
