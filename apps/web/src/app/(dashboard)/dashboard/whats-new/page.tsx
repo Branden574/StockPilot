@@ -2,6 +2,9 @@ import type { Metadata } from 'next';
 import { Gift } from 'lucide-react';
 import Link from 'next/link';
 
+import { PageHeader } from '@/components/patterns/page-header';
+import { StatePanel } from '@/components/patterns/state-panel';
+import { Badge } from '@/components/ui/badge';
 import { LocalDate } from '@/components/ui/local-date';
 import { MarkAllReadButton } from '@/components/updates/release-history-actions';
 import { utcDateLabel } from '@/lib/utc-date-label';
@@ -24,61 +27,63 @@ export default async function WhatsNewHistoryPage() {
   const list = await listReleasesFor(ctx);
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-            <Gift className="text-primary size-5" aria-hidden /> What’s new
-          </h1>
-          <p className="text-muted-foreground mt-1 text-sm">
-            Every StockPilot release, what changed, and what it means for your work.
-          </p>
-        </div>
-        {list.stateAvailable ? <MarkAllReadButton unreadCount={list.unreadCount} /> : null}
-      </div>
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <PageHeader
+        title={
+          <span className="inline-flex items-center gap-2.5">
+            <Gift className="text-accent size-5 shrink-0" aria-hidden strokeWidth={1.75} /> What’s
+            new
+          </span>
+        }
+        subline="Every StockPilot release, what changed, and what it means for your work."
+        actions={
+          list.stateAvailable ? <MarkAllReadButton unreadCount={list.unreadCount} /> : undefined
+        }
+      />
 
       {!list.stateAvailable ? (
         <p
           role="status"
-          className="mt-6 rounded-lg border px-3 py-2 text-[12.5px] text-[var(--ed-ink-3)]"
+          className="border-border bg-sunk text-muted-foreground rounded-lg border px-3.5 py-2.5 text-[12.5px] leading-[18.75px]"
         >
           We could not load which releases you have read, so none are marked unread right now.
         </p>
       ) : null}
 
       {list.releases.length === 0 ? (
-        <p className="text-muted-foreground mt-10 text-sm">
-          There are no release notes for you yet.
-        </p>
+        <StatePanel
+          kind="empty"
+          icon={Gift}
+          size="sm"
+          title="There are no release notes for you yet."
+        />
       ) : (
-        <ol className="mt-8 space-y-3">
+        <ol className="border-border bg-card overflow-hidden rounded-lg border">
           {list.releases.map((r) => (
-            <li key={r.id}>
+            <li key={r.id} className="border-border border-b last:border-b-0">
               <Link
                 href={`/dashboard/whats-new/${r.id}`}
-                className="bg-card hover:bg-muted/40 focus-visible:ring-ring block rounded-xl border p-4 transition-colors focus-visible:outline-none focus-visible:ring-2"
+                className="hover:bg-muted focus-visible:ring-ring block px-[18px] py-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset"
               >
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
                   {!r.state.read ? (
-                    <span className="border-primary/40 text-primary inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium">
-                      <span aria-hidden className="bg-primary size-1.5 rounded-full" /> Unread
-                    </span>
+                    <Badge variant="success" dot>
+                      Unread
+                    </Badge>
                   ) : null}
-                  {r.status === 'withdrawn' ? (
-                    <span className="border-border rounded-full border px-2 py-0.5 text-[11px] font-medium text-[var(--ed-ink-3)]">
-                      Withdrawn
-                    </span>
-                  ) : null}
-                  <span className="text-[12px] text-[var(--ed-ink-3)]">
+                  {r.status === 'withdrawn' ? <Badge variant="outline">Withdrawn</Badge> : null}
+                  <span className="text-muted-foreground text-[12px] leading-[18px]">
                     {r.version ? `${r.version} · ` : ''}
                     <LocalDate iso={r.publishedAt} fallback={utcDateLabel(r.publishedAt)} />
                   </span>
                 </div>
-                <h2 className="mt-2 text-base font-semibold tracking-tight">{r.title}</h2>
-                <p className="text-muted-foreground mt-1 line-clamp-3 text-sm leading-relaxed">
+                <h2 className="text-foreground mt-1.5 text-[15px] font-medium leading-[22px] tracking-[-0.005em]">
+                  {r.title}
+                </h2>
+                <p className="text-muted-foreground mt-1 line-clamp-3 text-[13px] leading-[19.5px]">
                   {r.summary}
                 </p>
-                <p className="text-primary mt-2 text-[13px] font-medium">
+                <p className="text-accent mt-2 text-[12.5px] font-medium">
                   {r.status === 'withdrawn'
                     ? 'See why →'
                     : `Read ${r.entryCount} ${r.entryCount === 1 ? 'change' : 'changes'} →`}

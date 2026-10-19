@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { ChatPanel } from '@/components/ai/chat-panel';
+import { PageHeader } from '@/components/patterns/page-header';
 import { requireOrgContext } from '@/lib/auth/session';
 
 import { can } from '@stockpilot/core';
@@ -27,24 +28,22 @@ export default async function AiPage() {
     redirect('/dashboard');
   }
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-6 sm:px-6 sm:py-8">
-      <div className="border-border mb-5 border-b pb-4">
-        <p className="mb-1.5 text-[11px] font-medium uppercase tracking-[0.1em] text-[var(--ed-ink-4)]">
-          <Sparkles className="mr-1 inline h-3 w-3" />
-          AI Assistant · Beta
-        </p>
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="font-display text-[28px] font-medium tracking-[-0.025em]">
-            Ask your inventory
-          </h1>
-          <PageTour tour={AI_TOUR} />
-        </div>
-        <p className="text-muted-foreground mt-1 text-[13.5px]">
-          Tool-call-grounded chat — every numeric answer comes from a real
-          query against your Supabase. Most tools are read-only; the
-          assistant can also adjust stock when you explicitly confirm.
-        </p>
-      </div>
+    // The two-pane tool page: the page box with the redesign's gutters
+    // (16 px on a phone), the shared header, then the sessions rail beside the
+    // conversation. The AI tour's first step targets `main h1`, which is the
+    // header's title.
+    <div className="mx-auto flex w-full max-w-[1120px] flex-col gap-5 px-4 pb-10 pt-6 sm:px-8 sm:pt-7">
+      <PageHeader
+        eyebrow={
+          <span className="inline-flex items-center gap-1">
+            <Sparkles className="h-3 w-3" aria-hidden />
+            AI Assistant · Beta
+          </span>
+        }
+        title="Ask your inventory"
+        subline="Tool-call-grounded chat — every numeric answer comes from a real query against your Supabase. Most tools are read-only; the assistant can also adjust stock when you explicitly confirm."
+        tour={<PageTour tour={AI_TOUR} />}
+      />
       <ChatPanel />
     </div>
   );

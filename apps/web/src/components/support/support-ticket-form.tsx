@@ -1,9 +1,19 @@
 'use client';
 
-import { Bug, CheckCircle2, CreditCard, ImagePlus, Lightbulb, Loader2, MessageCircle, X } from 'lucide-react';
+import {
+  Bug,
+  CheckCircle2,
+  CreditCard,
+  ImagePlus,
+  Lightbulb,
+  Loader2,
+  MessageCircle,
+  X,
+} from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 
+import { touchTargetClass } from '@/components/patterns/touch-target';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -147,7 +157,11 @@ export function SupportTicketForm({ userId }: { userId: string }) {
     <form onSubmit={onSubmit} noValidate className="space-y-5">
       <div>
         <Label className="mb-2 block">What can we help with?</Label>
-        <div role="radiogroup" aria-label="Request type" className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div
+          role="radiogroup"
+          aria-label="Request type"
+          className="grid grid-cols-2 gap-2 sm:grid-cols-4"
+        >
           {TYPES.map((t) => {
             const active = category === t.value;
             const Icon = t.icon;
@@ -159,13 +173,13 @@ export function SupportTicketForm({ userId }: { userId: string }) {
                 aria-checked={active}
                 onClick={() => setCategory(t.value)}
                 className={cn(
-                  'flex flex-col items-center gap-1.5 rounded-lg border px-2 py-3 text-center text-[12.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+                  'focus-visible:ring-ring focus-visible:ring-offset-background flex min-h-[68px] flex-col items-center justify-center gap-1.5 rounded-lg border px-2 py-3 text-center text-[12.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
                   active
-                    ? 'border-primary bg-primary/5 text-foreground'
-                    : 'border-border text-[var(--ed-ink-3)] hover:bg-muted',
+                    ? 'border-foreground bg-sunk text-foreground shadow-[0_0_0_1px_hsl(var(--foreground))]'
+                    : 'border-line-strong bg-card text-muted-foreground hover:bg-muted hover:text-foreground',
                 )}
               >
-                <Icon className="h-4 w-4" aria-hidden />
+                <Icon className="h-4 w-4" aria-hidden strokeWidth={1.75} />
                 {t.label}
               </button>
             );
@@ -217,7 +231,10 @@ export function SupportTicketForm({ userId }: { userId: string }) {
               type="button"
               onClick={() => replaceFile(null)}
               aria-label="Remove screenshot"
-              className="bg-background/90 border-border absolute right-1.5 top-1.5 grid h-6 w-6 place-items-center rounded-full border shadow-sm transition-colors hover:bg-muted"
+              className={cn(
+                'bg-card border-line-strong hover:bg-muted absolute right-1.5 top-1.5 grid h-6 w-6 place-items-center rounded-full border transition-colors',
+                touchTargetClass,
+              )}
             >
               <X className="h-3.5 w-3.5" aria-hidden />
             </button>
@@ -234,13 +251,15 @@ export function SupportTicketForm({ userId }: { userId: string }) {
             Attach a screenshot
           </Button>
         )}
-        <p className="text-muted-foreground text-xs">PNG, JPG, or WEBP — up to 5 MB.</p>
+        <p className="text-muted-foreground text-[12px] leading-[18px]">
+          PNG, JPG, or WEBP — up to 5 MB.
+        </p>
       </div>
 
       {error && (
         <div
           role="alert"
-          className="border-destructive/40 bg-destructive/10 text-destructive rounded-md border px-3 py-2 text-sm"
+          className="bg-destructive-wash text-destructive rounded-md px-3 py-2 text-[13px] leading-5"
         >
           {error}
         </div>
@@ -248,12 +267,12 @@ export function SupportTicketForm({ userId }: { userId: string }) {
       {success && (
         <div
           role="status"
-          className="border-success/40 bg-success/10 flex items-start gap-2 rounded-md border px-3 py-2 text-sm"
+          className="bg-success-wash text-foreground flex items-start gap-2 rounded-md px-3 py-2 text-[13px] leading-5"
         >
           <CheckCircle2 className="text-success mt-0.5 h-4 w-4 shrink-0" aria-hidden />
           <span>
-            Thanks — we got it. Your submission is listed below and we&apos;ll follow up by email
-            if we need anything.
+            Thanks — we got it. Your submission is listed below and we&apos;ll follow up by email if
+            we need anything.
           </span>
         </div>
       )}

@@ -1,7 +1,20 @@
 import type { Metadata } from 'next';
-import { BookOpen, CheckCircle2, Gift, Keyboard, Mail, Sparkles } from 'lucide-react';
+import {
+  BookOpen,
+  CheckCircle2,
+  ChevronRight,
+  Gift,
+  Keyboard,
+  Mail,
+  Sparkles,
+  type LucideIcon,
+} from 'lucide-react';
 import Link from 'next/link';
+import type * as React from 'react';
 
+import { DetailSection } from '@/components/patterns/detail-section';
+import { PageHeader } from '@/components/patterns/page-header';
+import { touchTargetClass } from '@/components/patterns/touch-target';
 import { getTourStateAction } from '@/lib/onboarding/actions';
 import {
   AI_TOUR,
@@ -21,6 +34,7 @@ import {
 } from '@/lib/onboarding/tours';
 import { TOUR_ROUTES, WORKFLOW_GUIDES } from '@/lib/onboarding/workflows';
 import { SUPPORT_EMAIL } from '@/lib/site';
+import { cn } from '@/lib/utils';
 
 export const metadata: Metadata = { title: 'Help & Learning' };
 
@@ -56,83 +70,101 @@ export default async function HelpPage() {
   const state = await getTourStateAction();
 
   return (
-    <div className="container mx-auto max-w-4xl px-4 py-8 sm:px-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Help &amp; Learning</h1>
-      <p className="text-muted-foreground mt-1 text-sm">
-        Interactive tours, step-by-step guides, and support — learn any part of the app in
-        minutes.
-      </p>
+    <div className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <PageHeader
+        title="Help & Learning"
+        subline="Interactive tours, step-by-step guides, and support — learn any part of the app in minutes."
+      />
 
-      <section className="mt-8">
-        <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide">
-          <Sparkles className="text-primary size-4" /> Page tours
-        </h2>
-        <p className="text-muted-foreground mt-1 text-sm">
+      <DetailSection title={<SectionTitle icon={Sparkles}>Page tours</SectionTitle>} flush>
+        <p className="text-muted-foreground border-border border-b px-[18px] py-3 text-[13px] leading-[19.5px]">
           Two-minute spotlight walkthroughs of each screen. Completed tours are checked — replay
           them any time.
         </p>
-        <div className="mt-4 grid gap-2 sm:grid-cols-2">
+        <ul className="grid sm:grid-cols-2">
           {ALL_TOURS.map((t) => {
             const route = TOUR_ROUTES[t.id];
             const done = state.completed[t.id];
             return (
-              <div
+              <li
                 key={t.id}
-                className="bg-card flex items-center justify-between gap-3 rounded-lg border p-3"
+                data-tour-id={t.id}
+                className="border-border flex min-h-[60px] items-center justify-between gap-3 border-b px-[18px] py-2.5 last:border-b-0 sm:[&:nth-child(odd)]:border-r sm:[&:nth-last-child(2):nth-child(odd)]:border-b-0"
               >
                 <div className="min-w-0">
-                  <p className="flex items-center gap-1.5 text-sm font-medium">
+                  <p className="text-foreground flex items-center gap-1.5 text-[13.5px] font-medium leading-5">
                     {t.name}
                     {done && (
-                      <CheckCircle2 className="size-3.5 shrink-0 text-emerald-500" aria-label="Completed" />
+                      <CheckCircle2
+                        className="text-accent size-3.5 shrink-0"
+                        aria-label="Completed"
+                      />
                     )}
                   </p>
-                  <p className="text-muted-foreground text-xs">{t.steps.length} steps</p>
+                  <p className="text-muted-foreground text-[12px] leading-[18px]">
+                    {t.steps.length} steps
+                  </p>
                 </div>
                 {route ? (
                   <Link
                     href={`${route}?tour=${t.id}`}
-                    className="text-primary shrink-0 text-xs font-medium hover:underline"
+                    className={cn(
+                      'text-accent hover:text-foreground shrink-0 text-[12.5px] font-medium transition-colors',
+                      touchTargetClass,
+                    )}
                   >
                     Start →
                   </Link>
                 ) : (
-                  <span className="text-muted-foreground shrink-0 text-xs">
+                  <span className="text-muted-foreground max-w-[45%] shrink-0 text-right text-[12px] leading-[18px]">
                     Via the Tour pill on any record
                   </span>
                 )}
-              </div>
+              </li>
             );
           })}
-        </div>
-      </section>
+        </ul>
+      </DetailSection>
 
-      <section className="mt-10">
-        <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide">
-          <BookOpen className="text-primary size-4" /> Workflow guides
-        </h2>
-        <p className="text-muted-foreground mt-1 text-sm">
+      <DetailSection title={<SectionTitle icon={BookOpen}>Workflow guides</SectionTitle>} flush>
+        <p className="text-muted-foreground border-border border-b px-[18px] py-3 text-[13px] leading-[19.5px]">
           Multi-page flows, end to end — each step links to the right screen.
         </p>
-        <div className="mt-4 space-y-4">
+        <div>
           {WORKFLOW_GUIDES.map((g) => (
-            <details key={g.id} className="bg-card group rounded-xl border p-4">
-              <summary className="cursor-pointer list-none">
-                <span className="text-sm font-semibold">{g.name}</span>
-                <p className="text-muted-foreground mt-0.5 text-xs">{g.summary}</p>
+            <details key={g.id} className="border-border group border-b last:border-b-0">
+              <summary className="hover:bg-muted focus-visible:ring-ring flex cursor-pointer list-none items-start gap-3 px-[18px] py-3 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset [&::-webkit-details-marker]:hidden">
+                <ChevronRight
+                  aria-hidden
+                  className="text-muted-foreground mt-0.5 size-4 shrink-0 transition-transform group-open:rotate-90"
+                  strokeWidth={1.8}
+                />
+                <span className="min-w-0">
+                  <span className="text-foreground block text-[13.5px] font-medium leading-5">
+                    {g.name}
+                  </span>
+                  <span className="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18.75px]">
+                    {g.summary}
+                  </span>
+                </span>
               </summary>
-              <ol className="mt-4 space-y-3 border-l pl-4">
+              <ol className="border-border mb-4 ml-[45px] mr-[18px] mt-1 space-y-3 border-l pl-5">
                 {g.steps.map((s, i) => (
                   <li key={i} className="relative">
-                    <span className="bg-primary text-primary-foreground absolute -left-[25px] top-0.5 grid size-4 place-items-center rounded-full text-[10px] font-semibold">
+                    <span className="bg-primary text-primary-foreground absolute -left-[30px] top-0.5 grid size-[18px] place-items-center rounded-full font-mono text-[10px] font-medium">
                       {i + 1}
                     </span>
-                    <p className="text-sm font-medium">{s.title}</p>
-                    <p className="text-muted-foreground mt-0.5 text-xs leading-relaxed">{s.body}</p>
+                    <p className="text-foreground text-[13.5px] font-medium leading-5">{s.title}</p>
+                    <p className="text-muted-foreground mt-0.5 text-[12.5px] leading-[18.75px]">
+                      {s.body}
+                    </p>
                     {s.href && (
                       <Link
                         href={s.href}
-                        className="text-primary mt-1 inline-block text-xs font-medium hover:underline"
+                        className={cn(
+                          'text-accent hover:text-foreground mt-1 inline-block text-[12.5px] font-medium transition-colors',
+                          touchTargetClass,
+                        )}
                       >
                         {s.linkText ?? 'Open'} →
                       </Link>
@@ -143,53 +175,65 @@ export default async function HelpPage() {
             </details>
           ))}
         </div>
-      </section>
+      </DetailSection>
 
       {/* What's new used to be listed here by mapping the raw registry, with NO
           audience filter, so copy about features a viewer could not reach was
           rendered to every role. The history page filters on the server. */}
-      <section className="mt-10">
-        <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide">
-          <Gift className="text-primary size-4" /> What&apos;s new
-        </h2>
+      <DetailSection title={<SectionTitle icon={Gift}>What&apos;s new</SectionTitle>} flush>
         <Link
           href="/dashboard/whats-new"
-          className="bg-card hover:bg-muted/50 mt-4 flex items-center justify-between rounded-lg border p-3 transition-colors"
+          className="hover:bg-muted flex items-center justify-between gap-3 px-[18px] py-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0"
         >
-          <span>
-            <span className="block text-sm font-medium">Release history</span>
-            <span className="text-muted-foreground mt-0.5 block text-xs leading-relaxed">
+          <span className="min-w-0">
+            <span className="text-foreground block text-[13.5px] font-medium leading-5">
+              Release history
+            </span>
+            <span className="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18.75px]">
               Every StockPilot release, what changed, and what it means for your work.
             </span>
           </span>
-          <span className="text-primary text-xs font-medium">Open →</span>
+          <span className="text-accent shrink-0 text-[12.5px] font-medium">Open →</span>
         </Link>
-      </section>
+      </DetailSection>
 
-      <section className="mt-10 grid gap-4 sm:grid-cols-2">
-        <div className="bg-card rounded-xl border p-4">
-          <h2 className="flex items-center gap-2 text-sm font-semibold">
-            <Keyboard className="text-primary size-4" /> Keyboard shortcuts
-          </h2>
-          <p className="text-muted-foreground mt-1 text-xs leading-relaxed">
-            Press <kbd className="bg-muted rounded border px-1">?</kbd> anywhere to see every
-            shortcut, <kbd className="bg-muted rounded border px-1">⌘K</kbd> to search, and{' '}
-            <kbd className="bg-muted rounded border px-1">g</kbd> then a letter to jump between
-            sections.
+      <div className="grid gap-4 sm:grid-cols-2">
+        <DetailSection title={<SectionTitle icon={Keyboard}>Keyboard shortcuts</SectionTitle>}>
+          <p className="text-muted-foreground text-[13px] leading-[19.5px]">
+            Press <Kbd>?</Kbd> anywhere to see every shortcut, <Kbd>⌘K</Kbd> to search, and{' '}
+            <Kbd>g</Kbd> then a letter to jump between sections.
           </p>
-        </div>
-        <div className="bg-card rounded-xl border p-4">
-          <h2 className="flex items-center gap-2 text-sm font-semibold">
-            <Mail className="text-primary size-4" /> Still stuck?
-          </h2>
-          <p className="text-muted-foreground mt-1 text-xs leading-relaxed">
+        </DetailSection>
+        <DetailSection title={<SectionTitle icon={Mail}>Still stuck?</SectionTitle>}>
+          <p className="text-muted-foreground text-[13px] leading-[19.5px]">
             We answer fast.{' '}
-            <a className="text-primary font-medium hover:underline" href={`mailto:${SUPPORT_EMAIL}`}>
+            <a
+              className="text-accent hover:text-foreground font-medium underline-offset-2 transition-colors hover:underline"
+              href={`mailto:${SUPPORT_EMAIL}`}
+            >
               {SUPPORT_EMAIL}
             </a>
           </p>
-        </div>
-      </section>
+        </DetailSection>
+      </div>
     </div>
+  );
+}
+
+/** A card title with its 14 px icon (the icon is decoration; the words name the card). */
+function SectionTitle({ icon: Icon, children }: { icon: LucideIcon; children: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-center gap-2">
+      <Icon className="text-muted-foreground size-3.5 shrink-0" aria-hidden strokeWidth={1.8} />
+      {children}
+    </span>
+  );
+}
+
+function Kbd({ children }: { children: React.ReactNode }) {
+  return (
+    <kbd className="bg-sunk border-line-strong text-foreground rounded border px-1 font-mono text-[11.5px]">
+      {children}
+    </kbd>
   );
 }
