@@ -2508,6 +2508,7 @@ export function InventoryTable({
         <SegmentedTabs
           aria-label="Show as"
           size="sm"
+          className="ml-auto"
           activeId={listView}
           onSelect={(id) => selectListView(id === 'grid' ? 'grid' : 'table')}
           items={[
@@ -2630,72 +2631,6 @@ export function InventoryTable({
             params={params}
             itemType={showBookFields ? 'book' : (params.get('type') ?? 'product')}
           />
-
-          <p className="text-muted-foreground ml-auto flex items-center gap-1.5 font-mono text-[12px] tabular-nums">
-            {/* Filter round-trip affordance: rows stay visible (dimmed) while
-              the new result set loads; this small spinner is the "working"
-              signal — mirrors the search box's "(searching…)" treatment. */}
-            {isFilterPending && (
-              <Loader2 aria-label="Updating results" className="h-3 w-3 animate-spin" />
-            )}
-            {(() => {
-              // Instant mode: the totals ARE the filtered set (the
-              // buildSumPage mirror runs locally over the full dataset),
-              // so the footer never needs the "Showing N matching" hedge
-              // or the "(searching…)" phase — every keystroke's answer is
-              // complete. The planned first page prints the same line from
-              // the counts the server took over the whole view, so the
-              // footer does not change when the dataset is adopted.
-              if (instantMode || planned) {
-                // Label and number must agree (see THE THREE COUNTS
-                // above): "SKUs" counts DISTINCT SKUs (count 3), "rows"
-                // counts the PLACEMENT rows actually rendered (count 2) —
-                // NOT `effectiveTotal`, which is item rows (count 1) and
-                // therefore understates the screen on the one surface
-                // where the two differ (the Items list, which expands one
-                // row per rack). The row term is worth showing only when
-                // it differs from the SKU count — that difference IS the
-                // collapsing the list just did.
-                const skus = distinctSkuCount ?? effectiveTotal;
-                const rows = placementRowCount ?? effectiveTotal;
-                // A staff member's planned Items page counts the view's
-                // records, not the rack rows they split into on screen
-                // (that needs every record's holdings), so it names them
-                // items (count 1). On Books a record is one row.
-                const rowsLabel = placementRowCount === null && !showBookFields ? 'items' : 'rows';
-                return (
-                  <>
-                    {formatNumber(skus)} SKUs ·{' '}
-                    {skus !== rows ? (
-                      <>
-                        {formatNumber(rows)} {rowsLabel} ·{' '}
-                      </>
-                    ) : null}
-                    {formatCurrency(valueOnHand)} on hand
-                  </>
-                );
-              }
-              const needle = q.trim();
-              if (!needle) {
-                return (
-                  <>
-                    {/* SERVER MODE holds ONE page, so it cannot count
-                        distinct SKUs across the result set — and `total`
-                        is an ITEM-ROW count (count 1), which grouping now
-                        collapses on Books too. Label it what it is rather
-                        than calling item rows "SKUs". */}
-                    {formatNumber(total)} items · {formatCurrency(valueOnHand)} on hand
-                  </>
-                );
-              }
-              return (
-                <>
-                  Showing {formatNumber(displayed.length)} matching &ldquo;{needle}&rdquo;
-                  {serverLoading ? ' (searching…)' : null}
-                </>
-              );
-            })()}
-          </p>
         </div>
 
         {/* Bulk actions layer — always mounted (see grid-stack note above),
@@ -2838,8 +2773,84 @@ export function InventoryTable({
           full filtered set up to the limit — pages recompose once `q`
           clears. INSTANT mode keeps it: search results are complete and
           paginate locally like any other filter. */}
-      {showPagination && (
-        <div className="flex items-center justify-end">
+      {/* The count and value of the whole result (THE THREE COUNTS), with
+          the top pager at the right. The redesign moved the count out of the
+          toolbar row, which wrapped it onto a line of its own, to sit under
+          the filters beside the pager. */}
+      <div className="flex min-h-7 flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <p
+          className={cn(
+            'text-muted-foreground flex items-center gap-1.5 font-mono text-[12px] tabular-nums',
+            // Hidden in place while rows are ticked, as it was inside the
+            // toolbar the bulk bar replaces (it keeps its space: no shift).
+            selected.size > 0 && 'invisible',
+          )}
+        >
+          {/* Filter round-trip affordance: rows stay visible (dimmed) while
+            the new result set loads; this small spinner is the "working"
+            signal — mirrors the search box's "(searching…)" treatment. */}
+          {isFilterPending && (
+            <Loader2 aria-label="Updating results" className="h-3 w-3 animate-spin" />
+          )}
+          {(() => {
+            // Instant mode: the totals ARE the filtered set (the
+            // buildSumPage mirror runs locally over the full dataset),
+            // so the footer never needs the "Showing N matching" hedge
+            // or the "(searching…)" phase — every keystroke's answer is
+            // complete. The planned first page prints the same line from
+            // the counts the server took over the whole view, so the
+            // footer does not change when the dataset is adopted.
+            if (instantMode || planned) {
+              // Label and number must agree (see THE THREE COUNTS
+              // above): "SKUs" counts DISTINCT SKUs (count 3), "rows"
+              // counts the PLACEMENT rows actually rendered (count 2) —
+              // NOT `effectiveTotal`, which is item rows (count 1) and
+              // therefore understates the screen on the one surface
+              // where the two differ (the Items list, which expands one
+              // row per rack). The row term is worth showing only when
+              // it differs from the SKU count — that difference IS the
+              // collapsing the list just did.
+              const skus = distinctSkuCount ?? effectiveTotal;
+              const rows = placementRowCount ?? effectiveTotal;
+              // A staff member's planned Items page counts the view's
+              // records, not the rack rows they split into on screen
+              // (that needs every record's holdings), so it names them
+              // items (count 1). On Books a record is one row.
+              const rowsLabel = placementRowCount === null && !showBookFields ? 'items' : 'rows';
+              return (
+                <>
+                  {formatNumber(skus)} SKUs ·{' '}
+                  {skus !== rows ? (
+                    <>
+                      {formatNumber(rows)} {rowsLabel} ·{' '}
+                    </>
+                  ) : null}
+                  {formatCurrency(valueOnHand)} on hand
+                </>
+              );
+            }
+            const needle = q.trim();
+            if (!needle) {
+              return (
+                <>
+                  {/* SERVER MODE holds ONE page, so it cannot count
+                      distinct SKUs across the result set — and `total`
+                      is an ITEM-ROW count (count 1), which grouping now
+                      collapses on Books too. Label it what it is rather
+                      than calling item rows "SKUs". */}
+                  {formatNumber(total)} items · {formatCurrency(valueOnHand)} on hand
+                </>
+              );
+            }
+            return (
+              <>
+                Showing {formatNumber(displayed.length)} matching &ldquo;{needle}&rdquo;
+                {serverLoading ? ' (searching…)' : null}
+              </>
+            );
+          })()}
+        </p>
+        {showPagination && (
           <Pagination
             page={effectivePage}
             pageSize={pageSize}
@@ -2849,8 +2860,8 @@ export function InventoryTable({
             onNavigate={instantMode ? shallowPush : undefined}
             pendingInstant={instantPending}
           />
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Table */}
       <div
@@ -3038,9 +3049,9 @@ export function InventoryTable({
                       )}
                     >
                       <td className="w-10 py-[var(--row-py)] pl-4 pr-0">{recordCheckbox(item)}</td>
-                      <td className="py-[var(--row-py)] pl-3 pr-3">
+                      <td className="min-w-[220px] py-[var(--row-py)] pl-3 pr-3">
                         <div
-                          className={cn('flex min-w-0 items-center gap-3', entry.nested && 'pl-6')}
+                          className={cn('flex min-w-0 items-center gap-3', entry.nested && 'pl-9')}
                         >
                           <ListThumb
                             photo={item}
@@ -3071,14 +3082,19 @@ export function InventoryTable({
                       <td className={cn(cell, 'whitespace-nowrap')}>
                         <CategoryLabel category={facts.category} />
                       </td>
-                      <td className={cn(cell, 'text-[13px]')}>
+                      <td className={cn(cell, 'whitespace-nowrap text-[13px]')}>
                         <CharterLabel item={item} lookups={lookups} />
                       </td>
-                      <td className={cn(cell, 'text-[13px] text-[var(--ed-ink-2)]')}>
+                      <td className={cn(cell, 'min-w-[112px] text-[13px] text-[var(--ed-ink-2)]')}>
                         {facts.location?.name ?? '—'}
                       </td>
                       {!showBookFields && (
-                        <td className={cn(cell, 'text-[12.5px] text-[var(--ed-ink-2)]')}>
+                        <td
+                          className={cn(
+                            cell,
+                            'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]',
+                          )}
+                        >
                           <ItemsRackContent item={item} />
                         </td>
                       )}
@@ -3087,13 +3103,28 @@ export function InventoryTable({
                           const storage = readBookStorage(item.custom_fields);
                           return (
                             <>
-                              <td className={cn(cell, 'text-[12.5px] text-[var(--ed-ink-2)]')}>
+                              <td
+                                className={cn(
+                                  cell,
+                                  'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]',
+                                )}
+                              >
                                 <BookGradeLabel grade={storage.grade} />
                               </td>
-                              <td className={cn(cell, 'text-[12.5px] text-[var(--ed-ink-2)]')}>
+                              <td
+                                className={cn(
+                                  cell,
+                                  'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]',
+                                )}
+                              >
                                 <BookRackContent item={item} />
                               </td>
-                              <td className={cn(cell, 'text-[12.5px] text-[var(--ed-ink-2)]')}>
+                              <td
+                                className={cn(
+                                  cell,
+                                  'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]',
+                                )}
+                              >
                                 <BookCrateLabel
                                   crateNumber={storage.crateNumber}
                                   crateColor={storage.crateColor}
@@ -3649,7 +3680,7 @@ function OnHandNotes({
     return (
       <>
         {awaiting && (
-          <div className="text-warning mt-0.5 text-[11px] font-normal leading-tight">
+          <div className="text-warning mt-0.5 whitespace-nowrap text-[11px] font-normal leading-tight">
             awaiting put-away
           </div>
         )}
@@ -3675,13 +3706,22 @@ function OnHandNotes({
             <>
               {/* Omit "0 placed" — for a fully-unplaced item it reads as if
                   the item is unavailable. */}
+              {/* Each phrase stays whole; the line may break only between them. */}
               {placed > 0 && (
-                <span className="text-muted-foreground">{formatNumber(placed)} placed · </span>
+                <>
+                  <span className="text-muted-foreground whitespace-nowrap">
+                    {formatNumber(placed)} placed ·
+                  </span>{' '}
+                </>
               )}
-              <span className="text-warning">{formatNumber(awaiting)} awaiting put-away</span>
+              <span className="text-warning whitespace-nowrap">
+                {formatNumber(awaiting)} awaiting put-away
+              </span>
             </>
           ) : (
-            <span className="text-warning">+{formatNumber(awaiting)} awaiting put-away</span>
+            <span className="text-warning whitespace-nowrap">
+              +{formatNumber(awaiting)} awaiting put-away
+            </span>
           )}
         </div>
       )}
@@ -4474,7 +4514,7 @@ function SkuGroupHeaderRow({
     >
       {/* Not selectable — no checkbox (bulk actions target placements). */}
       <td className="w-10 py-[var(--row-py)] pl-4 pr-0" />
-      <td className="py-[var(--row-py)] pl-3 pr-3">
+      <td className="min-w-[220px] py-[var(--row-py)] pl-3 pr-3">
         <div className="flex min-w-0 items-center gap-3">
           <HeaderChevron
             expanded={expanded}
@@ -4507,25 +4547,30 @@ function SkuGroupHeaderRow({
             <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
               <span className="text-foreground font-medium">{explicit.name}</span>
               <span className="text-muted-foreground text-[12px]">{count}</span>
-              {explicit.onRename ? (
-                <button
-                  type="button"
-                  onClick={explicit.onRename}
-                  aria-label={GROUP_COPY.renameFor(explicit.name)}
-                  className={cn(touchTargetClass, chipActionClass)}
-                >
-                  {GROUP_COPY.renameAction}
-                </button>
-              ) : null}
-              {explicit.onRemove ? (
-                <button
-                  type="button"
-                  onClick={explicit.onRemove}
-                  aria-label={GROUP_COPY.removeFor(explicit.name)}
-                  className={cn(touchTargetClass, chipActionClass)}
-                >
-                  {GROUP_COPY.removeAction}
-                </button>
+              {explicit.onRename || explicit.onRemove ? (
+                // Rename and Remove share a line under the name and count.
+                <span className="flex basis-full items-center gap-x-3">
+                  {explicit.onRename ? (
+                    <button
+                      type="button"
+                      onClick={explicit.onRename}
+                      aria-label={GROUP_COPY.renameFor(explicit.name)}
+                      className={cn(touchTargetClass, chipActionClass)}
+                    >
+                      {GROUP_COPY.renameAction}
+                    </button>
+                  ) : null}
+                  {explicit.onRemove ? (
+                    <button
+                      type="button"
+                      onClick={explicit.onRemove}
+                      aria-label={GROUP_COPY.removeFor(explicit.name)}
+                      className={cn(touchTargetClass, chipActionClass)}
+                    >
+                      {GROUP_COPY.removeAction}
+                    </button>
+                  ) : null}
+                </span>
               ) : null}
             </span>
           ) : (
@@ -4551,7 +4596,7 @@ function SkuGroupHeaderRow({
           <CategoryLabel category={f.category} />
         )}
       </td>
-      <td className={cn(HEADER_TD, 'text-[13px]')}>
+      <td className={cn(HEADER_TD, 'whitespace-nowrap text-[13px]')}>
         <HeaderCharterContent
           first={first}
           distinctCharterIds={f.distinctCharterIds}
@@ -4559,7 +4604,7 @@ function SkuGroupHeaderRow({
           multipleTitle="Placements span multiple charters — expand to see each"
         />
       </td>
-      <td className={cn(HEADER_TD, 'text-[13px] text-[var(--ed-ink-2)]')}>
+      <td className={cn(HEADER_TD, 'min-w-[112px] text-[13px] text-[var(--ed-ink-2)]')}>
         {f.locationRollup.kind === 'multiple' ? (
           <MultipleLabel title="Placements span multiple sites — expand to see each" />
         ) : (
@@ -4569,7 +4614,7 @@ function SkuGroupHeaderRow({
         )}
       </td>
       {!showBookFields && (
-        <td className={cn(HEADER_TD, 'text-[12.5px] text-[var(--ed-ink-2)]')}>
+        <td className={cn(HEADER_TD, 'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]')}>
           <ItemsHeaderRackContent items={items} distinctItems={distinctItems} />
         </td>
       )}
@@ -4578,13 +4623,19 @@ function SkuGroupHeaderRow({
           const books = booksHeaderContent(items, distinctItems);
           return (
             <>
-              <td className={cn(HEADER_TD, 'text-[12.5px] text-[var(--ed-ink-2)]')}>
+              <td
+                className={cn(HEADER_TD, 'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]')}
+              >
                 {books.gradeContent}
               </td>
-              <td className={cn(HEADER_TD, 'text-[12.5px] text-[var(--ed-ink-2)]')}>
+              <td
+                className={cn(HEADER_TD, 'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]')}
+              >
                 {books.rackContent}
               </td>
-              <td className={cn(HEADER_TD, 'text-[12.5px] text-[var(--ed-ink-2)]')}>
+              <td
+                className={cn(HEADER_TD, 'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]')}
+              >
                 {books.crateContent}
               </td>
             </>
@@ -4746,7 +4797,7 @@ function StyleGroupHeaderRow({
     >
       {/* Not selectable — no checkbox (bulk actions target the member rows). */}
       <td className="w-10 py-[var(--row-py)] pl-4 pr-0" />
-      <td className="py-[var(--row-py)] pl-3 pr-3">
+      <td className="min-w-[220px] py-[var(--row-py)] pl-3 pr-3">
         <div className="flex min-w-0 items-center gap-3">
           <HeaderChevron
             expanded={expanded}
@@ -4777,7 +4828,7 @@ function StyleGroupHeaderRow({
       <td className={cn(HEADER_TD, 'whitespace-nowrap')}>
         <CategoryLabel category={f.category} />
       </td>
-      <td className={cn(HEADER_TD, 'text-[13px]')}>
+      <td className={cn(HEADER_TD, 'whitespace-nowrap text-[13px]')}>
         <HeaderCharterContent
           first={first}
           distinctCharterIds={f.distinctCharterIds}
@@ -4785,10 +4836,12 @@ function StyleGroupHeaderRow({
           multipleTitle="Sizes span multiple charters — expand to see each"
         />
       </td>
-      <td className={cn(HEADER_TD, 'text-[13px] text-[var(--ed-ink-2)]')}>
+      <td className={cn(HEADER_TD, 'min-w-[112px] text-[13px] text-[var(--ed-ink-2)]')}>
         {f.location?.name ?? '—'}
       </td>
-      <td className={cn(HEADER_TD, 'text-[12.5px] text-[var(--ed-ink-2)]')}>{f.rackContent}</td>
+      <td className={cn(HEADER_TD, 'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]')}>
+        {f.rackContent}
+      </td>
       <td className={cn(HEADER_TD, 'text-right font-mono text-[13.5px] font-medium tabular-nums')}>
         {formatNumber(group.total)}
       </td>
