@@ -148,3 +148,25 @@ describe('the phone drawer opens with focus where it was before the redesign', (
     );
   });
 });
+
+/**
+ * THE PHONE DRAWER IS THE SIDEBAR'S OWN SURFACE. P2.2 gave every sheet the
+ * card colour and rounded the edge a sheet shows the page; the phone drawer is
+ * the sidebar itself, square and on the page colour beside the screen's edge,
+ * as the desktop sidebar is. Mutation caught: the drawer back on the sheet's
+ * card fill or its rounded right corners (the sidebar's square background then
+ * pokes past the curve at the top and bottom of the screen).
+ */
+describe('the phone drawer is drawn as the sidebar', () => {
+  it('on the page colour with square corners, the sheet card look overridden', async () => {
+    phoneViewport();
+    render(shell(ONE_ORG));
+    const drawer = await openDrawer();
+    const classes = (drawer.getAttribute('class') ?? '').split(/\s+/);
+    expect(classes).toEqual(expect.arrayContaining(['bg-background', 'rounded-none']));
+    expect(classes).not.toContain('bg-card');
+    expect(classes).not.toContain('rounded-r-lg');
+    // Its right hairline stays, as the desktop sidebar's border-right does.
+    expect(classes).toContain('border-r');
+  });
+});
