@@ -1,32 +1,20 @@
-import {
-  ChevronRight,
-  ClipboardList,
-  Clock,
-  DollarSign,
-  Download,
-  Truck,
-} from 'lucide-react';
+import { ClipboardList, Download, SearchX } from 'lucide-react';
 import Link from 'next/link';
 
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { requireOrgContext } from '@/lib/auth/session';
+import { effectiveNavLabel } from '@/lib/nav-labels';
 import { createClient } from '@/lib/supabase/server';
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { FilterBar } from '@/components/patterns/filter-bar';
+import { PageHeader, SublineValue } from '@/components/patterns/page-header';
+import { SegmentedTabs } from '@/components/patterns/segmented-tabs';
+import { StatePanel } from '@/components/patterns/state-panel';
+import { StatStrip, StatStripItem } from '@/components/patterns/stat-strip';
 import { PoApprovalPanel } from '@/components/settings/po-approval-panel';
-import { StatCard } from '@/components/dashboard/stat-card';
-import { EmptyState } from '@/components/ui/empty-state';
-import { PoStatusBadge } from '@/components/po/po-status-badge';
 import { Button } from '@/components/ui/button';
-import { PoInstantTable, type PoInstantRow } from '@/components/po/po-instant-table';
+import { PoInstantTable, PoListTable, type PoInstantRow } from '@/components/po/po-instant-table';
 import { PoSearch } from '@/components/po/po-search';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
 import {
   PurchaseOrdersService,
   type PoListStats,
@@ -34,7 +22,7 @@ import {
 } from '@/server/services/purchase-orders';
 import { SuppliersService } from '@/server/services/suppliers';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
-import { formatCurrency, formatDateShort } from '@/lib/utils';
+import { cn, formatCurrency } from '@/lib/utils';
 import {
   isPoTab,
   statusesForTab,
@@ -64,6 +52,22 @@ const PAGE_SIZE = 30;
  */
 const PO_INSTANT_CAP = 800;
 
+/** The page area (DESIGN-SPEC 5.3 and 4): max 1320, 28 / 32 / 64, 16 px gutters on a phone. */
+const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
+
+/** The filter row: on a phone each group takes the whole width, so the search spans it. */
+const TOOLBAR = 'max-sm:[&>div]:w-full';
+
+/**
+ * The four stats sit two by two until the content is wide enough for one row
+ * of four, so a phone shows them in two short rows instead of four tall ones.
+ */
+const STATS = '[&>div]:grid-cols-2 lg:[&>div]:grid-cols-4';
+
+/** A disabled pager button goes quiet (DESIGN-SPEC 6.2) instead of fading. */
+const PAGER_DISABLED =
+  'disabled:opacity-100 disabled:border-border disabled:bg-transparent disabled:text-ink-4';
+
 export default async function PurchaseOrdersPage({
   searchParams,
 }: {
@@ -79,9 +83,20 @@ export default async function PurchaseOrdersPage({
   const q = (params.q ?? '').trim();
   const page = Math.max(1, Number(params.page) || 1);
 
+  // The heading follows a Settings > Navigation rename of this page's sidebar
+  // entry, as the sidebar and the crumb do (PLAN rule 10). Both reads are
+  // request-cached lookups the dashboard layout already made, so nothing new
+  // is read; a failed lookup keeps the page's own words instead of failing
+  // the page.
+  const [orgCtx, heading] = await Promise.all([
+    requireOrgContext(),
+    effectiveNavLabel('/dashboard/purchase-orders', 'Purchase orders').catch(
+      () => 'Purchase orders',
+    ),
+  ]);
+
   // Approval-threshold panel (owner/admin only). Read fails SOFT to "panel
   // shows 0" — the enforcement read in the service is the fail-closed one.
-  const orgCtx = await requireOrgContext();
   const isAdmin = orgCtx.role === 'owner' || orgCtx.role === 'admin';
   let approvalThreshold = 0;
   if (isAdmin) {
@@ -168,7 +183,25 @@ export default async function PurchaseOrdersPage({
     loadFailed = true;
   }
 
-  const supplierName = (id: string | null) => (id ? (supplierMap.get(id) ?? '—') : '—');
+  // The table is a client component (its Placed day waits for the viewer's
+  // zone), so the rows cross the wire: only the columns it prints, and only
+  // the names of the suppliers these rows name, never the whole lookup list.
+  const tableRows: PoInstantRow[] = visible.map((po) => ({
+    id: po.id,
+    po_number: po.po_number,
+    supplier_id: po.supplier_id,
+    status: po.status,
+    ordered_at: po.ordered_at,
+    created_at: po.created_at,
+    expected_at: po.expected_at,
+    line_count: po.line_count,
+    total: po.total,
+  }));
+  const supplierNames: Record<string, string> = {};
+  for (const po of visible) {
+    const name = po.supplier_id ? supplierMap.get(po.supplier_id) : undefined;
+    if (po.supplier_id && name !== undefined) supplierNames[po.supplier_id] = name;
+  }
 
   const avgLead = stats.avgLeadDays != null ? Math.round(stats.avgLeadDays) : null;
 
@@ -189,275 +222,240 @@ export default async function PurchaseOrdersPage({
     (q ? `&q=${encodeURIComponent(q)}` : '') +
     (activeWarehouse ? `&warehouse=${encodeURIComponent(activeWarehouse)}` : '');
 
+  // The six status tabs, as the segmented track: links that keep `q`, a
+  // navigation landmark named "Filter by status" with aria-current on the tab
+  // shown, as the pill links were.
+  const statusTabs = (
+    <SegmentedTabs
+      semantics="nav"
+      aria-label="Filter by status"
+      activeId={tab}
+      items={TAB_ORDER.map((t) => ({
+        id: t,
+        label: TAB_LABELS[t],
+        href: `/dashboard/purchase-orders?status=${t}` + (q ? `&q=${encodeURIComponent(q)}` : ''),
+      }))}
+    />
+  );
+
+  // The filter row for every state but the instant table, which draws its own
+  // with its search beside the tabs. The server-mode search shows above 800
+  // POs, and whenever the list could not load, as before.
+  const toolbar = (
+    <FilterBar leading={statusTabs} className={TOOLBAR}>
+      {!instant ? <PoSearch key={`${tab}:${q}`} status={tab} initialQuery={q} /> : null}
+    </FilterBar>
+  );
+
+  // Server-side pagination (searchParams-driven, like the inventory page).
+  // Hidden on single-page lists — but ALWAYS shown when the URL is past page
+  // 1, so the past-end empty state's "jump back with the pagination below"
+  // copy always has the controls it points at (a filtered total ≤ PAGE_SIZE
+  // used to hide them, stranding the user on a stale ?page= link).
+  const showPager = !instant && !loadFailed && (totalFiltered > PAGE_SIZE || page > 1);
+  // Under the rows inside the table card (DESIGN-SPEC 6.9 pagination footer),
+  // or under the empty panel on a past-end page.
+  const pager = (inCard: boolean) => (
+    <div
+      className={cn(
+        'text-muted-foreground flex flex-wrap items-center justify-between gap-x-3 gap-y-2 text-[12.5px]',
+        inCard ? 'border-border border-t px-4 py-2.5' : 'px-1',
+      )}
+    >
+      {/* A stale deep link (?page= past the end) has an empty window — skip
+          the row range but keep Prev/Next so the user can get back. */}
+      <span className="tabular-nums">
+        {visible.length > 0 ? (
+          <>
+            Showing <span className="text-foreground font-medium">{startRow}</span>–
+            <span className="text-foreground font-medium">{endRow}</span> of{' '}
+            <span className="text-foreground font-medium">{totalFiltered}</span>
+          </>
+        ) : (
+          <>
+            <span className="text-foreground font-medium">{totalFiltered}</span> match
+            {totalFiltered === 1 ? '' : 'es'} on earlier pages
+          </>
+        )}
+      </span>
+      <div className="flex items-center gap-2">
+        {page <= 1 ? (
+          <Button variant="outline" size="sm" disabled className={PAGER_DISABLED}>
+            ← Prev
+          </Button>
+        ) : (
+          <Button asChild variant="outline" size="sm">
+            {/* Clamp: from a past-end page, "Prev" jumps straight to the last
+                REAL page instead of walking back one empty window at a time. */}
+            <Link href={pageHref(Math.min(page - 1, totalPages))} prefetch={false}>
+              ← Prev
+            </Link>
+          </Button>
+        )}
+        <span className="tabular-nums">
+          Page {Math.min(page, totalPages)} of {totalPages}
+        </span>
+        {page >= totalPages ? (
+          <Button variant="outline" size="sm" disabled className={PAGER_DISABLED}>
+            Next →
+          </Button>
+        ) : (
+          <Button asChild variant="outline" size="sm">
+            <Link href={pageHref(page + 1)} prefetch={false}>
+              Next →
+            </Link>
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+
+  let list: React.ReactNode;
+  if (loadFailed) {
+    list = (
+      <>
+        {toolbar}
+        <StatePanel
+          kind="failed"
+          title={<>We couldn&apos;t load purchase orders</>}
+          description="Something went wrong loading this list. This is usually temporary — try again in a moment."
+          action={
+            <Button asChild variant="outline">
+              <Link href="/dashboard/purchase-orders">Try again</Link>
+            </Button>
+          }
+        />
+      </>
+    );
+  } else if (stats.totalCount === 0) {
+    list = (
+      <>
+        {toolbar}
+        <StatePanel
+          kind="empty"
+          icon={ClipboardList}
+          title="No purchase orders yet"
+          description="Draft a PO with line items, send it to a supplier, then receive against it to bump stock automatically."
+          action={
+            <Button asChild variant="gradient">
+              <Link href="/dashboard/purchase-orders/new">Create your first PO</Link>
+            </Button>
+          }
+        />
+      </>
+    );
+  } else if (instant) {
+    list =
+      visible.length === 0 ? (
+        <>
+          {toolbar}
+          <StatePanel
+            kind="empty"
+            icon={ClipboardList}
+            title={`Nothing in ${TAB_LABELS[tab].toLowerCase()}`}
+            description="Switch tabs above to see purchase orders in other stages."
+          />
+        </>
+      ) : (
+        <PoInstantTable rows={tableRows} supplierNames={supplierNames} leading={statusTabs} />
+      );
+  } else if (visible.length === 0) {
+    const noMatch = totalFiltered === 0 && q !== '';
+    list = (
+      <>
+        {toolbar}
+        <StatePanel
+          kind={noMatch ? 'no-match' : 'empty'}
+          icon={noMatch ? SearchX : ClipboardList}
+          title={
+            totalFiltered > 0
+              ? 'Nothing on this page'
+              : q
+                ? `No POs match “${q}”`
+                : `Nothing in ${TAB_LABELS[tab].toLowerCase()}`
+          }
+          description={
+            totalFiltered > 0
+              ? 'This page is past the end of the list — jump back with the pagination below.'
+              : q
+                ? 'Try a different PO number or supplier, or clear the search.'
+                : 'Switch tabs above to see purchase orders in other stages.'
+          }
+        />
+        {showPager ? pager(false) : null}
+      </>
+    );
+  } else {
+    list = (
+      <>
+        {toolbar}
+        <PoListTable
+          rows={tableRows}
+          supplierNames={supplierNames}
+          footer={showPager ? pager(true) : undefined}
+        />
+      </>
+    );
+  }
+
   return (
-    <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
-      {/* Header */}
-      <div className="flex flex-wrap items-end justify-between gap-3 sm:gap-4">
-        <div>
-          <p className="font-mono text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
-            Inventory
-          </p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight">Purchase orders</h1>
-          <p className="text-muted-foreground mt-1 text-sm tabular-nums">
+    <div className={PAGE}>
+      <PageHeader
+        eyebrow="Inventory"
+        title={heading}
+        subline={
+          <span className="tabular-nums">
             {stats.totalCount} {stats.totalCount === 1 ? 'PO' : 'POs'} ·{' '}
-            {formatCurrency(stats.totalValue)} total value
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
+            <SublineValue>{formatCurrency(stats.totalValue)}</SublineValue> total value
+          </span>
+        }
+        actions={
           <Button asChild variant="outline">
             <a href={exportHref} download aria-label="Export purchase orders to CSV">
-              <Download className="mr-1.5 h-4 w-4" />
+              <Download className="h-4 w-4" />
               Export
             </a>
           </Button>
+        }
+        primaryAction={
           <Button asChild variant="gradient">
             <Link href="/dashboard/purchase-orders/new">+ New PO</Link>
           </Button>
-        </div>
-      </div>
+        }
+      />
 
-      {/* Stat cards */}
-      <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
+      <StatStrip className={STATS}>
+        <StatStripItem
           label="Open POs"
           value={stats.openCount}
-          foot={`across ${stats.openSupplierCount} ${stats.openSupplierCount === 1 ? 'supplier' : 'suppliers'}`}
-          icon={ClipboardList}
+          sub={`across ${stats.openSupplierCount} ${stats.openSupplierCount === 1 ? 'supplier' : 'suppliers'}`}
         />
-        <StatCard
+        <StatStripItem
           label="Committed value"
           value={formatCurrency(stats.committedValue)}
-          foot="USD"
-          icon={DollarSign}
+          sub="USD"
         />
-        <StatCard
+        <StatStripItem
           label="On the water"
           value={stats.inboundCount}
-          foot={
+          sub={
             stats.nextEtaPoNumber
               ? `${stats.nextEtaPoNumber} · ETA ${formatCalendarDate(stats.nextEtaExpectedAt)}`
               : stats.inboundCount > 0
                 ? 'No ETA scheduled'
                 : 'Nothing inbound'
           }
-          icon={Truck}
         />
-        <StatCard
+        <StatStripItem
           label="Avg lead time"
           value={avgLead != null ? `${avgLead} d` : '—'}
-          foot="rolling 90-day"
-          icon={Clock}
+          sub="rolling 90-day"
         />
-      </div>
+      </StatStrip>
 
-      {/* Filter tabs + search */}
-      <div className="mt-8 flex flex-wrap items-center justify-between gap-3">
-        <nav className="flex flex-wrap gap-1" aria-label="Filter by status">
-          {TAB_ORDER.map((t) => {
-            const isActive = t === tab;
-            const href =
-              `/dashboard/purchase-orders?status=${t}` + (q ? `&q=${encodeURIComponent(q)}` : '');
-            return (
-              <Link
-                key={t}
-                href={href}
-                aria-current={isActive ? 'page' : undefined}
-                className={
-                  'rounded-full px-3 py-1 text-sm transition-colors ' +
-                  (isActive
-                    ? 'bg-foreground text-background font-medium'
-                    : 'text-muted-foreground hover:bg-muted')
-                }
-              >
-                {TAB_LABELS[t]}
-              </Link>
-            );
-          })}
-        </nav>
+      {list}
 
-        {!instant && <PoSearch key={`${tab}:${q}`} status={tab} initialQuery={q} />}
-      </div>
-
-      {/* Table */}
-      <div className="mt-4">
-        {loadFailed ? (
-          <div className="bg-card border-destructive/40 rounded-xl border p-6 text-center">
-            <h2 className="text-destructive text-sm font-medium">We couldn&apos;t load purchase orders</h2>
-            <p className="text-muted-foreground mx-auto mt-1 max-w-md text-sm">
-              Something went wrong loading this list. This is usually temporary — try again in a moment.
-            </p>
-            <Button asChild variant="outline" className="mt-4">
-              <Link href="/dashboard/purchase-orders">Try again</Link>
-            </Button>
-          </div>
-        ) : stats.totalCount === 0 ? (
-          <EmptyState
-            icon={ClipboardList}
-            title="No purchase orders yet"
-            description="Draft a PO with line items, send it to a supplier, then receive against it to bump stock automatically."
-            cta={{ label: 'Create your first PO', href: '/dashboard/purchase-orders/new' }}
-          />
-        ) : instant ? (
-          visible.length === 0 ? (
-            <EmptyState
-              icon={ClipboardList}
-              title={`Nothing in ${TAB_LABELS[tab].toLowerCase()}`}
-              description="Switch tabs above to see purchase orders in other stages."
-            />
-          ) : (
-            <PoInstantTable
-              rows={visible as PoInstantRow[]}
-              supplierNames={Object.fromEntries(supplierMap)}
-            />
-          )
-        ) : visible.length === 0 ? (
-          <EmptyState
-            icon={ClipboardList}
-            title={
-              totalFiltered > 0
-                ? 'Nothing on this page'
-                : q
-                  ? `No POs match “${q}”`
-                  : `Nothing in ${TAB_LABELS[tab].toLowerCase()}`
-            }
-            description={
-              totalFiltered > 0
-                ? 'This page is past the end of the list — jump back with the pagination below.'
-                : q
-                  ? 'Try a different PO number or supplier, or clear the search.'
-                  : 'Switch tabs above to see purchase orders in other stages.'
-            }
-          />
-        ) : (
-          <div className="bg-card overflow-x-auto rounded-xl border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>PO #</TableHead>
-                  <TableHead>Supplier</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Placed</TableHead>
-                  <TableHead>Expected</TableHead>
-                  <TableHead className="text-right">Lines</TableHead>
-                  <TableHead className="text-right">Total</TableHead>
-                  <TableHead className="w-8" aria-label="Open" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {visible.map((po) => {
-                  // "Placed" = when the PO was sent to the supplier. Drafts
-                  // haven't been placed yet; imports lack ordered_at so fall
-                  // back to created_at.
-                  const placed = po.status === 'draft' ? null : (po.ordered_at ?? po.created_at);
-                  return (
-                    <TableRow key={po.id} className="group">
-                      <TableCell>
-                        <Link
-                          href={`/dashboard/purchase-orders/${po.id}`}
-                          className="font-mono text-sm font-medium hover:underline"
-                        >
-                          {po.po_number}
-                        </Link>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground text-sm">
-                        {supplierName(po.supplier_id)}
-                      </TableCell>
-                      <TableCell>
-                        <PoStatusBadge status={po.status} />
-                      </TableCell>
-                      <TableCell className="text-muted-foreground text-sm tabular-nums">
-                        {formatDateShort(placed)}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground text-sm tabular-nums">
-                        {/* A DAY stored as its UTC midnight: read in UTC, not
-                            in the server's zone (the day before west of UTC). */}
-                        {formatCalendarDate(po.expected_at)}
-                      </TableCell>
-                      <TableCell className="text-right text-sm tabular-nums">
-                        {po.line_count}
-                      </TableCell>
-                      <TableCell className="text-right text-sm font-medium tabular-nums">
-                        {formatCurrency(Number(po.total ?? 0))}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground w-8 text-right">
-                        <Link
-                          href={`/dashboard/purchase-orders/${po.id}`}
-                          aria-label={`Open ${po.po_number}`}
-                        >
-                          <ChevronRight className="h-4 w-4 shrink-0 transition-transform group-hover:translate-x-0.5" />
-                        </Link>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-
-        {/* Server-side pagination (searchParams-driven, like the inventory
-            page). Hidden on single-page lists for zero visual change — but
-            ALWAYS shown when the URL is past page 1, so the past-end empty
-            state's "jump back with the pagination below" copy always has the
-            controls it points at (a filtered total ≤ PAGE_SIZE used to hide
-            them, stranding the user on a stale ?page= link). */}
-        {!instant && !loadFailed && (totalFiltered > PAGE_SIZE || page > 1) && (
-          <div className="text-muted-foreground mt-3 flex items-center justify-between gap-3 text-[12px]">
-            {/* A stale deep link (?page= past the end) has an empty window —
-                skip the row range but keep Prev/Next so the user can get back. */}
-            <span className="tabular-nums">
-              {visible.length > 0 ? (
-                <>
-                  Showing <span className="text-foreground font-medium">{startRow}</span>–
-                  <span className="text-foreground font-medium">{endRow}</span> of{' '}
-                  <span className="text-foreground font-medium">{totalFiltered}</span>
-                </>
-              ) : (
-                <>
-                  <span className="text-foreground font-medium">{totalFiltered}</span> match
-                  {totalFiltered === 1 ? '' : 'es'} on earlier pages
-                </>
-              )}
-            </span>
-            <div className="flex items-center gap-2">
-              {page <= 1 ? (
-                <Button variant="outline" size="sm" disabled>
-                  ← Prev
-                </Button>
-              ) : (
-                <Button asChild variant="outline" size="sm">
-                  {/* Clamp: from a past-end page, "Prev" jumps straight to
-                      the last REAL page instead of walking back one empty
-                      window at a time. */}
-                  <Link href={pageHref(Math.min(page - 1, totalPages))} prefetch={false}>
-                    ← Prev
-                  </Link>
-                </Button>
-              )}
-              <span className="tabular-nums">
-                Page {Math.min(page, totalPages)} of {totalPages}
-              </span>
-              {page >= totalPages ? (
-                <Button variant="outline" size="sm" disabled>
-                  Next →
-                </Button>
-              ) : (
-                <Button asChild variant="outline" size="sm">
-                  <Link href={pageHref(page + 1)} prefetch={false}>
-                    Next →
-                  </Link>
-                </Button>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {isAdmin && (
-        <div className="mt-6">
-          <PoApprovalPanel initialAmount={approvalThreshold} />
-        </div>
-      )}
+      {isAdmin && <PoApprovalPanel initialAmount={approvalThreshold} />}
     </div>
   );
 }
