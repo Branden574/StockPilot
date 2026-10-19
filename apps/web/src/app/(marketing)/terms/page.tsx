@@ -1,7 +1,8 @@
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
-  title: 'Terms of Service · StockPilot',
+  // The root layout's title template adds " · StockPilot" (CONFLICTS D15).
+  title: 'Terms of Service',
   description:
     'The terms under which you may use StockPilot’s mobile and web applications.',
 };
@@ -17,7 +18,9 @@ const EFFECTIVE_DATE = 'May 27, 2026';
 export default function TermsPage() {
   return (
     <div className="mx-auto max-w-3xl px-6 py-16 text-[15px] leading-7 text-foreground">
-      <h1 className="text-4xl font-semibold tracking-tight">Terms of Service</h1>
+      <h1 className="font-display text-[34px] font-medium leading-[1.15] tracking-[-0.025em] sm:text-[40px]">
+        Terms of Service
+      </h1>
       <p className="mt-2 text-sm text-muted-foreground">Effective {EFFECTIVE_DATE}</p>
 
       <Section title="Acceptance">
@@ -115,7 +118,9 @@ export default function TermsPage() {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="mt-10">
-      <h2 className="text-xl font-semibold tracking-tight">{title}</h2>
+      <h2 className="font-display text-[20px] font-medium leading-[1.5] tracking-[-0.02em]">
+        {title}
+      </h2>
       <div className="mt-3 text-muted-foreground">{children}</div>
     </section>
   );

@@ -31,13 +31,15 @@ export function MarketingHeader() {
   }, []);
 
   return (
+    // An opaque header (redesign P5.1: no glass, no blur). It sits on the page
+    // ground and takes its hairline once the page scrolls under it.
     <header
       className={cn(
-        'sticky top-0 z-30 w-full border-b border-transparent transition-colors',
-        scrolled && 'border-border bg-[color-mix(in_oklab,_hsl(var(--background))_88%,_transparent)] backdrop-blur-md',
+        'bg-background sticky top-0 z-30 w-full border-b border-transparent transition-colors',
+        scrolled && 'border-border',
       )}
     >
-      <div className="mx-auto flex h-14 max-w-[1280px] items-center px-8">
+      <div className="mx-auto flex h-14 max-w-[1280px] items-center px-4 sm:px-8">
         <Link href="/" aria-label="Home">
           <IconMark size={22} />
         </Link>
@@ -47,7 +49,7 @@ export function MarketingHeader() {
             <Link
               key={n.href}
               href={n.href}
-              className="text-[13px] text-[var(--ed-ink-3)] transition-colors hover:text-foreground"
+              className="text-muted-foreground hover:text-foreground focus-visible:ring-ring rounded-sm text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-2"
             >
               {n.label}
             </Link>
@@ -60,9 +62,7 @@ export function MarketingHeader() {
             {/* Plain anchors (not <Link>): entering the app is a full document
                 load, not a client route transition. */}
             <Button asChild variant="ghost" size="sm">
-              <a href="/signin">
-                Sign in
-              </a>
+              <a href="/signin">Sign in</a>
             </Button>
             <Button asChild size="sm" className="gap-1.5">
               <a href="/signin">
@@ -84,24 +84,21 @@ export function MarketingHeader() {
       </div>
 
       {mobileOpen && (
-        <div className="border-t border-border bg-background/95 backdrop-blur-md md:hidden">
+        <div className="border-border bg-background border-t md:hidden">
           <div className="container mx-auto flex max-w-7xl flex-col gap-1 px-4 py-3">
             {NAV.map((n) => (
               <Link
                 key={n.href}
                 href={n.href}
                 onClick={() => setMobileOpen(false)}
-                className="rounded-md px-3 py-2 text-sm text-[var(--ed-ink-3)] hover:bg-muted hover:text-foreground"
+                className="text-muted-foreground hover:bg-muted hover:text-foreground flex min-h-11 items-center rounded-md px-3 text-sm"
               >
                 {n.label}
               </Link>
             ))}
             <div className="mt-2 flex gap-2">
-              <Button asChild size="sm" className="flex-1">
-                <a
-                  href="/signin"
-                  onClick={() => setMobileOpen(false)}
-                >
+              <Button asChild className="h-11 flex-1">
+                <a href="/signin" onClick={() => setMobileOpen(false)}>
                   Sign in
                 </a>
               </Button>
