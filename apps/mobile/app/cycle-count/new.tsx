@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import { ArrowLeft, CheckCircle2, Circle, Search, X } from 'lucide-react-native';
+import { ArrowLeft, Search, X } from 'lucide-react-native';
 import * as React from 'react';
 import {
   ActivityIndicator,
@@ -15,7 +15,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { cycleCountStartedMessage } from '@stockpilot/core';
 
+import { Button } from '@/components/ui/button';
 import { Card, Hair } from '@/components/ui/card';
+import { CheckboxMark } from '@/components/ui/checkbox';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { api } from '@/lib/api';
@@ -33,7 +35,7 @@ import {
   useIsPicked,
   type CountPick,
 } from '@/lib/use-count-selection';
-import { FONT } from '@/lib/theme';
+import { FONT, RADIUS } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { useWorkspace } from '@/lib/use-workspace';
 
@@ -43,6 +45,17 @@ interface StartResult {
   skipped: number;
 }
 
+/** The iOS minimum tap target, in points. */
+const MIN_TAP = 44;
+
+/**
+ * Start a count from a selection (redesign package P5.9a): the per-mode
+ * palette, the picker's Inventory / Books tabs as the reference's segmented
+ * switch, each picker row a CheckboxMark row (the shared phone checkbox,
+ * P2.5b) on the accent wash while picked, every control a 44pt target, and
+ * Start count the ink button that commits the count. Every word, query,
+ * gate and the shared countSelection store are unchanged.
+ */
 export default function NewCycleCount() {
   const router = useRouter();
   const { c } = useTheme();
@@ -76,10 +89,7 @@ export default function NewCycleCount() {
       }
     } catch (e) {
       setBusy(false);
-      Alert.alert(
-        'Could not start count',
-        e instanceof Error ? e.message : 'Please try again.',
-      );
+      Alert.alert('Could not start count', e instanceof Error ? e.message : 'Please try again.');
     }
   }
 
@@ -103,65 +113,68 @@ export default function NewCycleCount() {
             New <Em>count.</Em>
           </Display>
           <Body muted size={13} style={{ marginTop: 8 }}>
-            Search and check the items to count — picks made from the Items or
-            Books tabs show up here too.
+            Search and check the items to count — picks made from the Items or Books tabs show up
+            here too.
           </Body>
         </View>
       </SafeAreaView>
 
+      {/* The keyboard: the Notes box sits at the foot of the form, and the
+          keyboard covered it with no way to scroll it up. The scroll insets
+          itself by the keyboard on iOS and brings the focused box into view. */}
       <ScrollView
         contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 150, gap: 16 }}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
+        automaticallyAdjustKeyboardInsets
       >
         <ItemPicker selectedCount={picks.length} />
 
         {products.length > 0 ? (
           <PickGroup title={`PRODUCTS · ${products.length}`} picks={products} />
         ) : null}
-        {books.length > 0 ? (
-          <PickGroup title={`BOOKS · ${books.length}`} picks={books} />
-        ) : null}
+        {books.length > 0 ? <PickGroup title={`BOOKS · ${books.length}`} picks={books} /> : null}
 
         <View style={{ gap: 8 }}>
-          <Mono size={11} tracking={0.14} upper color={c.ink4}>
+          <Mono size={11} tracking={0.14} upper color={c.ink3}>
             Notes (optional)
           </Mono>
           <TextInput
             value={notes}
             onChangeText={setNotes}
             placeholder="e.g. Spot count · Rack 3"
-            placeholderTextColor={c.ink4}
+            placeholderTextColor={c.ink3}
+            accessibilityLabel="Notes (optional)"
             multiline
             maxLength={2000}
             style={[
               styles.notes,
-              { backgroundColor: c.card, borderColor: c.hair, color: c.ink, fontFamily: FONT.displayRegular },
+              {
+                backgroundColor: c.card,
+                borderColor: c.hair2,
+                color: c.ink,
+                fontFamily: FONT.displayRegular,
+              },
             ]}
           />
         </View>
       </ScrollView>
 
-      <SafeAreaView edges={['bottom']} style={styles.footer}>
-        <Pressable
+      {/* Start count commits the count: the ink button (it was a pressable
+          drawn on the ink colour with no button role). Its words stay beside
+          the spinner while the count starts. */}
+      <SafeAreaView
+        edges={['bottom']}
+        style={[styles.footer, { backgroundColor: c.paper, borderTopColor: c.hair }]}
+      >
+        <Button
+          block
           onPress={start}
           disabled={busy || picks.length === 0}
-          style={({ pressed }) => [
-            styles.startBtn,
-            {
-              backgroundColor: c.ink,
-              opacity: picks.length === 0 ? 0.4 : busy ? 0.6 : pressed ? 0.85 : 1,
-            },
-          ]}
+          leading={busy ? <ActivityIndicator color={c.paper} /> : undefined}
         >
-          {busy ? (
-            <ActivityIndicator color={c.paper} />
-          ) : (
-            <Mono size={14} color={c.paper} style={{ fontFamily: FONT.display }}>
-              Start count
-            </Mono>
-          )}
-        </Pressable>
+          Start count
+        </Button>
       </SafeAreaView>
     </View>
   );
@@ -289,13 +302,19 @@ function ItemPicker({ selectedCount }: { selectedCount: number }) {
 
   return (
     <View style={{ gap: 10 }}>
-      <View style={[styles.tabs, { backgroundColor: c.paper2 }]}>
+      {/* The reference's segmented switch: a recessed track with the chosen
+          tab on the card colour, ringed in muted ink (3:1 or more on the
+          track in both modes), its words in ink. Each tab is a 44pt target;
+          the same tab role, words and selected state. */}
+      <View style={[styles.tabs, { backgroundColor: c.sunk }]}>
         <PickerTab label="Inventory" active={tab === 'product'} onPress={() => setTab('product')} />
         <PickerTab label="Books" active={tab === 'book'} onPress={() => setTab('book')} />
       </View>
 
-      <View style={[styles.searchBox, { backgroundColor: c.card, borderColor: c.hair }]}>
-        <Search size={16} color={c.ink4} strokeWidth={1.8} />
+      {/* The shared input look: the card fill and the stronger border, the
+          muted-ink icon and placeholder (ink4 held the placeholder under AA). */}
+      <View style={[styles.searchBox, { backgroundColor: c.card, borderColor: c.hair2 }]}>
+        <Search size={16} color={c.ink3} strokeWidth={1.8} />
         <TextInput
           value={q}
           onChangeText={setQ}
@@ -304,7 +323,7 @@ function ItemPicker({ selectedCount }: { selectedCount: number }) {
               ? 'Search books by title, SKU, barcode'
               : 'Search items by name, SKU, barcode'
           }
-          placeholderTextColor={c.ink4}
+          placeholderTextColor={c.ink3}
           autoCapitalize="none"
           autoCorrect={false}
           returnKeyType="search"
@@ -312,8 +331,15 @@ function ItemPicker({ selectedCount }: { selectedCount: number }) {
           style={[styles.searchInput, { color: c.ink, fontFamily: FONT.displayRegular }]}
         />
         {q.length > 0 ? (
-          <Pressable onPress={() => setQ('')} hitSlop={8}>
-            <X size={16} color={c.ink4} />
+          // A button named for what it does, in a real 44pt frame (it was an
+          // unnamed X with hitSlop).
+          <Pressable
+            onPress={() => setQ('')}
+            accessibilityRole="button"
+            accessibilityLabel="Clear search"
+            style={({ pressed }) => [styles.clearFrame, { opacity: pressed ? 0.5 : 1 }]}
+          >
+            <X size={16} color={c.ink3} />
           </Pressable>
         ) : null}
       </View>
@@ -342,11 +368,12 @@ function ItemPicker({ selectedCount }: { selectedCount: number }) {
                 <Pressable
                   onPress={() => void loadMore()}
                   disabled={loadingMore}
-                  style={({ pressed }) => ({
-                    alignItems: 'center',
-                    paddingVertical: 13,
-                    opacity: loadingMore ? 0.5 : pressed ? 0.7 : 1,
-                  })}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: loadingMore, busy: loadingMore }}
+                  style={({ pressed }) => [
+                    styles.loadMore,
+                    { opacity: loadingMore ? 0.5 : pressed ? 0.7 : 1 },
+                  ]}
                 >
                   {loadingMore ? (
                     <ActivityIndicator color={c.ink} size="small" />
@@ -371,14 +398,18 @@ function ItemPicker({ selectedCount }: { selectedCount: number }) {
             <Mono size={12.5} color={c.ink4}>
               {' · '}
             </Mono>
-            <Pressable onPress={() => countSelection.clear()} hitSlop={8}>
+            <Pressable
+              onPress={() => countSelection.clear()}
+              accessibilityRole="button"
+              style={({ pressed }) => [styles.clearPicks, { opacity: pressed ? 0.6 : 1 }]}
+            >
               <Mono size={12.5} color={c.ink3} style={{ textDecorationLine: 'underline' }}>
                 Clear
               </Mono>
             </Pressable>
           </>
         ) : (
-          <Mono size={12.5} color={c.ink4}>
+          <Mono size={12.5} color={c.ink3} style={{ flexShrink: 1 }}>
             {' — check at least one item to start a count'}
           </Mono>
         )}
@@ -402,22 +433,33 @@ function PickerTab({
       onPress={onPress}
       accessibilityRole="tab"
       accessibilityState={{ selected: active }}
-      style={[styles.tabBtn, active ? { backgroundColor: c.card, borderColor: c.hair } : null]}
+      style={({ pressed }) => [
+        styles.tabBtn,
+        {
+          backgroundColor: active ? c.card : 'transparent',
+          borderColor: active ? c.ink3 : 'transparent',
+          opacity: pressed ? 0.7 : 1,
+        },
+      ]}
     >
-      <Mono
-        size={12.5}
-        color={active ? c.ink : c.ink4}
-        style={active ? { fontFamily: FONT.display } : undefined}
+      <Body
+        size={13}
+        color={active ? c.ink : c.ink3}
+        style={{ fontFamily: active ? FONT.displaySemi : FONT.display, textAlign: 'center' }}
       >
         {label}
-      </Mono>
+      </Body>
     </Pressable>
   );
 }
 
 /** One checkable row. Checked state subscribes per-id to the shared
  *  count-selection store (useIsPicked), so an Items-tab pick arrives
- *  pre-checked and only the toggled row re-renders. */
+ *  pre-checked and only the toggled row re-renders. The row is the press
+ *  target and VoiceOver's checkbox (role and checked state); it draws the
+ *  shared CheckboxMark, and the accent wash while picked (DESIGN-SPEC 6.21,
+ *  as the Items and Books rows: paper2 is the card colour in dark mode, so
+ *  the old tint showed nothing there). */
 const PickerRow = React.memo(function PickerRow({
   row,
   isFirst,
@@ -437,7 +479,7 @@ const PickerRow = React.memo(function PickerRow({
         accessibilityLabel={`Select ${row.name}`}
         style={({ pressed }) => [
           styles.pickerRow,
-          { backgroundColor: picked ? c.paper2 : 'transparent', opacity: pressed ? 0.7 : 1 },
+          { backgroundColor: picked ? c.accentWash : 'transparent', opacity: pressed ? 0.7 : 1 },
         ]}
       >
         <View style={{ flex: 1, minWidth: 0 }}>
@@ -445,19 +487,21 @@ const PickerRow = React.memo(function PickerRow({
             {row.name}
           </Body>
           {row.sku ? (
-            <Mono size={11} tracking={0.04} color={c.ink4} numberOfLines={1} style={{ marginTop: 2 }}>
+            <Mono
+              size={11}
+              tracking={0.04}
+              color={c.ink3}
+              numberOfLines={1}
+              style={{ marginTop: 2 }}
+            >
               {row.sku}
             </Mono>
           ) : null}
         </View>
-        <Mono size={11.5} color={c.ink4} style={{ fontVariant: ['tabular-nums'] }}>
+        <Mono size={11.5} color={c.ink3} style={{ fontVariant: ['tabular-nums'] }}>
           {row.quantity_on_hand} on hand
         </Mono>
-        {picked ? (
-          <CheckCircle2 size={22} color={c.ink} strokeWidth={2} />
-        ) : (
-          <Circle size={22} color={c.ink4} strokeWidth={1.6} />
-        )}
+        <CheckboxMark checked={picked} />
       </Pressable>
     </>
   );
@@ -467,7 +511,7 @@ function PickGroup({ title, picks }: { title: string; picks: CountPick[] }) {
   const { c } = useTheme();
   return (
     <View style={{ gap: 8 }}>
-      <Mono size={11} tracking={0.14} upper color={c.ink4}>
+      <Mono size={11} tracking={0.14} upper color={c.ink3}>
         {title}
       </Mono>
       <Card padding={0}>
@@ -484,13 +528,26 @@ function PickGroup({ title, picks }: { title: string; picks: CountPick[] }) {
                 {p.name}
               </Body>
               {p.sku ? (
-                <Mono size={11} tracking={0.04} color={c.ink4} numberOfLines={1} style={{ marginTop: 2 }}>
+                <Mono
+                  size={11}
+                  tracking={0.04}
+                  color={c.ink3}
+                  numberOfLines={1}
+                  style={{ marginTop: 2 }}
+                >
                   {p.sku}
                 </Mono>
               ) : null}
             </View>
-            <Pressable onPress={() => countSelection.remove(p.id)} hitSlop={10}>
-              <X size={18} color={c.ink4} />
+            {/* Named for the pick it removes (it was an unnamed X with
+                hitSlop), in a real 44pt frame. */}
+            <Pressable
+              onPress={() => countSelection.remove(p.id)}
+              accessibilityRole="button"
+              accessibilityLabel={`Remove ${p.name}`}
+              style={({ pressed }) => [styles.removeFrame, { opacity: pressed ? 0.5 : 1 }]}
+            >
+              <X size={18} color={c.ink3} />
             </Pressable>
           </View>
         ))}
@@ -511,24 +568,37 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   head: { paddingHorizontal: 20, paddingTop: 9, paddingBottom: 12 },
+  // The segmented track: padding 3, radius 10 (DESIGN-SPEC 6.5, the phone's
+  // segments), the tabs sized to their words.
   tabs: {
     flexDirection: 'row',
     alignSelf: 'flex-start',
+    maxWidth: '100%',
     borderRadius: 10,
     padding: 3,
     gap: 2,
   },
+  // flexShrink: at the largest text sizes the two words are wider than the
+  // screen, so each tab gives way and its word wraps instead of running off
+  // the edge.
   tabBtn: {
+    minHeight: MIN_TAP,
+    flexShrink: 1,
     paddingHorizontal: 14,
-    paddingVertical: 7,
+    paddingVertical: 6,
     borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'transparent',
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
+  // minHeight, never height: the typed words grow with the text size, and the
+  // box grows with them (the fixed 44pt box clipped them at the larger sizes).
   searchBox: {
-    height: 44,
-    paddingHorizontal: 14,
-    borderRadius: 10,
+    minHeight: MIN_TAP,
+    paddingLeft: 14,
+    paddingRight: 4,
+    paddingVertical: 4,
+    borderRadius: RADIUS.tile,
     borderWidth: 1,
     flexDirection: 'row',
     alignItems: 'center',
@@ -536,9 +606,19 @@ const styles = StyleSheet.create({
   },
   searchInput: {
     flex: 1,
+    minWidth: 0,
     fontSize: 14.5,
-    height: '100%',
+    minHeight: 36,
     letterSpacing: -0.17,
+  },
+  // The clear X's 44pt frame reaches into the box's 4pt padding, so the box
+  // keeps its 44pt height.
+  clearFrame: {
+    minWidth: MIN_TAP,
+    minHeight: MIN_TAP,
+    marginVertical: -4,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   listNotice: {
     paddingHorizontal: 16,
@@ -551,15 +631,29 @@ const styles = StyleSheet.create({
     gap: 12,
     paddingHorizontal: 16,
     paddingVertical: 12,
+    minHeight: MIN_TAP,
+  },
+  loadMore: {
+    minHeight: MIN_TAP,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 13,
   },
   selectedBar: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexWrap: 'wrap',
     paddingHorizontal: 2,
+  },
+  // Clear is a 44pt target around the same underlined word.
+  clearPicks: {
+    minHeight: MIN_TAP,
+    minWidth: MIN_TAP,
+    justifyContent: 'center',
   },
   notes: {
     minHeight: 64,
-    borderRadius: 10,
+    borderRadius: RADIUS.tile,
     borderWidth: 1,
     paddingHorizontal: 14,
     paddingVertical: 10,
@@ -570,20 +664,27 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    paddingHorizontal: 16,
+    paddingLeft: 16,
+    paddingRight: 6,
     paddingVertical: 12,
   },
+  // The remove X's 44pt frame reaches into the row's padding.
+  removeFrame: {
+    minWidth: MIN_TAP,
+    minHeight: MIN_TAP,
+    marginVertical: -10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // A pinned bar on the page colour, clear of the home indicator.
   footer: {
     position: 'absolute',
     left: 0,
     right: 0,
     bottom: 0,
     paddingHorizontal: 20,
-  },
-  startBtn: {
-    height: 52,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
+    paddingTop: 12,
+    paddingBottom: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
   },
 });
