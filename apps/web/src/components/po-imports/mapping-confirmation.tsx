@@ -12,6 +12,7 @@ import {
   type AmbiguousColumnMeaning,
 } from '@stockpilot/core';
 
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   Select,
@@ -89,28 +90,30 @@ export function MappingConfirmation({ poImportId, lines, editable, onConfirmed }
   }
 
   return (
-    <section className="border-warning/40 bg-warning/5 space-y-3 rounded-xl border p-4">
-      <div className="flex items-start gap-2">
-        <AlertTriangle className="text-warning mt-0.5 h-4 w-4 shrink-0" />
+    // A caution card (DESIGN-SPEC 6.7 on the warning wash): the question and
+    // why it is asked, one row per flagged line with its values and the
+    // meaning select, then the one confirm button.
+    <section className="bg-warning-wash space-y-3 rounded-lg p-4">
+      <div className="flex items-start gap-2.5">
+        <AlertTriangle aria-hidden className="text-warning mt-0.5 h-4 w-4 shrink-0" />
         <div className="space-y-1">
-          <h2 className="text-sm font-semibold">
+          <h2 className="text-foreground text-[13.5px] font-medium">
             Confirm what {flagged.length} ambiguous column
             {flagged.length === 1 ? '' : 's'} mean
             {flagged.length === 1 ? 's' : ''}
           </h2>
-          <p className="text-muted-foreground text-xs">
+          <p className="text-muted-foreground text-[12.5px] leading-[18.75px]">
             A column headed something like &ldquo;Number&rdquo; could be a jersey number, a
-            quantity, a serial, a style number or a PO line number. Rather than guess, the
-            extractor flagged these lines. Every value it read is listed below, exactly as
-            printed. Answering keeps those values; choosing{' '}
-            <span className="font-medium">Ignore</span> clears them, so nothing the extractor
-            guessed is ever applied unconfirmed. Approval stays blocked until every row here
-            is answered.
+            quantity, a serial, a style number or a PO line number. Rather than guess, the extractor
+            flagged these lines. Every value it read is listed below, exactly as printed. Answering
+            keeps those values; choosing <span className="font-medium">Ignore</span> clears them, so
+            nothing the extractor guessed is ever applied unconfirmed. Approval stays blocked until
+            every row here is answered.
           </p>
         </div>
       </div>
 
-      <div className="divide-border border-border bg-card divide-y rounded-md border">
+      <div className="divide-border border-border bg-card divide-y rounded-lg border">
         {flagged.map((l) => {
           const pct = Math.round((l.mapping_confidence ?? 0) * 100);
           const fields = flaggedSportsMappings(l);
@@ -124,31 +127,30 @@ export function MappingConfirmation({ poImportId, lines, editable, onConfirmed }
           return (
             <div
               key={l.id}
-              className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2 text-xs"
+              className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5 text-[12.5px]"
             >
-              <span className="font-mono">Line {l.line_number}</span>
-              <span className="text-muted-foreground max-w-[260px] truncate">
+              <span className="text-foreground font-mono">Line {l.line_number}</span>
+              <span className="text-muted-foreground min-w-0 max-w-[260px] truncate">
                 {l.description ?? '—'}
               </span>
-              <span
-                className="border-warning/40 bg-warning/10 text-warning rounded-full border px-1.5 py-px text-[9.5px] font-medium uppercase tracking-wide"
+              <Badge
+                variant="warning"
                 title="How confident the extractor was that it put these values in the right fields"
               >
                 {pct}% mapping confidence
-              </span>
+              </Badge>
               <span className="text-muted-foreground flex flex-wrap gap-x-2 gap-y-1">
                 {fields.length === 0 ? (
                   <span>no values read</span>
                 ) : (
                   fields.map((f) => (
                     <span key={f.field} data-testid={`flagged-${f.field}`}>
-                      {f.label}:{' '}
-                      <span className="text-foreground font-mono">{f.value}</span>
+                      {f.label}: <span className="text-foreground font-mono">{f.value}</span>
                     </span>
                   ))
                 )}
               </span>
-              <div className="ml-auto min-w-[200px]">
+              <div className="ml-auto w-full min-w-[200px] sm:w-auto">
                 <Select
                   value={choices[l.id] ?? ''}
                   onValueChange={(v) =>
@@ -156,7 +158,7 @@ export function MappingConfirmation({ poImportId, lines, editable, onConfirmed }
                   }
                   disabled={busy || !editable}
                 >
-                  <SelectTrigger className="h-8 text-xs">
+                  <SelectTrigger>
                     <SelectValue placeholder="What are these values?" />
                   </SelectTrigger>
                   <SelectContent>
@@ -176,7 +178,7 @@ export function MappingConfirmation({ poImportId, lines, editable, onConfirmed }
       {editable && (
         <div className="flex items-center justify-end gap-2">
           {!allAnswered && (
-            <span className="text-muted-foreground text-[11px]">
+            <span className="text-muted-foreground text-[12.5px]">
               Answer every row to continue.
             </span>
           )}

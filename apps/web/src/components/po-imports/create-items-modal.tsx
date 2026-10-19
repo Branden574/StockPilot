@@ -32,7 +32,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { formatCurrency, formatNumber } from '@/lib/utils';
+import { cn, formatCurrency, formatNumber } from '@/lib/utils';
 import {
   createItemsFromPoLinesAction,
   findDuplicatesForPoLinesAction,
@@ -76,12 +76,7 @@ interface CreateItemsModalProps {
   /** Server-resolved verdicts, keyed by line id (Task 14). */
   resolutions?: Record<string, LineResolution>;
   /** Called after a successful create so the parent can refresh data. */
-  onSuccess: (counts: {
-    created: number;
-    mapped: number;
-    linked: number;
-    skipped: number;
-  }) => void;
+  onSuccess: (counts: { created: number; mapped: number; linked: number; skipped: number }) => void;
 }
 
 /**
@@ -91,10 +86,7 @@ interface CreateItemsModalProps {
 const NO_CATEGORY = '__none';
 const NO_SIZE_SYSTEM = '__none';
 
-type Decision =
-  | { mode: 'create' }
-  | { mode: 'use_existing'; itemId: string }
-  | { mode: 'skip' };
+type Decision = { mode: 'create' } | { mode: 'use_existing'; itemId: string } | { mode: 'skip' };
 
 /**
  * Strip the trailing "(SOMETHING)" off a PO line description. The
@@ -164,6 +156,7 @@ export function CreateItemsModal({
   resolutions,
   onSuccess,
 }: CreateItemsModalProps) {
+  const categoryFieldId = React.useId();
   const [names, setNames] = React.useState<Record<string, string>>({});
   const [categoryId, setCategoryId] = React.useState<string>('');
   /**
@@ -176,8 +169,10 @@ export function CreateItemsModal({
    * one, the verdicts are recomputed against it. Read-only: nothing is written
    * or linked by asking.
    */
-  const [liveResolutions, setLiveResolutions] =
-    React.useState<Record<string, LineResolution> | null>(null);
+  const [liveResolutions, setLiveResolutions] = React.useState<Record<
+    string,
+    LineResolution
+  > | null>(null);
   const [resolving, setResolving] = React.useState(false);
   const effectiveResolutions = liveResolutions ?? resolutions;
   // Per-line fixes for a missing required attribute, so a reviewer never has
@@ -319,7 +314,9 @@ export function CreateItemsModal({
       return d?.mode === 'use_existing' && !d.itemId;
     });
     if (unmappedLink) {
-      toast.error(`Line ${unmappedLink.line_number} is set to use existing, but no item was picked.`);
+      toast.error(
+        `Line ${unmappedLink.line_number} is set to use existing, but no item was picked.`,
+      );
       return;
     }
     // Every blocked line needs an explicit answer. The server refuses these
@@ -370,9 +367,7 @@ export function CreateItemsModal({
             return o.size != null || o.sizeSystem != null || o.jerseyNumber != null;
           }),
       ),
-      nameOverrides: Object.fromEntries(
-        Object.entries(names).map(([id, n]) => [id, n.trim()]),
-      ),
+      nameOverrides: Object.fromEntries(Object.entries(names).map(([id, n]) => [id, n.trim()])),
       decisions: Object.fromEntries(
         Object.entries(decisions).map(([id, d]) => [
           id,
@@ -406,32 +401,33 @@ export function CreateItemsModal({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !busy && onOpenChange(o)}>
-      <DialogContent
-        className="flex h-[90vh] max-h-[90vh] w-[calc(100vw-2rem)] max-w-[1100px] flex-col overflow-hidden p-0 sm:w-[calc(100vw-3rem)]"
-      >
-        <DialogHeader className="border-border space-y-1 border-b px-6 pb-4 pt-6">
+      <DialogContent className="flex h-[90vh] max-h-[90vh] w-[calc(100vw-2rem)] max-w-[1100px] flex-col overflow-hidden p-0 sm:w-[calc(100vw-3rem)]">
+        {/* Header and footer at the redesign's 14 x 18 padding (DESIGN-SPEC
+            6.21 reviews), the lines in one scrolling list card between them. */}
+        <DialogHeader className="border-border space-y-1 border-b px-[18px] pb-3.5 pt-[18px]">
           <DialogTitle>
             Review {lines.length} {isSingle ? 'line' : 'lines'} from PO
           </DialogTitle>
-          <p className="text-muted-foreground text-xs">
-            Names are pre-filled from the PO description with the trailing part
-            number stripped (it's already saved in the barcode field). Every
-            row creates a new item under the chosen charter by default. If a
-            row matches an existing inventory item by barcode or name, you'll
-            see a yellow notice — a match is only a suggestion, so click "Use
-            existing" to explicitly link to it instead, or leave "Create
-            anyway" selected if it's actually a different SKU.
+          <p className="text-muted-foreground text-[12.5px] leading-[18.75px]">
+            Names are pre-filled from the PO description with the trailing part number stripped
+            (it's already saved in the barcode field). Every row creates a new item under the chosen
+            charter by default. If a row matches an existing inventory item by barcode or name,
+            you'll see a yellow notice — a match is only a suggestion, so click "Use existing" to
+            explicitly link to it instead, or leave "Create anyway" selected if it's actually a
+            different SKU.
             {scanning && ' (scanning for matches…)'}
           </p>
-          <div className="flex flex-wrap items-center gap-2 pt-1">
-            <label className="text-muted-foreground text-xs">Category</label>
-            <div className="min-w-[240px]">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 pt-1.5">
+            <label htmlFor={categoryFieldId} className="text-muted-foreground text-[12.5px]">
+              Category
+            </label>
+            <div className="w-full min-w-[240px] sm:w-auto">
               <Select
                 value={categoryId || NO_CATEGORY}
                 onValueChange={(v) => setCategoryId(v === NO_CATEGORY ? '' : v)}
                 disabled={busy}
               >
-                <SelectTrigger className="h-8 text-xs">
+                <SelectTrigger id={categoryFieldId}>
                   <SelectValue placeholder="No category" />
                 </SelectTrigger>
                 <SelectContent>
@@ -445,15 +441,15 @@ export function CreateItemsModal({
                 </SelectContent>
               </Select>
             </div>
-            <span className="text-muted-foreground text-[11px]">
-              A Sports category groups a size run into one product; every other
-              category behaves exactly as before.
+            <span className="text-muted-foreground min-w-0 flex-1 text-[12px]">
+              A Sports category groups a size run into one product; every other category behaves
+              exactly as before.
               {resolving && ' (checking what each line will do…)'}
             </span>
           </div>
         </DialogHeader>
 
-        <div className="border-border bg-card divide-border mx-6 my-4 flex-1 divide-y overflow-y-auto rounded-md border text-sm">
+        <div className="border-border bg-card divide-border mx-[18px] my-3.5 flex-1 divide-y overflow-y-auto rounded-lg border text-[13px]">
           {lines.map((l) => {
             const original = (l.description ?? '').trim();
             const cleaned = autoCleanItemName(original) || original;
@@ -471,8 +467,8 @@ export function CreateItemsModal({
             const numberMissing = numberRequired && !lineValues.jerseyNumber;
 
             return (
-              <div key={l.id} className="space-y-2 p-3">
-                <div className="text-muted-foreground flex items-center gap-2 text-[11px]">
+              <div key={l.id} className="space-y-2 px-4 py-3">
+                <div className="text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12px]">
                   <span className="font-mono">Line {l.line_number}</span>
                   <span>·</span>
                   <span className="tabular-nums">
@@ -491,36 +487,36 @@ export function CreateItemsModal({
                 </div>
 
                 {dupes.length > 0 && (
-                  <div className="border-warning/40 bg-warning/5 space-y-2 rounded-md border px-2.5 py-2">
-                    <div className="flex items-start gap-1.5 text-[11px]">
-                      <AlertTriangle className="text-warning mt-0.5 h-3 w-3 shrink-0" />
+                  <div className="bg-warning-wash space-y-2 rounded-lg px-3 py-2.5">
+                    <div className="text-foreground flex items-start gap-1.5 text-[12.5px]">
+                      <AlertTriangle
+                        aria-hidden
+                        className="text-warning mt-0.5 h-3.5 w-3.5 shrink-0"
+                      />
                       <span>
                         Possible duplicate
-                        {dupes.length === 1 ? '' : 's'} of an item already in
-                        inventory:
+                        {dupes.length === 1 ? '' : 's'} of an item already in inventory:
                       </span>
                     </div>
                     {dupes.map((c) => {
-                      const picked =
-                        decision.mode === 'use_existing' && decision.itemId === c.id;
+                      const picked = decision.mode === 'use_existing' && decision.itemId === c.id;
                       return (
                         <button
                           key={c.id}
                           type="button"
-                          onClick={() =>
-                            setDecision(l.id, { mode: 'use_existing', itemId: c.id })
-                          }
+                          onClick={() => setDecision(l.id, { mode: 'use_existing', itemId: c.id })}
                           disabled={busy}
-                          className={
-                            'flex w-full items-center justify-between rounded-md border px-2.5 py-1.5 text-left text-[12px] transition-colors ' +
-                            (picked
-                              ? 'border-foreground bg-foreground/5'
-                              : 'border-border hover:border-foreground/60')
-                          }
+                          aria-pressed={picked}
+                          className={cn(
+                            'bg-card focus-visible:ring-ring focus-visible:ring-offset-background flex w-full items-center justify-between gap-3 rounded-md border px-3 py-2 text-left text-[12.5px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
+                            picked
+                              ? 'border-foreground shadow-[0_0_0_1px_hsl(var(--foreground))]'
+                              : 'hover:bg-muted border-[var(--ed-line-strong)]',
+                          )}
                         >
                           <div className="min-w-0">
                             <div className="truncate font-medium">{c.name}</div>
-                            <div className="text-muted-foreground flex items-center gap-1.5 font-mono text-[10.5px]">
+                            <div className="text-muted-foreground flex flex-wrap items-center gap-x-1.5 font-mono text-[11.5px]">
                               <span>{c.sku}</span>
                               {c.barcode && (
                                 <>
@@ -531,25 +527,28 @@ export function CreateItemsModal({
                               <span>·</span>
                               <span>{formatNumber(c.quantityOnHand)} on hand</span>
                               <span>·</span>
-                              <span className="uppercase tracking-wider">
-                                {c.matchType === 'barcode'
-                                  ? 'barcode match'
-                                  : 'name match'}
+                              <span className="font-sans">
+                                {c.matchType === 'barcode' ? 'barcode match' : 'name match'}
                               </span>
                             </div>
                           </div>
-                          <span className="text-[10.5px] uppercase tracking-wider">
+                          <span
+                            className={cn(
+                              'shrink-0 text-[12px] font-medium',
+                              picked ? 'text-foreground' : 'text-muted-foreground',
+                            )}
+                          >
                             {picked ? 'using' : 'use'}
                           </span>
                         </button>
                       );
                     })}
-                    <div className="flex flex-wrap gap-1.5 pt-0.5">
+                    <div className="flex flex-wrap gap-2 pt-0.5">
                       <Button
                         type="button"
                         size="sm"
-                        variant={decision.mode === 'create' ? 'default' : 'ghost'}
-                        className="h-6 text-[11px]"
+                        variant={decision.mode === 'create' ? 'default' : 'outline'}
+                        aria-pressed={decision.mode === 'create'}
                         onClick={() => setDecision(l.id, { mode: 'create' })}
                         disabled={busy}
                       >
@@ -558,8 +557,8 @@ export function CreateItemsModal({
                       <Button
                         type="button"
                         size="sm"
-                        variant={decision.mode === 'skip' ? 'default' : 'ghost'}
-                        className="h-6 text-[11px]"
+                        variant={decision.mode === 'skip' ? 'default' : 'outline'}
+                        aria-pressed={decision.mode === 'skip'}
                         onClick={() => setDecision(l.id, { mode: 'skip' })}
                         disabled={busy}
                       >
@@ -573,9 +572,7 @@ export function CreateItemsModal({
                   <div className="flex items-center gap-2">
                     <Input
                       value={current}
-                      onChange={(e) =>
-                        setNames((m) => ({ ...m, [l.id]: e.target.value }))
-                      }
+                      onChange={(e) => setNames((m) => ({ ...m, [l.id]: e.target.value }))}
                       placeholder="Item name"
                       maxLength={200}
                       disabled={busy}
@@ -589,6 +586,7 @@ export function CreateItemsModal({
                         onClick={() => resetToCleaned(l.id)}
                         disabled={busy}
                         title="Reset to auto-cleaned PO description"
+                        aria-label="Reset to auto-cleaned PO description"
                       >
                         <RotateCcw className="h-3.5 w-3.5" />
                       </Button>
@@ -596,9 +594,12 @@ export function CreateItemsModal({
                   </div>
                 )}
                 {blocked && (
-                  <div className="border-destructive/40 bg-destructive/5 space-y-2 rounded-md border px-2.5 py-2 text-[11px]">
+                  <div className="bg-destructive-wash text-foreground space-y-2 rounded-lg px-3 py-2.5 text-[12.5px]">
                     <div className="flex items-start gap-1.5">
-                      <AlertTriangle className="text-destructive mt-0.5 h-3 w-3 shrink-0" />
+                      <AlertTriangle
+                        aria-hidden
+                        className="text-destructive mt-0.5 h-3.5 w-3.5 shrink-0"
+                      />
                       <span>
                         <strong>{LINE_RESULT_LABELS[res.result]}</strong>
                         {res.message ? ` — ${res.message}` : ''}
@@ -611,14 +612,13 @@ export function CreateItemsModal({
                       that variant rather than spawning a duplicate of it.
                     */}
                     {res.variantCandidates.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5">
+                      <div className="flex flex-wrap gap-2">
                         {res.variantCandidates.map((vc) => (
                           <Button
                             key={vc.id}
                             type="button"
                             size="sm"
                             variant="outline"
-                            className="h-6 text-[10.5px]"
                             disabled={busy}
                             onClick={() =>
                               setDecision(l.id, { mode: 'use_existing', itemId: vc.id })
@@ -630,7 +630,7 @@ export function CreateItemsModal({
                       </div>
                     )}
                     {res.groupCandidates.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5">
+                      <div className="flex flex-wrap gap-2">
                         {res.groupCandidates.map((c) => {
                           const picked =
                             groupChoice?.mode === 'link' && groupChoice.groupId === c.id;
@@ -640,7 +640,7 @@ export function CreateItemsModal({
                               type="button"
                               size="sm"
                               variant={picked ? 'default' : 'outline'}
-                              className="h-6 text-[10.5px]"
+                              aria-pressed={picked}
                               disabled={busy}
                               onClick={() =>
                                 setGroupChoices((m) => ({
@@ -657,7 +657,7 @@ export function CreateItemsModal({
                           type="button"
                           size="sm"
                           variant={groupChoice?.mode === 'new' ? 'default' : 'outline'}
-                          className="h-6 text-[10.5px]"
+                          aria-pressed={groupChoice?.mode === 'new'}
                           disabled={busy}
                           onClick={() =>
                             setGroupChoices((m) => ({ ...m, [l.id]: { mode: 'new' } }))
@@ -670,9 +670,7 @@ export function CreateItemsModal({
                             confirms a brand-new one. Same decision, two
                             honest labels.
                           */}
-                          {res.groupId
-                            ? 'Add a new variant to this group'
-                            : 'Confirm a new group'}
+                          {res.groupId ? 'Add a new variant to this group' : 'Confirm a new group'}
                         </Button>
                       </div>
                     )}
@@ -701,9 +699,9 @@ export function CreateItemsModal({
                       placeholder={`Size${sizeRequired ? ' (required)' : ''}, e.g. ${sizeExample}`}
                       maxLength={40}
                       disabled={busy}
-                      className="h-8 w-[170px] text-xs"
+                      className="w-full sm:w-[170px]"
                     />
-                    <div className="w-[170px]">
+                    <div className="w-full sm:w-[170px]">
                       <Select
                         value={v.sizeSystem ?? l.variant_size_system ?? NO_SIZE_SYSTEM}
                         onValueChange={(val) =>
@@ -718,7 +716,6 @@ export function CreateItemsModal({
                         disabled={busy}
                       >
                         <SelectTrigger
-                          className="h-8 text-xs"
                           aria-label={`Size system for line ${l.line_number}`}
                           aria-required={sizeSystemRequired || undefined}
                           aria-invalid={(blocked && sizeSystemMissing) || undefined}
@@ -753,20 +750,19 @@ export function CreateItemsModal({
                       placeholder={numberRequired ? 'Number (required)' : 'Number'}
                       maxLength={4}
                       disabled={busy}
-                      className={`h-8 text-xs ${numberRequired ? 'w-[140px]' : 'w-[90px]'}`}
+                      className={numberRequired ? 'w-full sm:w-[140px]' : 'w-full sm:w-[90px]'}
                     />
                   </div>
                 )}
 
                 {decision.mode === 'create' && original !== current && (
-                  <p className="text-muted-foreground truncate text-[11px]">
+                  <p className="text-muted-foreground truncate text-[12px]">
                     PO original: {original}
                   </p>
                 )}
                 {decision.mode === 'skip' && (
-                  <p className="text-muted-foreground text-[11px] italic">
-                    This line will be skipped — handle it later by mapping or
-                    creating manually.
+                  <p className="text-muted-foreground text-[12px] italic">
+                    This line will be skipped — handle it later by mapping or creating manually.
                   </p>
                 )}
               </div>
@@ -774,23 +770,20 @@ export function CreateItemsModal({
           })}
         </div>
 
-        <DialogFooter className="border-border bg-background border-t px-6 py-4">
-          <div className="text-muted-foreground mr-auto self-center text-[11px]">
+        <DialogFooter className="border-border bg-card border-t px-[18px] py-3.5">
+          <div className="text-muted-foreground mr-auto self-center text-[12.5px] tabular-nums">
             {createCount > 0 && <span>{createCount} new</span>}
             {createCount > 0 && (linkCount > 0 || skipCount > 0) && <span> · </span>}
             {linkCount > 0 && <span>{linkCount} linked</span>}
             {linkCount > 0 && skipCount > 0 && <span> · </span>}
             {skipCount > 0 && <span>{skipCount} skipped</span>}
           </div>
-          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             Cancel
           </Button>
-          <Button onClick={submit} disabled={busy || resolving} variant="gradient">
-            {busy ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Plus className="h-4 w-4" />
-            )}
+          {/* Apply is the ink primary (DESIGN-SPEC 6.21 reviews). */}
+          <Button onClick={submit} disabled={busy || resolving}>
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
             Confirm
           </Button>
         </DialogFooter>
