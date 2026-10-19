@@ -13,8 +13,8 @@ import {
 } from 'react-native';
 
 import { Button } from '@/components/ui/button';
-import { Chip } from '@/components/ui/chip';
 import { Display, Eyebrow, Mono } from '@/components/ui/text';
+import { SheetChip } from '@/components/move-stock-modal';
 // The write-off's crate verdict shares the move sheet's module deliberately:
 // one precedence chain, one vocabulary, both flavours side by side.
 import { removeStockCrateWarning } from '@/lib/move-stock-form';
@@ -332,12 +332,12 @@ function RemoveFromRackContent({
                 <Mono size={10} tracking={0.12} upper color={c.ink3}>
                   RACK / CRATE
                 </Mono>
-                {/* The shared chip (the move sheet's): a button that says
-                    which holding is chosen. It was a copy declared inside this
+                {/* The move sheet's 44pt chip: a button that says which
+                    holding is chosen. It was a copy declared inside this
                     component's render, so every render remounted the chips. */}
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
                   {holdings.map((h) => (
-                    <Chip
+                    <SheetChip
                       key={h.locationId}
                       label={`${h.name} · ${h.quantity}`}
                       active={h.locationId === fromId}

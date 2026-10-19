@@ -14,7 +14,6 @@ import {
 
 import { Button } from '@/components/ui/button';
 import { Display, Eyebrow, Mono } from '@/components/ui/text';
-import { Chip } from '@/components/ui/chip';
 import { CRATE_COLOR_OPTIONS, selectedCrateColor } from '@/lib/crate-color-options';
 import {
   bookCrateRefusal,
@@ -86,6 +85,74 @@ const NO_STOCK_ANYWHERE = 'This item has no stock in any location yet — receiv
 
 /** Sentinel `toId` value for the inline "create a new rack" branch. */
 const NEW_RACK = '__new__';
+
+/** The smallest target a sheet's choice may be. */
+const MIN_TAP = 44;
+
+/**
+ * A choice in the move and remove sheets: the FROM and TO holdings, "+ New
+ * rack…", the crate colours (here) and Remove from rack's RACK / CRATE
+ * holdings (imported there). The shared chip's exact recipe (components/ui/
+ * chip.tsx): the recessed fill with the control border, the ink fill with its
+ * words in the card colour when chosen, a button that says whether it is the
+ * one chosen, and the optional crate swatch ringed in the chip's foreground.
+ * It adds only a 44pt minimum height: the shared chip is about 36.5pt (9pt
+ * padding twice, a 16.5pt mono line, the border), under the 44pt rule.
+ * Declared at module level, so its identity is stable across renders.
+ */
+export function SheetChip({
+  label,
+  active,
+  onPress,
+  swatch,
+}: {
+  label: string;
+  active: boolean;
+  onPress: () => void;
+  swatch?: string | null;
+}) {
+  const { c } = useTheme();
+  const text = (
+    <Mono size={12.5} color={active ? c.card : c.ink}>
+      {label}
+    </Mono>
+  );
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+      style={{
+        minHeight: MIN_TAP,
+        justifyContent: 'center',
+        paddingHorizontal: 12,
+        paddingVertical: 9,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: active ? c.ink : c.hair2,
+        backgroundColor: active ? c.ink : c.sunk,
+      }}
+    >
+      {swatch ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <View
+            style={{
+              width: 10,
+              height: 10,
+              borderRadius: 5,
+              backgroundColor: swatch,
+              borderWidth: 1,
+              borderColor: active ? c.card : c.hair2,
+            }}
+          />
+          {text}
+        </View>
+      ) : (
+        text
+      )}
+    </Pressable>
+  );
+}
 
 /** Colors this file reads off the theme palette — a subset of `useTheme().c`. */
 type FieldColors = { ink: string; ink3: string; hair2: string; sunk: string };
@@ -929,7 +996,7 @@ export function MoveStockModal({
                   ) : (
                     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
                       {holdings.map((h) => (
-                        <Chip
+                        <SheetChip
                           key={h.locationId}
                           label={holdingLabel(h)}
                           active={h.locationId === fromId}
@@ -997,7 +1064,7 @@ export function MoveStockModal({
                   </Mono>
                   <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
                     {destChoices.map((d) => (
-                      <Chip
+                      <SheetChip
                         key={d.id}
                         label={d.name}
                         // For a BOOK a chip is a shortcut that FILLS the four
@@ -1018,7 +1085,7 @@ export function MoveStockModal({
                       />
                     ))}
                     {!isBook && canCreateLocation ? (
-                      <Chip
+                      <SheetChip
                         label="+ New rack…"
                         active={isNewRack}
                         onPress={() => setToId(NEW_RACK)}
@@ -1079,7 +1146,7 @@ export function MoveStockModal({
                           accessibilityLabel="Crate color"
                         >
                           {CRATE_COLOR_OPTIONS.map((opt) => (
-                            <Chip
+                            <SheetChip
                               key={opt.label}
                               label={opt.label}
                               swatch={opt.hex}
