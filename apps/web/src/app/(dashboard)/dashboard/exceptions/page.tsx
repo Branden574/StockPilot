@@ -91,16 +91,16 @@ export const metadata = { title: 'Exceptions' };
  * for the people who review exceptions. Web only; the phone's Resolved list
  * shows the role in each row's chip.
  */
-/** The page area every redesigned page uses (DESIGN-SPEC 4 and 5.3): max
- *  1320, 28 / 32 / 64 padding, a 16 px gutter on a phone, 16 px between
- *  blocks. */
-const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
-
 type SearchParams = { tab?: string | string[]; confirmed?: string | string[] };
 
 function firstParam(v: string | string[] | undefined): string | undefined {
   return Array.isArray(v) ? v[0] : v;
 }
+
+/** The page area every redesigned page uses (DESIGN-SPEC 4 and 5.3): max
+ *  1320, 28 / 32 / 64 padding, a 16 px gutter on a phone, 16 px between
+ *  blocks. */
+const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
 
 async function orgTimeZone(organizationId: string): Promise<string> {
   try {
