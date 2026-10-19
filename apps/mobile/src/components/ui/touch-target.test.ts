@@ -416,12 +416,11 @@ const AX5 = 3.57;
  *  about 0.56em; 0.62em errs wide). */
 const DIGIT_EM = 0.62;
 
-/** The width one child of the row takes at `fontScale`, read from the
- *  styles it renders: the frame's minimum, or the drawn box when the
- *  digits (capped at the chrome ceiling) make it wider. */
-function childWidth(n: Node, fontScale: number): number {
-  const style = flat(n.props.style);
-  if (n.type !== 'Pressable') return num(style.width); // the "·" gap marker
+/** The width a page button or arrow is DRAWN at `fontScale`, read from the
+ *  styles it renders: its fixed or least width, or its digits (capped at the
+ *  chrome ceiling) plus its padding and its border each side when they make
+ *  it wider. */
+function drawnWidth(n: Node, fontScale: number): number {
   const face = kids(n)[0]!;
   const f = flat(face.props.style);
   const [digits] = every(face, 'Mono');
@@ -430,9 +429,18 @@ function childWidth(n: Node, fontScale: number): number {
     const p = digits.props as { size: number; maxFontSizeMultiplier: number; children: number };
     const scale = Math.min(fontScale, p.maxFontSizeMultiplier);
     const text = String(p.children).length * p.size * scale * DIGIT_EM;
-    faceWidth = Math.max(faceWidth, text + 2 * num(f.paddingHorizontal));
+    faceWidth = Math.max(faceWidth, text + 2 * num(f.paddingHorizontal) + 2 * num(f.borderWidth));
   }
-  return Math.max(num(style.minWidth), faceWidth);
+  return faceWidth;
+}
+
+/** The width one child of the row takes at `fontScale`: the frame's
+ *  minimum, or the drawn box plus the frame's padding each side when that is
+ *  wider (Yoga counts padding inside minWidth). */
+function childWidth(n: Node, fontScale: number): number {
+  const style = flat(n.props.style);
+  if (n.type !== 'Pressable') return num(style.width); // the "·" gap marker
+  return Math.max(num(style.minWidth), drawnWidth(n, fontScale) + 2 * num(style.paddingHorizontal));
 }
 
 /** Flex-wrap lines of `widths` in `width` points with `gap` between items. */
@@ -490,6 +498,8 @@ describe('Paginator: 44pt page buttons and arrows', () => {
       expect(flat(p.props.style)).toMatchObject({
         minWidth: 44,
         minHeight: 44,
+        paddingHorizontal: 3,
+        paddingVertical: 3,
         alignItems: 'center',
         justifyContent: 'center',
       });
@@ -553,7 +563,7 @@ describe('Paginator: 44pt page buttons and arrows', () => {
         const widths = row.map((n) => childWidth(n, fontScale));
         for (const width of WIDTHS) {
           // flexWrap clips nothing so long as no one control is wider than
-          // the line; the widest (a 3-digit page at AX5) is about 55pt.
+          // the line; the widest (a 3-digit page at AX5) is about 63pt.
           expect(
             Math.max(...widths),
             `${page}/${count} @${fontScale} in ${width}`,
@@ -565,6 +575,31 @@ describe('Paginator: 44pt page buttons and arrows', () => {
       }
     }
     expect(row0Labels()).toEqual(['Previous page', 'Next page']);
+  });
+
+  it('neighbouring drawn page buttons stand at least 6pt apart at every text size, as the old 6pt gap kept them', () => {
+    // Before the frame had padding a page button its digits grew to 44pt or
+    // wider filled its frame and touched the next one (0pt; 2-digit pages at
+    // AX1 and up, 3-digit pages at the default size).
+    for (const fontScale of [1, 1.35, 1.65, AX5]) {
+      for (const [page, count] of SHAPES) {
+        for (const n of kids(buttonRow(pager(page, count)))) {
+          if (n.type !== 'Pressable') continue;
+          // Each frame's spare width is split evenly round its centred box,
+          // so two frames edge to edge leave this much between the boxes.
+          const spare = childWidth(n, fontScale) - drawnWidth(n, fontScale);
+          expect(
+            spare,
+            `${n.props.accessibilityLabel} ${page}/${count} @${fontScale}`,
+          ).toBeGreaterThanOrEqual(6);
+        }
+      }
+    }
+    // The same 3pt each way keeps wrapped lines apart: a box taller than
+    // 38pt (large digits) grows its frame rather than filling it.
+    const frame = flat(every(pager(5, 8), 'Pressable')[0]!.props.style);
+    expect(2 * num(frame.paddingVertical)).toBeGreaterThanOrEqual(6);
+    expect(PAGER_MIN_TARGET - PAGER_BUTTON_SIZE).toBeGreaterThanOrEqual(6);
   });
 
   it('on a 393pt phone the row breaks into as many lines as it did with 36pt buttons; on a 375pt phone only a six-page pager gains one', () => {

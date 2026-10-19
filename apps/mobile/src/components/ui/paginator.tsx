@@ -56,10 +56,13 @@ function pageNumbers(current: number, total: number): (number | 'ellipsis')[] {
  * so every target is 44pt while the buttons look as they did. A frame, not
  * hitSlop: the old 4-6pt hitSlop never reached past the row. The frames sit
  * edge to edge (the row has no gap), so the drawn buttons stand 8pt apart
- * (4pt of frame each side; the gap was 6pt). The row breaks into as many
- * lines as it did on a 393pt phone; on a 375pt phone a six-page pager (eight
- * controls, 352pt) now takes two lines where it took one. A line is 44pt
- * tall instead of 36pt.
+ * (4pt of frame each side; the gap was 6pt). The frame also pads 3pt all
+ * round, so a page button its digits grow past 38pt (three digits, or two at
+ * the larger text sizes) widens its frame and still stands at least 6pt from
+ * its neighbour, sideways and across a wrapped line, as the old gap kept it.
+ * The row breaks into as many lines as it did on a 393pt phone; on a 375pt
+ * phone a six-page pager (eight controls, 352pt) now takes two lines where it
+ * took one. A line is 44pt tall instead of 36pt.
  */
 export function Paginator({
   page,
@@ -109,8 +112,9 @@ export function Paginator({
         Nine 52pt buttons on a 353pt screen walked the Next arrow clean off the
         right edge — unreachable, which stranded the user on page 1 of the two
         hottest tabs in the app. Wrapping to a second row keeps every control
-        on screen at any text size. No gap: the 44pt frames touch, and their
-        4pt margins round each drawn button are the space between them.
+        on screen at any text size. No gap: the 44pt frames touch, and the
+        frame round each drawn button (4pt at 36pt, never under the frame's
+        3pt padding) is the space between them: at least 6pt, as the gap was.
       */}
       <View
         style={{
@@ -264,10 +268,16 @@ export const PAGER_BUTTON_SIZE = 36;
 export const PAGER_MIN_TARGET = 44;
 
 /** The frame: at least 44 x 44pt, the drawn button centred in it at its own
- *  size (alignItems centre, so it is never stretched to the frame). */
+ *  size (alignItems centre, so it is never stretched to the frame). Its 3pt
+ *  padding counts inside that minimum (Yoga sizes the padding box), so a 36pt
+ *  button still gets a 44pt frame, while a button wider or taller than 38pt
+ *  keeps 3pt of frame each side: two neighbours never stand under 6pt apart,
+ *  the row's old gap, sideways or across a wrapped line. */
 const PAGER_FRAME = {
   minWidth: PAGER_MIN_TARGET,
   minHeight: PAGER_MIN_TARGET,
+  paddingHorizontal: 3,
+  paddingVertical: 3,
   alignItems: 'center',
   justifyContent: 'center',
 } as const;
