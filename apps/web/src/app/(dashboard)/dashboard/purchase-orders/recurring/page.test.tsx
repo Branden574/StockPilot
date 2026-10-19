@@ -159,6 +159,7 @@ vi.mock('@/components/po/recurring-templates-seed-loader', () => ({
   RecurringTemplatesSeedLoader: vi.fn(() => null),
 }));
 
+import { PageHeader } from '@/components/patterns/page-header';
 import { RecurringTemplatesSeedLoader } from '@/components/po/recurring-templates-seed-loader';
 import { reportDegradedRead } from '@/server/services/lib/fetch-by-ids';
 
@@ -356,5 +357,16 @@ describe('Recurring POs page', () => {
     expect(findProps(tree, RecurringTemplatesSeedLoader)?.locations).toEqual([
       { id: 'loc-main', name: 'Main Warehouse' },
     ]);
+  });
+
+  it('draws the shared page header with its back link, heading and description (P4.C2 redesign)', async () => {
+    const header = findProps(await page(), PageHeader);
+    expect(header?.title).toBe('Recurring purchase orders');
+    expect(header?.subline).toBe(
+      'Templates that auto-create a purchase order on a schedule — weekly, monthly, quarterly, or custom.',
+    );
+    const back = header?.back as React.ReactElement<{ href: string; children: React.ReactNode }>;
+    expect(back.props.href).toBe('/dashboard/purchase-orders');
+    expect(back.props.children).toBe('← Purchase orders');
   });
 });

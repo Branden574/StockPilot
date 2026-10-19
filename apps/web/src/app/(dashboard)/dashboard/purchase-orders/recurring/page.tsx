@@ -1,6 +1,6 @@
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { RefreshCw } from 'lucide-react';
+
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 
 import type {
   RecurringLineLabel,
@@ -21,6 +21,9 @@ import { createClient } from '@/lib/supabase/server';
 import { withContext } from '@/server/services/context';
 
 import { can, planAllowsRecurringPos, type OrgBillingState } from '@stockpilot/core';
+
+/** The page area (DESIGN-SPEC 5.3 and 4): max 1320, 16 px gutters on a phone. */
+const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -116,20 +119,21 @@ export default async function RecurringPosPage({
     try {
       const { data, error } = await supabase
         .from('purchase_orders')
-        .select('destination_location_id, destination:locations!destination_location_id (name, deleted_at)')
+        .select(
+          'destination_location_id, destination:locations!destination_location_id (name, deleted_at)',
+        )
         .eq('organization_id', ctx.organizationId)
         .eq('id', fromPoId)
         .maybeSingle();
       if (error) throw error;
       if (!data) return null;
-      const locationId = (data as { destination_location_id: string | null }).destination_location_id;
+      const locationId = (data as { destination_location_id: string | null })
+        .destination_location_id;
       if (!locationId) return { locationId: null, name: null, deleted: false };
       // A many-to-one embed: one row (typed as a list), as PurchaseOrdersService.get reads it.
       const embedded = (data as { destination?: unknown }).destination;
       const location = (Array.isArray(embedded) ? embedded[0] : embedded) as
-        | { name?: string | null; deleted_at?: string | null }
-        | null
-        | undefined;
+        { name?: string | null; deleted_at?: string | null } | null | undefined;
       return {
         locationId,
         name: location?.name?.trim() || null,
@@ -178,8 +182,8 @@ export default async function RecurringPosPage({
   const unlistedIds = [
     ...new Set([
       ...templates.flatMap((t) =>
-        (Array.isArray(t.line_items) ? (t.line_items as Array<{ itemId?: unknown }>) : []).map((l) =>
-          typeof l?.itemId === 'string' ? l.itemId : '',
+        (Array.isArray(t.line_items) ? (t.line_items as Array<{ itemId?: unknown }>) : []).map(
+          (l) => (typeof l?.itemId === 'string' ? l.itemId : ''),
         ),
       ),
       ...seedItemIds,
@@ -202,26 +206,16 @@ export default async function RecurringPosPage({
   }
 
   return (
-    <div className="container mx-auto max-w-4xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href="/dashboard/purchase-orders"
-          className="text-muted-foreground hover:text-foreground text-sm"
-        >
-          ← Purchase orders
-        </Link>
-        <div className="mt-2 flex items-end justify-between gap-3">
-          <div>
-            <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-              <RefreshCw className="h-6 w-6" /> Recurring purchase orders
-            </h1>
-            <p className="text-muted-foreground mt-1 text-sm">
-              Templates that auto-create a purchase order on a schedule — weekly, monthly,
-              quarterly, or custom.
-            </p>
-          </div>
-        </div>
-      </div>
+    <div className={PAGE}>
+      <PageHeader
+        back={
+          <PageHeaderBackLink href="/dashboard/purchase-orders">
+            ← Purchase orders
+          </PageHeaderBackLink>
+        }
+        title="Recurring purchase orders"
+        subline="Templates that auto-create a purchase order on a schedule — weekly, monthly, quarterly, or custom."
+      />
 
       <RecurringTemplatesSeedLoader
         initial={templates}

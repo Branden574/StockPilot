@@ -17,8 +17,7 @@ const mockSetEnabled = vi.fn(async (_id: string, _enabled: boolean) => ({
 const mockCreate = vi.fn(async () => ({ ok: true as const, data: { id: 'new-tpl' } }));
 
 vi.mock('@/server/actions/recurring-pos', () => ({
-  setRecurringTemplateEnabledAction: (id: string, enabled: boolean) =>
-    mockSetEnabled(id, enabled),
+  setRecurringTemplateEnabledAction: (id: string, enabled: boolean) => mockSetEnabled(id, enabled),
   createRecurringTemplateAction: (_input: unknown) => mockCreate(),
   updateRecurringTemplateAction: vi.fn(async () => ({ ok: true as const, data: { id: 'tpl-1' } })),
   deleteRecurringTemplateAction: vi.fn(async () => ({ ok: true as const, data: undefined })),
@@ -97,8 +96,11 @@ describe('RecurringTemplatesPanel', () => {
     render(<RecurringTemplatesPanel {...BASE_PROPS} />);
 
     // The template is enabled=true; unchecking it should call setEnabled(id, false).
-    const checkbox = screen.getByTestId('toggle-tpl-1') as HTMLInputElement;
-    expect(checkbox.checked).toBe(true);
+    // The shared checkbox (role="checkbox", aria-checked) replaced the native
+    // box in the redesign (P4.C2): toBeChecked reads either, same strength.
+    const checkbox = screen.getByTestId('toggle-tpl-1');
+    expect(checkbox).toBeChecked();
+    expect(checkbox).toHaveAccessibleName('Disable template');
 
     fireEvent.click(checkbox);
 
@@ -108,15 +110,11 @@ describe('RecurringTemplatesPanel', () => {
   });
 
   it('calls setRecurringTemplateEnabledAction(id, true) when a disabled template is checked', async () => {
-    render(
-      <RecurringTemplatesPanel
-        {...BASE_PROPS}
-        initial={[{ ...TEMPLATE, enabled: false }]}
-      />,
-    );
+    render(<RecurringTemplatesPanel {...BASE_PROPS} initial={[{ ...TEMPLATE, enabled: false }]} />);
 
-    const checkbox = screen.getByTestId('toggle-tpl-1') as HTMLInputElement;
-    expect(checkbox.checked).toBe(false);
+    const checkbox = screen.getByTestId('toggle-tpl-1');
+    expect(checkbox).not.toBeChecked();
+    expect(checkbox).toHaveAccessibleName('Enable template');
 
     fireEvent.click(checkbox);
 
@@ -178,7 +176,13 @@ describe('RecurringTemplatesPanel', () => {
         ]}
         lineLabels={[
           { id: 'item-gone', name: 'Blue pens', sku: 'BP-1', deleted: true, kitStock: false },
-          { id: 'item-kit', name: 'Reading Kit', sku: '__BUNDLE__0a000000', deleted: false, kitStock: true },
+          {
+            id: 'item-kit',
+            name: 'Reading Kit',
+            sku: '__BUNDLE__0a000000',
+            deleted: false,
+            kitStock: true,
+          },
         ]}
       />,
     );
@@ -187,8 +191,12 @@ describe('RecurringTemplatesPanel', () => {
 
     // The save refuses the deleted item and the kit BY NAME; the line that
     // holds each now reads so, and one the page could not resolve says that.
-    await waitFor(() => expect(screen.getAllByText('Deleted: Blue pens (BP-1)').length).toBeGreaterThan(0));
-    expect(screen.getAllByText('Pre-assembled kit: Reading Kit (__BUNDLE__0a000000)').length).toBeGreaterThan(0);
+    await waitFor(() =>
+      expect(screen.getAllByText('Deleted: Blue pens (BP-1)').length).toBeGreaterThan(0),
+    );
+    expect(
+      screen.getAllByText('Pre-assembled kit: Reading Kit (__BUNDLE__0a000000)').length,
+    ).toBeGreaterThan(0);
     expect(screen.getAllByText('Item not available').length).toBeGreaterThan(0);
   });
 });

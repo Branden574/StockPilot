@@ -10,6 +10,9 @@ import { SuppliersService } from '@/server/services/suppliers';
 
 import { can } from '@stockpilot/core';
 
+/** The page area (DESIGN-SPEC 5.3 and 4): max 1320, 16 px gutters on a phone. */
+const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
+
 interface SuppliersPageProps {
   searchParams: Promise<{ view?: string }>;
 }
@@ -21,23 +24,14 @@ export default async function SuppliersPage({ searchParams }: SuppliersPageProps
   }
   const params = await searchParams;
   const isArchivedView = params.view === 'archived';
-  const [ctx, svc] = await Promise.all([
-    requireOrgContext(),
-    SuppliersService.forCurrentUser(),
-  ]);
+  const [ctx, svc] = await Promise.all([requireOrgContext(), SuppliersService.forCurrentUser()]);
   const canManage = can(ctx, 'suppliers:manage');
   const rows = await svc.list({ includeArchived: isArchivedView });
 
   return (
-    <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Suppliers</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {isArchivedView
-            ? 'Suppliers you archived. Restore one to bring it back into pick lists.'
-            : 'Vendors, contacts, and where to reorder from.'}
-        </p>
-      </div>
+    // The header (h1, subline, Active / Archived, New supplier) is drawn by
+    // SuppliersManager, which also holds the New supplier dialog it opens.
+    <div className={PAGE}>
       <SuppliersManager
         view={isArchivedView ? 'archived' : 'active'}
         canManage={canManage}

@@ -5,8 +5,8 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { DetailSection } from '@/components/patterns/detail-section';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { setPlanningParamsAction } from '@/server/actions/planning-settings';
@@ -22,6 +22,8 @@ interface PlanningParams {
  * multiplier, velocity window). Renders only for owner/admin; the server
  * action re-gates. Saving re-runs the server suggestions (router.refresh) so
  * the table reflects the new parameters immediately.
+ *
+ * Drawn as a titled card under the suggestions table (DESIGN-SPEC 6.7).
  */
 export function PlanningParamsPanel({ initial }: { initial: PlanningParams }) {
   const router = useRouter();
@@ -58,60 +60,67 @@ export function PlanningParamsPanel({ initial }: { initial: PlanningParams }) {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Settings2 className="h-4 w-4" /> Planning settings
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <div className="space-y-1.5">
-          <Label htmlFor="leadTimeDays">Lead time (days)</Label>
-          <Input
-            id="leadTimeDays"
-            type="number"
-            min={1}
-            max={180}
-            value={leadTimeDays}
-            onChange={(e) => setLeadTimeDays(e.target.value)}
-            disabled={busy}
-          />
-          <p className="text-muted-foreground text-xs">PO placement → stock on shelf.</p>
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="safetyMultiplier">Safety multiplier</Label>
-          <Input
-            id="safetyMultiplier"
-            type="number"
-            min={1}
-            max={3}
-            step={0.1}
-            value={safetyMultiplier}
-            onChange={(e) => setSafetyMultiplier(e.target.value)}
-            disabled={busy}
-          />
-          <p className="text-muted-foreground text-xs">Buffer on lead-time demand (1.5 = +50%).</p>
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="velocityWindowDays">Velocity window (days)</Label>
-          <Input
-            id="velocityWindowDays"
-            type="number"
-            min={14}
-            max={365}
-            value={velocityWindowDays}
-            onChange={(e) => setVelocityWindowDays(e.target.value)}
-            disabled={busy}
-          />
-          <p className="text-muted-foreground text-xs">Lookback for the demand rate.</p>
-        </div>
-        <div className="sm:col-span-3">
-          <Button onClick={save} disabled={busy} size="sm">
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Save settings
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
+    <DetailSection
+      data-slot="planning-params"
+      title={
+        <span className="inline-flex items-center gap-2">
+          <Settings2 aria-hidden className="text-muted-foreground h-4 w-4" /> Planning settings
+        </span>
+      }
+      bodyClassName="grid grid-cols-1 gap-4 sm:grid-cols-3"
+    >
+      <div className="space-y-1.5">
+        <Label htmlFor="leadTimeDays">Lead time (days)</Label>
+        <Input
+          id="leadTimeDays"
+          type="number"
+          min={1}
+          max={180}
+          value={leadTimeDays}
+          onChange={(e) => setLeadTimeDays(e.target.value)}
+          disabled={busy}
+        />
+        <p className="text-muted-foreground text-[12px] leading-[18px]">
+          PO placement → stock on shelf.
+        </p>
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="safetyMultiplier">Safety multiplier</Label>
+        <Input
+          id="safetyMultiplier"
+          type="number"
+          min={1}
+          max={3}
+          step={0.1}
+          value={safetyMultiplier}
+          onChange={(e) => setSafetyMultiplier(e.target.value)}
+          disabled={busy}
+        />
+        <p className="text-muted-foreground text-[12px] leading-[18px]">
+          Buffer on lead-time demand (1.5 = +50%).
+        </p>
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="velocityWindowDays">Velocity window (days)</Label>
+        <Input
+          id="velocityWindowDays"
+          type="number"
+          min={14}
+          max={365}
+          value={velocityWindowDays}
+          onChange={(e) => setVelocityWindowDays(e.target.value)}
+          disabled={busy}
+        />
+        <p className="text-muted-foreground text-[12px] leading-[18px]">
+          Lookback for the demand rate.
+        </p>
+      </div>
+      <div className="sm:col-span-3">
+        <Button onClick={save} disabled={busy}>
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          Save settings
+        </Button>
+      </div>
+    </DetailSection>
   );
 }
