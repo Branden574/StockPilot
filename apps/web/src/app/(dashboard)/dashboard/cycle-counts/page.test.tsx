@@ -44,6 +44,8 @@ vi.mock('@/server/services/cycle-counts', () => ({
   CycleCountsService: { forCurrentUser: vi.fn(async () => ({ listPage })) },
 }));
 
+import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
+
 import CycleCountsPage from './page';
 
 function item(n: number, extra: Record<string, unknown> = {}) {
@@ -255,5 +257,35 @@ describe('cycle counts history page: empty states and controls', () => {
     ctxHolder.current = { role: 'viewer', permissions: new Set(['items:read']) };
     await expect(CycleCountsPage({ searchParams: Promise.resolve({}) })).rejects.toThrow('redirect:/dashboard');
     expect(listPage).not.toHaveBeenCalled();
+  });
+});
+
+// PLAN section 0 rule 10: a destination renamed in Settings > Navigation shows
+// the org's label in its h1, as it does in the sidebar and the crumb. The
+// label comes off the org row this page already reads for the time zone.
+describe('cycle counts history page: the heading follows a Navigation rename', () => {
+  it('prints the renamed destination as the page heading', async () => {
+    vi.mocked(getOrgRowForRequest).mockResolvedValueOnce({
+      timezone: 'America/Los_Angeles',
+      nav_overrides: { v: 1, labels: { '/dashboard/cycle-counts': 'Stock checks' } },
+    } as never);
+    listPage.mockResolvedValue(pageOf(1, 1, [item(1)]));
+    await renderPage();
+    expect(screen.getByRole('heading', { level: 1, name: 'Stock checks' })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { level: 1, name: 'Cycle counts' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('keeps "Cycle counts" when the org has no rename', async () => {
+    listPage.mockResolvedValue(pageOf(1, 1, [item(1)]));
+    await renderPage();
+    expect(screen.getByRole('heading', { level: 1, name: 'Cycle counts' })).toBeInTheDocument();
+  });
+
+  it('reads the org row once and nothing else for the label', async () => {
+    listPage.mockResolvedValue(pageOf(1, 1, [item(1)]));
+    await renderPage();
+    expect(getOrgRowForRequest).toHaveBeenCalledTimes(1);
   });
 });

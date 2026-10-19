@@ -1,8 +1,7 @@
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { NewCycleCount } from '@/components/cycle-counts/new-cycle-count';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getModulesForRequest } from '@/lib/dashboard/request-cache';
 import { createClient } from '@/lib/supabase/server';
@@ -10,6 +9,10 @@ import { fetchCountAssignees, type CountAssignee } from '@/server/lib/count-assi
 import { WarehousesService } from '@/server/services/warehouses';
 
 import { can } from '@stockpilot/core';
+
+/** The page area (DESIGN-SPEC 4 and 5.3), the same box the list page and the
+ *  shell's loading skeleton draw. */
+const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
 
 export default async function NewCycleCountPage() {
   // Submit asserts stock:adjust. Without this gate viewers/staff
@@ -41,34 +44,37 @@ export default async function NewCycleCountPage() {
   }
 
   return (
-    <div className="container mx-auto max-w-2xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href="/dashboard/cycle-counts"
-          className="text-muted-foreground hover:text-foreground text-sm"
-        >
-          ← Back to cycle counts
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">Start a count</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Pick the exact items to count below, or snapshot a whole warehouse.
-          Starting the count records each item&apos;s current quantity-on-hand
-          so we can compute variance later.
-        </p>
-      </div>
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Scope</CardTitle>
-        </CardHeader>
-        <CardContent>
+    <div className={PAGE}>
+      <PageHeader
+        back={
+          <PageHeaderBackLink href="/dashboard/cycle-counts">
+            ← Back to cycle counts
+          </PageHeaderBackLink>
+        }
+        title="Start a count"
+        subline="Pick the exact items to count below, or snapshot a whole warehouse. Starting the count records each item's current quantity-on-hand so we can compute variance later."
+        className="max-w-[880px]"
+      />
+      {/* One form card at a reading width (the shared form pattern): the scope
+          switch, then the picker and its review, or the whole-warehouse form. */}
+      <section
+        aria-labelledby="start-count-scope"
+        className="border-border bg-card text-card-foreground w-full max-w-[880px] rounded-lg border"
+      >
+        <div className="border-border border-b px-[18px] py-3.5">
+          <h2 id="start-count-scope" className="text-[13.5px] font-medium leading-5">
+            Scope
+          </h2>
+        </div>
+        <div className="p-[18px]">
           <NewCycleCount
             warehouses={warehouses.map((w) => ({ id: w.id, name: w.name }))}
             members={members}
             canAssign={canAssign}
             sportsEnabled={sportsEnabled}
           />
-        </CardContent>
-      </Card>
+        </div>
+      </section>
     </div>
   );
 }

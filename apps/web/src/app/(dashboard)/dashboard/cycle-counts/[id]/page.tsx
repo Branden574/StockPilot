@@ -6,6 +6,7 @@ import { CopyReferenceButton } from '@/components/cycle-counts/copy-reference-bu
 import { CycleCountDetail } from '@/components/cycle-counts/cycle-count-detail';
 import { BackToCycleCounts } from '@/components/cycle-counts/cycle-count-list-memory';
 import { LinkedExceptionsBlock } from '@/components/exceptions/linked-exceptions-block';
+import { PageHeader } from '@/components/patterns/page-header';
 import { Button } from '@/components/ui/button';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
@@ -26,6 +27,10 @@ import {
 } from '@stockpilot/core';
 
 const LINE_PAGE_SIZE = 50;
+
+/** The page area (DESIGN-SPEC 4 and 5.3), the same box the list page and the
+ *  shell's loading skeleton draw. */
+const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
 
 type DetailSearchParams = {
   page?: string;
@@ -135,66 +140,60 @@ export default async function CycleCountDetailPage({
   }
 
   return (
-    <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <nav aria-label="Breadcrumb" className="text-muted-foreground flex items-center gap-1.5 text-sm">
-          <BackToCycleCounts className="hover:text-foreground" />
-          <span aria-hidden>/</span>
-          <span aria-current="page" className="font-mono tabular-nums">
-            {reference ?? 'Cycle count'}
-          </span>
-        </nav>
-        <div className="mt-2 flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-1.5">
-              <h1 className="text-2xl font-semibold tracking-tight">
-                {reference ? (
-                  <>
-                    <span className="sr-only">Cycle count </span>
-                    <span className="font-mono tabular-nums">{reference}</span>
-                  </>
-                ) : (
-                  'Cycle count'
-                )}
-              </h1>
-              {reference ? <CopyReferenceButton reference={reference} /> : null}
-            </div>
-            {reference ? null : (
-              <p className="text-muted-foreground mt-0.5 text-xs">{CYCLE_COUNT_REFERENCE_UNAVAILABLE}</p>
-            )}
-            <p className="text-muted-foreground mt-1 text-sm">
-              {scopeLabel}
-              {header.notes ? ` · ${header.notes}` : ''}
-            </p>
-            <p className="text-muted-foreground mt-0.5 text-xs">
-              Started {formatRelative(header.started_at)} ·{' '}
-              <time dateTime={header.started_at}>
-                {formatOrgDateTime(header.started_at, { dateStyle: 'medium', timeStyle: 'short' }, tz)}
-              </time>
-            </p>
-          </div>
+    <div className={PAGE}>
+      {/* The count's record header (DESIGN-SPEC 6.1, 7.7): the way back to the
+          remembered list view, the reference as the page's one h1 with its
+          copy button, what the count covers and when it started, and the
+          printable sheet (or, once closed, the variance report). */}
+      <PageHeader
+        back={
+          <nav
+            aria-label="Breadcrumb"
+            className="text-muted-foreground flex min-w-0 items-center gap-1.5 text-[13px]"
+          >
+            <BackToCycleCounts className="hover:text-foreground shrink-0 transition-colors" />
+            <span aria-hidden className="text-ink-4">
+              /
+            </span>
+            <span aria-current="page" className="text-foreground truncate font-mono tabular-nums">
+              {reference ?? 'Cycle count'}
+            </span>
+          </nav>
+        }
+        title={
+          reference ? (
+            <>
+              <span className="sr-only">Cycle count </span>
+              <span className="font-mono tabular-nums tracking-normal">{reference}</span>
+            </>
+          ) : (
+            'Cycle count'
+          )
+        }
+        titleAside={reference ? <CopyReferenceButton reference={reference} /> : null}
+        meta={reference ? null : <span>{CYCLE_COUNT_REFERENCE_UNAVAILABLE}</span>}
+        subline={
+          <>
+            {scopeLabel}
+            {header.notes ? ` · ${header.notes}` : ''}
+          </>
+        }
+        actions={
           <Button asChild variant="outline">
-            <a
-              href={`/api/cycle-counts/${id}/pdf`}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              <Download className="h-4 w-4" />{' '}
-              {header.status === 'in_progress'
-                ? 'Print count sheet'
-                : 'Variance report PDF'}
+            <a href={`/api/cycle-counts/${id}/pdf`} target="_blank" rel="noopener noreferrer">
+              <Download aria-hidden className="h-4 w-4" />{' '}
+              {header.status === 'in_progress' ? 'Print count sheet' : 'Variance report PDF'}
             </a>
           </Button>
-        </div>
-      </div>
-
-      {/* The exceptions a recount linked to this count (F1-2): streamed, so
-          the count never waits for it; a failed read says unavailable. */}
-      <Suspense fallback={null}>
-        <div className="mb-6 empty:hidden">
-          <LinkedExceptionsBlock cycleCountId={id} />
-        </div>
-      </Suspense>
+        }
+      >
+        <p className="text-muted-foreground mt-1 text-[12.5px]">
+          Started {formatRelative(header.started_at)} ·{' '}
+          <time dateTime={header.started_at}>
+            {formatOrgDateTime(header.started_at, { dateStyle: 'medium', timeStyle: 'short' }, tz)}
+          </time>
+        </p>
+      </PageHeader>
 
       <CycleCountDetail
         header={header}
@@ -212,6 +211,13 @@ export default async function CycleCountDetailPage({
         itemsInScopeCount={itemsInScopeCount}
         timeZone={tz}
         role={ctx.role}
+        linkedExceptions={
+          // The exceptions a recount linked to this count (F1-2): streamed, so
+          // the count never waits for it; a failed read says unavailable.
+          <Suspense fallback={null}>
+            <LinkedExceptionsBlock cycleCountId={id} />
+          </Suspense>
+        }
       />
     </div>
   );
