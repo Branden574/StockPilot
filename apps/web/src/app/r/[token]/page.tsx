@@ -1,9 +1,9 @@
-import { Ban } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import type { ReactNode } from 'react';
 
+import { ExternalShell, ExternalStatusCard } from '@/components/auth/external-shell';
 import { PublicOrdersV2 } from '@/components/orders/public-v2/public-orders-v2';
 import type { PublicCatalogItem } from '@/components/orders/public-v2/types';
 import { env } from '@/lib/env';
@@ -48,6 +48,11 @@ export const dynamic = 'force-dynamic';
  * the shared `public_link_eligible_items` predicate — the same one the
  * submit endpoint enforces. The payload is PublicCatalogItem only: no
  * sku, cost, location, reserved, or charter data ever serializes here.
+ *
+ * Redesign (P5.1 step B): the storefront look of the New order page
+ * (storefront.css, P4.B2) with the public layer (public-orders.css) on top.
+ * A closed link is the external pages' status card (ExternalStatusCard on
+ * the ExternalShell column, the page's only heading) under the brand row.
  */
 
 interface WarehouseSummary {
@@ -55,11 +60,7 @@ interface WarehouseSummary {
   name: string;
 }
 
-export async function generateMetadata({
-  params,
-}: {
-  params: Promise<{ token: string }>;
-}) {
+export async function generateMetadata({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
   const resolved = token && token.length >= 16 ? await resolvePublicRequestToken(token) : null;
   const orgName = resolved?.org.name ?? 'Order request';
@@ -94,8 +95,8 @@ export default async function PublicOrderRequestPage({
   if (link && !isLinkOpen(link)) {
     return (
       <ClosedShell org={org}>
-        This request link isn&apos;t currently open. Please check back later or
-        reach out to the organization directly.
+        This request link isn&apos;t currently open. Please check back later or reach out to the
+        organization directly.
       </ClosedShell>
     );
   }
@@ -109,17 +110,19 @@ export default async function PublicOrderRequestPage({
     .eq('organization_id', org.id)
     .eq('is_public_orderable', true)
     .order('name', { ascending: true });
-  const warehouses: WarehouseSummary[] = ((whRows ?? []) as Array<{
-    id: string;
-    name: string;
-  }>).map((w) => ({ id: w.id, name: w.name }));
+  const warehouses: WarehouseSummary[] = (
+    (whRows ?? []) as Array<{
+      id: string;
+      name: string;
+    }>
+  ).map((w) => ({ id: w.id, name: w.name }));
 
   // No eligible warehouses → render the friendly "closed" card.
   if (warehouses.length === 0) {
     return (
       <ClosedShell org={org}>
-        This organization isn&apos;t currently accepting public order requests.
-        Please check back later or reach out to them directly.
+        This organization isn&apos;t currently accepting public order requests. Please check back
+        later or reach out to them directly.
       </ClosedShell>
     );
   }
@@ -127,7 +130,7 @@ export default async function PublicOrderRequestPage({
   // Pick the active warehouse: prefer ?w= if it's still eligible, else the
   // first one alphabetically. This keeps the warehouse switcher reload-safe.
   const requested = warehouseQuery
-    ? warehouses.find((w) => w.id === warehouseQuery) ?? null
+    ? (warehouses.find((w) => w.id === warehouseQuery) ?? null)
     : null;
   const activeWarehouse = requested ?? warehouses[0];
   if (!activeWarehouse) notFound();
@@ -195,11 +198,7 @@ export default async function PublicOrderRequestPage({
 
 /* ---- org brand row (logo + name) ---------------------------------------- */
 
-function BrandRow({
-  org,
-}: {
-  org: { name: string; logo_url: string | null };
-}) {
+function BrandRow({ org }: { org: { name: string; logo_url: string | null } }) {
   return (
     <div className="sfp-brand">
       {isAllowedLogoUrl(org.logo_url) ? (
@@ -248,7 +247,7 @@ function Header({
         <div className="sf-sub">
           {blurb ||
             'Browse the catalog, add what you need, and tell us how to get it ' +
-              "to you. Our team reviews every request before stock is pulled — " +
+              'to you. Our team reviews every request before stock is pulled — ' +
               "you'll get an email confirmation once it's approved."}
         </div>
       </div>
@@ -289,13 +288,13 @@ function ClosedShell({
   return (
     <div className="sp-storefront sf-public">
       <BrandRow org={org} />
-      <div className="sf-empty sfp-closed" role="status">
-        <div className="big">
-          <Ban size={24} aria-hidden />
+      {/* The external pages' status card: the reason in the page's own
+          words, announced as before (role="status"). */}
+      <ExternalShell frame="column" as="div" width="md">
+        <div role="status">
+          <ExternalStatusCard title="Not accepting requests" body={children} />
         </div>
-        <h4>Not accepting requests</h4>
-        <p>{children}</p>
-      </div>
+      </ExternalShell>
       <p className="sfp-track">
         <Link href="/r/track">Track an order you&apos;ve already submitted</Link>
       </p>
