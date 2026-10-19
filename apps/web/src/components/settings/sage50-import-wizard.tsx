@@ -3,9 +3,9 @@
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { SettingsPanel } from '@/components/settings/settings-panel';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import {
   Select,
@@ -33,7 +33,11 @@ interface LoadedFiles {
     skipped: number;
     clampedNegative: number;
   } | null;
-  valuation: { fileName: string; count: number; map: Map<string, { qty: number; avgCost: number | null }> } | null;
+  valuation: {
+    fileName: string;
+    count: number;
+    map: Map<string, { qty: number; avgCost: number | null }>;
+  } | null;
   vendors: { fileName: string; vendors: Sage50Vendor[]; skipped: number } | null;
   unknown: string[];
 }
@@ -54,11 +58,7 @@ const CHUNK_SIZE = 250;
  * every chunk so cross-chunk items still link — the server reuses by name, so
  * no duplicates).
  */
-export function Sage50ImportWizard({
-  warehouses,
-}: {
-  warehouses: { id: string; name: string }[];
-}) {
+export function Sage50ImportWizard({ warehouses }: { warehouses: { id: string; name: string }[] }) {
   const [loaded, setLoaded] = React.useState<LoadedFiles>(EMPTY);
   const [summary, setSummary] = React.useState<Sage50ImportSummary | null>(null);
   const [progress, setProgress] = React.useState<string | null>(null);
@@ -94,7 +94,11 @@ export function Sage50ImportWizard({
         next.valuation = { fileName: file.name, count: map.size, map };
       } else if (kind === 'vendors') {
         const mapped = mapSage50Vendors(header, rows);
-        next.vendors = { fileName: file.name, vendors: mapped.vendors, skipped: mapped.skipped.length };
+        next.vendors = {
+          fileName: file.name,
+          vendors: mapped.vendors,
+          skipped: mapped.skipped.length,
+        };
       } else {
         next.unknown.push(file.name);
       }
@@ -123,7 +127,14 @@ export function Sage50ImportWizard({
       // so their items can link; the server reuses by name).
       const agg: Sage50ImportSummary = {
         items: { total: 0, created: 0, failed: 0, errors: [] },
-        suppliers: { total: 0, created: 0, reused: 0, failed: 0, skipped: false, skippedReason: null },
+        suppliers: {
+          total: 0,
+          created: 0,
+          reused: 0,
+          failed: 0,
+          skipped: false,
+          skippedReason: null,
+        },
       };
       try {
         for (let offset = 0; offset < items.length; offset += CHUNK_SIZE) {
@@ -170,164 +181,164 @@ export function Sage50ImportWizard({
   }
 
   const fileBadge = (label: string, value: string | null) => (
-    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+    <div className="bg-sunk flex items-center justify-between gap-2 rounded-md border px-3 py-2 text-[13px]">
       <span className="text-muted-foreground">{label}</span>
       {value ? (
-        <Badge variant="default" className="text-[10px]">{value}</Badge>
+        <Badge variant="success" dot>
+          {value}
+        </Badge>
       ) : (
-        <Badge variant="outline" className="text-[10px]">not loaded</Badge>
+        <Badge variant="outline">not loaded</Badge>
       )}
     </div>
   );
 
   return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">1 · Export from Sage 50</CardTitle>
-          <CardDescription>
-            In Sage 50: <span className="font-medium text-foreground">File → Select Import/Export</span>{' '}
-            → export the <span className="font-medium text-foreground">Inventory Item List</span> and{' '}
-            <span className="font-medium text-foreground">Vendor List</span> as CSV. For accurate stock
-            counts, also open the <span className="font-medium text-foreground">Inventory Valuation
-            report</span> and export it to CSV (the item list&apos;s quantity column is unreliable —
-            the valuation report is the true snapshot).
-          </CardDescription>
-        </CardHeader>
-      </Card>
+    <div className="flex flex-col gap-4">
+      <SettingsPanel
+        title="1 · Export from Sage 50"
+        description={
+          <>
+            In Sage 50:{' '}
+            <span className="text-foreground font-medium">File → Select Import/Export</span> →
+            export the <span className="text-foreground font-medium">Inventory Item List</span> and{' '}
+            <span className="text-foreground font-medium">Vendor List</span> as CSV. For accurate
+            stock counts, also open the{' '}
+            <span className="text-foreground font-medium">Inventory Valuation report</span> and
+            export it to CSV (the item list&apos;s quantity column is unreliable — the valuation
+            report is the true snapshot).
+          </>
+        }
+      />
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">2 · Drop the files here</CardTitle>
-          <CardDescription>
+      <SettingsPanel
+        title="2 · Drop the files here"
+        description={
+          <>
             Add all the CSVs at once or one at a time — each file&apos;s type is detected
             automatically from its headers.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <input
-            ref={inputRef}
-            type="file"
-            accept=".csv,text/csv"
-            multiple
-            onChange={(e) => void handleFiles(e.target.files)}
-            className="text-muted-foreground file:bg-foreground file:text-background block w-full cursor-pointer text-sm file:mr-3 file:cursor-pointer file:rounded-md file:border-0 file:px-3 file:py-1.5 file:text-xs file:font-medium"
-          />
-          <div className="grid gap-2 sm:grid-cols-3">
-            {fileBadge(
-              'Item list',
-              loaded.items ? `${loaded.items.items.length} items` : null,
-            )}
-            {fileBadge(
-              'Valuation (stock)',
-              loaded.valuation ? `${loaded.valuation.count} quantities` : null,
-            )}
-            {fileBadge(
-              'Vendor list',
-              loaded.vendors ? `${loaded.vendors.vendors.length} vendors` : null,
-            )}
-          </div>
-          {(loaded.items?.skipped || loaded.vendors?.skipped) ? (
-            <p className="text-muted-foreground text-xs">
-              Skipped rows with blank IDs:{' '}
-              {[
-                loaded.items?.skipped ? `${loaded.items.skipped} item` : null,
-                loaded.vendors?.skipped ? `${loaded.vendors.skipped} vendor` : null,
-              ]
-                .filter(Boolean)
-                .join(' · ')}
-            </p>
-          ) : null}
-          {loaded.items && loaded.items.clampedNegative > 0 && (
-            <p className="text-muted-foreground text-xs">
-              {loaded.items.clampedNegative} item{loaded.items.clampedNegative === 1 ? '' : 's'} had
-              negative quantities or costs in the item list — those values open at 0 (correct via
-              cycle count, or load the valuation report for true quantities).
-            </p>
+          </>
+        }
+        bodyClassName="space-y-3"
+      >
+        {/* The native file input stays (keyboard, drop and the .csv filter
+            for free); its button is drawn as the outline button. */}
+        <input
+          ref={inputRef}
+          type="file"
+          accept=".csv,text/csv"
+          multiple
+          aria-label="Sage 50 CSV files"
+          onChange={(e) => void handleFiles(e.target.files)}
+          className="text-muted-foreground file:bg-card file:text-foreground hover:file:bg-muted focus-visible:ring-ring focus-visible:ring-offset-background block w-full cursor-pointer rounded-md text-[13px] file:mr-3 file:h-8 file:cursor-pointer file:rounded-md file:border file:border-solid file:border-[var(--ed-line-strong)] file:px-3 file:text-[13px] file:font-medium file:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
+        />
+        <div className="grid gap-2 sm:grid-cols-3">
+          {fileBadge('Item list', loaded.items ? `${loaded.items.items.length} items` : null)}
+          {fileBadge(
+            'Valuation (stock)',
+            loaded.valuation ? `${loaded.valuation.count} quantities` : null,
           )}
-          {loaded.unknown.length > 0 && (
-            <p className="text-destructive text-xs">
-              Not recognized as a Sage 50 export: {loaded.unknown.join(', ')}
-            </p>
+          {fileBadge(
+            'Vendor list',
+            loaded.vendors ? `${loaded.vendors.vendors.length} vendors` : null,
           )}
-        </CardContent>
-      </Card>
+        </div>
+        {loaded.items?.skipped || loaded.vendors?.skipped ? (
+          <p className="text-muted-foreground text-[12.5px]">
+            Skipped rows with blank IDs:{' '}
+            {[
+              loaded.items?.skipped ? `${loaded.items.skipped} item` : null,
+              loaded.vendors?.skipped ? `${loaded.vendors.skipped} vendor` : null,
+            ]
+              .filter(Boolean)
+              .join(' · ')}
+          </p>
+        ) : null}
+        {loaded.items && loaded.items.clampedNegative > 0 && (
+          <p className="text-muted-foreground text-[12.5px]">
+            {loaded.items.clampedNegative} item{loaded.items.clampedNegative === 1 ? '' : 's'} had
+            negative quantities or costs in the item list — those values open at 0 (correct via
+            cycle count, or load the valuation report for true quantities).
+          </p>
+        )}
+        {loaded.unknown.length > 0 && (
+          <p className="text-destructive text-[12.5px]">
+            Not recognized as a Sage 50 export: {loaded.unknown.join(', ')}
+          </p>
+        )}
+      </SettingsPanel>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">3 · Import</CardTitle>
-          <CardDescription>
-            {loaded.items
-              ? `${loaded.items.items.length} items${
-                  loaded.vendors ? ` + ${loaded.vendors.vendors.length} vendors (as suppliers)` : ''
-                }${loaded.valuation ? ', with stock quantities from the valuation report' : ''}.
+      <SettingsPanel
+        title="3 · Import"
+        description={
+          loaded.items
+            ? `${loaded.items.items.length} items${
+                loaded.vendors ? ` + ${loaded.vendors.vendors.length} vendors (as suppliers)` : ''
+              }${loaded.valuation ? ', with stock quantities from the valuation report' : ''}.
                 Items whose SKU already exists will fail individually and are listed below — nothing
                 gets overwritten.`
-              : 'Load the Inventory Item List first — it is the only required file.'}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {warehouses.length === 0 ? (
-            <p className="text-destructive text-sm">
-              Create a warehouse first — imported items need one to belong to.
-            </p>
-          ) : (
-            warehouses.length > 1 && (
-              <div className="max-w-xs space-y-1">
-                <Label htmlFor="sage50-warehouse" className="text-xs">
-                  Destination warehouse
-                </Label>
-                <Select value={warehouseId} onValueChange={setWarehouseId}>
-                  <SelectTrigger id="sage50-warehouse">
-                    <SelectValue placeholder="Select a warehouse" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {warehouses.map((w) => (
-                      <SelectItem key={w.id} value={w.id}>
-                        {w.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )
-          )}
-          <Button onClick={runImport} disabled={!loaded.items || !warehouseId || importing}>
-            {importing ? (progress ?? 'Importing…') : 'Import into StockPilot'}
-          </Button>
-
-          {summary && (
-            <div className="space-y-2 rounded-md border p-3 text-sm">
-              <p>
-                <span className="font-medium">Items:</span> {summary.items.created} created ·{' '}
-                {summary.items.failed} failed (of {summary.items.total})
-              </p>
-              <p>
-                <span className="font-medium">Suppliers:</span>{' '}
-                {summary.suppliers.skipped
-                  ? `skipped — ${summary.suppliers.skippedReason ?? 'unavailable'} (items imported unlinked)`
-                  : `${summary.suppliers.created} created · ${summary.suppliers.reused} matched existing${
-                      summary.suppliers.failed ? ` · ${summary.suppliers.failed} failed` : ''
-                    }`}
-              </p>
-              {summary.items.errors.length > 0 && (
-                <details className="text-xs">
-                  <summary className="text-muted-foreground cursor-pointer">
-                    First {summary.items.errors.length} errors
-                  </summary>
-                  <ul className="mt-1 list-disc space-y-0.5 pl-4">
-                    {summary.items.errors.map((e) => (
-                      <li key={`${e.row}-${e.sku}`}>
-                        {e.sku}: {e.message}
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-              )}
+            : 'Load the Inventory Item List first — it is the only required file.'
+        }
+        bodyClassName="space-y-3"
+      >
+        {warehouses.length === 0 ? (
+          <p className="text-destructive text-[13px]">
+            Create a warehouse first — imported items need one to belong to.
+          </p>
+        ) : (
+          warehouses.length > 1 && (
+            <div className="max-w-xs space-y-1.5">
+              <Label htmlFor="sage50-warehouse">Destination warehouse</Label>
+              <Select value={warehouseId} onValueChange={setWarehouseId}>
+                <SelectTrigger id="sage50-warehouse">
+                  <SelectValue placeholder="Select a warehouse" />
+                </SelectTrigger>
+                <SelectContent>
+                  {warehouses.map((w) => (
+                    <SelectItem key={w.id} value={w.id}>
+                      {w.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
-          )}
-        </CardContent>
-      </Card>
+          )
+        )}
+        <Button onClick={runImport} disabled={!loaded.items || !warehouseId || importing}>
+          {importing ? (progress ?? 'Importing…') : 'Import into StockPilot'}
+        </Button>
+
+        {summary && (
+          <div className="bg-sunk space-y-2 rounded-lg border p-3 text-[13px]">
+            <p>
+              <span className="font-medium">Items:</span> {summary.items.created} created ·{' '}
+              {summary.items.failed} failed (of {summary.items.total})
+            </p>
+            <p>
+              <span className="font-medium">Suppliers:</span>{' '}
+              {summary.suppliers.skipped
+                ? `skipped — ${summary.suppliers.skippedReason ?? 'unavailable'} (items imported unlinked)`
+                : `${summary.suppliers.created} created · ${summary.suppliers.reused} matched existing${
+                    summary.suppliers.failed ? ` · ${summary.suppliers.failed} failed` : ''
+                  }`}
+            </p>
+            {summary.items.errors.length > 0 && (
+              <details className="text-[12.5px]">
+                <summary className="text-muted-foreground hover:text-foreground cursor-pointer">
+                  First {summary.items.errors.length} errors
+                </summary>
+                <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                  {summary.items.errors.map((e) => (
+                    <li key={`${e.row}-${e.sku}`}>
+                      <span className="font-mono">{e.sku}</span>: {e.message}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </div>
+        )}
+      </SettingsPanel>
     </div>
   );
 }

@@ -1,8 +1,9 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { Sage50ImportWizard } from '@/components/settings/sage50-import-wizard';
+import { SettingsPage } from '@/components/settings/settings-panel';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
@@ -45,21 +46,22 @@ export default async function Sage50MigratePage() {
   }));
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href="/dashboard/settings/integrations"
-          className="text-muted-foreground hover:text-foreground inline-flex items-center text-sm"
-        >
-          ← Back to integrations
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">Migrate from Sage 50</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Bring your items, stock quantities, and vendors over from Sage 50&apos;s built-in CSV
-          exports. Three files, one import, nothing overwritten.
-        </p>
-      </div>
+    <SettingsPage>
+      <PageHeader
+        title="Migrate from Sage 50"
+        subline={
+          <>
+            Bring your items, stock quantities, and vendors over from Sage 50&apos;s built-in CSV
+            exports. Three files, one import, nothing overwritten.
+          </>
+        }
+        back={
+          <PageHeaderBackLink href="/dashboard/settings/integrations">
+            ← Back to integrations
+          </PageHeaderBackLink>
+        }
+      />
       <Sage50ImportWizard warehouses={warehouses} />
-    </div>
+    </SettingsPage>
   );
 }
