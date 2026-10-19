@@ -11,6 +11,13 @@
 //
 // Renders the narrow PublicCatalogItem schema directly — there is no
 // sku/price/charter/location anywhere in the props chain.
+//
+// Redesign (P5.1 step B) on the P4.B2 storefront: the empty catalog and the
+// no-match state are the shared StatePanel (as on New order), the toolbar's
+// options, the category pills and the setup bar's pickers say which one is
+// chosen (aria-pressed, as on New order), the "Switch location?" dialog keeps
+// focus (public-switch-location-dialog.tsx), and the "Check your inbox" panel
+// takes focus once the request is sent. Every word, rule and URL is kept.
 
 import {
   ArrowUpDown,
@@ -30,11 +37,10 @@ import * as React from 'react';
 
 import { useCatalogThumbnails } from '@/lib/use-catalog-thumbnails';
 
-import {
-  CartProvider,
-  initialCartState,
-  useCart,
-} from '@/components/orders/v2/cart-context';
+import { CartProvider, initialCartState, useCart } from '@/components/orders/v2/cart-context';
+import { StatePanel } from '@/components/patterns/state-panel';
+import { Button } from '@/components/ui/button';
+import { CheckboxGlyph } from '@/components/ui/checkbox';
 
 import { CategorySection } from '../storefront/storefront-cards';
 import { CartFab } from '../storefront/storefront-cart';
@@ -51,6 +57,7 @@ import {
   publicStatusOf,
   type PublicItemStatus,
 } from './public-logic';
+import { PublicSwitchLocationDialog } from './public-switch-location-dialog';
 import { PublicYourInfoCard } from './public-your-info-card';
 import type { PublicAvailabilityDisplay, PublicCatalogItem } from './types';
 
@@ -111,11 +118,23 @@ function PublicOrdersV2Inner({
   // Warehouse-switch confirm state. A styled sf-modal replaces
   // window.confirm(), which iOS Safari blocks in webviews.
   const [pendingSwitchTo, setPendingSwitchTo] = React.useState<string | null>(null);
+  // The Location cell opens the switch; a cancelled switch hands focus back
+  // to it (the warehouse option that asked has closed with its popover).
+  const locationCellRef = React.useRef<HTMLDivElement>(null);
+  const cancelSwitch = React.useCallback(() => {
+    setPendingSwitchTo(null);
+    locationCellRef.current?.focus();
+  }, []);
+
+  // The success panel replaces the rail whose Send request had focus, so it
+  // takes focus itself and a keyboard or screen reader user lands on it.
+  const successRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    if (submitted) successRef.current?.focus();
+  }, [submitted]);
 
   // Setup-bar + toolbar popovers
-  const [openPop, setOpenPop] = React.useState<null | 'wh' | 'site' | 'avail' | 'sort'>(
-    null,
-  );
+  const [openPop, setOpenPop] = React.useState<null | 'wh' | 'site' | 'avail' | 'sort'>(null);
 
   // Catalog UI state
   const [category, setCategory] = React.useState<'all' | 'uncategorized' | string>('all');
@@ -125,9 +144,7 @@ function PublicOrdersV2Inner({
     () => new Set<PublicItemStatus>(),
   );
   const [sort, setSort] = React.useState<PublicSortKey>('name-asc');
-  const [collapsed, setCollapsed] = React.useState<ReadonlySet<string>>(
-    () => new Set<string>(),
-  );
+  const [collapsed, setCollapsed] = React.useState<ReadonlySet<string>>(() => new Set<string>());
 
   const warehouseName =
     warehouses.find((w) => w.id === initialWarehouseId)?.name ?? initialWarehouseId;
@@ -160,10 +177,7 @@ function PublicOrdersV2Inner({
     );
   }, [rawItems, thumbUrls]);
 
-  const itemMap = React.useMemo(
-    () => new Map(items.map((it) => [it.id, it])),
-    [items],
-  );
+  const itemMap = React.useMemo(() => new Map(items.map((it) => [it.id, it])), [items]);
 
   /* --- cart callbacks (stable so React.memo cards actually skip) --- */
   const linesRef = React.useRef(cartState.lines);
@@ -205,9 +219,7 @@ function PublicOrdersV2Inner({
       if (prev) prev.count += 1;
       else byId.set(it.categoryId, { name: it.categoryLabel ?? 'Category', count: 1 });
     }
-    const named: Array<{ id: string | null; name: string; count: number }> = [
-      ...byId.entries(),
-    ]
+    const named: Array<{ id: string | null; name: string; count: number }> = [...byId.entries()]
       .map(([id, v]) => ({ id: id as string | null, name: v.name, count: v.count }))
       .sort((a, b) => a.name.localeCompare(b.name));
     if (uncategorized > 0) {
@@ -264,8 +276,7 @@ function PublicOrdersV2Inner({
     return out;
   }, [items, category, deferredSearch, availability, sort]);
 
-  const browsingAll =
-    category === 'all' && deferredSearch.trim() === '' && availability.size === 0;
+  const browsingAll = category === 'all' && deferredSearch.trim() === '' && availability.size === 0;
 
   const statusCounts = React.useMemo(() => {
     const counts: Record<PublicItemStatus, number> = { ok: 0, low: 0, out: 0 };
@@ -352,21 +363,20 @@ function PublicOrdersV2Inner({
   if (submitted) {
     return (
       <div className="sfp-success-card">
-        <div className="sf-success" role="status">
+        <div className="sf-success" role="status" ref={successRef} tabIndex={-1}>
           <div className="ok">
             <MailCheck size={28} />
           </div>
           <h3>Check your inbox</h3>
           <div className="ref">Request ID: {submitted.id}</div>
           <p>
-            We&apos;ve emailed <strong>{submitted.email}</strong> a link to confirm
-            this order request. Once you click the link, {orgName}&apos;s team will
-            review it — until then, the request stays on hold and is not visible to
-            anyone else.
+            We&apos;ve emailed <strong>{submitted.email}</strong> a link to confirm this order
+            request. Once you click the link, {orgName}&apos;s team will review it — until then, the
+            request stays on hold and is not visible to anyone else.
           </p>
           <p>
-            Didn&apos;t get it? Check your spam folder, or try again with a
-            different email address. The confirmation link expires in 24 hours.
+            Didn&apos;t get it? Check your spam folder, or try again with a different email address.
+            The confirmation link expires in 24 hours.
           </p>
           <div className="acts">
             <a className="sf-btn-go" href={submitted.trackUrl}>
@@ -384,6 +394,7 @@ function PublicOrdersV2Inner({
       {/* Warehouse */}
       {warehouses.length > 1 ? (
         <div
+          ref={locationCellRef}
           className="sf-setup-cell"
           role="button"
           tabIndex={0}
@@ -418,6 +429,7 @@ function PublicOrdersV2Inner({
                 type="button"
                 className="sf-opt"
                 data-on={w.id === initialWarehouseId}
+                aria-pressed={w.id === initialWarehouseId}
                 onClick={(e) => {
                   e.stopPropagation();
                   setOpenPop(null);
@@ -458,9 +470,7 @@ function PublicOrdersV2Inner({
               type="button"
               data-active={cartState.fulfillmentType === 'pickup'}
               aria-pressed={cartState.fulfillmentType === 'pickup'}
-              onClick={() =>
-                dispatch({ type: 'set-setup', patch: { fulfillmentType: 'pickup' } })
-              }
+              onClick={() => dispatch({ type: 'set-setup', patch: { fulfillmentType: 'pickup' } })}
             >
               <Package size={13} /> Pickup
             </button>
@@ -523,9 +533,7 @@ function PublicOrdersV2Inner({
             <div className="sf-pop-label">Delivery site</div>
             {chartersForWarehouse.length === 0 && (
               <div className="sf-opt" style={{ cursor: 'default' }}>
-                <span className="sb">
-                  No delivery sites available — choose Pickup instead.
-                </span>
+                <span className="sb">No delivery sites available — choose Pickup instead.</span>
               </div>
             )}
             {chartersForWarehouse.map((c) => (
@@ -534,6 +542,7 @@ function PublicOrdersV2Inner({
                 type="button"
                 className="sf-opt"
                 data-on={c.id === cartState.charterId}
+                aria-pressed={c.id === cartState.charterId}
                 onClick={(e) => {
                   e.stopPropagation();
                   dispatch({ type: 'set-setup', patch: { charterId: c.id } });
@@ -566,16 +575,18 @@ function PublicOrdersV2Inner({
     return (
       <>
         {warehouses.length > 1 ? setupBar : null}
-        <div className="sf-empty sfp-closed" role="status">
-          <div className="big">
-            <PackageOpen size={24} />
-          </div>
-          <h4>No items available</h4>
-          <p>
-            There are currently no items available through this request form.
-            Please contact your organization for assistance.
-          </p>
-        </div>
+        <StatePanel
+          kind="empty"
+          icon={PackageOpen}
+          live="polite"
+          title="No items available"
+          description={
+            <>
+              There are currently no items available through this request form. Please contact your
+              organization for assistance.
+            </>
+          }
+        />
       </>
     );
   }
@@ -638,9 +649,10 @@ function PublicOrdersV2Inner({
                         type="button"
                         className="sf-opt"
                         data-on={availability.has(id)}
+                        aria-pressed={availability.has(id)}
                         onClick={() => toggleAvailability(id)}
                       >
-                        <span className="sf-cb" data-checked={availability.has(id)} />
+                        <CheckboxGlyph checked={availability.has(id)} className="sf-cb" />
                         <span className="nm" style={{ fontWeight: 400 }}>
                           {statusLabels[id]}
                         </span>
@@ -675,6 +687,7 @@ function PublicOrdersV2Inner({
                       type="button"
                       className="sf-opt"
                       data-on={s.id === sort}
+                      aria-pressed={s.id === sort}
                       onClick={() => {
                         setSort(s.id);
                         setOpenPop(null);
@@ -698,6 +711,7 @@ function PublicOrdersV2Inner({
                 type="button"
                 className="sf-pill"
                 data-active={category === 'all'}
+                aria-pressed={category === 'all'}
                 onClick={() => setCategory('all')}
               >
                 All <span className="ct">{items.length}</span>
@@ -710,6 +724,7 @@ function PublicOrdersV2Inner({
                     type="button"
                     className="sf-pill"
                     data-active={category === key}
+                    aria-pressed={category === key}
                     onClick={() => setCategory(category === key ? 'all' : key)}
                   >
                     <span className="icon">
@@ -788,19 +803,18 @@ function PublicOrdersV2Inner({
                 </span>
               </div>
               {filtered.length === 0 ? (
-                <div className="sf-empty">
-                  <div className="big">
-                    <Search size={24} />
-                  </div>
-                  <h4>
-                    Nothing matches
-                    {deferredSearch.trim() ? ` “${deferredSearch.trim()}”` : ' those filters'}
-                  </h4>
-                  <p>Try a different name or category — or clear your filters.</p>
-                  <button type="button" className="sf-btn-ghost" onClick={clearAllFilters}>
-                    Clear search &amp; filters
-                  </button>
-                </div>
+                <StatePanel
+                  kind="no-match"
+                  title={`Nothing matches${
+                    deferredSearch.trim() ? ` “${deferredSearch.trim()}”` : ' those filters'
+                  }`}
+                  description="Try a different name or category — or clear your filters."
+                  action={
+                    <Button type="button" variant="outline" onClick={clearAllFilters}>
+                      Clear search &amp; filters
+                    </Button>
+                  }
+                />
               ) : (
                 renderItems(filtered)
               )}
@@ -841,62 +855,19 @@ function PublicOrdersV2Inner({
       {/* Floating cart FAB (stacked layout) */}
       <CartFab
         unitCount={unitCount}
-        onClick={() =>
-          railRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-        }
+        onClick={() => railRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
       />
 
       {/* Warehouse-switch confirm */}
       {pendingSwitchTo !== null && (
-        <div className="sf-modal-bk" onClick={() => setPendingSwitchTo(null)}>
-          <div
-            className="sf-modal"
-            style={{ width: 'min(420px, 100%)' }}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Switch location?"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="sf-modal-head">
-              <h3>Switch location?</h3>
-              <button
-                type="button"
-                className="sf-icon-btn x"
-                onClick={() => setPendingSwitchTo(null)}
-                aria-label="Close"
-              >
-                <X size={15} />
-              </button>
-            </div>
-            <div className="sf-modal-body">
-              <p style={{ margin: 0, fontSize: '12.5px', color: 'var(--sf-ink-3)' }}>
-                Your cart has items in it. Switching locations will clear them so the
-                new location&apos;s catalog can load.
-              </p>
-            </div>
-            <div className="sf-modal-foot">
-              <span className="grow2" />
-              <button
-                type="button"
-                className="sf-btn-ghost"
-                onClick={() => setPendingSwitchTo(null)}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="sf-btn-go"
-                onClick={() => {
-                  const target = pendingSwitchTo;
-                  setPendingSwitchTo(null);
-                  if (target) commitWarehouseSwitch(target);
-                }}
-              >
-                Switch and clear cart
-              </button>
-            </div>
-          </div>
-        </div>
+        <PublicSwitchLocationDialog
+          onCancel={cancelSwitch}
+          onConfirm={() => {
+            const target = pendingSwitchTo;
+            setPendingSwitchTo(null);
+            if (target) commitWarehouseSwitch(target);
+          }}
+        />
       )}
     </>
   );
