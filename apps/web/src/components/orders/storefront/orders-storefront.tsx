@@ -426,6 +426,7 @@ function StorefrontShell({
                   type="button"
                   className="sf-opt"
                   data-on={w.id === warehouseId}
+                  aria-pressed={w.id === warehouseId}
                   onClick={(e) => {
                     e.stopPropagation();
                     setOpenPop(null);
@@ -492,6 +493,7 @@ function StorefrontShell({
                 type="button"
                 className="sf-opt"
                 data-on={state.onBehalfOf === null}
+                aria-pressed={state.onBehalfOf === null}
                 onClick={(e) => {
                   e.stopPropagation();
                   dispatch({ type: 'set-setup', patch: { onBehalfOf: null } });
@@ -662,6 +664,7 @@ function StorefrontShell({
                     type="button"
                     className="sf-opt"
                     data-on={c.id === state.charterId}
+                    aria-pressed={c.id === state.charterId}
                     onClick={(e) => {
                       e.stopPropagation();
                       dispatch({ type: 'set-setup', patch: { charterId: c.id } });
@@ -1380,6 +1383,7 @@ function StorefrontCatalog({
                       type="button"
                       className="sf-opt"
                       data-on={s.id === sort}
+                      aria-pressed={s.id === sort}
                       onClick={() => {
                         setSort(s.id);
                         setToolPop(null);
@@ -1400,6 +1404,7 @@ function StorefrontCatalog({
                 <button
                   type="button"
                   data-active={view === 'grid'}
+                  aria-pressed={view === 'grid'}
                   title="Grid view"
                   aria-label="Grid view"
                   onClick={() => setView('grid')}
@@ -1409,6 +1414,7 @@ function StorefrontCatalog({
                 <button
                   type="button"
                   data-active={view === 'compact'}
+                  aria-pressed={view === 'compact'}
                   title="Compact view"
                   aria-label="Compact view"
                   onClick={() => setView('compact')}
@@ -1424,6 +1430,7 @@ function StorefrontCatalog({
                 type="button"
                 className="sf-pill"
                 data-active={category === 'all'}
+                aria-pressed={category === 'all'}
                 onClick={() => setCategory('all')}
               >
                 All <span className="ct">{items.length}</span>
@@ -1436,6 +1443,7 @@ function StorefrontCatalog({
                     type="button"
                     className="sf-pill"
                     data-active={category === key}
+                    aria-pressed={category === key}
                     onClick={() => setCategory(category === key ? 'all' : key)}
                   >
                     <span className="icon">

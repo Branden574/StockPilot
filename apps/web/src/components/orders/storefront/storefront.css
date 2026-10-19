@@ -1024,6 +1024,12 @@
   filter: grayscale(0.85);
   opacity: 0.7;
 }
+/* A photo that failed to sign shows its tiny blurred preview: it stays
+   blurred when grey (a filter replaces the whole list, so a bare grayscale
+   would draw the 16 px preview unblurred). */
+.sp-storefront .sf-card[data-out='true'] .sf-ph img.lqip {
+  filter: blur(6px) grayscale(0.85);
+}
 .sp-storefront .sf-card[data-out='true'] .sf-ph .glyph {
   opacity: 0.4;
 }
@@ -1609,8 +1615,17 @@
 .sp-storefront .sf-row:hover {
   background: var(--sf-hover);
 }
-.sp-storefront .sf-row[data-out='true'] {
-  opacity: 0.62;
+/* Out of stock: only the photo dims, as on the grid card, so the row's name,
+   SKU and Out of stock label keep their full contrast (DESIGN-SPEC 2.4). */
+.sp-storefront .sf-row[data-out='true'] .th img {
+  filter: grayscale(0.85);
+  opacity: 0.7;
+}
+.sp-storefront .sf-row[data-out='true'] .th img.lqip {
+  filter: blur(6px) grayscale(0.85);
+}
+.sp-storefront .sf-row[data-out='true'] .th .glyph {
+  opacity: 0.4;
 }
 .sp-storefront .sf-row .th {
   width: 46px;
@@ -2818,56 +2833,76 @@ html[data-sp-update-card] .sp-storefront .sf-fab {
 }
 
 /* ---- Narrow screens (redesign 2026-10, P4.B2) ------------------------
-   Below 1024 px the setup bar's four cells sit two by two, and below
-   640 px one per line; before, the bar kept four squeezed columns and at
-   390 px drew its labels on top of each other, the head wrapped a word
+   Below 1024 px the New order page's setup bar sits two by two, and below
+   640 px one cell per line; before, the bar kept four squeezed columns and
+   at 390 px drew its labels on top of each other, the head wrapped a word
    per line and the toolbar ran off the right edge. Below 640 px the page
    keeps the shell's 16 px gutter, every control the finger uses is 44 px
    tall (the shared rule for filter triggers, chips and segmented tabs),
-   and text boxes are 16 px so iOS does not zoom into them. The cells are
-   always four (Ship from, For, Pickup or delivery, Pick up at or Deliver
-   to). */
+   and text boxes are 16 px so iOS does not zoom into them.
+   The grid, its dividers and its corners count cells, so they belong to
+   the New order page's bar only: .sf-page > .sf-setup (orders-storefront
+   and its loading skeleton), which always has four cells (Ship from, For,
+   Pickup or delivery, Pick up at or Deliver to). The public order page
+   (/r/<token>, public-orders-v2.tsx) has no .sf-page and a bar of three
+   cells (Location, Fulfillment, Pick up at or Deliver to): it keeps its
+   row of three, and the stack public-orders.css draws at 860 px and
+   narrower. The cells at the bar's corners take its 8 px radius, so a
+   hovered cell does not paint a square corner over the bar's round one. */
+.sp-storefront .sf-page > .sf-setup > :last-child {
+  border-radius: 0 8px 8px 0;
+}
 @media (max-width: 1023.98px) {
-  .sp-storefront .sf-setup {
+  .sp-storefront .sf-page > .sf-setup {
     display: grid;
     grid-template-columns: 1fr 1fr;
   }
-  .sp-storefront .sf-setup > .sf-setup-cell,
-  .sp-storefront .sf-setup > .sf-seg-wrap {
+  .sp-storefront .sf-page > .sf-setup > .sf-setup-cell,
+  .sp-storefront .sf-page > .sf-setup > .sf-seg-wrap {
     border-left: 0;
     border-radius: 0;
   }
-  .sp-storefront .sf-setup > :nth-child(even) {
+  .sp-storefront .sf-page > .sf-setup > :nth-child(even) {
     border-left: 1px solid var(--sf-line);
   }
-  .sp-storefront .sf-setup > :nth-child(n + 3) {
+  .sp-storefront .sf-page > .sf-setup > :nth-child(n + 3) {
     border-top: 1px solid var(--sf-line);
   }
-  .sp-storefront .sf-setup > :first-child {
+  .sp-storefront .sf-page > .sf-setup > :first-child {
     border-radius: 8px 0 0 0;
   }
-  .sp-storefront .sf-setup > :nth-child(2) {
+  .sp-storefront .sf-page > .sf-setup > :nth-child(2) {
     border-radius: 0 8px 0 0;
+  }
+  .sp-storefront .sf-page > .sf-setup > :nth-child(3) {
+    border-radius: 0 0 0 8px;
+  }
+  .sp-storefront .sf-page > .sf-setup > :nth-child(4) {
+    border-radius: 0 0 8px 0;
   }
 }
 @media (max-width: 639.98px) {
   .sp-storefront .sf-page {
     padding: 24px 16px 90px;
   }
-  .sp-storefront .sf-setup {
+  .sp-storefront .sf-page > .sf-setup {
     grid-template-columns: 1fr;
   }
-  .sp-storefront .sf-setup > :nth-child(even) {
+  .sp-storefront .sf-page > .sf-setup > :nth-child(even) {
     border-left: 0;
   }
-  .sp-storefront .sf-setup > :nth-child(n + 2) {
+  .sp-storefront .sf-page > .sf-setup > :nth-child(n + 2) {
     border-top: 1px solid var(--sf-line);
   }
-  .sp-storefront .sf-setup > :first-child {
+  .sp-storefront .sf-page > .sf-setup > :first-child {
     border-radius: 8px 8px 0 0;
   }
-  .sp-storefront .sf-setup > :nth-child(2) {
+  .sp-storefront .sf-page > .sf-setup > :nth-child(2),
+  .sp-storefront .sf-page > .sf-setup > :nth-child(3) {
     border-radius: 0;
+  }
+  .sp-storefront .sf-page > .sf-setup > :last-child {
+    border-radius: 0 0 8px 8px;
   }
   .sp-storefront .sf-setup-cell,
   .sp-storefront .sf-seg-wrap {

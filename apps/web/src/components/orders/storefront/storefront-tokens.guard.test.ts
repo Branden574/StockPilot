@@ -16,11 +16,30 @@ import { describe, expect, it } from 'vitest';
 const CSS = readFileSync(path.resolve(__dirname, 'storefront.css'), 'utf8');
 const CODE = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
 const GLOBALS = readFileSync(path.resolve(__dirname, '../../../app/globals.css'), 'utf8');
+// The public order page (/r/<token>) reads this stylesheet too.
+const PUBLIC_PAGE = readFileSync(
+  path.resolve(__dirname, '../public-v2/public-orders-v2.tsx'),
+  'utf8',
+);
 
 function ruleBody(css: string, selector: string, from = 0): string {
   const at = css.indexOf(`${selector} {`, from);
   expect(at, `${selector} rule`).toBeGreaterThanOrEqual(0);
   return css.slice(at, css.indexOf('}', at));
+}
+
+/** Every innermost rule of the stylesheet (inside @media and @layer too),
+ *  as its selectors and its body. */
+function rules(css: string): Array<{ selectors: string[]; body: string }> {
+  const out: Array<{ selectors: string[]; body: string }> = [];
+  for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selectors = m[1]!
+      .split(',')
+      .map((sel) => sel.trim())
+      .filter(Boolean);
+    out.push({ selectors, body: m[2]! });
+  }
+  return out;
 }
 
 function declarations(body: string): Map<string, string> {
@@ -117,7 +136,9 @@ describe('the redesign rules for this page', () => {
     const at = CODE.indexOf('@media (max-width: 639.98px) {');
     expect(at).toBeGreaterThanOrEqual(0);
     expect(ruleBody(CODE, '.sp-storefront .sf-page', at)).toContain('padding: 24px 16px 90px;');
-    expect(ruleBody(CODE, '.sp-storefront .sf-setup', at)).toContain('grid-template-columns: 1fr;');
+    expect(ruleBody(CODE, '.sp-storefront .sf-page > .sf-setup', at)).toContain(
+      'grid-template-columns: 1fr;',
+    );
     const boxes = CODE.slice(at, CODE.indexOf('font-size: 16px;', at));
     for (const sel of [
       '.sf-search input',
@@ -127,6 +148,92 @@ describe('the redesign rules for this page', () => {
     ]) {
       expect(boxes).toContain(`.sp-storefront ${sel}`);
     }
+  });
+});
+
+describe('the narrow setup bar is the New order page bar only', () => {
+  // The two-by-two grid below 1024 px, its dividers and its corners count
+  // cells: four on the New order page (Ship from, For, Pickup or delivery,
+  // Pick up at or Deliver to). The public order page /r/<token>
+  // (public-orders-v2.tsx) draws a bar of three cells (Location, Fulfillment,
+  // Pick up at or Deliver to) from this same stylesheet, which public-orders.css
+  // keeps as a row of three and stacks below 861 px. A grid rule on the plain
+  // .sf-setup drew that bar as a ragged 2 + 1 grid from 640 to 1023 px (review
+  // 2, 2026-10-19), so every such rule names .sf-page > .sf-setup, the New
+  // order page's own bar (orders-storefront.tsx and its loading skeleton).
+  const isBar = (sel: string) => /\.sf-setup(?![\w-])/.test(sel);
+  const scoped = (sel: string) => sel.includes('.sf-page > .sf-setup');
+
+  it('no rule on the plain .sf-setup sets a grid or counts its cells', () => {
+    const offenders: string[] = [];
+    for (const { selectors, body } of rules(CODE)) {
+      for (const sel of selectors) {
+        if (!isBar(sel) || scoped(sel)) continue;
+        if (/display:\s*grid|grid-template/.test(body)) offenders.push(`${sel} (grid)`);
+        if (/\.sf-setup\s*>\s*:(nth-child|first-child|last-child)/.test(sel)) {
+          offenders.push(`${sel} (counts cells)`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('draws the New order page bar two by two below 1024 px, with its four corners', () => {
+    const at = CODE.indexOf('@media (max-width: 1023.98px) {');
+    expect(at).toBeGreaterThanOrEqual(0);
+    const grid = ruleBody(CODE, '.sp-storefront .sf-page > .sf-setup', at);
+    expect(grid).toContain('display: grid;');
+    expect(grid).toContain('grid-template-columns: 1fr 1fr;');
+    const corners: Array<[string, string]> = [
+      [':first-child', '8px 0 0 0'],
+      [':nth-child(2)', '0 8px 0 0'],
+      [':nth-child(3)', '0 0 0 8px'],
+      [':nth-child(4)', '0 0 8px 0'],
+    ];
+    for (const [child, radius] of corners) {
+      expect(ruleBody(CODE, `.sp-storefront .sf-page > .sf-setup > ${child}`, at)).toContain(
+        `border-radius: ${radius};`,
+      );
+    }
+  });
+
+  it('only the public page has no .sf-page, so the scoped rules leave its bar alone', () => {
+    expect(PUBLIC_PAGE).toContain('<div className="sf-setup">');
+    expect(PUBLIC_PAGE).not.toMatch(/\bsf-page\b/);
+  });
+});
+
+describe('an out-of-stock compact row', () => {
+  // The row used to be dimmed whole to 0.62, which took the Out of stock
+  // label to 2.5:1 (light) and 3.0:1 (dark) and the SKU under 4.5:1. Now
+  // only its photo dims, as on the grid card.
+  it('never dims the row itself', () => {
+    for (const { selectors, body } of rules(CODE)) {
+      for (const sel of selectors) {
+        if (/\.sf-row\[data-out='true'\]$/.test(sel)) {
+          expect(body, sel).not.toMatch(/opacity|filter/);
+        }
+      }
+    }
+  });
+
+  it('dims its photo and placeholder letter as the card does', () => {
+    const img = ruleBody(CODE, ".sp-storefront .sf-row[data-out='true'] .th img");
+    expect(img).toContain('filter: grayscale(0.85);');
+    expect(img).toContain('opacity: 0.7;');
+    expect(ruleBody(CODE, ".sp-storefront .sf-row[data-out='true'] .th .glyph")).toContain(
+      'opacity: 0.4;',
+    );
+  });
+
+  it('keeps a blurred preview blurred when it is grey, on the row and on the card', () => {
+    for (const sel of [
+      ".sp-storefront .sf-row[data-out='true'] .th img.lqip",
+      ".sp-storefront .sf-card[data-out='true'] .sf-ph img.lqip",
+    ]) {
+      expect(ruleBody(CODE, sel)).toContain('filter: blur(6px) grayscale(0.85);');
+    }
+    expect(ruleBody(CODE, '.sp-storefront .sf-ph img.lqip')).toContain('filter: blur(6px);');
   });
 });
 
