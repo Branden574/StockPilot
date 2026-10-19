@@ -255,6 +255,29 @@ describe('the PO page lines', () => {
     expect((gone!.querySelector('[style]') as HTMLElement).style.width).toBe('0%');
   });
 
+  it('names the lines table by the card title, once', async () => {
+    await renderPage();
+    const heading = screen.getByRole('heading', { level: 2, name: 'Line items' });
+    expect(heading).toHaveAttribute('id', 'po-line-items-heading');
+    const table = screen.getAllByTestId('po-line')[0]!.closest('table')!;
+    const regions = screen.getAllByRole('region', { name: 'Line items' });
+    expect(regions).toHaveLength(1);
+    expect(regions[0]).toBe(table.parentElement);
+    expect(regions[0]).toContainElement(table);
+  });
+
+  it('lets a line break after the SKU, so a long SKU does not widen the table', async () => {
+    await renderPage();
+    const [polo] = screen.getAllByTestId('po-line');
+    // The SKU and its separator stay together; the space after them sits
+    // outside the no-wrap span, where the line may break.
+    const sku = within(polo!).getByText('POLO-M ·');
+    expect(sku).toHaveClass('whitespace-nowrap');
+    expect(sku.textContent).toBe('POLO-M ·');
+    expect(sku.nextSibling?.nodeType).toBe(Node.TEXT_NODE);
+    expect(sku.nextSibling?.textContent).toBe(' ');
+  });
+
   it('puts the lines’ subtotal beside Receive, and keeps Subtotal and Total in Summary', async () => {
     await renderPage();
     const lines = screen.getByRole('heading', { name: 'Line items' }).closest('section')!;

@@ -259,6 +259,7 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
         <div className="@min-[856px]:grid-cols-[minmax(0,1.7fr)_minmax(280px,1fr)] grid items-start gap-4">
           <div className="flex min-w-0 flex-col gap-4">
             <DetailSection
+              headingId="po-line-items-heading"
               title="Line items"
               aside={
                 receiveNote ? (
@@ -363,10 +364,16 @@ function receivedPercent(received: number, ordered: number): number {
  * thin bar drawn from those two numbers. Every value the old columns held
  * (Image, Item, SKU, Ordered, Received, Unit cost, Total) is still printed,
  * and named for a screen reader. All lines render (no pagination).
+ *
+ * The rows hold no control, so when a line is wider than the screen (an ISBN
+ * at 320 px, a SKU built from a book's title) the table's scroll area is a
+ * Tab stop; it is named by the card's Line items heading. The space after the
+ * SKU's separator sits outside its no-wrap span, so the line can break there:
+ * an ISBN or an automatic SKU then fits from 360 px up.
  */
 function LineItems({ rows }: { rows: LineRow[] }) {
   return (
-    <Table>
+    <Table scrollLabelledBy="po-line-items-heading">
       <TableHeader>
         <TableRow className="hover:bg-transparent">
           <TableHead className="w-[46px] first:pl-[18px]">
@@ -398,7 +405,11 @@ function LineItems({ rows }: { rows: LineRow[] }) {
                   {l.name}
                 </p>
                 <p className="text-muted-foreground mt-0.5 font-mono text-[12px] tabular-nums leading-[18px]">
-                  {l.sku ? <span className="whitespace-nowrap">{l.sku} · </span> : null}
+                  {l.sku ? (
+                    <>
+                      <span className="whitespace-nowrap">{l.sku} ·</span>{' '}
+                    </>
+                  ) : null}
                   <span aria-hidden="true" data-testid="po-line-money">
                     <span className="whitespace-nowrap">{unitCost} ea</span> ·{' '}
                     <span className="whitespace-nowrap">{lineTotal}</span>
