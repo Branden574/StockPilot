@@ -267,7 +267,7 @@ export function MaintenanceReview({
             </div>
             <div>
               <p className={BLOCK_LABEL}>Body</p>
-              <pre className="border-border bg-sunk mt-1 whitespace-pre-wrap rounded-md border p-3 font-sans text-[13px] leading-[19.5px] [overflow-wrap:anywhere]">
+              <pre className="border-border bg-sunk mt-1 whitespace-pre-wrap rounded-md border p-3 font-mono text-[12.5px] leading-[19px] [overflow-wrap:anywhere]">
                 {prepared.draft.body}
               </pre>
             </div>
