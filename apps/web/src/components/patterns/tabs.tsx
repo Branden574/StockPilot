@@ -67,6 +67,14 @@ export interface TabsProps {
   prefetch?: boolean | 'auto' | null;
   /** Button mode: called with the id of the clicked tab. */
   onSelect?(id: string): void;
+  /**
+   * Link mode: the current tab keeps its own `href` instead of the address
+   * bar, so clicking it goes back to that tab's plain URL (a section strip
+   * whose current tab resets the view's filters and paging, as the rentals
+   * Activity / Items strip always did). A click while the address bar
+   * already IS that href still does nothing, as rule 2 below says.
+   */
+  activeLinksToHref?: boolean;
   className?: string;
 }
 
@@ -84,6 +92,7 @@ export function Tabs({
   scroll,
   prefetch,
   onSelect,
+  activeLinksToHref = false,
   className,
 }: TabsProps) {
   const pathname = usePathname();
@@ -106,13 +115,17 @@ export function Tabs({
     setOptimistic((current) => (current !== null && current.id === id ? null : current));
   }, []);
 
-  function onLinkClick(event: React.MouseEvent<HTMLAnchorElement>, id: string) {
+  function onLinkClick(event: React.MouseEvent<HTMLAnchorElement>, id: string, href: string) {
     // Modified clicks open a new tab or window: next/link leaves them to the
     // browser, and so does this strip.
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
       return;
     }
     if (id === shownId) {
+      // activeLinksToHref: the tab the server rendered leads to its plain URL,
+      // so a click while the address bar is elsewhere navigates there (and
+      // resets the view). A tab still loading from a click keeps rule 2.
+      if (activeLinksToHref && id === activeId && href !== currentHref) return;
       // next/link skips its navigation when the default is already prevented.
       event.preventDefault();
       return;
@@ -152,15 +165,17 @@ export function Tabs({
               ) : null;
 
             if (item.href != null) {
+              const href =
+                item.id === activeId && pathname && !activeLinksToHref ? currentHref : item.href;
               return (
                 <Link
                   key={item.id}
-                  href={item.id === activeId && pathname ? currentHref : item.href}
+                  href={href}
                   role="tab"
                   aria-selected={isShown}
                   scroll={scroll}
                   prefetch={prefetch}
-                  onClick={(event) => onLinkClick(event, item.id)}
+                  onClick={(event) => onLinkClick(event, item.id, href)}
                   className={tabClass}
                   {...ids}
                 >

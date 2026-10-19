@@ -57,21 +57,29 @@ describe('RentalsTabs', () => {
     expect(activity.getAttribute('href')).toBe('/dashboard/rentals');
   });
 
-  // Review finding (P4.D1, LOW): pinned as the shared strip draws it today, a
-  // pattern-imposed change recorded for the owner's review (see the component's
-  // note). The current tab links to the address bar as it is and a click on it
-  // is cancelled, so it no longer resets the status view or the filters; the
-  // other tab still links to its fixed URL and its click is left to the link.
-  it('the current tab keeps the URL as it is; the other tab links to its fixed URL', () => {
+  // Review finding (P4.D1, LOW), fixed with the shared strip's
+  // activeLinksToHref: as before the redesign, the current tab links to its
+  // fixed URL, so a click on a filtered or paged list resets it; on the plain
+  // URL itself the click does nothing.
+  it('the current tab links to its fixed URL and resets a filtered or paged view', () => {
     nav.pathname = '/dashboard/rentals/items';
     nav.search = 'q=tent&page=2';
     render(<RentalsTabs activeTab="items" />);
     const items = screen.getByRole('tab', { name: 'Items' });
     const activity = screen.getByRole('tab', { name: 'Activity' });
-    expect(items.getAttribute('href')).toBe('/dashboard/rentals/items?q=tent&page=2');
+    expect(items.getAttribute('href')).toBe('/dashboard/rentals/items');
     expect(activity.getAttribute('href')).toBe('/dashboard/rentals');
     // fireEvent returns false when the handler prevented the default.
-    expect(fireEvent.click(items)).toBe(false);
+    expect(fireEvent.click(items)).toBe(true);
     expect(fireEvent.click(activity)).toBe(true);
+  });
+
+  it('on its plain URL a click on the current tab does nothing', () => {
+    nav.pathname = '/dashboard/rentals';
+    nav.search = '';
+    render(<RentalsTabs activeTab="activity" />);
+    const activity = screen.getByRole('tab', { name: 'Activity' });
+    expect(activity.getAttribute('href')).toBe('/dashboard/rentals');
+    expect(fireEvent.click(activity)).toBe(false);
   });
 });
