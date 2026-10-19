@@ -1,11 +1,10 @@
-import { TrendingUp } from 'lucide-react';
-import Link from 'next/link';
-
 import { DraftPosFromReorderButton } from '@/components/reports/draft-pos-from-reorder-button';
 import { AutoReorderPanel } from '@/components/settings/auto-reorder-panel';
 import { PlanningParamsPanel } from '@/components/settings/planning-params-panel';
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { DetailSection } from '@/components/patterns/detail-section';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
+import { StatePanel } from '@/components/patterns/state-panel';
 import {
   Table,
   TableBody,
@@ -17,12 +16,18 @@ import {
 import { requireOrgContext } from '@/lib/auth/session';
 import { reportError } from '@/lib/error-reporter';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
-import { formatNumber } from '@/lib/utils';
+import { cn, formatNumber } from '@/lib/utils';
 import { createClient } from '@/lib/supabase/server';
 import { readAutoReorderSettings } from '@/server/services/auto-reorder';
 import { PLANNING_MAX_ITEMS, PlanningService } from '@/server/services/planning';
 
 import { planAllowsAutoReorder, type OrgBillingState } from '@stockpilot/core';
+
+/** The page area (DESIGN-SPEC 5.3 and 4): max 1320, 16 px gutters on a phone. */
+const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
+
+/** A figure column: right-aligned mono, as the reference's On hand. */
+const NUM = 'whitespace-nowrap text-right font-mono text-[13px] tabular-nums';
 
 /**
  * Reorder Planning — velocity-ranked reorder surface. Lists active items by
@@ -82,113 +87,126 @@ export default async function PlanningPage() {
   const draftableCount = belowPar.length - (onOpenPoCount ?? 0);
 
   return (
-    <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href="/dashboard/purchase-orders"
-          className="text-muted-foreground hover:text-foreground text-sm"
-        >
-          ← Purchase orders
-        </Link>
-        <div className="mt-2 flex flex-wrap items-end justify-between gap-3 sm:gap-4">
-          <div>
-            <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-              <TrendingUp className="h-6 w-6" /> Reorder Planning
-            </h1>
-            <p className="text-muted-foreground mt-1 text-sm">
-              Items ranked by urgency from actual demand velocity. Lowest
-              days-of-cover first; non-moving items sink to the bottom.
-            </p>
-          </div>
+    <div className={PAGE}>
+      <PageHeader
+        back={
+          <PageHeaderBackLink href="/dashboard/purchase-orders">
+            ← Purchase orders
+          </PageHeaderBackLink>
+        }
+        title="Reorder Planning"
+        subline="Items ranked by urgency from actual demand velocity. Lowest days-of-cover first; non-moving items sink to the bottom."
+        commitAction={
           <div className="flex flex-col items-start gap-1 sm:items-end">
             <DraftPosFromReorderButton itemCount={draftableCount} countIsPartial={truncated} />
             {onOpenPoCount === null ? (
-              <p role="status" className="text-warning max-w-xs text-xs sm:text-right">
-                Couldn&apos;t check which of the {formatNumber(belowPar.length)} below-par items
-                are already on open purchase orders. Drafting checks again and skips those.
+              <p
+                role="status"
+                className="text-warning max-w-xs text-[12px] leading-[18px] sm:text-right"
+              >
+                Couldn&apos;t check which of the {formatNumber(belowPar.length)} below-par items are
+                already on open purchase orders. Drafting checks again and skips those.
               </p>
             ) : onOpenPoCount > 0 ? (
-              <p className="text-muted-foreground max-w-xs text-xs sm:text-right">
-                {formatNumber(draftableCount)} to draft ·{' '}
-                {formatNumber(onOpenPoCount)} already on open POs (skipped)
+              <p className="text-muted-foreground max-w-xs text-[12px] leading-[18px] sm:text-right">
+                {formatNumber(draftableCount)} to draft · {formatNumber(onOpenPoCount)} already on
+                open POs (skipped)
               </p>
             ) : null}
           </div>
-        </div>
-      </div>
+        }
+      />
 
       {truncated && (
         <p
           role="status"
           data-testid="planning-coverage-note"
-          className="border-warning/40 bg-warning/10 text-foreground mb-4 rounded-md border px-3 py-2 text-sm"
+          className="border-warning/40 bg-warning-wash text-foreground rounded-lg border px-3.5 py-2.5 text-[13.5px] leading-[20.25px]"
         >
-          This organization has more than {formatNumber(PLANNING_MAX_ITEMS)} items to plan, so
-          only {formatNumber(PLANNING_MAX_ITEMS)} of them are ranked below, and they are not
-          picked by urgency: an urgent item can be missing here, and the below-par count covers
-          only the items shown. &ldquo;Draft PO from suggestions&rdquo; still checks every item.
+          This organization has more than {formatNumber(PLANNING_MAX_ITEMS)} items to plan, so only{' '}
+          {formatNumber(PLANNING_MAX_ITEMS)} of them are ranked below, and they are not picked by
+          urgency: an urgent item can be missing here, and the below-par count covers only the items
+          shown. &ldquo;Draft PO from suggestions&rdquo; still checks every item.
         </p>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Reorder suggestions</CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Item</TableHead>
-                <TableHead>SKU</TableHead>
-                <TableHead>Supplier</TableHead>
-                <TableHead className="text-right">On hand</TableHead>
-                <TableHead className="text-right">Units/day</TableHead>
-                <TableHead className="text-right">Days of cover</TableHead>
-                <TableHead className="text-right">Reorder at</TableHead>
-                <TableHead className="text-right">Suggested point</TableHead>
-                <TableHead className="text-right">Suggested qty</TableHead>
+      {/* Distinct from Reports > Reorder forecast: this ranks by demand
+          velocity. Up to PLANNING_MAX_ITEMS rows in one server-rendered table
+          that scrolls sideways inside its card on a narrow screen. */}
+      <DetailSection title="Reorder suggestions" flush data-slot="planning-suggestions">
+        <Table className="min-w-[860px]">
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead>Item</TableHead>
+              <TableHead>SKU</TableHead>
+              <TableHead>Supplier</TableHead>
+              <TableHead className="text-right">On hand</TableHead>
+              <TableHead className="text-right">Units/day</TableHead>
+              <TableHead className="text-right">Days of cover</TableHead>
+              <TableHead className="text-right">Reorder at</TableHead>
+              <TableHead className="text-right">Suggested point</TableHead>
+              <TableHead className="text-right">Suggested qty</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {suggestions.length === 0 && (
+              <TableRow className="hover:bg-transparent">
+                <TableCell colSpan={9} className="p-0">
+                  <StatePanel
+                    kind="empty"
+                    surface="plain"
+                    headingLevel={null}
+                    icon={null}
+                    title="No active items to plan. Add stock movements to build velocity."
+                  />
+                </TableCell>
               </TableRow>
-            </TableHeader>
-            <TableBody>
-              {suggestions.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={9} className="text-muted-foreground py-8 text-center text-xs">
-                    No active items to plan. Add stock movements to build velocity.
-                  </TableCell>
-                </TableRow>
-              )}
-              {suggestions.map((s) => (
-                <TableRow key={s.itemId}>
-                  <TableCell className="max-w-[260px] truncate">{s.name}</TableCell>
-                  <TableCell className="text-muted-foreground font-mono text-xs">{s.sku ?? '—'}</TableCell>
-                  <TableCell className="text-muted-foreground text-xs">{s.supplierName ?? '—'}</TableCell>
-                  <TableCell className="text-right tabular-nums">{formatNumber(s.quantityOnHand)}</TableCell>
-                  <TableCell className="text-muted-foreground text-right tabular-nums">
-                    {s.unitsPerDay.toFixed(2)}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {s.daysOfStockRemaining === null ? (
-                      <span className="text-muted-foreground">—</span>
-                    ) : (
-                      <span className={s.daysOfStockRemaining <= 14 ? 'text-warning font-medium' : ''}>
-                        {formatNumber(s.daysOfStockRemaining)}
-                      </span>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground text-right tabular-nums">
-                    {formatNumber(s.currentReorderPoint)}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">{formatNumber(s.suggestedReorderPoint)}</TableCell>
-                  <TableCell className="text-right tabular-nums">{formatNumber(s.suggestedReorderQty)}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+            )}
+            {suggestions.map((s) => (
+              <TableRow key={s.itemId}>
+                <TableCell className="text-foreground max-w-[260px] truncate font-medium">
+                  {s.name}
+                </TableCell>
+                <TableCell className="text-muted-foreground whitespace-nowrap font-mono text-[12px]">
+                  {s.sku ?? '—'}
+                </TableCell>
+                <TableCell className="text-ink-2 text-[12.5px]">{s.supplierName ?? '—'}</TableCell>
+                <TableCell className={cn(NUM, 'text-foreground font-medium')}>
+                  {formatNumber(s.quantityOnHand)}
+                </TableCell>
+                <TableCell className={cn(NUM, 'text-ink-2')}>{s.unitsPerDay.toFixed(2)}</TableCell>
+                <TableCell className={NUM}>
+                  {s.daysOfStockRemaining === null ? (
+                    <span className="text-muted-foreground">—</span>
+                  ) : (
+                    <span
+                      className={
+                        s.daysOfStockRemaining <= 14
+                          ? 'text-warning font-medium'
+                          : 'text-foreground'
+                      }
+                    >
+                      {formatNumber(s.daysOfStockRemaining)}
+                    </span>
+                  )}
+                </TableCell>
+                <TableCell className={cn(NUM, 'text-ink-2')}>
+                  {formatNumber(s.currentReorderPoint)}
+                </TableCell>
+                <TableCell className={cn(NUM, 'text-foreground')}>
+                  {formatNumber(s.suggestedReorderPoint)}
+                </TableCell>
+                <TableCell className={cn(NUM, 'text-foreground')}>
+                  {formatNumber(s.suggestedReorderQty)}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </DetailSection>
 
       {moduleAccess.canManage && (
-        <div className="mt-6 space-y-6">
+        <div data-slot="planning-settings" className="flex flex-col gap-4">
           <PlanningParamsPanel initial={params} />
           <AutoReorderPanel initial={autoReorder} entitled={autoReorderEntitled} />
         </div>

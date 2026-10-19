@@ -26,14 +26,24 @@ vi.mock('@/lib/modules/module-gate', () => ({
   checkModuleAccess: vi.fn(async () => ({ enabled: true, canManage: false })),
 }));
 vi.mock('@/lib/auth/session', () => ({
-  requireOrgContext: vi.fn(async () => ({ organizationId: 'org-1', userId: 'u-1', role: 'manager' })),
+  requireOrgContext: vi.fn(async () => ({
+    organizationId: 'org-1',
+    userId: 'u-1',
+    role: 'manager',
+  })),
 }));
 vi.mock('@/lib/supabase/server', () => ({
-  createClient: vi.fn(async () => makeSupabaseStub({ 'organizations.select': { data: null, error: null } }).client),
+  createClient: vi.fn(
+    async () => makeSupabaseStub({ 'organizations.select': { data: null, error: null } }).client,
+  ),
 }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
-vi.mock('@/server/services/auto-reorder', () => ({ readAutoReorderSettings: vi.fn(async () => ({})) }));
-vi.mock('@/server/actions/purchase-orders', () => ({ createDraftPosFromReorderForecastAction: vi.fn() }));
+vi.mock('@/server/services/auto-reorder', () => ({
+  readAutoReorderSettings: vi.fn(async () => ({})),
+}));
+vi.mock('@/server/actions/purchase-orders', () => ({
+  createDraftPosFromReorderForecastAction: vi.fn(),
+}));
 vi.mock('@/components/settings/auto-reorder-panel', () => ({ AutoReorderPanel: () => null }));
 vi.mock('@/components/settings/planning-params-panel', () => ({ PlanningParamsPanel: () => null }));
 vi.mock('@/server/services/planning', () => ({
@@ -41,7 +51,11 @@ vi.mock('@/server/services/planning', () => ({
   PlanningService: {
     forCurrentUser: vi.fn(async () => ({
       getReorderSuggestions,
-      readParams: vi.fn(async () => ({ leadTimeDays: 14, safetyMultiplier: 1.5, velocityWindowDays: 90 })),
+      readParams: vi.fn(async () => ({
+        leadTimeDays: 14,
+        safetyMultiplier: 1.5,
+        velocityWindowDays: 90,
+      })),
       itemIdsOnOpenPurchaseOrders: vi.fn(async () => new Set<string>()),
     })),
   },
@@ -86,5 +100,55 @@ describe('Planning page coverage', () => {
 
     expect(screen.queryByTestId('planning-coverage-note')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Draft PO from suggestions/i })).toBeDisabled();
+  });
+});
+
+describe('Planning page layout (P4.C2 redesign)', () => {
+  it('keeps the back link, the one heading, its words and every column', async () => {
+    getReorderSuggestions.mockResolvedValue({ suggestions: [healthy('a')], truncated: false });
+    render(await PlanningPage());
+
+    expect(screen.getByRole('link', { name: '← Purchase orders' })).toHaveAttribute(
+      'href',
+      '/dashboard/purchase-orders',
+    );
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Reorder Planning');
+    expect(
+      screen.getByText(/Items ranked by urgency from actual demand velocity/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Reorder suggestions' })).toBeInTheDocument();
+    for (const name of [
+      'Item',
+      'SKU',
+      'Supplier',
+      'On hand',
+      'Units/day',
+      'Days of cover',
+      'Reorder at',
+      'Suggested point',
+      'Suggested qty',
+    ]) {
+      expect(screen.getByRole('columnheader', { name })).toBeInTheDocument();
+    }
+    const row = screen.getByRole('row', { name: /Item a/ });
+    expect(row).toHaveTextContent('0.10');
+  });
+
+  it('says there is nothing to plan in the table when no item ranks', async () => {
+    getReorderSuggestions.mockResolvedValue({ suggestions: [], truncated: false });
+    render(await PlanningPage());
+    expect(
+      screen.getByText('No active items to plan. Add stock movements to build velocity.'),
+    ).toBeInTheDocument();
+  });
+
+  it('marks days of cover of 14 or fewer in the caution colour', async () => {
+    getReorderSuggestions.mockResolvedValue({
+      suggestions: [{ ...healthy('low'), daysOfStockRemaining: 9 }],
+      truncated: false,
+    });
+    render(await PlanningPage());
+    expect(screen.getByText('9')).toHaveClass('text-warning');
   });
 });
