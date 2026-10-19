@@ -4,9 +4,10 @@ import { notFound } from 'next/navigation';
 
 import { can } from '@stockpilot/core';
 
-import { RestoreButton } from '@/components/settings/restore-button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { EmptyState } from '@/components/ui/empty-state';
+import { PageHeader } from '@/components/patterns/page-header';
+import { StatePanel } from '@/components/patterns/state-panel';
+import { DeletedAtTooltip, RestoreButton } from '@/components/settings/restore-button';
+import { SettingsPage, SettingsPanel } from '@/components/settings/settings-nav';
 import { requireOrgContext } from '@/lib/auth/session';
 import { formatRelative } from '@/lib/utils';
 import {
@@ -14,22 +15,6 @@ import {
   RecoveryService,
   type RecoveryEntity,
 } from '@/server/services/recovery';
-
-/**
- * Render an absolute timestamp for the title= tooltip. Uses the
- * browser/server's local format with seconds dropped — gives enough
- * precision to disambiguate same-day deletes without being verbose.
- */
-function formatExact(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-}
 
 interface SectionDef {
   entity: RecoveryEntity;
@@ -83,106 +68,95 @@ export default async function RecoveryPage() {
   const totalDeleted = buckets.reduce((sum, b) => sum + b.rows.length, 0);
 
   return (
-    <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
-      <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
-        <Link href="/dashboard/settings" className="hover:text-foreground">
-          Settings
-        </Link>
-        <span>/</span>
-        <span>Recovery</span>
-      </div>
-      <h1 className="text-2xl font-semibold tracking-tight">Recovery</h1>
-      <p className="mt-1 text-sm text-muted-foreground">
-        Restore soft-deleted rows. Anything deleted via Archive (or the
-        API equivalent) lives here until you restore it — no time limit.
-        Restoring brings the row back exactly where it was, with its
-        original ID and references intact.
-      </p>
+    <SettingsPage width="wide">
+      <PageHeader
+        title="Recovery"
+        subline="Restore soft-deleted rows. Anything deleted via Archive (or the API equivalent) lives here until you restore it — no time limit. Restoring brings the row back exactly where it was, with its original ID and references intact."
+        back={
+          <div className="text-muted-foreground flex items-center gap-2 text-[12.5px]">
+            <Link href="/dashboard/settings" className="hover:text-foreground transition-colors">
+              Settings
+            </Link>
+            <span aria-hidden className="text-ink-4">
+              /
+            </span>
+            <span>Recovery</span>
+          </div>
+        }
+      />
 
       {totalDeleted === 0 ? (
-        <Card className="mt-6">
-          <CardContent className="pt-6">
-            <EmptyState
-              icon={History}
-              title="Nothing to restore"
-              description="Soft-deleted items, categories, suppliers, and locations show up here when they exist."
-            />
-          </CardContent>
-        </Card>
+        <StatePanel
+          kind="empty"
+          icon={History}
+          title="Nothing to restore"
+          description="Soft-deleted items, categories, suppliers, and locations show up here when they exist."
+        />
       ) : (
-        <div className="mt-6 space-y-4">
-          {buckets.map((b) =>
-            b.rows.length === 0 ? null : (
-              <Card key={b.entity}>
-                <CardHeader className="pb-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <div>
-                      <CardTitle className="text-base">{b.title}</CardTitle>
-                      <p className="text-muted-foreground mt-0.5 text-xs">
-                        {b.description}
-                      </p>
-                    </div>
-                    <span className="rounded-full border border-border bg-background px-2 py-0.5 font-mono text-[11px] text-[var(--ed-ink-2)]">
-                      {b.rows.length}
-                    </span>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <ul className="divide-border divide-y">
-                    {b.rows.map((r) => {
-                      const auditHref = `/dashboard/audit?entityType=${RECOVERY_AUDIT_ENTITY_TYPE[b.entity]}&entityId=${r.id}`;
-                      return (
-                        <li
-                          key={r.id}
-                          className="flex flex-wrap items-center justify-between gap-3 py-2.5 text-[13px]"
-                        >
-                          <div className="min-w-0">
-                            <div className="truncate font-medium">{r.name}</div>
-                            {r.sku && (
-                              <div className="text-muted-foreground truncate font-mono text-[11px]">
-                                SKU {r.sku}
-                              </div>
-                            )}
-                            <div className="text-muted-foreground mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11.5px]">
-                              <span title={formatExact(r.deleted_at)}>
-                                Deleted {formatRelative(r.deleted_at)}
-                                {r.deleted_by_name && (
-                                  <> by <span className="text-foreground">{r.deleted_by_name}</span></>
-                                )}
-                              </span>
-                              {canSeeAudit && (
-                                <>
-                                  <span aria-hidden="true">·</span>
-                                  <Link
-                                    href={auditHref}
-                                    className="underline-offset-2 hover:text-foreground hover:underline"
-                                  >
-                                    View history
-                                  </Link>
-                                </>
-                              )}
-                            </div>
+        buckets.map((b) =>
+          b.rows.length === 0 ? null : (
+            <SettingsPanel
+              key={b.entity}
+              title={b.title}
+              description={b.description}
+              aside={
+                <span className="text-ink-2 rounded-full border border-[var(--ed-line-strong)] px-2 py-0.5 font-mono text-[11px] tabular-nums">
+                  {b.rows.length}
+                </span>
+              }
+              flush
+            >
+              <ul className="divide-border divide-y">
+                {b.rows.map((r) => {
+                  const auditHref = `/dashboard/audit?entityType=${RECOVERY_AUDIT_ENTITY_TYPE[b.entity]}&entityId=${r.id}`;
+                  return (
+                    <li
+                      key={r.id}
+                      className="flex flex-wrap items-center justify-between gap-3 px-[18px] py-2.5 text-[13.5px]"
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate font-medium">{r.name}</div>
+                        {r.sku && (
+                          <div className="text-muted-foreground truncate font-mono text-[11.5px]">
+                            SKU {r.sku}
                           </div>
-                          <RestoreButton
-                            entity={b.entity}
-                            id={r.id}
-                            label={r.name}
-                          />
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </CardContent>
-              </Card>
-            ),
-          )}
-        </div>
+                        )}
+                        <div className="text-muted-foreground mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12px]">
+                          <DeletedAtTooltip iso={r.deleted_at}>
+                            Deleted {formatRelative(r.deleted_at)}
+                            {r.deleted_by_name && (
+                              <>
+                                {' '}
+                                by <span className="text-foreground">{r.deleted_by_name}</span>
+                              </>
+                            )}
+                          </DeletedAtTooltip>
+                          {canSeeAudit && (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <Link
+                                href={auditHref}
+                                className="hover:text-foreground underline-offset-2 hover:underline"
+                              >
+                                View history
+                              </Link>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      <RestoreButton entity={b.entity} id={r.id} label={r.name} />
+                    </li>
+                  );
+                })}
+              </ul>
+            </SettingsPanel>
+          ),
+        )
       )}
 
-      <p className="text-muted-foreground mt-6 text-[11.5px]">
-        Showing the most recent 200 deletes per type. If you need
-        something older, contact support.
+      <p className="text-muted-foreground text-[12px]">
+        Showing the most recent 200 deletes per type. If you need something older, contact support.
       </p>
-    </div>
+    </SettingsPage>
   );
 }

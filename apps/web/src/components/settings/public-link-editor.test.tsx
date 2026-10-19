@@ -122,3 +122,23 @@ describe('PublicLinkEditor bulk remove', () => {
     expect(screen.queryByText('2 selected')).not.toBeInTheDocument();
   });
 });
+
+describe('PublicLinkEditor select names', () => {
+  it('names every select: the stock display and the five catalog filters', () => {
+    renderEditor();
+    for (const name of [
+      'Stock shown to the public',
+      'Filter by category',
+      'Filter by type',
+      'Filter by warehouse',
+      'Filter by link membership',
+      'Sort by',
+    ]) {
+      expect(screen.getByRole('combobox', { name })).toBeInTheDocument();
+    }
+    // No select is left without a name.
+    for (const box of screen.getAllByRole('combobox')) {
+      expect(box).toHaveAccessibleName();
+    }
+  });
+});

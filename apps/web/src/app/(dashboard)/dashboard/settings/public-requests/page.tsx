@@ -1,8 +1,11 @@
 import Link from 'next/link';
 
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
+import { StatePanel } from '@/components/patterns/state-panel';
 import { PublicLinksManager } from '@/components/settings/public-links-manager';
 import { PublicRequestsGlobalSettings } from '@/components/settings/public-requests-global-settings';
+import { SettingsPage, SettingsPanel } from '@/components/settings/settings-nav';
 import { can } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
@@ -31,22 +34,28 @@ export default async function PublicRequestsSettingsPage() {
   const canManageOrg = can(ctx, 'organization:update');
   if (!canManageLinks && !canManageOrg) {
     return (
-      <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-        <div className="bg-card rounded-xl border p-8 text-center">
-          <h1 className="text-lg font-semibold">Public request links</h1>
-          <p className="text-muted-foreground mx-auto mt-2 max-w-md text-sm">
-            You need the “Manage public links” permission to configure public
-            request links. Ask an owner or admin to grant it under Settings →
-            Roles &amp; permissions.
-          </p>
-          <Link
-            href="/dashboard/settings"
-            className="text-primary mt-4 inline-block text-sm hover:underline"
-          >
-            ← Back to settings
-          </Link>
-        </div>
-      </div>
+      <SettingsPage>
+        <StatePanel
+          kind="forbidden"
+          size="page"
+          headingLevel={1}
+          title="Public request links"
+          description={
+            <>
+              You need the “Manage public links” permission to configure public request links. Ask
+              an owner or admin to grant it under Settings → Roles &amp; permissions.
+            </>
+          }
+          action={
+            <Link
+              href="/dashboard/settings"
+              className="text-accent hover:text-foreground text-[13px] transition-colors hover:underline"
+            >
+              ← Back to settings
+            </Link>
+          }
+        />
+      </SettingsPage>
     );
   }
 
@@ -62,47 +71,39 @@ export default async function PublicRequestsSettingsPage() {
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://stockpilotusa.com';
 
   return (
-    <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href="/dashboard/settings"
-          className="text-muted-foreground hover:text-foreground inline-flex items-center text-sm"
-        >
-          ← Back to settings
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">Public requests</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Share curated request links with external partners. Each link
-          controls exactly which items and books the public can see and
-          request.
-        </p>
-      </div>
+    <SettingsPage width="wide">
+      <PageHeader
+        title="Public requests"
+        subline="Share curated request links with external partners. Each link controls exactly which items and books the public can see and request."
+        back={
+          <PageHeaderBackLink href="/dashboard/settings">← Back to settings</PageHeaderBackLink>
+        }
+      />
 
-      <div className="space-y-6">
-        {canManageLinks && links ? (
-          <PublicLinksManager appUrl={appUrl} links={links} />
-        ) : (
-          <div className="bg-card rounded-xl border p-5">
-            <h2 className="text-sm font-semibold">Request links</h2>
-            <p className="text-muted-foreground mt-1 text-sm">
-              You need the “Manage public links” permission to view or edit
-              the curated request links. Ask an owner or admin to grant it
-              under Settings → Roles &amp; permissions.
-            </p>
-          </div>
-        )}
+      {canManageLinks && links ? (
+        <PublicLinksManager appUrl={appUrl} links={links} />
+      ) : (
+        <SettingsPanel
+          title="Request links"
+          description={
+            <>
+              You need the “Manage public links” permission to view or edit the curated request
+              links. Ask an owner or admin to grant it under Settings → Roles &amp; permissions.
+            </>
+          }
+        />
+      )}
 
-        {canManageOrg && settings ? (
-          <PublicRequestsGlobalSettings
-            initialBlurb={settings.blurb}
-            warehouses={warehouses.map((w) => ({
-              id: w.id,
-              name: w.name,
-              isPublicOrderable: settings.publicOrderableWarehouseIds.includes(w.id),
-            }))}
-          />
-        ) : null}
-      </div>
-    </div>
+      {canManageOrg && settings ? (
+        <PublicRequestsGlobalSettings
+          initialBlurb={settings.blurb}
+          warehouses={warehouses.map((w) => ({
+            id: w.id,
+            name: w.name,
+            isPublicOrderable: settings.publicOrderableWarehouseIds.includes(w.id),
+          }))}
+        />
+      ) : null}
+    </SettingsPage>
   );
 }

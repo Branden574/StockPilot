@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 
+import { StatePanel } from '@/components/patterns/state-panel';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -44,13 +45,7 @@ import type { PublicLinkRow } from '@/server/services/public-links';
  * offered exactly once, in the dialog right after Create (and, for existing
  * links, by Rotate in the editor, which mints a replacement).
  */
-export function PublicLinksManager({
-  appUrl,
-  links,
-}: {
-  appUrl: string;
-  links: PublicLinkRow[];
-}) {
+export function PublicLinksManager({ appUrl, links }: { appUrl: string; links: PublicLinkRow[] }) {
   const router = useRouter();
   const base = appUrl.replace(/\/$/, '');
 
@@ -136,36 +131,52 @@ export function PublicLinksManager({
   }
 
   return (
-    <section data-tour="public-links" className="bg-card rounded-xl border">
-      <div className="border-border flex items-center justify-between gap-3 border-b px-4 py-3">
-        <div>
-          <h2 className="text-sm font-medium">Public request links</h2>
-          <p className="text-muted-foreground mt-0.5 text-[11.5px]">
-            Each link has its own catalog, availability window, and quantity
-            limits. Share a link&apos;s URL with the audience it was made for.
+    <section
+      data-tour="public-links"
+      aria-labelledby="public-links-heading"
+      className="bg-card text-card-foreground min-w-0 rounded-lg border"
+    >
+      <div className="border-border flex flex-wrap items-start justify-between gap-x-3 gap-y-2 border-b px-[18px] py-3.5">
+        <div className="min-w-0 flex-1">
+          <h2
+            id="public-links-heading"
+            className="text-foreground text-[13.5px] font-medium leading-5"
+          >
+            Public request links
+          </h2>
+          <p className="text-muted-foreground mt-0.5 text-[12.5px] leading-[18px]">
+            Each link has its own catalog, availability window, and quantity limits. Share a
+            link&apos;s URL with the audience it was made for.
           </p>
         </div>
-        <Button type="button" size="sm" onClick={() => setCreateOpen(true)}>
+        <Button type="button" variant="gradient" onClick={() => setCreateOpen(true)}>
           <Plus className="h-3.5 w-3.5" />
           New link
         </Button>
       </div>
 
       {error ? (
-        <p role="alert" className="text-destructive px-4 pt-3 text-xs">
+        <p role="alert" className="text-destructive px-[18px] pt-3 text-[12.5px]">
           {error}
         </p>
       ) : null}
 
       {links.length === 0 ? (
-        <p className="text-muted-foreground p-6 text-center text-sm">
-          No public links yet. Create one to share a curated catalog with
-          external requesters.
-        </p>
+        <StatePanel
+          kind="empty"
+          surface="plain"
+          headingLevel={null}
+          icon={null}
+          title={
+            <>
+              No public links yet. Create one to share a curated catalog with external requesters.
+            </>
+          }
+        />
       ) : (
-        <Table>
+        <Table className="min-w-[760px]">
           <TableHeader>
-            <TableRow>
+            <TableRow className="hover:bg-transparent">
               <TableHead>Name</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Expires</TableHead>
@@ -176,8 +187,7 @@ export function PublicLinksManager({
           </TableHeader>
           <TableBody>
             {links.map((link) => {
-              const expired =
-                link.expires_at != null && Date.parse(link.expires_at) <= Date.now();
+              const expired = link.expires_at != null && Date.parse(link.expires_at) <= Date.now();
               return (
                 <TableRow key={link.id}>
                   <TableCell className="font-medium">
@@ -188,7 +198,7 @@ export function PublicLinksManager({
                       {link.name}
                     </Link>
                     {link.purpose ? (
-                      <p className="text-muted-foreground mt-0.5 max-w-[28ch] truncate text-xs font-normal">
+                      <p className="text-muted-foreground mt-0.5 max-w-[28ch] truncate text-[12px] font-normal">
                         {link.purpose}
                       </p>
                     ) : null}
@@ -196,15 +206,21 @@ export function PublicLinksManager({
                   <TableCell>
                     {link.active ? (
                       expired ? (
-                        <Badge variant="warning">Expired</Badge>
+                        <Badge variant="warning" dot>
+                          Expired
+                        </Badge>
                       ) : (
-                        <Badge variant="success">Active</Badge>
+                        <Badge variant="success" dot>
+                          Active
+                        </Badge>
                       )
                     ) : (
-                      <Badge variant="outline">Disabled</Badge>
+                      <Badge variant="outline" dot>
+                        Disabled
+                      </Badge>
                     )}
                   </TableCell>
-                  <TableCell className="text-muted-foreground whitespace-nowrap text-xs">
+                  <TableCell className="text-muted-foreground whitespace-nowrap text-[12.5px]">
                     {link.expires_at ? (
                       <span className={expired ? 'text-destructive' : undefined}>
                         {hydrated ? new Date(link.expires_at).toLocaleDateString() : null}
@@ -213,18 +229,19 @@ export function PublicLinksManager({
                       'Never'
                     )}
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">
+                  <TableCell className="text-right font-mono text-[13px] tabular-nums">
                     {link.entry_count}
                   </TableCell>
-                  <TableCell className="text-muted-foreground whitespace-nowrap text-xs">
+                  <TableCell className="text-muted-foreground whitespace-nowrap text-[12.5px]">
                     {hydrated ? new Date(link.created_at).toLocaleDateString() : null}
                   </TableCell>
                   <TableCell>
                     {/* No Copy URL / Preview here (mig 0330): the token is
                         hashed at rest, so an existing row's URL cannot be
                         rebuilt. Rotate in the editor is the show-once path
-                        to a fresh URL. */}
-                    <div className="flex items-center justify-end gap-1.5">
+                        to a fresh URL. 8 px apart: the 28 px buttons' 44 px
+                        touch areas (coarse pointers) must not overlap. */}
+                    <div className="flex items-center justify-end gap-2">
                       <Button
                         type="button"
                         variant="outline"
@@ -234,9 +251,7 @@ export function PublicLinksManager({
                           link.active ? setConfirmDisable(link) : setActive(link, true)
                         }
                       >
-                        {togglingId === link.id && (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        )}
+                        {togglingId === link.id && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                         {link.active ? 'Disable' : 'Enable'}
                       </Button>
                       <Button
@@ -297,8 +312,8 @@ export function PublicLinksManager({
           <DialogHeader>
             <DialogTitle>New public request link</DialogTitle>
             <DialogDescription>
-              A fresh link starts with an empty catalog and a unique URL. Name
-              it after the audience it serves — you pick what it exposes next.
+              A fresh link starts with an empty catalog and a unique URL. Name it after the audience
+              it serves — you pick what it exposes next.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
@@ -318,7 +333,7 @@ export function PublicLinksManager({
               }}
             />
             {createError ? (
-              <p role="alert" className="text-destructive text-xs">
+              <p role="alert" className="text-destructive text-[12.5px]">
                 {createError}
               </p>
             ) : null}
@@ -357,13 +372,18 @@ export function PublicLinksManager({
           <DialogHeader>
             <DialogTitle>Link created — copy the URL now</DialogTitle>
             <DialogDescription>
-              For security, this URL is shown only once and cannot be
-              displayed again. If you lose it, rotate the link in the editor
-              to get a new one.
+              For security, this URL is shown only once and cannot be displayed again. If you lose
+              it, rotate the link in the editor to get a new one.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
-            <Input readOnly value={createdLink?.url ?? ''} onFocus={(e) => e.currentTarget.select()} />
+            <Input
+              readOnly
+              aria-label="Public URL"
+              value={createdLink?.url ?? ''}
+              onFocus={(e) => e.currentTarget.select()}
+              className="font-mono text-[12.5px]"
+            />
             <Button type="button" variant="outline" size="sm" onClick={() => void copyCreatedUrl()}>
               {createdCopied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
               {createdCopied ? 'Copied' : 'Copy URL'}

@@ -4,7 +4,12 @@ import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 
+import { Loader2, TriangleAlert } from 'lucide-react';
+
 import { useStepUp } from '@/components/auth/step-up-modal';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { useHydrated } from '@/lib/use-hydrated';
 import {
   restoreFromPointAction,
   restorePointSkuChangesAction,
@@ -12,6 +17,35 @@ import {
 import type { RestorePointSkuChanges } from '@/server/services/restore-points';
 
 import { RESTORE_SKU_COPY } from './restore-sku-warning-copy';
+
+/**
+ * A restore point's time in words, in the VIEWER's zone and locale, with the
+ * seconds kept: two points taken moments apart (a manual point and its
+ * pre-restore point) must read differently. One formatter for the Backups
+ * table's When column and the row's "roll back to ..." sentence, so the row
+ * never shows the same point two ways.
+ */
+export function formatRestorePointTime(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+/**
+ * The Backups table's When cell (CONFLICTS D13). The page is a server
+ * component, so formatting there printed the server's zone (UTC on Vercel);
+ * the text is added once the page has hydrated, in the viewer's zone.
+ */
+export function RestorePointTime({ iso }: { iso: string }) {
+  const hydrated = useHydrated();
+  if (!hydrated || Number.isNaN(new Date(iso).getTime())) return null;
+  return <span>{formatRestorePointTime(iso)}</span>;
+}
 
 /**
  * Per-row "Restore" — opens an inline confirm where the operator must type
@@ -25,7 +59,23 @@ import { RESTORE_SKU_COPY } from './restore-sku-warning-copy';
  * D1 b). A point taken before restore points carried record ids matches by SKU
  * and rack, so the row names those records BEFORE the typed confirm.
  */
-export function RestoreSnapshotButton({ id, when }: { id: string; when: string }) {
+export function RestoreSnapshotButton({
+  id,
+  when,
+  createdAt,
+}: {
+  id: string;
+  /** The point's time as words, for callers that format it themselves. */
+  when?: string;
+  /**
+   * The point's time (ISO). The Backups page passes this instead of `when`,
+   * so the time in "roll back to …" is the VIEWER's (CONFLICTS D13): the page
+   * is a server component and formatted it in the server's zone (UTC on
+   * Vercel). The sentence only shows after a click, long after hydration, so
+   * formatting it here can never mismatch the server HTML.
+   */
+  createdAt?: string;
+}) {
   const router = useRouter();
   const stepUp = useStepUp();
   const [open, setOpen] = React.useState(false);
@@ -94,45 +144,56 @@ export function RestoreSnapshotButton({ id, when }: { id: string; when: string }
 
   if (!open) {
     return (
-      <button
-        type="button"
-        onClick={() => void openRow()}
-        className="hover:bg-muted rounded-md border px-2 py-1 text-xs font-medium"
-      >
+      <Button type="button" variant="outline" size="sm" onClick={() => void openRow()}>
         Restore
-      </button>
+      </Button>
     );
   }
 
+  const whenText = createdAt ? formatRestorePointTime(createdAt) : (when ?? '');
   const changes = skuCheck.state === 'done' ? skuCheck.data.changes : [];
   // PR stage fix round 1 (F3): the check reads at most SKU_CHANGES_SCAN audit
   // rows, and the split rows it leaves out count against that limit, so a
   // check cut off there may have named nothing. That is never an all-clear.
   const cutOff = skuCheck.state === 'done' && skuCheck.data.truncated;
+  // The warnings stay ABOVE the typed confirm, and Confirm stays disabled
+  // until the check has answered (Ungroup D1 b). The amber lines carry an icon
+  // so the warning never relies on colour alone.
   return (
-    <>
+    <div className="ml-auto flex max-w-[460px] flex-col items-stretch gap-2 text-left">
       {stepUp.modal}
       {skuCheck.state === 'checking' ? (
-        <p role="status" className="text-muted-foreground mb-2 text-left text-[11px]">
-          {RESTORE_SKU_COPY.checking}
+        <p
+          role="status"
+          className="text-muted-foreground flex items-start gap-1.5 text-left text-[12px]"
+        >
+          <Loader2 aria-hidden className="mt-0.5 h-3 w-3 shrink-0 animate-spin" />
+          <span>{RESTORE_SKU_COPY.checking}</span>
         </p>
       ) : null}
       {skuCheck.state === 'failed' ? (
-        <p className="mb-2 text-left text-[11px] text-amber-700 dark:text-amber-400">
-          {skuCheck.noAuditAccess ? RESTORE_SKU_COPY.noAuditAccess : RESTORE_SKU_COPY.failed}
+        <p className="text-warning flex items-start gap-1.5 text-left text-[12px]">
+          <TriangleAlert aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>
+            {skuCheck.noAuditAccess ? RESTORE_SKU_COPY.noAuditAccess : RESTORE_SKU_COPY.failed}
+          </span>
         </p>
       ) : null}
       {cutOff && changes.length === 0 ? (
-        <p className="mb-2 text-left text-[11px] text-amber-700 dark:text-amber-400">
-          {RESTORE_SKU_COPY.cutOff}
+        <p className="text-warning flex items-start gap-1.5 text-left text-[12px]">
+          <TriangleAlert aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>{RESTORE_SKU_COPY.cutOff}</span>
         </p>
       ) : null}
       {skuCheck.state === 'done' && changes.length > 0 ? (
         <div
           role="alert"
-          className="mb-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-left text-[11px] text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
+          className="border-warning/40 bg-warning-wash text-foreground rounded-md border p-2.5 text-left text-[12px]"
         >
-          <p className="font-semibold">{RESTORE_SKU_COPY.heading}</p>
+          <p className="text-warning flex items-start gap-1.5 font-semibold">
+            <TriangleAlert aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>{RESTORE_SKU_COPY.heading}</span>
+          </p>
           <p className="mt-1">{RESTORE_SKU_COPY.body}</p>
           <ul className="mt-1 list-disc pl-4">
             {changes.map((c, i) => (
@@ -145,38 +206,46 @@ export function RestoreSnapshotButton({ id, when }: { id: string; when: string }
           <p className="mt-1">{RESTORE_SKU_COPY.advice}</p>
         </div>
       ) : null}
+      {/* 8 px apart: the 28 px buttons' 44 px touch areas (coarse pointers)
+          must not overlap. */}
       <div className="flex flex-wrap items-center justify-end gap-2">
-        <span className="text-muted-foreground text-[11px]">
-          Type <span className="font-mono font-semibold">RESTORE</span> to roll back to {when}:
+        <span className="text-muted-foreground text-[12px]">
+          Type <span className="text-foreground font-mono font-semibold">RESTORE</span> to roll back
+          to {whenText}:
         </span>
-        <input
+        <Input
           value={confirm}
           onChange={(e) => setConfirm(e.target.value)}
           placeholder="RESTORE"
-          className="bg-background h-7 w-24 rounded-md border px-2 text-xs outline-none"
+          aria-label={`Type RESTORE to roll back to ${whenText}`}
+          autoComplete="off"
+          spellCheck={false}
+          className="h-7 w-28 font-mono text-[12px]"
           disabled={busy}
         />
-        <button
+        <Button
           type="button"
+          variant="destructive"
+          size="sm"
           onClick={run}
           disabled={busy || !checkSettled || confirm !== 'RESTORE'}
-          className="bg-destructive text-destructive-foreground rounded-md px-2 py-1 text-xs font-semibold disabled:opacity-50"
         >
           {busy ? 'Restoring…' : 'Confirm'}
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
           onClick={() => {
             setOpen(false);
             setConfirm('');
             setSkuCheck({ state: 'idle' });
           }}
           disabled={busy}
-          className="text-muted-foreground hover:text-foreground text-xs"
         >
           Cancel
-        </button>
+        </Button>
       </div>
-    </>
+    </div>
   );
 }

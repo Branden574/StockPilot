@@ -24,7 +24,11 @@ vi.mock('@/server/actions/restore-points', () => ({
   restoreFromPointAction: (...a: unknown[]) => h.restore(...a),
 }));
 
-import { RestoreSnapshotButton } from './restore-snapshot-button';
+import {
+  formatRestorePointTime,
+  RestorePointTime,
+  RestoreSnapshotButton,
+} from './restore-snapshot-button';
 import { RESTORE_SKU_COPY } from './restore-sku-warning-copy';
 
 const ID = '33333333-3333-4333-8333-333333333333';
@@ -284,5 +288,95 @@ describe('RestoreSnapshotButton: SKU changes since the point', () => {
     ].join(' ');
     expect(text).not.toMatch(/\bbook\b/i);
     expect(text).not.toMatch(/change (the |a )?(charter|rack)/i);
+  });
+});
+
+describe("RestoreSnapshotButton: the point's time in the viewer's zone (CONFLICTS D13)", () => {
+  it('says "roll back to" the time in the browser zone when given the ISO time', async () => {
+    const { inZone, BROWSER_ZONE } = await import('@/test/hydration');
+    // 7:30 PM on Oct 5 in Los Angeles; 02:30 on Oct 6 in UTC.
+    const at = '2026-10-06T02:30:00.000Z';
+    // The words come from the shared formatter (the When column's too); the
+    // zone assertions are as before.
+    const viewer = inZone(BROWSER_ZONE, () => formatRestorePointTime(at));
+    const server = inZone('UTC', () => formatRestorePointTime(at));
+    expect(viewer).not.toBe(server);
+    h.changes.mockResolvedValue(answer({ version: 2, changes: [], more: 0, truncated: false }));
+    const previous = process.env.TZ;
+    process.env.TZ = BROWSER_ZONE;
+    try {
+      const user = userEvent.setup();
+      render(<RestoreSnapshotButton id={ID} createdAt={at} />);
+      await user.click(screen.getByRole('button', { name: 'Restore' }));
+      expect(screen.getByText(`to roll back to ${viewer}:`, { exact: false })).toBeInTheDocument();
+      expect(
+        screen.getByRole('textbox', { name: `Type RESTORE to roll back to ${viewer}` }),
+      ).toBeInTheDocument();
+      // Confirm still waits for the check and the typed word.
+      expect(screen.getByRole('button', { name: 'Confirm' })).toBeDisabled();
+    } finally {
+      if (previous === undefined) delete process.env.TZ;
+      else process.env.TZ = previous;
+    }
+  });
+});
+
+describe('RestorePointTime: one format for the When column and the confirm sentence', () => {
+  // Two points taken seconds apart (a manual point and its pre-restore point).
+  const at = '2026-10-18T21:22:32.000Z';
+  const fourSecondsEarlier = '2026-10-18T21:22:28.000Z';
+  const T0 = Date.parse('2026-10-19T03:00:00.000Z');
+
+  it('shows nothing on the server and the viewer-zone time once hydrated, with no hydration error', async () => {
+    const { hydrateAcrossClockShift, inZone, BROWSER_ZONE } = await import('@/test/hydration');
+    const viewer = inZone(BROWSER_ZONE, () => formatRestorePointTime(at));
+    const server = inZone('UTC', () => formatRestorePointTime(at));
+    expect(viewer).not.toBe(server);
+    const run = await hydrateAcrossClockShift(() => <RestorePointTime iso={at} />, {
+      serverNow: T0,
+      browserNow: T0 + 60_000,
+    });
+    try {
+      expect(run.errors).toEqual([]);
+      expect(run.html).not.toContain(server);
+      expect(run.container.textContent).toBe(viewer);
+    } finally {
+      run.unmount();
+    }
+  });
+
+  it('keeps the seconds, so two points taken moments apart read differently', () => {
+    expect(formatRestorePointTime(at)).not.toBe(formatRestorePointTime(fourSecondsEarlier));
+    expect(formatRestorePointTime(at)).toMatch(/32/);
+  });
+
+  it('the cell and the "roll back to" sentence show the same words in a non-UTC zone', async () => {
+    const { BROWSER_ZONE } = await import('@/test/hydration');
+    h.changes.mockResolvedValue(answer({ version: 2, changes: [], more: 0, truncated: false }));
+    const previous = process.env.TZ;
+    process.env.TZ = BROWSER_ZONE;
+    try {
+      const user = userEvent.setup();
+      render(
+        <div>
+          <span data-testid="when-cell">
+            <RestorePointTime iso={at} />
+          </span>
+          <RestoreSnapshotButton id={ID} createdAt={at} />
+        </div>,
+      );
+      const cellText = screen.getByTestId('when-cell').textContent ?? '';
+      expect(cellText).not.toBe('');
+      await user.click(screen.getByRole('button', { name: 'Restore' }));
+      expect(
+        screen.getByText(`to roll back to ${cellText}:`, { exact: false }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole('textbox', { name: `Type RESTORE to roll back to ${cellText}` }),
+      ).toBeInTheDocument();
+    } finally {
+      if (previous === undefined) delete process.env.TZ;
+      else process.env.TZ = previous;
+    }
   });
 });

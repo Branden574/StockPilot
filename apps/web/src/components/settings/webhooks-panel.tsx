@@ -5,8 +5,11 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { FilterChip } from '@/components/patterns/chip';
+import { SettingsPanel } from '@/components/settings/settings-nav';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -141,34 +144,33 @@ export function WebhooksPanel({ endpoints }: { endpoints: PanelEndpoint[] }) {
   }
 
   return (
-    <section className="border-border bg-card mt-8 rounded-xl border p-5">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="text-base font-semibold tracking-tight">Webhooks &amp; alerts</h2>
-          <p className="text-muted-foreground mt-1 text-sm">
-            Get notified in Slack or Microsoft Teams, or send signed webhooks to your own
-            systems, when things happen in StockPilot.
-          </p>
-        </div>
-        {!adding && (
+    <SettingsPanel
+      title={<>Webhooks &amp; alerts</>}
+      description="Get notified in Slack or Microsoft Teams, or send signed webhooks to your own systems, when things happen in StockPilot."
+      aside={
+        !adding && (
           <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
-            <Plus className="mr-1.5 h-4 w-4" />
+            <Plus className="h-4 w-4" />
             Add endpoint
           </Button>
-        )}
-      </div>
-
+        )
+      }
+      bodyClassName="space-y-4"
+    >
       {/* Secret shown once after creating a webhook */}
       {newSecret && (
-        <div className="border-border bg-muted/40 mt-4 rounded-lg border p-3">
-          <p className="text-sm font-medium">Signing secret — copy it now, it won&apos;t be shown again</p>
+        <div className="bg-sunk rounded-lg border p-3">
+          <p className="text-[13px] font-medium">
+            Signing secret — copy it now, it won&apos;t be shown again
+          </p>
           <div className="mt-2 flex items-center gap-2">
-            <code className="bg-background flex-1 overflow-x-auto rounded border px-2 py-1.5 font-mono text-xs">
+            <code className="bg-card min-w-0 flex-1 overflow-x-auto rounded-md border px-2 py-1.5 font-mono text-[12px]">
               {newSecret}
             </code>
             <Button
-              size="sm"
+              size="icon"
               variant="outline"
+              aria-label="Copy signing secret"
               onClick={() => {
                 void navigator.clipboard?.writeText(newSecret);
                 toast.success('Copied');
@@ -176,11 +178,16 @@ export function WebhooksPanel({ endpoints }: { endpoints: PanelEndpoint[] }) {
             >
               <Copy className="h-4 w-4" />
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => setNewSecret(null)}>
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label="Done, hide the signing secret"
+              onClick={() => setNewSecret(null)}
+            >
               <Check className="h-4 w-4" />
             </Button>
           </div>
-          <p className="text-muted-foreground mt-2 text-xs">
+          <p className="text-muted-foreground mt-2 text-[12px]">
             We sign each webhook <code>X-StockPilot-Signature: t=&lt;ts&gt;,v1=&lt;hmac&gt;</code> —
             HMAC-SHA256 of <code>&lt;ts&gt;.&lt;body&gt;</code> with this secret.
           </p>
@@ -189,28 +196,18 @@ export function WebhooksPanel({ endpoints }: { endpoints: PanelEndpoint[] }) {
 
       {/* Add form */}
       {adding && (
-        <div className="border-border mt-4 space-y-4 rounded-lg border p-4">
-          <div>
-            <Label>Destination</Label>
-            <div className="mt-1 flex gap-2">
+        <div className="space-y-4 rounded-lg border p-4">
+          <div role="group" aria-labelledby="wh-destination-label">
+            <Label id="wh-destination-label">Destination</Label>
+            <div className="mt-1.5 flex flex-wrap gap-2">
               {(['slack', 'teams', 'webhook'] as const).map((t) => (
-                <button
-                  key={t}
-                  type="button"
-                  onClick={() => setType(t)}
-                  className={
-                    'rounded-full border px-3 py-1 text-sm transition-colors ' +
-                    (type === t
-                      ? 'border-primary bg-foreground text-background'
-                      : 'border-border text-muted-foreground hover:bg-muted')
-                  }
-                >
+                <FilterChip key={t} pressed={type === t} onClick={() => setType(t)}>
                   {TYPE_LABEL[t]}
-                </button>
+                </FilterChip>
               ))}
             </div>
           </div>
-          <div>
+          <div className="space-y-1.5">
             <Label htmlFor="wh-url">
               {type === 'slack'
                 ? 'Slack incoming webhook URL'
@@ -227,23 +224,22 @@ export function WebhooksPanel({ endpoints }: { endpoints: PanelEndpoint[] }) {
               spellCheck={false}
             />
           </div>
-          <div>
-            <Label>Send these events</Label>
-            <div className="mt-1 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+          <div role="group" aria-labelledby="wh-events-label">
+            <Label id="wh-events-label">Send these events</Label>
+            <div className="mt-1.5 grid grid-cols-1 gap-x-4 gap-y-2 sm:grid-cols-2">
               {EVENTS.map(([value, label]) => (
-                <label key={value} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={selected.has(value)}
-                    onChange={() => toggleEvent(value)}
-                    className="h-4 w-4"
-                  />
+                <Checkbox
+                  key={value}
+                  checked={selected.has(value)}
+                  onCheckedChange={() => toggleEvent(value)}
+                  className="text-[13px]"
+                >
                   {label}
-                </label>
+                </Checkbox>
               ))}
             </div>
           </div>
-          <div>
+          <div className="space-y-1.5">
             <Label htmlFor="wh-desc">Label (optional)</Label>
             <Input
               id="wh-desc"
@@ -265,28 +261,40 @@ export function WebhooksPanel({ endpoints }: { endpoints: PanelEndpoint[] }) {
       )}
 
       {/* List */}
-      <div className="mt-4 space-y-2">
-        {endpoints.length === 0 && !adding ? (
-          <p className="text-muted-foreground text-sm">No endpoints yet.</p>
-        ) : (
-          endpoints.map((ep) => (
-            <div
+      {endpoints.length === 0 && !adding ? (
+        <p className="text-muted-foreground text-[13px]">No endpoints yet.</p>
+      ) : endpoints.length > 0 ? (
+        <ul className="divide-border divide-y rounded-lg border">
+          {endpoints.map((ep) => (
+            <li
               key={ep.id}
-              className="border-border flex flex-wrap items-center justify-between gap-3 rounded-lg border px-3 py-2.5"
+              className="flex flex-wrap items-center justify-between gap-3 px-3 py-2.5"
             >
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <Badge variant={ep.enabled ? 'success' : 'outline'}>{TYPE_LABEL[ep.type]}</Badge>
-                  <span className="text-muted-foreground truncate font-mono text-xs">{ep.url}</span>
+                <div className="flex min-w-0 items-center gap-2">
+                  <Badge variant={ep.enabled ? 'success' : 'outline'} dot>
+                    {TYPE_LABEL[ep.type]}
+                  </Badge>
+                  <span className="text-muted-foreground truncate font-mono text-[12px]">
+                    {ep.url}
+                  </span>
                 </div>
-                <div className="text-muted-foreground mt-1 text-xs">
+                <div className="text-muted-foreground mt-1 text-[12px]">
                   {ep.eventTypes.length} event{ep.eventTypes.length === 1 ? '' : 's'}
                   {ep.description ? ` · ${ep.description}` : ''}
                   {ep.lastStatus ? ` · last: ${ep.lastStatus}` : ''}
                 </div>
               </div>
-              <div className="flex items-center gap-1.5">
-                <Button size="sm" variant="ghost" onClick={() => void test(ep.id)} title="Send test">
+              {/* 8 px apart: the small buttons' 44 px touch areas (coarse
+                  pointers) must not overlap. */}
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => void test(ep.id)}
+                  title="Send test"
+                  aria-label={`Send test to ${endpointName(ep)}`}
+                >
                   <Send className="h-4 w-4" />
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => void toggleEnabled(ep)}>
@@ -297,15 +305,26 @@ export function WebhooksPanel({ endpoints }: { endpoints: PanelEndpoint[] }) {
                   variant="ghost"
                   onClick={() => void remove(ep.id)}
                   title="Delete"
+                  aria-label={`Delete ${endpointName(ep)}`}
                   className="text-destructive"
                 >
                   <Trash2 className="h-4 w-4" />
                 </Button>
               </div>
-            </div>
-          ))
-        )}
-      </div>
-    </section>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </SettingsPanel>
   );
+}
+
+/** An endpoint's accessible name for its icon buttons (CONFLICTS D17): the
+ *  destination and, when set, its label, so each row's buttons say which
+ *  endpoint they act on. The full URL is left out (a Slack or Teams URL holds
+ *  a credential). */
+function endpointName(ep: PanelEndpoint): string {
+  return ep.description
+    ? `${TYPE_LABEL[ep.type]} endpoint ${ep.description}`
+    : `${TYPE_LABEL[ep.type]} endpoint`;
 }

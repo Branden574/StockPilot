@@ -1,19 +1,15 @@
 'use client';
 
-import {
-  Check,
-  Copy,
-  ExternalLink,
-  Loader2,
-  RefreshCw,
-  Search,
-  Trash2,
-} from 'lucide-react';
+import { Check, Copy, ExternalLink, Loader2, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 
+import { FilterBar } from '@/components/patterns/filter-bar';
+import { StatePanel } from '@/components/patterns/state-panel';
+import { SettingsPanel } from '@/components/settings/settings-nav';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
@@ -84,19 +80,34 @@ function localInputToIso(value: string): string | null {
   return d.toISOString();
 }
 
-function VisibilityBadge({ visibility }: { visibility: PublicLinkCandidateRow['public_visibility'] }) {
-  if (visibility === 'public') return <Badge variant="success">Public</Badge>;
+function VisibilityBadge({
+  visibility,
+}: {
+  visibility: PublicLinkCandidateRow['public_visibility'];
+}) {
+  if (visibility === 'public') {
+    return (
+      <Badge variant="success" dot>
+        Public
+      </Badge>
+    );
+  }
   if (visibility === 'hidden') {
     return (
       <Badge
         variant="destructive"
+        dot
         title="Hidden items never appear publicly — even with an entry on this link."
       >
         Hidden
       </Badge>
     );
   }
-  return <Badge variant="outline">Internal only</Badge>;
+  return (
+    <Badge variant="outline" dot>
+      Internal only
+    </Badge>
+  );
 }
 
 /**
@@ -194,20 +205,14 @@ export function PublicLinkEditor({
   const [instructions, setInstructions] = React.useState(link.instructions ?? '');
   const [active, setActive] = React.useState(link.active);
   const [expiresAt, setExpiresAt] = React.useState(isoToLocalInput(link.expires_at));
-  const [availableFrom, setAvailableFrom] = React.useState(
-    isoToLocalInput(link.available_from),
+  const [availableFrom, setAvailableFrom] = React.useState(isoToLocalInput(link.available_from));
+  const [availableUntil, setAvailableUntil] = React.useState(isoToLocalInput(link.available_until));
+  const [availabilityDisplay, setAvailabilityDisplay] = React.useState<'exact' | 'bucket' | 'none'>(
+    link.availability_display,
   );
-  const [availableUntil, setAvailableUntil] = React.useState(
-    isoToLocalInput(link.available_until),
-  );
-  const [availabilityDisplay, setAvailabilityDisplay] = React.useState<
-    'exact' | 'bucket' | 'none'
-  >(link.availability_display);
   const [booksEnabled, setBooksEnabled] = React.useState(link.books_enabled);
   const [itemsEnabled, setItemsEnabled] = React.useState(link.items_enabled);
-  const [includePublicPool, setIncludePublicPool] = React.useState(
-    link.include_public_pool,
-  );
+  const [includePublicPool, setIncludePublicPool] = React.useState(link.include_public_pool);
   const [defaultMaxQty, setDefaultMaxQty] = React.useState(
     link.default_max_qty != null ? String(link.default_max_qty) : '',
   );
@@ -458,7 +463,9 @@ export function PublicLinkEditor({
     const trimmed = draft.trim();
     const next = trimmed === '' ? null : Number(trimmed);
     if (next !== null && (!Number.isInteger(next) || next <= 0)) {
-      setCapError('Quantity limit must be a positive whole number (or blank for the link default).');
+      setCapError(
+        'Quantity limit must be a positive whole number (or blank for the link default).',
+      );
       return;
     }
     if (next === row.max_qty_per_request) {
@@ -480,9 +487,7 @@ export function PublicLinkEditor({
       setCapError(res.error.message);
       return;
     }
-    setRows((cur) =>
-      cur.map((r) => (r.id === row.id ? { ...r, max_qty_per_request: next } : r)),
-    );
+    setRows((cur) => cur.map((r) => (r.id === row.id ? { ...r, max_qty_per_request: next } : r)));
     setCapDrafts((d) => {
       const { [row.id]: _gone, ...rest } = d;
       return rest;
@@ -491,20 +496,66 @@ export function PublicLinkEditor({
 
   const selectedCount = selected.size;
 
+  const pageSomeSelected = !pageAllSelected && rows.some((r) => selected.has(r.id));
+
   return (
-    <div className="space-y-6">
-      {/* ── Link URL + status ─────────────────────────────────────────────── */}
-      <section className="bg-card space-y-3 rounded-xl border p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <h2 className="text-sm font-medium">Public URL</h2>
-            {active ? (
-              <Badge variant="success">Active</Badge>
-            ) : (
-              <Badge variant="outline">Disabled</Badge>
-            )}
-          </div>
-          <div className="flex items-center gap-1.5">
+    <div className="flex flex-col gap-4">
+      {/* The URL and the live count side by side when the column has room
+          for two 320 px cards; stacked otherwise (sub-nav, phones). */}
+      <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr))]">
+        {/* ── Link URL + status ───────────────────────────────────────────── */}
+        <SettingsPanel
+          title="Public URL"
+          aside={
+            <div className="flex flex-wrap items-center gap-2">
+              {active ? (
+                <Badge variant="success" dot>
+                  Active
+                </Badge>
+              ) : (
+                <Badge variant="outline" dot>
+                  Disabled
+                </Badge>
+              )}
+            </div>
+          }
+          bodyClassName="space-y-3"
+        >
+          {publicUrl ? (
+            <>
+              <p className="text-[12.5px] font-medium">
+                New URL generated — copy it now. For security it is shown only this once;
+                regenerating replaces it.
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  value={publicUrl}
+                  readOnly
+                  aria-label="Public URL"
+                  className="min-w-0 flex-1 basis-56 font-mono text-[12.5px]"
+                />
+                <Button type="button" variant="outline" onClick={copyUrl}>
+                  {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                  {copied ? 'Copied' : 'Copy'}
+                </Button>
+                <Button asChild type="button" variant="outline">
+                  <a href={publicUrl} target="_blank" rel="noopener noreferrer">
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    Preview
+                  </a>
+                </Button>
+              </div>
+            </>
+          ) : (
+            <p className="text-muted-foreground text-[12.5px]">
+              For security the URL of this link is not stored and cannot be shown again. Use
+              “Regenerate URL” to mint a new one — it is shown once for copying, and the old URL
+              stops working immediately.
+            </p>
+          )}
+          {/* 8 px apart: the 28 px buttons' 44 px touch areas (coarse
+              pointers) must not overlap. */}
+          <div className="flex flex-wrap items-center gap-2">
             <Button type="button" variant="outline" size="sm" onClick={() => setRotateOpen(true)}>
               <RefreshCw className="h-3.5 w-3.5" />
               Regenerate URL
@@ -520,111 +571,84 @@ export function PublicLinkEditor({
               Delete link
             </Button>
           </div>
-        </div>
-        {publicUrl ? (
-          <>
-            <p className="text-[11.5px] font-medium">
-              New URL generated — copy it now. For security it is shown only this once; regenerating
-              replaces it.
+          {headerError ? (
+            <p role="alert" className="text-destructive text-[12.5px]">
+              {headerError}
             </p>
-            <div className="flex items-center gap-2">
-              <Input value={publicUrl} readOnly className="font-mono text-xs" />
-              <Button type="button" variant="outline" onClick={copyUrl}>
-                {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                {copied ? 'Copied' : 'Copy'}
-              </Button>
-              <Button asChild type="button" variant="outline">
-                <a href={publicUrl} target="_blank" rel="noopener noreferrer">
-                  <ExternalLink className="h-3.5 w-3.5" />
-                  Preview
-                </a>
-              </Button>
-            </div>
-          </>
-        ) : (
-          <p className="text-muted-foreground text-xs">
-            For security the URL of this link is not stored and cannot be shown again. Use
-            “Regenerate URL” to mint a new one — it is shown once for copying, and the old URL stops
-            working immediately.
-          </p>
-        )}
-        {headerError ? (
-          <p role="alert" className="text-destructive text-xs">
-            {headerError}
-          </p>
-        ) : null}
-      </section>
+          ) : null}
+        </SettingsPanel>
 
-      {/* ── What the public sees ──────────────────────────────────────────── */}
-      <section className="bg-card rounded-xl border p-4">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-medium">What the public sees</h2>
-            <p className="text-muted-foreground mt-0.5 text-[11.5px]">
-              Live count from the same eligibility check the public page and
-              submit API use: explicit entries plus the public pool, minus
-              hidden or archived items, disabled types, closed warehouses, and
-              the link&apos;s own window.
-            </p>
+        {/* ── What the public sees ────────────────────────────────────────── */}
+        <SettingsPanel
+          title="What the public sees"
+          description={
+            <>
+              Live count from the same eligibility check the public page and submit API use:
+              explicit entries plus the public pool, minus hidden or archived items, disabled types,
+              closed warehouses, and the link&apos;s own window.
+            </>
+          }
+          aside={
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void refreshEffective()}
+              disabled={effectiveLoading}
+            >
+              {effectiveLoading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )}
+              Refresh
+            </Button>
+          }
+        >
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+            <span className="font-display text-[24px] font-medium tabular-nums leading-9 tracking-[-0.02em]">
+              {effective.total}
+            </span>
+            <span className="text-muted-foreground text-[13px]">
+              item{effective.total === 1 ? '' : 's'} visible right now
+              {link.entry_count !== effective.total
+                ? ` (${link.entry_count} explicit entr${link.entry_count === 1 ? 'y' : 'ies'} on this link)`
+                : ''}
+            </span>
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => void refreshEffective()}
-            disabled={effectiveLoading}
-          >
-            {effectiveLoading ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <RefreshCw className="h-3.5 w-3.5" />
-            )}
-            Refresh
-          </Button>
-        </div>
-        <div className="mt-3 flex items-baseline gap-2">
-          <span className="text-3xl font-semibold tabular-nums">{effective.total}</span>
-          <span className="text-muted-foreground text-sm">
-            item{effective.total === 1 ? '' : 's'} visible right now
-            {link.entry_count !== effective.total
-              ? ` (${link.entry_count} explicit entr${link.entry_count === 1 ? 'y' : 'ies'} on this link)`
-              : ''}
-          </span>
-        </div>
-        {effective.byWarehouse.length > 1 ? (
-          <ul className="text-muted-foreground mt-2 space-y-0.5 text-xs">
-            {effective.byWarehouse.map((w) => (
-              <li key={w.warehouseId}>
-                {warehouseNameById.get(w.warehouseId) ?? 'Warehouse'}:{' '}
-                <span className="tabular-nums">{w.count}</span>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-        {effective.total === 0 ? (
-          <p className="text-muted-foreground mt-2 text-xs">
-            Nothing is publicly visible. Check that the link is active and in
-            its date window, at least one warehouse is public-orderable, the
-            right item types are enabled, and the catalog below has entries.
-          </p>
-        ) : null}
-        {effectiveError ? (
-          <p role="alert" className="text-destructive mt-2 text-xs">
-            {effectiveError}
-          </p>
-        ) : null}
-      </section>
+          {effective.byWarehouse.length > 1 ? (
+            <ul className="divide-border mt-2 divide-y border-t text-[12.5px]">
+              {effective.byWarehouse.map((w) => (
+                <li key={w.warehouseId} className="flex justify-between gap-3 py-1.5">
+                  <span className="text-muted-foreground">
+                    {warehouseNameById.get(w.warehouseId) ?? 'Warehouse'}:
+                  </span>{' '}
+                  <span className="font-mono tabular-nums">{w.count}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {effective.total === 0 ? (
+            <p className="text-muted-foreground mt-2 text-[12.5px]">
+              Nothing is publicly visible. Check that the link is active and in its date window, at
+              least one warehouse is public-orderable, the right item types are enabled, and the
+              catalog below has entries.
+            </p>
+          ) : null}
+          {effectiveError ? (
+            <p role="alert" className="text-destructive mt-2 text-[12.5px]">
+              {effectiveError}
+            </p>
+          ) : null}
+        </SettingsPanel>
+      </div>
 
       {/* ── Link settings ─────────────────────────────────────────────────── */}
-      <section className="bg-card space-y-4 rounded-xl border p-4">
-        <div>
-          <h2 className="text-sm font-medium">Link settings</h2>
-          <p className="text-muted-foreground mt-0.5 text-[11.5px]">
-            Name and purpose are internal; instructions are shown to public
-            requesters at the top of the page.
-          </p>
-        </div>
-
+      <SettingsPanel
+        title="Link settings"
+        description="Name and purpose are internal; instructions are shown to public requesters at the top of the page."
+        bodyClassName="space-y-4"
+      >
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-1.5">
             <Label htmlFor="link-name">Name</Label>
@@ -668,7 +692,7 @@ export function PublicLinkEditor({
               value={expiresAt}
               onChange={(e) => setExpiresAt(e.target.value)}
             />
-            <p className="text-muted-foreground text-[11px]">Blank = never expires.</p>
+            <p className="text-muted-foreground text-[12px]">Blank = never expires.</p>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="link-from">Available from</Label>
@@ -695,11 +719,9 @@ export function PublicLinkEditor({
             <Label>Stock shown to the public</Label>
             <Select
               value={availabilityDisplay}
-              onValueChange={(v) =>
-                setAvailabilityDisplay(v as 'exact' | 'bucket' | 'none')
-              }
+              onValueChange={(v) => setAvailabilityDisplay(v as 'exact' | 'bucket' | 'none')}
             >
-              <SelectTrigger>
+              <SelectTrigger aria-label="Stock shown to the public">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -720,100 +742,61 @@ export function PublicLinkEditor({
               onChange={(e) => setDefaultMaxQty(e.target.value)}
               placeholder="No limit"
             />
-            <p className="text-muted-foreground text-[11px]">
+            <p className="text-muted-foreground text-[12px]">
               Per line. Individual catalog entries can override it below.
             </p>
           </div>
         </div>
 
-        <div className="grid gap-2 sm:grid-cols-2">
-          <label className="flex items-start gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="mt-0.5"
-              checked={active}
-              onChange={(e) => setActive(e.target.checked)}
-            />
-            <span>
-              Link is active
-              <span className="text-muted-foreground block text-[11.5px]">
-                Turning this off hides the page and blocks submissions
-                immediately.
-              </span>
-            </span>
-          </label>
-          <label className="flex items-start gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="mt-0.5"
-              checked={includePublicPool}
-              onChange={(e) => setIncludePublicPool(e.target.checked)}
-            />
-            <span>
-              Include the public pool
-              <span className="text-muted-foreground block text-[11.5px]">
-                Also show every item marked “Public” (in public categories)
-                without adding it here explicitly.
-              </span>
-            </span>
-          </label>
-          <label className="flex items-start gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="mt-0.5"
-              checked={booksEnabled}
-              onChange={(e) => setBooksEnabled(e.target.checked)}
-            />
-            <span>
-              Books
-              <span className="text-muted-foreground block text-[11.5px]">
-                Allow book requests on this link.
-              </span>
-            </span>
-          </label>
-          <label className="flex items-start gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="mt-0.5"
-              checked={itemsEnabled}
-              onChange={(e) => setItemsEnabled(e.target.checked)}
-            />
-            <span>
-              Items
-              <span className="text-muted-foreground block text-[11.5px]">
-                Allow non-book item requests on this link.
-              </span>
-            </span>
-          </label>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <SettingCheckbox
+            checked={active}
+            onCheckedChange={setActive}
+            title="Link is active"
+            hint="Turning this off hides the page and blocks submissions immediately."
+          />
+          <SettingCheckbox
+            checked={includePublicPool}
+            onCheckedChange={setIncludePublicPool}
+            title="Include the public pool"
+            hint="Also show every item marked “Public” (in public categories) without adding it here explicitly."
+          />
+          <SettingCheckbox
+            checked={booksEnabled}
+            onCheckedChange={setBooksEnabled}
+            title="Books"
+            hint="Allow book requests on this link."
+          />
+          <SettingCheckbox
+            checked={itemsEnabled}
+            onCheckedChange={setItemsEnabled}
+            title="Items"
+            hint="Allow non-book item requests on this link."
+          />
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <Button type="button" onClick={() => void saveSettings()} disabled={saving}>
             {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
             Save settings
           </Button>
           {saveError ? (
-            <p role="alert" className="text-destructive text-xs">
+            <p role="alert" className="text-destructive text-[12.5px]">
               {saveError}
             </p>
           ) : savedAt ? (
-            <p className="text-muted-foreground text-xs">Saved.</p>
+            <p className="text-muted-foreground text-[12.5px]">Saved.</p>
           ) : null}
         </div>
-      </section>
+      </SettingsPanel>
 
       {/* ── Catalog editor ────────────────────────────────────────────────── */}
-      <section className="bg-card rounded-xl border">
-        <div className="border-border border-b px-4 py-3">
-          <h2 className="text-sm font-medium">Catalog</h2>
-          <p className="text-muted-foreground mt-0.5 text-[11.5px]">
-            Pick exactly which items and books this link exposes. Select rows,
-            then add or remove them in bulk — nothing changes until you
-            confirm.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2 px-4 py-3">
+      <SettingsPanel
+        title="Catalog"
+        description="Pick exactly which items and books this link exposes. Select rows, then add or remove them in bulk — nothing changes until you confirm."
+        flush
+      >
+        <FilterBar className="px-[18px] py-3">
           <div className="relative min-w-52 flex-1">
             <Search className="text-muted-foreground pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2" />
             <Input
@@ -831,7 +814,7 @@ export function PublicLinkEditor({
               resetToFirstPage();
             }}
           >
-            <SelectTrigger className="w-44">
+            <SelectTrigger className="w-44" aria-label="Filter by category">
               <SelectValue placeholder="Category" />
             </SelectTrigger>
             <SelectContent>
@@ -851,7 +834,7 @@ export function PublicLinkEditor({
               resetToFirstPage();
             }}
           >
-            <SelectTrigger className="w-32">
+            <SelectTrigger className="w-32" aria-label="Filter by type">
               <SelectValue placeholder="Type" />
             </SelectTrigger>
             <SelectContent>
@@ -867,7 +850,7 @@ export function PublicLinkEditor({
               resetToFirstPage();
             }}
           >
-            <SelectTrigger className="w-44">
+            <SelectTrigger className="w-44" aria-label="Filter by warehouse">
               <SelectValue placeholder="Warehouse" />
             </SelectTrigger>
             <SelectContent>
@@ -886,7 +869,7 @@ export function PublicLinkEditor({
               resetToFirstPage();
             }}
           >
-            <SelectTrigger className="w-40">
+            <SelectTrigger className="w-40" aria-label="Filter by link membership">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -901,7 +884,7 @@ export function PublicLinkEditor({
               resetToFirstPage();
             }}
           >
-            <SelectTrigger className="w-40">
+            <SelectTrigger className="w-40" aria-label="Sort by">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -911,53 +894,58 @@ export function PublicLinkEditor({
               <SelectItem value="created-desc">Newest first</SelectItem>
             </SelectContent>
           </Select>
-        </div>
+        </FilterBar>
 
+        {/* The selection bar (DESIGN-SPEC 6.21's bulk bar): it stays in view
+            while the table scrolls, so the count is always visible. The
+            selection itself is one set of ids that survives page and filter
+            changes; only a finished bulk change or Clear selection empties it. */}
         {selectedCount > 0 ? (
-          <div className="border-border bg-muted/40 flex flex-wrap items-center gap-2 border-y px-4 py-2 text-sm">
-            <span className="font-medium tabular-nums">{selectedCount} selected</span>
-            <Button type="button" size="sm" onClick={() => setAddOpen(true)}>
-              Add to link
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => setRemoveOpen(true)}
-            >
-              Remove from link
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              onClick={() => setSelected(new Set())}
-            >
-              Clear selection
-            </Button>
+          <div className="bg-card sticky top-0 z-10 px-[18px] pb-3">
+            <div className="bg-card flex min-h-9 flex-wrap items-center gap-2 rounded-lg border px-3 py-1">
+              <span className="text-foreground mr-1 font-mono text-[12.5px] tabular-nums">
+                {selectedCount} selected
+              </span>
+              <Button type="button" size="sm" onClick={() => setAddOpen(true)}>
+                Add to link
+              </Button>
+              <Button type="button" size="sm" variant="ghost" onClick={() => setRemoveOpen(true)}>
+                Remove from link
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="text-muted-foreground ml-auto"
+                onClick={() => setSelected(new Set())}
+              >
+                Clear selection
+              </Button>
+            </div>
           </div>
         ) : null}
 
         {listError ? (
-          <p role="alert" className="text-destructive px-4 py-2 text-xs">
+          <p role="alert" className="text-destructive px-[18px] pb-2 text-[12.5px]">
             {listError}
           </p>
         ) : null}
         {capError ? (
-          <p role="alert" className="text-destructive px-4 py-2 text-xs">
+          <p role="alert" className="text-destructive px-[18px] pb-2 text-[12.5px]">
             {capError}
           </p>
         ) : null}
 
-        <Table>
+        <Table className="min-w-[860px] border-t">
           <TableHeader>
-            <TableRow>
+            <TableRow className="hover:bg-transparent">
               <TableHead className="w-10">
-                <input
-                  type="checkbox"
-                  aria-label="Select all items on this page"
+                <Checkbox
+                  label="Select all items on this page"
                   checked={pageAllSelected}
-                  onChange={togglePageSelection}
+                  indeterminate={pageSomeSelected}
+                  disabled={rows.length === 0}
+                  onCheckedChange={() => togglePageSelection()}
                 />
               </TableHead>
               <TableHead>Item</TableHead>
@@ -970,101 +958,118 @@ export function PublicLinkEditor({
           </TableHeader>
           <TableBody>
             {listLoading && rows.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={7} className="text-muted-foreground py-8 text-center text-sm">
+              <TableRow className="hover:bg-transparent">
+                <TableCell
+                  colSpan={7}
+                  className="text-muted-foreground py-8 text-center text-[13px]"
+                >
                   <Loader2 className="mr-2 inline h-4 w-4 animate-spin" />
                   Loading items…
                 </TableCell>
               </TableRow>
             ) : rows.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={7} className="text-muted-foreground py-8 text-center text-sm">
-                  No items match these filters.
+              <TableRow className="hover:bg-transparent">
+                <TableCell colSpan={7} className="p-0">
+                  <StatePanel
+                    kind="no-match"
+                    surface="plain"
+                    headingLevel={null}
+                    icon={null}
+                    title="No items match these filters."
+                  />
                 </TableCell>
               </TableRow>
             ) : (
-              rows.map((row) => (
-                <TableRow key={row.id} className={listLoading ? 'opacity-60' : undefined}>
-                  <TableCell>
-                    <input
-                      type="checkbox"
-                      aria-label={`Select ${row.name}`}
-                      checked={selected.has(row.id)}
-                      onChange={() => toggleRow(row.id)}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <p className="font-medium">{row.name}</p>
-                    <p className="text-muted-foreground text-xs">
-                      {row.sku ?? 'No SKU'}
-                      {row.status !== 'active' ? ' · not active (never public)' : ''}
-                    </p>
-                  </TableCell>
-                  <TableCell className="text-xs capitalize">
-                    {row.item_type ?? 'product'}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground text-xs">
-                    {row.category_id
-                      ? categoryNameById.get(row.category_id) ?? '—'
-                      : 'Uncategorized'}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground text-xs">
-                    {row.warehouse_id ? warehouseNameById.get(row.warehouse_id) ?? '—' : '—'}
-                  </TableCell>
-                  <TableCell>
-                    <VisibilityBadge visibility={row.public_visibility} />
-                  </TableCell>
-                  <TableCell>
-                    {row.on_link ? (
-                      <div className="flex items-center gap-2">
-                        <Badge variant="success">On link</Badge>
-                        <Input
-                          type="number"
-                          min={1}
-                          inputMode="numeric"
-                          aria-label={`Max quantity per request for ${row.name}`}
-                          className="h-7 w-24 text-xs"
-                          placeholder={
-                            link.default_max_qty != null
-                              ? `Default (${link.default_max_qty})`
-                              : 'No limit'
-                          }
-                          value={capDrafts[row.id] ?? (row.max_qty_per_request != null ? String(row.max_qty_per_request) : '')}
-                          disabled={capPendingId === row.id}
-                          onChange={(e) =>
-                            setCapDrafts((d) => ({ ...d, [row.id]: e.target.value }))
-                          }
-                          onBlur={() => void commitCap(row)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault();
-                              void commitCap(row);
+              rows.map((row) => {
+                const isSelected = selected.has(row.id);
+                return (
+                  <TableRow
+                    key={row.id}
+                    data-state={isSelected ? 'selected' : undefined}
+                    className={listLoading ? 'opacity-60' : undefined}
+                  >
+                    <TableCell>
+                      <Checkbox
+                        label={`Select ${row.name}`}
+                        checked={isSelected}
+                        onCheckedChange={() => toggleRow(row.id)}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <p className="font-medium">{row.name}</p>
+                      <p className="text-muted-foreground text-[12px]">
+                        <span className="font-mono text-[11.5px]">{row.sku ?? 'No SKU'}</span>
+                        {row.status !== 'active' ? ' · not active (never public)' : ''}
+                      </p>
+                    </TableCell>
+                    <TableCell className="text-[12.5px] capitalize">
+                      {row.item_type ?? 'product'}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground text-[12.5px]">
+                      {row.category_id
+                        ? (categoryNameById.get(row.category_id) ?? '—')
+                        : 'Uncategorized'}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground text-[12.5px]">
+                      {row.warehouse_id ? (warehouseNameById.get(row.warehouse_id) ?? '—') : '—'}
+                    </TableCell>
+                    <TableCell>
+                      <VisibilityBadge visibility={row.public_visibility} />
+                    </TableCell>
+                    <TableCell>
+                      {row.on_link ? (
+                        <div className="flex items-center gap-2">
+                          <Badge variant="success" dot>
+                            On link
+                          </Badge>
+                          <Input
+                            type="number"
+                            min={1}
+                            inputMode="numeric"
+                            aria-label={`Max quantity per request for ${row.name}`}
+                            className="h-7 w-24 text-[12.5px]"
+                            placeholder={
+                              link.default_max_qty != null
+                                ? `Default (${link.default_max_qty})`
+                                : 'No limit'
                             }
-                          }}
-                        />
-                        {capPendingId === row.id ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : null}
-                      </div>
-                    ) : (
-                      <span className="text-muted-foreground text-xs">—</span>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))
+                            value={
+                              capDrafts[row.id] ??
+                              (row.max_qty_per_request != null
+                                ? String(row.max_qty_per_request)
+                                : '')
+                            }
+                            disabled={capPendingId === row.id}
+                            onChange={(e) =>
+                              setCapDrafts((d) => ({ ...d, [row.id]: e.target.value }))
+                            }
+                            onBlur={() => void commitCap(row)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                void commitCap(row);
+                              }
+                            }}
+                          />
+                          {capPendingId === row.id ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : null}
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground text-[12.5px]">—</span>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })
             )}
           </TableBody>
         </Table>
 
-        <div className="px-4 py-3">
-          <Pagination
-            page={page}
-            pageSize={PAGE_SIZE}
-            total={total}
-            onPageChange={setPage}
-          />
+        <div className="border-border border-t px-[18px] py-2.5">
+          <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} />
         </div>
-      </section>
+      </SettingsPanel>
 
       {/* ── Bulk add confirmation ─────────────────────────────────────────── */}
       <Dialog
@@ -1079,9 +1084,8 @@ export function PublicLinkEditor({
             <DialogTitle>Add items to this link?</DialogTitle>
             <DialogDescription>
               You are about to make {selectedCount} item
-              {selectedCount === 1 ? '' : 's'} available on “{link.name}”.
-              Anyone with the link can request them while it is active. Items
-              marked Hidden stay hidden even with an entry.
+              {selectedCount === 1 ? '' : 's'} available on “{link.name}”. Anyone with the link can
+              request them while it is active. Items marked Hidden stay hidden even with an entry.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
@@ -1135,9 +1139,9 @@ export function PublicLinkEditor({
             <DialogTitle>Remove items from this link?</DialogTitle>
             <DialogDescription>
               You are about to remove {selectedCount} item
-              {selectedCount === 1 ? '' : 's'} from “{link.name}”. Public
-              visitors will no longer see or be able to request them here
-              (unless they remain visible through the public pool).
+              {selectedCount === 1 ? '' : 's'} from “{link.name}”. Public visitors will no longer
+              see or be able to request them here (unless they remain visible through the public
+              pool).
             </DialogDescription>
           </DialogHeader>
           {bulkError ? (
@@ -1187,5 +1191,35 @@ export function PublicLinkEditor({
         onConfirm={performDelete}
       />
     </div>
+  );
+}
+
+/**
+ * A link setting's checkbox: the shared box with its title and the hint
+ * under it, all one control (the whole block toggles), as the native label
+ * that wrapped both did.
+ */
+function SettingCheckbox({
+  checked,
+  onCheckedChange,
+  title,
+  hint,
+}: {
+  checked: boolean;
+  onCheckedChange: (next: boolean) => void;
+  title: string;
+  hint: string;
+}) {
+  return (
+    <Checkbox
+      checked={checked}
+      onCheckedChange={onCheckedChange}
+      className="flex w-full items-start gap-2.5"
+    >
+      <span className="min-w-0 flex-1">
+        <span className="block text-[13.5px]">{title}</span>
+        <span className="text-muted-foreground block text-[12.5px]">{hint}</span>
+      </span>
+    </Checkbox>
   );
 }

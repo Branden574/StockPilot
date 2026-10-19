@@ -4,8 +4,8 @@ import { Loader2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 
+import { SettingsPanel } from '@/components/settings/settings-nav';
 import { Button } from '@/components/ui/button';
-import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import {
   setPublicRequestBlurbAction,
@@ -84,17 +84,15 @@ export function PublicRequestsGlobalSettings({
   }
 
   return (
-    <div className="space-y-6">
-      <section className="bg-card space-y-2 rounded-xl border p-4">
-        <div>
-          <Label htmlFor="public-blurb" className="text-sm font-medium">
-            Public blurb
-          </Label>
-          <p className="text-muted-foreground mt-0.5 text-[11.5px]">
-            Shown at the top of every public request page. Use it to set
-            expectations or describe who you serve.
-          </p>
-        </div>
+    <>
+      <SettingsPanel
+        title={
+          // The heading names the field: the textarea's label sits inside it.
+          <label htmlFor="public-blurb">Public blurb</label>
+        }
+        description="Shown at the top of every public request page. Use it to set expectations or describe who you serve."
+        bodyClassName="space-y-2"
+      >
         <Textarea
           id="public-blurb"
           value={blurb}
@@ -104,41 +102,38 @@ export function PublicRequestsGlobalSettings({
           placeholder="Tell visitors who you are and how requests are fulfilled."
         />
         {blurbError ? (
-          <p role="alert" className="text-destructive text-xs">
+          <p role="alert" className="text-destructive text-[12.5px]">
             {blurbError}
           </p>
         ) : (
-          <p className="text-muted-foreground text-[11px]">
+          <p className="text-muted-foreground text-[12px]">
             {savingBlurb ? 'Saving…' : 'Saves automatically.'}
           </p>
         )}
-      </section>
+      </SettingsPanel>
 
-      <section className="bg-card rounded-xl border">
-        <div className="border-border border-b px-4 py-3">
-          <h2 className="text-sm font-medium">Public-orderable warehouses</h2>
-          <p className="text-muted-foreground mt-0.5 text-[11.5px]">
-            Applies to every link: only items in warehouses you flip on here
-            can ever appear on a public request page.
-          </p>
-        </div>
+      <SettingsPanel
+        title="Public-orderable warehouses"
+        description="Applies to every link: only items in warehouses you flip on here can ever appear on a public request page."
+        flush
+      >
         {warehouseError ? (
-          <p role="alert" className="text-destructive px-4 pt-3 text-xs">
+          <p role="alert" className="text-destructive px-[18px] pt-3 text-[12.5px]">
             {warehouseError}
           </p>
         ) : null}
-        <ul className="divide-y">
+        <ul className="divide-border divide-y">
           {warehouseState.length === 0 && (
-            <li className="text-muted-foreground p-4 text-center text-xs">
+            <li className="text-muted-foreground px-[18px] py-6 text-center text-[13px]">
               No warehouses to configure.
             </li>
           )}
           {warehouseState.map((w) => (
             <li
               key={w.id}
-              className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm"
+              className="flex items-center justify-between gap-3 px-[18px] py-2.5 text-[13.5px]"
             >
-              <span className="truncate">{w.name}</span>
+              <span className="min-w-0 truncate">{w.name}</span>
               <Button
                 type="button"
                 variant={w.isPublicOrderable ? 'gradient' : 'outline'}
@@ -146,15 +141,13 @@ export function PublicRequestsGlobalSettings({
                 onClick={() => toggleWarehouse(w.id, !w.isPublicOrderable)}
                 disabled={togglingWarehouseId === w.id}
               >
-                {togglingWarehouseId === w.id && (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                )}
+                {togglingWarehouseId === w.id && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                 {w.isPublicOrderable ? 'Open' : 'Closed'}
               </Button>
             </li>
           ))}
         </ul>
-      </section>
-    </div>
+      </SettingsPanel>
+    </>
   );
 }
