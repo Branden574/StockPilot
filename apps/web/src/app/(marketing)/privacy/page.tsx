@@ -3,7 +3,8 @@ import type { Metadata } from 'next';
 import { PRIVACY_EMAIL } from '@/lib/site';
 
 export const metadata: Metadata = {
-  title: 'Privacy Policy · StockPilot',
+  // The root layout's title template adds " · StockPilot" (CONFLICTS D15).
+  title: 'Privacy Policy',
   description:
     'How StockPilot collects, stores, and protects the data you and your organization put into the app.',
 };
@@ -19,8 +20,10 @@ const EFFECTIVE_DATE = 'June 9, 2026';
  */
 export default function PrivacyPolicyPage() {
   return (
-    <div className="mx-auto max-w-3xl px-6 py-16 text-[15px] leading-7 text-foreground">
-      <h1 className="text-4xl font-semibold tracking-tight">Privacy Policy</h1>
+    <div className="mx-auto max-w-3xl px-4 py-16 text-[15px] leading-7 text-foreground sm:px-8">
+      <h1 className="font-display text-[34px] font-medium leading-[1.15] tracking-[-0.025em] sm:text-[40px]">
+        Privacy Policy
+      </h1>
       <p className="mt-2 text-sm text-muted-foreground">Effective {EFFECTIVE_DATE}</p>
 
       <Section title="Summary">
@@ -124,7 +127,7 @@ export default function PrivacyPolicyPage() {
       </Section>
 
       <section id="california" className="mt-10 scroll-mt-20">
-        <h2 className="text-xl font-semibold tracking-tight">
+        <h2 className="font-display text-[20px] font-medium leading-[1.5] tracking-[-0.02em]">
           Your California privacy rights (CCPA/CPRA)
         </h2>
         <div className="mt-3 text-muted-foreground">
@@ -300,7 +303,9 @@ export default function PrivacyPolicyPage() {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="mt-10">
-      <h2 className="text-xl font-semibold tracking-tight">{title}</h2>
+      <h2 className="font-display text-[20px] font-medium leading-[1.5] tracking-[-0.02em]">
+        {title}
+      </h2>
       <div className="mt-3 text-muted-foreground">{children}</div>
     </section>
   );

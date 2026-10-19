@@ -24,8 +24,10 @@ const PRIORITIES: Array<{ value: string; label: string }> = [
   { value: 'urgent', label: 'Urgent — blocking my team' },
 ];
 
+// A native select drawn like the shared Input (P5.1): the stronger hairline,
+// 40 px on desktop, and 44 px with 16 px text below sm.
 const selectClass =
-  'border-border bg-background focus-visible:ring-ring h-10 w-full rounded-md border px-3 text-sm focus-visible:outline-none focus-visible:ring-2';
+  'bg-card focus-visible:ring-ring focus-visible:ring-offset-background h-10 w-full rounded-md border border-line-strong px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 max-sm:h-11 max-sm:text-base';
 
 export function SupportForm() {
   const [busy, setBusy] = React.useState(false);
@@ -61,18 +63,29 @@ export function SupportForm() {
 
   if (done) {
     return (
-      <div className="border-border bg-card rounded-xl border p-8 text-center">
-        <CheckCircle2 className="text-foreground mx-auto h-8 w-8" strokeWidth={1.6} />
-        <h2 className="mt-3 text-lg font-semibold">Ticket received</h2>
-        <p className="text-muted-foreground mx-auto mt-1.5 max-w-sm text-sm leading-relaxed">
+      <div className="border-border bg-card rounded-lg border px-6 py-8 text-center">
+        <span
+          aria-hidden
+          className="bg-success-wash text-success mx-auto grid size-11 place-items-center rounded-full"
+        >
+          <CheckCircle2 className="h-5 w-5" strokeWidth={1.75} />
+        </span>
+        <h2 className="mt-3 font-display text-[20px] font-medium tracking-[-0.02em]">
+          Ticket received
+        </h2>
+        <p className="text-muted-foreground mx-auto mt-1.5 max-w-sm text-[13.5px] leading-relaxed">
           Thanks — we&apos;ve logged your ticket and emailed our team. We&apos;ll reply to the email
           you provided, usually within 1–2 business days.
         </p>
-        <Button variant="outline" className="mt-5" onClick={() => {
-          setDone(false);
-          setSubject('');
-          setMessage('');
-        }}>
+        <Button
+          variant="outline"
+          className="mt-5"
+          onClick={() => {
+            setDone(false);
+            setSubject('');
+            setMessage('');
+          }}
+        >
           Submit another
         </Button>
       </div>
@@ -82,60 +95,116 @@ export function SupportForm() {
   return (
     <form onSubmit={submit} className="space-y-4">
       <div className="grid gap-4 sm:grid-cols-2">
-        <div>
+        <div className="space-y-2">
           <Label htmlFor="sup-name">Name</Label>
-          <Input id="sup-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={120} autoComplete="name" />
+          <Input
+            id="sup-name"
+            className="sm:h-10"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            maxLength={120}
+            autoComplete="name"
+          />
         </div>
-        <div>
+        <div className="space-y-2">
           <Label htmlFor="sup-email">
             Email <span className="text-destructive">*</span>
           </Label>
-          <Input id="sup-email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} maxLength={254} autoComplete="email" placeholder="you@company.com" />
+          <Input
+            id="sup-email"
+            className="sm:h-10"
+            type="email"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            maxLength={254}
+            autoComplete="email"
+            placeholder="you@company.com"
+          />
         </div>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <div>
+        <div className="space-y-2">
           <Label htmlFor="sup-category">What&apos;s this about?</Label>
-          <select id="sup-category" className={selectClass} value={category} onChange={(e) => setCategory(e.target.value)}>
+          <select
+            id="sup-category"
+            className={selectClass}
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+          >
             {CATEGORIES.map((c) => (
-              <option key={c.value} value={c.value}>{c.label}</option>
+              <option key={c.value} value={c.value}>
+                {c.label}
+              </option>
             ))}
           </select>
         </div>
-        <div>
+        <div className="space-y-2">
           <Label htmlFor="sup-priority">Priority</Label>
-          <select id="sup-priority" className={selectClass} value={priority} onChange={(e) => setPriority(e.target.value)}>
+          <select
+            id="sup-priority"
+            className={selectClass}
+            value={priority}
+            onChange={(e) => setPriority(e.target.value)}
+          >
             {PRIORITIES.map((p) => (
-              <option key={p.value} value={p.value}>{p.label}</option>
+              <option key={p.value} value={p.value}>
+                {p.label}
+              </option>
             ))}
           </select>
         </div>
       </div>
 
-      <div>
+      <div className="space-y-2">
         <Label htmlFor="sup-subject">
           Subject <span className="text-destructive">*</span>
         </Label>
-        <Input id="sup-subject" required value={subject} onChange={(e) => setSubject(e.target.value)} maxLength={200} placeholder="Short summary" />
+        <Input
+          id="sup-subject"
+          className="sm:h-10"
+          required
+          value={subject}
+          onChange={(e) => setSubject(e.target.value)}
+          maxLength={200}
+          placeholder="Short summary"
+        />
       </div>
 
-      <div>
+      <div className="space-y-2">
         <Label htmlFor="sup-message">
           Details <span className="text-destructive">*</span>
         </Label>
-        <Textarea id="sup-message" required value={message} onChange={(e) => setMessage(e.target.value)} rows={6} maxLength={8000} placeholder="What happened? What did you expect? If it's broken, what were you doing when it broke?" />
+        <Textarea
+          id="sup-message"
+          required
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          rows={6}
+          maxLength={8000}
+          placeholder="What happened? What did you expect? If it's broken, what were you doing when it broke?"
+        />
       </div>
 
       {/* Honeypot — visually hidden, off-screen, not announced. Bots fill it. */}
-      <div aria-hidden className="pointer-events-none absolute -left-[9999px] h-0 w-0 overflow-hidden">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute -left-[9999px] h-0 w-0 overflow-hidden"
+      >
         <label htmlFor="sup-company">Company</label>
-        <input id="sup-company" tabIndex={-1} autoComplete="off" value={company} onChange={(e) => setCompany(e.target.value)} />
+        <input
+          id="sup-company"
+          tabIndex={-1}
+          autoComplete="off"
+          value={company}
+          onChange={(e) => setCompany(e.target.value)}
+        />
       </div>
 
-      <div className="flex items-center justify-between pt-1">
+      <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
         <p className="text-muted-foreground text-xs">We&apos;ll only use your email to reply.</p>
-        <Button type="submit" disabled={busy}>
+        <Button type="submit" disabled={busy} className="h-10 px-5 max-sm:h-11 max-sm:w-full">
           {busy ? 'Sending…' : 'Send ticket'}
         </Button>
       </div>

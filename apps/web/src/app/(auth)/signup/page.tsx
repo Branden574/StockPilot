@@ -30,15 +30,15 @@ export default function SignUpPage() {
       }
     >
       <div className="space-y-4">
-        <div className="flex items-start gap-3 rounded-md border border-border bg-muted/40 p-3 text-[13px] text-[var(--ed-ink-3)]">
-          <Mail className="mt-0.5 h-4 w-4 shrink-0 text-[var(--ed-ink-4)]" />
+        <div className="bg-sunk text-ink-2 flex items-start gap-3 rounded-md p-3 text-[13px]">
+          <Mail className="text-muted-foreground mt-0.5 h-4 w-4 shrink-0" aria-hidden />
           <p>
             If you&apos;re expecting access, your administrator will email you an invite link. Open
             that email and click <span className="font-medium text-foreground">Accept invite</span>{' '}
             to set up your account.
           </p>
         </div>
-        <p className="text-[12.5px] text-[var(--ed-ink-4)]">
+        <p className="text-muted-foreground text-[12.5px]">
           Need access? Reach out to your company&apos;s StockPilot administrator and ask them to
           invite you. They can assign you to a charter and warehouse from the admin dashboard.
         </p>

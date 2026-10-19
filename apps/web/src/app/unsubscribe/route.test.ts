@@ -155,3 +155,24 @@ describe('/unsubscribe', () => {
     expect(stub.fromCalls).toEqual([]);
   });
 });
+
+// Redesign P5.1: the page keeps zero JS and its words, and draws the app's
+// palette in both schemes with the ink button for the opt-out.
+describe('/unsubscribe page look', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    envState.UNSUBSCRIBE_SECRET = 'route-test-secret-0123456789abcdef';
+    adminHolder.client = null;
+  });
+
+  it('is zero JS, with the brand palette, a dark scheme and a 44 px Unsubscribe button', async () => {
+    const res = await GET(buildGet(EMAIL, mintUnsubscribeToken(EMAIL)!));
+    const html = await res.text();
+    expect(html).not.toMatch(/<script\b/i);
+    expect(html).not.toMatch(/style="/);
+    expect(html).toMatch(/@media \(prefers-color-scheme:dark\)/);
+    expect(html).toMatch(/\.btn\{[^}]*min-height:44px/);
+    expect(html).toMatch(/<button type="submit" class="btn">\s*Unsubscribe\s*<\/button>/);
+    expect(html).toContain('Unsubscribe from order notifications?');
+  });
+});

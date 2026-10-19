@@ -5,7 +5,8 @@ import Link from 'next/link';
 import { COMPANY_NAME, SALES_EMAIL } from '@/lib/site';
 
 export const metadata: Metadata = {
-  title: 'Pricing · StockPilot',
+  // The root layout's title template adds " · StockPilot" (CONFLICTS D15).
+  title: 'Pricing',
   description: `Plans for teams of every size. ${COMPANY_NAME} scales from a single warehouse to a multi-org platform — at a fraction of legacy WMS/ERP cost.`,
 };
 
@@ -93,14 +94,16 @@ const TIERS: Tier[] = [
 
 export default function PricingPage() {
   return (
-    <div className="mx-auto max-w-[1280px] px-6 py-16 sm:px-8">
+    <div className="mx-auto max-w-[1280px] px-4 py-16 sm:px-8">
       <div className="mx-auto max-w-2xl text-center">
-        <h1 className="text-4xl font-semibold tracking-tight">Simple, scalable pricing</h1>
+        <h1 className="font-display text-[34px] font-medium leading-[1.15] tracking-[-0.025em] sm:text-[40px]">
+          Simple, scalable pricing
+        </h1>
         <p className="text-muted-foreground mt-3 text-[15px] leading-relaxed">
           Start free and grow into it. Every plan includes the web app, the native mobile app, and
           your whole team — and costs a rounding error next to legacy WMS/ERP.
         </p>
-        <div className="border-border bg-muted/40 text-muted-foreground mt-5 inline-flex rounded-full border px-3 py-1 text-xs">
+        <div className="border-border bg-sunk text-muted-foreground mt-5 inline-flex rounded-full border px-3 py-1 text-xs">
           Introductory pricing — early teams lock in this rate. <span className="mx-1">·</span>
           <a href={`mailto:${SALES_EMAIL}`} className="text-foreground underline-offset-4 hover:underline">
             Talk to us for a quote
@@ -113,14 +116,14 @@ export default function PricingPage() {
           <div
             key={t.name}
             className={
-              'flex flex-col rounded-2xl border p-5 ' +
+              'flex flex-col rounded-lg border p-5 ' +
               (t.highlight
-                ? 'border-primary bg-card shadow-sm ring-1 ring-[var(--ed-line-strong)]'
+                ? 'border-primary bg-card ring-line-strong ring-1'
                 : 'border-border bg-card')
             }
           >
             <div className="flex items-center justify-between">
-              <h2 className="text-base font-semibold">{t.name}</h2>
+              <h2 className="font-display text-[17px] font-medium tracking-[-0.01em]">{t.name}</h2>
               {t.highlight && (
                 <span className="bg-foreground text-background rounded-full px-2.5 py-0.5 text-[11px] font-medium">
                   Most popular
@@ -131,7 +134,9 @@ export default function PricingPage() {
               {t.blurb}
             </p>
             <div className="mt-4 flex items-baseline gap-1">
-              <span className="text-3xl font-semibold tracking-tight">{t.price}</span>
+              <span className="font-display text-[30px] font-medium tracking-[-0.025em]">
+                {t.price}
+              </span>
               {t.cadence && <span className="text-muted-foreground text-sm">{t.cadence}</span>}
             </div>
 
@@ -153,7 +158,7 @@ export default function PricingPage() {
                   key={f}
                   className={
                     i === 0 && f.endsWith('plus:')
-                      ? 'text-[12px] font-medium text-[var(--ed-ink-4)]'
+                      ? 'text-muted-foreground text-[12px] font-medium'
                       : 'flex items-start gap-2 text-[13px]'
                   }
                 >

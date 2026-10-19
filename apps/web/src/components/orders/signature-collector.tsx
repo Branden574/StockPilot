@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { ExternalCard, ExternalEyebrow } from '@/components/auth/external-shell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -139,9 +140,11 @@ export function SignatureCollector({
   if (submitted) {
     const display = Math.max(0, countdown);
     return (
-      <div className="border-border bg-card rounded-2xl border p-6 text-center">
-        <h2 className="font-display text-xl">Thank you</h2>
-        <p className="text-muted-foreground mt-2 text-sm">
+      <ExternalCard padding="lg" className="text-center">
+        <h2 className="font-display text-foreground text-[20px] font-medium leading-[1.3] tracking-[-0.02em]">
+          Thank you
+        </h2>
+        <p className="text-muted-foreground mt-2 text-[13.5px] leading-[20.25px]">
           {submitted.message}
           {submitted.receiptOnItsWay ? (
             <>
@@ -155,115 +158,119 @@ export function SignatureCollector({
           <span className="text-foreground font-mono tabular-nums">{display}</span>
           {display === 1 ? ' second' : ' seconds'}…
         </p>
-      </div>
+      </ExternalCard>
     );
   }
 
   return (
     <div className="space-y-4">
-      <section className="border-border bg-card space-y-2 rounded-2xl border p-4">
-        <p className="text-muted-foreground text-xs uppercase tracking-wide">
-          Order summary
-        </p>
-        <p className="text-sm">
-          {summary.lines.length} item{summary.lines.length === 1 ? '' : 's'} ·{' '}
-          {summary.fulfillmentType === 'pickup' ? 'Pickup' : 'Delivery'} ·{' '}
-          {summary.warehouseName ?? 'Warehouse'}
-          {summary.charterName ? ` → ${summary.charterName}` : ''}
-        </p>
-        <details className="text-muted-foreground text-xs">
-          <summary className="cursor-pointer">Show items</summary>
-          <ul className="mt-2 space-y-1">
-            {summary.lines.map((l, i) => (
-              <li key={i} className="flex justify-between gap-3">
-                <span className="flex-1 truncate">{l.itemName}</span>
-                <span className="tabular-nums">
-                  {l.quantityPicked || l.quantityRequested}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </details>
-      </section>
+      <ExternalCard>
+        <div className="space-y-2">
+          <ExternalEyebrow>Order summary</ExternalEyebrow>
+          <p className="text-[13.5px] leading-[20.25px]">
+            {summary.lines.length} item{summary.lines.length === 1 ? '' : 's'} ·{' '}
+            {summary.fulfillmentType === 'pickup' ? 'Pickup' : 'Delivery'} ·{' '}
+            {summary.warehouseName ?? 'Warehouse'}
+            {summary.charterName ? ` → ${summary.charterName}` : ''}
+          </p>
+          <details className="text-muted-foreground text-[12.5px]">
+            <summary className="hover:text-foreground -mx-1 inline-flex min-h-11 cursor-pointer items-center rounded-md px-1 sm:min-h-0 sm:py-1">
+              Show items
+            </summary>
+            <ul className="divide-border mt-1 divide-y">
+              {summary.lines.map((l, i) => (
+                <li key={i} className="flex justify-between gap-3 py-1.5">
+                  <span className="text-foreground flex-1 truncate">{l.itemName}</span>
+                  <span className="font-mono tabular-nums">
+                    {l.quantityPicked || l.quantityRequested}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        </div>
+      </ExternalCard>
 
-      <section className="border-border bg-card space-y-3 rounded-2xl border p-4">
-        {summary.requesterName ? (
-          <label className="border-border hover:bg-muted/40 flex cursor-pointer items-start gap-3 rounded-lg border p-3 text-sm">
-            <input
-              type="checkbox"
-              checked={onBehalfOf}
-              onChange={(e) => toggleOnBehalfOf(e.target.checked)}
-              className="mt-0.5 h-4 w-4 cursor-pointer"
-            />
-            <span className="flex-1">
-              <span className="font-medium">Someone else is receiving</span>
-              <span className="text-muted-foreground mt-0.5 block text-xs">
-                Check this if you&apos;re picking up on behalf of{' '}
-                <span className="text-foreground font-medium">
-                  {summary.requesterName}
+      <ExternalCard>
+        <div className="space-y-4">
+          {summary.requesterName ? (
+            <label className="border-border hover:bg-muted flex cursor-pointer items-start gap-3 rounded-md border p-3 text-[13.5px] transition-colors">
+              <input
+                type="checkbox"
+                checked={onBehalfOf}
+                onChange={(e) => toggleOnBehalfOf(e.target.checked)}
+                className="accent-foreground mt-px h-5 w-5 shrink-0 cursor-pointer"
+              />
+              <span className="flex-1">
+                <span className="font-medium">Someone else is receiving</span>
+                <span className="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18.75px]">
+                  Check this if you&apos;re picking up on behalf of{' '}
+                  <span className="text-foreground font-medium">
+                    {summary.requesterName}
+                  </span>
+                  . What you take is recorded on their order, and they&apos;ll
+                  be notified.
                 </span>
-                . What you take is recorded on their order, and they&apos;ll
-                be notified.
               </span>
-            </span>
-          </label>
-        ) : null}
-        <div className="space-y-2">
-          <Label htmlFor="signer-name">
-            {onBehalfOf ? 'Your name (the person picking up)' : 'Your name'}
-          </Label>
-          <Input
-            id="signer-name"
-            value={signerName}
-            onChange={(e) => setSignerName(e.target.value)}
-            placeholder="Full name"
-            maxLength={120}
-            autoComplete="name"
-            autoFocus={onBehalfOf}
-          />
-          {onBehalfOf && summary.requesterName ? (
-            <p className="text-muted-foreground text-[11px]">
-              Signing on behalf of{' '}
-              <span className="text-foreground">{summary.requesterName}</span>.
-            </p>
+            </label>
           ) : null}
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="signer-email">
-            {onBehalfOf ? 'Your email (for the receipt)' : 'Email'}
-          </Label>
-          <Input
-            id="signer-email"
-            type="email"
-            value={signerEmail}
-            onChange={(e) => setSignerEmail(e.target.value)}
-            placeholder="you@example.com"
-            maxLength={254}
-            autoComplete="email"
-            inputMode="email"
-          />
-        </div>
-        <div className="space-y-2">
-          <Label>Signature</Label>
-          <SignaturePad ref={padRef} onChange={(empty) => setPadEmpty(empty)} />
-          <p className="text-muted-foreground text-xs">
-            Use your finger or stylus. Tap{' '}
-            <span className="font-medium">Clear</span> to start over.
+          <div className="space-y-2">
+            <Label htmlFor="signer-name">
+              {onBehalfOf ? 'Your name (the person picking up)' : 'Your name'}
+            </Label>
+            <Input
+              id="signer-name"
+              value={signerName}
+              onChange={(e) => setSignerName(e.target.value)}
+              placeholder="Full name"
+              maxLength={120}
+              autoComplete="name"
+              autoFocus={onBehalfOf}
+            />
+            {onBehalfOf && summary.requesterName ? (
+              <p className="text-muted-foreground text-xs">
+                Signing on behalf of{' '}
+                <span className="text-foreground">{summary.requesterName}</span>.
+              </p>
+            ) : null}
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="signer-email">
+              {onBehalfOf ? 'Your email (for the receipt)' : 'Email'}
+            </Label>
+            <Input
+              id="signer-email"
+              type="email"
+              value={signerEmail}
+              onChange={(e) => setSignerEmail(e.target.value)}
+              placeholder="you@example.com"
+              maxLength={254}
+              autoComplete="email"
+              inputMode="email"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Signature</Label>
+            <SignaturePad ref={padRef} onChange={(empty) => setPadEmpty(empty)} />
+            <p className="text-muted-foreground text-xs">
+              Use your finger or stylus. Tap{' '}
+              <span className="font-medium">Clear</span> to start over.
+            </p>
+          </div>
+          <Button
+            onClick={submit}
+            disabled={submitting || padEmpty}
+            className="w-full"
+            size="lg"
+            variant="gradient"
+          >
+            {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Confirm & complete'}
+          </Button>
+          <p className="text-muted-foreground text-center text-xs">
+            By signing, you confirm the items listed above were received.
           </p>
         </div>
-        <Button
-          onClick={submit}
-          disabled={submitting || padEmpty}
-          className="w-full"
-          size="lg"
-          variant="gradient"
-        >
-          {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Confirm & complete'}
-        </Button>
-        <p className="text-muted-foreground text-center text-[11px]">
-          By signing, you confirm the items listed above were received.
-        </p>
-      </section>
+      </ExternalCard>
     </div>
   );
 }

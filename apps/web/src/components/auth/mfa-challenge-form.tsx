@@ -99,79 +99,87 @@ export function MfaChallengeForm({ factors }: MfaChallengeFormProps) {
     router.refresh();
   }
 
+  // The recovery dialog renders BESIDE the code form, never inside it: the
+  // dialog is portalled, but React bubbles a portalled form's submit event up
+  // the React tree, so a dialog inside the code form submitted both forms
+  // (a typed code went to the factor challenge during a recovery).
   return (
-    <form onSubmit={submit} className="space-y-4" noValidate>
-      <div className="flex items-start gap-3 rounded-lg border border-border bg-card p-3 text-sm">
-        <ShieldCheck className="mt-0.5 h-5 w-5 text-muted-foreground" />
-        <p className="text-muted-foreground">
-          Open your authenticator app and enter the 6-digit code for StockPilot.
-        </p>
-      </div>
-
-      {factors.length > 1 && (
-        <div className="space-y-2">
-          <Label htmlFor="mfa-factor">Authenticator</Label>
-          <select
-            id="mfa-factor"
-            value={factorId}
-            onChange={(e) => {
-              setFactorId(e.target.value);
-              setCode('');
-            }}
-            className="border-border bg-background h-10 w-full rounded-md border px-3 text-sm"
-          >
-            {factors.map((f) => (
-              <option key={f.id} value={f.id}>
-                {f.friendlyName ?? `Authenticator (${f.id.slice(0, 6)})`}
-              </option>
-            ))}
-          </select>
-          <p className="text-muted-foreground text-[11px]">
-            Multiple authenticators are enrolled — pick the one you have a code for.
+    <>
+      <form onSubmit={submit} className="space-y-4" noValidate>
+        <div className="bg-sunk flex items-start gap-3 rounded-md p-3 text-[13px]">
+          <ShieldCheck className="text-muted-foreground mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+          <p className="text-ink-2">
+            Open your authenticator app and enter the 6-digit code for StockPilot.
           </p>
         </div>
-      )}
 
-      <div className="space-y-2">
-        <Label htmlFor="mfa-code">Authentication code</Label>
-        <Input
-          id="mfa-code"
-          inputMode="numeric"
-          autoComplete="one-time-code"
-          autoFocus
-          placeholder="123456"
-          maxLength={6}
-          value={code}
-          onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
-          className="font-mono tracking-widest"
-        />
-      </div>
+        {factors.length > 1 && (
+          <div className="space-y-2">
+            <Label htmlFor="mfa-factor">Authenticator</Label>
+            <select
+              id="mfa-factor"
+              value={factorId}
+              onChange={(e) => {
+                setFactorId(e.target.value);
+                setCode('');
+              }}
+              className="bg-card focus-visible:ring-ring focus-visible:ring-offset-background border-line-strong h-10 w-full rounded-md border px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 max-sm:h-11 max-sm:text-base"
+            >
+              {factors.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.friendlyName ?? `Authenticator (${f.id.slice(0, 6)})`}
+                </option>
+              ))}
+            </select>
+            <p className="text-muted-foreground text-xs">
+              Multiple authenticators are enrolled — pick the one you have a code for.
+            </p>
+          </div>
+        )}
 
-      <Button
-        type="submit"
-        className="w-full"
-        variant="gradient"
-        size="lg"
-        disabled={pending || code.length !== 6}
-      >
-        {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Verify & continue'}
-      </Button>
+        <div className="space-y-2">
+          <Label htmlFor="mfa-code">Authentication code</Label>
+          <Input
+            id="mfa-code"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            autoFocus
+            placeholder="123456"
+            maxLength={6}
+            value={code}
+            onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+            className="font-mono tracking-widest sm:h-10"
+          />
+        </div>
 
-      <button
-        type="button"
-        className="text-muted-foreground hover:text-foreground flex w-full items-center justify-center gap-1.5 text-center text-xs"
-        onClick={() => setRecoveryOpen(true)}
-      >
-        <KeyRound className="h-3 w-3" /> Lost your phone? Use a recovery code
-      </button>
+        <Button
+          type="submit"
+          className="h-11 w-full text-[14px]"
+          variant="gradient"
+          size="lg"
+          disabled={pending || code.length !== 6}
+        >
+          {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Verify & continue'}
+        </Button>
 
-      <button
-        type="button"
-        className="w-full text-center text-xs text-muted-foreground hover:text-foreground"
-        onClick={cancel}
-      >
-        Cancel and sign out
-      </button>
+        <div className="flex flex-col items-center gap-1">
+          <button
+            type="button"
+            className="text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex min-h-11 items-center justify-center gap-1.5 rounded-md px-2 text-center text-xs focus-visible:outline-none focus-visible:ring-2 sm:min-h-8"
+            onClick={() => setRecoveryOpen(true)}
+          >
+            <KeyRound className="h-3 w-3" aria-hidden /> Lost your phone? Use a recovery code
+          </button>
+
+          <button
+            type="button"
+            className="text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex min-h-11 items-center justify-center rounded-md px-2 text-center text-xs focus-visible:outline-none focus-visible:ring-2 sm:min-h-8"
+            onClick={cancel}
+          >
+            Cancel and sign out
+          </button>
+        </div>
+      </form>
 
       <Dialog open={recoveryOpen} onOpenChange={setRecoveryOpen}>
         <DialogContent>
@@ -184,8 +192,8 @@ export function MfaChallengeForm({ factors }: MfaChallengeFormProps) {
               device.
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={recover} className="space-y-3">
-            <div className="space-y-1.5">
+          <form onSubmit={recover} className="space-y-4">
+            <div className="space-y-2">
               <Label htmlFor="recovery-code">Recovery code</Label>
               <Input
                 id="recovery-code"
@@ -197,7 +205,7 @@ export function MfaChallengeForm({ factors }: MfaChallengeFormProps) {
                 autoFocus
               />
             </div>
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               <Label htmlFor="recovery-password">Confirm your password</Label>
               <Input
                 id="recovery-password"
@@ -207,7 +215,7 @@ export function MfaChallengeForm({ factors }: MfaChallengeFormProps) {
                 onChange={(e) => setRecoveryPassword(e.target.value)}
                 placeholder="Your account password"
               />
-              <p className="text-muted-foreground text-[11px]">
+              <p className="text-muted-foreground text-xs">
                 Required so a stolen sign-in cookie can't strip your MFA on its own.
               </p>
             </div>
@@ -231,6 +239,6 @@ export function MfaChallengeForm({ factors }: MfaChallengeFormProps) {
           </form>
         </DialogContent>
       </Dialog>
-    </form>
+    </>
   );
 }

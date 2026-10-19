@@ -1,12 +1,19 @@
 import Link from 'next/link';
 
+import {
+  ExternalCard,
+  ExternalHeader,
+  ExternalShell,
+  ExternalStatusCard,
+} from '@/components/auth/external-shell';
 import { Button } from '@/components/ui/button';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+// The root layout's title template adds " · StockPilot" (CONFLICTS D15).
 export const metadata = {
-  title: 'Confirm your order request · StockPilot',
+  title: 'Confirm your order request',
   robots: { index: false, follow: false },
 };
 
@@ -66,84 +73,88 @@ export default async function ConfirmOrderRequestPage({
   }
 
   return (
-    <div className="mx-auto max-w-md py-6">
-      <header className="text-center">
-        <p className="text-muted-foreground text-[11px] font-medium uppercase tracking-[0.12em]">
-          StockPilot
-        </p>
-        <h1 className="font-display mt-1 text-[26px] font-medium leading-tight tracking-[-0.025em]">
-          Confirm your order request
-        </h1>
-        <p className="text-muted-foreground mt-3 text-sm">
-          This link works once. Press the button below and we&apos;ll send
-          your request to the team for review.
-        </p>
-      </header>
-      <div className="bg-card border-border mt-6 rounded-xl border p-4 text-sm">
-        <p className="text-muted-foreground text-xs">Request ID</p>
-        <p className="font-mono break-all">{id}</p>
-      </div>
+    <ExternalShell frame="column" as="div" width="md">
+      <ExternalHeader
+        eyebrow="StockPilot"
+        title="Confirm your order request"
+        description={
+          <>
+            This link works once. Press the button below and we&apos;ll send
+            your request to the team for review.
+          </>
+        }
+      />
+      <RequestIdCard id={id} className="mt-6" />
       {/* Plain HTML form POST — zero JS, works in every mail-client
           browser, and (unlike a server action) survives a deploy between
           the email GET and the human's click. */}
       <form method="post" action="/r/confirm/submit" className="mt-6 text-center">
         <input type="hidden" name="id" value={id} />
         <input type="hidden" name="t" value={token} />
-        <Button type="submit">Confirm order request</Button>
+        <Button type="submit" className="h-11 w-full px-5 sm:w-auto">
+          Confirm order request
+        </Button>
       </form>
-    </div>
+    </ExternalShell>
+  );
+}
+
+function RequestIdCard({ id, className }: { id: string; className?: string }) {
+  return (
+    <ExternalCard className={className}>
+      <p className="text-muted-foreground text-xs">Request ID</p>
+      <p className="font-mono text-[13.5px] break-all">{id}</p>
+    </ExternalCard>
   );
 }
 
 function ConfirmedPanel({ id }: { id: string }) {
   return (
-    <div className="mx-auto max-w-md py-6">
-      <header className="text-center">
-        <p className="text-muted-foreground text-[11px] font-medium uppercase tracking-[0.12em]">
-          StockPilot
-        </p>
-        <h1 className="font-display mt-1 text-[26px] font-medium leading-tight tracking-[-0.025em]">
-          Request confirmed
-        </h1>
-        <p className="text-muted-foreground mt-3 text-sm">
-          Thanks — your order request has been sent to the team for review.
-          You&apos;ll get another email when a manager approves or declines it.
-        </p>
-      </header>
-      <div className="bg-card border-border mt-6 rounded-xl border p-4 text-sm">
-        <p className="text-muted-foreground text-xs">Request ID</p>
-        <p className="font-mono break-all">{id}</p>
-      </div>
-      <div className="mt-6 text-center">
-        <Link href="/r/track" prefetch={false}>
-          <Button variant="outline">Track this request</Button>
-        </Link>
-      </div>
-    </div>
+    <ExternalShell frame="column" as="div" width="md">
+      <ExternalStatusCard
+        eyebrow="StockPilot"
+        title="Request confirmed"
+        body={
+          <>
+            Thanks — your order request has been sent to the team for review.
+            You&apos;ll get another email when a manager approves or declines it.
+          </>
+        }
+        action={
+          <Button asChild variant="outline">
+            <Link href="/r/track" prefetch={false}>
+              Track this request
+            </Link>
+          </Button>
+        }
+      >
+        <RequestIdCard id={id} className="bg-sunk" />
+      </ExternalStatusCard>
+    </ExternalShell>
   );
 }
 
 function InvalidPanel() {
   return (
-    <div className="mx-auto max-w-md py-6">
-      <header className="text-center">
-        <p className="text-muted-foreground text-[11px] font-medium uppercase tracking-[0.12em]">
-          StockPilot
-        </p>
-        <h1 className="font-display mt-1 text-[26px] font-medium leading-tight tracking-[-0.025em]">
-          We couldn&apos;t confirm this request
-        </h1>
-        <p className="text-muted-foreground mt-3 text-sm">
-          This link is either invalid, expired, or already used. If you still
-          need to place the order, submit a fresh request from the order page.
-        </p>
-      </header>
-      <div className="mt-6 text-center">
-        <Link href="/r/track" prefetch={false}>
-          <Button variant="outline">Track an existing request</Button>
-        </Link>
-      </div>
-    </div>
+    <ExternalShell frame="column" as="div" width="md">
+      <ExternalStatusCard
+        eyebrow="StockPilot"
+        title={"We couldn't confirm this request"}
+        body={
+          <>
+            This link is either invalid, expired, or already used. If you still
+            need to place the order, submit a fresh request from the order page.
+          </>
+        }
+        action={
+          <Button asChild variant="outline">
+            <Link href="/r/track" prefetch={false}>
+              Track an existing request
+            </Link>
+          </Button>
+        }
+      />
+    </ExternalShell>
   );
 }
 
