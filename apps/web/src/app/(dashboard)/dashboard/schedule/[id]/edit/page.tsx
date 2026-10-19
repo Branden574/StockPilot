@@ -1,8 +1,8 @@
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
+import { DetailSection } from '@/components/patterns/detail-section';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { ScheduleEventForm } from '@/components/schedule/schedule-event-form';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { requireOrgContext } from '@/lib/auth/session';
 import { BundlesService } from '@/server/services/bundles';
 import { ServiceError } from '@/server/services/context';
@@ -36,10 +36,7 @@ export default async function EditScheduleEventPage({
     if (e instanceof ServiceError && e.code === 'not_found') notFound();
     throw e;
   }
-  const [warehouses, bundles] = await Promise.all([
-    warehousesSvc.listNames(),
-    bundlesSvc.list(),
-  ]);
+  const [warehouses, bundles] = await Promise.all([warehousesSvc.listNames(), bundlesSvc.list()]);
 
   // Pull a window of nearby events so the form can warn about overlaps.
   // Excludes the event being edited so saving an unchanged time isn't
@@ -51,12 +48,7 @@ export default async function EditScheduleEventPage({
   conflictTo.setDate(anchor.getDate() + 30);
   const nearby = await scheduleSvc.listInRange(conflictFrom, conflictTo);
   const conflictCandidates = nearby
-    .filter(
-      (e) =>
-        e.id !== event.id &&
-        e.status !== 'cancelled' &&
-        e.status !== 'completed',
-    )
+    .filter((e) => e.id !== event.id && e.status !== 'cancelled' && e.status !== 'completed')
     .map((e) => ({
       id: e.id,
       title: e.title,
@@ -67,44 +59,38 @@ export default async function EditScheduleEventPage({
     }));
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href={`/dashboard/schedule/${id}`}
-          className="text-muted-foreground hover:text-foreground text-sm"
-        >
-          ← Back to event
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">Edit event</h1>
-      </div>
-      <Card>
-        <CardHeader>
-          <CardTitle>{event.title}</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <ScheduleEventForm
-            warehouses={warehouses.map((w) => ({ id: w.id, name: w.name }))}
-            bundles={bundles.map((b) => ({ id: b.id, name: b.name, sku: b.sku }))}
-            conflictCandidates={conflictCandidates}
-            defaults={{
-              id: event.id,
-              title: event.title,
-              startsAt: event.startsAt,
-              endsAt: event.endsAt,
-              allDay: event.allDay,
-              locationText: event.locationText,
-              warehouseId: event.warehouseId,
-              requesterName: event.requesterName,
-              details: event.details,
-              status: event.status,
-              bundleId: event.bundleId,
-              bundleQuantity: event.bundleQuantity,
-              bundleWarehouseId: event.bundleWarehouseId,
-              bundleAlreadyDistributed: event.bundleDistributed,
-            }}
-          />
-        </CardContent>
-      </Card>
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <PageHeader
+        back={
+          <PageHeaderBackLink href={`/dashboard/schedule/${id}`}>
+            ← Back to event
+          </PageHeaderBackLink>
+        }
+        title="Edit event"
+      />
+      <DetailSection title={event.title}>
+        <ScheduleEventForm
+          warehouses={warehouses.map((w) => ({ id: w.id, name: w.name }))}
+          bundles={bundles.map((b) => ({ id: b.id, name: b.name, sku: b.sku }))}
+          conflictCandidates={conflictCandidates}
+          defaults={{
+            id: event.id,
+            title: event.title,
+            startsAt: event.startsAt,
+            endsAt: event.endsAt,
+            allDay: event.allDay,
+            locationText: event.locationText,
+            warehouseId: event.warehouseId,
+            requesterName: event.requesterName,
+            details: event.details,
+            status: event.status,
+            bundleId: event.bundleId,
+            bundleQuantity: event.bundleQuantity,
+            bundleWarehouseId: event.bundleWarehouseId,
+            bundleAlreadyDistributed: event.bundleDistributed,
+          }}
+        />
+      </DetailSection>
     </div>
   );
 }

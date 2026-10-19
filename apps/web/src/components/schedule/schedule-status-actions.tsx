@@ -27,6 +27,10 @@ interface Props {
  *
  * "Reopen" sets the status back to 'scheduled' so the event flows
  * through the normal lifecycle again.
+ *
+ * Start and Mark complete commit the work in front of you, so they are the
+ * page's one ink-filled button (DESIGN-SPEC 6.2); Cancel and Reopen are
+ * secondary. All sit in the page header's actions row at 32 px.
  */
 export function ScheduleStatusActions({ eventId, currentStatus }: Props) {
   const router = useRouter();
@@ -53,8 +57,7 @@ export function ScheduleStatusActions({ eventId, currentStatus }: Props) {
       <>
         <Button
           type="button"
-          variant="gradient"
-          size="sm"
+          variant="default"
           disabled={busy !== null}
           onClick={() => flip('in_progress', 'Event started.')}
         >
@@ -68,7 +71,6 @@ export function ScheduleStatusActions({ eventId, currentStatus }: Props) {
         <Button
           type="button"
           variant="outline"
-          size="sm"
           disabled={busy !== null}
           onClick={() => flip('cancelled', 'Event cancelled.')}
         >
@@ -88,8 +90,7 @@ export function ScheduleStatusActions({ eventId, currentStatus }: Props) {
       <>
         <Button
           type="button"
-          variant="gradient"
-          size="sm"
+          variant="default"
           disabled={busy !== null}
           onClick={() => flip('completed', 'Event marked complete.')}
         >
@@ -103,7 +104,6 @@ export function ScheduleStatusActions({ eventId, currentStatus }: Props) {
         <Button
           type="button"
           variant="outline"
-          size="sm"
           disabled={busy !== null}
           onClick={() => flip('cancelled', 'Event cancelled.')}
         >
@@ -123,7 +123,6 @@ export function ScheduleStatusActions({ eventId, currentStatus }: Props) {
     <Button
       type="button"
       variant="outline"
-      size="sm"
       disabled={busy !== null}
       onClick={() => flip('scheduled', 'Event reopened.')}
     >

@@ -3,10 +3,12 @@ import { redirect } from 'next/navigation';
 
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { PageHeader } from '@/components/patterns/page-header';
 import { ScheduleCalendar } from '@/components/schedule/schedule-calendar';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 import { reportError } from '@/lib/error-reporter';
+import { navLabelFromOverrides } from '@/lib/nav-labels';
 import { ScheduleService } from '@/server/services/schedule';
 
 import { can, resolveOrgTimezone, zonedParts } from '@stockpilot/core';
@@ -50,11 +52,21 @@ export default async function SchedulePage({
   // error). The browser marks today on the viewer's own day once hydrated
   // (schedule-calendar.tsx), which for anyone in the organization's zone is
   // a day of this month.
-  const timeZone = await getOrgRowForRequest(ctx.organizationId)
-    .then((org) => resolveOrgTimezone(org?.timezone))
+  // The same cached row gives the eyebrow the organization's name for this
+  // page in the sidebar (Settings > Navigation renames; PLAN rule 10), with no
+  // read of its own.
+  const { timeZone, navLabel } = await getOrgRowForRequest(ctx.organizationId)
+    .then((org) => ({
+      timeZone: resolveOrgTimezone(org?.timezone),
+      navLabel: navLabelFromOverrides(
+        org?.nav_overrides ?? null,
+        '/dashboard/schedule',
+        'Schedule',
+      ),
+    }))
     .catch((e: unknown) => {
       void reportError(e, { tag: 'schedule.calendar.org_timezone_failed', level: 'warning' });
-      return resolveOrgTimezone(null);
+      return { timeZone: resolveOrgTimezone(null), navLabel: 'Schedule' };
     });
   const today = zonedParts(new Date(), timeZone);
   let year = today.year;
@@ -93,31 +105,25 @@ export default async function SchedulePage({
   }));
 
   return (
-    <div className="container mx-auto max-w-7xl px-4 py-8 sm:px-6">
-      <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <p className="mb-1.5 text-[11px] font-medium uppercase tracking-[0.1em] text-[var(--ed-ink-4)]">
-            <Calendar className="mr-1 inline h-3 w-3" />
-            Workspace · Schedule
-          </p>
-          <h1 className="font-display text-[28px] font-medium tracking-[-0.025em]">
-            Team calendar
-          </h1>
-          <p className="text-muted-foreground mt-1 text-[13.5px]">
-            Jobs, deliveries, pickups, drops — anything time + location based.
-            Each event is scoped to its warehouse: only staff assigned to
-            that warehouse can see it.
+    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <PageHeader
+        eyebrow={
+          <span className="inline-flex items-center gap-1.5">
+            <Calendar aria-hidden className="h-3 w-3" />
+            Workspace · {navLabel}
+          </span>
+        }
+        title="Team calendar"
+        subline={
+          <>
+            Jobs, deliveries, pickups, drops — anything time + location based. Each event is scoped
+            to its warehouse: only staff assigned to that warehouse can see it.
             {canManage ? ' Click a date to add an event.' : ''}
-          </p>
-        </div>
-      </div>
-
-      <ScheduleCalendar
-        year={year}
-        month={month}
-        events={calendarEvents}
-        canManage={canManage}
+          </>
+        }
       />
+
+      <ScheduleCalendar year={year} month={month} events={calendarEvents} canManage={canManage} />
     </div>
   );
 }
