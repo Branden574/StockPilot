@@ -4,6 +4,7 @@ import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 
+import { Button } from '@/components/ui/button';
 import { stopActingAsAction } from '@/server/actions/platform/impersonation';
 
 /** Exits impersonation and returns the admin to their own workspace. */
@@ -25,13 +26,8 @@ export function StopActingAsButton() {
   }
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={pending}
-      className="rounded-md border border-amber-600/50 bg-background/60 px-2.5 py-1 text-[12px] font-semibold hover:bg-background disabled:opacity-50"
-    >
+    <Button type="button" variant="outline" size="sm" onClick={onClick} disabled={pending}>
       {pending ? 'Exiting…' : 'Exit — back to my workspace'}
-    </button>
+    </Button>
   );
 }
