@@ -17,7 +17,7 @@ const EFFECTIVE_DATE = 'May 27, 2026';
  */
 export default function TermsPage() {
   return (
-    <div className="mx-auto max-w-3xl px-6 py-16 text-[15px] leading-7 text-foreground">
+    <div className="mx-auto max-w-3xl px-4 py-16 text-[15px] leading-7 text-foreground sm:px-8">
       <h1 className="font-display text-[34px] font-medium leading-[1.15] tracking-[-0.025em] sm:text-[40px]">
         Terms of Service
       </h1>

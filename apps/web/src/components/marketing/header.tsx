@@ -19,6 +19,10 @@ const NAV: Array<{ href: string; label: string }> = [
   { href: '/support', label: 'Support' },
 ];
 
+// The phone menu panel; the toggle names it in aria-controls and says whether
+// it is open in aria-expanded, as the landing nav's toggle does.
+const MOBILE_MENU_ID = 'marketing-mobile-menu';
+
 export function MarketingHeader() {
   const [scrolled, setScrolled] = React.useState(false);
   const [mobileOpen, setMobileOpen] = React.useState(false);
@@ -77,6 +81,8 @@ export function MarketingHeader() {
             className="md:hidden"
             onClick={() => setMobileOpen((o) => !o)}
             aria-label="Toggle menu"
+            aria-expanded={mobileOpen}
+            aria-controls={MOBILE_MENU_ID}
           >
             {mobileOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
           </Button>
@@ -84,7 +90,7 @@ export function MarketingHeader() {
       </div>
 
       {mobileOpen && (
-        <div className="border-border bg-background border-t md:hidden">
+        <div id={MOBILE_MENU_ID} className="border-border bg-background border-t md:hidden">
           <div className="container mx-auto flex max-w-7xl flex-col gap-1 px-4 py-3">
             {NAV.map((n) => (
               <Link

@@ -33,7 +33,7 @@ const CARDS = [
 
 export default function ContactPage() {
   return (
-    <div className="mx-auto max-w-3xl px-6 py-16 sm:px-8">
+    <div className="mx-auto max-w-3xl px-4 py-16 sm:px-8">
       <h1 className="font-display text-[34px] font-medium leading-[1.15] tracking-[-0.025em] sm:text-[40px]">
         Contact us
       </h1>

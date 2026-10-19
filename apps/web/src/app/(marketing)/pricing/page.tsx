@@ -94,7 +94,7 @@ const TIERS: Tier[] = [
 
 export default function PricingPage() {
   return (
-    <div className="mx-auto max-w-[1280px] px-6 py-16 sm:px-8">
+    <div className="mx-auto max-w-[1280px] px-4 py-16 sm:px-8">
       <div className="mx-auto max-w-2xl text-center">
         <h1 className="font-display text-[34px] font-medium leading-[1.15] tracking-[-0.025em] sm:text-[40px]">
           Simple, scalable pricing

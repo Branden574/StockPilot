@@ -20,7 +20,7 @@ const EFFECTIVE_DATE = 'June 18, 2026';
  */
 export default function SecurityPage() {
   return (
-    <div className="mx-auto max-w-3xl px-6 py-16 text-[15px] leading-7 text-foreground">
+    <div className="mx-auto max-w-3xl px-4 py-16 text-[15px] leading-7 text-foreground sm:px-8">
       <h1 className="font-display text-[34px] font-medium leading-[1.15] tracking-[-0.025em] sm:text-[40px]">
         Security &amp; Compliance
       </h1>
