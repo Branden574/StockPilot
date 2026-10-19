@@ -1,10 +1,15 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 
+import { PageHeader } from '@/components/patterns/page-header';
 import { ArchiveCleanupPanel } from '@/components/settings/archive-cleanup-panel';
 import { AutoArchivePanel } from '@/components/settings/auto-archive-panel';
+import { SettingsPage } from '@/components/settings/settings-panel';
 import { parseAutoDeleteArchivedSettings } from '@/server/services/archive-cleanup';
-import { countEligibleForAutoArchive, parseAutoArchiveSettings } from '@/server/services/auto-archive';
+import {
+  countEligibleForAutoArchive,
+  parseAutoArchiveSettings,
+} from '@/server/services/auto-archive';
 import { withContext } from '@/server/services/context';
 
 import { can } from '@stockpilot/core';
@@ -49,7 +54,8 @@ export default async function InventoryCleanupSettingsPage() {
   const windowedCounts: Record<number, number> = {};
 
   if (canDelete) {
-    const bucket = (mod?.settings as Record<string, unknown> | null | undefined)?.autoDeleteArchived;
+    const bucket = (mod?.settings as Record<string, unknown> | null | undefined)
+      ?.autoDeleteArchived;
     settings = parseAutoDeleteArchivedSettings(bucket);
 
     // Total currently-archived (context) + a per-window "already past this
@@ -85,23 +91,19 @@ export default async function InventoryCleanupSettingsPage() {
   }
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Inventory cleanup</h1>
-      <p className="text-muted-foreground mt-1 text-sm">
-        Automate what happens to inactive inventory: archive items that stay out of stock, and (for
-        admins) remove items that have been archived for a long time. Archiving is reversible;
-        deletion only ever soft-deletes, so nothing is lost permanently.
-      </p>
-      <div className="mt-8 space-y-6">
-        {canDelete && settings ? (
-          <ArchiveCleanupPanel
-            initial={settings}
-            archivedCount={archivedCount}
-            windowedCounts={windowedCounts}
-          />
-        ) : null}
-        <AutoArchivePanel initial={autoArchiveSettings} eligibleCount={eligibleCount} />
-      </div>
-    </div>
+    <SettingsPage>
+      <PageHeader
+        title="Inventory cleanup"
+        subline="Automate what happens to inactive inventory: archive items that stay out of stock, and (for admins) remove items that have been archived for a long time. Archiving is reversible; deletion only ever soft-deletes, so nothing is lost permanently."
+      />
+      {canDelete && settings ? (
+        <ArchiveCleanupPanel
+          initial={settings}
+          archivedCount={archivedCount}
+          windowedCounts={windowedCounts}
+        />
+      ) : null}
+      <AutoArchivePanel initial={autoArchiveSettings} eligibleCount={eligibleCount} />
+    </SettingsPage>
   );
 }

@@ -1,12 +1,13 @@
 'use client';
 
-import { Loader2, Trash2 } from 'lucide-react';
+import { Loader2, Trash2, TriangleAlert } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { SettingsPanel } from '@/components/settings/settings-panel';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { setAutoDeleteArchivedSettingsAction } from '@/server/actions/inventory-cleanup-settings';
 
@@ -67,65 +68,75 @@ export function ArchiveCleanupPanel({ initial, archivedCount, windowedCounts }: 
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Trash2 className="h-4 w-4" /> Auto-delete archived items
-        </CardTitle>
-        <CardDescription>
+    <SettingsPanel
+      title={
+        <span className="flex items-center gap-2">
+          <Trash2 aria-hidden className="text-muted-foreground h-4 w-4" /> Auto-delete archived
+          items
+        </span>
+      }
+      description={
+        <>
           Automatically remove items that have stayed archived past a set time. Deleted items
-          disappear from every list but are <span className="font-medium text-foreground">recoverable</span>{' '}
-          from Settings → Recovery, and the history on past purchase orders and receipts is preserved.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <label className="flex items-center gap-2 text-sm font-medium">
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={(e) => setEnabled(e.target.checked)}
+          disappear from every list but are{' '}
+          <span className="text-foreground font-medium">recoverable</span> from Settings → Recovery,
+          and the history on past purchase orders and receipts is preserved.
+        </>
+      }
+      bodyClassName="space-y-4"
+    >
+      <Checkbox
+        checked={enabled}
+        onCheckedChange={setEnabled}
+        disabled={busy}
+        className="text-[13.5px] font-medium"
+      >
+        Automatically delete archived items
+      </Checkbox>
+
+      {enabled && (
+        <div className="max-w-xs space-y-1.5">
+          <Label htmlFor="ac-days">Delete after an item has been archived for</Label>
+          <select
+            id="ac-days"
+            value={days}
+            onChange={(e) => setDays(Number(e.target.value))}
             disabled={busy}
-          />
-          Automatically delete archived items
-        </label>
-
-        {enabled && (
-          <div className="max-w-xs space-y-1.5">
-            <Label htmlFor="ac-days">Delete after an item has been archived for</Label>
-            <select
-              id="ac-days"
-              value={days}
-              onChange={(e) => setDays(Number(e.target.value))}
-              disabled={busy}
-              className="border-input bg-background focus:border-ring h-9 w-full rounded-md border px-2.5 text-sm outline-none"
-            >
-              {dayOptions.map((d) => (
-                <option key={d} value={d}>
-                  {d} days
-                </option>
-              ))}
-            </select>
-            <p className="text-muted-foreground text-xs">
-              Checked once a day — only items archived longer than this are removed.{' '}
-              {archivedCount > 0
-                ? `You have ${archivedCount} archived item${archivedCount === 1 ? '' : 's'} in total.`
-                : 'You have no archived items right now.'}
+            className="bg-card focus-visible:ring-ring focus-visible:ring-offset-background h-8 w-full rounded-md border border-[var(--ed-line-strong)] px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:h-11 max-sm:text-base"
+          >
+            {dayOptions.map((d) => (
+              <option key={d} value={d}>
+                {d} days
+              </option>
+            ))}
+          </select>
+          <p className="text-muted-foreground text-[12.5px]">
+            Checked once a day — only items archived longer than this are removed.{' '}
+            {archivedCount > 0
+              ? `You have ${archivedCount} archived item${archivedCount === 1 ? '' : 's'} in total.`
+              : 'You have no archived items right now.'}
+          </p>
+          {dueNow > 0 ? (
+            // The warning glyph is an icon now (no symbol characters in UI
+            // copy); the words are unchanged and the icon is the non-colour cue.
+            <p className="text-warning flex items-start gap-1.5 text-[12.5px] font-medium">
+              <TriangleAlert aria-hidden className="mt-px h-3.5 w-3.5 shrink-0" />
+              <span>
+                {dueNow} item{dueNow === 1 ? '' : 's'} {dueNow === 1 ? 'is' : 'are'} already past
+                this window and would be removed on the next nightly run (recoverable from Settings
+                → Recovery).
+              </span>
             </p>
-            {dueNow > 0 ? (
-              <p className="text-amber-600 dark:text-amber-400 text-xs font-medium">
-                ⚠ {dueNow} item{dueNow === 1 ? '' : 's'} {dueNow === 1 ? 'is' : 'are'} already past
-                this window and would be removed on the next nightly run (recoverable from
-                Settings → Recovery).
-              </p>
-            ) : null}
-          </div>
-        )}
+          ) : null}
+        </div>
+      )}
 
-        <Button onClick={save} disabled={busy} size="sm">
+      <div>
+        <Button onClick={save} disabled={busy}>
           {busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null}
           Save settings
         </Button>
-      </CardContent>
-    </Card>
+      </div>
+    </SettingsPanel>
   );
 }
