@@ -1,6 +1,8 @@
 import type { Metadata } from 'next';
 
 import { SupportTriage } from '@/components/admin/support-triage';
+import { PageHeader } from '@/components/patterns/page-header';
+import { PlatformPage } from '@/components/platform/platform-page';
 import { requirePlatformAdmin } from '@/lib/auth/platform-admin';
 import { createAttachmentSignedUrls, listSupportTickets } from '@/server/services/support-tickets';
 
@@ -31,14 +33,12 @@ export default async function PlatformSupportPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-[1280px] px-6 pb-20 pt-7">
-      <div className="mb-6 border-b border-border pb-4">
-        <h1 className="font-display text-[26px] font-medium tracking-[-0.025em]">Support tickets</h1>
-        <p className="mt-1 text-[13px] text-[var(--ed-ink-3)]">
-          {open} open · {tickets.length} total — submitted from the public support page.
-        </p>
-      </div>
+    <PlatformPage>
+      <PageHeader
+        title="Support tickets"
+        subline={`${open} open · ${tickets.length} total — submitted from the public support page.`}
+      />
       <SupportTriage tickets={tickets} attachmentUrls={attachmentUrls} />
-    </div>
+    </PlatformPage>
   );
 }
