@@ -61,6 +61,10 @@ function draftFrom(ticket: SupportTicketRow): TicketDraft {
   return { status: ticket.status, priority: ticket.priority, notes: ticket.adminNotes ?? '' };
 }
 
+function sameDraft(a: TicketDraft, b: TicketDraft): boolean {
+  return a.status === b.status && a.priority === b.priority && a.notes === b.notes;
+}
+
 export function SupportTriage({
   tickets,
   attachmentUrls,
@@ -75,8 +79,27 @@ export function SupportTriage({
   // Each card's edits live here, not in the card: switching the filter
   // unmounts the cards it hides, and their typed notes and picked status or
   // priority used to vanish with them (CONFLICTS D31). A ticket with no entry
-  // shows what the server has.
+  // shows what the server has; a successful save removes the entry it sent.
   const [drafts, setDrafts] = React.useState<Record<string, TicketDraft>>({});
+
+  // After a save the server's values take over again: a draft left behind
+  // would hide the saved (normalised) values and any later change from the
+  // platform console twin, and a later Save would send its stale status and
+  // priority back. The entry is dropped in the same transition as the refresh,
+  // so the refreshed ticket replaces it in one commit. Edits typed while the
+  // save was on its way differ from what was sent, so they stay as the draft.
+  function dropSavedDraft(ticketId: string, sent: TicketDraft) {
+    React.startTransition(() => {
+      setDrafts((all) => {
+        const current = all[ticketId];
+        if (!current || !sameDraft(current, sent)) return all;
+        const rest = { ...all };
+        delete rest[ticketId];
+        return rest;
+      });
+      router.refresh();
+    });
+  }
 
   const active = FILTERS.find((f) => f.key === filter);
   const visible = active ? tickets.filter(active.match) : tickets;
@@ -91,6 +114,7 @@ export function SupportTriage({
               key={f.key}
               pressed={filter === f.key}
               count={count}
+              size="md"
               onClick={() => setFilter(f.key)}
             >
               {/* The space keeps the button's name "Open 3", as before. */}
@@ -121,7 +145,7 @@ export function SupportTriage({
               onToggle={() => setOpenId((id) => (id === t.id ? null : t.id))}
               draft={drafts[t.id] ?? draftFrom(t)}
               onDraftChange={(next) => setDrafts((all) => ({ ...all, [t.id]: next }))}
-              onSaved={() => router.refresh()}
+              onSaved={(sent) => dropSavedDraft(t.id, sent)}
             />
           ))}
         </div>
@@ -145,7 +169,8 @@ function TicketCard({
   onToggle: () => void;
   draft: TicketDraft;
   onDraftChange: (next: TicketDraft) => void;
-  onSaved: () => void;
+  /** Called after a successful save with the values that were sent. */
+  onSaved: (sent: TicketDraft) => void;
 }) {
   const { status, priority, notes } = draft;
   const [busy, setBusy] = React.useState(false);
@@ -156,17 +181,18 @@ function TicketCard({
   const notesId = `ticket-${ticket.id}-notes`;
 
   async function save() {
+    const sent = draft;
     setBusy(true);
     const res = await updateSupportTicketAction({
       id: ticket.id,
-      status,
-      priority,
-      adminNotes: notes,
+      status: sent.status,
+      priority: sent.priority,
+      adminNotes: sent.notes,
     });
     setBusy(false);
     if (!res.ok) return toast.error(res.error.message);
     toast.success('Ticket updated.');
-    onSaved();
+    onSaved(sent);
   }
 
   return (

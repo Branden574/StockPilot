@@ -5,18 +5,21 @@
  * browser hydrates. An evening ticket in Los Angeles is the next day in UTC,
  * so React threw error #418. The day is printed once the page has hydrated.
  */
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
+import { filterChipClass } from '@/components/patterns/chip';
 import { hydrateAcrossClockShift, inZone, BROWSER_ZONE } from '@/test/hydration';
 
 import type { SupportTicketRow } from '@/server/services/support-tickets';
 
+const refresh = vi.hoisted(() => vi.fn());
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+  useRouter: () => ({ push: vi.fn(), refresh }),
 }));
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
-vi.mock('@/server/actions/support-tickets', () => ({ updateSupportTicketAction: vi.fn() }));
+const updateTicket = vi.hoisted(() => vi.fn());
+vi.mock('@/server/actions/support-tickets', () => ({ updateSupportTicketAction: updateTicket }));
 
 import { SupportTriage } from './support-triage';
 
@@ -96,10 +99,86 @@ describe('SupportTriage keeps each ticket card working in the redesign', () => {
     expect(screen.getByLabelText('Status')).toHaveValue('in_progress');
   });
 
+  it('after a successful save the server’s values replace the draft, so a later change elsewhere shows', async () => {
+    refresh.mockClear();
+    updateTicket.mockReset();
+    updateTicket.mockResolvedValue({ ok: true, data: null });
+    const { rerender } = render(<SupportTriage tickets={[TICKET]} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Scanner stops after one scan/ }));
+    fireEvent.change(screen.getByLabelText('Internal notes'), {
+      target: { value: '  Asked for a video of the scanner.  ' },
+    });
+    fireEvent.change(screen.getByLabelText('Priority'), { target: { value: 'high' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+    expect(updateTicket).toHaveBeenCalledWith({
+      id: 't1',
+      status: 'open',
+      priority: 'high',
+      adminNotes: '  Asked for a video of the scanner.  ',
+    });
+
+    // The refreshed ticket: the service trimmed the notes, and another
+    // platform admin has since raised the priority on /platform/support.
+    rerender(
+      <SupportTriage
+        tickets={[
+          { ...TICKET, adminNotes: 'Asked for a video of the scanner.', priority: 'urgent' },
+        ]}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText('Internal notes')).toHaveValue(
+        'Asked for a video of the scanner.',
+      ),
+    );
+    expect(screen.getByLabelText('Priority')).toHaveValue('urgent');
+    expect(screen.getByLabelText('Status')).toHaveValue('open');
+  });
+
+  it('keeps notes typed while the save is on its way: they were not sent, so they stay as the draft', async () => {
+    refresh.mockClear();
+    updateTicket.mockReset();
+    let answer: (value: { ok: true; data: null }) => void = () => {};
+    updateTicket.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const { rerender } = render(<SupportTriage tickets={[TICKET]} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Scanner stops after one scan/ }));
+    const notes = screen.getByLabelText('Internal notes');
+    fireEvent.change(notes, { target: { value: 'Asked for a video.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByRole('button', { name: 'Saving…' })).toBeDisabled();
+    fireEvent.change(notes, { target: { value: 'Asked for a video. It arrived.' } });
+
+    answer({ ok: true, data: null });
+    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+    expect(updateTicket).toHaveBeenCalledWith(
+      expect.objectContaining({ adminNotes: 'Asked for a video.' }),
+    );
+    rerender(<SupportTriage tickets={[{ ...TICKET, adminNotes: 'Asked for a video.' }]} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+    expect(screen.getByLabelText('Internal notes')).toHaveValue('Asked for a video. It arrived.');
+  });
+
   it('names each filter chip with its count, marks the pressed one, and says "No tickets here." without an emoji', () => {
     render(<SupportTriage tickets={[TICKET]} />);
     expect(screen.getByRole('button', { name: 'Open 1' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('button', { name: 'All 1' })).toHaveAttribute('aria-pressed', 'false');
+    // Look-only (review 1b): the 30 px movement-type chips (DESIGN-SPEC 6.6),
+    // read from the chip pattern's export.
+    expect(screen.getByRole('button', { name: 'Open 1' })).toHaveClass(
+      ...filterChipClass({ active: true, size: 'md' }).split(/\s+/),
+    );
+    expect(screen.getByRole('button', { name: 'All 1' })).toHaveClass(
+      ...filterChipClass({ size: 'md' }).split(/\s+/),
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Closed 0' }));
     const empty = screen.getByText('No tickets here.');
     expect(empty).toBeInTheDocument();
