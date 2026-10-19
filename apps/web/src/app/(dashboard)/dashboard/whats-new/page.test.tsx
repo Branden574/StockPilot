@@ -16,9 +16,13 @@ vi.mock('@/server/services/releases', () => ({
   listReleasesFor: (...a: unknown[]) => h.list(...a),
   getReleaseFor: (...a: unknown[]) => h.one(...a),
 }));
+// An entry's link warms its page when a person comes to it (P2.3c, through
+// lib/hooks/use-warm-route.ts), which reads the pathname and the router's
+// prefetch; nothing here hovers or navigates.
 vi.mock('next/navigation', () => ({
   notFound: () => h.notFound(),
-  useRouter: () => ({ refresh: vi.fn() }),
+  usePathname: () => '/dashboard/whats-new',
+  useRouter: () => ({ refresh: vi.fn(), prefetch: vi.fn() }),
 }));
 vi.mock('next/link', () => ({
   default: ({ href, children, ...rest }: { href: string; children: React.ReactNode }) => (

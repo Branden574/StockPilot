@@ -1,5 +1,12 @@
+'use client';
+
 import { ShieldAlert } from 'lucide-react';
 import Link from 'next/link';
+
+import { useWarmRoute } from '@/lib/hooks/use-warm-route';
+
+/** Where the banner sends someone to enroll. */
+const ENROLL_PAGE = '/dashboard/settings/security?enroll=1';
 
 /**
  * Persistent banner shown above every dashboard page when the org's MFA
@@ -12,8 +19,15 @@ import Link from 'next/link';
  * A caution strip in the redesign's language: the warning wash with a hairline,
  * the icon in the warning tone beside the words (never colour alone), and the
  * one action as a small ink button (44px tall wherever a finger is the pointer).
+ *
+ * The button never prefetches its page on sight (PLAN 0.6): the banner is on
+ * every page view until the person enrolls, and a default <Link> fetched the
+ * security page on each one (two requests, a full dynamic render). It warms
+ * that page when the person comes to it, as the top bar's links do.
  */
 export function MfaRequiredBanner() {
+  const warmRoute = useWarmRoute();
+  const warm = () => warmRoute(ENROLL_PAGE);
   return (
     <div
       role="status"
@@ -27,7 +41,11 @@ export function MfaRequiredBanner() {
         </span>
       </p>
       <Link
-        href="/dashboard/settings/security?enroll=1"
+        href={ENROLL_PAGE}
+        prefetch={false}
+        onFocus={warm}
+        onPointerEnter={warm}
+        onPointerDown={warm}
         className="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex min-h-11 shrink-0 items-center rounded-md px-3 text-[12.5px] font-medium transition-colors sm:min-h-7 sm:px-2.5 [@media(pointer:coarse)]:min-h-11"
       >
         Enroll now

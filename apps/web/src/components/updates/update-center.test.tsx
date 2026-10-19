@@ -18,7 +18,10 @@ vi.mock('@/lib/updates/safe-reload', () => ({
   reconcileReload: () => 'none',
 }));
 let pathname = '/dashboard/inventory';
-vi.mock('next/navigation', () => ({ usePathname: () => pathname }));
+// The drawer's links warm their pages on approach (lib/hooks/use-warm-route.ts),
+// which asks for the router; nothing here navigates.
+const router = vi.hoisted(() => ({ prefetch: () => {} }));
+vi.mock('next/navigation', () => ({ usePathname: () => pathname, useRouter: () => router }));
 vi.mock('next/link', () => ({
   default: ({ href, children, ...rest }: { href: string; children: React.ReactNode }) => (
     <a href={href} {...rest}>

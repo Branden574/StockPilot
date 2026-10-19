@@ -283,3 +283,72 @@ describe('PageTour step targets', () => {
     expect(items!.scrollIntoView).toHaveBeenCalled();
   });
 });
+
+/**
+ * THE TOUR TRIGGER IS THE SHARED GHOST BUTTON (DESIGN-SPEC 6.21 draws "Tour"
+ * as a ghost button; P2.6 review). It sits in the page header's tour slot
+ * beside 32 px actions, and as a hand-drawn 28 px button it had no 44 px
+ * target where a finger is the pointer. As the small ghost Button it gets the
+ * Button's invisible 44 x 44 hit area below sm and on coarse pointers, and it
+ * keeps its words, its name and what it does.
+ */
+describe('the Tour trigger', () => {
+  async function mountTour() {
+    render(
+      <SessionUserProvider userId="user-a">
+        <PageTour tour={TOUR} />
+      </SessionUserProvider>,
+    );
+    await act(async () => {});
+    return screen.getByRole('button', { name: 'Start the Items tour' });
+  }
+  const classesOf = (el: Element) => (el.getAttribute('class') ?? '').split(/\s+/);
+
+  // Mutation caught: the trigger drawn by hand again (no touch target), or a
+  // different Button size or variant.
+  it('is the small ghost Button, with the 44 px touch target below sm and on coarse pointers', async () => {
+    const trigger = await mountTour();
+    expect(trigger.tagName).toBe('BUTTON');
+    expect(trigger).toHaveAttribute('type', 'button');
+    expect(trigger).toHaveTextContent(/^Tour$/);
+    expect(classesOf(trigger)).toEqual(
+      expect.arrayContaining([
+        // size sm and the ghost variant's hover
+        'h-7',
+        'px-2.5',
+        'hover:bg-muted',
+        // the Button's hit area: 44 x 44, present below sm and on coarse pointers
+        'before:min-h-11',
+        'before:min-w-11',
+        "max-sm:before:content-['']",
+        "pointer-coarse:before:content-['']",
+        // the quiet look the tour slot drew: muted words at 400, a 14 px glyph
+        'text-muted-foreground',
+        'font-normal',
+        '[&_svg]:size-3.5',
+      ]),
+    );
+    expect(classesOf(trigger)).not.toContain('font-medium');
+    expect(classesOf(trigger)).not.toContain('[&_svg]:size-4');
+  });
+
+  it('still starts the tour from its first step', async () => {
+    const trigger = await mountTour();
+    fireEvent.click(trigger);
+    await act(async () => {});
+    expect(screen.getByRole('dialog', { name: 'Welcome' })).toBeInTheDocument();
+  });
+
+  // The offer and the step card float over the page; P2.2's floating surfaces
+  // draw the stronger hairline (in dark the structural one is about 1.13:1
+  // against a card). Mutation caught: either card back on the plain border.
+  it('the offer and the step card draw the stronger hairline of a floating surface', async () => {
+    const trigger = await mountTour();
+    const offer = screen.getByRole('dialog', { name: 'Items tour offer' });
+    expect(classesOf(offer)).toEqual(expect.arrayContaining(['border', 'border-line-strong']));
+    fireEvent.click(trigger);
+    await act(async () => {});
+    const card = screen.getByRole('dialog', { name: 'Welcome' });
+    expect(classesOf(card)).toEqual(expect.arrayContaining(['border', 'border-line-strong']));
+  });
+});

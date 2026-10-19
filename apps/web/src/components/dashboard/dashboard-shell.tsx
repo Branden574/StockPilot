@@ -393,7 +393,7 @@ export function DashboardShell({
           <SheetContent
             side="left"
             hideClose
-            className="w-[280px] max-w-[280px] gap-0 p-0"
+            className="bg-background w-[280px] max-w-[280px] gap-0 rounded-none p-0"
             aria-describedby={undefined}
             onOpenAutoFocus={focusDrawerStart}
           >

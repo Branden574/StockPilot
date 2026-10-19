@@ -17,6 +17,7 @@ import {
   SheetFooter,
   SheetTitle,
 } from '@/components/ui/sheet';
+import { useWarmRoute } from '@/lib/hooks/use-warm-route';
 import type { ReleaseLoad } from '@/lib/updates/update-store';
 import { utcDateLabel } from '@/lib/utc-date-label';
 import { cn } from '@/lib/utils';
@@ -25,6 +26,9 @@ import { TOUCH_TARGET, TOUCH_TARGET_ICON } from './constants';
 import { ReleaseEntryCard } from './release-entry-card';
 
 const LABEL = 'text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--ed-ink-3)]';
+
+/** The permanent release history, linked from the drawer's footer. */
+const HISTORY_PAGE = '/dashboard/whats-new';
 
 export interface ReleaseDrawerProps {
   open: boolean;
@@ -77,6 +81,9 @@ export function ReleaseDrawer({
   const refreshRef = React.useRef<HTMLButtonElement>(null);
   const handBackFocus = React.useRef(false);
   const confirming = blockedBy.length > 0;
+  // The history link never prefetches on sight (PLAN 0.6): it warms its page
+  // when a person comes to it, as the top bar's links do.
+  const warmRoute = useWarmRoute();
 
   // "Keep working" removes the button that had focus. Put focus back on the
   // control the person came from, and only after THAT button: the confirmation
@@ -291,7 +298,11 @@ export function ReleaseDrawer({
           ) : (
             <>
               <Link
-                href="/dashboard/whats-new"
+                href={HISTORY_PAGE}
+                prefetch={false}
+                onFocus={() => warmRoute(HISTORY_PAGE)}
+                onPointerEnter={() => warmRoute(HISTORY_PAGE)}
+                onPointerDown={() => warmRoute(HISTORY_PAGE)}
                 onClick={onClose}
                 className={cn(
                   TOUCH_TARGET,

@@ -111,7 +111,7 @@ export function UpdateCard({
       aria-label="Product update"
       data-update-notice
       className={cn(
-        'bg-card text-card-foreground border-border pointer-events-auto relative w-full rounded-lg border p-4 font-sans shadow-[0_10px_30px_rgba(0,0,0,0.25)] duration-200 animate-in fade-in slide-in-from-bottom-2 sm:w-[400px]',
+        'bg-card text-card-foreground border-line-strong pointer-events-auto relative w-full rounded-lg border p-4 font-sans shadow-[0_10px_30px_rgba(0,0,0,0.25)] duration-200 animate-in fade-in slide-in-from-bottom-2 sm:w-[400px]',
         className,
       )}
     >

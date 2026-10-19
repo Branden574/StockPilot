@@ -19,6 +19,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { reset as resetAnalytics } from '@/lib/analytics';
+import { useWarmRoute } from '@/lib/hooks/use-warm-route';
 import { forgetTourState } from '@/lib/onboarding/tour-state-cache';
 import { signOutAction } from '@/server/actions/auth';
 
@@ -52,6 +53,19 @@ export function UserMenu({
 }: UserMenuProps) {
   const router = useRouter();
   const { theme, setTheme } = useTheme();
+  // NO LINK IN THE MENU PREFETCHES ITS PAGE WHEN THE MENU OPENS (PLAN 0.6). A
+  // default <Link> prefetches as soon as it is on screen, so opening the menu
+  // fetched Profile, Settings, Help, Support (and Platform) at once: two
+  // requests each, every one a full dynamic render. Each item warms its page
+  // when a person comes to it instead (hover, keyboard focus as the arrows
+  // move through the menu, pointer-down), as the top bar's links do, through
+  // the app's one warm-up (lib/hooks/use-warm-route.ts).
+  const warmRoute = useWarmRoute();
+  const warmOnApproach = (href: string) => ({
+    onFocus: () => warmRoute(href),
+    onPointerEnter: () => warmRoute(href),
+    onPointerDown: () => warmRoute(href),
+  });
   const initials = (fullName || email || 'U')
     .split(/\s+/)
     .map((s) => s[0])
@@ -104,13 +118,21 @@ export function UserMenu({
         </DropdownMenuLabel>
         <div className="p-1">
           <DropdownMenuItem asChild>
-            <Link href="/dashboard/settings/profile">
+            <Link
+              href="/dashboard/settings/profile"
+              prefetch={false}
+              {...warmOnApproach('/dashboard/settings/profile')}
+            >
               <User className="mr-2 h-4 w-4" />
               Profile
             </Link>
           </DropdownMenuItem>
           <DropdownMenuItem asChild>
-            <Link href="/dashboard/settings">
+            <Link
+              href="/dashboard/settings"
+              prefetch={false}
+              {...warmOnApproach('/dashboard/settings')}
+            >
               <Settings className="mr-2 h-4 w-4" />
               Settings
             </Link>
@@ -120,13 +142,17 @@ export function UserMenu({
               at every width. */}
           <DropdownMenuSeparator />
           <DropdownMenuItem asChild>
-            <Link href="/dashboard/help">
+            <Link href="/dashboard/help" prefetch={false} {...warmOnApproach('/dashboard/help')}>
               <BookOpen className="mr-2 h-4 w-4" />
               Help & Learning
             </Link>
           </DropdownMenuItem>
           <DropdownMenuItem asChild>
-            <Link href="/dashboard/support">
+            <Link
+              href="/dashboard/support"
+              prefetch={false}
+              {...warmOnApproach('/dashboard/support')}
+            >
               <LifeBuoy className="mr-2 h-4 w-4" />
               Support & feedback
             </Link>
@@ -172,7 +198,7 @@ export function UserMenu({
             <>
               <DropdownMenuSeparator />
               <DropdownMenuItem asChild>
-                <Link href="/platform">
+                <Link href="/platform" prefetch={false} {...warmOnApproach('/platform')}>
                   <ShieldAlert className="mr-2 h-4 w-4" />
                   Platform admin
                 </Link>
