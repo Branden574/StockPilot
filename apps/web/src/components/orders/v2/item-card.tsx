@@ -189,7 +189,7 @@ export function ItemCard({ item }: ItemCardProps) {
             {/* Bin location */}
             {item.rackLabel ? (
               <div
-                className="text-muted-foreground flex min-w-0 items-center gap-1 truncate font-mono text-[11px]"
+                className="text-muted-foreground flex min-w-0 items-center gap-1 truncate text-[11px]"
                 title={item.rackLabel}
               >
                 <MapPin className="h-3 w-3 flex-none" />
