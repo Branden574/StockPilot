@@ -1,13 +1,17 @@
 'use client';
 
-import { Download, Loader2, Plus, Sparkles } from 'lucide-react';
+import { AlertTriangle, Download, Loader2, Plus, Sparkles } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { DetailSection } from '@/components/patterns/detail-section';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   Dialog,
   DialogContent,
@@ -48,15 +52,12 @@ import { MappingConfirmation } from '@/components/po-imports/mapping-confirmatio
 
 import { dedupeItemsBySku } from '@/lib/po-imports/dedupe-items';
 
-import {
-  BLOCKING_LINE_RESULTS,
-  LINE_RESULT_LABELS,
-  type LineResult,
-} from '@stockpilot/core';
+import { BLOCKING_LINE_RESULTS, LINE_RESULT_LABELS, type LineResult } from '@stockpilot/core';
 
 import type { PoImportLineRow, PoImportRow } from '@/server/services/po-imports';
 import type { LineResolution } from '@/server/services/po-imports-variants';
 import { HelpTip } from '@/components/onboarding/help-tip';
+import { cn } from '@/lib/utils';
 
 // createdAt drives the match dropdown's SKU-dedupe (oldest row wins); the
 // preview only needs the PreviewItem fields and ignores the extra key.
@@ -123,14 +124,54 @@ const CHARTER_GENERIC = '__none';
 function variantLabel(l: PoImportLineRow): string {
   const parts = [
     l.jersey_number ? `#${l.jersey_number}` : null,
-    l.variant_size
-      ? [l.variant_size, l.variant_size_system].filter(Boolean).join(' ')
-      : null,
+    l.variant_size ? [l.variant_size, l.variant_size_system].filter(Boolean).join(' ') : null,
     l.variant_width,
     l.variant_fit,
     l.variant_color,
   ].filter((v): v is string => typeof v === 'string' && v.length > 0);
   return parts.length > 0 ? parts.join(' · ') : '—';
+}
+
+/** A field label on the review: the quiet 12.5 px form label (DESIGN-SPEC 6.3). */
+const FIELD_LABEL = 'text-muted-foreground text-[12.5px] font-normal leading-4';
+/** An inline field error, persistent beside its field (recurring pattern #20). */
+const FIELD_ERROR = 'text-destructive text-[12.5px]';
+
+/**
+ * Row tints for the review table: a blocked or very-low-confidence line on the
+ * danger wash, a low-confidence line on the caution wash. The tint stays on
+ * hover so the warning never flickers away under the pointer; the Result and
+ * confidence labels carry the same message in words.
+ */
+const ROW_DANGER = 'bg-destructive-wash hover:bg-destructive-wash';
+const ROW_WARNING = 'bg-warning-wash hover:bg-warning-wash';
+
+/** A banner on the review (low confidence, lines that need a decision): the
+ *  tone's wash with its icon, the words in ink. */
+function Notice({
+  tone,
+  children,
+}: {
+  tone: 'warning' | 'destructive';
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className={cn(
+        'text-foreground flex gap-2.5 rounded-lg px-4 py-3 text-[13px]',
+        tone === 'warning' ? 'bg-warning-wash' : 'bg-destructive-wash',
+      )}
+    >
+      <AlertTriangle
+        aria-hidden
+        className={cn(
+          'mt-0.5 h-4 w-4 shrink-0',
+          tone === 'warning' ? 'text-warning' : 'text-destructive',
+        )}
+      />
+      <div className="min-w-0">{children}</div>
+    </div>
+  );
 }
 
 export function PoImportDetail({
@@ -146,6 +187,9 @@ export function PoImportDetail({
   categories,
 }: Props) {
   const router = useRouter();
+  // Field ids: unique per mounted review, so each label names its own control.
+  const fid = React.useId();
+  const fieldId = (name: string) => `${fid}-${name}`;
   const [vendorId, setVendorId] = React.useState<string>(header.vendor_id ?? '');
   // Owner directive: choosing the destination warehouse must be an EXPLICIT
   // act — never seeded from header.warehouse_id. (The old seed was also a
@@ -210,10 +254,7 @@ export function PoImportDetail({
     () => new Set(dedupedOptions.map((o) => o.id)),
     [dedupedOptions],
   );
-  const itemsById = React.useMemo(
-    () => new Map(items.map((i) => [i.id, i])),
-    [items],
-  );
+  const itemsById = React.useMemo(() => new Map(items.map((i) => [i.id, i])), [items]);
   // Model B: the org's data model allows the same SKU across multiple
   // inventory_items rows — one per charter/rack "placement" (see
   // lib/inventory/group-by-sku.ts). A line's matched/created item is only
@@ -376,8 +417,7 @@ export function PoImportDetail({
     }
   }
 
-  const canApprove =
-    header.status === 'parsed' || header.status === 'needs_review';
+  const canApprove = header.status === 'parsed' || header.status === 'needs_review';
 
   // Lines whose verdict is an OPEN QUESTION — an ambiguous match, a possible
   // duplicate, a missing required attribute, a serial mismatch, or an
@@ -402,33 +442,35 @@ export function PoImportDetail({
     (l) => l.extraction_confidence != null && l.extraction_confidence < 0.85,
   ).length;
 
+  // Unmapped inventory lines (no item, not skipped): the bar above the table
+  // offers to create them as new items.
+  const unmappedIds = lines
+    .filter((l) => {
+      const o = overrides[l.id] ?? {};
+      const effectiveItemId = o.itemId !== undefined ? o.itemId : l.item_id;
+      return l.line_type === 'inventory' && o.skip !== true && !effectiveItemId;
+    })
+    .map((l) => l.id);
+
   return (
-    <div className="space-y-6">
-      <div className="border-border bg-card flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 text-sm">
+    <div className="flex min-w-0 flex-col gap-4">
+      {/* The import's status bar: what it is, how sure the reader was, and
+          the record-level actions on the right. */}
+      <div className="border-border bg-card flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border px-[18px] py-3 text-[13px]">
         <PoImportStatusBadge status={header.status} />
-        <span className="text-muted-foreground">
-          {header.source_type.toUpperCase()} ·{' '}
-          {(header.file_size / 1024).toFixed(1)} KB
+        <span className="text-muted-foreground font-mono text-[12.5px] tabular-nums">
+          {header.source_type.toUpperCase()} · {(header.file_size / 1024).toFixed(1)} KB
         </span>
         {isScan && overallConf != null && (
-          <span
-            className={
-              'inline-flex items-center rounded-full border px-2 py-0.5 text-[10.5px] font-medium uppercase tracking-wide ' +
-              (overallConf < 0.7
-                ? 'border-destructive/40 bg-destructive/10 text-destructive'
-                : overallConf < 0.85
-                  ? 'border-warning/40 bg-warning/10 text-warning'
-                  : 'border-success/40 bg-success/10 text-success')
-            }
+          <Badge
+            variant={overallConf < 0.7 ? 'destructive' : overallConf < 0.85 ? 'warning' : 'success'}
             title={`Vision-model overall confidence: ${Math.round(overallConf * 100)}%`}
           >
             {Math.round(overallConf * 100)}% confidence
-          </span>
+          </Badge>
         )}
-        {header.parse_error && (
-          <span className="text-destructive">{header.parse_error}</span>
-        )}
-        <div className="ml-auto flex gap-2">
+        {header.parse_error && <span className="text-destructive">{header.parse_error}</span>}
+        <div className="ml-auto flex flex-wrap gap-2">
           {/* Recordkeeping export: downloads EVERY line (inventory + tax /
               freight / service / fee / discount) plus the header money totals
               for manual/paper audit. Distinct read path from PO creation. */}
@@ -452,6 +494,7 @@ export function PoImportDetail({
               size="sm"
               onClick={() => setCancelOpen(true)}
               disabled={busy}
+              className="hover:text-destructive"
             >
               Cancel import
             </Button>
@@ -471,274 +514,280 @@ export function PoImportDetail({
       />
 
       {isScan && lowConfLineCount > 0 && (
-        <div className="border-warning/40 bg-warning/5 text-foreground rounded-lg border px-4 py-3 text-sm">
+        <Notice tone="warning">
           <p className="font-medium">
-            {lowConfLineCount} line{lowConfLineCount === 1 ? '' : 's'} need a
-            quick review
+            {lowConfLineCount} line{lowConfLineCount === 1 ? '' : 's'} need a quick review
           </p>
-          <p className="text-muted-foreground mt-0.5 text-xs">
-            The vision model wasn't fully sure on those — they're highlighted
-            yellow (low confidence) or red (very low). Skim them, fix any
-            wrong character, then approve.
+          <p className="text-muted-foreground mt-0.5 text-[12.5px]">
+            The vision model wasn't fully sure on those — they're highlighted yellow (low
+            confidence) or red (very low). Skim them, fix any wrong character, then approve.
           </p>
-        </div>
+        </Notice>
       )}
 
       {canApprove && (
         // B5: billing and operational placement live in two visibly separate
         // sections. Both stay fully visible and editable — the fix for the
         // bill-to/ownership conflation is separation, never concealment.
-        <div className="space-y-4">
-        <section className="border-border rounded-md border p-3">
-          <h3 className="text-foreground text-sm font-medium">Operational placement</h3>
-          <p className="text-muted-foreground mt-0.5 mb-3 text-xs">
-            Where this PO receives and who owns the stock. Nothing in the Billing
-            section below affects any of it.
-          </p>
-          <div className="grid gap-3 sm:grid-cols-2">
-          <div>
-            <label className="text-muted-foreground text-xs">Vendor</label>
-            <Select
-              value={vendorId}
-              onValueChange={(v) => {
-                setVendorId(v);
-                setApproveErrors((e) => ({ ...e, vendor: undefined }));
-              }}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Pick vendor" />
-              </SelectTrigger>
-              <SelectContent>
-                {suppliers.map((s) => (
-                  <SelectItem key={s.id} value={s.id}>
-                    {s.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {approveErrors.vendor && (
-              <p role="alert" className="text-destructive mt-1 text-xs">
-                {approveErrors.vendor}
-              </p>
-            )}
-          </div>
-          <div>
-            <label className="text-muted-foreground text-xs">
-              Destination warehouse
-            </label>
-            <Select
-              value={warehouseId}
-              onValueChange={(v) => {
-                setWarehouseId(v);
-                // The location list changes with the warehouse — clear its
-                // error too; a stale message would point at the old list.
-                setApproveErrors((e) => ({
-                  ...e,
-                  warehouse: undefined,
-                  location: undefined,
-                }));
-              }}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Pick warehouse" />
-              </SelectTrigger>
-              <SelectContent>
-                {warehouses.map((w) => (
-                  <SelectItem key={w.id} value={w.id}>
-                    {w.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {approveErrors.warehouse && (
-              <p role="alert" className="text-destructive mt-1 text-xs">
-                {approveErrors.warehouse}
-              </p>
-            )}
-          </div>
-          <div>
-            <label className="text-muted-foreground text-xs inline-flex items-center gap-1">
-              Charter for items (ownership)
-              <HelpTip label="Charter for items">
-                <p>
-                  Sets who <strong>owns</strong> the stock: items created from these
-                  lines are stamped with this charter, and at approval every line is
-                  pointed at the instance owned by it. Independent of billing — a PO
-                  billed to one charter can stock items owned by another.
-                </p>
-                <p className="mt-1">
-                  Leave it on &ldquo;Keep each item&apos;s current charter&rdquo; to
-                  change no ownership at all.
-                </p>
-              </HelpTip>
-            </label>
-            <Select
-              value={charterId || CHARTER_KEEP}
-              onValueChange={(v) => setCharterId(v === CHARTER_KEEP ? '' : v)}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Keep each item's current charter" />
-              </SelectTrigger>
-              <SelectContent>
-                {/* Default = express NO ownership intent. approve() then leaves
-                    every item's charter exactly as it is. "No charter" below is
-                    a DIFFERENT, explicit choice: move ownership to Generic. */}
-                <SelectItem value={CHARTER_KEEP}>
-                  Keep each item&apos;s current charter
-                </SelectItem>
-                <SelectItem value={CHARTER_GENERIC}>No charter (Generic)</SelectItem>
-                {charters.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <label className="text-muted-foreground text-xs">Create new items as</label>
-            <Select
-              value={createItemType}
-              onValueChange={(v) => setCreateItemType(v === 'book' ? 'book' : 'product')}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="product">Items</SelectItem>
-                <SelectItem value="book">Books</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <label className="text-muted-foreground text-xs">Destination location</label>
-            {warehouseId && warehouseLocations.length === 0 ? (
-              // No silent fallback: the old "Warehouse default" option let the
-              // server auto-create a synthetic location. Surface the gap and
-              // block approve until a real site exists.
-              <p className="border-warning/40 bg-warning/5 text-foreground rounded-md border px-3 py-2 text-xs">
-                No sites are linked to this warehouse yet — add one under
-                Locations first
-              </p>
-            ) : (
+        <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+          <DetailSection title="Operational placement">
+            <p className="text-muted-foreground mb-4 text-[12.5px] leading-[18.75px]">
+              Where this PO receives and who owns the stock. Nothing in the Billing section below
+              affects any of it.
+            </p>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="min-w-0 space-y-1.5">
+                <Label htmlFor={fieldId('vendor')} className={FIELD_LABEL}>
+                  Vendor
+                </Label>
+                <Select
+                  value={vendorId}
+                  onValueChange={(v) => {
+                    setVendorId(v);
+                    setApproveErrors((e) => ({ ...e, vendor: undefined }));
+                  }}
+                >
+                  <SelectTrigger
+                    id={fieldId('vendor')}
+                    aria-invalid={approveErrors.vendor ? true : undefined}
+                  >
+                    <SelectValue placeholder="Pick vendor" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {suppliers.map((s) => (
+                      <SelectItem key={s.id} value={s.id}>
+                        {s.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {approveErrors.vendor && (
+                  <p role="alert" className={FIELD_ERROR}>
+                    {approveErrors.vendor}
+                  </p>
+                )}
+              </div>
+              <div className="min-w-0 space-y-1.5">
+                <Label htmlFor={fieldId('warehouse')} className={FIELD_LABEL}>
+                  Destination warehouse
+                </Label>
+                <Select
+                  value={warehouseId}
+                  onValueChange={(v) => {
+                    setWarehouseId(v);
+                    // The location list changes with the warehouse — clear its
+                    // error too; a stale message would point at the old list.
+                    setApproveErrors((e) => ({
+                      ...e,
+                      warehouse: undefined,
+                      location: undefined,
+                    }));
+                  }}
+                >
+                  <SelectTrigger
+                    id={fieldId('warehouse')}
+                    aria-invalid={approveErrors.warehouse ? true : undefined}
+                  >
+                    <SelectValue placeholder="Pick warehouse" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {warehouses.map((w) => (
+                      <SelectItem key={w.id} value={w.id}>
+                        {w.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {approveErrors.warehouse && (
+                  <p role="alert" className={FIELD_ERROR}>
+                    {approveErrors.warehouse}
+                  </p>
+                )}
+              </div>
+              <div className="min-w-0 space-y-1.5">
+                <div className="inline-flex items-center gap-1">
+                  <Label htmlFor={fieldId('item-charter')} className={FIELD_LABEL}>
+                    Charter for items (ownership)
+                  </Label>
+                  <HelpTip label="Charter for items">
+                    <p>
+                      Sets who <strong>owns</strong> the stock: items created from these lines are
+                      stamped with this charter, and at approval every line is pointed at the
+                      instance owned by it. Independent of billing — a PO billed to one charter can
+                      stock items owned by another.
+                    </p>
+                    <p className="mt-1">
+                      Leave it on &ldquo;Keep each item&apos;s current charter&rdquo; to change no
+                      ownership at all.
+                    </p>
+                  </HelpTip>
+                </div>
+                <Select
+                  value={charterId || CHARTER_KEEP}
+                  onValueChange={(v) => setCharterId(v === CHARTER_KEEP ? '' : v)}
+                >
+                  <SelectTrigger id={fieldId('item-charter')}>
+                    <SelectValue placeholder="Keep each item's current charter" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {/* Default = express NO ownership intent. approve() then leaves
+                        every item's charter exactly as it is. "No charter" below is
+                        a DIFFERENT, explicit choice: move ownership to Generic. */}
+                    <SelectItem value={CHARTER_KEEP}>
+                      Keep each item&apos;s current charter
+                    </SelectItem>
+                    <SelectItem value={CHARTER_GENERIC}>No charter (Generic)</SelectItem>
+                    {charters.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {c.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="min-w-0 space-y-1.5">
+                <Label htmlFor={fieldId('item-type')} className={FIELD_LABEL}>
+                  Create new items as
+                </Label>
+                <Select
+                  value={createItemType}
+                  onValueChange={(v) => setCreateItemType(v === 'book' ? 'book' : 'product')}
+                >
+                  <SelectTrigger id={fieldId('item-type')}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="product">Items</SelectItem>
+                    <SelectItem value="book">Books</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="min-w-0 space-y-1.5">
+                <Label htmlFor={fieldId('location')} className={FIELD_LABEL}>
+                  Destination location
+                </Label>
+                {warehouseId && warehouseLocations.length === 0 ? (
+                  // No silent fallback: the old "Warehouse default" option let the
+                  // server auto-create a synthetic location. Surface the gap and
+                  // block approve until a real site exists.
+                  <p className="bg-warning-wash text-foreground rounded-md px-3 py-2 text-[12.5px]">
+                    No sites are linked to this warehouse yet — add one under Locations first
+                  </p>
+                ) : (
+                  <Select
+                    value={locationId}
+                    onValueChange={(v) => {
+                      setLocationId(v);
+                      setApproveErrors((e) => ({ ...e, location: undefined }));
+                    }}
+                    disabled={!warehouseId}
+                  >
+                    <SelectTrigger
+                      id={fieldId('location')}
+                      aria-invalid={approveErrors.location ? true : undefined}
+                    >
+                      <SelectValue
+                        placeholder={warehouseId ? 'Pick a location' : 'Pick a warehouse first'}
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {warehouseLocations.map((l) => (
+                        <SelectItem key={l.id} value={l.id}>
+                          {l.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                {approveErrors.location && (
+                  <p role="alert" className={FIELD_ERROR}>
+                    {approveErrors.location}
+                  </p>
+                )}
+              </div>
+              <div className="min-w-0 space-y-1.5">
+                <Label htmlFor={fieldId('expected')} className={FIELD_LABEL}>
+                  Expected delivery (optional)
+                </Label>
+                <Input
+                  id={fieldId('expected')}
+                  type="date"
+                  value={expectedAt}
+                  onChange={(e) => setExpectedAt(e.target.value)}
+                />
+              </div>
+            </div>
+          </DetailSection>
+
+          <DetailSection title="Billing — does not affect placement">
+            <p className="text-muted-foreground mb-4 text-[12.5px] leading-[18.75px]">
+              Financial metadata only. It is printed on the purchase-order document&apos;s
+              &ldquo;Bill to&rdquo; block and changes nothing else: not the receiving warehouse, not
+              the destination location, not who owns the stock, not which list this PO appears in,
+              not who can see it.
+            </p>
+            <div className="min-w-0 space-y-1.5">
+              <div className="inline-flex items-center gap-1">
+                <Label htmlFor={fieldId('bill-to')} className={FIELD_LABEL}>
+                  Bill to charter (optional)
+                </Label>
+                <HelpTip label="Bill to charter">
+                  <p>
+                    Sets who is <strong>billed</strong> on the purchase-order document itself. It
+                    does not affect who owns the items — that is &ldquo;Charter for items&rdquo;
+                    under Operational placement.
+                  </p>
+                </HelpTip>
+              </div>
               <Select
-                value={locationId}
-                onValueChange={(v) => {
-                  setLocationId(v);
-                  setApproveErrors((e) => ({ ...e, location: undefined }));
-                }}
-                disabled={!warehouseId}
+                value={billToCharterId || '__none'}
+                onValueChange={(v) => setBillToCharterId(v === '__none' ? '' : v)}
               >
-                <SelectTrigger>
-                  <SelectValue
-                    placeholder={warehouseId ? 'Pick a location' : 'Pick a warehouse first'}
-                  />
+                <SelectTrigger id={fieldId('bill-to')}>
+                  <SelectValue placeholder="No charter" />
                 </SelectTrigger>
                 <SelectContent>
-                  {warehouseLocations.map((l) => (
-                    <SelectItem key={l.id} value={l.id}>
-                      {l.name}
+                  <SelectItem value="__none">No charter</SelectItem>
+                  {charters.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-            )}
-            {approveErrors.location && (
-              <p role="alert" className="text-destructive mt-1 text-xs">
-                {approveErrors.location}
-              </p>
-            )}
-          </div>
-          <div>
-            <label className="text-muted-foreground text-xs">Expected delivery (optional)</label>
-            <Input
-              type="date"
-              value={expectedAt}
-              onChange={(e) => setExpectedAt(e.target.value)}
-            />
-          </div>
-          </div>
-        </section>
-
-        <section className="border-border rounded-md border p-3">
-          <h3 className="text-foreground text-sm font-medium">
-            Billing — does not affect placement
-          </h3>
-          <p className="text-muted-foreground mt-0.5 mb-3 text-xs">
-            Financial metadata only. It is printed on the purchase-order
-            document&apos;s &ldquo;Bill to&rdquo; block and changes nothing else:
-            not the receiving warehouse, not the destination location, not who
-            owns the stock, not which list this PO appears in, not who can see it.
-          </p>
-          <div className="grid gap-3 sm:grid-cols-2">
-          <div>
-            <label className="text-muted-foreground text-xs inline-flex items-center gap-1">
-              Bill to charter (optional)
-              <HelpTip label="Bill to charter">
-                <p>
-                  Sets who is <strong>billed</strong> on the purchase-order document
-                  itself. It does not affect who owns the items — that is
-                  &ldquo;Charter for items&rdquo; under Operational placement.
-                </p>
-              </HelpTip>
-            </label>
-            <Select
-              value={billToCharterId || '__none'}
-              onValueChange={(v) => setBillToCharterId(v === '__none' ? '' : v)}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="No charter" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none">No charter</SelectItem>
-                {charters.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          </div>
-        </section>
+            </div>
+          </DetailSection>
         </div>
       )}
 
-      {(() => {
-        const unmappedIds = lines
-          .filter((l) => {
-            const o = overrides[l.id] ?? {};
-            const effectiveItemId = o.itemId !== undefined ? o.itemId : l.item_id;
-            return l.line_type === 'inventory' && o.skip !== true && !effectiveItemId;
-          })
-          .map((l) => l.id);
-        if (unmappedIds.length === 0 || !canApprove) return null;
-        return (
-          <div className="border-border bg-card flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-xs">
-            <Sparkles className="text-muted-foreground h-3.5 w-3.5" />
-            <span>
-              <strong>{unmappedIds.length}</strong> unmapped line
-              {unmappedIds.length === 1 ? '' : 's'} — create new internal items
-              from the PO so you don't have to enter them manually.
-            </span>
-            <Button
-              size="sm"
-              variant="outline"
-              className="ml-auto"
-              onClick={() => openCreateItems(unmappedIds)}
-              disabled={busy || !vendorId}
-              title={!vendorId ? 'Pick a vendor first' : undefined}
-            >
-              {busy ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Plus className="h-3.5 w-3.5" />
-              )}
-              Create {unmappedIds.length} as new items
-            </Button>
-          </div>
-        );
-      })()}
+      {unmappedIds.length > 0 && canApprove && (
+        <div className="border-border bg-card flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border px-[18px] py-2.5 text-[13px]">
+          <Sparkles aria-hidden className="text-accent h-4 w-4 shrink-0" />
+          {/* The words keep at least 14rem, so on a phone the button wraps
+              under them (at the right) instead of squeezing them into a
+              narrow column beside it. */}
+          <span className="min-w-0 flex-[1_1_14rem]">
+            <strong className="font-medium tabular-nums">{unmappedIds.length}</strong> unmapped line
+            {unmappedIds.length === 1 ? '' : 's'} — create new internal items from the PO so you
+            don't have to enter them manually.
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            className="ml-auto"
+            onClick={() => openCreateItems(unmappedIds)}
+            disabled={busy || !vendorId}
+            title={!vendorId ? 'Pick a vendor first' : undefined}
+          >
+            {busy ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Plus className="h-3.5 w-3.5" />
+            )}
+            Create {unmappedIds.length} as new items
+          </Button>
+        </div>
+      )}
 
       <MappingConfirmation
         poImportId={header.id}
@@ -748,18 +797,23 @@ export function PoImportDetail({
       />
 
       {blockedLines.length > 0 && canApprove && (
-        <div className="border-destructive/40 bg-destructive/5 rounded-md border px-3 py-2 text-xs">
-          <strong>{blockedLines.length}</strong>{' '}
+        <Notice tone="destructive">
+          <strong className="font-medium tabular-nums">{blockedLines.length}</strong>{' '}
           {`${
             blockedLines.length === 1 ? 'line needs' : 'lines need'
           } a decision before this import can be approved — see the Result column. Nothing is merged or linked automatically.`}
-        </div>
+        </Notice>
       )}
 
-      <div className="overflow-x-auto rounded-xl border bg-card">
+      {/* The review table (DESIGN-SPEC 6.9) in its card: the eleven columns
+          take their natural widths and scroll sideways inside it when they
+          need more room than the screen has, never the page, and every column
+          stays available (an import with no lines keeps all its headers in
+          view). */}
+      <div className="border-border bg-card min-w-0 overflow-hidden rounded-lg border">
         <Table>
           <TableHeader>
-            <TableRow>
+            <TableRow className="hover:bg-transparent">
               <TableHead className="w-12">#</TableHead>
               <TableHead>Description</TableHead>
               <TableHead>Vendor #</TableHead>
@@ -776,8 +830,7 @@ export function PoImportDetail({
           <TableBody>
             {lines.map((l) => {
               const o = overrides[l.id] ?? {};
-              const effectiveItemId =
-                o.itemId !== undefined ? o.itemId : l.item_id;
+              const effectiveItemId = o.itemId !== undefined ? o.itemId : l.item_id;
               const isUnmappedInventory =
                 l.line_type === 'inventory' && o.skip !== true && !effectiveItemId;
               // Advisory chip (Tasks 2/3): a match was found (barcode/ISBN/
@@ -790,44 +843,34 @@ export function PoImportDetail({
               // have null confidence and render in the default tone).
               const conf = l.extraction_confidence;
               const confClass =
-                conf == null
-                  ? ''
-                  : conf < 0.7
-                    ? 'bg-destructive/5'
-                    : conf < 0.85
-                      ? 'bg-warning/5'
-                      : '';
+                conf == null ? '' : conf < 0.7 ? ROW_DANGER : conf < 0.85 ? ROW_WARNING : '';
               // Task 14 verdict. Absent = a caller that predates the resolver;
               // 'ready' is what every non-sports line resolves to anyway.
               const resolution = resolutions?.[l.id];
               const result: LineResult = resolution?.result ?? 'ready';
               const isBlocked = o.skip !== true && BLOCKING_LINE_RESULTS.has(result);
               return (
-                <TableRow
-                  key={l.id}
-                  className={isBlocked ? 'bg-destructive/5' : confClass}
-                >
-                  <TableCell className="tabular-nums">{l.line_number}</TableCell>
+                <TableRow key={l.id} className={isBlocked ? ROW_DANGER : confClass}>
+                  <TableCell className="font-mono text-[12.5px] tabular-nums">
+                    {l.line_number}
+                  </TableCell>
                   <TableCell className="max-w-[280px] truncate">
                     {l.description}
                     {conf != null && conf < 0.85 && (
-                      <span
-                        className={
-                          'ml-2 inline-flex items-center rounded-full border px-1.5 py-px text-[9.5px] font-medium uppercase tracking-wide ' +
-                          (conf < 0.7
-                            ? 'border-destructive/40 bg-destructive/10 text-destructive'
-                            : 'border-warning/40 bg-warning/10 text-warning')
-                        }
+                      <Badge
+                        variant={conf < 0.7 ? 'destructive' : 'warning'}
+                        className="ml-2 align-middle"
                         title={`Vision-model confidence: ${Math.round(conf * 100)}%`}
                       >
                         {Math.round(conf * 100)}%
-                      </span>
+                      </Badge>
                     )}
                   </TableCell>
-                  <TableCell className="font-mono text-xs">
+                  {/* A vendor code reads whole: it never breaks at its hyphens. */}
+                  <TableCell className="text-ink-2 whitespace-nowrap font-mono text-[12px]">
                     {l.vendor_item_number ?? '—'}
                   </TableCell>
-                  <TableCell className="max-w-[180px] truncate text-xs">
+                  <TableCell className="text-ink-2 max-w-[180px] truncate text-[12.5px]">
                     {resolution?.groupName ??
                       (resolution && resolution.groupCandidates.length > 0
                         ? `${resolution.groupCandidates.length} candidate${
@@ -835,39 +878,32 @@ export function PoImportDetail({
                           }`
                         : (l.group_hint ?? '—'))}
                   </TableCell>
-                  <TableCell className="text-xs">{variantLabel(l)}</TableCell>
-                  <TableCell className="tabular-nums">
+                  <TableCell className="text-ink-2 text-[12.5px]">{variantLabel(l)}</TableCell>
+                  <TableCell className="whitespace-nowrap tabular-nums">
                     {l.qty_ordered_original} {l.uom_original}
                   </TableCell>
-                  <TableCell className="tabular-nums">
+                  <TableCell className="whitespace-nowrap font-mono text-[12.5px] tabular-nums">
                     {l.line_total != null ? `$${l.line_total.toFixed(2)}` : '—'}
                   </TableCell>
                   <TableCell>
-                    <span className="rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide">
-                      {l.line_type}
-                    </span>
+                    <Badge variant="outline">{l.line_type}</Badge>
                   </TableCell>
                   <TableCell className="max-w-[200px]">
                     {/* Never a bare Valid/Invalid — the cell says what will
                         happen, or what question is still open. */}
-                    <span
-                      className={
-                        'inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ' +
-                        (isBlocked
-                          ? 'border-destructive/40 bg-destructive/10 text-destructive'
-                          : 'border-border text-muted-foreground')
-                      }
+                    <Badge
+                      variant={isBlocked ? 'destructive' : 'outline'}
                       title={resolution?.message ?? undefined}
                     >
                       {LINE_RESULT_LABELS[result]}
-                    </span>
+                    </Badge>
                     {isBlocked && resolution?.message && (
-                      <p className="text-muted-foreground mt-1 text-[10.5px] leading-snug">
+                      <p className="text-muted-foreground mt-1 text-[12px] leading-snug">
                         {resolution.message}
                       </p>
                     )}
                     {isBlocked && resolution && resolution.groupCandidates.length > 0 && (
-                      <ul className="text-muted-foreground mt-1 space-y-0.5 text-[10.5px]">
+                      <ul className="text-muted-foreground mt-1 space-y-0.5 text-[12px]">
                         {resolution.groupCandidates.map((c) => (
                           <li key={c.id} className="truncate">
                             · {c.name}
@@ -879,7 +915,7 @@ export function PoImportDetail({
                   <TableCell>
                     {l.line_type === 'inventory' ? (
                       <div className="flex min-w-[220px] flex-col gap-1.5">
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-2">
                           <ItemCombobox
                             items={comboOptionsFor(effectiveItemId ?? null)}
                             value={effectiveItemId ?? null}
@@ -894,7 +930,7 @@ export function PoImportDetail({
                               type="button"
                               variant="outline"
                               size="sm"
-                              className="h-8 shrink-0 px-2 text-[11px]"
+                              className="shrink-0"
                               onClick={() => openCreateItems([l.id])}
                               disabled={busy || !vendorId}
                               title={
@@ -903,7 +939,7 @@ export function PoImportDetail({
                                   : 'Create a new internal item from this line'
                               }
                             >
-                              <Plus className="h-3 w-3" /> Create
+                              <Plus className="h-3.5 w-3.5" /> Create
                             </Button>
                           )}
                         </div>
@@ -912,9 +948,9 @@ export function PoImportDetail({
                           // (value stays derived from item_id/override, never
                           // suggested_item_id). Default stays create-new; this
                           // is the ONLY way a suggestion becomes a link.
-                          <div className="border-border bg-muted/40 flex flex-wrap items-center gap-1.5 rounded-md border px-2 py-1 text-[11px]">
-                            <Sparkles className="text-muted-foreground h-3 w-3 shrink-0" />
-                            <span>
+                          <div className="border-border bg-sunk flex flex-wrap items-center gap-2 rounded-md border px-2.5 py-1.5 text-[12px]">
+                            <Sparkles aria-hidden className="text-accent h-3.5 w-3.5 shrink-0" />
+                            <span className="min-w-0">
                               Possible match:{' '}
                               <strong className="font-medium">
                                 {l.suggestionLabel ?? 'an existing item'}
@@ -925,7 +961,7 @@ export function PoImportDetail({
                               type="button"
                               variant="outline"
                               size="sm"
-                              className="h-6 shrink-0 px-2 text-[10.5px]"
+                              className="shrink-0"
                               onClick={() => acceptSuggestion(l.id, l.suggested_item_id!)}
                             >
                               Use existing
@@ -934,18 +970,20 @@ export function PoImportDetail({
                         )}
                       </div>
                     ) : (
-                      <span className="text-muted-foreground text-xs">
-                        non-inventory
-                      </span>
+                      <span className="text-muted-foreground text-[12.5px]">non-inventory</span>
                     )}
                   </TableCell>
                   <TableCell className="text-right">
-                    <input
-                      type="checkbox"
-                      checked={o.skip === true}
-                      onChange={(e) => setLineSkip(l.id, e.target.checked)}
-                      disabled={!canApprove}
-                    />
+                    {/* Keyed by the line's id, never its description (owner
+                        TC1/TC6): two lines that read the same are two boxes. */}
+                    <div className="flex justify-end">
+                      <Checkbox
+                        label={`Skip line ${l.line_number}`}
+                        checked={o.skip === true}
+                        onCheckedChange={(next) => setLineSkip(l.id, next)}
+                        disabled={!canApprove}
+                      />
+                    </div>
                   </TableCell>
                 </TableRow>
               );
@@ -965,7 +1003,9 @@ export function PoImportDetail({
 
       {canApprove && (
         <div className="flex justify-end">
-          <Button onClick={openConfirm} disabled={busy} variant="gradient">
+          {/* Committing the review in front of you: the ink primary
+              (DESIGN-SPEC 6.2). */}
+          <Button onClick={openConfirm} disabled={busy}>
             Review & approve
           </Button>
         </div>
@@ -976,22 +1016,21 @@ export function PoImportDetail({
           <DialogHeader>
             <DialogTitle>Approve this import?</DialogTitle>
           </DialogHeader>
-          <div className="text-muted-foreground space-y-2 text-sm">
+          <div className="text-muted-foreground space-y-2 text-[13.5px]">
             <p>
               An expected inbound PO will be created. Stock will{' '}
-              <strong className="text-foreground">not</strong> change yet — the
-              quantities below are added when you receive the PO.
+              <strong className="text-foreground">not</strong> change yet — the quantities below are
+              added when you receive the PO.
             </p>
             <ul className="list-disc pl-5">
               <li>
-                <strong className="text-foreground">
+                <strong className="text-foreground tabular-nums">
                   {preview.summary.mappedCount}
                 </strong>{' '}
-                item{preview.summary.mappedCount === 1 ? '' : 's'} will be
-                receivable
+                item{preview.summary.mappedCount === 1 ? '' : 's'} will be receivable
               </li>
               <li>
-                <strong className="text-foreground">
+                <strong className="text-foreground tabular-nums">
                   {preview.summary.totalUnits}
                 </strong>{' '}
                 total units inbound
@@ -1009,21 +1048,17 @@ export function PoImportDetail({
                 </li>
               )}
             </ul>
-            <p className="text-[12px]">
-              You can still receive partial quantities later — receiving is
-              when the actual stock change posts.
+            <p className="text-[12.5px]">
+              You can still receive partial quantities later — receiving is when the actual stock
+              change posts.
             </p>
           </div>
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setConfirmOpen(false)} disabled={busy}>
+            <Button variant="outline" onClick={() => setConfirmOpen(false)} disabled={busy}>
               Back to review
             </Button>
-            <Button onClick={approve} disabled={busy} variant="gradient">
-              {busy ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                'Approve & create PO'
-              )}
+            <Button onClick={approve} disabled={busy}>
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Approve & create PO'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1056,12 +1091,9 @@ export function PoImportDetail({
             parts.push(
               `Linked ${counts.linked} line${counts.linked === 1 ? '' : 's'} to existing items`,
             );
-          if (counts.skipped > 0)
-            parts.push(`Skipped ${counts.skipped}`);
+          if (counts.skipped > 0) parts.push(`Skipped ${counts.skipped}`);
           if (counts.mapped > 0)
-            parts.push(
-              `${counts.mapped} vendor mapping${counts.mapped === 1 ? '' : 's'}`,
-            );
+            parts.push(`${counts.mapped} vendor mapping${counts.mapped === 1 ? '' : 's'}`);
           toast.success(parts.length > 0 ? `${parts.join(' · ')}.` : 'Lines processed.');
           router.refresh();
         }}

@@ -40,19 +40,21 @@ export function PoImportLineageNotice({
   return (
     <div className={className ? `space-y-3 ${className}` : 'space-y-3'}>
       {replacement && (
-        <div className="border-warning/40 bg-warning/5 text-foreground rounded-lg border px-4 py-3 text-sm">
+        // On the caution wash: everything below reads differently on a
+        // replaced import.
+        <div className="bg-warning-wash text-foreground rounded-lg px-4 py-3 text-[13px]">
           <p className="flex items-center gap-2 font-medium">
-            <History className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <History className="text-warning h-4 w-4 shrink-0" aria-hidden="true" />
             Replaced by a later import of this file
           </p>
-          <p className="text-muted-foreground mt-0.5 text-xs">
+          <p className="text-muted-foreground mt-0.5 text-[12.5px]">
             This file was imported again {formatRelative(replacement.createdAt)}. Open the newer
             import to see where it stands — if it was replaced in turn, it says so too. This import
             and the purchase order it created are kept unchanged for the record.
           </p>
           <Link
             href={`/dashboard/purchase-orders/imports/${replacement.id}`}
-            className="mt-2 inline-block text-sm font-medium underline-offset-2 hover:underline"
+            className="mt-2 inline-block text-[13px] font-medium underline underline-offset-2 hover:no-underline"
           >
             Open the newer import
           </Link>
@@ -60,27 +62,27 @@ export function PoImportLineageNotice({
       )}
 
       {pred && (
-        <div className="border-border bg-muted/40 text-foreground rounded-lg border px-4 py-3 text-sm">
+        <div className="border-border bg-sunk text-foreground rounded-lg border px-4 py-3 text-[13px]">
           <p className="flex items-center gap-2 font-medium">
-            <Undo2 className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <Undo2 className="text-muted-foreground h-4 w-4 shrink-0" aria-hidden="true" />
             Re-import of an earlier purchase order
           </p>
-          <p className="text-muted-foreground mt-0.5 text-xs">
+          <p className="text-muted-foreground mt-0.5 text-[12.5px]">
             {pred.poStatus === 'cancelled' && pred.poNumber
               ? `Re-import of ${pred.poNumber}, which was cancelled. The earlier import of ${pred.displayName ?? pred.fileName} is kept for the record.`
               : `This file was imported once before. The earlier import of ${pred.displayName ?? pred.fileName} is kept for the record.`}
           </p>
-          <div className="mt-2 flex flex-wrap gap-4">
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
             <Link
               href={`/dashboard/purchase-orders/imports/${pred.id}`}
-              className="text-sm font-medium underline-offset-2 hover:underline"
+              className="text-accent hover:text-foreground text-[13px] font-medium"
             >
               View the earlier import
             </Link>
             {pred.poId && (
               <Link
                 href={`/dashboard/purchase-orders/${pred.poId}`}
-                className="text-sm font-medium underline-offset-2 hover:underline"
+                className="text-accent hover:text-foreground text-[13px] font-medium"
               >
                 {pred.poNumber ? `View ${pred.poNumber}` : 'View the earlier purchase order'}
               </Link>
