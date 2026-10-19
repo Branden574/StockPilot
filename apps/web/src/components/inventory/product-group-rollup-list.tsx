@@ -63,6 +63,9 @@ import {
 
 export type RollupVariant = GroupVariantRow;
 
+/** A variant-table header cell: 11 px uppercase in the quiet ink (DESIGN-SPEC 6.9). */
+const TH = 'whitespace-nowrap px-3 py-2.5 text-[11px] font-medium uppercase tracking-[0.06em]';
+
 export interface RollupGroup {
   id: string;
   name: string;
@@ -114,7 +117,12 @@ export function ProductGroupRollupList({
   }, []);
 
   return (
-    <div className="border-border divide-border divide-y rounded-lg border">
+    // The table-card language (DESIGN-SPEC 6.9 and 6.21): one card, a row per
+    // group in the group-header recipe, hairlines between.
+    <div
+      data-slot="product-group-list"
+      className="border-border bg-card divide-border divide-y overflow-hidden rounded-lg border"
+    >
       {groups.map((g) => (
         <GroupRow
           key={g.id}
@@ -275,39 +283,53 @@ function GroupRow({
 
   return (
     <div>
-      <div className="flex items-start gap-3 px-3 py-2.5">
+      <div
+        data-slot="product-group-row"
+        className={cn(
+          'hover:bg-muted/60 flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-3 transition-colors sm:flex-nowrap',
+          expanded && 'bg-sunk hover:bg-sunk',
+        )}
+      >
         <button
           type="button"
           onClick={handleToggle}
           aria-expanded={expanded}
           aria-label={`${expanded ? 'Collapse' : 'Expand'} ${group.name} (${rollup})`}
-          className="hover:bg-muted hover:text-foreground mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-sm text-[var(--ed-ink-3)] transition-colors"
+          // The group-header chevron: 24 x 24, radius 6, a 14 px chevron that
+          // turns a quarter when the group is open (44 px to touch below sm).
+          className="text-muted-foreground hover:bg-muted hover:text-foreground relative grid h-6 w-6 shrink-0 place-items-center rounded-md transition-colors before:absolute before:left-1/2 before:top-1/2 before:size-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-['']"
         >
-          <ChevronRight className={cn('h-3.5 w-3.5 transition-transform', expanded && 'rotate-90')} />
+          <ChevronRight
+            aria-hidden
+            strokeWidth={1.8}
+            className={cn('h-3.5 w-3.5 transition-transform', expanded && 'rotate-90')}
+          />
         </button>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="truncate text-[13.5px] font-medium">{group.name}</span>
+            <span className="min-w-0 truncate text-[13.5px] font-medium">{group.name}</span>
             {/* The tracking mode is admin-facing detail; this whole route is
                 gated on sports:manage, so it belongs here and nowhere on the
                 ordinary inventory list. */}
             {modeLabel && (
-              <span className="border-border shrink-0 rounded-full border px-1.5 py-0.5 text-[10.5px] font-medium text-[var(--ed-ink-3)]">
+              <span className="border-line-strong text-muted-foreground shrink-0 rounded-full border px-1.5 text-[11px] leading-[18px]">
                 {modeLabel}
               </span>
             )}
           </div>
           {identity && (
-            <p className="truncate text-[11.5px] text-[var(--ed-ink-4)]">{identity}</p>
+            <p className="text-muted-foreground truncate text-[12px]">{identity}</p>
           )}
         </div>
-        <div className="shrink-0 text-right">
-          <p className="text-[12.5px] font-medium tabular-nums">{rollup}</p>
-          <p className="text-[11.5px] text-[var(--ed-ink-4)]">
+        {/* On a phone the roll-up and the action drop under the name,
+            indented to it; from sm up they sit on the row's right. */}
+        <div className="ml-9 min-w-0 text-left sm:ml-0 sm:shrink-0 sm:text-right">
+          <p className="text-[13px] font-medium tabular-nums">{rollup}</p>
+          <p className="text-muted-foreground text-[12px]">
             Added up from this group&rsquo;s variants
           </p>
         </div>
-        <div className="shrink-0">
+        <div className="ml-auto shrink-0 sm:ml-0">
           {archived ? (
             <Button
               type="button"
@@ -335,7 +357,7 @@ function GroupRow({
       </div>
 
       {archiving && (
-        <div className="border-border bg-background border-t px-3 py-2.5 pl-11">
+        <div className="border-border bg-sunk border-t py-3 pl-4 pr-4 sm:pl-[52px]">
           <ArchiveRow
             groupName={group.name}
             blocked={archiving.blocked}
@@ -348,35 +370,43 @@ function GroupRow({
       )}
 
       {expanded && (
-        <div className="border-border bg-muted/20 overflow-x-auto border-t">
+        // The nested member rows: the card surface under the open header, the
+        // first column indented so a variant sits under its group's name.
+        <div className="border-border bg-card overflow-x-auto border-t">
           {loading || variants === null ? (
             loadError ? (
-              <div className="flex flex-wrap items-center gap-2 px-10 py-3 text-[12px] text-[var(--ed-ink-3)]">
+              <div
+                role="alert"
+                className="text-destructive flex flex-wrap items-center gap-2 py-3 pl-4 pr-4 text-[12.5px] sm:pl-[52px]"
+              >
                 <span>{loadError}</span>
                 <Button type="button" variant="outline" size="sm" onClick={load}>
                   Try again
                 </Button>
               </div>
             ) : (
-              <p className="px-10 py-3 text-[12px] text-[var(--ed-ink-4)]">Loading variants…</p>
+              <p
+                role="status"
+                className="text-muted-foreground py-3 pl-4 pr-4 text-[12.5px] sm:pl-[52px]"
+              >
+                Loading variants…
+              </p>
             )
           ) : variants.length === 0 ? (
-            <p className="px-10 py-3 text-[12px] text-[var(--ed-ink-4)]">
+            <p className="text-muted-foreground py-3 pl-4 pr-4 text-[12.5px] sm:pl-[52px]">
               No items are linked to this group yet.
             </p>
           ) : (
-            <table className="w-full min-w-[640px] text-[12px]">
-              <thead className="text-[var(--ed-ink-4)]">
+            <table className="w-full min-w-[640px] text-[13px]">
+              <thead className="text-muted-foreground">
                 <tr className="border-border border-b">
-                  <th className="py-1.5 pl-10 pr-3 text-left font-medium">Variant</th>
-                  <th className="px-3 text-left font-medium">SKU</th>
-                  <th className="px-3 text-left font-medium">Tracking</th>
+                  <th className={cn(TH, 'pl-4 text-left sm:pl-[52px]')}>Variant</th>
+                  <th className={cn(TH, 'text-left')}>SKU</th>
+                  <th className={cn(TH, 'text-left')}>Tracking</th>
                   {/* Rendered ONLY when a variant genuinely has serials. */}
-                  {showSerialColumn && (
-                    <th className="px-3 text-left font-medium">Serials</th>
-                  )}
-                  <th className="px-3 text-right font-medium">On hand</th>
-                  <th className="px-3 pr-4 text-right font-medium">
+                  {showSerialColumn && <th className={cn(TH, 'text-left')}>Serials</th>}
+                  <th className={cn(TH, 'text-right')}>On hand</th>
+                  <th className={cn(TH, 'pr-4 text-right')}>
                     <span className="sr-only">Actions</span>
                   </th>
                 </tr>
@@ -395,8 +425,8 @@ function GroupRow({
                   const columns = showSerialColumn ? 6 : 5;
                   return (
                     <React.Fragment key={v.id}>
-                      <tr className="border-border border-b last:border-0">
-                        <td className="py-1.5 pl-10 pr-3">
+                      <tr className="border-border hover:bg-muted/60 border-b transition-colors last:border-0">
+                        <td className="py-2 pl-4 pr-3 sm:pl-[52px]">
                           <Link
                             href={`/dashboard/inventory/${v.id}`}
                             prefetch={false}
@@ -405,22 +435,22 @@ function GroupRow({
                             {label}
                           </Link>
                           {v.variantSizeSystem && (
-                            <span className="ml-1.5 text-[10.5px] text-[var(--ed-ink-4)]">
+                            <span className="text-muted-foreground ml-1.5 text-[11px]">
                               {v.variantSizeSystem.replace(/_/g, ' ')}
                             </span>
                           )}
                           {v.status !== 'active' && (
-                            <span className="ml-1.5 text-[10.5px] text-[var(--ed-ink-4)]">
+                            <span className="text-muted-foreground ml-1.5 text-[11px]">
                               {v.status}
                             </span>
                           )}
                         </td>
-                        <td className="px-3 font-mono text-[11px] text-[var(--ed-ink-3)]">{v.sku}</td>
-                        <td className="px-3 text-[var(--ed-ink-3)]">
+                        <td className="text-muted-foreground px-3 font-mono text-[12px]">{v.sku}</td>
+                        <td className="text-muted-foreground px-3">
                           {TRACKING_TYPE_LABELS[v.trackingType]}
                         </td>
                         {showSerialColumn && (
-                          <td className="px-3 text-[var(--ed-ink-3)]">
+                          <td className="text-muted-foreground px-3">
                             {serialTracked ? (
                               <Link
                                 href={`/dashboard/inventory/${v.id}`}
@@ -439,7 +469,7 @@ function GroupRow({
                         )}
                         <td className="px-3 text-right tabular-nums">
                           {formatNumber(v.quantity)}{' '}
-                          <span className="text-[10.5px] text-[var(--ed-ink-4)]">
+                          <span className="text-muted-foreground text-[11px]">
                             {countingUnitLabel(group.countingUnit, v.quantity)}
                           </span>
                         </td>
@@ -457,8 +487,8 @@ function GroupRow({
                         </td>
                       </tr>
                       {unlinking === v.id && (
-                        <tr className="border-border bg-background border-b last:border-0">
-                          <td colSpan={columns} className="py-2 pl-10 pr-4">
+                        <tr className="border-border bg-sunk border-b last:border-0">
+                          <td colSpan={columns} className="py-2.5 pl-4 pr-4 sm:pl-[52px]">
                             <UnlinkRow
                               label={label}
                               pending={pending}
@@ -513,7 +543,7 @@ function ArchiveRow({
 }) {
   return (
     <div className="flex flex-wrap items-end justify-between gap-2">
-      <p className="max-w-xl flex-1 text-[11.5px] text-[var(--ed-ink-3)]">
+      <p className="text-muted-foreground max-w-xl flex-1 text-[12.5px]">
         {blocked ??
           `Archive ${groupName}? It leaves the product-groups list and stops being offered when ` +
             'items are linked. Its variants keep their stock and stay where they are, and you can ' +
@@ -561,14 +591,14 @@ function UnlinkRow({
   const [reason, setReason] = React.useState('');
   return (
     <div className="flex flex-wrap items-end gap-2">
-      <label className="flex flex-1 flex-col gap-1 text-[11.5px] text-[var(--ed-ink-3)]">
+      <label className="text-muted-foreground flex min-w-[220px] flex-1 flex-col gap-1 text-[12.5px]">
         Why is {label} not part of this product? (required — it is stored on the audit trail)
         <Input
           value={reason}
           onChange={(e) => setReason(e.target.value)}
           placeholder="Different style, grouped by mistake"
           aria-label={`Reason for unlinking ${label}`}
-          className="h-8 text-[12px]"
+          className="text-foreground"
         />
       </label>
       <Button type="button" variant="ghost" size="sm" onClick={onCancel} disabled={pending}>

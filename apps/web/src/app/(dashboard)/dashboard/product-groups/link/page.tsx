@@ -6,6 +6,7 @@ import { can, SPORTS_SUBCATEGORIES } from '@stockpilot/core';
 
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { GroupLinkingReview } from '@/components/inventory/group-linking-review';
+import { PageHeader } from '@/components/patterns/page-header';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { requireOrgContext } from '@/lib/auth/session';
@@ -15,6 +16,10 @@ import { suggestFamilies } from '@/server/services/product-group-linking';
 import { ProductGroupsService } from '@/server/services/product-groups';
 
 export const metadata = { title: 'Review product families' };
+
+/** The page area (DESIGN-SPEC 4 and 5.3), the same box every redesigned page
+ *  draws. */
+const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
 
 /**
  * The opt-in group-linking review tool.
@@ -52,23 +57,25 @@ export default async function ProductGroupLinkPage() {
   ]);
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="max-w-2xl">
-          <h1 className="text-xl font-semibold">Review product families</h1>
-          {/* The header states plainly that nothing is linked until Link is
-              pressed — the whole opt-in promise, in the first thing read. */}
-          <p className="text-[13px] text-[var(--ed-ink-3)]">
+    <div className={PAGE}>
+      <PageHeader
+        title="Review product families"
+        // The header states plainly that nothing is linked until Link is
+        // pressed — the whole opt-in promise, in the first thing read.
+        subline={
+          <span className="block max-w-[72ch]">
             These are suggestions based on item names alone. Nothing is linked until you press
             Link on a family. Names can mislead, so check each one before you accept it — a link
             becomes the product identity that receiving, counting and purchase-order matching all
             use.
-          </p>
-        </div>
-        <Button asChild variant="outline" size="sm">
-          <Link href="/dashboard/product-groups">Back to product groups</Link>
-        </Button>
-      </div>
+          </span>
+        }
+        actions={
+          <Button asChild variant="outline">
+            <Link href="/dashboard/product-groups">Back to product groups</Link>
+          </Button>
+        }
+      />
 
       {suggestions.length === 0 ? (
         <EmptyState

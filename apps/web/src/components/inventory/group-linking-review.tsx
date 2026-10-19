@@ -7,8 +7,12 @@ import { toast } from 'sonner';
 
 import { SIZE_SYSTEMS, type CountingUnit } from '@stockpilot/core';
 
+import { StatePanel } from '@/components/patterns/state-panel';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
+import { cn } from '@/lib/utils';
 import { linkFamilyAction } from '@/server/actions/product-group-linking';
 
 /**
@@ -93,9 +97,12 @@ export function GroupLinkingReview({
   return (
     <div className="space-y-4">
       {visible.length === 0 ? (
-        <p className="text-[13px] text-[var(--ed-ink-3)]">
-          Every suggestion on this page has been handled. Reload to look again.
-        </p>
+        <StatePanel
+          kind="empty"
+          size="sm"
+          headingLevel={null}
+          title="Every suggestion on this page has been handled. Reload to look again."
+        />
       ) : (
         visible.map((s) => (
           <FamilyCard
@@ -131,6 +138,7 @@ function FamilyCard({
   onLinked: () => void;
 }) {
   const router = useRouter();
+  const headingId = React.useId();
   const [pending, startTransition] = React.useTransition();
   const [reason, setReason] = React.useState('');
   const [destination, setDestination] = React.useState<'new' | string>('new');
@@ -201,84 +209,93 @@ function FamilyCard({
   }
 
   return (
-    <section className="border-border rounded-lg border">
-      <header className="border-border flex flex-wrap items-start justify-between gap-3 border-b px-4 py-3">
+    // One card per suggestion (the card language, DESIGN-SPEC 6.7), its
+    // member table in the shared table look.
+    <section
+      aria-labelledby={headingId}
+      className="border-border bg-card overflow-hidden rounded-lg border"
+    >
+      <div className="border-border flex flex-wrap items-start justify-between gap-3 border-b px-[18px] py-3.5">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="truncate text-[14px] font-medium">{suggestion.baseName}</h2>
-            <span
-              className={
-                suggestion.confidence === 'low'
-                  ? 'shrink-0 rounded-full border border-amber-500/40 px-1.5 py-0.5 text-[10.5px] font-medium text-amber-700 dark:text-amber-400'
-                  : 'border-border shrink-0 rounded-full border px-1.5 py-0.5 text-[10.5px] font-medium text-[var(--ed-ink-3)]'
-              }
-            >
+            <h2 id={headingId} className="min-w-0 truncate text-[13.5px] font-medium leading-5">
+              {suggestion.baseName}
+            </h2>
+            <Badge variant={suggestion.confidence === 'low' ? 'warning' : 'outline'}>
               {CONFIDENCE_COPY[suggestion.confidence]}
-            </span>
+            </Badge>
           </div>
-          <p className="text-[11.5px] text-[var(--ed-ink-4)]">
+          <p className="text-muted-foreground mt-0.5 text-[12px]">
             {suggestion.members.length} candidate items. Nothing here is linked yet.
           </p>
         </div>
         <Button type="button" variant="ghost" size="sm" onClick={onDismiss} disabled={pending}>
           Not a family
         </Button>
-      </header>
+      </div>
 
-      <ul className="border-border space-y-1 border-b px-4 py-2.5">
-        {suggestion.caveats.map((c) => (
-          <li key={c} className="flex items-start gap-1.5 text-[11.5px] text-[var(--ed-ink-3)]">
-            <AlertTriangle aria-hidden className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" />
-            <span>{c}</span>
-          </li>
-        ))}
-      </ul>
+      {suggestion.caveats.length > 0 ? (
+        <ul className="border-border bg-warning-wash space-y-1 border-b px-[18px] py-2.5">
+          {suggestion.caveats.map((c) => (
+            <li key={c} className="text-foreground flex items-start gap-1.5 text-[12.5px]">
+              <AlertTriangle aria-hidden className="text-warning mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>{c}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[680px] text-[12px]">
-          <thead className="text-[var(--ed-ink-4)]">
+        <table className="w-full min-w-[680px] text-[13px]">
+          <thead className="text-muted-foreground">
             <tr className="border-border border-b">
-              <th className="w-8 py-1.5 pl-4 pr-2 text-left font-medium">
+              <th className={cn(TH, 'w-10 pl-[18px] pr-2 text-left')}>
                 <span className="sr-only">Include</span>
               </th>
-              <th className="px-2 text-left font-medium">Item</th>
-              <th className="px-2 text-left font-medium">SKU</th>
-              <th className="px-2 text-left font-medium">Size</th>
-              <th className="px-2 text-left font-medium">Size system</th>
-              <th className="px-2 text-left font-medium">Number</th>
-              <th className="px-2 pr-4 text-right font-medium">On hand</th>
+              <th className={cn(TH, 'text-left')}>Item</th>
+              <th className={cn(TH, 'text-left')}>SKU</th>
+              <th className={cn(TH, 'text-left')}>Size</th>
+              <th className={cn(TH, 'text-left')}>Size system</th>
+              <th className={cn(TH, 'text-left')}>Number</th>
+              <th className={cn(TH, 'pr-[18px] text-right')}>On hand</th>
             </tr>
           </thead>
           <tbody>
             {suggestion.members.map((m) => {
               const d = drafts[m.id]!;
               return (
-                <tr key={m.id} className="border-border border-b last:border-0">
-                  <td className="py-1.5 pl-4 pr-2">
-                    <input
-                      type="checkbox"
+                <tr
+                  key={m.id}
+                  className={cn(
+                    'border-border border-b transition-colors last:border-0',
+                    d.selected ? 'bg-success-wash' : 'hover:bg-muted/60',
+                  )}
+                >
+                  <td className="py-2 pl-[18px] pr-2">
+                    {/* The shared checkbox; members start unticked, and there
+                        is no select-all (owner decision). */}
+                    <Checkbox
                       checked={d.selected}
-                      onChange={(e) => patch(m.id, { selected: e.target.checked })}
-                      aria-label={`Include ${m.name} in this family`}
-                      className="h-3.5 w-3.5"
+                      onCheckedChange={(next) => patch(m.id, { selected: next })}
+                      label={`Include ${m.name} in this family`}
                     />
                   </td>
-                  <td className="max-w-[220px] truncate px-2">{m.name}</td>
-                  <td className="px-2 font-mono text-[11px] text-[var(--ed-ink-3)]">{m.sku}</td>
-                  <td className="px-2">
+                  <td className="max-w-[220px] truncate px-3">{m.name}</td>
+                  <td className="text-muted-foreground px-3 font-mono text-[12px]">{m.sku}</td>
+                  <td className="px-3">
                     <Input
                       value={d.variantSize}
                       onChange={(e) => patch(m.id, { variantSize: e.target.value })}
                       aria-label={`Size for ${m.name}`}
-                      className="h-7 w-24 text-[12px]"
+                      className="h-7 w-24 text-[12.5px]"
                     />
                   </td>
-                  <td className="px-2">
+                  <td className="px-3">
                     <select
                       value={d.variantSizeSystem}
                       onChange={(e) => patch(m.id, { variantSizeSystem: e.target.value })}
                       aria-label={`Size system for ${m.name}`}
-                      className="border-border bg-background h-7 rounded-md border px-1.5 text-[12px]"
+                      className={cn(NATIVE_SELECT, 'h-7 px-1.5 text-[12.5px]')}
                     >
                       <option value="">Not set</option>
                       {SIZE_SYSTEMS.map((s) => (
@@ -288,7 +305,7 @@ function FamilyCard({
                       ))}
                     </select>
                   </td>
-                  <td className="px-2">
+                  <td className="px-3">
                     {/* NEVER labelled "Serial Number" — a jersey number repeats
                         across sizes and teams and is not identity
                         (requirements 4). */}
@@ -298,10 +315,10 @@ function FamilyCard({
                       inputMode="numeric"
                       placeholder="e.g. 07"
                       aria-label={`Jersey number for ${m.name}`}
-                      className="h-7 w-20 text-[12px]"
+                      className="h-7 w-20 text-[12.5px]"
                     />
                   </td>
-                  <td className="px-2 pr-4 text-right tabular-nums">{m.quantity}</td>
+                  <td className="pl-3 pr-[18px] text-right tabular-nums">{m.quantity}</td>
                 </tr>
               );
             })}
@@ -309,14 +326,14 @@ function FamilyCard({
         </table>
       </div>
 
-      <footer className="border-border space-y-3 border-t px-4 py-3">
+      <div className="border-border bg-sunk space-y-3 border-t px-[18px] py-3.5">
         <div className="flex flex-wrap items-end gap-3">
-          <label className="flex flex-col gap-1 text-[11.5px] text-[var(--ed-ink-3)]">
+          <label className={FIELD_LABEL}>
             Link into
             <select
               value={destination}
               onChange={(e) => setDestination(e.target.value)}
-              className="border-border bg-background h-8 rounded-md border px-2 text-[12px]"
+              className={NATIVE_SELECT}
             >
               <option value="new">A new product group</option>
               {existingGroups.map((g) => (
@@ -326,7 +343,7 @@ function FamilyCard({
               ))}
             </select>
             {groupsTruncated ? (
-              <span className="text-[10.5px] text-[var(--ed-ink-4)]">
+              <span className="text-muted-foreground max-w-[320px] text-[12px]">
                 Showing the first {existingGroups.length.toLocaleString()} groups. Rename or
                 archive groups you no longer use, or link into a new group instead.
               </span>
@@ -335,20 +352,20 @@ function FamilyCard({
 
           {destination === 'new' && (
             <>
-              <label className="flex flex-col gap-1 text-[11.5px] text-[var(--ed-ink-3)]">
+              <label className={FIELD_LABEL}>
                 Group name
                 <Input
                   value={groupName}
                   onChange={(e) => setGroupName(e.target.value)}
-                  className="h-8 w-56 text-[12px]"
+                  className="text-foreground w-56 max-w-full"
                 />
               </label>
-              <label className="flex flex-col gap-1 text-[11.5px] text-[var(--ed-ink-3)]">
+              <label className={FIELD_LABEL}>
                 Subcategory
                 <select
                   value={subcategoryKey}
                   onChange={(e) => setSubcategoryKey(e.target.value)}
-                  className="border-border bg-background h-8 rounded-md border px-2 text-[12px]"
+                  className={NATIVE_SELECT}
                 >
                   {subcategoryKeys.map((k) => (
                     <option key={k} value={k}>
@@ -357,12 +374,12 @@ function FamilyCard({
                   ))}
                 </select>
               </label>
-              <label className="flex flex-col gap-1 text-[11.5px] text-[var(--ed-ink-3)]">
+              <label className={FIELD_LABEL}>
                 Counted in
                 <select
                   value={countingUnit}
                   onChange={(e) => setCountingUnit(e.target.value as CountingUnit)}
-                  className="border-border bg-background h-8 rounded-md border px-2 text-[12px]"
+                  className={NATIVE_SELECT}
                 >
                   <option value="each">each</option>
                   <option value="pair">pairs</option>
@@ -375,27 +392,36 @@ function FamilyCard({
           )}
         </div>
 
-        <label className="block text-[11.5px] text-[var(--ed-ink-3)]">
+        <label className={cn(FIELD_LABEL, 'flex')}>
           Why are these one product? (required — it is stored on the audit trail)
           <Input
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             placeholder="Checked the rack: same style, three sizes"
-            className="mt-1 h-8 text-[12px]"
+            className="text-foreground"
           />
         </label>
 
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-[11.5px] text-[var(--ed-ink-4)]">
+          <p className="text-muted-foreground text-[12.5px]">
             {selectedIds.length === 0
               ? 'Tick the items that really are one product.'
               : `${selectedIds.length} of ${suggestion.members.length} items selected.`}
           </p>
-          <Button type="button" size="sm" onClick={submit} disabled={!canLink}>
+          {/* Committing the reviewed family: the ink primary. */}
+          <Button type="button" onClick={submit} disabled={!canLink}>
             {pending ? 'Linking…' : `Link ${selectedIds.length || ''} selected`.trim()}
           </Button>
         </div>
-      </footer>
+      </div>
     </section>
   );
 }
+
+/** A member-table header cell: 11 px uppercase in the quiet ink (DESIGN-SPEC 6.9). */
+const TH = 'whitespace-nowrap px-3 py-2.5 text-[11px] font-medium uppercase tracking-[0.06em]';
+/** A labelled control in the footer: the words above the field. */
+const FIELD_LABEL = 'text-muted-foreground flex flex-col gap-1.5 text-[12.5px]';
+/** A native select in the shared input look (44 px and 16 px text on a phone). */
+const NATIVE_SELECT =
+  'border-line-strong bg-card text-foreground focus-visible:ring-ring focus-visible:ring-offset-background h-8 max-w-full rounded-md border px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 max-sm:h-11 max-sm:text-base';
