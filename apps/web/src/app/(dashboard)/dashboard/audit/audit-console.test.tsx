@@ -70,6 +70,8 @@ vi.mock('@/components/audit/metadata-diff', () => ({
   diffMetadataFields: () => [],
 }));
 
+import { filterChipClass } from '@/components/patterns/chip';
+
 import AuditLogPage from './page';
 import LegacyAdminAuditRedirect from '../admin/audit/page';
 import LegacySettingsAuditRedirect from '../settings/audit/page';
@@ -162,6 +164,20 @@ describe('/dashboard/audit redesign (P5.2): same console, the redesign look', ()
     );
   });
 
+  // Look-only (review 1b): the category chips are the 30 px movement-type chips
+  // (DESIGN-SPEC 6.6), like the Reconciliation and support chips; the recipe is
+  // read from the chip pattern's export, so a restyle of it cannot break this.
+  it('draws the category chips at the movement-type size', async () => {
+    setCtx('manager');
+    render(await AuditLogPage({ searchParams: Promise.resolve({ category: 'stock' }) }));
+    expect(screen.getByRole('link', { name: 'Stock' })).toHaveClass(
+      ...filterChipClass({ active: true, size: 'md' }).split(/\s+/),
+    );
+    expect(screen.getByRole('link', { name: 'Team' })).toHaveClass(
+      ...filterChipClass({ size: 'md' }).split(/\s+/),
+    );
+  });
+
   it('is always a table of events with no Export control, and the GET filter form keeps its fields', async () => {
     setCtx('manager');
     auditList.mockResolvedValueOnce({ rows: [ROW], total: 1 } as never);
@@ -187,7 +203,7 @@ describe('/dashboard/audit redesign (P5.2): same console, the redesign look', ()
     expect(screen.getByText('Dana Lee')).toBeInTheDocument();
   });
 
-  it('keeps the pager words and disables an end with aria-disabled', async () => {
+  it('keeps the pager words and links both ends from a middle page', async () => {
     setCtx('manager');
     auditList.mockResolvedValueOnce({ rows: [ROW], total: 120 } as never);
     render(await AuditLogPage({ searchParams: Promise.resolve({ page: '2' }) }));
@@ -197,6 +213,44 @@ describe('/dashboard/audit redesign (P5.2): same console, the redesign look', ()
     expect(newer[0]).toHaveAttribute('href', '/dashboard/audit');
     expect(newer[0]).toHaveAttribute('aria-disabled', 'false');
     expect(older[0]).toHaveAttribute('href', '/dashboard/audit?page=3');
+  });
+
+  // A disabled end (both pagers, above and below the table) keeps its words,
+  // says so with aria-disabled, points nowhere and takes no clicks, as before.
+  it('disables both Newer links on the first page', async () => {
+    setCtx('manager');
+    auditList.mockResolvedValueOnce({ rows: [ROW], total: 120 } as never);
+    render(await AuditLogPage({ searchParams: Promise.resolve({}) }));
+    expect(screen.getByText('120 events · page 1 of 3')).toBeInTheDocument();
+    const newer = screen.getAllByRole('link', { name: '← Newer' });
+    expect(newer).toHaveLength(2);
+    for (const link of newer) {
+      expect(link).toHaveAttribute('aria-disabled', 'true');
+      expect(link).toHaveAttribute('href', '#');
+      expect(link).toHaveClass('pointer-events-none');
+    }
+    for (const link of screen.getAllByRole('link', { name: 'Older →' })) {
+      expect(link).toHaveAttribute('aria-disabled', 'false');
+      expect(link).toHaveAttribute('href', '/dashboard/audit?page=2');
+    }
+  });
+
+  it('disables both Older links on the last page', async () => {
+    setCtx('manager');
+    auditList.mockResolvedValueOnce({ rows: [ROW], total: 120 } as never);
+    render(await AuditLogPage({ searchParams: Promise.resolve({ page: '3' }) }));
+    expect(screen.getByText('120 events · page 3 of 3')).toBeInTheDocument();
+    const older = screen.getAllByRole('link', { name: 'Older →' });
+    expect(older).toHaveLength(2);
+    for (const link of older) {
+      expect(link).toHaveAttribute('aria-disabled', 'true');
+      expect(link).toHaveAttribute('href', '#');
+      expect(link).toHaveClass('pointer-events-none');
+    }
+    for (const link of screen.getAllByRole('link', { name: '← Newer' })) {
+      expect(link).toHaveAttribute('aria-disabled', 'false');
+      expect(link).toHaveAttribute('href', '/dashboard/audit?page=2');
+    }
   });
 
   it('shows the filtered empty state when filters match nothing', async () => {

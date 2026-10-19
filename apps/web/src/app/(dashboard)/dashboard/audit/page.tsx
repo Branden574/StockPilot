@@ -196,6 +196,7 @@ export default async function AuditLogPage({
               href={buildCategoryHref(params, c.slug)}
               active={isActive}
               aria-current={isActive ? 'page' : undefined}
+              size="md"
             >
               {c.label}
             </FilterChipLink>
