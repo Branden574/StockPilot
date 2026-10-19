@@ -84,7 +84,7 @@ export function ProcedureFilters({
             id="wh-filter"
             name="wh"
             defaultValue={state.wh}
-            className="bg-card text-foreground focus-visible:ring-ring focus-visible:ring-offset-background h-8 min-w-0 max-w-full rounded-md border border-[var(--ed-line-strong)] px-2.5 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-offset-2 max-sm:h-11 max-sm:text-base"
+            className="bg-card text-foreground focus-visible:ring-ring focus-visible:ring-offset-background border-line-strong h-8 min-w-0 max-w-full rounded-md border px-2.5 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-offset-2 max-sm:h-11 max-sm:text-base"
           >
             <option value="">All warehouses</option>
             {warehouses.map((w) => (

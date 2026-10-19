@@ -34,7 +34,7 @@ export function ProcedureCard({ procedure }: ProcedureCardProps) {
     <Link
       href={`/dashboard/procedures/${procedure.id}`}
       data-slot="procedure-card"
-      className="border-border bg-background focus-visible:ring-ring focus-visible:ring-offset-background flex h-full min-w-0 flex-col overflow-hidden rounded-lg border transition-colors hover:border-[var(--ed-ink-4)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
+      className="border-border bg-background focus-visible:ring-ring focus-visible:ring-offset-background hover:border-ink-4 flex h-full min-w-0 flex-col overflow-hidden rounded-lg border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
     >
       <div
         data-slot="procedure-card-media"

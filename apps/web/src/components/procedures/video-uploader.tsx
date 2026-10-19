@@ -618,7 +618,7 @@ function DropZone({ dragOver, setDragOver, inputRef, onFiles, disabled }: DropZo
         if (e.dataTransfer.files) void onFiles(e.dataTransfer.files);
       }}
       className={cn(
-        'bg-sunk flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-[var(--ed-line-strong)] px-6 py-8 text-center transition-colors',
+        'bg-sunk border-line-strong flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed px-6 py-8 text-center transition-colors',
         disabled
           ? 'cursor-not-allowed opacity-60'
           : 'hover:bg-muted hover:border-foreground/40 cursor-pointer',
