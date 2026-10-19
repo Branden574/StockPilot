@@ -1,9 +1,10 @@
 'use client';
 
-import { AlertTriangle, RefreshCw } from 'lucide-react';
-import Link from 'next/link';
+import { RefreshCw } from 'lucide-react';
 import * as React from 'react';
 
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
+import { StatePanel } from '@/components/patterns/state-panel';
 import { Button } from '@/components/ui/button';
 import { reportError } from '@/lib/error-reporter';
 
@@ -32,23 +33,29 @@ export default function BookOrderTotalsError({
   }, [error]);
 
   return (
-    <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
-      <Link href="/dashboard/reports" className="text-muted-foreground hover:text-foreground text-sm">
-        ← Back to reports
-      </Link>
-      <h1 className="mt-2 text-2xl font-semibold tracking-tight">{BOOK_REPORT_TITLE}</h1>
-      <div role="alert" className="border-border bg-card mt-6 flex items-start gap-3 rounded-md border p-4">
-        <AlertTriangle aria-hidden className="text-destructive mt-0.5 h-5 w-5 shrink-0" />
-        <div className="space-y-3">
-          <p className="text-sm">{BOOK_REPORT_LOAD_ERROR}</p>
-          {error.digest ? (
-            <p className="text-muted-foreground font-mono text-[11px]">Error id: {error.digest}</p>
-          ) : null}
+    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-5 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <PageHeader
+        back={<PageHeaderBackLink href="/dashboard/reports">← Back to reports</PageHeaderBackLink>}
+        title={BOOK_REPORT_TITLE}
+      />
+      {/* The shared failed-read panel (DESIGN-SPEC 6.21 states): the load
+          error is the alert, then the error id and Try again. */}
+      <StatePanel
+        kind="failed"
+        live="assertive"
+        headingLevel={null}
+        title={BOOK_REPORT_LOAD_ERROR}
+        description={
+          error.digest ? (
+            <span className="font-mono text-[11px]">Error id: {error.digest}</span>
+          ) : undefined
+        }
+        action={
           <Button type="button" variant="outline" size="sm" onClick={() => (retry ?? reset)?.()}>
             <RefreshCw aria-hidden /> {BOOK_REPORT_UI.tryAgain}
           </Button>
-        </div>
-      </div>
+        }
+      />
     </div>
   );
 }
