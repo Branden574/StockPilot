@@ -1,8 +1,13 @@
 import type { Metadata } from 'next';
 
+import { DetailSection, DetailSectionMeta } from '@/components/patterns/detail-section';
+import { PageHeader } from '@/components/patterns/page-header';
+import { StatePanel } from '@/components/patterns/state-panel';
 import { SupportTicketForm } from '@/components/support/support-ticket-form';
 import { Badge } from '@/components/ui/badge';
+import { LocalDate } from '@/components/ui/local-date';
 import { requireOrgContext } from '@/lib/auth/session';
+import { utcDateLabel } from '@/lib/utc-date-label';
 import {
   listMyTickets,
   type TicketCategory,
@@ -46,48 +51,59 @@ export default async function DashboardSupportPage() {
   });
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Support &amp; feedback</h1>
-      <p className="text-muted-foreground mt-1 text-sm">
-        Found a bug, want a feature, or have a billing question? Send it straight to the
-        StockPilot team — screenshots welcome.
-      </p>
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <PageHeader
+        title="Support & feedback"
+        subline="Found a bug, want a feature, or have a billing question? Send it straight to the StockPilot team — screenshots welcome."
+      />
 
-      <div className="bg-card mt-6 rounded-xl border p-5 sm:p-6">
+      <DetailSection bodyClassName="p-[18px] sm:p-6">
         <SupportTicketForm userId={ctx.userId} />
-      </div>
+      </DetailSection>
 
-      <section className="mt-10">
-        <h2 className="text-lg font-semibold tracking-tight">My submissions</h2>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Your latest tickets from this workspace and where they stand.
-        </p>
-
+      <DetailSection
+        title="My submissions"
+        flush
+        className="mt-3"
+        aside={
+          <DetailSectionMeta>
+            Your latest tickets from this workspace and where they stand.
+          </DetailSectionMeta>
+        }
+      >
         {tickets.length === 0 ? (
-          <div className="bg-card text-muted-foreground mt-4 rounded-xl border px-5 py-8 text-center text-sm">
-            Nothing yet — your submissions will show up here.
-          </div>
+          <StatePanel
+            kind="empty"
+            surface="plain"
+            icon={null}
+            headingLevel={null}
+            title="Nothing yet — your submissions will show up here."
+          />
         ) : (
-          <div className="bg-card mt-4 divide-y rounded-xl border">
+          <ul>
             {tickets.map((t) => (
-              <div key={t.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 sm:px-5">
+              <li
+                key={t.id}
+                className="border-border flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-[18px] py-3 last:border-b-0"
+              >
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium">{t.subject}</div>
-                  <div className="text-muted-foreground mt-0.5 text-xs">
-                    {new Date(t.createdAt).toLocaleDateString(undefined, {
-                      month: 'short',
-                      day: 'numeric',
-                      year: 'numeric',
-                    })}
+                  <div className="text-foreground truncate text-[13.5px] font-medium leading-5">
+                    {t.subject}
+                  </div>
+                  <div className="text-muted-foreground mt-0.5 text-[12px] leading-[18px]">
+                    {/* The viewer's own calendar day: formatted on the
+                        server this was the deployment's (UTC) day, a day
+                        late for an evening ticket west of Greenwich. */}
+                    <LocalDate iso={t.createdAt} fallback={utcDateLabel(t.createdAt)} />
                   </div>
                 </div>
                 <Badge variant="outline">{CATEGORY_LABEL[t.category]}</Badge>
                 <Badge variant={STATUS_BADGE[t.status]}>{STATUS_LABEL[t.status]}</Badge>
-              </div>
+              </li>
             ))}
-          </div>
+          </ul>
         )}
-      </section>
+      </DetailSection>
     </div>
   );
 }

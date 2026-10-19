@@ -1,17 +1,12 @@
 'use client';
 
-import {
-  Loader2,
-  Paperclip,
-  Plus,
-  Send,
-  Sparkles,
-  Trash2,
-  Wrench,
-} from 'lucide-react';
+import { Loader2, Paperclip, Plus, Send, Sparkles, Trash2, Wrench } from 'lucide-react';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { filterChipClass } from '@/components/patterns/chip';
+import { StatePanel } from '@/components/patterns/state-panel';
+import { touchTargetClass } from '@/components/patterns/touch-target';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -86,7 +81,7 @@ function pickSuggestions(referrerPath: string | null): string[] {
     return [
       "What's below reorder right now?",
       'Show the 10 most-stocked items.',
-      'Which items haven\'t moved in 90 days?',
+      "Which items haven't moved in 90 days?",
       'Show me items added this week.',
     ];
   }
@@ -137,7 +132,7 @@ function pickSuggestions(referrerPath: string | null): string[] {
  * Returns at most one link per turn (the most relevant tool wins).
  * Order matters: writes > specific lists > broad lists.
  */
-function jumpLinkFor(
+export function jumpLinkFor(
   toolCalls: ReadonlyArray<{ name: string; ok: boolean }> | undefined,
 ): { label: string; href: string } | null {
   if (!toolCalls || toolCalls.length === 0) return null;
@@ -153,27 +148,31 @@ function jumpLinkFor(
   if (names.has('getOrderRequestSummary') || names.has('listOrderRequests'))
     return { label: 'Open orders', href: '/dashboard/orders' };
   if (names.has('listLowStock'))
-    return { label: 'Open low-stock list', href: '/dashboard/inventory?filter=low_stock' };
+    // The Items page reads `stock` (and `type=all` keeps books in the list),
+    // the same link the low-stock notifications use; `?filter=low_stock` was
+    // never read, so it opened the unfiltered list (CONFLICTS D4).
+    return { label: 'Open low-stock list', href: '/dashboard/inventory?stock=low&type=all' };
   if (names.has('inventoryByWarehouse'))
     return { label: 'Open warehouses', href: '/dashboard/admin/warehouses' };
   if (names.has('inventoryByCategory'))
     return { label: 'Open categories', href: '/dashboard/categories' };
   if (names.has('listBundles') || names.has('previewBundleDistribution'))
     return { label: 'Open bundles', href: '/dashboard/bundles' };
-  if (names.has('listSuppliers'))
-    return { label: 'Open suppliers', href: '/dashboard/suppliers' };
+  if (names.has('listSuppliers')) return { label: 'Open suppliers', href: '/dashboard/suppliers' };
   if (names.has('listWarehouses'))
     return { label: 'Open warehouses', href: '/dashboard/admin/warehouses' };
   if (names.has('searchInventorySemantic') || names.has('searchInventory'))
     return { label: 'Open inventory', href: '/dashboard/inventory' };
-  if (names.has('getRecentOrders'))
-    return { label: 'Open orders', href: '/dashboard/orders' };
-  if (names.has('getMovements') || names.has('getRecentItems') || names.has('getDailyMovementCounts'))
+  if (names.has('getRecentOrders')) return { label: 'Open orders', href: '/dashboard/orders' };
+  if (
+    names.has('getMovements') ||
+    names.has('getRecentItems') ||
+    names.has('getDailyMovementCounts')
+  )
     return { label: 'Open movements log', href: '/dashboard/movements' };
   if (names.has('getTopMovers') || names.has('getStaleItems'))
     return { label: 'Open reports', href: '/dashboard/reports' };
-  if (names.has('getDashboardSummary'))
-    return { label: 'Open dashboard', href: '/dashboard' };
+  if (names.has('getDashboardSummary')) return { label: 'Open dashboard', href: '/dashboard' };
   return null;
 }
 
@@ -221,6 +220,7 @@ export function ChatPanel() {
       if (!url.pathname.startsWith('/dashboard/')) return;
       // Avoid the trivial "came from /dashboard/ai itself" case.
       if (url.pathname.startsWith('/dashboard/ai')) return;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reads document.referrer (an external value) once on mount
       setReferrerPath(url.pathname);
     } catch {
       // Ignore — referrer parsing failed, no context will be sent.
@@ -251,9 +251,7 @@ export function ChatPanel() {
           const list = (json.sessions as SessionRow[]) ?? [];
           setSessions(list);
           const stored =
-            typeof window !== 'undefined'
-              ? window.localStorage.getItem(ACTIVE_SESSION_KEY)
-              : null;
+            typeof window !== 'undefined' ? window.localStorage.getItem(ACTIVE_SESSION_KEY) : null;
           const target = stored && list.find((s) => s.id === stored) ? stored : null;
           if (target) await loadSession(target);
         }
@@ -265,7 +263,6 @@ export function ChatPanel() {
     return () => {
       cancelled = true;
     };
-     
   }, []);
 
   React.useEffect(() => {
@@ -298,11 +295,12 @@ export function ChatPanel() {
         setTurns([]);
         return;
       }
-      const messages = (json.messages as Array<{
-        role: 'user' | 'assistant';
-        content: string;
-        toolCalls: Array<{ name: string; ok: boolean }> | null;
-      }>) ?? [];
+      const messages =
+        (json.messages as Array<{
+          role: 'user' | 'assistant';
+          content: string;
+          toolCalls: Array<{ name: string; ok: boolean }> | null;
+        }>) ?? [];
       setSessionId(id);
       setTurns(
         messages.map((m) => ({
@@ -315,7 +313,11 @@ export function ChatPanel() {
         window.localStorage.setItem(ACTIVE_SESSION_KEY, id);
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Couldn't load that chat session. Try again or pick a different one.");
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : "Couldn't load that chat session. Try again or pick a different one.",
+      );
     }
   }
 
@@ -343,7 +345,9 @@ export function ChatPanel() {
       setSessions((cur) => cur.filter((s) => s.id !== id));
       if (id === sessionId) startNewChat();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Couldn't delete this chat. Try again in a moment.");
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't delete this chat. Try again in a moment.",
+      );
     }
   }
 
@@ -370,7 +374,9 @@ export function ChatPanel() {
         message?: string;
       };
       if (!res.ok || !json.ok) {
-        toast.error(json.message ?? `Couldn't read "${file.name}" (${res.status}). Try a different file.`);
+        toast.error(
+          json.message ?? `Couldn't read "${file.name}" (${res.status}). Try a different file.`,
+        );
         return;
       }
       const isbns = json.isbns ?? [];
@@ -392,7 +398,11 @@ export function ChatPanel() {
       setUploading(false);
       await send(synthetic);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Couldn't upload the file. Check your network and try again.");
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : "Couldn't upload the file. Check your network and try again.",
+      );
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -464,7 +474,7 @@ export function ChatPanel() {
       if (!res.ok) {
         const json = (await res.json().catch(() => ({}))) as { message?: string };
         const friendly =
-          json.message ?? "The AI assistant ran into a problem. Try again in a moment.";
+          json.message ?? 'The AI assistant ran into a problem. Try again in a moment.';
         toast.error(friendly);
         replaceAssistantWithError(friendly);
         return;
@@ -526,8 +536,7 @@ export function ChatPanel() {
           } else if (event.type === 'error') {
             streamErrored = true;
             const friendly =
-              event.message ??
-              "The AI assistant ran into a problem. Try again in a moment.";
+              event.message ?? 'The AI assistant ran into a problem. Try again in a moment.';
             toast.error(friendly);
             replaceAssistantWithError(friendly);
           }
@@ -548,7 +557,10 @@ export function ChatPanel() {
 
       if (!streamErrored) void refreshSessions();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Couldn't reach the assistant. Check your network and try again.";
+      const msg =
+        err instanceof Error
+          ? err.message
+          : "Couldn't reach the assistant. Check your network and try again.";
       toast.error(msg);
       replaceAssistantWithError(msg);
     } finally {
@@ -556,319 +568,348 @@ export function ChatPanel() {
     }
   }
 
+  const newChatButton = (
+    <Button
+      type="button"
+      size="sm"
+      variant="outline"
+      onClick={startNewChat}
+      className="justify-start gap-2"
+    >
+      <Plus className="h-3.5 w-3.5" />
+      New chat
+    </Button>
+  );
+
   return (
     // dvh handles mobile address bar resize cleanly. The 260px subtract
-    // budgets for: dashboard topbar (~64), page wrapper py-8 top (32),
+    // budgets for: dashboard topbar (~64), page wrapper top padding,
     // page header block (~140), bottom breathing room (~24). min-h
     // keeps the panel usable on short viewports.
     <div className="flex h-[calc(100dvh-260px)] min-h-[420px] gap-4">
-      {/* Sessions sidebar */}
-      <aside className="border-border bg-card hidden w-56 shrink-0 flex-col rounded-xl border p-2 md:flex">
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          onClick={startNewChat}
-          className="mb-2 justify-start gap-2"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          New chat
-        </Button>
-        <p className="text-muted-foreground mb-1 px-2 text-[10px] font-medium uppercase tracking-wider">
+      {/* Sessions rail: the two-pane tool page's list (md and wider). */}
+      <aside className="border-border bg-card hidden w-60 shrink-0 flex-col overflow-hidden rounded-lg border md:flex">
+        <div className="border-border flex flex-col border-b p-2">{newChatButton}</div>
+        <p className="text-muted-foreground px-3.5 pb-1 pt-3 text-[11px] font-medium uppercase leading-4 tracking-[0.08em]">
           Last 30 days
         </p>
-        <div className="-mx-1 flex-1 overflow-y-auto px-1">
+        <div className="flex-1 overflow-y-auto px-1.5 pb-2">
           {hydrating ? (
-            <div className="text-muted-foreground px-2 py-3 text-[12px]">Loading…</div>
+            <div className="text-muted-foreground px-2 py-3 text-[12.5px]">Loading…</div>
           ) : sessions.length === 0 ? (
-            <div className="text-muted-foreground px-2 py-3 text-[12px]">No chats yet.</div>
+            <div className="text-muted-foreground px-2 py-3 text-[12.5px]">No chats yet.</div>
           ) : (
             <ul className="space-y-0.5">
-              {sessions.map((s) => (
-                <li key={s.id} className="group">
-                  <div
-                    className={cn(
-                      'flex items-center gap-1 rounded-md px-2 py-1.5 text-[12.5px]',
-                      s.id === sessionId
-                        ? 'bg-foreground/[0.06] text-foreground'
-                        : 'text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground',
-                    )}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => void loadSession(s.id)}
-                      className="flex min-w-0 flex-1 flex-col text-left"
+              {sessions.map((s) => {
+                const active = s.id === sessionId;
+                return (
+                  <li key={s.id} className="group">
+                    <div
+                      className={cn(
+                        'flex items-center gap-1 rounded-md pr-1 text-[13px] transition-colors',
+                        active
+                          ? 'bg-muted text-foreground'
+                          : 'text-ink-2 hover:bg-muted hover:text-foreground',
+                      )}
                     >
-                      <span className="truncate">
-                        {s.title || 'Untitled chat'}
-                      </span>
-                      <span className="text-muted-foreground text-[10px]" suppressHydrationWarning>
-                        {formatRelative(s.updatedAt)}
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void deleteSession(s.id);
-                      }}
-                      className="text-muted-foreground hover:text-destructive opacity-0 transition group-hover:opacity-100"
-                      aria-label="Delete chat"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </button>
-                  </div>
-                </li>
-              ))}
+                      <button
+                        type="button"
+                        onClick={() => void loadSession(s.id)}
+                        aria-current={active ? 'true' : undefined}
+                        className="focus-visible:ring-ring flex min-w-0 flex-1 flex-col rounded-md px-2.5 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset"
+                      >
+                        <span className={cn('truncate', active && 'font-medium')}>
+                          {s.title || 'Untitled chat'}
+                        </span>
+                        <span
+                          className="text-muted-foreground text-[11px] leading-4"
+                          suppressHydrationWarning
+                        >
+                          {formatRelative(s.updatedAt)}
+                        </span>
+                      </button>
+                      {/* Shown on hover, and also whenever it has keyboard
+                          focus or the pointer is a finger (there is no hover
+                          on touch), so it is never an invisible control. */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void deleteSession(s.id);
+                        }}
+                        className={cn(
+                          'text-muted-foreground hover:text-destructive hover:bg-card focus-visible:ring-ring grid size-7 shrink-0 place-items-center rounded-md transition',
+                          'pointer-coarse:opacity-100 opacity-0 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 group-hover:opacity-100',
+                          touchTargetClass,
+                        )}
+                        aria-label="Delete chat"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>
       </aside>
 
-      {/* Chat column */}
+      {/* Conversation column */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <div
-          ref={scrollRef}
-          className="flex-1 overflow-y-auto pb-4"
-          aria-live="polite"
-        >
-          {turns.length === 0 ? (
-            <div className="mx-auto max-w-md py-12 text-center">
-              <div className="bg-muted text-muted-foreground mx-auto mb-3 grid h-10 w-10 place-items-center rounded-full">
-                <Sparkles className="h-4 w-4" />
-              </div>
-              <h2 className="text-lg font-medium">Ask your inventory anything</h2>
-              <p className="text-muted-foreground mt-1.5 text-sm">
-                Streamed responses, grounded by tool calls into your real
-                data — no hallucinated quantities. Can adjust stock when
-                you confirm.
-              </p>
-              <div className="mt-5 flex flex-wrap justify-center gap-2">
-                {pickSuggestions(referrerPath).map((s) => (
+        <div className="border-border bg-card flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border">
+          {/* Below md the rail is hidden, so New chat lives here instead. */}
+          {turns.length > 0 ? (
+            <div
+              data-slot="chat-phone-bar"
+              className="border-border flex justify-end border-b px-3 py-2 md:hidden"
+            >
+              {newChatButton}
+            </div>
+          ) : null}
+          <div
+            ref={scrollRef}
+            className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5"
+            aria-live="polite"
+          >
+            {turns.length === 0 ? (
+              <StatePanel
+                kind="empty"
+                surface="plain"
+                icon={Sparkles}
+                title="Ask your inventory anything"
+                description="Streamed responses, grounded by tool calls into your real data — no hallucinated quantities. Can adjust stock when you confirm."
+                className="mx-auto max-w-lg py-10"
+                action={pickSuggestions(referrerPath).map((s) => (
                   <button
                     key={s}
                     type="button"
                     onClick={() => send(s)}
                     disabled={busy}
-                    className="border-border bg-card hover:border-foreground/30 rounded-full border px-3 py-1.5 text-[12px] disabled:opacity-50"
+                    className={cn(
+                      filterChipClass({ size: 'md' }),
+                      'h-auto min-h-[30px] max-w-full whitespace-normal py-1 text-left disabled:opacity-50',
+                    )}
                   >
                     {s}
                   </button>
                 ))}
-              </div>
-            </div>
-          ) : (
-            <ul className="space-y-4">
-              {turns.map((t, i) => (
-                <li
-                  key={i}
-                  className={cn(
-                    'flex',
-                    t.role === 'user' ? 'justify-end' : 'justify-start',
-                  )}
-                >
-                  <div
-                    className={cn(
-                      'max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed',
-                      t.role === 'user'
-                        ? 'bg-foreground text-background rounded-br-md'
-                        : 'bg-muted text-foreground rounded-bl-md',
-                    )}
+              />
+            ) : (
+              <ul className="space-y-4">
+                {turns.map((t, i) => (
+                  <li
+                    key={i}
+                    className={cn('flex', t.role === 'user' ? 'justify-end' : 'justify-start')}
                   >
-                    {t.role === 'assistant' &&
-                    busy &&
-                    i === turns.length - 1 &&
-                    !t.content ? (
-                      <div className="text-muted-foreground inline-flex items-center gap-2">
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        thinking…
-                      </div>
-                    ) : (
-                      // Plain-text render with whitespace preserved.
-                      // NOTE: markdown is NOT parsed here — links the AI
-                      // emits (e.g. "[Download CSV](https://…)") show up
-                      // as their raw text. This is intentional for v1:
-                      // skipping markdown sidesteps XSS surface, and the
-                      // CSV-download URLs are long-lived enough for users
-                      // to copy-paste. If you ever turn this on, sanitize
-                      // first (DOMPurify / react-markdown with a strict
-                      // schema) and watch out for tool output that may
-                      // contain user-supplied free text.
-                      <div className="whitespace-pre-wrap">{t.content}</div>
-                    )}
-                    {t.toolCalls && t.toolCalls.length > 0 && (
-                      <div className="text-muted-foreground mt-2 flex flex-wrap gap-1.5 text-[10.5px]">
-                        {t.toolCalls.map((tc, j) => (
-                          <span
-                            key={j}
-                            className={cn(
-                              'inline-flex items-center gap-1 rounded-full border px-1.5 py-px',
-                              tc.ok
-                                ? 'border-success/40 bg-success/10 text-success'
-                                : 'border-destructive/40 bg-destructive/10 text-destructive',
-                            )}
-                          >
-                            <Wrench className="h-2.5 w-2.5" />
-                            {tc.name}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    {/* Inline Confirm button — when the assistant's LAST
-                        turn ends with "Confirm?" we surface a single
-                        action button so the user doesn't have to type
-                        "yes". The detection is purposely conservative:
-                        only the last message, not busy, and only when
-                        text matches the canned phrasing the system
-                        prompt enforces. False positives are harmless
-                        (it just sends "yes, confirm" as a normal turn). */}
-                    {t.role === 'assistant' &&
-                      i === turns.length - 1 &&
-                      !busy &&
-                      /confirm\?\s*$/i.test(t.content) && (
-                        <div className="mt-2 flex flex-wrap items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => void send('yes, confirm')}
-                            className="bg-foreground text-background hover:opacity-90 inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition"
-                          >
-                            Confirm
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void send('cancel')}
-                            className="border-border hover:bg-muted/60 inline-flex items-center gap-1.5 rounded-full border bg-transparent px-3 py-1 text-xs font-medium transition"
-                          >
-                            Cancel
-                          </button>
+                    <div
+                      data-role={t.role}
+                      className={cn(
+                        'max-w-[85%] rounded-[10px] px-3.5 py-2.5 text-[13.5px] leading-[1.6]',
+                        t.role === 'user'
+                          ? 'bg-primary text-primary-foreground rounded-br-[4px]'
+                          : 'border-border bg-sunk text-foreground rounded-bl-[4px] border',
+                      )}
+                    >
+                      {t.role === 'assistant' && busy && i === turns.length - 1 && !t.content ? (
+                        <div className="text-muted-foreground inline-flex items-center gap-2">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          thinking…
+                        </div>
+                      ) : (
+                        // Plain-text render with whitespace preserved.
+                        // NOTE: markdown is NOT parsed here — links the AI
+                        // emits (e.g. "[Download CSV](https://…)") show up
+                        // as their raw text. This is intentional for v1:
+                        // skipping markdown sidesteps XSS surface, and the
+                        // CSV-download URLs are long-lived enough for users
+                        // to copy-paste. If you ever turn this on, sanitize
+                        // first (DOMPurify / react-markdown with a strict
+                        // schema) and watch out for tool output that may
+                        // contain user-supplied free text.
+                        <div className="whitespace-pre-wrap [overflow-wrap:anywhere]">
+                          {t.content}
                         </div>
                       )}
-                    {/* Quick-jump action link — when the tool the AI
-                        called has a natural dashboard counterpart,
-                        show a "Open in dashboard" link under the
-                        bubble. Suppresses while the turn is in flight
-                        and on confirm-prompt turns (the Confirm/Cancel
-                        actions above take priority). */}
-                    {(() => {
-                      if (t.role !== 'assistant') return null;
-                      if (busy && i === turns.length - 1) return null;
-                      if (/confirm\?\s*$/i.test(t.content)) return null;
-                      const link = jumpLinkFor(t.toolCalls);
-                      if (!link) return null;
-                      return (
-                        <div className="mt-2">
-                          <a
-                            href={link.href}
-                            className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 text-[11px] underline-offset-2 hover:underline"
-                          >
-                            {link.label} →
-                          </a>
+                      {t.toolCalls && t.toolCalls.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
+                          {t.toolCalls.map((tc, j) => (
+                            <span
+                              key={j}
+                              data-ok={tc.ok ? 'true' : 'false'}
+                              className={cn(
+                                'inline-flex items-center gap-1 rounded-full px-2 py-px font-mono',
+                                tc.ok
+                                  ? 'bg-success-wash text-success'
+                                  : 'bg-destructive-wash text-destructive',
+                              )}
+                            >
+                              <Wrench className="h-2.5 w-2.5" />
+                              {tc.name}
+                            </span>
+                          ))}
                         </div>
-                      );
-                    })()}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        {/* Composer */}
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void send(input);
-          }}
-          onDragEnter={(e) => {
-            if (e.dataTransfer?.types?.includes('Files')) {
-              e.preventDefault();
-              setDragOver(true);
-            }
-          }}
-          onDragOver={(e) => {
-            if (e.dataTransfer?.types?.includes('Files')) {
-              e.preventDefault();
-              setDragOver(true);
-            }
-          }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            setDragOver(false);
-            const f = e.dataTransfer?.files?.[0];
-            if (f) void uploadFile(f);
-          }}
-          className={cn(
-            'border-border bg-card relative flex items-end gap-2 rounded-xl border p-2 shadow-sm transition',
-            dragOver && 'border-foreground/50 bg-foreground/[0.04]',
-          )}
-        >
-          {dragOver && (
-            <div className="bg-foreground/[0.06] text-foreground pointer-events-none absolute inset-0 flex items-center justify-center rounded-xl text-xs font-medium">
-              Drop a PDF, Word, Excel, image, or CSV to extract ISBNs
-            </div>
-          )}
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".pdf,.docx,.xlsx,.xls,.csv,.txt,.png,.jpg,.jpeg,.webp,.heic,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,text/plain,image/png,image/jpeg,image/webp,image/heic"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) void uploadFile(f);
-            }}
-          />
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            disabled={busy || uploading}
-            onClick={() => fileInputRef.current?.click()}
-            className="shrink-0 px-2"
-            aria-label="Attach a file with ISBNs"
-            title="Attach a PDF, Word, Excel, image, or CSV — the assistant will pull ISBNs out of it."
-          >
-            {uploading ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Paperclip className="h-3.5 w-3.5" />
+                      )}
+                      {/* Inline Confirm button — when the assistant's LAST
+                          turn ends with "Confirm?" we surface a single
+                          action button so the user doesn't have to type
+                          "yes". The detection is purposely conservative:
+                          only the last message, not busy, and only when
+                          text matches the canned phrasing the system
+                          prompt enforces. False positives are harmless
+                          (it just sends "yes, confirm" as a normal turn). */}
+                      {t.role === 'assistant' &&
+                        i === turns.length - 1 &&
+                        !busy &&
+                        /confirm\?\s*$/i.test(t.content) && (
+                          <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                            <Button
+                              type="button"
+                              size="sm"
+                              onClick={() => void send('yes, confirm')}
+                            >
+                              Confirm
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={() => void send('cancel')}
+                            >
+                              Cancel
+                            </Button>
+                          </div>
+                        )}
+                      {/* Quick-jump action link — when the tool the AI
+                          called has a natural dashboard counterpart,
+                          show a "Open in dashboard" link under the
+                          bubble. Suppresses while the turn is in flight
+                          and on confirm-prompt turns (the Confirm/Cancel
+                          actions above take priority). */}
+                      {(() => {
+                        if (t.role !== 'assistant') return null;
+                        if (busy && i === turns.length - 1) return null;
+                        if (/confirm\?\s*$/i.test(t.content)) return null;
+                        const link = jumpLinkFor(t.toolCalls);
+                        if (!link) return null;
+                        return (
+                          <div className="mt-2">
+                            <a
+                              href={link.href}
+                              className={cn(
+                                'text-accent hover:text-foreground inline-flex items-center gap-1 text-[12.5px] font-medium underline-offset-2 transition-colors hover:underline',
+                                touchTargetClass,
+                              )}
+                            >
+                              {link.label} →
+                            </a>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  </li>
+                ))}
+              </ul>
             )}
-          </Button>
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
+          </div>
+
+          {/* Composer */}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void send(input);
+            }}
+            onDragEnter={(e) => {
+              if (e.dataTransfer?.types?.includes('Files')) {
                 e.preventDefault();
-                void send(input);
+                setDragOver(true);
               }
             }}
-            placeholder={
-              uploading
-                ? 'Reading file…'
-                : 'Ask about your stock, suppliers, or recent activity…'
-            }
-            rows={1}
-            className="placeholder:text-muted-foreground max-h-32 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm outline-none"
-            disabled={busy || uploading}
-            aria-label="Ask the inventory assistant"
-          />
-          <Button
-            type="submit"
-            variant="gradient"
-            size="sm"
-            disabled={busy || input.trim().length === 0}
-          >
-            {busy ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Send className="h-3.5 w-3.5" />
+            onDragOver={(e) => {
+              if (e.dataTransfer?.types?.includes('Files')) {
+                e.preventDefault();
+                setDragOver(true);
+              }
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOver(false);
+              const f = e.dataTransfer?.files?.[0];
+              if (f) void uploadFile(f);
+            }}
+            className={cn(
+              'border-border relative flex items-end gap-2 border-t p-2.5 transition-colors',
+              dragOver && 'bg-muted',
             )}
-          </Button>
-        </form>
-        <p className="text-muted-foreground mt-1.5 px-1 text-[10.5px]">
-          ⌘ Enter or Enter to send · Shift+Enter for newline · Drop or attach
-          a PDF / Word / Excel / image to bulk-import books · Chats auto-save 30 days.
+          >
+            {dragOver && (
+              <div className="bg-muted text-foreground border-line-strong pointer-events-none absolute inset-1.5 flex items-center justify-center rounded-md border border-dashed px-3 text-center text-[12.5px] font-medium">
+                Drop a PDF, Word, Excel, image, or CSV to extract ISBNs
+              </div>
+            )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.docx,.xlsx,.xls,.csv,.txt,.png,.jpg,.jpeg,.webp,.heic,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,text/plain,image/png,image/jpeg,image/webp,image/heic"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void uploadFile(f);
+              }}
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              disabled={busy || uploading}
+              onClick={() => fileInputRef.current?.click()}
+              className="text-muted-foreground shrink-0"
+              aria-label="Attach a file with ISBNs"
+              title="Attach a PDF, Word, Excel, image, or CSV — the assistant will pull ISBNs out of it."
+            >
+              {uploading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Paperclip className="h-3.5 w-3.5" />
+              )}
+            </Button>
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  void send(input);
+                }
+              }}
+              placeholder={
+                uploading ? 'Reading file…' : 'Ask about your stock, suppliers, or recent activity…'
+              }
+              rows={1}
+              className="placeholder:text-muted-foreground focus-visible:ring-ring max-h-32 min-h-8 flex-1 resize-none rounded-md bg-transparent px-2 py-1.5 text-[13.5px] leading-5 outline-none focus-visible:ring-2 disabled:opacity-60 max-sm:min-h-[60px] max-sm:text-base"
+              disabled={busy || uploading}
+              aria-label="Ask the inventory assistant"
+            />
+            <Button
+              type="submit"
+              variant="gradient"
+              size="icon"
+              aria-label="Send message"
+              disabled={busy || input.trim().length === 0}
+              className="shrink-0"
+            >
+              {busy ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Send className="h-3.5 w-3.5" />
+              )}
+            </Button>
+          </form>
+        </div>
+        <p className="text-muted-foreground mt-1.5 px-1 text-[11.5px] leading-[17px]">
+          ⌘ Enter or Enter to send · Shift+Enter for newline · Drop or attach a PDF / Word / Excel /
+          image to bulk-import books · Chats auto-save 30 days.
         </p>
       </div>
     </div>
