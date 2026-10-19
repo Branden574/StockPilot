@@ -87,15 +87,16 @@ export const KitRow = React.memo(function KitRow({
         <Mono size={11.5} color={out ? c.critText : c.ink3}>
           {kitsAvailableCopy(avail.kits)}
         </Mono>
+        {/* Sentences in the body face (mono is for codes and figures). */}
         {limiting && avail.limiting ? (
-          <Mono size={11} color={c.ink3}>
+          <Body size={12.5} color={c.ink3}>
             {kitLimitedByCopy(limiting.name, avail.limiting.available)}
-          </Mono>
+          </Body>
         ) : null}
         {full ? (
-          <Mono size={11} color={c.ink3}>
+          <Body size={12.5} color={c.ink3}>
             {CART_ALL_STOCK_IN_CART_COPY}
-          </Mono>
+          </Body>
         ) : null}
       </View>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>

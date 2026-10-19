@@ -331,9 +331,29 @@ describe('item and kit rows, the cart and the sheets', () => {
       'width: pickQtyFieldWidthFor(digits), borderColor: c.hair2, backgroundColor: c.sunk, color: c.ink,',
     );
     expect(code).toContain(
-      'const inputStyle = [styles.input, { borderColor: c.hair2, backgroundColor: c.card, color: c.ink }];',
+      'const inputStyle = [ styles.input, styles.textInput, { borderColor: c.hair2, backgroundColor: c.card, color: c.ink }, ];',
     );
+    // A name, an email or a search is typed in the body face, as the shared
+    // box types it; the quantity, a figure, keeps mono.
+    expect(code).toContain('textInput: { fontFamily: FONT.displayRegular },');
+    expect(code).toMatch(/input: \{[^}]*fontFamily: FONT\.mono,/);
     expect(code).toContain('backgroundColor: PHOTO_BACKGROUND,');
+  });
+
+  it("a kit's sentences are in the body face; its figures and a SKU in mono", () => {
+    const kit = codeOnly(sourceOf(FILES.kitRow));
+    expect(kit).toMatch(
+      /<Body size=\{12\.5\} color=\{c\.ink3\}>\s*\{kitLimitedByCopy\(limiting\.name, avail\.limiting\.available\)\}/,
+    );
+    expect(kit).toMatch(
+      /<Body size=\{12\.5\} color=\{c\.ink3\}>\s*\{CART_ALL_STOCK_IN_CART_COPY\}/,
+    );
+    expect(kit).toMatch(
+      /<Mono size=\{11\.5\} color=\{out \? c\.critText : c\.ink3\}>\s*\{kitsAvailableCopy/,
+    );
+    expect(codeOnly(sourceOf(FILES.cart))).toMatch(
+      /<Mono size=\{11\.5\} color=\{c\.ink3\}>\s*\{item\.sku\}/,
+    );
   });
 
   it("a sheet's Close is a named 44pt button whose X reads at 3:1 and more", () => {

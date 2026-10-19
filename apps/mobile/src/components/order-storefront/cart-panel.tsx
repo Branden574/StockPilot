@@ -161,7 +161,7 @@ export function CartPanel({
                 {view.title}
               </Body>
               {item?.sku ? (
-                <Mono size={11} color={c.ink3}>
+                <Mono size={11.5} color={c.ink3}>
                   {item.sku}
                 </Mono>
               ) : null}

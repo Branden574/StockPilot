@@ -403,8 +403,14 @@ export function RequesterSheet({
   const emailSpan = React.useRef<{ top: number; height: number } | null>(null);
   const spanOf = (e: LayoutChangeEvent) => ({ top: e.nativeEvent.layout.y, height: e.nativeEvent.layout.height });
   // The shared text box's recipe (components/ui/field.tsx): the card fill in
-  // the stronger border, the placeholder in muted ink (ink3, AA).
-  const inputStyle = [styles.input, { borderColor: c.hair2, backgroundColor: c.card, color: c.ink }];
+  // the stronger border, the placeholder in muted ink (ink3, AA), and a
+  // name, an email or a search typed in the body face, as the shared box
+  // types them (mono is kept for the quantity, a figure).
+  const inputStyle = [
+    styles.input,
+    styles.textInput,
+    { borderColor: c.hair2, backgroundColor: c.card, color: c.ink },
+  ];
   return (
     <StorefrontSheet
       visible
@@ -614,4 +620,5 @@ const styles = StyleSheet.create({
     fontFamily: FONT.mono,
     fontSize: 15,
   },
+  textInput: { fontFamily: FONT.displayRegular },
 });

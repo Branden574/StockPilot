@@ -982,7 +982,9 @@ describe('dimmed controls say why, and what can be tapped looks it (PO-4 review)
     expect(catalog).not.toContain('disabled={ready.warehouses.length < 2 && !locked}');
   });
   it('(c) a full Add kit says why on screen, on the row and in Details', () => {
-    expect(kitRow).toMatch(/\{full \? \(\s*<Mono size=\{11\} color=\{c\.ink3\}>\s*\{CART_ALL_STOCK_IN_CART_COPY\}/);
+    // Re-pinned by the redesign (P5.7a, look only): the sentence is in the
+    // body face (mono is for codes and figures); the same words on the row.
+    expect(kitRow).toMatch(/\{full \? \(\s*<Body size=\{12\.5\} color=\{c\.ink3\}>\s*\{CART_ALL_STOCK_IN_CART_COPY\}/);
     expect(catalog).toMatch(/kitFull\(sheetKit\) \? \(\s*<Body size=\{12\.5\} color=\{c\.ink3\}>\s*\{CART_ALL_STOCK_IN_CART_COPY\}/);
   });
   it('(d) the chips say a tap takes them off', () => {
