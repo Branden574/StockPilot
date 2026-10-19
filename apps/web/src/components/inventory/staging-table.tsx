@@ -1,6 +1,6 @@
 'use client';
 
-import { Clock, History, Search, X } from 'lucide-react';
+import { Clock, History, PackageCheck, Search, X } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import * as React from 'react';
@@ -23,8 +23,13 @@ import {
   type StagingFilters,
   type StagingSourceFilter,
 } from '@/components/inventory/staging-filters';
+import { FilterBar } from '@/components/patterns/filter-bar';
+import { SegmentedTabs } from '@/components/patterns/segmented-tabs';
+import { StatePanel } from '@/components/patterns/state-panel';
+import { touchTargetClass } from '@/components/patterns/touch-target';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import {
   Select,
@@ -33,6 +38,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { stagingReturnedSourceLabel, type BookStorageInfo } from '@stockpilot/core';
 
 import { cn, formatRelative } from '@/lib/utils';
@@ -107,18 +120,22 @@ export interface StagingTableProps {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
+function Dash() {
+  return <span className="text-muted-foreground">—</span>;
+}
+
 function AgeBadge({ ageDays }: { ageDays: number | null }) {
-  if (ageDays === null) return <span className="text-muted-foreground text-sm">—</span>;
+  if (ageDays === null) return <Dash />;
 
   // The SAME predicate the Age filter's Stale bucket uses (staging-filters.ts),
   // not a re-typed comparison, so the badge and the filter cannot drift apart.
   const isStale = isStaleAge(ageDays);
   return (
-    <span className="flex items-center gap-1.5">
-      <span className="text-sm tabular-nums">{ageDays}d</span>
+    <span className="flex items-center gap-2 whitespace-nowrap">
+      <span className="font-mono text-[12.5px] tabular-nums">{ageDays}d</span>
       {isStale && (
-        <Badge variant="destructive" className="gap-0.5 px-1.5 py-0 text-xs">
-          <Clock className="h-2.5 w-2.5" />
+        <Badge variant="destructive" className="gap-1 px-1.5">
+          <Clock aria-hidden className="h-3 w-3" strokeWidth={1.8} />
           Stale
         </Badge>
       )}
@@ -153,17 +170,17 @@ function SourceCell({
       <Link
         href={`/dashboard/returns/${returnId}`}
         onClick={(e) => e.stopPropagation()}
-        className="text-sm underline-offset-2 hover:underline"
+        className="text-foreground underline-offset-2 hover:underline"
       >
         {stagingReturnedSourceLabel(returnNumber ?? null)}
       </Link>
     );
   }
   if (!poNumber && !receiptNumber) {
-    return <span className="text-muted-foreground text-sm">—</span>;
+    return <Dash />;
   }
   return (
-    <span className="text-sm">
+    <span className="whitespace-nowrap font-mono text-[12.5px]">
       {poNumber && (
         <button
           type="button"
@@ -172,14 +189,12 @@ function SourceCell({
             e.stopPropagation();
             onFilterByPo(poNumber);
           }}
-          className="rounded-sm font-medium underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="text-foreground focus-visible:ring-ring rounded-sm font-medium underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2"
         >
           {poNumber}
         </button>
       )}
-      {poNumber && receiptNumber && (
-        <span className="text-muted-foreground"> / </span>
-      )}
+      {poNumber && receiptNumber && <span className="text-muted-foreground"> / </span>}
       {receiptNumber && (
         <button
           type="button"
@@ -188,7 +203,7 @@ function SourceCell({
             e.stopPropagation();
             onSearchReceipt(receiptNumber);
           }}
-          className="text-muted-foreground rounded-sm underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="text-muted-foreground hover:text-foreground focus-visible:ring-ring rounded-sm underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2"
         >
           {receiptNumber}
         </button>
@@ -222,6 +237,10 @@ const AGE_OPTIONS: ReadonlyArray<{ value: StagingAgeFilter; label: string }> = [
 /** Radix Select cannot hold an empty-string value, so "no PO filter" gets a
  *  sentinel of its own (distinct from NO_PO = the "unattributed rows" option). */
 const ALL_POS = '__all__';
+
+/** A filter select in the toolbar: full width on a phone, its own width from
+ *  sm, the quiet label then the value, and the chevron at the far end. */
+const FILTER_SELECT = 'w-full justify-start gap-1.5 sm:w-auto [&>svg]:ml-auto';
 
 // Per-row selection identity. Neither field is unique on its own: one item can
 // hold stock in BOTH staging and unplaced (two rows, same itemId), and one
@@ -329,192 +348,200 @@ export function StagingTable({
   const ageChipLabel = filters.age === 'recent' ? 'Recent' : filters.age === 'stale' ? 'Stale' : null;
 
   return (
-    <div className="rounded-[10px] border border-border bg-card">
-      {/* Filter toolbar — always rendered, including over an empty result, so
-          the user can always widen a filter that hid everything. */}
-      <div className="flex flex-col gap-2 border-b border-border px-3 py-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="relative min-w-[220px] max-w-md flex-1">
-            <Search className="text-muted-foreground pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2" />
-            <Input
-              type="search"
-              value={filters.query}
-              onChange={(e) => updateFilters({ query: e.target.value })}
-              placeholder="Search item, SKU, PO or receipt..."
-              aria-label="Search staging items"
-              className="h-9 pl-8 pr-8 text-[13px]"
-            />
-            {filters.query && (
-              <button
-                type="button"
-                onClick={() => updateFilters({ query: '' })}
-                aria-label="Clear staging search"
-                className="text-muted-foreground hover:text-foreground absolute right-2 top-1/2 -translate-y-1/2"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
+    <div className="flex min-w-0 flex-col gap-3">
+      {/* Filter toolbar (DESIGN-SPEC 6.4, 6.5): the type tabs on the left,
+          search and the three filters on the right. Always rendered, including
+          over an empty result, so the user can always widen a filter that hid
+          everything. */}
+      <FilterBar
+        leading={
+          // Server-side filter (?type=): a group of toggle buttons, exactly as
+          // before (no links: the push keeps every other param).
+          <SegmentedTabs
+            semantics="nav"
+            aria-label="Item type"
+            activeId={currentType}
+            items={TYPE_OPTIONS.map((opt) => ({ id: opt.value, label: opt.label }))}
+            onSelect={(id) => setTypeFilter(id as ItemTypeFilter)}
+          />
+        }
+      >
+        <div className="relative w-full sm:w-[264px]">
+          <Search
+            aria-hidden
+            className="text-muted-foreground pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+            strokeWidth={1.8}
+          />
+          <Input
+            type="search"
+            value={filters.query}
+            onChange={(e) => updateFilters({ query: e.target.value })}
+            placeholder="Search item, SKU, PO or receipt..."
+            aria-label="Search staging items"
+            className={cn(
+              'pl-8 [&::-webkit-search-cancel-button]:appearance-none',
+              filters.query ? 'pr-9' : 'pr-2.5',
             )}
-          </div>
-          <span
-            className="text-muted-foreground ml-auto text-sm tabular-nums"
-            aria-live="polite"
-            data-testid="staging-count"
+          />
+          {filters.query && (
+            <button
+              type="button"
+              onClick={() => updateFilters({ query: '' })}
+              aria-label="Clear staging search"
+              // The touch target first: its `relative` must lose to `absolute`.
+              className={cn(
+                touchTargetClass,
+                'text-muted-foreground hover:bg-muted hover:text-foreground absolute right-1.5 top-1/2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded transition-colors',
+              )}
+            >
+              <X aria-hidden className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+
+        <Select
+          value={poSelectValue}
+          onValueChange={(v) => updateFilters({ poNumber: v === ALL_POS ? null : v })}
+        >
+          <SelectTrigger
+            className={cn(FILTER_SELECT, 'sm:w-[220px]')}
+            aria-label="Filter by purchase order"
           >
-            {formatStagingCount(visibleRows.length, rows.length)}
-          </span>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-1" role="group" aria-label="Item type">
-            {TYPE_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => setTypeFilter(opt.value)}
-                aria-pressed={currentType === opt.value}
-                className={cn(
-                  'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
-                  currentType === opt.value
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-                )}
-              >
-                {opt.label}
-              </button>
+            <FilterSelectLabel>PO</FilterSelectLabel>
+            <SelectValue placeholder="All POs" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL_POS}>All POs</SelectItem>
+            {poOptions.options.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.value} ({opt.count})
+              </SelectItem>
             ))}
-          </div>
-          <span className="bg-border mx-1 hidden h-5 w-px sm:block" aria-hidden />
+            {poOptions.unattributedCount > 0 && (
+              <SelectItem value={NO_PO}>
+                No PO / Unattributed ({poOptions.unattributedCount})
+              </SelectItem>
+            )}
+          </SelectContent>
+        </Select>
 
-          <div className="text-muted-foreground flex items-center gap-1.5 text-xs">
-            PO
-            <Select
-              value={poSelectValue}
-              onValueChange={(v) => updateFilters({ poNumber: v === ALL_POS ? null : v })}
-            >
-              <SelectTrigger className="h-8 w-[190px] text-[13px]" aria-label="Filter by purchase order">
-                <SelectValue placeholder="All POs" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ALL_POS}>All POs</SelectItem>
-                {poOptions.options.map((opt) => (
-                  <SelectItem key={opt.value} value={opt.value}>
-                    {opt.value} ({opt.count})
-                  </SelectItem>
-                ))}
-                {poOptions.unattributedCount > 0 && (
-                  <SelectItem value={NO_PO}>
-                    No PO / Unattributed ({poOptions.unattributedCount})
-                  </SelectItem>
-                )}
-              </SelectContent>
-            </Select>
-          </div>
+        <Select
+          value={filters.source}
+          onValueChange={(v) => updateFilters({ source: v as StagingSourceFilter })}
+        >
+          <SelectTrigger className={cn(FILTER_SELECT, 'sm:w-[176px]')} aria-label="Filter by source">
+            <FilterSelectLabel>Source</FilterSelectLabel>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {SOURCE_OPTIONS.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
 
-          <div className="text-muted-foreground flex items-center gap-1.5 text-xs">
-            Source
-            <Select
-              value={filters.source}
-              onValueChange={(v) => updateFilters({ source: v as StagingSourceFilter })}
-            >
-              <SelectTrigger className="h-8 w-[130px] text-[13px]" aria-label="Filter by source">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {SOURCE_OPTIONS.map((opt) => (
-                  <SelectItem key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+        <Select
+          value={filters.age}
+          onValueChange={(v) => updateFilters({ age: v as StagingAgeFilter })}
+        >
+          <SelectTrigger className={cn(FILTER_SELECT, 'sm:w-[204px]')} aria-label="Filter by age">
+            <FilterSelectLabel>Age</FilterSelectLabel>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {AGE_OPTIONS.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </FilterBar>
 
-          <div className="text-muted-foreground flex items-center gap-1.5 text-xs">
-            Age
-            <Select
-              value={filters.age}
-              onValueChange={(v) => updateFilters({ age: v as StagingAgeFilter })}
-            >
-              <SelectTrigger className="h-8 w-[170px] text-[13px]" aria-label="Filter by age">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {AGE_OPTIONS.map((opt) => (
-                  <SelectItem key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-
+      {/* The active filters (chips that each remove one) and the live count. */}
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
         {filtersActive && (
-          <div className="flex flex-wrap items-center gap-1.5" data-testid="staging-active-filters">
+          <div className="flex min-w-0 flex-wrap items-center gap-2" data-testid="staging-active-filters">
             {normalizeStagingText(filters.query) !== '' && (
-              <FilterChip
+              <ActiveFilterChip
                 label={`Search: ${filters.query.trim()}`}
                 onRemove={() => updateFilters({ query: '' })}
               />
             )}
             {filters.poNumber !== null && (
-              <FilterChip
+              <ActiveFilterChip
                 label={`PO: ${poChipLabel}`}
                 onRemove={() => updateFilters({ poNumber: null })}
               />
             )}
             {filters.source !== 'all' && (
-              <FilterChip
+              <ActiveFilterChip
                 label={`Source: ${sourceChipLabel}`}
                 onRemove={() => updateFilters({ source: 'all' })}
               />
             )}
             {ageChipLabel && (
-              <FilterChip
+              <ActiveFilterChip
                 label={`Age: ${ageChipLabel}`}
                 onRemove={() => updateFilters({ age: 'all' })}
               />
             )}
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={clearFilters}
-              className="text-muted-foreground hover:text-foreground ml-1 inline-flex items-center gap-1 text-xs"
+              className="text-muted-foreground font-normal"
             >
-              <X className="h-3 w-3" /> Clear filters
-            </button>
+              <X aria-hidden /> Clear filters
+            </Button>
           </div>
         )}
+        <span
+          className="text-muted-foreground ml-auto text-[12.5px] tabular-nums"
+          aria-live="polite"
+          data-testid="staging-count"
+        >
+          {formatStagingCount(visibleRows.length, rows.length)}
+        </span>
       </div>
 
       {rows.length === 0 ? (
         /* True empty: nothing staged or unplaced at all (for this type/warehouse).
            Left out when the page already says so (hideEmptyState). */
         hideEmptyState ? null : (
-          <div className="flex flex-col items-center justify-center gap-2 px-6 py-16 text-center">
-            <p className="text-muted-foreground text-sm">
-              Nothing to place — received (staged) or unplaced stock appears here.
-            </p>
-          </div>
+          <StatePanel
+            kind="empty"
+            icon={PackageCheck}
+            headingLevel={null}
+            title="Nothing to place — received (staged) or unplaced stock appears here."
+          />
         )
       ) : visibleRows.length === 0 ? (
         /* Filtered empty: rows exist, the active filters hide all of them. */
-        <div
-          className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center"
+        <StatePanel
+          kind="no-match"
+          headingLevel={null}
           data-testid="staging-filtered-empty"
-        >
-          <p className="text-muted-foreground text-sm">
-            No staging items match these filters.
-          </p>
-          <Button size="sm" variant="outline" onClick={clearFilters}>
-            Clear filters
-          </Button>
-        </div>
+          title="No staging items match these filters."
+          action={
+            <Button size="sm" variant="outline" onClick={clearFilters}>
+              Clear filters
+            </Button>
+          }
+        />
       ) : (
-        <>
-          {/* Bulk-place action bar — appears when VISIBLE rows are selected */}
+        <div className="border-border bg-card min-w-0 overflow-hidden rounded-lg border">
+          {/* Bulk-place bar (DESIGN-SPEC 6.21) — appears when VISIBLE rows are
+              selected, as a strip at the top of the table card. */}
           {canPlace && selectedRows.length > 0 && (
-            <div className="flex items-center gap-3 border-b border-border bg-muted/40 px-3 py-2">
-              <span className="text-sm font-medium">
+            <div
+              data-slot="staging-bulk-bar"
+              className="border-border bg-sunk flex flex-wrap items-center gap-2 border-b px-4 py-2"
+            >
+              <span className="text-foreground font-mono text-[12.5px] tabular-nums">
                 {selectedRows.length} selected
               </span>
               <BulkPlaceDialog
@@ -536,292 +563,259 @@ export function StagingTable({
                 canMintDestination={canMintDestination}
                 onPlaced={clearSelection}
                 trigger={
-                  <Button size="sm" variant="outline">
+                  <Button size="sm">
+                    <PackageCheck aria-hidden />
                     Place selected
                   </Button>
                 }
               />
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 onClick={clearSelection}
-                className="text-muted-foreground hover:text-foreground ml-auto text-sm"
+                className="text-muted-foreground ml-auto font-normal"
               >
                 Clear
-              </button>
+              </Button>
             </div>
           )}
 
-          {/* Table */}
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[700px]">
-              <thead>
-                <tr className="border-b border-border text-left">
-                  {canPlace && (
-                    <th className="w-8 px-3 py-2.5">
-                      <StagingCheckbox
-                        checked={allSelected}
-                        disabled={placeableKeys.length === 0}
-                        onChange={toggleAll}
-                        label="Select all placeable rows"
-                      />
-                    </th>
-                  )}
-                  <th className="text-muted-foreground px-3 py-2.5 text-xs font-medium uppercase tracking-wide">
-                    <span className="inline-flex items-center gap-1.5">
-                      Item
-                      <HelpTip label="the staged / unplaced badge">
-                        <p>
-                          <strong>staged</strong> = received from a purchase order into
-                          staging. <strong>unplaced</strong> = on-hand stock that was never
-                          put into a rack or crate. Either way it counts in your totals but
-                          cannot be picked until you place it.
-                        </p>
-                      </HelpTip>
-                    </span>
-                  </th>
-                  <th className="text-muted-foreground px-3 py-2.5 text-xs font-medium uppercase tracking-wide">
-                    Qty to place
-                  </th>
-                  <th className="text-muted-foreground px-3 py-2.5 text-xs font-medium uppercase tracking-wide">
-                    Source PO / receipt
-                  </th>
-                  <th className="text-muted-foreground px-3 py-2.5 text-xs font-medium uppercase tracking-wide">
-                    Received
-                  </th>
-                  <th className="text-muted-foreground px-3 py-2.5 text-xs font-medium uppercase tracking-wide">
-                    Age
-                  </th>
-                  <th className="text-muted-foreground px-3 py-2.5 text-xs font-medium uppercase tracking-wide">
-                    Warehouse
-                  </th>
-                  {/* Always rendered: History is available to anyone who can read
-                      this page (the route already gates on 'items:read'), while
-                      Place additionally needs 'stock:transfer'. */}
-                  <th className="text-muted-foreground px-3 py-2.5 text-xs font-medium uppercase tracking-wide">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibleRows.map((row) => {
-                  const destinations =
-                    row.warehouseId
-                      ? (destinationsMap[row.warehouseId] ?? [])
-                      : [];
-                  const canPlaceRow = canPlace && row.warehouseId !== null;
+          <Table className="min-w-[760px]">
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                {canPlace && (
+                  <TableHead className="w-[52px]">
+                    <Checkbox
+                      checked={allSelected}
+                      disabled={placeableKeys.length === 0}
+                      onCheckedChange={toggleAll}
+                      label="Select all placeable rows"
+                    />
+                  </TableHead>
+                )}
+                <TableHead>
+                  <span className="inline-flex items-center gap-1.5">
+                    Item
+                    <HelpTip label="the staged / unplaced badge">
+                      <p>
+                        <strong>staged</strong> = received from a purchase order into
+                        staging. <strong>unplaced</strong> = on-hand stock that was never
+                        put into a rack or crate. Either way it counts in your totals but
+                        cannot be picked until you place it.
+                      </p>
+                    </HelpTip>
+                  </span>
+                </TableHead>
+                <TableHead className="text-right">Qty to place</TableHead>
+                <TableHead>Source PO / receipt</TableHead>
+                <TableHead>Received</TableHead>
+                <TableHead>Age</TableHead>
+                <TableHead>Warehouse</TableHead>
+                {/* Always rendered: History is available to anyone who can read
+                    this page (the route already gates on 'items:read'), while
+                    Place additionally needs 'stock:transfer'. */}
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {visibleRows.map((row) => {
+                const destinations = row.warehouseId
+                  ? (destinationsMap[row.warehouseId] ?? [])
+                  : [];
+                const canPlaceRow = canPlace && row.warehouseId !== null;
+                const key = rowKey(row);
+                const selected = selectedKeys.has(key);
 
-                  return (
-                    <tr
-                      // Same composite identity as selection (rowKey): one item can
-                      // have BOTH a staging and an unplaced holding, and one location
-                      // holds many items — so neither field alone is unique.
-                      key={rowKey(row)}
-                      className="border-b border-border last:border-0 hover:bg-muted/40 transition-colors"
-                    >
-                      {canPlace && (
-                        <td className="px-3 py-3">
-                          <StagingCheckbox
-                            checked={selectedKeys.has(rowKey(row))}
-                            disabled={!canPlaceRow}
-                            onChange={() => toggleRow(rowKey(row))}
-                            label={`Select ${row.name}`}
-                          />
-                        </td>
-                      )}
-                      {/* Item name + SKU + source-bucket badge */}
-                      <td className="px-3 py-3">
-                        <div className="flex flex-col gap-1">
-                          <span className="text-sm font-medium leading-tight">{row.name}</span>
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-muted-foreground text-xs">{row.sku}</span>
-                            <Badge
-                              variant={row.sourceKind === 'unplaced' ? 'outline' : 'secondary'}
-                              className="px-1.5 py-0 text-[10px] font-normal capitalize"
-                            >
-                              {row.sourceKind}
-                            </Badge>
-                          </div>
-                        </div>
-                      </td>
-
-                      {/* Qty to place */}
-                      <td className="px-3 py-3">
-                        <span className="text-sm tabular-nums font-medium">
-                          {row.quantity}
-                        </span>
-                      </td>
-
-                      {/* Source PO / receipt — the PO is click-to-filter */}
-                      <td className="px-3 py-3">
-                        <SourceCell
-                          poNumber={row.sourcePoNumber}
-                          receiptNumber={row.receiptNumber}
-                          returnId={row.sourceReturnId ?? null}
-                          returnNumber={row.sourceReturnNumber ?? null}
-                          onFilterByPo={filterByPo}
-                          onSearchReceipt={(receipt) => updateFilters({ query: receipt })}
+                return (
+                  <TableRow
+                    // Same composite identity as selection (rowKey): one item can
+                    // have BOTH a staging and an unplaced holding, and one location
+                    // holds many items — so neither field alone is unique.
+                    key={key}
+                    data-state={selected ? 'selected' : undefined}
+                  >
+                    {canPlace && (
+                      <TableCell>
+                        <Checkbox
+                          checked={selected}
+                          disabled={!canPlaceRow}
+                          onCheckedChange={() => toggleRow(key)}
+                          label={`Select ${row.name}`}
                         />
-                      </td>
+                      </TableCell>
+                    )}
+                    {/* Item name, then the SKU and the source-bucket badge */}
+                    <TableCell className="min-w-[220px]">
+                      <div className="text-foreground text-[13.5px] font-medium leading-5">
+                        {row.name}
+                      </div>
+                      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                        <span className="text-muted-foreground font-mono text-[11.5px] leading-[17.25px]">
+                          {row.sku}
+                        </span>
+                        <Badge
+                          variant={row.sourceKind === 'unplaced' ? 'outline' : 'secondary'}
+                          className="px-1.5 text-[11px] leading-4 capitalize"
+                        >
+                          {row.sourceKind}
+                        </Badge>
+                      </div>
+                    </TableCell>
 
-                      {/* Received date */}
-                      <td className="px-3 py-3">
-                        {row.receivedAt ? (
-                          // Rendered on the server, hydrated a minute later:
-                          // tolerate the drift instead of React error #418.
-                          <span className="text-sm" title={row.receivedAt} suppressHydrationWarning>
-                            {formatRelative(row.receivedAt)}
+                    {/* Qty to place */}
+                    <TableCell className="text-right">
+                      <span className="font-mono text-[13.5px] font-medium tabular-nums">
+                        {row.quantity}
+                      </span>
+                    </TableCell>
+
+                    {/* Source PO / receipt — the PO is click-to-filter */}
+                    <TableCell>
+                      <SourceCell
+                        poNumber={row.sourcePoNumber}
+                        receiptNumber={row.receiptNumber}
+                        returnId={row.sourceReturnId ?? null}
+                        returnNumber={row.sourceReturnNumber ?? null}
+                        onFilterByPo={filterByPo}
+                        onSearchReceipt={(receipt) => updateFilters({ query: receipt })}
+                      />
+                    </TableCell>
+
+                    {/* Received date */}
+                    <TableCell className="whitespace-nowrap">
+                      {row.receivedAt ? (
+                        // Rendered on the server, hydrated a minute later:
+                        // tolerate the drift instead of React error #418.
+                        <span
+                          className="text-muted-foreground text-[12.5px]"
+                          title={row.receivedAt}
+                          suppressHydrationWarning
+                        >
+                          {formatRelative(row.receivedAt)}
+                        </span>
+                      ) : (
+                        <Dash />
+                      )}
+                    </TableCell>
+
+                    {/* Age + stale badge */}
+                    <TableCell>
+                      <AgeBadge ageDays={row.ageDays} />
+                    </TableCell>
+
+                    {/* Warehouse — resolved name, falling back to a truncated
+                        UUID for warehouses missing from the name map (archived/
+                        inactive), or an em dash when the row has no warehouse. */}
+                    <TableCell className="text-ink-2">
+                      {row.warehouseId ? (
+                        warehouseNames[row.warehouseId] ? (
+                          <span>{warehouseNames[row.warehouseId]}</span>
+                        ) : (
+                          <span className="text-muted-foreground font-mono text-[12px]">
+                            {row.warehouseId.slice(0, 8)}…
                           </span>
-                        ) : (
-                          <span className="text-muted-foreground text-sm">—</span>
-                        )}
-                      </td>
+                        )
+                      ) : (
+                        <Dash />
+                      )}
+                    </TableCell>
 
-                      {/* Age + stale badge */}
-                      <td className="px-3 py-3">
-                        <AgeBadge ageDays={row.ageDays} />
-                      </td>
-
-                      {/* Warehouse — resolved name, falling back to a truncated
-                          UUID for warehouses missing from the name map (archived/
-                          inactive), or an em dash when the row has no warehouse. */}
-                      <td className="px-3 py-3">
-                        {row.warehouseId ? (
-                          warehouseNames[row.warehouseId] ? (
-                            <span className="text-sm">
-                              {warehouseNames[row.warehouseId]}
-                            </span>
+                    {/* Actions — History for everyone, Place when permitted.
+                        The em dash in the Source column only ever meant "this
+                        stock did not arrive on a PO"; History is where the rest
+                        of the story (who, when, where from, why) actually lives,
+                        so it must not be hidden behind the place permission.
+                        8 px between the two 28 px buttons: the Button touch
+                        rule for dense small buttons. */}
+                    <TableCell>
+                      <div className="flex items-center justify-end gap-2">
+                        <ItemHistoryDialog
+                          itemId={row.itemId}
+                          itemName={row.name}
+                          itemSku={row.sku}
+                          trigger={
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              aria-label={`View history for ${row.name}`}
+                              className="text-ink-2"
+                            >
+                              <History aria-hidden className="h-4 w-4" />
+                              History
+                            </Button>
+                          }
+                        />
+                        {canPlace &&
+                          (canPlaceRow ? (
+                            <PlaceFromStagingDialog
+                              itemId={row.itemId}
+                              itemName={row.name}
+                              itemType={row.itemType}
+                              sourceLocationId={row.sourceLocationId}
+                              sourceKind={row.sourceKind}
+                              warehouseId={row.warehouseId!}
+                              warehouseName={warehouseNames[row.warehouseId!]}
+                              availableQuantity={row.quantity}
+                              destinations={destinations}
+                              bookStorage={row.bookStorage}
+                              canMintDestination={canMintDestination}
+                              trigger={
+                                <Button size="sm" variant="outline">
+                                  Place
+                                </Button>
+                              }
+                            />
                           ) : (
-                            <span className="text-muted-foreground font-mono text-xs">
-                              {row.warehouseId.slice(0, 8)}…
-                            </span>
-                          )
-                        ) : (
-                          <span className="text-muted-foreground text-sm">—</span>
-                        )}
-                      </td>
-
-                      {/* Actions — History for everyone, Place when permitted.
-                          The em dash in the Source column only ever meant "this
-                          stock did not arrive on a PO"; History is where the rest
-                          of the story (who, when, where from, why) actually lives,
-                          so it must not be hidden behind the place permission. */}
-                      <td className="px-3 py-3">
-                        <div className="flex items-center gap-2">
-                          <ItemHistoryDialog
-                            itemId={row.itemId}
-                            itemName={row.name}
-                            itemSku={row.sku}
-                            trigger={
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                aria-label={`View history for ${row.name}`}
-                              >
-                                <History className="h-4 w-4" />
-                                History
-                              </Button>
-                            }
-                          />
-                          {canPlace &&
-                            (canPlaceRow ? (
-                              <PlaceFromStagingDialog
-                                itemId={row.itemId}
-                                itemName={row.name}
-                                itemType={row.itemType}
-                                sourceLocationId={row.sourceLocationId}
-                                sourceKind={row.sourceKind}
-                                warehouseId={row.warehouseId!}
-                                warehouseName={warehouseNames[row.warehouseId!]}
-                                availableQuantity={row.quantity}
-                                destinations={destinations}
-                                bookStorage={row.bookStorage}
-                                canMintDestination={canMintDestination}
-                                trigger={
-                                  <Button size="sm" variant="outline">
-                                    Place
-                                  </Button>
-                                }
-                              />
-                            ) : (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                disabled
-                                title="No warehouse — cannot place"
-                              >
-                                Place
-                              </Button>
-                            ))}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled
+                              title="No warehouse — cannot place"
+                            >
+                              Place
+                            </Button>
+                          ))}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </div>
       )}
     </div>
   );
 }
 
-// An active-filter chip with its own remove control.
-function FilterChip({ label, onRemove }: { label: string; onRemove: () => void }) {
+/** The quiet label inside a filter select ("PO", "Source", "Age"): the
+ *  filter-trigger recipe's "Label: value" form (DESIGN-SPEC 6.4, 6.21). */
+function FilterSelectLabel({ children }: { children: React.ReactNode }) {
   return (
-    <span className="bg-muted text-foreground inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-xs">
-      {label}
-      <button
-        type="button"
-        onClick={onRemove}
-        aria-label={`Remove filter ${label}`}
-        className="text-muted-foreground hover:text-foreground rounded-full"
-      >
-        <X className="h-3 w-3" />
-      </button>
+    <span aria-hidden className="text-muted-foreground shrink-0">
+      {children}:
     </span>
   );
 }
 
-// Small inline checkbox for row selection — mirrors the inventory table's
-// control so the two pages feel consistent. Disabled rows (no warehouse) can't
-// be bulk-placed.
-function StagingCheckbox({
-  checked,
-  disabled,
-  onChange,
-  label,
-}: {
-  checked: boolean;
-  disabled?: boolean;
-  onChange: () => void;
-  label: string;
-}) {
+// An active-filter chip with its own remove control. The label and the remove
+// button are siblings, never one inside the other.
+function ActiveFilterChip({ label, onRemove }: { label: string; onRemove: () => void }) {
   return (
-    <button
-      type="button"
-      role="checkbox"
-      aria-checked={checked}
-      aria-label={label}
-      disabled={disabled}
-      onClick={onChange}
-      className={cn(
-        'inline-grid h-5 w-5 place-items-center rounded-[5px] border bg-card transition-colors',
-        disabled
-          ? 'cursor-not-allowed border-border opacity-40'
-          : checked
-            ? 'border-foreground bg-foreground'
-            : 'border-[var(--ed-line-strong)]',
-      )}
-    >
-      {checked && !disabled && (
-        <span
-          aria-hidden
-          // CSS-drawn ✓: bottom+RIGHT borders rotated +45° (bottom+LEFT at
-          // -45° mirrors the mark — same fix as inventory-table.tsx).
-          className="h-[11px] w-[6px] -translate-y-px rotate-45 border-b-2 border-r-2 border-background"
-        />
-      )}
-    </button>
+    <span className="text-foreground inline-flex h-7 max-w-full items-center gap-1 rounded-full border border-[var(--ed-line-strong)] bg-transparent pl-2.5 pr-1 text-[12.5px]">
+      <span className="min-w-0 truncate">{label}</span>
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label={`Remove filter ${label}`}
+        className={cn(
+          touchTargetClass,
+          'text-muted-foreground hover:bg-muted hover:text-foreground inline-flex size-5 shrink-0 items-center justify-center rounded-full transition-colors',
+        )}
+      >
+        <X aria-hidden className="h-3 w-3" />
+      </button>
+    </span>
   );
 }

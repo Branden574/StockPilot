@@ -593,7 +593,7 @@ export function BulkPlaceDialog({
         </DialogHeader>
 
         {!singleWarehouse ? (
-          <p className="text-destructive text-sm">
+          <p className="bg-destructive-wash text-destructive rounded-md px-3 py-2 text-[13px]">
             The selected items span multiple warehouses (or have none). Select items from a single
             warehouse to place them together.
           </p>
@@ -638,9 +638,9 @@ export function BulkPlaceDialog({
             ) : (
               <>
                 <div className="space-y-1.5">
-                  <Label>To location</Label>
+                  <Label id="bulk-to-label">To location</Label>
                   <Select value={destId} onValueChange={pickExisting}>
-                    <SelectTrigger>
+                    <SelectTrigger aria-labelledby="bulk-to-label">
                       <SelectValue placeholder="Select destination" />
                     </SelectTrigger>
                     <SelectContent>
@@ -659,7 +659,7 @@ export function BulkPlaceDialog({
                     />
                   )}
                   {selectedDestination?.kind === 'crate' && nonBookCount > 0 && (
-                    <p className="text-muted-foreground text-xs">
+                    <p className="text-muted-foreground text-[12px]">
                       {nonBookCount} of the {rows.length} selected rows{' '}
                       {nonBookCount === 1 ? 'is not a book' : 'are not books'} — no crate is
                       recorded for {nonBookCount === 1 ? 'it' : 'them'}.
@@ -668,8 +668,8 @@ export function BulkPlaceDialog({
                 </div>
 
                 {isNew && (
-                  <div className="space-y-3 rounded-md border p-3">
-                    <p className="text-muted-foreground text-xs">
+                  <div className="border-border space-y-3 rounded-md border p-3">
+                    <p className="text-muted-foreground text-[12px]">
                       The selection includes items that are not books, so a new location here is
                       a rack. Place books on their own to place them into a crate.
                     </p>
@@ -699,7 +699,7 @@ export function BulkPlaceDialog({
 
                     {/* The planner's refusal, said where the fields are — so a
                         disabled Place button always has a stated reason. */}
-                    {newProblem && <p className="text-destructive text-xs">{newProblem}</p>}
+                    {newProblem && <p className="text-destructive text-[12px]">{newProblem}</p>}
                   </div>
                 )}
               </>
@@ -725,10 +725,10 @@ export function BulkPlaceDialog({
           </Button>
           <Button onClick={submit} disabled={!canSubmit}>
             {submitting ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <Loader2 aria-hidden className="h-4 w-4 animate-spin" />
             ) : (
               <>
-                <PackageCheck className="h-4 w-4" /> Place {rows.length}
+                <PackageCheck aria-hidden className="h-4 w-4" /> Place {rows.length}
               </>
             )}
           </Button>
