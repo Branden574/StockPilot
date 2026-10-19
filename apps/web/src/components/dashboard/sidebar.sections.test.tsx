@@ -96,6 +96,11 @@ function linksUnder(label: string): string[] {
     .map((a) => a.textContent ?? '');
 }
 
+/** A link's text without its badge (AI Assistant's Beta, Briefing's New). */
+function withoutBadge(text: string): string {
+  return text.replace(/(Beta|New)$/, '');
+}
+
 beforeEach(() => {
   currentPathname = '/dashboard';
 });
@@ -244,7 +249,9 @@ describe('the sub-categories, per role', () => {
         })}
       />,
     );
-    expect(linksUnder('Fulfillment')).toEqual(['Rentals', 'Bundles', 'Orders', 'Returns']);
+    // Owner-approved preview order 2026-10-19 (the links kept the order they
+    // had in Inventory and Workspace until then).
+    expect(linksUnder('Fulfillment')).toEqual(['Orders', 'Returns', 'Rentals', 'Bundles']);
     expect(linksUnder('Purchasing')).toEqual([
       'Purchase orders',
       'Recurring POs',
@@ -253,14 +260,141 @@ describe('the sub-categories, per role', () => {
       'Suppliers',
     ]);
     // The badges are part of each link's text.
-    expect(linksUnder('Insights').map((t) => t.replace(/(Beta|New)$/, ''))).toEqual([
+    expect(linksUnder('Insights').map(withoutBadge)).toEqual([
       'Reports',
-      'AI Assistant',
       'Briefing',
+      'AI Assistant',
     ]);
     expect(linksUnder('Inventory')).not.toContain('Orders');
     expect(linksUnder('Workspace').some((t) => t.startsWith('AI Assistant'))).toBe(false);
   });
+
+  /**
+   * OWNER DECISION 2026-10-19: the owner approved the "Five groups" preview,
+   * which lists the links inside each group in this order. With nothing saved
+   * by the org, each role's sidebar draws them so, leaving out only the links
+   * the role cannot open.
+   */
+  const PREVIEW_INVENTORY = [
+    'Items',
+    'Books',
+    'Product groups',
+    'Staging',
+    'Exceptions',
+    'Cycle counts',
+    'Movements',
+    'Locations',
+    'Categories',
+    'Tags',
+    'Procedures',
+  ];
+  const PREVIEW_FULFILLMENT = ['Orders', 'Returns', 'Rentals', 'Bundles'];
+  const PREVIEW_PURCHASING = [
+    'Purchase orders',
+    'Recurring POs',
+    'Reorder Planning',
+    'PO imports',
+    'Suppliers',
+  ];
+  const PREVIEW_INSIGHTS = ['Reports', 'Briefing', 'AI Assistant'];
+
+  it.each<[Role, Record<string, string[]>]>([
+    [
+      'admin',
+      {
+        Inventory: PREVIEW_INVENTORY,
+        Fulfillment: PREVIEW_FULFILLMENT,
+        Purchasing: PREVIEW_PURCHASING,
+        Insights: PREVIEW_INSIGHTS,
+        Workspace: [
+          'Schedule',
+          'Notifications',
+          'Team',
+          'Accounts',
+          'Support',
+          'Settings',
+          'Maintenance',
+          'Zendesk',
+        ],
+        Admin: [
+          'Admin overview',
+          'Charters',
+          'Warehouses',
+          'Bins',
+          'Users',
+          'Vendor mappings',
+          'UoM conversions',
+          'Reconciliation',
+          'Audit log',
+        ],
+      },
+    ],
+    [
+      'manager',
+      {
+        Inventory: PREVIEW_INVENTORY,
+        Fulfillment: PREVIEW_FULFILLMENT,
+        Purchasing: PREVIEW_PURCHASING,
+        Insights: PREVIEW_INSIGHTS,
+        Workspace: [
+          'Schedule',
+          'Notifications',
+          'Accounts',
+          'Support',
+          'Settings',
+          'Maintenance',
+          'Zendesk',
+        ],
+        Admin: ['Audit log'],
+      },
+    ],
+    [
+      'staff',
+      {
+        Inventory: [
+          'Items',
+          'Books',
+          'Staging',
+          'Exceptions',
+          'Cycle counts',
+          'Locations',
+          'Categories',
+          'Tags',
+          'Procedures',
+        ],
+        Fulfillment: ['Orders', 'Rentals', 'Bundles'],
+        Purchasing: ['Purchase orders', 'Suppliers'],
+        Insights: PREVIEW_INSIGHTS,
+        Workspace: ['Notifications', 'Support', 'Settings', 'Maintenance', 'Zendesk'],
+      },
+    ],
+    [
+      'viewer',
+      {
+        Inventory: ['Items', 'Books', 'Staging', 'Exceptions', 'Locations', 'Categories'],
+        Fulfillment: ['Orders'],
+        Purchasing: ['Purchase orders', 'Suppliers'],
+        Workspace: ['Notifications', 'Support', 'Settings', 'Maintenance', 'Zendesk'],
+      },
+    ],
+  ])(
+    '%s, every module on: the links inside each section, in the owner-approved preview order',
+    (role, expected) => {
+      render(
+        <Sidebar
+          {...props(role, {
+            enabledModules: ALL_MODULES,
+            collapsedSections: [],
+            onToggleSection: () => {},
+          })}
+        />,
+      );
+      expect(sectionHeaders()).toEqual(Object.keys(expected));
+      for (const [header, links] of Object.entries(expected)) {
+        expect(linksUnder(header).map(withoutBadge), header).toEqual(links);
+      }
+    },
+  );
 
   it.each<[Role, string[]]>([
     ['owner', ['Inventory', 'Insights', 'Workspace', 'Admin']],
@@ -295,6 +429,9 @@ describe('the sub-categories, per role', () => {
     );
     expect(linksUnder('Fulfillment')).toEqual(['Sales orders', 'Rentals', 'Bundles']);
     expect(linksUnder('Inventory')[0]).toBe('Items');
+    // The links the saved list does not name follow in the default order:
+    // the owner-approved preview order 2026-10-19, Books right after Items.
+    expect(linksUnder('Inventory').slice(0, 3)).toEqual(['Items', 'Books', 'Staging']);
   });
 
   it('a custom link saved under a new section is drawn there', () => {

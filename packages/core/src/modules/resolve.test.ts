@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { resolveSurface, SECTION_ORDER } from './resolve';
 import type { Role } from '../constants/roles';
-import { DEFAULT_MODULE_IDS, MODULE_REGISTRY, type ModuleId, type NavSectionKey } from './registry';
+import {
+  DEFAULT_MODULE_IDS,
+  MODULE_REGISTRY,
+  modulesForPack,
+  type DomainPack,
+  type ModuleId,
+  type NavSectionKey,
+} from './registry';
 
 const ALL = new Set(DEFAULT_MODULE_IDS);
 
@@ -161,10 +168,14 @@ describe('resolveSurface', () => {
 //
 // Updated knowingly for the OWNER DECISION of 2026-10-19 (sidebar
 // sub-categories, as in the Claude design): Fulfillment, Purchasing and
-// Insights split out of Inventory and Workspace. No link was added or removed,
-// and every section keeps the relative order its links had before (the last
-// test below proves it against the lists as they were): Reports, which ended
-// Inventory, still sits above AI Assistant and Briefing, which began Workspace.
+// Insights split out of Inventory and Workspace. No link was added or removed
+// (the last test below proves it against the lists as they were).
+//
+// Updated again for the owner-approved preview order 2026-10-19: the owner
+// approved the "Five groups" preview, which also orders the links inside
+// Inventory, Fulfillment, Insights and Workspace (pinned link for link in
+// 'the owner-approved preview order' below). Overview, Purchasing, Tools and
+// Admin keep the order their links had.
 describe('nav order is frozen', () => {
   const sectionsOf = (surface: 'web_sidebar' | 'mobile_drawer') =>
     resolveSurface(surface, { role: 'admin', enabledModules: ALL }).map(
@@ -177,21 +188,25 @@ describe('nav order is frozen', () => {
       [
         'inventory',
         [
+          // Owner-approved preview order 2026-10-19 (the default modules have
+          // no Product groups, which would sit after Books).
           '/dashboard/inventory',
-          '/dashboard/inventory/staging',
-          // Exceptions (sortOrder 7) lands between Staging (5) and Books (20):
-          // the Exception Center is an inventory-oversight surface.
-          '/dashboard/exceptions',
           '/dashboard/books',
+          '/dashboard/inventory/staging',
+          // Exceptions follows Staging: the Exception Center is an
+          // inventory-oversight surface.
+          '/dashboard/exceptions',
+          '/dashboard/cycle-counts',
+          '/dashboard/movements',
+          '/dashboard/locations',
           '/dashboard/categories',
           '/dashboard/tags',
-          '/dashboard/movements',
-          '/dashboard/cycle-counts',
           '/dashboard/procedures',
-          '/dashboard/locations',
         ],
       ],
-      ['fulfillment', ['/dashboard/rentals', '/dashboard/bundles', '/dashboard/orders']],
+      // Owner-approved preview order 2026-10-19 (Returns, off by default,
+      // would sit after Orders).
+      ['fulfillment', ['/dashboard/orders', '/dashboard/rentals', '/dashboard/bundles']],
       [
         'purchasing',
         [
@@ -201,10 +216,12 @@ describe('nav order is frozen', () => {
           '/dashboard/suppliers',
         ],
       ],
-      ['insights', ['/dashboard/reports', '/dashboard/ai', '/dashboard/insights']],
+      // Owner-approved preview order 2026-10-19: Briefing above AI Assistant.
+      ['insights', ['/dashboard/reports', '/dashboard/insights', '/dashboard/ai']],
       [
         'workspace',
         [
+          // Accounts, off by default, would sit between Team and Support.
           '/dashboard/schedule',
           '/dashboard/notifications',
           '/dashboard/team',
@@ -238,21 +255,22 @@ describe('nav order is frozen', () => {
         'inventory',
         [
           // Staging and Exceptions gained native twins (put-away is done on
-          // foot; F1-1), placed where the web sidebar puts them: right after
-          // Items, at sortOrder 5 and 7.
+          // foot; F1-1), placed where the web sidebar puts them: after Books,
+          // in the owner-approved preview order 2026-10-19.
           '/inventory',
+          '/books',
           '/staging',
           '/exceptions',
-          '/books',
+          '/cycle-counts',
+          '/movements',
+          '/locations',
           '/categories',
           '/tags',
-          '/movements',
-          '/cycle-counts',
           '/procedures',
-          '/locations',
         ],
       ],
-      ['fulfillment', ['/rentals', '/bundles', '/orders']],
+      // Owner-approved preview order 2026-10-19.
+      ['fulfillment', ['/orders', '/rentals', '/bundles']],
       // Receive POs (105) leads Purchasing, just above Purchase orders, as it
       // did in the old Inventory section.
       [
@@ -355,13 +373,21 @@ describe('nav order is frozen', () => {
     ],
   } as const;
 
+  // Owner-approved preview order 2026-10-19: this asserted that every section
+  // kept the order its links had. Inventory, Fulfillment, Insights and
+  // Workspace now follow the preview instead, so only the sections it left
+  // alone are held to the old order here.
   it.each(['web_sidebar', 'mobile_drawer'] as const)(
-    '%s: the regroup kept every link, and each section keeps the order its links had',
+    '%s: every link is kept, and Overview, Purchasing, Tools and Admin keep the order their links had',
     (surface) => {
       const before: readonly string[] = BEFORE_REGROUP[surface];
       const sections = sectionsOf(surface);
       expect(sections.flatMap(([, hrefs]) => hrefs).sort()).toEqual([...before].sort());
-      for (const [section, hrefs] of sections) {
+      const unchanged = sections.filter(([section]) =>
+        ['overview', 'purchasing', 'tools', 'admin'].includes(section),
+      );
+      expect(unchanged.length).toBe(surface === 'web_sidebar' ? 3 : 4);
+      for (const [section, hrefs] of unchanged) {
         const places = hrefs.map((href) => before.indexOf(href));
         expect(places, section).toEqual([...places].sort((a, b) => a - b));
       }
@@ -409,6 +435,9 @@ describe('requiresAnyOf (read-or-write nav fallback)', () => {
  * and which links sit in it, for every role. Every module on first (every
  * section a role can hold), then with modules off, where a section left empty
  * is dropped rather than drawn as a bare heading.
+ *
+ * The lists are in the owner-approved preview order 2026-10-19 (they held the
+ * order the links had before the regroup until then).
  */
 describe('sections per role after the regroup', () => {
   const EVERY_MODULE = new Set(Object.keys(MODULE_REGISTRY) as ModuleId[]);
@@ -427,18 +456,18 @@ describe('sections per role after the regroup', () => {
 
   const WEB_INVENTORY = [
     'Items',
-    'Staging',
-    'Exceptions',
     'Books',
     'Product groups',
+    'Staging',
+    'Exceptions',
+    'Cycle counts',
+    'Movements',
+    'Locations',
     'Categories',
     'Tags',
-    'Movements',
-    'Cycle counts',
     'Procedures',
-    'Locations',
   ];
-  const WEB_FULFILLMENT = ['Rentals', 'Bundles', 'Orders', 'Returns'];
+  const WEB_FULFILLMENT = ['Orders', 'Returns', 'Rentals', 'Bundles'];
   const WEB_PURCHASING = [
     'Purchase orders',
     'Recurring POs',
@@ -446,7 +475,7 @@ describe('sections per role after the regroup', () => {
     'PO imports',
     'Suppliers',
   ];
-  const WEB_INSIGHTS = ['Reports', 'AI Assistant', 'Briefing'];
+  const WEB_INSIGHTS = ['Reports', 'Briefing', 'AI Assistant'];
   const WEB_ADMIN = [
     'Admin overview',
     'Charters',
@@ -470,9 +499,9 @@ describe('sections per role after the regroup', () => {
         'Schedule',
         'Notifications',
         'Team',
+        'Accounts',
         'Support',
         'Settings',
-        'Accounts',
         'Maintenance',
         'Zendesk',
       ],
@@ -496,9 +525,9 @@ describe('sections per role after the regroup', () => {
           [
             'Schedule',
             'Notifications',
+            'Accounts',
             'Support',
             'Settings',
-            'Accounts',
             'Maintenance',
             'Zendesk',
           ],
@@ -514,17 +543,17 @@ describe('sections per role after the regroup', () => {
           'inventory',
           [
             'Items',
+            'Books',
             'Staging',
             'Exceptions',
-            'Books',
+            'Cycle counts',
+            'Locations',
             'Categories',
             'Tags',
-            'Cycle counts',
             'Procedures',
-            'Locations',
           ],
         ],
-        ['fulfillment', ['Rentals', 'Bundles', 'Orders']],
+        ['fulfillment', ['Orders', 'Rentals', 'Bundles']],
         ['purchasing', ['Purchase orders', 'Suppliers']],
         ['insights', WEB_INSIGHTS],
         ['workspace', ['Notifications', 'Support', 'Settings', 'Maintenance', 'Zendesk']],
@@ -535,7 +564,7 @@ describe('sections per role after the regroup', () => {
       'viewer',
       [
         ['overview', ['Overview']],
-        ['inventory', ['Items', 'Staging', 'Exceptions', 'Books', 'Categories', 'Locations']],
+        ['inventory', ['Items', 'Books', 'Staging', 'Exceptions', 'Locations', 'Categories']],
         ['fulfillment', ['Orders']],
         ['purchasing', ['Purchase orders', 'Suppliers']],
         ['workspace', ['Notifications', 'Support', 'Settings', 'Maintenance', 'Zendesk']],
@@ -547,15 +576,15 @@ describe('sections per role after the regroup', () => {
 
   const PHONE_INVENTORY = [
     'Items',
+    'Books',
     'Staging',
     'Exceptions',
-    'Books',
+    'Cycle counts',
+    'Movements',
+    'Locations',
     'Categories',
     'Tags',
-    'Movements',
-    'Cycle counts',
     'Procedures',
-    'Locations',
   ];
   const PHONE_PURCHASING = [
     'Receive POs',
@@ -572,7 +601,7 @@ describe('sections per role after the regroup', () => {
     ['insights', ['Reports', 'AI Assistant']],
     [
       'workspace',
-      ['Schedule', 'Notifications', 'Team', 'Settings', 'Accounts', 'Maintenance', 'Zendesk'],
+      ['Schedule', 'Notifications', 'Team', 'Accounts', 'Settings', 'Maintenance', 'Zendesk'],
     ],
     ['tools', ['Scan']],
     [
@@ -603,7 +632,7 @@ describe('sections per role after the regroup', () => {
         ['insights', ['Reports', 'AI Assistant']],
         [
           'workspace',
-          ['Schedule', 'Notifications', 'Settings', 'Accounts', 'Maintenance', 'Zendesk'],
+          ['Schedule', 'Notifications', 'Accounts', 'Settings', 'Maintenance', 'Zendesk'],
         ],
         ['tools', ['Scan']],
         ['admin', ['Audit log']],
@@ -617,17 +646,17 @@ describe('sections per role after the regroup', () => {
           'inventory',
           [
             'Items',
+            'Books',
             'Staging',
             'Exceptions',
-            'Books',
+            'Cycle counts',
+            'Locations',
             'Categories',
             'Tags',
-            'Cycle counts',
             'Procedures',
-            'Locations',
           ],
         ],
-        ['fulfillment', ['Rentals', 'Bundles', 'Orders']],
+        ['fulfillment', ['Orders', 'Rentals', 'Bundles']],
         ['purchasing', ['Receive POs', 'Purchase orders', 'Suppliers']],
         ['insights', ['Reports', 'AI Assistant']],
         ['workspace', ['Notifications', 'Settings', 'Maintenance', 'Zendesk']],
@@ -638,7 +667,7 @@ describe('sections per role after the regroup', () => {
       'viewer',
       [
         ['overview', ['Overview']],
-        ['inventory', ['Items', 'Staging', 'Exceptions', 'Books', 'Categories', 'Locations']],
+        ['inventory', ['Items', 'Books', 'Staging', 'Exceptions', 'Locations', 'Categories']],
         ['fulfillment', ['Orders']],
         ['purchasing', ['Receive POs', 'Purchase orders', 'Suppliers']],
         ['workspace', ['Notifications', 'Settings', 'Maintenance', 'Zendesk']],
@@ -730,4 +759,184 @@ describe('sections per role after the regroup', () => {
       }
     }
   });
+});
+
+/**
+ * OWNER DECISION 2026-10-19: the owner approved the "Five groups" sidebar
+ * preview, which lists the links inside each group in this order. With no
+ * order saved by the org, the web sidebar draws exactly these, and the phone
+ * drawer draws the ones it has in the same order, with its own Receive POs
+ * first in Purchasing and Scan alone in Tools. Overview and Admin are as they
+ * were. (An org's saved order still wins: customization/index.test.ts.)
+ */
+describe('the owner-approved preview order (2026-10-19)', () => {
+  const PREVIEW: Record<NavSectionKey, string[]> = {
+    overview: ['Overview'],
+    inventory: [
+      'Items',
+      'Books',
+      'Product groups',
+      'Staging',
+      'Exceptions',
+      'Cycle counts',
+      'Movements',
+      'Locations',
+      'Categories',
+      'Tags',
+      'Procedures',
+    ],
+    fulfillment: ['Orders', 'Returns', 'Rentals', 'Bundles'],
+    purchasing: ['Purchase orders', 'Recurring POs', 'Reorder Planning', 'PO imports', 'Suppliers'],
+    insights: ['Reports', 'Briefing', 'AI Assistant'],
+    workspace: [
+      'Schedule',
+      'Notifications',
+      'Team',
+      'Accounts',
+      'Support',
+      'Settings',
+      'Maintenance',
+      'Zendesk',
+    ],
+    tools: [],
+    admin: [
+      'Admin overview',
+      'Charters',
+      'Warehouses',
+      'Bins',
+      'Users',
+      'Vendor mappings',
+      'UoM conversions',
+      'Reconciliation',
+      'Audit log',
+    ],
+  };
+  // The phone has no Product groups, Reorder Planning, Briefing, Support or
+  // Reconciliation link; Receive POs and Scan are its own.
+  const PHONE: Record<NavSectionKey, string[]> = {
+    overview: ['Overview'],
+    inventory: [
+      'Items',
+      'Books',
+      'Staging',
+      'Exceptions',
+      'Cycle counts',
+      'Movements',
+      'Locations',
+      'Categories',
+      'Tags',
+      'Procedures',
+    ],
+    fulfillment: ['Orders', 'Returns', 'Rentals', 'Bundles'],
+    purchasing: ['Receive POs', 'Purchase orders', 'Recurring POs', 'PO imports', 'Suppliers'],
+    insights: ['Reports', 'AI Assistant'],
+    workspace: [
+      'Schedule',
+      'Notifications',
+      'Team',
+      'Accounts',
+      'Settings',
+      'Maintenance',
+      'Zendesk',
+    ],
+    tools: ['Scan'],
+    admin: [
+      'Admin overview',
+      'Charters',
+      'Warehouses',
+      'Bins',
+      'Users',
+      'Vendor mappings',
+      'UoM conversions',
+      'Audit log',
+    ],
+  };
+  const PHONE_ONLY = ['Receive POs', 'Scan'];
+
+  type Surface = 'web_sidebar' | 'mobile_drawer';
+  const SURFACES: Surface[] = ['web_sidebar', 'mobile_drawer'];
+  const ROLES: Role[] = ['owner', 'admin', 'manager', 'staff', 'viewer'];
+  const EVERY_MODULE = new Set(Object.keys(MODULE_REGISTRY) as ModuleId[]);
+  const PACKS: DomainPack[] = [
+    'charter_school',
+    'distribution',
+    'agriculture_food',
+    'retail_backroom',
+    'light_3pl',
+  ];
+  const MODULE_SETS: Array<[string, Set<ModuleId>]> = [
+    ['every module', EVERY_MODULE],
+    ['the default modules', new Set(DEFAULT_MODULE_IDS)],
+    ['only the core modules', new Set<ModuleId>()],
+    ...PACKS.map((pack): [string, Set<ModuleId>] => [
+      `the ${pack} pack`,
+      new Set(modulesForPack(pack)),
+    ]),
+  ];
+
+  const previewOf = (surface: Surface) => (surface === 'web_sidebar' ? PREVIEW : PHONE);
+  const drawn = (surface: Surface, role: Role, enabledModules: Set<ModuleId>) =>
+    resolveSurface(surface, { role, enabledModules }).map((s): [NavSectionKey, string[]] => [
+      s.section,
+      s.items.map((i) => i.label),
+    ]);
+
+  it.each(SURFACES)(
+    '%s, admin, every module on: every section is the preview, link for link',
+    (surface) => {
+      const preview = previewOf(surface);
+      expect(drawn(surface, 'admin', EVERY_MODULE)).toEqual(
+        SECTION_ORDER.filter((s) => preview[s].length > 0).map((s) => [s, preview[s]]),
+      );
+    },
+  );
+
+  // A role that sees fewer links sees the preview's own order with the links
+  // it cannot open left out. Which links each role sees is pinned link for
+  // link in 'sections per role after the regroup' above.
+  it.each(
+    (['manager', 'staff', 'viewer'] as const).flatMap((role) =>
+      SURFACES.map((surface): [Role, Surface] => [role, surface]),
+    ),
+  )('%s, %s, every module on: every section keeps the preview order', (role, surface) => {
+    const preview = previewOf(surface);
+    const sections = drawn(surface, role, EVERY_MODULE);
+    expect(sections.length).toBeGreaterThan(3);
+    for (const [section, labels] of sections) {
+      expect(labels, section).toEqual(preview[section].filter((l) => labels.includes(l)));
+    }
+  });
+
+  it('every role and module set draws each section in the preview order', () => {
+    for (const [name, modules] of MODULE_SETS) {
+      for (const role of ROLES) {
+        for (const surface of SURFACES) {
+          const preview = previewOf(surface);
+          for (const [section, labels] of drawn(surface, role, modules)) {
+            expect(labels, `${name}, ${role}, ${surface}, ${section}`).toEqual(
+              preview[section].filter((l) => labels.includes(l)),
+            );
+          }
+        }
+      }
+    }
+  });
+
+  it('the phone keeps the web preview order for every link the two share', () => {
+    for (const section of SECTION_ORDER) {
+      const shared = PHONE[section].filter((label) => !PHONE_ONLY.includes(label));
+      expect(shared, section).toEqual(PREVIEW[section].filter((l) => shared.includes(l)));
+    }
+  });
+
+  // Where the phone's own links land: Receive POs keeps its place at the top
+  // of Purchasing, above Purchase orders, and Scan stays alone in Tools.
+  it.each(ROLES)(
+    'phone drawer, %s, every module on: Receive POs leads Purchasing, Scan is Tools',
+    (role) => {
+      const sections = new Map(drawn('mobile_drawer', role, EVERY_MODULE));
+      expect(sections.get('purchasing')?.[0]).toBe('Receive POs');
+      expect(sections.get('tools')).toEqual(['Scan']);
+    },
+  );
 });

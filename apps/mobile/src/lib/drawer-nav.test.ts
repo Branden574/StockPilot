@@ -77,8 +77,10 @@ describe('the phone drawer headers', () => {
     expect(headersOf(role, EVERY_MODULE)).toEqual(headers);
   });
 
+  // Owner-approved preview order 2026-10-19 (the links kept the order they had
+  // in INVENTORY and WORKSPACE until then).
   it('the links under the three new headers (owner, every module on)', () => {
-    expect(linksUnder('owner', 'FULFILLMENT')).toEqual(['Rentals', 'Bundles', 'Orders', 'Returns']);
+    expect(linksUnder('owner', 'FULFILLMENT')).toEqual(['Orders', 'Returns', 'Rentals', 'Bundles']);
     expect(linksUnder('owner', 'PURCHASING')).toEqual([
       'Receive POs',
       'Purchase orders',
@@ -89,15 +91,15 @@ describe('the phone drawer headers', () => {
     expect(linksUnder('owner', 'INSIGHTS')).toEqual(['Reports', 'AI Assistant']);
     expect(linksUnder('owner', 'INVENTORY')).toEqual([
       'Items',
+      'Books',
       'Staging',
       'Exceptions',
-      'Books',
+      'Cycle counts',
+      'Movements',
+      'Locations',
       'Categories',
       'Tags',
-      'Movements',
-      'Cycle counts',
       'Procedures',
-      'Locations',
     ]);
   });
 
@@ -121,5 +123,121 @@ describe('the phone drawer headers', () => {
     expect(sections.slice(1).map((s) => s.label?.length ?? 0)).not.toContain(0);
     // The phone has a link in every section the registry has.
     expect(sections).toHaveLength(SECTION_ORDER.length);
+  });
+});
+
+/**
+ * OWNER DECISION 2026-10-19: the owner approved the "Five groups" sidebar
+ * preview, which lists the links inside each group in this order. The drawer
+ * draws the preview's links the phone has in that order (it has no Product
+ * groups, Reorder Planning, Briefing or Support link), each role leaving out
+ * only the links it cannot open. The phone's own links keep their places:
+ * Receive POs first in PURCHASING, above Purchase orders, and Scan alone in
+ * TOOLS.
+ */
+describe('the drawer draws the owner-approved preview order', () => {
+  /** Each header (none for Overview) with its links, top to bottom. */
+  type Drawn = [string | undefined, string[]][];
+  const sectionsOf = (role: Role): Drawn =>
+    drawerSectionsFor(role, EVERY_MODULE).map((s) => [s.label, s.items.map((i) => i.label)]);
+
+  const INVENTORY = [
+    'Items',
+    'Books',
+    'Staging',
+    'Exceptions',
+    'Cycle counts',
+    'Movements',
+    'Locations',
+    'Categories',
+    'Tags',
+    'Procedures',
+  ];
+  const FULFILLMENT = ['Orders', 'Returns', 'Rentals', 'Bundles'];
+  const PURCHASING = ['Receive POs', 'Purchase orders', 'Recurring POs', 'PO imports', 'Suppliers'];
+
+  it.each<[Role, Drawn]>([
+    [
+      'admin',
+      [
+        [undefined, ['Overview']],
+        ['INVENTORY', INVENTORY],
+        ['FULFILLMENT', FULFILLMENT],
+        ['PURCHASING', PURCHASING],
+        ['INSIGHTS', ['Reports', 'AI Assistant']],
+        [
+          'WORKSPACE',
+          ['Schedule', 'Notifications', 'Team', 'Accounts', 'Settings', 'Maintenance', 'Zendesk'],
+        ],
+        ['TOOLS', ['Scan']],
+        [
+          'ADMIN',
+          [
+            'Admin overview',
+            'Charters',
+            'Warehouses',
+            'Bins',
+            'Users',
+            'Vendor mappings',
+            'UoM conversions',
+            'Audit log',
+          ],
+        ],
+      ],
+    ],
+    [
+      'manager',
+      [
+        [undefined, ['Overview']],
+        ['INVENTORY', INVENTORY],
+        ['FULFILLMENT', FULFILLMENT],
+        ['PURCHASING', PURCHASING],
+        ['INSIGHTS', ['Reports', 'AI Assistant']],
+        [
+          'WORKSPACE',
+          ['Schedule', 'Notifications', 'Accounts', 'Settings', 'Maintenance', 'Zendesk'],
+        ],
+        ['TOOLS', ['Scan']],
+        ['ADMIN', ['Audit log']],
+      ],
+    ],
+    [
+      'staff',
+      [
+        [undefined, ['Overview']],
+        [
+          'INVENTORY',
+          [
+            'Items',
+            'Books',
+            'Staging',
+            'Exceptions',
+            'Cycle counts',
+            'Locations',
+            'Categories',
+            'Tags',
+            'Procedures',
+          ],
+        ],
+        ['FULFILLMENT', ['Orders', 'Rentals', 'Bundles']],
+        ['PURCHASING', ['Receive POs', 'Purchase orders', 'Suppliers']],
+        ['INSIGHTS', ['Reports', 'AI Assistant']],
+        ['WORKSPACE', ['Notifications', 'Settings', 'Maintenance', 'Zendesk']],
+        ['TOOLS', ['Scan']],
+      ],
+    ],
+    [
+      'viewer',
+      [
+        [undefined, ['Overview']],
+        ['INVENTORY', ['Items', 'Books', 'Staging', 'Exceptions', 'Locations', 'Categories']],
+        ['FULFILLMENT', ['Orders']],
+        ['PURCHASING', ['Receive POs', 'Purchase orders', 'Suppliers']],
+        ['WORKSPACE', ['Notifications', 'Settings', 'Maintenance', 'Zendesk']],
+        ['TOOLS', ['Scan']],
+      ],
+    ],
+  ])('%s, every module on: every header and its links, in the preview order', (role, expected) => {
+    expect(sectionsOf(role)).toEqual(expected);
   });
 });

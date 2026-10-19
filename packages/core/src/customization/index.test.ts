@@ -276,10 +276,11 @@ describe('applyNavOverrides after the 2026-10-19 regroup', () => {
     });
     expect(linksOf(out, 'fulfillment')).toEqual([
       '/dashboard/orders',
-      // Not in the list: after it, in default order, as they were.
+      // Not in the list: after it, in default order (owner-approved preview
+      // order 2026-10-19: Orders, Returns, Rentals, Bundles).
+      '/dashboard/returns',
       '/dashboard/rentals',
       '/dashboard/bundles',
-      '/dashboard/returns',
     ]);
     expect(linksOf(out, 'inventory')?.[0]).toBe('/dashboard/inventory');
     // Orders is in Fulfillment only: the moved link is skipped in Inventory.
@@ -335,6 +336,11 @@ describe('applyNavOverrides after the 2026-10-19 regroup', () => {
       '/dashboard/maintenance',
       '/dashboard/zendesk',
     ]);
+    // The saved lists still win over the default order, which differs from
+    // them in these sections since the owner-approved preview order 2026-10-19.
+    for (const section of ['inventory', 'fulfillment', 'workspace']) {
+      expect(linksOf(out, section), section).not.toEqual(linksOf(sidebar(), section));
+    }
   });
 
   it('Insights from a saved Workspace list alone: Reports still leads, then the saved order', () => {
@@ -350,15 +356,17 @@ describe('applyNavOverrides after the 2026-10-19 regroup', () => {
     expect(linksOf(out, 'workspace')?.[0]).toBe('/dashboard/schedule');
   });
 
-  it('Insights from a saved Inventory list alone: Reports, then AI Assistant and Briefing in default order', () => {
+  // Owner-approved preview order 2026-10-19: the default order puts Briefing
+  // above AI Assistant (it was AI Assistant, then Briefing).
+  it('Insights from a saved Inventory list alone: Reports, then Briefing and AI Assistant in default order', () => {
     const out = applyNavOverrides(sidebar(), {
       v: 1,
       order: { inventory: ['/dashboard/reports', '/dashboard/inventory'] },
     });
     expect(linksOf(out, 'insights')).toEqual([
       '/dashboard/reports',
-      '/dashboard/ai',
       '/dashboard/insights',
+      '/dashboard/ai',
     ]);
   });
 
@@ -371,11 +379,13 @@ describe('applyNavOverrides after the 2026-10-19 regroup', () => {
         insights: ['/dashboard/ai'],
       },
     });
+    // The links the list does not name follow in default order (owner-approved
+    // preview order 2026-10-19: Orders above Rentals).
     expect(linksOf(out, 'fulfillment')).toEqual([
       '/dashboard/bundles',
       '/dashboard/returns',
-      '/dashboard/rentals',
       '/dashboard/orders',
+      '/dashboard/rentals',
     ]);
     expect(linksOf(out, 'insights')).toEqual([
       '/dashboard/ai',
@@ -404,6 +414,66 @@ describe('applyNavOverrides after the 2026-10-19 regroup', () => {
         );
       }
     }
+  });
+
+  // Owner-approved preview order 2026-10-19: a saved list still comes first,
+  // and every link it does not name follows in the new default order, both in
+  // a section's own list and in the old lists a new section carries over.
+  it('links a saved list does not name follow in the new default order', () => {
+    const out = applyNavOverrides(sidebar(), {
+      v: 1,
+      order: {
+        // Saved before the regroup, naming a few links only.
+        inventory: ['/dashboard/tags', '/dashboard/orders'],
+        workspace: ['/dashboard/settings'],
+        // Saved after it.
+        purchasing: ['/dashboard/suppliers'],
+      },
+    });
+    expect(linksOf(out, 'inventory')).toEqual([
+      '/dashboard/tags',
+      '/dashboard/inventory',
+      '/dashboard/books',
+      '/dashboard/product-groups',
+      '/dashboard/inventory/staging',
+      '/dashboard/exceptions',
+      '/dashboard/cycle-counts',
+      '/dashboard/movements',
+      '/dashboard/locations',
+      '/dashboard/categories',
+      '/dashboard/procedures',
+    ]);
+    // Carried over from the Inventory list: Orders first, then the rest.
+    expect(linksOf(out, 'fulfillment')).toEqual([
+      '/dashboard/orders',
+      '/dashboard/returns',
+      '/dashboard/rentals',
+      '/dashboard/bundles',
+    ]);
+    // Its own list, not the Inventory one it came from.
+    expect(linksOf(out, 'purchasing')).toEqual([
+      '/dashboard/suppliers',
+      '/dashboard/purchase-orders',
+      '/dashboard/purchase-orders/recurring',
+      '/dashboard/planning',
+      '/dashboard/purchase-orders/imports',
+    ]);
+    // Neither old list names an Insights link.
+    expect(linksOf(out, 'insights')).toEqual([
+      '/dashboard/reports',
+      '/dashboard/insights',
+      '/dashboard/ai',
+    ]);
+    expect(linksOf(out, 'workspace')).toEqual([
+      '/dashboard/settings',
+      '/dashboard/schedule',
+      '/dashboard/notifications',
+      '/dashboard/team',
+      '/dashboard/customers',
+      '/dashboard/support',
+      '/dashboard/maintenance',
+      '/dashboard/zendesk',
+    ]);
   });
 
   it('hidden and renamed moved links still apply, by href, in their new sections', () => {

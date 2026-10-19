@@ -2,10 +2,12 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  applyNavOverrides,
   MODULE_REGISTRY,
   resolveSurface,
   type ModuleId,
   type NavOverrides,
+  type NavSectionKey,
 } from '@stockpilot/core';
 
 /**
@@ -32,10 +34,15 @@ import { setNavOverridesAction } from '@/server/actions/nav-settings';
 
 import { NavCustomizer } from './nav-customizer';
 
+/** The admin's sidebar before the org's own changes, every module on. */
+function adminSidebar() {
+  const enabledModules = new Set(Object.keys(MODULE_REGISTRY) as ModuleId[]);
+  return resolveSurface('web_sidebar', { role: 'admin', enabledModules });
+}
+
 /** What the page hands the editor: the admin's sidebar, every module on. */
 function baseSections() {
-  const enabledModules = new Set(Object.keys(MODULE_REGISTRY) as ModuleId[]);
-  return resolveSurface('web_sidebar', { role: 'admin', enabledModules }).map((sec) => ({
+  return adminSidebar().map((sec) => ({
     section: sec.section,
     items: sec.items.map((it) => ({
       href: it.href,
@@ -45,6 +52,18 @@ function baseSections() {
     })),
   }));
 }
+
+/** Each section's panel title in the editor. */
+const TITLES: Record<NavSectionKey, string> = {
+  overview: 'Overview',
+  inventory: 'Inventory',
+  fulfillment: 'Fulfillment',
+  purchasing: 'Purchasing',
+  insights: 'Insights',
+  workspace: 'Workspace',
+  tools: 'Tools',
+  admin: 'Admin',
+};
 
 /** An order saved from this editor before the regroup: whole sections. */
 const OLD_ORDER = {
@@ -121,7 +140,22 @@ describe('Settings > Navigation shows the sections the sidebar has', () => {
       'Admin',
       'Add custom link',
     ]);
-    expect(linksIn('Fulfillment')).toEqual(['Rentals', 'Bundles', 'Orders', 'Returns']);
+    // Owner-approved preview order 2026-10-19 (the links kept the order they
+    // had in Inventory and Workspace until then).
+    expect(linksIn('Inventory')).toEqual([
+      'Items',
+      'Books',
+      'Product groups',
+      'Staging',
+      'Exceptions',
+      'Cycle counts',
+      'Movements',
+      'Locations',
+      'Categories',
+      'Tags',
+      'Procedures',
+    ]);
+    expect(linksIn('Fulfillment')).toEqual(['Orders', 'Returns', 'Rentals', 'Bundles']);
     expect(linksIn('Purchasing')).toEqual([
       'Purchase orders',
       'Recurring POs',
@@ -129,13 +163,54 @@ describe('Settings > Navigation shows the sections the sidebar has', () => {
       'PO imports',
       'Suppliers',
     ]);
-    expect(linksIn('Insights')).toEqual(['Reports', 'AI Assistant', 'Briefing']);
+    expect(linksIn('Insights')).toEqual(['Reports', 'Briefing', 'AI Assistant']);
+    expect(linksIn('Workspace')).toEqual([
+      'Schedule',
+      'Notifications',
+      'Team',
+      'Accounts',
+      'Support',
+      'Settings',
+      'Maintenance',
+      'Zendesk',
+    ]);
     expect(linksIn('Inventory')).not.toContain('Orders');
   });
 
   it('with nothing saved, saving without a change saves nothing (null)', async () => {
     render(<NavCustomizer baseSections={baseSections()} initialOverrides={null} />);
     expect(await save()).toBeNull();
+  });
+});
+
+/**
+ * The editor opens on the order the sidebar draws: with nothing saved, the
+ * owner-approved preview order 2026-10-19; with a saved order, the sidebar's
+ * own rule (the saved list first, the links it does not name after it in the
+ * default order). An admin never sees one order here and another there.
+ */
+describe('the editor opens in the order the sidebar draws', () => {
+  it.each<[string, NavOverrides | null]>([
+    ['nothing saved', null],
+    ['an order saved before the regroup', { v: 1, order: OLD_ORDER }],
+    [
+      'lists that name only a few links',
+      {
+        v: 1,
+        order: {
+          inventory: ['/dashboard/tags', '/dashboard/orders'],
+          workspace: ['/dashboard/settings'],
+          purchasing: ['/dashboard/suppliers'],
+        },
+      },
+    ],
+  ])('%s', (_name, overrides) => {
+    render(<NavCustomizer baseSections={baseSections()} initialOverrides={overrides} />);
+    const sidebar = applyNavOverrides(adminSidebar(), overrides);
+    expect(panelTitles()).toEqual([...sidebar.map((s) => TITLES[s.section]), 'Add custom link']);
+    for (const sec of sidebar) {
+      expect(linksIn(TITLES[sec.section]), sec.section).toEqual(sec.items.map((i) => i.label));
+    }
   });
 });
 
@@ -170,7 +245,7 @@ describe('an order saved before the regroup', () => {
     expect(linksIn('Insights')).toEqual(['Reports', 'Briefing', 'AI Assistant']);
   });
 
-  it('saving it untouched writes an order per new section and an Inventory list of its own links', async () => {
+  it('saving it untouched writes a list for each section not in its default order, Inventory naming only its own links', async () => {
     render(
       <NavCustomizer baseSections={baseSections()} initialOverrides={{ v: 1, order: OLD_ORDER }} />,
     );
@@ -195,25 +270,50 @@ describe('an order saved before the regroup', () => {
         '/dashboard/bundles',
         '/dashboard/returns',
       ],
-      // Purchasing and Workspace came out in their default order, so they
-      // need no list: with none saved, each is drawn in default order.
-      insights: ['/dashboard/reports', '/dashboard/insights', '/dashboard/ai'],
+      // Owner-approved preview order 2026-10-19: the default order now puts
+      // Accounts above Support and Settings, where this org saved it below,
+      // so Workspace keeps its list. Purchasing and Insights come out in
+      // their default order (Briefing above AI Assistant, as saved here), so
+      // they need no list: with none saved, each is drawn in default order.
+      workspace: [
+        '/dashboard/schedule',
+        '/dashboard/notifications',
+        '/dashboard/team',
+        '/dashboard/support',
+        '/dashboard/settings',
+        '/dashboard/customers',
+        '/dashboard/maintenance',
+        '/dashboard/zendesk',
+      ],
     });
+    // And the sidebar then draws every section as the editor showed it.
+    const shown = Object.fromEntries(
+      baseSections().map((s) => [s.section, linksIn(TITLES[s.section])]),
+    );
+    for (const sec of applyNavOverrides(adminSidebar(), saved)) {
+      expect(
+        sec.items.map((i) => i.label),
+        sec.section,
+      ).toEqual(shown[sec.section]);
+    }
   });
 
+  // Owner-approved preview order 2026-10-19: Orders now leads Fulfillment,
+  // so this moves Bundles up instead of Orders.
   it('a link moved in a new section saves that section in its new order', async () => {
     render(<NavCustomizer baseSections={baseSections()} initialOverrides={null} />);
     const fulfillment = within(screen.getByRole('region', { name: 'Fulfillment' }));
-    fireEvent.click(fulfillment.getByRole('button', { name: 'Move Orders up' }));
-    fireEvent.click(fulfillment.getByRole('button', { name: 'Move Orders up' }));
-    expect(linksIn('Fulfillment')).toEqual(['Orders', 'Rentals', 'Bundles', 'Returns']);
+    expect(fulfillment.getByRole('button', { name: 'Move Orders up' })).toBeDisabled();
+    fireEvent.click(fulfillment.getByRole('button', { name: 'Move Bundles up' }));
+    fireEvent.click(fulfillment.getByRole('button', { name: 'Move Bundles up' }));
+    expect(linksIn('Fulfillment')).toEqual(['Orders', 'Bundles', 'Returns', 'Rentals']);
     const saved = await save();
     expect(saved?.order).toEqual({
       fulfillment: [
         '/dashboard/orders',
-        '/dashboard/rentals',
         '/dashboard/bundles',
         '/dashboard/returns',
+        '/dashboard/rentals',
       ],
     });
   });

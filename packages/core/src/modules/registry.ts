@@ -56,6 +56,12 @@ export interface NavPlacement {
   href: string;
   /** lucide icon name as a string (e.g. 'Boxes' on web, 'Box' on mobile). */
   iconName: string;
+  /**
+   * Place within its section, lowest first: only links in the same section
+   * are compared. Each section's default order is the "Five groups" preview
+   * the owner approved on 2026-10-19; an org's saved order (Settings >
+   * Navigation, customization/index.ts) still comes first.
+   */
   defaultSortOrder: number;
   /** Permission required to show this placement. Omitted = everyone. */
   requires?: Permission;
@@ -121,7 +127,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     defaultOnFor: [],
     placements: [
       { surface: 'web_sidebar', section: 'inventory', label: 'Items', href: '/dashboard/inventory', iconName: 'Boxes', defaultSortOrder: 0, requires: 'items:read' },
-      { surface: 'web_sidebar', section: 'inventory', label: 'Staging', href: '/dashboard/inventory/staging', iconName: 'LayoutList', defaultSortOrder: 5, requires: 'items:read' },
+      { surface: 'web_sidebar', section: 'inventory', label: 'Staging', href: '/dashboard/inventory/staging', iconName: 'LayoutList', defaultSortOrder: 30, requires: 'items:read' },
       // EXCEPTIONS sits in the inventory section rather than becoming its own
       // module: it owns no tables and is a pure derived read over inventory,
       // locations and reservations, so a module toggle would gate a view of
@@ -137,19 +143,19 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
       // is an inventory fact already visible on the item pages, and the people best
       // placed to act on "this rack label is wrong" are the staff walking the racks,
       // not only managers. Read-only, no new permission, so no pgTAP bump in 0207.
-      { surface: 'web_sidebar', section: 'inventory', label: 'Exceptions', href: '/dashboard/exceptions', iconName: 'AlertTriangle', defaultSortOrder: 7, requires: 'items:read' },
-      { surface: 'web_sidebar', section: 'inventory', label: 'Tags', href: '/dashboard/tags', iconName: 'Tags', defaultSortOrder: 40, requires: 'items:update' },
+      { surface: 'web_sidebar', section: 'inventory', label: 'Exceptions', href: '/dashboard/exceptions', iconName: 'AlertTriangle', defaultSortOrder: 40, requires: 'items:read' },
+      { surface: 'web_sidebar', section: 'inventory', label: 'Tags', href: '/dashboard/tags', iconName: 'Tags', defaultSortOrder: 90, requires: 'items:update' },
       { surface: 'mobile_drawer', section: 'inventory', label: 'Items', href: '/inventory', iconName: 'Box', defaultSortOrder: 0, mobileTabEligible: true, requires: 'items:read' },
       // Native twin of the web Staging page — same section, same sort order,
       // same 'items:read' gate, so the phone's drawer mirrors the sidebar.
       // Put-away is done on foot; it used to be desk-only.
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Staging', href: '/staging', iconName: 'LayoutList', defaultSortOrder: 5, requires: 'items:read' },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Staging', href: '/staging', iconName: 'LayoutList', defaultSortOrder: 30, requires: 'items:read' },
       // Native twin of the web Exceptions page (F1-1): same section, sort order,
       // icon and 'items:read' gate as its web_sidebar placement above, so the
       // phone's drawer mirrors the sidebar. Acknowledging and adding notes are
       // gated inside the screen (stock:adjust + warehouse write), not here.
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Exceptions', href: '/exceptions', iconName: 'AlertTriangle', defaultSortOrder: 7, requires: 'items:read' },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Tags', href: '/tags', iconName: 'Tags', defaultSortOrder: 40, requires: 'items:update' },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Exceptions', href: '/exceptions', iconName: 'AlertTriangle', defaultSortOrder: 40, requires: 'items:read' },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Tags', href: '/tags', iconName: 'Tags', defaultSortOrder: 90, requires: 'items:update' },
     ],
   },
   movements: {
@@ -163,8 +169,8 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     ownsTables: ['stock_movements'],
     defaultOnFor: [],
     placements: [
-      { surface: 'web_sidebar', section: 'inventory', label: 'Movements', href: '/dashboard/movements', iconName: 'ArrowLeftRight', defaultSortOrder: 50, requires: 'activity_logs:read' },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Movements', href: '/movements', iconName: 'ArrowLeftRight', defaultSortOrder: 50, requires: 'activity_logs:read' },
+      { surface: 'web_sidebar', section: 'inventory', label: 'Movements', href: '/dashboard/movements', iconName: 'ArrowLeftRight', defaultSortOrder: 60, requires: 'activity_logs:read' },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Movements', href: '/movements', iconName: 'ArrowLeftRight', defaultSortOrder: 60, requires: 'activity_logs:read' },
     ],
   },
   categories: {
@@ -178,8 +184,8 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     ownsTables: ['categories'],
     defaultOnFor: [],
     placements: [
-      { surface: 'web_sidebar', section: 'inventory', label: 'Categories', href: '/dashboard/categories', iconName: 'Tag', defaultSortOrder: 30, requires: 'categories:read' },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Categories', href: '/categories', iconName: 'Tag', defaultSortOrder: 30, requires: 'categories:read' },
+      { surface: 'web_sidebar', section: 'inventory', label: 'Categories', href: '/dashboard/categories', iconName: 'Tag', defaultSortOrder: 80, requires: 'categories:read' },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Categories', href: '/categories', iconName: 'Tag', defaultSortOrder: 80, requires: 'categories:read' },
     ],
   },
   locations: {
@@ -193,10 +199,10 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     ownsTables: ['locations', 'warehouses', 'bins'],
     defaultOnFor: [],
     placements: [
-      { surface: 'web_sidebar', section: 'inventory', label: 'Locations', href: '/dashboard/locations', iconName: 'MapPin', defaultSortOrder: 130, requires: 'locations:read' },
+      { surface: 'web_sidebar', section: 'inventory', label: 'Locations', href: '/dashboard/locations', iconName: 'MapPin', defaultSortOrder: 70, requires: 'locations:read' },
       { surface: 'web_sidebar', section: 'admin', label: 'Warehouses', href: '/dashboard/admin/warehouses', iconName: 'Warehouse', defaultSortOrder: 20, requiresAdmin: true },
       { surface: 'web_sidebar', section: 'admin', label: 'Bins', href: '/dashboard/admin/bins', iconName: 'MapPin', defaultSortOrder: 30, requiresAdmin: true },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Locations', href: '/locations', iconName: 'MapPin', defaultSortOrder: 130, requires: 'locations:read' },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Locations', href: '/locations', iconName: 'MapPin', defaultSortOrder: 70, requires: 'locations:read' },
       { surface: 'mobile_drawer', section: 'admin', label: 'Warehouses', href: '/admin/warehouses', iconName: 'Warehouse', defaultSortOrder: 20, requiresAdmin: true },
       { surface: 'mobile_drawer', section: 'admin', label: 'Bins', href: '/admin/bins', iconName: 'MapPin', defaultSortOrder: 30, requiresAdmin: true },
     ],
@@ -212,8 +218,8 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     ownsTables: [],
     defaultOnFor: [],
     placements: [
-      // First in Insights, above AI Assistant and Briefing (160, 161), as it sat
-      // above them when it ended Inventory and they began Workspace.
+      // First in Insights, above Briefing (160) and AI Assistant (170): the
+      // order of the "Five groups" preview the owner approved on 2026-10-19.
       { surface: 'web_sidebar', section: 'insights', label: 'Reports', href: '/dashboard/reports', iconName: 'BarChart3', defaultSortOrder: 150, requires: 'reports:read' },
       { surface: 'mobile_drawer', section: 'insights', label: 'Reports', href: '/reports', iconName: 'BarChart3', defaultSortOrder: 150, requires: 'reports:read' },
     ],
@@ -261,8 +267,8 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     ownsTables: ['organizations'],
     defaultOnFor: [],
     placements: [
-      { surface: 'web_sidebar', section: 'workspace', label: 'Settings', href: '/dashboard/settings', iconName: 'Cog', defaultSortOrder: 40 },
-      { surface: 'mobile_drawer', section: 'workspace', label: 'Settings', href: '/settings', iconName: 'Cog', defaultSortOrder: 40 },
+      { surface: 'web_sidebar', section: 'workspace', label: 'Settings', href: '/dashboard/settings', iconName: 'Cog', defaultSortOrder: 60 },
+      { surface: 'mobile_drawer', section: 'workspace', label: 'Settings', href: '/settings', iconName: 'Cog', defaultSortOrder: 60 },
     ],
   },
   admin_tools: {
@@ -341,9 +347,9 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     ownsTables: [],
     defaultOnFor: [],
     placements: [
-      // Web-only for now — the native surface ships separately. sortOrder 35
-      // slots between Team (30) and Settings (40) in the workspace section.
-      { surface: 'web_sidebar', section: 'workspace', label: 'Support', href: '/dashboard/support', iconName: 'LifeBuoy', defaultSortOrder: 35 },
+      // Web-only for now — the native surface ships separately. sortOrder 50
+      // slots between Accounts (40) and Settings (60) in the workspace section.
+      { surface: 'web_sidebar', section: 'workspace', label: 'Support', href: '/dashboard/support', iconName: 'LifeBuoy', defaultSortOrder: 50 },
     ],
   },
 
@@ -359,8 +365,8 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     ownsTables: [],
     defaultOnFor: ['charter_school'],
     placements: [
-      { surface: 'web_sidebar', section: 'inventory', label: 'Books', href: '/dashboard/books', iconName: 'BookOpen', defaultSortOrder: 20, requires: 'items:read' },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Books', href: '/books', iconName: 'BookOpen', defaultSortOrder: 20, mobileTabEligible: true, requires: 'items:read' },
+      { surface: 'web_sidebar', section: 'inventory', label: 'Books', href: '/dashboard/books', iconName: 'BookOpen', defaultSortOrder: 10, requires: 'items:read' },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Books', href: '/books', iconName: 'BookOpen', defaultSortOrder: 10, mobileTabEligible: true, requires: 'items:read' },
     ],
   },
   rentals: {
@@ -378,8 +384,8 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     // rentals:create/manage at the page level. Staff/manager/admin hold
     // rentals:read by default (mirrored from rentals:create) — zero change.
     placements: [
-      { surface: 'web_sidebar', section: 'fulfillment', label: 'Rentals', href: '/dashboard/rentals', iconName: 'PackageOpen', defaultSortOrder: 60, requiresAnyOf: ['rentals:read', 'rentals:create'] },
-      { surface: 'mobile_drawer', section: 'fulfillment', label: 'Rentals', href: '/rentals', iconName: 'PackageOpen', defaultSortOrder: 60, requiresAnyOf: ['rentals:read', 'rentals:create'] },
+      { surface: 'web_sidebar', section: 'fulfillment', label: 'Rentals', href: '/dashboard/rentals', iconName: 'PackageOpen', defaultSortOrder: 80, requiresAnyOf: ['rentals:read', 'rentals:create'] },
+      { surface: 'mobile_drawer', section: 'fulfillment', label: 'Rentals', href: '/rentals', iconName: 'PackageOpen', defaultSortOrder: 80, requiresAnyOf: ['rentals:read', 'rentals:create'] },
     ],
   },
   bundles: {
@@ -393,8 +399,8 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     ownsTables: ['bundles', 'bundle_lines', 'bundle_distributions'],
     defaultOnFor: ['charter_school', 'distribution'],
     placements: [
-      { surface: 'web_sidebar', section: 'fulfillment', label: 'Bundles', href: '/dashboard/bundles', iconName: 'Package', defaultSortOrder: 70, requiresAnyOf: ['bundles:read', 'bundles:distribute'] },
-      { surface: 'mobile_drawer', section: 'fulfillment', label: 'Bundles', href: '/bundles', iconName: 'Package', defaultSortOrder: 70, requiresAnyOf: ['bundles:read', 'bundles:distribute'] },
+      { surface: 'web_sidebar', section: 'fulfillment', label: 'Bundles', href: '/dashboard/bundles', iconName: 'Package', defaultSortOrder: 90, requiresAnyOf: ['bundles:read', 'bundles:distribute'] },
+      { surface: 'mobile_drawer', section: 'fulfillment', label: 'Bundles', href: '/bundles', iconName: 'Package', defaultSortOrder: 90, requiresAnyOf: ['bundles:read', 'bundles:distribute'] },
     ],
   },
   orders: {
@@ -408,8 +414,8 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     ownsTables: ['order_requests', 'order_request_lines', 'stock_reservations'],
     defaultOnFor: ['charter_school', 'distribution', 'light_3pl'],
     placements: [
-      { surface: 'web_sidebar', section: 'fulfillment', label: 'Orders', href: '/dashboard/orders', iconName: 'ShoppingCart', defaultSortOrder: 80, requires: 'orders:request' },
-      { surface: 'mobile_drawer', section: 'fulfillment', label: 'Orders', href: '/orders', iconName: 'ShoppingCart', defaultSortOrder: 80, requires: 'orders:request' },
+      { surface: 'web_sidebar', section: 'fulfillment', label: 'Orders', href: '/dashboard/orders', iconName: 'ShoppingCart', defaultSortOrder: 60, requires: 'orders:request' },
+      { surface: 'mobile_drawer', section: 'fulfillment', label: 'Orders', href: '/orders', iconName: 'ShoppingCart', defaultSortOrder: 60, requires: 'orders:request' },
     ],
   },
   cycle_counts: {
@@ -423,8 +429,8 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     ownsTables: ['cycle_counts', 'cycle_count_lines'],
     defaultOnFor: ['charter_school', 'distribution', 'agriculture_food', 'retail_backroom', 'light_3pl'],
     placements: [
-      { surface: 'web_sidebar', section: 'inventory', label: 'Cycle counts', href: '/dashboard/cycle-counts', iconName: 'ClipboardCheck', defaultSortOrder: 90, requiresAnyOf: ['cycle_counts:read', 'stock:adjust'] },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Cycle counts', href: '/cycle-counts', iconName: 'ClipboardCheck', defaultSortOrder: 90, requiresAnyOf: ['cycle_counts:read', 'stock:adjust'] },
+      { surface: 'web_sidebar', section: 'inventory', label: 'Cycle counts', href: '/dashboard/cycle-counts', iconName: 'ClipboardCheck', defaultSortOrder: 50, requiresAnyOf: ['cycle_counts:read', 'stock:adjust'] },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Cycle counts', href: '/cycle-counts', iconName: 'ClipboardCheck', defaultSortOrder: 50, requiresAnyOf: ['cycle_counts:read', 'stock:adjust'] },
     ],
   },
   procedures: {
@@ -537,13 +543,12 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     ownsTables: [],
     defaultOnFor: ['charter_school'],
     // In Insights since the 2026-10-19 regroup (they began Workspace before,
-    // at 0 and 1). 160 and 161 keep them below Reports (150) and AI Assistant
-    // above Briefing: the order they were drawn in when Reports ended
-    // Inventory just above them.
+    // at 0 and 1). Briefing (160), then AI Assistant (170), below Reports
+    // (150): the order of the preview the owner approved on 2026-10-19.
     placements: [
-      { surface: 'web_sidebar', section: 'insights', label: 'AI Assistant', href: '/dashboard/ai', iconName: 'Sparkles', defaultSortOrder: 160, requires: 'items:update', badge: 'Beta' },
-      { surface: 'web_sidebar', section: 'insights', label: 'Briefing', href: '/dashboard/insights', iconName: 'Sparkles', defaultSortOrder: 161, requires: 'items:update', badge: 'New' },
-      { surface: 'mobile_drawer', section: 'insights', label: 'AI Assistant', href: '/ai', iconName: 'Sparkles', defaultSortOrder: 160, requires: 'items:update' },
+      { surface: 'web_sidebar', section: 'insights', label: 'AI Assistant', href: '/dashboard/ai', iconName: 'Sparkles', defaultSortOrder: 170, requires: 'items:update', badge: 'Beta' },
+      { surface: 'web_sidebar', section: 'insights', label: 'Briefing', href: '/dashboard/insights', iconName: 'Sparkles', defaultSortOrder: 160, requires: 'items:update', badge: 'New' },
+      { surface: 'mobile_drawer', section: 'insights', label: 'AI Assistant', href: '/ai', iconName: 'Sparkles', defaultSortOrder: 170, requires: 'items:update' },
     ],
   },
   public_requests: {
@@ -607,16 +612,16 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     // placement is module-derived: it only renders when the org has the
     // off-by-default `returns` module enabled AND the role holds
     // `returns:manage` (resolveSurface filters on both), mirroring how other
-    // optional modules surface their nav. Sits just after Orders (80) in the
+    // optional modules surface their nav. Sits just after Orders (60) in the
     // Fulfillment section.
     defaultOnFor: [],
     // Returns RX-1: the phone has its own list (app/(drawer)/returns.tsx) and
     // RMA workbench (app/returns/[id].tsx), so the drawer carries the entry
     // too, gated exactly like the sidebar (module on, returns:read or
-    // returns:manage). Sits just after Orders (80) in Fulfillment.
+    // returns:manage). Sits just after Orders (60) in Fulfillment.
     placements: [
-      { surface: 'web_sidebar', section: 'fulfillment', label: 'Returns', href: '/dashboard/returns', iconName: 'Undo2', defaultSortOrder: 85, requiresAnyOf: ['returns:read', 'returns:manage'] },
-      { surface: 'mobile_drawer', section: 'fulfillment', label: 'Returns', href: '/returns', iconName: 'Undo2', defaultSortOrder: 85, requiresAnyOf: ['returns:read', 'returns:manage'] },
+      { surface: 'web_sidebar', section: 'fulfillment', label: 'Returns', href: '/dashboard/returns', iconName: 'Undo2', defaultSortOrder: 70, requiresAnyOf: ['returns:read', 'returns:manage'] },
+      { surface: 'mobile_drawer', section: 'fulfillment', label: 'Returns', href: '/returns', iconName: 'Undo2', defaultSortOrder: 70, requiresAnyOf: ['returns:read', 'returns:manage'] },
     ],
   },
 
@@ -645,9 +650,9 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     // Org-side management surface only; the customer-facing portal lives at
     // /portal/* outside the dashboard shell. Web-only (P4 adds mobile).
     placements: [
-      { surface: 'web_sidebar', section: 'workspace', label: 'Accounts', href: '/dashboard/customers', iconName: 'Handshake', defaultSortOrder: 82, requires: 'customers:manage' },
+      { surface: 'web_sidebar', section: 'workspace', label: 'Accounts', href: '/dashboard/customers', iconName: 'Handshake', defaultSortOrder: 40, requires: 'customers:manage' },
       // Mobile twin (parity rule): org-side customers management, read + archive.
-      { surface: 'mobile_drawer', section: 'workspace', label: 'Accounts', href: '/customers', iconName: 'Handshake', defaultSortOrder: 82, requires: 'customers:manage' },
+      { surface: 'mobile_drawer', section: 'workspace', label: 'Accounts', href: '/customers', iconName: 'Handshake', defaultSortOrder: 40, requires: 'customers:manage' },
     ],
   },
 
@@ -844,7 +849,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
         label: 'Product groups',
         href: '/dashboard/product-groups',
         iconName: 'Layers',
-        defaultSortOrder: 25,
+        defaultSortOrder: 20,
         requires: 'sports:manage',
       },
     ],

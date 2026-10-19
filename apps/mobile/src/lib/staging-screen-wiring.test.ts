@@ -3,7 +3,7 @@ import * as path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { resolveSurface } from '@stockpilot/core';
+import { resolveSurface, type ModuleId } from '@stockpilot/core';
 
 /**
  * Staging screen — WIRING PINS for app/(drawer)/staging.tsx.
@@ -186,13 +186,19 @@ describe('staging is registered in the app navigation', () => {
     expect(drawerLayout).toContain('<Drawer.Screen name="staging"');
   });
 
-  it('appears in the drawer for a role that can read items, right after Items', () => {
-    const hrefs = resolveSurface('mobile_drawer', {
-      role: 'staff',
-      enabledModules: new Set(['inventory']),
-    }).flatMap((s) => s.items.map((i) => i.href));
+  // Owner-approved preview order 2026-10-19: Books sits between Items and
+  // Staging, so Staging follows Items directly only when Books is off.
+  it('appears in the drawer for a role that can read items, after Items and Books', () => {
+    const drawn = (enabledModules: Set<ModuleId>) =>
+      resolveSurface('mobile_drawer', { role: 'staff', enabledModules }).flatMap((s) =>
+        s.items.map((i) => i.href),
+      );
+    const hrefs = drawn(new Set(['inventory']));
     expect(hrefs).toContain('/staging');
     expect(hrefs.indexOf('/staging')).toBe(hrefs.indexOf('/inventory') + 1);
+    const withBooks = drawn(new Set(['inventory', 'books']));
+    const items = withBooks.indexOf('/inventory');
+    expect(withBooks.slice(items, items + 3)).toEqual(['/inventory', '/books', '/staging']);
   });
 
   it('resolves a real icon rather than falling back to the generic box', () => {
