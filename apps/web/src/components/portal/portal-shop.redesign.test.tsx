@@ -257,6 +257,19 @@ describe('the portal look keeps the performance and phone rules', () => {
     expect(container.innerHTML).not.toMatch(/backdrop-blur|bg-background\/\d+/);
   });
 
+  it('on a phone the cart bar puts the count on its own line, then the notes and Place order in the order a keyboard reaches them', () => {
+    shop();
+    fireEvent.click(screen.getByRole('button', { name: 'Add one Composition Notebook' }));
+    const count = screen.getByText(/^1 units/);
+    expect((count.parentElement as HTMLElement).className).toMatch(/\bmax-sm:basis-full\b/);
+    const notes = screen.getByRole('textbox', { name: 'Notes for your supplier (optional)' });
+    const place = screen.getByRole('button', { name: 'Place order' });
+    expect(notes.compareDocumentPosition(place) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Nothing moves a control away from its place in the focus order.
+    const bar = place.closest('.fixed') as HTMLElement;
+    expect(bar.innerHTML).not.toMatch(/\border-(?:first|last|\d+)\b/);
+  });
+
   it('an order row lets its status, total and actions wrap under its words (they ran off a 390 px screen)', () => {
     shop({ orders: [order({ status: 'completed' })], returnsEnabled: true });
     const reorder = screen.getByRole('button', { name: 'Reorder' });

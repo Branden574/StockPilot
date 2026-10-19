@@ -404,16 +404,20 @@ export function PortalShop({
               </p>
             )}
             <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-              <ShoppingCart className="text-muted-foreground h-4 w-4 shrink-0" />
-              <span className="text-foreground text-[13.5px]">
-                {unitCount} units
-                {pricingMode !== 'no_charge' && (
-                  <>
-                    {' '}
-                    · <span className="font-mono">${total.toFixed(2)}</span>
-                  </>
-                )}
-              </span>
+              {/* On a phone the count takes the first line, then the notes
+                  and Place order share the second (same order as the DOM). */}
+              <div className="flex min-w-0 items-center gap-3 max-sm:basis-full">
+                <ShoppingCart className="text-muted-foreground h-4 w-4 shrink-0" />
+                <span className="text-foreground text-[13.5px]">
+                  {unitCount} units
+                  {pricingMode !== 'no_charge' && (
+                    <>
+                      {' '}
+                      · <span className="font-mono">${total.toFixed(2)}</span>
+                    </>
+                  )}
+                </span>
+              </div>
               <Input
                 className="min-w-0 flex-[1_1_12rem]"
                 placeholder="Notes for your supplier (optional)"
