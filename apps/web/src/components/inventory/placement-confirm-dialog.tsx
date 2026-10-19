@@ -14,6 +14,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { cn } from '@/lib/utils';
+
+/** The caution panel the questions sit in: the warning wash with a warning
+ *  edge and ink words (DESIGN-SPEC 6.10's caution tone), in place of the
+ *  amber palette colours, so it reads in both themes. */
+const WARNING_PANEL = 'border-warning/40 bg-warning-wash rounded-md border p-3 text-[13.5px]';
 
 /**
  * ONE confirmation for a put-away, however many questions it has to ask.
@@ -134,14 +140,14 @@ export function PlacementConfirmDialog({
       <DialogContent role="alertdialog" className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <AlertTriangle className="text-amber-600 dark:text-amber-500 size-4 shrink-0" />
+            <AlertTriangle className="text-warning size-4 shrink-0" aria-hidden />
             {content.title}
           </DialogTitle>
           <DialogDescription>{message}</DialogDescription>
         </DialogHeader>
 
         {content.crateLines && content.crateLines.length > 0 && (
-          <ul className="space-y-1 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+          <ul className={cn(WARNING_PANEL, 'space-y-1')}>
             {content.crateLines.map((line) => (
               <li key={line}>{line}</li>
             ))}
@@ -149,7 +155,7 @@ export function PlacementConfirmDialog({
         )}
 
         {summary && (
-          <div className="space-y-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+          <div className={cn(WARNING_PANEL, 'space-y-1.5')}>
             <p>
               {summary.total} {summary.total === 1 ? 'title' : 'titles'} will be recorded in{' '}
               <span className="font-medium">{summary.nextLabel ?? 'no crate'}</span>:
@@ -179,7 +185,7 @@ export function PlacementConfirmDialog({
                 typed by hand is about to be erased, which is the loudest thing
                 on this panel, not a footnote to the group counts. */}
             {rackLines.length > 0 && (
-              <ul className="space-y-0.5 border-t border-amber-500/30 pt-1.5 font-medium">
+              <ul className="border-warning/30 space-y-0.5 border-t pt-1.5 font-medium">
                 {rackLines.map((line) => (
                   <li key={line}>{line}</li>
                 ))}
@@ -199,7 +205,7 @@ export function PlacementConfirmDialog({
             printing them twice is exactly what this component spent a commit
             fixing. */}
         {!summary && rackSummary && (
-          <div className="space-y-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+          <div className={cn(WARNING_PANEL, 'space-y-1.5')}>
             <p className="font-medium">
               {rackSummary.total === 1
                 ? 'This clears the rack recorded on this title:'
@@ -222,7 +228,7 @@ export function PlacementConfirmDialog({
         )}
 
         {content.notices && content.notices.length > 0 && (
-          <ul className="text-muted-foreground space-y-1 text-sm">
+          <ul className="text-muted-foreground space-y-1 text-[13.5px]">
             {content.notices.map((n) => (
               <li key={n}>{n}</li>
             ))}

@@ -72,7 +72,7 @@ export function PublicVisibilityControl({
     <div className="w-full space-y-1.5">
       <div className="flex items-center gap-2">
         <Select value={current} onValueChange={onChange} disabled={busy}>
-          <SelectTrigger className="h-8 w-[180px] text-sm" aria-label="Public visibility">
+          <SelectTrigger className="w-[180px]" aria-label="Public visibility">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -83,22 +83,25 @@ export function PublicVisibilityControl({
         </Select>
         {busy && <Loader2 className="text-muted-foreground h-3.5 w-3.5 animate-spin" />}
       </div>
-      {error && <p className="text-destructive text-xs">{error}</p>}
+      {error && (
+        <p role="alert" className="text-destructive text-[12px]">
+          {error}
+        </p>
+      )}
       {current === 'public' && categoryIsInternalOnly && (
-        <p className="text-warning flex items-start gap-1.5 text-xs">
-          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <p className="text-warning flex items-start gap-1.5 text-[12px]">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
           <span>
-            This item is Public, but its category is internal-only, so it stays out of the
-            shared public pool. It can still appear on links where it&apos;s individually
-            selected.
+            This item is Public, but its category is internal-only, so it stays out of the shared
+            public pool. It can still appear on links where it&apos;s individually selected.
           </span>
         </p>
       )}
-      <p className="text-muted-foreground text-xs">
+      <p className="text-muted-foreground text-[12px] leading-[18px]">
         &lsquo;Hidden&rsquo; beats everything — the item never appears publicly, even when
-        hand-picked on a link. &lsquo;Public&rsquo; still requires the item&apos;s category to
-        be public and a link that includes the public pool. Per-link curation lives in
-        Settings → Public request links.
+        hand-picked on a link. &lsquo;Public&rsquo; still requires the item&apos;s category to be
+        public and a link that includes the public pool. Per-link curation lives in Settings →
+        Public request links.
       </p>
     </div>
   );

@@ -281,8 +281,8 @@ export function UngroupDialog({ open, onOpenChange, itemIds, onDone }: Props) {
             {plan.groups.map((g) => {
               const anchor = g.allSelected ? anchorOf(g.sku, g.defaultAnchorId) : null;
               return (
-                <fieldset key={g.sku} className="border-border space-y-2 rounded-md border p-3">
-                  <legend className="px-1 font-mono text-xs">SKU {g.sku}</legend>
+                <fieldset key={g.sku} className="border-border space-y-2 rounded-lg border p-3">
+                  <legend className="px-1 font-mono text-[12px]">SKU {g.sku}</legend>
                   {g.allSelected ? (
                     <p className="text-muted-foreground text-xs">{UNGROUP_COPY.anchorLegend}</p>
                   ) : null}
@@ -300,7 +300,11 @@ export function UngroupDialog({ open, onOpenChange, itemIds, onDone }: Props) {
                               <input
                                 type="radio"
                                 name={`ungroup-anchor-${g.sku}`}
-                                className="mt-1"
+                                // The shared radio's dot (components/ui/radio-group):
+                                // a faint-ink ring that fills with an ink centre
+                                // when chosen; the browser's own radio comes back
+                                // in forced colors.
+                                className="bg-card checked:border-foreground checked:bg-foreground focus-visible:ring-ring focus-visible:ring-offset-background mt-0.5 size-4 shrink-0 appearance-none rounded-full border border-[var(--ed-ink-4)] transition-colors checked:shadow-[inset_0_0_0_3px_hsl(var(--card))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed forced-colors:appearance-auto"
                                 aria-describedby={`ungroup-outcome-${r.id}`}
                                 checked={keeps}
                                 disabled={phase.kind === 'saving'}

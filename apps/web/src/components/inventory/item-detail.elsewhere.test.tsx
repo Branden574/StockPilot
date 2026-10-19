@@ -319,8 +319,10 @@ describe('the Rack summary row', () => {
       elsewhere,
     });
   const mainRack = { locationId: 'loc-5a', name: '5-A', kind: 'rack', warehouseId: 'wh-main', quantity: 4 };
+  // Locator-only update (redesign P3.3): the Details rows are key-value rows,
+  // a <dt> label beside its <dd> value (the label was a <p> before).
   const rackRow = () => {
-    const heading = screen.queryAllByText('Rack', { selector: 'p' })[0];
+    const heading = screen.queryAllByText('Rack', { selector: 'dt' })[0];
     return heading?.nextElementSibling?.textContent ?? null;
   };
 

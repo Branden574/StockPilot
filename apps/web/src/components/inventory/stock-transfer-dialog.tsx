@@ -168,6 +168,8 @@ export function StockTransferDialog({
   writableWarehouseIds = null,
   trigger,
 }: StockTransferDialogProps) {
+  // Each field's label names it (its accessible name), one id set per dialog.
+  const fieldId = React.useId();
   const [open, setOpen] = React.useState(false);
 
   const sourceHoldings = transferableHoldings(holdings);
@@ -298,8 +300,7 @@ export function StockTransferDialog({
   // STOCK THE VIEWER CANNOT MOVE (0371): what the item holds in warehouses
   // they cannot see. The empty state names it instead of blaming Staging, and
   // a non-empty source list says the rest is elsewhere.
-  const elsewhereTotal =
-    elsewhere?.status === 'some' ? holdingsElsewhereTotal(elsewhere) : 0;
+  const elsewhereTotal = elsewhere?.status === 'some' ? holdingsElsewhereTotal(elsewhere) : 0;
   const elsewhereUnavailable = elsewhere?.status === 'unavailable';
   const awaitingHere = holdings.some(
     (h) => h.quantity > 0 && (h.kind === 'staging' || h.kind === 'unplaced'),
@@ -367,7 +368,8 @@ export function StockTransferDialog({
     !!fromLoc &&
     (chosen.mode === 'existing'
       ? chosen.option.id === fromLocation
-      : plannedLabel.length > 0 && plannedLabel.toLowerCase() === fromLoc.name.trim().toLowerCase());
+      : plannedLabel.length > 0 &&
+        plannedLabel.toLowerCase() === fromLoc.name.trim().toLowerCase());
   const newProblem =
     chosen !== null
       ? (newDestinationProblem(chosen) ??
@@ -632,9 +634,8 @@ export function StockTransferDialog({
         <DialogHeader>
           <DialogTitle>Transfer stock</DialogTitle>
           <DialogDescription>
-            Move <span className="font-medium text-foreground">{itemName}</span> between
-            locations. Current on hand:{' '}
-            <span className="tabular-nums">{currentQuantity}</span>.
+            Move <span className="text-foreground font-medium">{itemName}</span> between locations.
+            Current on hand: <span className="tabular-nums">{currentQuantity}</span>.
           </DialogDescription>
         </DialogHeader>
 
@@ -646,8 +647,8 @@ export function StockTransferDialog({
               ELSEWHERE_UNAVAILABLE_NOTE
             ) : (
               <>
-                This item&apos;s stock is in Staging/Unplaced — placement is handled in the
-                staging workflow.
+                This item&apos;s stock is in Staging/Unplaced — placement is handled in the staging
+                workflow.
                 {elsewhereTotal > 0 &&
                   ` ${formatElsewhereSourcesNote(elsewhereTotal, { noneHere: false })}`}
                 {elsewhereUnavailable && ` ${ELSEWHERE_UNAVAILABLE_NOTE}`}
@@ -660,7 +661,7 @@ export function StockTransferDialog({
             {isBook && bookStorage && <CurrentStorageSummary storage={bookStorage} />}
 
             <div className="space-y-1.5">
-              <Label>From location</Label>
+              <Label htmlFor={`${fieldId}-from`}>From location</Label>
               <Select
                 value={fromLocation}
                 onValueChange={(v) => {
@@ -671,7 +672,7 @@ export function StockTransferDialog({
                   if (toLocation === NEW_LOCATION_SENTINEL) setToLocation('');
                 }}
               >
-                <SelectTrigger>
+                <SelectTrigger id={`${fieldId}-from`}>
                   <SelectValue placeholder="Select source" />
                 </SelectTrigger>
                 <SelectContent>
@@ -683,31 +684,33 @@ export function StockTransferDialog({
                 </SelectContent>
               </Select>
               {elsewhereTotal > 0 && (
-                <p className="text-muted-foreground text-[11px]">
+                <p className="text-muted-foreground text-[12px]">
                   {formatElsewhereSourcesNote(elsewhereTotal, { noneHere: false })}
                 </p>
               )}
               {elsewhereUnavailable && (
-                <p role="status" className="text-muted-foreground text-[11px]">
+                <p role="status" className="text-muted-foreground text-[12px]">
                   {ELSEWHERE_UNAVAILABLE_NOTE}
                 </p>
               )}
             </div>
 
             <div className="space-y-1.5">
-              <Label>{isBook ? 'To location (optional — fills in the fields below)' : 'To location'}</Label>
+              <Label htmlFor={`${fieldId}-to`}>
+                {isBook ? 'To location (optional — fills in the fields below)' : 'To location'}
+              </Label>
               <Select value={toLocation} onValueChange={pickDestination}>
-                <SelectTrigger>
+                <SelectTrigger id={`${fieldId}-to`}>
                   <SelectValue
-                    placeholder={isBook ? 'Fill in from an existing location' : 'Select destination'}
+                    placeholder={
+                      isBook ? 'Fill in from an existing location' : 'Select destination'
+                    }
                   />
                 </SelectTrigger>
                 <SelectContent>
                   {destinationLocations.map((l) => (
                     <SelectItem key={l.id} value={l.id}>
-                      {l.kind === 'unplaced'
-                        ? `${l.name} — off the rack, stock kept`
-                        : l.name}
+                      {l.kind === 'unplaced' ? `${l.name} — off the rack, stock kept` : l.name}
                     </SelectItem>
                   ))}
                   {!isBook && canCreateHere && (
@@ -722,9 +725,8 @@ export function StockTransferDialog({
                 />
               )}
               {crossWarehouse && (
-                <p className="text-[11px] text-amber-700 dark:text-amber-400">
-                  This transfer crosses warehouses. Both warehouses must be in your access
-                  scope.
+                <p className="text-warning text-[12px]">
+                  This transfer crosses warehouses. Both warehouses must be in your access scope.
                 </p>
               )}
             </div>
@@ -773,8 +775,9 @@ export function StockTransferDialog({
             )}
 
             <div className="space-y-1.5">
-              <Label>Quantity</Label>
+              <Label htmlFor={`${fieldId}-quantity`}>Quantity</Label>
               <Input
+                id={`${fieldId}-quantity`}
                 type="number"
                 step="1"
                 min="1"
@@ -784,8 +787,9 @@ export function StockTransferDialog({
             </div>
 
             <div className="space-y-1.5">
-              <Label>Notes (optional)</Label>
+              <Label htmlFor={`${fieldId}-notes`}>Notes (optional)</Label>
               <Textarea
+                id={`${fieldId}-notes`}
                 rows={2}
                 value={notes}
                 maxLength={2000}
@@ -797,7 +801,7 @@ export function StockTransferDialog({
         )}
 
         {serverError && (
-          <p role="alert" className="text-sm text-destructive">
+          <p role="alert" className="text-destructive text-[13px]">
             {serverError}
           </p>
         )}

@@ -1,10 +1,8 @@
 'use client';
 
-import Link, { useLinkStatus } from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
-import * as React from 'react';
 
-import { cn } from '@/lib/utils';
+import { Tabs, type TabItem } from '@/components/patterns/tabs';
 
 import { type DetailTabId } from './item-detail-tabs-shared';
 
@@ -19,16 +17,11 @@ const TABS: ReadonlyArray<{ id: DetailTabId; label: string }> = [
   { id: 'activity', label: 'Activity' },
 ];
 
-/** The tab the person clicked, and the URL they clicked it on. */
-interface OptimisticTab {
-  tab: DetailTabId;
-  href: string;
-}
-
 /**
- * Client-side tab strip for the item detail page. Renders `Link` rows so
- * deep-linking to ?tab=activity works on the very first paint (no client
- * round-trip needed), and the URL stays canonical for sharing.
+ * The item page's tab strip (Overview / Movements / Activity), drawn by the
+ * shared in-page tab pattern (components/patterns/tabs.tsx). Every tab is a
+ * link, so `?tab=activity` deep links render the right tab on the very first
+ * paint (no client round trip) and the URL stays canonical for sharing.
  *
  * INSTANT FEEDBACK (owner report 2026-09-22: Movements/Activity took ~10 s and
  * he clicked about ten times). A tab is a query-only navigation that re-renders
@@ -39,7 +32,9 @@ interface OptimisticTab {
  * bar skipped same-path navigations too, and no loading.tsx fallback can show
  * for a query-only change (Next keys the page's React tree WITHOUT the query,
  * layout-router.js `createRouterCacheKey(activeSegment, true)`, so the page
- * stays mounted inside a transition). So:
+ * stays mounted inside a transition). The pattern keeps every rule this strip
+ * has always had (item-detail-tabs.feedback.test.tsx pins them here, and
+ * tabs.test.tsx in the pattern):
  *
  *   1. The clicked tab is shown selected at once, and its underline pulses for
  *      as long as next/link reports that navigation pending (useLinkStatus).
@@ -53,37 +48,23 @@ interface OptimisticTab {
  *      landed, Back was pressed) the URL decides again; and when next/link says
  *      the navigation is over while the URL has NOT moved (another link took
  *      over), it is dropped and the real tab shows again.
+ *
+ * Each tab keeps the id its panel names (`item-detail-tab-<id>`, and
+ * `aria-controls="item-detail-panel-<id>"`), and `scroll={false}` keeps the
+ * page where it is on a tab switch.
  */
 export function ItemDetailTabs({ activeTab }: { activeTab: DetailTabId }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const query = searchParams?.toString() ?? '';
-  const currentHref = query ? `${pathname}?${query}` : pathname;
 
-  const [optimistic, setOptimistic] = React.useState<OptimisticTab | null>(null);
-  // The URL moved, so whatever was clicked on the old one is settled. Reset
-  // during render (React's "adjusting state when a prop changes" pattern) so no
-  // frame shows a stale choice, and so going Back to the URL a tab was clicked
-  // on can never bring that old choice back.
-  if (optimistic !== null && optimistic.href !== currentHref) setOptimistic(null);
-  const shownTab =
-    optimistic !== null && optimistic.href === currentHref ? optimistic.tab : activeTab;
-
-  // Called by a tab's underline when next/link reports its navigation over.
-  // Only the tab still being waited on is dropped: after a quick second click
-  // the first tab's navigation ends (superseded) while the second is current.
-  const settle = React.useCallback((tab: DetailTabId) => {
-    setOptimistic((current) => (current !== null && current.tab === tab ? null : current));
-  }, []);
-
-  // Preserve any other query params (filters, etc.) when swapping tabs.
-  function hrefFor(tab: DetailTabId) {
-    // The tab the server rendered links to the page exactly as it is, so its
-    // href and the address bar agree even when the URL spells the tab another
-    // way (?tab=overview, an unknown ?tab=) or encodes other params another
-    // way. NavProgressBar compares the two to decide whether a click is a
-    // navigation at all.
-    if (tab === activeTab) return currentHref;
+  // Preserve any other query params (filters, the validated return target)
+  // when swapping tabs. The tab the server rendered is linked to the address
+  // bar exactly as it is by the pattern itself, so its href and the URL agree
+  // even when the URL spells the tab another way (?tab=overview, an unknown
+  // ?tab=): NavProgressBar compares the two to decide whether a click is a
+  // navigation at all.
+  function hrefFor(tab: DetailTabId): string {
     const params = new URLSearchParams(query);
     if (tab === 'overview') {
       params.delete('tab');
@@ -94,87 +75,15 @@ export function ItemDetailTabs({ activeTab }: { activeTab: DetailTabId }) {
     return qs ? `${pathname}?${qs}` : pathname;
   }
 
-  function onTabClick(event: React.MouseEvent<HTMLAnchorElement>, tab: DetailTabId) {
-    // Modified clicks open a new tab or window: next/link leaves them to the
-    // browser (link.js isModifiedEvent), and so does this page.
-    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
-      return;
-    }
-    if (tab === shownTab) {
-      // next/link skips its navigation when the default is already prevented.
-      event.preventDefault();
-      return;
-    }
-    setOptimistic({ tab, href: currentHref });
-  }
+  const items: TabItem[] = TABS.map((t) => ({ id: t.id, label: t.label, href: hrefFor(t.id) }));
 
   return (
-    <div role="tablist" aria-label="Item detail sections" className="border-border border-b">
-      <div className="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
-        <div className="flex w-max gap-1 sm:w-auto">
-          {TABS.map((t) => {
-            const isShown = t.id === shownTab;
-            return (
-              <Link
-                key={t.id}
-                id={`item-detail-tab-${t.id}`}
-                href={hrefFor(t.id)}
-                role="tab"
-                aria-selected={isShown}
-                aria-controls={`item-detail-panel-${t.id}`}
-                scroll={false}
-                onClick={(event) => onTabClick(event, t.id)}
-                className={cn(
-                  'relative inline-flex h-10 items-center px-3 text-sm font-medium transition-colors',
-                  isShown ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
-                )}
-              >
-                {t.label}
-                <TabUnderline tab={t.id} shown={isShown} onSettled={settle} />
-              </Link>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * The tab's underline. It lives INSIDE the Link because useLinkStatus reads
- * the nearest Link's status. `pending` is true from the click until the new
- * page is rendered (Next resolves it with the navigation's own transition), so
- * the pulse lasts exactly as long as the wait, and its true -> false edge is
- * how the strip learns that a navigation it was showing early is over.
- */
-function TabUnderline({
-  tab,
-  shown,
-  onSettled,
-}: {
-  tab: DetailTabId;
-  shown: boolean;
-  onSettled: (tab: DetailTabId) => void;
-}) {
-  const { pending } = useLinkStatus();
-  const wasPending = React.useRef(false);
-  React.useEffect(() => {
-    if (pending) {
-      wasPending.current = true;
-      return;
-    }
-    if (!wasPending.current) return;
-    wasPending.current = false;
-    onSettled(tab);
-  }, [pending, tab, onSettled]);
-  return (
-    <span
-      aria-hidden
-      className={cn(
-        'absolute inset-x-2 bottom-0 h-0.5 rounded-full transition-colors',
-        shown ? 'bg-foreground' : 'bg-transparent',
-        shown && pending && 'motion-safe:animate-pulse',
-      )}
+    <Tabs
+      items={items}
+      activeId={activeTab}
+      aria-label="Item detail sections"
+      idPrefix="item-detail"
+      scroll={false}
     />
   );
 }
