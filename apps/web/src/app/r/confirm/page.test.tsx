@@ -77,4 +77,24 @@ describe('GET /r/confirm (page render)', () => {
     expect(createAdminClientMock).not.toHaveBeenCalled();
     expect(getByText(/invalid, expired, or already used/)).toBeTruthy();
   });
+
+  it('offers Track as one plain link on the confirmed and invalid panels (never a button nested in a link)', async () => {
+    for (const [params, name] of [
+      [{ done: ID }, 'Track this request'],
+      [{ e: '1' }, 'Track an existing request'],
+    ] as const) {
+      const { getByRole, unmount } = await renderPage(params);
+      const link = getByRole('link', { name });
+      expect(link.getAttribute('href')).toBe('/r/track');
+      expect(link.querySelector('button')).toBeNull();
+      unmount();
+    }
+  });
+
+  it('keeps the confirm action a real submit button inside the zero-JS form', async () => {
+    const { getByRole } = await renderPage({ id: ID, t: TOKEN });
+    const button = getByRole('button', { name: 'Confirm order request' });
+    expect(button.getAttribute('type')).toBe('submit');
+    expect(button.closest('form')?.getAttribute('action')).toBe('/r/confirm/submit');
+  });
 });

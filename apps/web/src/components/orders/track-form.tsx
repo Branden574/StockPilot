@@ -3,7 +3,9 @@
 import { CheckCircle2, Circle, XCircle } from 'lucide-react';
 import { useState } from 'react';
 
+import { ExternalCard, ExternalEyebrow } from '@/components/auth/external-shell';
 import { DeliveryMap } from '@/components/orders/delivery-map';
+import { Timeline, TimelineEntry } from '@/components/patterns/timeline';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -66,7 +68,7 @@ const TIMELINE: Array<{
   { key: 'completedAt', label: 'Delivered' },
 ];
 
-const STATUS_LABELS: Record<string, string> = {
+export const STATUS_LABELS: Record<string, string> = {
   pending_confirmation: 'Waiting for your confirmation',
   pending_approval: 'Pending approval',
   approved: 'Approved',
@@ -77,6 +79,9 @@ const STATUS_LABELS: Record<string, string> = {
   staged_for_pickup: 'Staged for pickup',
   staged_for_delivery: 'Ready for delivery',
   in_transit: 'In transit',
+  // CONFLICTS D14: a short hand-over leaves the order backordered; the page
+  // printed the raw key. The word is the app's own (ORDER_STATUS_META).
+  backordered: 'Backordered',
   completed: 'Delivered',
   denied: 'Denied',
   cancelled: 'Cancelled',
@@ -120,59 +125,58 @@ export function TrackForm({ initialToken, initialId, initialEmail }: Props) {
   }
 
   return (
-    <div className="space-y-6">
-      <form
-        onSubmit={handleSubmit}
-        className="border-border bg-card space-y-3 rounded-2xl border p-5"
-      >
-        <div>
-          <Label htmlFor="track-id">Request ID</Label>
-          <Input
-            id="track-id"
-            value={id}
-            onChange={(e) => setId(e.target.value)}
-            placeholder="From your confirmation email"
-            required
-            autoComplete="off"
-            spellCheck={false}
-          />
-        </div>
-        <div>
-          <Label htmlFor="track-email">Email</Label>
-          <Input
-            id="track-email"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            autoComplete="email"
-          />
-        </div>
-        {!initialToken ? (
-          <div>
-            <Label htmlFor="track-token">Tracking link key</Label>
+    <div className="space-y-4">
+      <ExternalCard>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="track-id">Request ID</Label>
             <Input
-              id="track-token"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              placeholder="Paste the full link or just the key"
+              id="track-id"
+              value={id}
+              onChange={(e) => setId(e.target.value)}
+              placeholder="From your confirmation email"
               required
               autoComplete="off"
               spellCheck={false}
             />
-            <p className="text-muted-foreground mt-1 text-xs">
-              This is the long string at the end of the link your school /
-              partner shared with you.
-            </p>
           </div>
-        ) : null}
-        <Button type="submit" className="w-full" disabled={loading}>
-          {loading ? 'Looking up…' : 'Find my order'}
-        </Button>
-      </form>
+          <div className="space-y-2">
+            <Label htmlFor="track-email">Email</Label>
+            <Input
+              id="track-email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              autoComplete="email"
+            />
+          </div>
+          {!initialToken ? (
+            <div className="space-y-2">
+              <Label htmlFor="track-token">Tracking link key</Label>
+              <Input
+                id="track-token"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                placeholder="Paste the full link or just the key"
+                required
+                autoComplete="off"
+                spellCheck={false}
+              />
+              <p className="text-muted-foreground text-xs">
+                This is the long string at the end of the link your school /
+                partner shared with you.
+              </p>
+            </div>
+          ) : null}
+          <Button type="submit" className="h-11 w-full" disabled={loading}>
+            {loading ? 'Looking up…' : 'Find my order'}
+          </Button>
+        </form>
+      </ExternalCard>
 
       {notFound ? (
-        <div className="border-destructive/40 bg-destructive/5 text-destructive rounded-2xl border p-5 text-sm">
+        <div className="bg-destructive-wash text-destructive rounded-lg border border-transparent p-[18px] text-[13.5px] leading-[20.25px]">
           We couldn&apos;t find that order. Double-check the email address
           and request ID from your confirmation email and try again.
         </div>
@@ -193,75 +197,66 @@ function TrackResultBlock({ result }: { result: TrackResult }) {
     result.status === 'denied' || result.status === 'cancelled';
 
   return (
-    <div className="space-y-5">
-      <div className="border-border bg-card rounded-2xl border p-5">
-        <p className="text-muted-foreground text-[11px] font-medium uppercase tracking-[0.12em]">
-          Status
-        </p>
-        <h2 className="font-display mt-1 text-2xl">{statusLabel}</h2>
+    <div className="space-y-4">
+      <ExternalCard>
+        <ExternalEyebrow>Status</ExternalEyebrow>
+        <h2 className="font-display text-foreground mt-1 text-[22px] font-medium leading-[1.25] tracking-[-0.02em]">
+          {statusLabel}
+        </h2>
         {result.status === 'pending_confirmation' ? (
-          <p className="text-muted-foreground mt-2 text-sm">
+          <p className="text-muted-foreground mt-2 text-[13.5px] leading-[20.25px]">
             Check your inbox (and spam folder) for a confirmation email from
             StockPilot. Until you click the link, your request stays on hold
             and no one on the team can see it.
           </p>
         ) : null}
         {result.warehouseName ? (
-          <p className="text-muted-foreground mt-1 text-sm">
+          <p className="text-muted-foreground mt-1 text-[13.5px]">
             {result.fulfillmentType === 'pickup' ? 'Pickup' : 'From'}:{' '}
             {result.warehouseName}
           </p>
         ) : null}
         {result.requesterName ? (
-          <p className="text-muted-foreground mt-0.5 text-sm">
+          <p className="text-muted-foreground mt-0.5 text-[13.5px]">
             Requester: {result.requesterName}
           </p>
         ) : null}
 
         {/* Timeline — only for non-terminal-negative paths and only
             once the requester has confirmed (pending_confirmation
-            rows haven't "created" yet from the team's view). */}
+            rows haven't "created" yet from the team's view). Done steps
+            carry a check and ink words; open steps a hollow circle and quiet
+            words, so the state never rests on colour alone. */}
         {!isTerminalNegative && result.status !== 'pending_confirmation' ? (
-          <ol className="mt-5 space-y-3">
+          <Timeline className="border-border mt-5 border-t pt-5">
             {TIMELINE.map((step) => {
               const ts = result[step.key];
               const done = Boolean(ts);
               return (
-                <li key={step.key} className="flex items-start gap-3 text-sm">
-                  {done ? (
-                    <CheckCircle2 className="text-primary mt-0.5 h-4 w-4" />
-                  ) : (
-                    <Circle className="text-muted-foreground/50 mt-0.5 h-4 w-4" />
-                  )}
-                  <div className="flex-1">
-                    <div
-                      className={cn(
-                        'font-medium',
-                        !done && 'text-muted-foreground',
-                      )}
-                    >
+                <TimelineEntry
+                  key={step.key}
+                  tone={done ? 'accent' : 'muted'}
+                  icon={done ? <CheckCircle2 /> : <Circle />}
+                  title={
+                    <span className={cn('font-medium', !done && 'text-muted-foreground')}>
                       {step.label}
-                    </div>
-                    {ts ? (
-                      <div className="text-muted-foreground text-xs">
-                        {formatDate(ts)}
-                      </div>
-                    ) : null}
-                  </div>
-                </li>
+                    </span>
+                  }
+                  meta={ts ? formatDate(ts) : undefined}
+                />
               );
             })}
-          </ol>
+          </Timeline>
         ) : null}
 
         {result.status === 'denied' ? (
-          <div className="bg-destructive/5 border-destructive/40 mt-5 rounded-xl border p-4">
-            <div className="text-destructive flex items-center gap-2 text-sm font-medium">
+          <div className="bg-destructive-wash mt-5 rounded-md p-4">
+            <div className="text-destructive flex items-center gap-2 text-[13.5px] font-medium">
               <XCircle className="h-4 w-4" />
               Request denied
             </div>
             {result.deniedReason ? (
-              <p className="text-muted-foreground mt-1 text-sm">
+              <p className="text-foreground mt-1 text-[13.5px]">
                 Reason: {result.deniedReason}
               </p>
             ) : null}
@@ -269,7 +264,7 @@ function TrackResultBlock({ result }: { result: TrackResult }) {
         ) : null}
 
         {result.status === 'cancelled' ? (
-          <div className="text-muted-foreground mt-5 text-sm">
+          <div className="text-muted-foreground mt-5 text-[13.5px]">
             This request was cancelled
             {result.cancelledAt ? ` on ${formatDate(result.cancelledAt)}` : ''}.
           </div>
@@ -281,7 +276,7 @@ function TrackResultBlock({ result }: { result: TrackResult }) {
             fulfilled, and the org's returns module is on. */}
         {result.returnPath ? (
           <div className="border-border mt-5 border-t pt-4">
-            <p className="text-muted-foreground text-sm">
+            <p className="text-muted-foreground text-[13.5px]">
               Need to send something back?
             </p>
             <Button asChild variant="outline" className="mt-2">
@@ -289,20 +284,19 @@ function TrackResultBlock({ result }: { result: TrackResult }) {
             </Button>
           </div>
         ) : null}
-      </div>
+      </ExternalCard>
 
       {/* Lines */}
       {result.lines.length > 0 ? (
-        <div className="border-border bg-card rounded-2xl border p-5">
-          <h3 className="font-display text-base">Items</h3>
-          <ul className="divide-border mt-3 divide-y">
+        <ExternalCard title="Items" headingLevel={3}>
+          <ul className="divide-border -my-2 divide-y">
             {result.lines.map((l, i) => (
               <li
                 key={i}
-                className="flex items-baseline justify-between gap-4 py-2 text-sm"
+                className="flex items-baseline justify-between gap-4 py-2 text-[13.5px]"
               >
                 <span className="flex-1 truncate">{l.itemName}</span>
-                <span className="text-muted-foreground tabular-nums text-xs">
+                <span className="text-muted-foreground font-mono tabular-nums text-xs">
                   {l.quantityFulfilled > 0 ? (
                     <>
                       {l.quantityFulfilled} / {l.quantityRequested}
@@ -317,16 +311,15 @@ function TrackResultBlock({ result }: { result: TrackResult }) {
               </li>
             ))}
           </ul>
-        </div>
+        </ExternalCard>
       ) : null}
 
       {result.notes ? (
-        <div className="border-border bg-card rounded-2xl border p-5">
-          <h3 className="font-display text-base">Your notes</h3>
-          <p className="text-muted-foreground mt-2 whitespace-pre-line text-sm">
+        <ExternalCard title="Your notes" headingLevel={3}>
+          <p className="text-muted-foreground whitespace-pre-line text-[13.5px]">
             {result.notes}
           </p>
-        </div>
+        </ExternalCard>
       ) : null}
     </div>
   );

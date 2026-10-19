@@ -33,6 +33,13 @@ const STROKE_WIDTH = 2;
 // turn the captured signature into a near-invisible stroke on a too-
 // dark or too-light background when re-rendered in the PDF.
 const PAD_BACKGROUND = '#fafaf7';
+// The words drawn ON the pad ("Sign here", "Clear") sit on that fixed light
+// canvas in both themes, so their colours are fixed too: the light theme's
+// ink-3 (#5a5d56, 6.3:1 on the canvas) and its ink (#0e0f0d) on hover. The
+// theme tokens turned them into light grey (2.5:1) and, on hover, near-white
+// text on the light canvas in dark mode.
+export const PAD_INK_QUIET = '#5a5d56';
+export const PAD_INK = '#0e0f0d';
 
 /**
  * Vanilla-canvas signature pad — no dependency. Built for warehouse-loading-
@@ -157,17 +164,14 @@ export const SignaturePad = React.forwardRef<SignaturePadHandle, SignaturePadPro
 
     // ── Pointer event handlers ───────────────────────────────────────────
 
-    const pointFromEvent = React.useCallback(
-      (e: React.PointerEvent<HTMLCanvasElement>): Point => {
-        const canvas = canvasRef.current!;
-        const rect = canvas.getBoundingClientRect();
-        return {
-          x: e.clientX - rect.left,
-          y: e.clientY - rect.top,
-        };
-      },
-      [],
-    );
+    const pointFromEvent = React.useCallback((e: React.PointerEvent<HTMLCanvasElement>): Point => {
+      const canvas = canvasRef.current!;
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+      };
+    }, []);
 
     const onPointerDown = React.useCallback(
       (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -233,30 +237,33 @@ export const SignaturePad = React.forwardRef<SignaturePadHandle, SignaturePadPro
       [getCtx, pointFromEvent],
     );
 
-    const endStroke = React.useCallback((e?: React.PointerEvent<HTMLCanvasElement>) => {
-      const current = currentStrokeRef.current;
-      if (!current) return;
-      // Draw the final tail of the stroke (the last point isn't otherwise
-      // rendered by the incremental quadratic path above).
-      const ctx = getCtx();
-      if (ctx && current.length >= 2) {
-        const p1 = current[current.length - 2]!;
-        const p2 = current[current.length - 1]!;
-        const mStart = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
-        ctx.beginPath();
-        ctx.moveTo(mStart.x, mStart.y);
-        ctx.lineTo(p2.x, p2.y);
-        ctx.stroke();
-      }
-      currentStrokeRef.current = null;
-      if (e) {
-        try {
-          (e.target as Element).releasePointerCapture?.(e.pointerId);
-        } catch {
-          /* non-fatal */
+    const endStroke = React.useCallback(
+      (e?: React.PointerEvent<HTMLCanvasElement>) => {
+        const current = currentStrokeRef.current;
+        if (!current) return;
+        // Draw the final tail of the stroke (the last point isn't otherwise
+        // rendered by the incremental quadratic path above).
+        const ctx = getCtx();
+        if (ctx && current.length >= 2) {
+          const p1 = current[current.length - 2]!;
+          const p2 = current[current.length - 1]!;
+          const mStart = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+          ctx.beginPath();
+          ctx.moveTo(mStart.x, mStart.y);
+          ctx.lineTo(p2.x, p2.y);
+          ctx.stroke();
         }
-      }
-    }, [getCtx]);
+        currentStrokeRef.current = null;
+        if (e) {
+          try {
+            (e.target as Element).releasePointerCapture?.(e.pointerId);
+          } catch {
+            /* non-fatal */
+          }
+        }
+      },
+      [getCtx],
+    );
 
     const onPointerUp = React.useCallback(
       (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -286,9 +293,7 @@ export const SignaturePad = React.forwardRef<SignaturePadHandle, SignaturePadPro
       ro.observe(container);
       // Also resize on devicePixelRatio changes — happens when a window
       // moves between monitors with different scaling.
-      const dprQuery = window.matchMedia(
-        `(resolution: ${window.devicePixelRatio || 1}dppx)`,
-      );
+      const dprQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
       const onDprChange = () => resize();
       try {
         dprQuery.addEventListener('change', onDprChange);
@@ -333,7 +338,7 @@ export const SignaturePad = React.forwardRef<SignaturePadHandle, SignaturePadPro
         className={[
           'relative w-full select-none',
           'aspect-[3/1]',
-          'rounded-xl',
+          'rounded-lg',
           'border border-dashed border-[var(--ed-line-strong)]',
           className ?? '',
         ]
@@ -347,14 +352,18 @@ export const SignaturePad = React.forwardRef<SignaturePadHandle, SignaturePadPro
         */}
         {hintVisible ? (
           <div className="pointer-events-none absolute inset-0 flex items-end justify-center pb-3">
-            <span className="text-muted-foreground text-xs font-medium uppercase tracking-[0.12em]">
+            <span
+              data-slot="signature-pad-hint"
+              className="text-[11px] font-medium uppercase tracking-[0.1em]"
+              style={{ color: PAD_INK_QUIET }}
+            >
               Sign here
             </span>
           </div>
         ) : null}
         <canvas
           ref={canvasRef}
-          className="block h-full w-full touch-none rounded-xl"
+          className="block h-full w-full touch-none rounded-lg"
           style={{ touchAction: 'none' }}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
@@ -363,10 +372,14 @@ export const SignaturePad = React.forwardRef<SignaturePadHandle, SignaturePadPro
           aria-label="Signature pad"
           role="img"
         />
+        {/* A 44 px target at the corner (one hand at a dock), drawn in the
+            canvas's own fixed ink; the hover colour comes from a CSS
+            variable so it stays dark on the light pad in both themes. */}
         <button
           type="button"
           onClick={clear}
-          className="text-muted-foreground hover:text-foreground absolute right-3 top-2 text-xs font-medium underline-offset-2 hover:underline"
+          className="absolute right-0 top-0 inline-flex min-h-11 min-w-11 items-center justify-center rounded-md px-3 text-xs font-medium text-[var(--pad-ink-quiet)] underline-offset-2 hover:text-[var(--pad-ink)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--pad-ink)]"
+          style={{ '--pad-ink-quiet': PAD_INK_QUIET, '--pad-ink': PAD_INK } as React.CSSProperties}
         >
           Clear
         </button>
