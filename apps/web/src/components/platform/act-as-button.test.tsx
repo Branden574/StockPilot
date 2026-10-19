@@ -30,9 +30,21 @@ vi.mock('@/server/actions/platform/impersonation', () => ({
   startActingAsAction: (...a: unknown[]) => h.start(...a),
 }));
 
+import { buttonVariants } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
+
 import { ActAsButton } from './act-as-button';
 
 const ORG = 'org-1';
+
+/**
+ * The classes a shared Button variant draws, read from the primitive's own
+ * export, so this pin follows a restyle of the primitive instead of naming
+ * its internal classes.
+ */
+function look(variant: 'default' | 'outline'): string[] {
+  return cn(buttonVariants({ variant })).split(/\s+/).filter(Boolean);
+}
 const CONFIRM =
   "Act as “Acme”? You'll be able to view AND edit their live data. Every action is logged, and the grant auto-expires in 45 minutes.";
 
@@ -56,8 +68,12 @@ function button() {
 describe('ActAsButton', () => {
   it('is the secondary (outline) button, never the ink primary, and keeps 44 px on a phone', () => {
     render(<ActAsButton organizationId={ORG} orgName="Acme" />);
-    expect(button()).toHaveClass('bg-card', 'max-sm:h-11');
-    expect(button()).not.toHaveClass('bg-primary');
+    const outline = look('outline');
+    const inkOnly = look('default').filter((c) => !outline.includes(c));
+    // The ink primary draws classes the outline one does not (its fill).
+    expect(inkOnly.length).toBeGreaterThan(0);
+    expect(button()).toHaveClass(...outline, 'max-sm:h-11');
+    for (const c of inkOnly) expect(button()).not.toHaveClass(c);
     expect(button()).toHaveAttribute('type', 'button');
   });
 
