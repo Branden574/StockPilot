@@ -29,12 +29,15 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { DetailSection } from '@/components/patterns/detail-section';
+import { StatePanel } from '@/components/patterns/state-panel';
 import { isbnVariants } from '@/lib/books/isbn-variants';
 import { PURCHASE_ORDER_ITEM_TYPES } from '@/lib/purchase-orders/item-types';
 import { chunkInFilterValues, IN_FILTER_MAX_VALUES } from '@/lib/supabase/in-filter';
 import { cn } from '@/lib/utils';
-import { createPoAction, updatePoAction } from '@/server/actions/purchase-orders';
+import { useUnsavedWork } from '@/lib/unsaved-work';
 import { formatCurrency } from '@/lib/utils';
+import { createPoAction, updatePoAction } from '@/server/actions/purchase-orders';
 
 import type { SizeRunGroup } from './size-run-receive-grid';
 
@@ -227,6 +230,34 @@ function lineHasItem(l: Line): boolean {
   return Boolean(l.itemId) || Boolean(l.newItemName?.trim());
 }
 
+/** The fields the form edits, as it opened (blank for a new PO). */
+type PoFormValues = InitialPoValues;
+
+function initialFormValues(initial: InitialPoValues | undefined): PoFormValues {
+  return {
+    supplierId: initial?.supplierId ?? '',
+    locationId: initial?.locationId ?? '',
+    charterId: initial?.charterId ?? '',
+    poNumber: initial?.poNumber ?? '',
+    expectedAt: initial?.expectedAt ?? '',
+    notes: initial?.notes ?? '',
+    lines: initial?.lines ?? [],
+  };
+}
+
+/** One comparable string for the unsaved-work check, in a fixed key order. */
+function poFormSnapshot(v: PoFormValues): string {
+  return JSON.stringify([
+    v.supplierId,
+    v.locationId,
+    v.charterId,
+    v.poNumber,
+    v.expectedAt,
+    v.notes,
+    v.lines.map((l) => [l.itemId ?? null, l.newItemName ?? null, l.quantityOrdered, l.unitCost]),
+  ]);
+}
+
 // ─── ItemPicker ────────────────────────────────────────────────────────────
 // A combobox that lets the user either pick an existing catalog item OR type a
 // free-text name to create a new one.  Rendered inline inside each PO line row.
@@ -387,37 +418,43 @@ function ItemPicker({
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
+      {/* Drawn as the form's own fields (the shared Input's box): 32 px on a
+          desktop, 44 px on a phone, the stronger hairline and the app's focus
+          ring. Its accessible name stays its own words (the picked item's
+          "SKU · name", "New: …" or the placeholder), which the tests and a
+          screen reader read. */}
       <PopoverTrigger
         type="button"
         className={cn(
-          'border-border bg-background flex h-8 w-full items-center gap-2 rounded-md border px-2.5 text-left text-xs outline-none transition-colors',
-          'hover:border-[var(--ed-line-strong)] focus-visible:ring-2 focus-visible:ring-ring',
+          'bg-card flex h-8 w-full min-w-0 items-center gap-2 rounded-md border border-[var(--ed-line-strong)] px-2.5 text-left text-[13px] outline-none transition-colors max-sm:h-11',
+          'hover:bg-muted focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:ring-2 focus-visible:ring-offset-2',
+          'data-[state=open]:border-foreground/40',
         )}
       >
-        <span className="flex-1 truncate">
+        <span className="min-w-0 flex-1 truncate">
           {triggerLabel ? (
-            <span className={newItemName ? 'italic text-muted-foreground' : ''}>{triggerLabel}</span>
+            <span className={newItemName ? 'text-muted-foreground italic' : 'text-foreground'}>
+              {triggerLabel}
+            </span>
           ) : (
             <span className="text-muted-foreground">Pick or create an item…</span>
           )}
         </span>
-        <ChevronsUpDown className="text-muted-foreground h-3 w-3 shrink-0 opacity-60" />
+        <ChevronsUpDown aria-hidden className="text-muted-foreground h-3.5 w-3.5 shrink-0" />
       </PopoverTrigger>
 
-      <PopoverContent
-        className="w-[min(480px,calc(100vw-1rem))] p-0"
-        align="start"
-        sideOffset={4}
-      >
-        <Command shouldFilter={false} className="bg-popover overflow-hidden rounded-md">
+      <PopoverContent className="w-[min(480px,calc(100vw-1rem))] p-0" align="start" sideOffset={4}>
+        <Command shouldFilter={false} className="bg-popover overflow-hidden rounded-lg">
           <div className="border-border flex items-center gap-2 border-b px-3 py-2">
-            <Search className="text-muted-foreground h-3.5 w-3.5 shrink-0" />
+            <Search aria-hidden className="text-muted-foreground h-3.5 w-3.5 shrink-0" />
             <Command.Input
               autoFocus
               value={query}
               onValueChange={setQuery}
               placeholder="Search by name, SKU, barcode or ISBN, or type a new item name…"
-              className="placeholder:text-muted-foreground flex-1 bg-transparent text-sm outline-none"
+              // 16 px below sm so iOS does not zoom into the field (the shared
+              // Input's phone rule).
+              className="placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent text-[13px] outline-none max-sm:text-base"
             />
             {pending && (
               <Loader2
@@ -428,7 +465,7 @@ function ItemPicker({
           </div>
           <Command.List className="max-h-[280px] overflow-y-auto p-1.5">
             {searchFailed && (
-              <p className="text-muted-foreground px-2 py-1.5 text-[11px]">
+              <p className="text-warning px-2 py-1.5 text-[12px]">
                 Search is unavailable — showing items from this page only.
               </p>
             )}
@@ -438,19 +475,18 @@ function ItemPicker({
                 onSelect={handlePickNew}
                 className={ROW}
               >
-                <Plus className="mr-2 h-3.5 w-3.5 shrink-0 text-primary" />
-                <span>
-                  Create{' '}
-                  <span className="font-medium">"{trimmedQuery}"</span>
-                  <span className="ml-1.5 text-[11px] text-muted-foreground">as a new item</span>
+                <Plus aria-hidden className="text-accent mr-2 h-3.5 w-3.5 shrink-0" />
+                <span className="min-w-0">
+                  Create <span className="font-medium">"{trimmedQuery}"</span>
+                  <span className="text-muted-foreground ml-1.5 text-[12px]">as a new item</span>
                 </span>
               </Command.Item>
             )}
             {pending && visible.length === 0 && (
-              <p className="text-muted-foreground py-6 text-center text-sm">Searching…</p>
+              <p className="text-muted-foreground py-6 text-center text-[13px]">Searching…</p>
             )}
             {!pending && visible.length === 0 && !showCreate && (
-              <Command.Empty className="text-muted-foreground py-6 text-center text-sm">
+              <Command.Empty className="text-muted-foreground py-6 text-center text-[13px]">
                 No matches. Type a name to create a new item.
               </Command.Empty>
             )}
@@ -465,22 +501,24 @@ function ItemPicker({
                   className={ROW}
                 >
                   {isActive ? (
-                    <Check className="mr-2 h-3.5 w-3.5 shrink-0" />
+                    <Check aria-hidden className="mr-2 h-3.5 w-3.5 shrink-0" />
                   ) : (
                     <span className="mr-2 inline-block h-3.5 w-3.5 shrink-0" />
                   )}
-                  <span className="text-muted-foreground mr-2 font-mono text-[11px]">{i.sku}</span>
-                  <span className="flex-1 truncate">{i.name}</span>
+                  <span className="text-muted-foreground mr-2 shrink-0 font-mono text-[11.5px]">
+                    {i.sku}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">{i.name}</span>
                   {/* Books are first-class PO lines, so a row says which it is
                       and shows the ISBN it was matched on. Same row, same
                       height — muted trailing metadata, no new component. */}
                   {isBook && (
-                    <span className="text-muted-foreground ml-2 shrink-0 text-[10px] uppercase tracking-wide">
+                    <span className="border-line-strong text-muted-foreground ml-2 shrink-0 rounded-full border px-1.5 text-[11px] leading-4">
                       Book
                     </span>
                   )}
                   {isBook && i.barcode && (
-                    <span className="text-muted-foreground ml-1.5 shrink-0 font-mono text-[11px]">
+                    <span className="text-muted-foreground ml-1.5 shrink-0 font-mono text-[11.5px]">
                       {i.barcode}
                     </span>
                   )}
@@ -494,10 +532,25 @@ function ItemPicker({
   );
 }
 
+// Menu rows at the redesign's 13 px with the neutral highlight (DESIGN-SPEC
+// 6.21 popover rows), at least 32 px tall and 44 px on a phone.
 const ROW = cn(
-  'flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 text-sm outline-none',
+  'flex min-h-8 cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 text-[13px] outline-none max-sm:min-h-11',
   'data-[selected=true]:bg-muted data-[selected=true]:text-foreground',
 );
+
+/**
+ * The line editor's columns. On a desktop one row per line: the item takes the
+ * room, then Qty, Unit cost, Subtotal and the remove button (the PO page's
+ * line rows, DESIGN-SPEC 6.18). On a phone a line stacks: the item on its own
+ * row, then Qty, Unit cost and Subtotal side by side, then the remove button,
+ * so every field stays in view without a page-wide scroll.
+ */
+const LINE_GRID =
+  'grid grid-cols-3 items-end gap-x-3 gap-y-2 px-4 sm:grid-cols-[minmax(0,1fr)_88px_112px_104px_32px] sm:items-start';
+
+/** A line field's label: shown over the field on a phone, read aloud everywhere. */
+const LINE_LABEL = 'text-muted-foreground text-[12px] font-normal leading-4 sm:sr-only';
 
 // ─── PoForm ─────────────────────────────────────────────────────────────────
 
@@ -558,9 +611,7 @@ function SizeRunAddDialog({
   const totalQty = run
     ? run.variants.reduce((s, v) => s + Math.max(0, quantities[v.id] ?? 0), 0)
     : 0;
-  const sizeCount = run
-    ? run.variants.filter((v) => (quantities[v.id] ?? 0) > 0).length
-    : 0;
+  const sizeCount = run ? run.variants.filter((v) => (quantities[v.id] ?? 0) > 0).length : 0;
 
   function confirm() {
     if (!run) return;
@@ -578,15 +629,15 @@ function SizeRunAddDialog({
         <DialogHeader>
           <DialogTitle>Add a size run</DialogTitle>
           <DialogDescription>
-            Pick a product group and enter how many of each size to order. Each
-            size becomes its own line, so receiving stays per-size.
+            Pick a product group and enter how many of each size to order. Each size becomes its own
+            line, so receiving stays per-size.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-1.5">
-          <Label>Product group</Label>
+          <Label htmlFor="po-size-run-group">Product group</Label>
           <Select value={groupId} onValueChange={setGroupId}>
-            <SelectTrigger>
+            <SelectTrigger id="po-size-run-group">
               <SelectValue placeholder="Choose a product group" />
             </SelectTrigger>
             <SelectContent>
@@ -600,24 +651,26 @@ function SizeRunAddDialog({
         </div>
 
         {run && (
-          <div className="max-h-[45vh] space-y-2 overflow-y-auto rounded-md border p-3">
+          // One row per size in scale order (size, SKU, quantity), as rows of
+          // a list card: the size reads first, the SKU in mono, the quantity
+          // field at the right edge, and every row keeps its own field.
+          <div className="border-border bg-card divide-border max-h-[45vh] divide-y overflow-y-auto rounded-lg border">
             {run.variants.map((v) => (
-              <div key={v.id} className="grid grid-cols-12 items-center gap-2">
-                <div className="col-span-3 font-medium tabular-nums">
+              <div
+                key={v.id}
+                className="grid grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)_minmax(88px,120px)] items-center gap-3 px-4 py-2"
+              >
+                <div className="text-foreground truncate text-[13.5px] font-medium tabular-nums">
                   {v.variantSize?.trim() ? v.variantSize : 'No size'}
                 </div>
-                <div className="text-muted-foreground col-span-5 truncate font-mono text-xs">
-                  {v.sku}
-                </div>
-                <div className="col-span-4">
+                <div className="text-muted-foreground truncate font-mono text-[12px]">{v.sku}</div>
+                <div>
                   <BlankZeroNumberInput
                     min={0}
                     step={1}
                     aria-label={`Quantity for size ${v.variantSize ?? v.sku}`}
                     value={quantities[v.id] ?? 0}
-                    onValueChange={(n) =>
-                      setQuantities((m) => ({ ...m, [v.id]: Math.max(0, n) }))
-                    }
+                    onValueChange={(n) => setQuantities((m) => ({ ...m, [v.id]: Math.max(0, n) }))}
                   />
                 </div>
               </div>
@@ -626,7 +679,7 @@ function SizeRunAddDialog({
         )}
 
         <DialogFooter className="items-center justify-between gap-3 sm:justify-between">
-          <span className="text-muted-foreground text-xs">
+          <span className="text-muted-foreground text-[12.5px] tabular-nums">
             {sizeCount === 0
               ? 'Nothing entered yet.'
               : `Ordering ${totalQty} ${countingUnitLabel(
@@ -669,6 +722,36 @@ export function PoForm({
   const [submitting, setSubmitting] = React.useState(false);
 
   const total = lines.reduce((s, l) => s + l.quantityOrdered * l.unitCost, 0);
+
+  // ── Unsaved work (CONFLICTS D30) ─────────────────────────────────────────
+  // The one global "Refresh to update" reload asks before it discards a form
+  // that registered here (lib/unsaved-work.ts). Dirty = anything differs from
+  // what the form opened with (blank for a new PO, the stored PO for an edit),
+  // or a save is in flight. After a successful save the form is clean while
+  // the router moves on to the PO's page.
+  const [openedWith] = React.useState(() => poFormSnapshot(initialFormValues(initial)));
+  const savedRef = React.useRef(false);
+  // useUnsavedWork keeps the LATEST function, read at the moment of the
+  // click, so this closure always sees the current fields.
+  useUnsavedWork(
+    poId ? `po-form-${poId}` : 'po-form-new',
+    poId ? `Editing ${initial?.poNumber || 'purchase order'}` : 'New purchase order',
+    () => {
+      if (savedRef.current) return false;
+      if (submitting) return true;
+      return (
+        poFormSnapshot({
+          supplierId,
+          locationId,
+          charterId,
+          poNumber,
+          expectedAt,
+          notes,
+          lines,
+        }) !== openedWith
+      );
+    },
+  );
 
   const [sizeRunOpen, setSizeRunOpen] = React.useState(false);
 
@@ -864,7 +947,11 @@ export function PoForm({
       lines: lines.map((l) =>
         l.itemId
           ? { itemId: l.itemId, quantityOrdered: l.quantityOrdered, unitCost: l.unitCost }
-          : { newItemName: l.newItemName!.trim(), quantityOrdered: l.quantityOrdered, unitCost: l.unitCost },
+          : {
+              newItemName: l.newItemName!.trim(),
+              quantityOrdered: l.quantityOrdered,
+              unitCost: l.unitCost,
+            },
       ),
     };
 
@@ -876,6 +963,7 @@ export function PoForm({
         toast.error(res.error.message);
         return;
       }
+      savedRef.current = true;
       toast.success('Purchase order updated.');
       router.push(`/dashboard/purchase-orders/${poId}`);
     } else {
@@ -886,220 +974,295 @@ export function PoForm({
         toast.error(res.error.message);
         return;
       }
+      savedRef.current = true;
       toast.success('Purchase order created.');
       router.push(`/dashboard/purchase-orders/${res.data.id}`);
     }
   }
 
+  // Field ids: unique per mounted form, so each label names its own control.
+  const fid = React.useId();
+  const fieldId = (name: string) => `${fid}-${name}`;
+  const optional = <span className="text-muted-foreground font-normal">(optional)</span>;
+
+  // One card, "PO details", as before (DESIGN-SPEC 6.7): the header fields in
+  // two columns (one on a phone), the line editor drawn as the PO page's
+  // line rows (6.18), the notes, then the footer the PO page's line card
+  // has: the Total on the left and the form's two buttons on the right.
   return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-1.5">
-          <Label>
-            Supplier
-            <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
-          </Label>
-          <Select value={supplierId || '__none'} onValueChange={(v: string) => setSupplierId(v === '__none' ? '' : v)}>
-            <SelectTrigger>
-              <SelectValue placeholder="No supplier" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__none">No supplier</SelectItem>
-              {suppliers.map((s) => (
-                <SelectItem key={s.id} value={s.id}>
-                  {s.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1.5">
-          <Label>
-            Destination location
-            <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
-          </Label>
-          <Select value={locationId || '__none'} onValueChange={(v: string) => setLocationId(v === '__none' ? '' : v)}>
-            <SelectTrigger>
-              <SelectValue placeholder="None" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__none">None</SelectItem>
-              {locations.map((l) => (
-                <SelectItem key={l.id} value={l.id}>
-                  {l.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-1.5">
-          <Label>
-            PO number
-            <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
-          </Label>
-          <Input
-            value={poNumber}
-            onChange={(e) => setPoNumber(e.target.value)}
-            placeholder="Auto-generated if left blank"
-            maxLength={64}
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label>
-            Expected delivery
-            <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
-          </Label>
-          <Input type="date" value={expectedAt} onChange={(e) => setExpectedAt(e.target.value)} />
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-1.5">
-          <Label>
-            Bill to charter
-            <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
-          </Label>
-          <Select value={charterId || '__none'} onValueChange={(v: string) => setCharterId(v === '__none' ? '' : v)}>
-            <SelectTrigger>
-              <SelectValue placeholder="No charter" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__none">No charter</SelectItem>
-              {charters.map((c) => (
-                <SelectItem key={c.id} value={c.id}>
-                  {c.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
-
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <Label>Line items</Label>
-          <div className="flex gap-2">
-            {sizeRuns.length > 0 && (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setSizeRunOpen(true)}
-              >
-                <Plus className="h-4 w-4" /> Add size run
-              </Button>
-            )}
-            <Button type="button" variant="outline" size="sm" onClick={addLine}>
-              <Plus className="h-4 w-4" /> Add line
+    <DetailSection
+      title="PO details"
+      data-slot="po-form"
+      footer={
+        <>
+          {lines.length > 0 ? (
+            <p className="text-[13.5px]">
+              <span className="text-muted-foreground">Total: </span>
+              <span className="text-foreground ml-1.5 font-mono font-medium tabular-nums">
+                {formatCurrency(total)}
+              </span>
+            </p>
+          ) : (
+            <span />
+          )}
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button variant="outline" onClick={() => router.back()} disabled={submitting}>
+              Cancel
+            </Button>
+            <Button variant="gradient" onClick={submit} disabled={submitting || lines.length === 0}>
+              {submitting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : poId ? (
+                'Save changes'
+              ) : (
+                'Create PO'
+              )}
             </Button>
           </div>
-        </div>
-        {sizeRuns.length > 0 && (
-          <SizeRunAddDialog
-            open={sizeRunOpen}
-            onOpenChange={setSizeRunOpen}
-            runs={sizeRuns}
-            onAdd={addSizeRun}
-          />
-        )}
-        {lines.length === 0 ? (
-          <div className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
-            No lines yet. Click "Add line" to start.
+        </>
+      }
+    >
+      <div className="flex flex-col gap-6">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="min-w-0 space-y-1.5">
+            <Label htmlFor={fieldId('supplier')}>Supplier {optional}</Label>
+            <Select
+              value={supplierId || '__none'}
+              onValueChange={(v: string) => setSupplierId(v === '__none' ? '' : v)}
+            >
+              <SelectTrigger id={fieldId('supplier')}>
+                <SelectValue placeholder="No supplier" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none">No supplier</SelectItem>
+                {suppliers.map((s) => (
+                  <SelectItem key={s.id} value={s.id}>
+                    {s.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
-        ) : (
-          <div className="space-y-2">
-            {lines.map((line, idx) => {
-              return (
-                <div key={idx} className="grid grid-cols-12 gap-2 rounded-md border bg-card p-3">
-                  <div className="col-span-5 space-y-1">
-                    <Label className="text-[11px] text-muted-foreground">Item</Label>
-                    <ItemPicker
-                      items={items}
-                      itemId={line.itemId}
-                      newItemName={line.newItemName}
-                      extraItems={pickerExtraItems}
-                      onPickExisting={(item) => {
-                        rememberItem(item);
-                        updateLine(idx, {
-                          itemId: item.id,
-                          newItemName: undefined,
-                          unitCost: item.unit_cost,
-                        });
-                      }}
-                      onPickNew={(name) =>
-                        updateLine(idx, {
-                          itemId: undefined,
-                          newItemName: name,
-                        })
-                      }
-                    />
-                    {line.newItemName && (
-                      <p className="text-[10px] text-muted-foreground">
-                        A new catalog item will be created when you save this PO.
-                      </p>
-                    )}
-                  </div>
-                  <div className="col-span-2 space-y-1">
-                    <Label className="text-[11px] text-muted-foreground">Qty</Label>
-                    <BlankZeroNumberInput
-                      min={1}
-                      step={1}
-                      value={line.quantityOrdered}
-                      onValueChange={(n) => updateLine(idx, { quantityOrdered: n })}
-                      placeholder="Qty"
-                    />
-                  </div>
-                  <div className="col-span-2 space-y-1">
-                    <Label className="text-[11px] text-muted-foreground">Unit cost</Label>
-                    <BlankZeroNumberInput
-                      min={0}
-                      step={0.01}
-                      value={line.unitCost}
-                      onValueChange={(n) => updateLine(idx, { unitCost: n })}
-                      placeholder="0.00"
-                    />
-                  </div>
-                  <div className="col-span-2 space-y-1">
-                    <Label className="text-[11px] text-muted-foreground">Subtotal</Label>
-                    <p className="px-2 py-2 text-sm tabular-nums">
-                      {formatCurrency(line.quantityOrdered * line.unitCost)}
-                    </p>
-                  </div>
-                  <div className="col-span-1 flex items-end">
-                    <Button type="button" variant="ghost" size="icon" onClick={() => removeLine(idx)}>
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-              );
-            })}
-            <div className="flex justify-end pt-2 text-sm">
-              <span className="text-muted-foreground">Total: </span>
-              <span className="ml-2 font-semibold tabular-nums">{formatCurrency(total)}</span>
+          <div className="min-w-0 space-y-1.5">
+            <Label htmlFor={fieldId('location')}>Destination location {optional}</Label>
+            <Select
+              value={locationId || '__none'}
+              onValueChange={(v: string) => setLocationId(v === '__none' ? '' : v)}
+            >
+              <SelectTrigger id={fieldId('location')}>
+                <SelectValue placeholder="None" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none">None</SelectItem>
+                {locations.map((l) => (
+                  <SelectItem key={l.id} value={l.id}>
+                    {l.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="min-w-0 space-y-1.5">
+            <Label htmlFor={fieldId('number')}>PO number {optional}</Label>
+            <Input
+              id={fieldId('number')}
+              value={poNumber}
+              onChange={(e) => setPoNumber(e.target.value)}
+              placeholder="Auto-generated if left blank"
+              maxLength={64}
+              className="font-mono"
+            />
+          </div>
+          <div className="min-w-0 space-y-1.5">
+            <Label htmlFor={fieldId('expected')}>Expected delivery {optional}</Label>
+            <Input
+              id={fieldId('expected')}
+              type="date"
+              value={expectedAt}
+              onChange={(e) => setExpectedAt(e.target.value)}
+            />
+          </div>
+          <div className="min-w-0 space-y-1.5">
+            <Label htmlFor={fieldId('charter')}>Bill to charter {optional}</Label>
+            <Select
+              value={charterId || '__none'}
+              onValueChange={(v: string) => setCharterId(v === '__none' ? '' : v)}
+            >
+              <SelectTrigger id={fieldId('charter')}>
+                <SelectValue placeholder="No charter" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none">No charter</SelectItem>
+                {charters.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        <div
+          role="group"
+          aria-labelledby={fieldId('lines')}
+          className="flex min-w-0 flex-col gap-2.5"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span id={fieldId('lines')} className="text-foreground text-[13px] font-medium">
+              Line items
+            </span>
+            <div className="flex flex-wrap gap-2">
+              {sizeRuns.length > 0 && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSizeRunOpen(true)}
+                >
+                  <Plus className="h-4 w-4" /> Add size run
+                </Button>
+              )}
+              <Button type="button" variant="outline" size="sm" onClick={addLine}>
+                <Plus className="h-4 w-4" /> Add line
+              </Button>
             </div>
           </div>
-        )}
-      </div>
+          {sizeRuns.length > 0 && (
+            <SizeRunAddDialog
+              open={sizeRunOpen}
+              onOpenChange={setSizeRunOpen}
+              runs={sizeRuns}
+              onAdd={addSizeRun}
+            />
+          )}
+          <div className="border-border min-w-0 overflow-hidden rounded-lg border">
+            {lines.length === 0 ? (
+              <StatePanel
+                kind="empty"
+                surface="plain"
+                icon={null}
+                headingLevel={null}
+                title={'No lines yet. Click "Add line" to start.'}
+                className="p-6"
+              />
+            ) : (
+              <>
+                {/* Column heads (DESIGN-SPEC 6.9) on a desktop. Each row also
+                    names its own fields for assistive technology and, on a
+                    phone where the row stacks, on screen. */}
+                <div
+                  aria-hidden
+                  className={cn(
+                    LINE_GRID,
+                    'bg-sunk border-border text-muted-foreground hidden border-b py-2 text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] sm:grid',
+                  )}
+                >
+                  <span>Item</span>
+                  <span>Qty</span>
+                  <span>Unit cost</span>
+                  <span className="text-right">Subtotal</span>
+                  <span />
+                </div>
+                <ul className="divide-border divide-y">
+                  {lines.map((line, idx) => {
+                    const qtyId = fieldId(`line-${idx}-qty`);
+                    const costId = fieldId(`line-${idx}-cost`);
+                    return (
+                      <li key={idx} className={cn(LINE_GRID, 'py-3')}>
+                        <div className="col-span-3 min-w-0 space-y-1 sm:col-span-1">
+                          <span className={LINE_LABEL}>Item</span>
+                          <ItemPicker
+                            items={items}
+                            itemId={line.itemId}
+                            newItemName={line.newItemName}
+                            extraItems={pickerExtraItems}
+                            onPickExisting={(item) => {
+                              rememberItem(item);
+                              updateLine(idx, {
+                                itemId: item.id,
+                                newItemName: undefined,
+                                unitCost: item.unit_cost,
+                              });
+                            }}
+                            onPickNew={(name) =>
+                              updateLine(idx, {
+                                itemId: undefined,
+                                newItemName: name,
+                              })
+                            }
+                          />
+                          {line.newItemName && (
+                            <p className="text-muted-foreground text-[12px]">
+                              A new catalog item will be created when you save this PO.
+                            </p>
+                          )}
+                        </div>
+                        <div className="min-w-0 space-y-1">
+                          <Label htmlFor={qtyId} className={LINE_LABEL}>
+                            Qty
+                          </Label>
+                          <BlankZeroNumberInput
+                            id={qtyId}
+                            min={1}
+                            step={1}
+                            value={line.quantityOrdered}
+                            onValueChange={(n) => updateLine(idx, { quantityOrdered: n })}
+                            placeholder="Qty"
+                            className="tabular-nums"
+                          />
+                        </div>
+                        <div className="min-w-0 space-y-1">
+                          <Label htmlFor={costId} className={LINE_LABEL}>
+                            Unit cost
+                          </Label>
+                          <BlankZeroNumberInput
+                            id={costId}
+                            min={0}
+                            step={0.01}
+                            value={line.unitCost}
+                            onValueChange={(n) => updateLine(idx, { unitCost: n })}
+                            placeholder="0.00"
+                            className="tabular-nums"
+                          />
+                        </div>
+                        <div className="min-w-0 space-y-1">
+                          <span className={cn(LINE_LABEL, 'block text-right')}>Subtotal</span>
+                          <p className="text-foreground flex h-8 items-center justify-end font-mono text-[13px] tabular-nums max-sm:h-11">
+                            {formatCurrency(line.quantityOrdered * line.unitCost)}
+                          </p>
+                        </div>
+                        <div className="col-span-3 flex justify-end sm:col-span-1">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            aria-label={`Remove line ${idx + 1}`}
+                            onClick={() => removeLine(idx)}
+                            className="text-muted-foreground hover:text-destructive"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            )}
+          </div>
+        </div>
 
-      <div className="space-y-1.5">
-        <Label>
-          Notes
-          <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
-        </Label>
-        <Textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} />
+        <div className="min-w-0 space-y-1.5">
+          <Label htmlFor={fieldId('notes')}>Notes {optional}</Label>
+          <Textarea
+            id={fieldId('notes')}
+            rows={3}
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+          />
+        </div>
       </div>
-
-      <div className="flex justify-end gap-2">
-        <Button variant="outline" onClick={() => router.back()} disabled={submitting}>
-          Cancel
-        </Button>
-        <Button variant="gradient" onClick={submit} disabled={submitting || lines.length === 0}>
-          {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : poId ? 'Save changes' : 'Create PO'}
-        </Button>
-      </div>
-    </div>
+    </DetailSection>
   );
 }

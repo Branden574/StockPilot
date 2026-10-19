@@ -1,9 +1,8 @@
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { notFound } from 'next/navigation';
 
 import { PoForm, type InitialPoValues } from '@/components/po/po-form';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { requireOrgContext } from '@/lib/auth/session';
 import { purchaseOrderItemTypes } from '@/lib/purchase-orders/item-types';
 import { ChartersService } from '@/server/services/charters';
@@ -15,6 +14,13 @@ import { loadSizeRunGroups } from '@/server/services/size-run-display';
 import { SuppliersService } from '@/server/services/suppliers';
 
 import { can } from '@stockpilot/core';
+
+/** The page area (DESIGN-SPEC 4 and 5.3), the same box the PO list and the
+ *  shell's loading skeleton draw. */
+const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
+
+/** The form at a reading width with room for the line editor's five columns. */
+const FORM_WIDTH = 'w-full max-w-[960px]';
 
 export default async function EditPoPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -123,58 +129,58 @@ export default async function EditPoPage({ params }: { params: Promise<{ id: str
   ]);
 
   return (
-    <div className="container mx-auto max-w-4xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href={`/dashboard/purchase-orders/${id}`}
-          className="text-muted-foreground hover:text-foreground text-sm"
-        >
-          ← Back to purchase order
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">
-          Edit {(po as { po_number?: string }).po_number ?? 'Purchase Order'}
-        </h1>
+    <div className={PAGE}>
+      <PageHeader
+        back={
+          <PageHeaderBackLink href={`/dashboard/purchase-orders/${id}`}>
+            ← Back to purchase order
+          </PageHeaderBackLink>
+        }
+        // The PO number in mono, as the PO's own page titles it.
+        title={
+          <>
+            Edit{' '}
+            <span className="font-mono tracking-normal">
+              {(po as { po_number?: string }).po_number ?? 'Purchase Order'}
+            </span>
+          </>
+        }
+        className={FORM_WIDTH}
+      />
+      <div className={FORM_WIDTH}>
+        <PoForm
+          items={inventory.items.map((i) => ({
+            id: i.id,
+            name: i.name,
+            sku: i.sku,
+            unit_cost: i.unit_cost,
+            groupId: i.group_id,
+            variantSize: i.variant_size,
+            // Drives the "Book" marker + ISBN on a picker row. For a book,
+            // barcode IS the ISBN.
+            itemType: i.item_type,
+            barcode: i.barcode,
+          }))}
+          productGroups={productGroups}
+          groupItems={groupItemRows.map((i) => ({
+            id: i.id,
+            name: i.name,
+            sku: i.sku,
+            unit_cost: i.unit_cost,
+            groupId: i.group_id,
+            variantSize: i.variant_size,
+          }))}
+          suppliers={suppliers.map((s) => ({ id: s.id as string, name: s.name as string }))}
+          // Only warehouse-backed locations can be receiving destinations — a
+          // warehouse-less location makes the PO impossible to receive against.
+          locations={locations
+            .filter((l) => Boolean((l as { warehouse_id?: string | null }).warehouse_id))
+            .map((l) => ({ id: l.id as string, name: l.name as string }))}
+          charters={charterOptions.map((c) => ({ id: c.id as string, name: c.name as string }))}
+          poId={id}
+          initial={initial}
+        />
       </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>PO details</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <PoForm
-            items={inventory.items.map((i) => ({
-              id: i.id,
-              name: i.name,
-              sku: i.sku,
-              unit_cost: i.unit_cost,
-              groupId: i.group_id,
-              variantSize: i.variant_size,
-              // Drives the "Book" marker + ISBN on a picker row. For a book,
-              // barcode IS the ISBN.
-              itemType: i.item_type,
-              barcode: i.barcode,
-            }))}
-            productGroups={productGroups}
-            groupItems={groupItemRows.map((i) => ({
-              id: i.id,
-              name: i.name,
-              sku: i.sku,
-              unit_cost: i.unit_cost,
-              groupId: i.group_id,
-              variantSize: i.variant_size,
-            }))}
-            suppliers={suppliers.map((s) => ({ id: s.id as string, name: s.name as string }))}
-            // Only warehouse-backed locations can be receiving destinations — a
-            // warehouse-less location makes the PO impossible to receive against.
-            locations={locations
-              .filter((l) => Boolean((l as { warehouse_id?: string | null }).warehouse_id))
-              .map((l) => ({ id: l.id as string, name: l.name as string }))}
-            charters={charterOptions.map((c) => ({ id: c.id as string, name: c.name as string }))}
-            poId={id}
-            initial={initial}
-          />
-        </CardContent>
-      </Card>
     </div>
   );
 }
