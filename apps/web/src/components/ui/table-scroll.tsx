@@ -13,12 +13,15 @@ import * as React from 'react';
  * same 2 px in --ring) drawn as an inset outline rather than the usual
  * box-shadow, so a card's clipped edge cannot hide it and the rows cannot
  * cover it (a row's hover, selected or footer background and its 1 px
- * separators paint above an inset shadow, but below an outline), and carries
+ * separators paint above an inset shadow, but below an outline; an outline
+ * also stays under forced colors, which drop every box-shadow), and carries
  * data-overflow="true" for an edge treatment. Overflow is measured after mount
  * and again whenever the wrapper or the table resizes, so the server HTML and
  * the first client render match and nothing moves. With a `label` (or
  * `labelledBy`) the wrapper is a `region` named by it, whether or not it
  * overflows. A table that fits, with no name, renders exactly as before.
+ * A positioned cell (a sticky column with its own background) still paints
+ * over the outline; no caller has one.
  */
 export function TableScroll({
   label,
