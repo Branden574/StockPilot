@@ -1,10 +1,19 @@
-import { BookX, ShieldAlert } from 'lucide-react';
+import { BookX, ChevronRight, ShieldAlert } from 'lucide-react';
 import Link from 'next/link';
 
-import { EmptyState } from '@/components/ui/empty-state';
+import { StatePanel } from '@/components/patterns/state-panel';
+import { StatStrip, StatStripItem } from '@/components/patterns/stat-strip';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import {
@@ -290,12 +299,14 @@ export async function BookOrderTotalsBody(props: BookOrderTotalsBodyProps) {
           viewNow={viewChanged}
         />
 
-        <div className="flex flex-wrap items-start justify-end gap-2">
+        <div className="flex flex-wrap items-start justify-end gap-2" data-report-actions>
           <BookReportRefreshButton />
-          {props.canExport ? <BookReportExportMenu query={rq} totalCount={answer.totalCount} /> : null}
+          {props.canExport ? (
+            <BookReportExportMenu query={rq} totalCount={answer.totalCount} />
+          ) : null}
         </div>
 
-        <BookReportBusyRegion className="space-y-6">
+        <BookReportBusyRegion className="space-y-4">
           <BookReportShowingBlock
             echoes={showing}
             query={rq}
@@ -326,24 +337,30 @@ export async function BookOrderTotalsBody(props: BookOrderTotalsBodyProps) {
           />
 
           {rows.length === 0 ? (
-            <EmptyState
+            // The shared state panel in place of the table (no-match: the
+            // report always has filters; the words are core's, unchanged).
+            <StatePanel
+              kind="no-match"
               icon={BookX}
+              headingLevel={3}
               size="sm"
               title={BOOK_REPORT_EMPTY}
-              description={[
-                // A charter with one warehouse in effect (chosen, or the
-                // warehouse view): its orders may be at another warehouse,
-                // or, with dates chosen, outside them (core's words, the
-                // phone's).
-                bookReportEmptyCharterHint(answer),
-                sameGroups(rq.statusGroups, DEFAULT_BOOK_REPORT_STATUS_GROUPS)
-                  ? BOOK_REPORT_EMPTY_DEFAULT_STATUS
-                  : null,
-                answer.scope.restricted ? BOOK_REPORT_RESTRICTED : null,
-                rq.q ? BOOK_REPORT_EMPTY_SEARCH : null,
-              ]
-                .filter(Boolean)
-                .join(' ')}
+              description={
+                [
+                  // A charter with one warehouse in effect (chosen, or the
+                  // warehouse view): its orders may be at another warehouse,
+                  // or, with dates chosen, outside them (core's words, the
+                  // phone's).
+                  bookReportEmptyCharterHint(answer),
+                  sameGroups(rq.statusGroups, DEFAULT_BOOK_REPORT_STATUS_GROUPS)
+                    ? BOOK_REPORT_EMPTY_DEFAULT_STATUS
+                    : null,
+                  answer.scope.restricted ? BOOK_REPORT_RESTRICTED : null,
+                  rq.q ? BOOK_REPORT_EMPTY_SEARCH : null,
+                ]
+                  .filter(Boolean)
+                  .join(' ') || undefined
+              }
             />
           ) : (
             <BooksTable answer={answer} totalPages={totalPages} coverFor={coverFor} />
@@ -353,7 +370,7 @@ export async function BookOrderTotalsBody(props: BookOrderTotalsBodyProps) {
             aria-label={BOOK_REPORT_UI.pagesNav}
             className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
           >
-            <p className="text-muted-foreground text-xs tabular-nums" aria-live="polite">
+            <p className="text-muted-foreground text-[12.5px] tabular-nums" aria-live="polite">
               {formatListFooter(
                 {
                   page: answer.page,
@@ -365,6 +382,8 @@ export async function BookOrderTotalsBody(props: BookOrderTotalsBodyProps) {
                 BOOK_REPORT_LIST_NOUN,
               )}
             </p>
+            {/* 8 px apart: the 28 px pager buttons' 44 px touch areas never
+                overlap (the Button rule). */}
             <div className="flex gap-2">
               <BookReportPagerLink query={rq} step={-1} enabled={answer.page > 1} rel="prev">
                 {BOOK_REPORT_UI.previous}
@@ -380,7 +399,9 @@ export async function BookOrderTotalsBody(props: BookOrderTotalsBodyProps) {
             </div>
           </nav>
           <div className="space-y-1">
-            <p className="text-sm font-semibold">{bookReportGrandTotalLine(answer.summary, totalPages)}</p>
+            <p className="text-[13.5px] font-medium tabular-nums">
+              {bookReportGrandTotalLine(answer.summary, totalPages)}
+            </p>
             <UnresolvedNote answer={answer} />
           </div>
         </BookReportBusyRegion>
@@ -404,7 +425,10 @@ export async function BookOrderTotalsBody(props: BookOrderTotalsBodyProps) {
 function FiltersResetNote({ shown }: { shown: boolean }) {
   if (!shown) return null;
   return (
-    <p role="status" className="border-warning/40 bg-warning/10 rounded-md border px-3 py-2 text-sm">
+    <p
+      role="status"
+      className="border-warning/40 bg-warning-wash text-foreground rounded-lg border px-3.5 py-2.5 text-[13px] leading-5"
+    >
       {BOOK_REPORT_FILTERS_RESET}
     </p>
   );
@@ -419,9 +443,19 @@ function UnresolvedNote({ answer }: { answer: BookOrderTotalsResponse }) {
   if (unresolved.entries <= 0) return null;
   const onlyOther = answer.rows.filter((r) => !r.countsAsCopies);
   const unit = unresolved.entries === 1 && onlyOther.length === 1 ? onlyOther[0]!.unit : undefined;
-  return <p className="text-muted-foreground text-xs">{unresolvedUnitsNote(unresolved, unit)}</p>;
+  return (
+    <p className="text-muted-foreground text-[12px] leading-[18px]">
+      {unresolvedUnitsNote(unresolved, unit)}
+    </p>
+  );
 }
 
+/**
+ * One figure of the totals strip (DESIGN-SPEC 6.8, the Overview stat strip):
+ * its label, the figure with its unit, and the definition under it, always
+ * (never a delta or an invented sub-line). A named group, so each figure is
+ * read with its label and definition.
+ */
 function MetricCard({
   id,
   label,
@@ -438,17 +472,31 @@ function MetricCard({
   note?: React.ReactNode;
 }) {
   return (
-    <div className="bg-card border-border rounded-md border px-4 py-3" role="group" aria-labelledby={id}>
-      <h2 id={id} className="text-muted-foreground text-[11px] font-semibold uppercase tracking-wider">
-        {label}
-      </h2>
-      <p className="mt-1">
-        <span className="text-2xl font-semibold tabular-nums">{value}</span>
-        {unit ? <span className="text-muted-foreground ml-1.5 text-sm">{unit}</span> : null}
-      </p>
-      <p className="text-muted-foreground mt-1 text-xs">{definition}</p>
-      {note}
-    </div>
+    <StatStripItem
+      role="group"
+      aria-labelledby={id}
+      label={
+        <h2 id={id} className="text-[12.5px] font-normal leading-[18.75px]">
+          {label}
+        </h2>
+      }
+      value={
+        <>
+          <span>{value}</span>
+          {unit ? (
+            <span className="text-muted-foreground ml-1.5 font-sans text-[13px] font-normal tracking-normal">
+              {unit}
+            </span>
+          ) : null}
+        </>
+      }
+      sub={
+        <>
+          <span className="mt-0.5 block">{definition}</span>
+          {note}
+        </>
+      }
+    />
   );
 }
 
@@ -457,27 +505,29 @@ function SummaryCards({ answer }: { answer: BookOrderTotalsResponse }) {
   const copies = formatReportQuantity(summary.copies);
   const copiesWords = copiesRequestedText(summary.copies).slice(copies.length + 1);
   return (
-    <section aria-label={BOOK_REPORT_UI.summaryRegion} className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-      <MetricCard
-        id="book-report-metric-copies"
-        label={BOOK_REPORT_METRICS.copies.label}
-        value={copies}
-        unit={copiesWords}
-        definition={BOOK_REPORT_METRICS.copies.definition}
-        note={<UnresolvedNote answer={answer} />}
-      />
-      <MetricCard
-        id="book-report-metric-entries"
-        label={BOOK_REPORT_METRICS.entries.label}
-        value={summary.entries.toLocaleString('en-US')}
-        definition={BOOK_REPORT_METRICS.entries.definition}
-      />
-      <MetricCard
-        id="book-report-metric-orders"
-        label={BOOK_REPORT_METRICS.orders.label}
-        value={summary.orders.toLocaleString('en-US')}
-        definition={BOOK_REPORT_METRICS.orders.definition}
-      />
+    <section aria-label={BOOK_REPORT_UI.summaryRegion}>
+      <StatStrip>
+        <MetricCard
+          id="book-report-metric-copies"
+          label={BOOK_REPORT_METRICS.copies.label}
+          value={copies}
+          unit={copiesWords}
+          definition={BOOK_REPORT_METRICS.copies.definition}
+          note={<UnresolvedNote answer={answer} />}
+        />
+        <MetricCard
+          id="book-report-metric-entries"
+          label={BOOK_REPORT_METRICS.entries.label}
+          value={summary.entries.toLocaleString('en-US')}
+          definition={BOOK_REPORT_METRICS.entries.definition}
+        />
+        <MetricCard
+          id="book-report-metric-orders"
+          label={BOOK_REPORT_METRICS.orders.label}
+          value={summary.orders.toLocaleString('en-US')}
+          definition={BOOK_REPORT_METRICS.orders.definition}
+        />
+      </StatStrip>
     </section>
   );
 }
@@ -498,7 +548,10 @@ function ScopeLines({
   const category = bookReportCategoryLine(answer.filters.category, answer.filters.uncategorized);
   const search = bookReportSearchLine(query.q);
   return (
-    <section aria-label={BOOK_REPORT_UI.scopeRegion} className="text-muted-foreground space-y-1 text-sm">
+    <section
+      aria-label={BOOK_REPORT_UI.scopeRegion}
+      className="border-border bg-card text-muted-foreground space-y-1 rounded-lg border px-[18px] py-3.5 text-[13px] leading-5"
+    >
       <p>{bookReportRangeLine(answer.range, answer.summary)}</p>
       <BookReportCharterScopeLine
         charter={answer.filters.charter ?? null}
@@ -515,11 +568,16 @@ function ScopeLines({
       </p>
       <p>{BOOK_REPORT_AS_SAVED}</p>
       {answer.scope.restricted ? <p className="text-foreground">{BOOK_REPORT_RESTRICTED}</p> : null}
-      <details className="pt-1">
-        <summary className="text-foreground cursor-pointer text-sm font-medium">
+      <details className="border-border group mt-3 border-t pt-2.5">
+        <summary className="text-foreground hover:text-foreground/80 inline-flex cursor-pointer list-none items-center gap-1.5 text-[13.5px] font-medium [&::-webkit-details-marker]:hidden">
+          <ChevronRight
+            aria-hidden
+            className="text-muted-foreground h-3.5 w-3.5 shrink-0 transition-transform group-open:rotate-90"
+            strokeWidth={1.8}
+          />
           {BOOK_REPORT_UI.howCounted}
         </summary>
-        <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-[12.5px] leading-[18px]">
           {BOOK_REPORT_HOW_COUNTED.map((line) => (
             <li key={line}>{line}</li>
           ))}
@@ -539,14 +597,14 @@ function BooksTable({
   coverFor: (itemId: string) => Promise<BookCoverSource>;
 }) {
   return (
-    <div className="border-border bg-card rounded-md border">
+    <div className="border-border bg-card overflow-hidden rounded-lg border">
       <Table>
         <TableCaption className="sr-only">
           {bookReportTableCaption(answer.sort, answer.page, totalPages)}
         </TableCaption>
         <TableHeader>
           <TableRow>
-            <TableHead scope="col" className="w-14 px-2 sm:px-3">
+            <TableHead scope="col" className="w-14 px-2 first:pl-3 sm:px-3 sm:first:pl-4">
               {BOOK_REPORT_UI.columnCover}
             </TableHead>
             <TableHead scope="col" className="px-2 sm:px-3">
@@ -561,7 +619,7 @@ function BooksTable({
             <TableHead scope="col" className="hidden md:table-cell">
               {BOOK_REPORT_UI.columnLatest}
             </TableHead>
-            <TableHead scope="col" className="hidden sm:table-cell sm:px-3">
+            <TableHead scope="col" className="hidden sm:table-cell sm:px-3 sm:last:pr-4">
               <span className="sr-only">{BOOK_REPORT_UI.columnActions}</span>
             </TableHead>
           </TableRow>
@@ -580,26 +638,31 @@ function BookRow({ row, cover }: { row: BookReportRow; cover: Promise<BookCoverS
   const badges = bookReportRowBadges(row);
   return (
     <TableRow data-item-id={row.itemId}>
-      <TableCell className="w-14 px-2 py-2 sm:px-3">
+      <TableCell className="w-14 px-2 py-2 first:pl-3 sm:px-3 sm:first:pl-4">
         <BookCover cover={cover} title={row.name} />
       </TableCell>
       <th scope="row" className="px-2 py-2 text-left align-middle font-normal sm:px-3">
-        <span className="block font-medium [overflow-wrap:anywhere]">{row.name}</span>
-        <BookIdentityLine row={row} className="text-muted-foreground block text-xs" />
-        <span className="text-muted-foreground block text-xs sm:hidden">
-          {[ordersCountText(row.orders), latestOrderText(row.latestOrderDate)].filter(Boolean).join(' · ')}
+        <span className="block text-[13.5px] font-medium [overflow-wrap:anywhere]">{row.name}</span>
+        <BookIdentityLine
+          row={row}
+          className="text-muted-foreground mt-0.5 block text-[12px] leading-[18px]"
+        />
+        <span className="text-muted-foreground block text-[12px] leading-[18px] sm:hidden">
+          {[ordersCountText(row.orders), latestOrderText(row.latestOrderDate)]
+            .filter(Boolean)
+            .join(' · ')}
         </span>
         {badges.length > 0 ? (
           <span className="mt-1 flex flex-wrap gap-1">
             {badges.map((b) => (
-              <Badge key={b} variant="outline" className="text-[10.5px] font-medium">
+              <Badge key={b} variant="outline">
                 {b}
               </Badge>
             ))}
           </span>
         ) : null}
       </th>
-      <TableCell className="px-2 text-right font-semibold tabular-nums sm:px-3">
+      <TableCell className="px-2 text-right font-mono text-[13.5px] font-medium tabular-nums max-sm:pr-3 sm:px-3">
         {row.countsAsCopies ? formatReportQuantity(row.copies) : rowQuantityText(row)}
         {/* At phone width View orders sits under the total, so the Book
             column has room to keep an ISBN whole and the table fits a
@@ -608,13 +671,13 @@ function BookRow({ row, cover }: { row: BookReportRow; cover: Promise<BookCoverS
           <ViewOrdersButton itemId={row.itemId} title={row.name} />
         </span>
       </TableCell>
-      <TableCell className="hidden text-right tabular-nums sm:table-cell">
+      <TableCell className="hidden text-right font-mono text-[13px] tabular-nums sm:table-cell">
         {row.orders.toLocaleString('en-US')}
       </TableCell>
-      <TableCell className="hidden whitespace-nowrap md:table-cell">
+      <TableCell className="text-muted-foreground hidden whitespace-nowrap text-[12.5px] md:table-cell">
         {formatReportDate(row.latestOrderDate)}
       </TableCell>
-      <TableCell className="hidden text-right sm:table-cell sm:px-3">
+      <TableCell className="hidden text-right sm:table-cell sm:px-3 sm:last:pr-4">
         <ViewOrdersButton itemId={row.itemId} title={row.name} />
       </TableCell>
     </TableRow>
@@ -625,10 +688,14 @@ function BookRow({ row, cover }: { row: BookReportRow; cover: Promise<BookCoverS
  *  Rendered inside BookReportNavigationProvider. */
 function BookReportProblem({ message }: { message: string }) {
   return (
-    <div role="alert" className="border-border bg-card space-y-3 rounded-md border p-4">
-      <p className="text-sm">{message}</p>
-      <BookReportRefreshButton />
-    </div>
+    <StatePanel
+      kind="failed"
+      live="assertive"
+      headingLevel={null}
+      size="sm"
+      title={message}
+      action={<BookReportRefreshButton />}
+    />
   );
 }
 
@@ -648,10 +715,19 @@ export function BookReportMfaState({
   const here = qs ? `${BOOK_REPORT_PATH}?${qs}` : BOOK_REPORT_PATH;
   const enroll = reason === 'mfa_required';
   return (
-    <div role="alert" className="border-warning/40 bg-warning/10 flex items-start gap-3 rounded-md border p-4">
-      <ShieldAlert aria-hidden className="text-warning mt-0.5 h-5 w-5 shrink-0" />
+    <div
+      role="alert"
+      className="border-warning/40 bg-warning-wash flex items-start gap-3 rounded-lg border px-[18px] py-4"
+    >
+      <ShieldAlert
+        aria-hidden
+        className="text-warning mt-0.5 h-5 w-5 shrink-0"
+        strokeWidth={1.75}
+      />
       <div className="space-y-3">
-        <p className="text-sm">{enroll ? BOOK_REPORT_MFA_ENROLL : BOOK_REPORT_MFA_VERIFY}</p>
+        <p className="text-foreground text-[13.5px] leading-5">
+          {enroll ? BOOK_REPORT_MFA_ENROLL : BOOK_REPORT_MFA_VERIFY}
+        </p>
         <Button asChild size="sm">
           <Link
             href={

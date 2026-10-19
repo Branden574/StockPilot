@@ -1,6 +1,6 @@
 'use client';
 
-import { Loader2, Search, X } from 'lucide-react';
+import { ChevronDown, Loader2, Search, X } from 'lucide-react';
 import * as React from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -215,7 +215,7 @@ function ViewChangedNotice({
   return (
     <p
       role="status"
-      className="border-warning/40 bg-warning/10 text-foreground rounded-md border px-3 py-2 text-sm"
+      className="border-warning/40 bg-warning-wash text-foreground rounded-lg border px-3.5 py-2.5 text-[13px] leading-5"
     >
       {bookReportViewChangedLine(now, bookReportWarehouseOptionLabel(shown))}{' '}
       <BookReportLink
@@ -263,21 +263,35 @@ function StatusControl({
           <button
             type="button"
             aria-labelledby={`${id}-label ${id}-value`}
-            className={cn(CONTROL, 'flex items-center text-left')}
+            className={cn(CONTROL, 'flex items-center gap-1.5 text-left')}
           >
-            <span id={`${id}-value`} className="truncate">
+            <span id={`${id}-value`} className="min-w-0 flex-1 truncate">
               {summary}
             </span>
+            {/* The select-like chevron (DESIGN-SPEC 6.4); not part of the name. */}
+            <ChevronDown
+              aria-hidden
+              className="text-muted-foreground h-3.5 w-3.5 shrink-0"
+              strokeWidth={2}
+            />
           </button>
         </PopoverTrigger>
         <PopoverContent className="w-72 p-3">
-          <fieldset className="space-y-2">
-            <legend className="mb-1 text-sm font-medium">{BOOK_REPORT_UI.status}</legend>
+          <fieldset className="space-y-1">
+            <legend className="text-foreground mb-1.5 text-[13.5px] font-medium">
+              {BOOK_REPORT_UI.status}
+            </legend>
             {BOOK_REPORT_STATUS_GROUP_KEYS.map((g) => (
-              <label key={g} className="flex cursor-pointer items-start gap-2 text-sm">
+              // A real checkbox (the area's walk check): the row is its label,
+              // a 32 px row (44 px below sm) with the neutral hover fill, and
+              // the box checks in ink (DESIGN-SPEC 6.21).
+              <label
+                key={g}
+                className="hover:bg-muted -mx-1.5 flex min-h-8 cursor-pointer items-start gap-2.5 rounded-md px-1.5 py-1.5 text-[13px] leading-5 max-sm:min-h-11"
+              >
                 <input
                   type="checkbox"
-                  className="mt-0.5 h-4 w-4"
+                  className="accent-foreground mt-0.5 h-4 w-4 shrink-0 cursor-pointer"
                   checked={chosen.includes(g)}
                   onChange={(e) =>
                     setChosen((prev) =>
@@ -290,7 +304,7 @@ function StatusControl({
                 <span>
                   {bookReportStatusGroupLabel(g, statusLabels)}
                   {g === 'in_progress' ? (
-                    <span className="text-muted-foreground block text-xs">
+                    <span className="text-muted-foreground block text-[12px] leading-[18px]">
                       {bookReportInProgressDetail(statusLabels)}
                     </span>
                   ) : null}
@@ -299,11 +313,11 @@ function StatusControl({
             ))}
           </fieldset>
           {chosen.length === 0 ? (
-            <p role="alert" className="text-destructive mt-2 text-xs">
+            <p role="alert" className="text-destructive mt-2 text-[12px]">
               {BOOK_REPORT_UI.statusNoneChosen}
             </p>
           ) : null}
-          <div className="mt-3 flex items-center justify-between gap-2">
+          <div className="border-border mt-3 flex items-center justify-between gap-2 border-t pt-3">
             <Button
               type="button"
               variant="ghost"
@@ -351,11 +365,11 @@ function ListsProblem({
   if (failed) {
     const message = BOOK_REPORT_OPTIONS_ERROR.replace(/\s+Retry$/, '');
     return (
-      <p id={id} role="status" className="text-destructive text-xs">
+      <p id={id} role="status" className="text-destructive text-[12px]">
         {message}{' '}
         <button
           type="button"
-          className="font-medium underline underline-offset-2"
+          className="hover:text-foreground font-medium underline underline-offset-2"
           onClick={onRetry}
         >
           {BOOK_REPORT_UI.retry}
@@ -442,7 +456,10 @@ function CharterControl({
           </option>
         ))}
       </select>
-      <p id={hintId} className="text-muted-foreground sr-only text-xs sm:not-sr-only">
+      <p
+        id={hintId}
+        className="text-muted-foreground sr-only text-[12px] leading-[18px] sm:not-sr-only"
+      >
         {value === 'none'
           ? `${BOOK_REPORT_CHARTER_HINT} ${BOOK_REPORT_NO_CHARTER}: ${BOOK_REPORT_NO_CHARTER_HINT}`
           : BOOK_REPORT_CHARTER_HINT}
@@ -659,7 +676,7 @@ function SearchControl({ query }: { query: BookReportQuery }) {
       <div className="relative">
         <Search
           aria-hidden
-          className="text-muted-foreground pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+          className="text-muted-foreground pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
         />
         <Input
           ref={inputRef}
@@ -673,7 +690,7 @@ function SearchControl({ query }: { query: BookReportQuery }) {
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder={BOOK_REPORT_UI.searchPlaceholder}
-          className="h-9 pl-8 pr-16 text-[13px] [&::-webkit-search-cancel-button]:hidden"
+          className="h-8 pl-8 pr-16 text-[13px] [&::-webkit-search-cancel-button]:hidden"
         />
         <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-1">
           {pending ? (
@@ -687,7 +704,7 @@ function SearchControl({ query }: { query: BookReportQuery }) {
                 apply('');
                 inputRef.current?.focus();
               }}
-              className="text-muted-foreground hover:text-foreground focus-visible:ring-ring rounded p-1 focus-visible:outline-none focus-visible:ring-2"
+              className="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring inline-flex h-6 w-6 items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-2 max-sm:h-8 max-sm:w-8"
               aria-label={BOOK_REPORT_UI.clearSearch}
             >
               <X aria-hidden className="h-3.5 w-3.5" />

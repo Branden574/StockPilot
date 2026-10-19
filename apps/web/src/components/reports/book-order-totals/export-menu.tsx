@@ -93,7 +93,7 @@ export function BookReportExportMenu({
             <Button variant="outline" disabled aria-describedby={csvReasonId}>
               <Download className="h-4 w-4" /> {BOOK_REPORT_EXPORT_CSV}
             </Button>
-            <p id={csvReasonId} className="text-muted-foreground text-xs">
+            <p id={csvReasonId} className="text-muted-foreground text-[12px] leading-[18px]">
               {bookReportTooManyText(totalCount, BOOK_REPORT_CSV_MAX_ROWS)}
             </p>
           </div>
@@ -141,11 +141,11 @@ export function BookReportExportMenu({
           onDownload={(href) => void download(href, 'pdf')}
         />
       </div>
-      <p aria-live="polite" className="text-muted-foreground text-xs empty:hidden">
+      <p aria-live="polite" className="text-muted-foreground text-[12px] empty:hidden">
         {busy ? `${BOOK_REPORT_EXPORT_PREPARING}…` : ''}
       </p>
       {problem ? (
-        <p role="alert" className="text-destructive max-w-sm text-right text-xs">
+        <p role="alert" className="text-destructive max-w-sm text-right text-[12px] leading-[18px]">
           {problem}
         </p>
       ) : null}

@@ -239,4 +239,58 @@ describe('Books ordered by charter', () => {
       within(box).getByText('Copies in single-copy units only, as in Total books ordered.'),
     ).toBeInTheDocument();
   });
+
+  // Redesign hand-off from P2.1: the remove X and the by-charter row links
+  // hovered to the accent fill, where ink text or the X glyph read 3.48:1
+  // (light) and 1.62:1 (dark). They take the neutral hover fill instead.
+  it('the chip remove X hovers to the neutral fill, never the accent', () => {
+    render(
+      <BookReportNavigationProvider query={RENDERED}>
+        <BookReportShowingBlock
+          echoes={ECHOES}
+          query={RENDERED}
+          statusLabels={labels}
+          organizationId={ORG}
+          userId={USER}
+        />
+      </BookReportNavigationProvider>,
+    );
+    for (const name of ['Remove charter filter', 'Remove date filter', 'Remove search filter']) {
+      const link = screen.getByRole('link', { name });
+      expect(link).toHaveClass('hover:bg-muted', 'hover:text-foreground');
+      expect(link.className).not.toMatch(/(^|\s)hover:bg-accent(\s|$)/);
+    }
+  });
+
+  it('a by-charter row link hovers to the neutral fill with ink text, never the accent', () => {
+    const all: BookReportQuery = { ...RENDERED, charter: 'all' };
+    render(
+      <BookReportNavigationProvider query={all}>
+        <BookReportByCharter
+          rows={[
+            {
+              id: CH_A,
+              name: 'Charter Alder',
+              code: 'CH-A',
+              status: 'active',
+              copies: '7',
+              orders: 1,
+            },
+            { id: null, name: null, code: null, status: null, copies: '3', orders: 1 },
+          ]}
+          summary={{ copies: '10', orders: 2, unresolved: { entries: 0 } }}
+          query={all}
+          organizationId={ORG}
+          userId={USER}
+        />
+      </BookReportNavigationProvider>,
+    );
+    const box = document.querySelector('[data-by-charter]') as HTMLElement;
+    const links = within(box).getAllByRole('link', { hidden: true });
+    expect(links).toHaveLength(2);
+    for (const link of links) {
+      expect(link).toHaveClass('hover:bg-muted', 'hover:text-foreground');
+      expect(link.className).not.toMatch(/(^|\s)hover:bg-accent(\s|$)/);
+    }
+  });
 });

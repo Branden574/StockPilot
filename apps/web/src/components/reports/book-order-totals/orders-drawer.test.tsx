@@ -218,7 +218,10 @@ describe('View orders drawer', () => {
     );
     render(drawer());
     const dialog = await screen.findByRole('dialog');
-    expect(await within(dialog).findByRole('alert')).toHaveTextContent(BOOK_REPORT_NOT_IN_SCOPE);
+    const alert = await within(dialog).findByRole('alert');
+    expect(alert).toHaveTextContent(BOOK_REPORT_NOT_IN_SCOPE);
+    // Redesign (P4.E2): the shared state panel; a refusal is not a failed read.
+    expect(alert).toHaveAttribute('data-state-kind', 'forbidden');
     expect(within(dialog).queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 
@@ -226,8 +229,10 @@ describe('View orders drawer', () => {
     fetchMock.mockImplementationOnce(async () => json({ error: 'internal_error' }, 500));
     render(drawer());
     const dialog = await screen.findByRole('dialog');
-    expect(await within(dialog).findByRole('alert')).toHaveTextContent(BOOK_REPORT_ORDERS_LOAD_ERROR);
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Try again' }));
+    const alert = await within(dialog).findByRole('alert');
+    expect(alert).toHaveTextContent(BOOK_REPORT_ORDERS_LOAD_ERROR);
+    expect(alert).toHaveAttribute('data-state-kind', 'failed');
+    await userEvent.click(within(alert).getByRole('button', { name: 'Try again' }));
     expect(await within(dialog).findByText('SO-000003')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });

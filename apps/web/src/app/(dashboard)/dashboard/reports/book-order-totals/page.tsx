@@ -1,8 +1,8 @@
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { Suspense } from 'react';
 
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import {
   BookOrderTotalsBody,
   type BookReportSearchParams,
@@ -42,17 +42,14 @@ export default async function BookOrderTotalsPage({
   if (!books.enabled) return <ModuleNotEnabled moduleId="books" canManage={books.canManage} />;
 
   return (
-    <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href="/dashboard/reports"
-          className="text-muted-foreground hover:text-foreground text-sm"
-        >
-          ← Back to reports
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">{BOOK_REPORT_TITLE}</h1>
-        <p className="text-muted-foreground mt-1 text-sm">{BOOK_REPORT_CARD_DESCRIPTION}</p>
-      </div>
+    // The page area every redesigned list shares (DESIGN-SPEC 4 and 5.3):
+    // 1320 wide at most, a 16 px gutter on a phone.
+    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-5 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <PageHeader
+        back={<PageHeaderBackLink href="/dashboard/reports">← Back to reports</PageHeaderBackLink>}
+        title={BOOK_REPORT_TITLE}
+        subline={BOOK_REPORT_CARD_DESCRIPTION}
+      />
 
       <Suspense fallback={<ReportBodySkeleton />}>
         <BookOrderTotalsBody

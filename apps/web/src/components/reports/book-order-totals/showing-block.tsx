@@ -81,28 +81,32 @@ export function BookReportShowingBlock({
     <section
       aria-labelledby={headingId}
       data-showing
-      className="border-border bg-card rounded-md border px-4 py-3"
+      className="border-border bg-card rounded-lg border px-[18px] py-3.5"
     >
       <h2
         id={headingId}
-        className="text-muted-foreground text-[11px] font-semibold uppercase tracking-wider"
+        className="text-muted-foreground text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.1em]"
       >
         {BOOK_REPORT_SHOWING}
       </h2>
       <p
         role="status"
         data-showing-scope
-        className="mt-1 text-base font-medium [overflow-wrap:anywhere]"
+        className="mt-1 font-display text-[17px] font-medium leading-6 [overflow-wrap:anywhere]"
       >
         <span>{charter}</span>
-        <span aria-hidden className="text-muted-foreground mx-1.5">
+        <span aria-hidden className="text-ink-4 mx-1.5">
           ·
         </span>
         <span className="sr-only">, </span>
         <span>{range}</span>
       </p>
-      {warehouse ? <p className="text-muted-foreground mt-0.5 text-sm">{warehouse}</p> : null}
-      {status ? <p className="text-muted-foreground mt-0.5 text-sm">{status}</p> : null}
+      {warehouse ? (
+        <p className="text-muted-foreground mt-0.5 text-[13px] leading-5">{warehouse}</p>
+      ) : null}
+      {status ? (
+        <p className="text-muted-foreground mt-0.5 text-[13px] leading-5">{status}</p>
+      ) : null}
       <BookReportShowingChips
         query={query}
         echoes={echoes}

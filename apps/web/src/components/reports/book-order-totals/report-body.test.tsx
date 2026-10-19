@@ -27,7 +27,12 @@ const nav = vi.hoisted(() => ({
   params: new URLSearchParams(),
 }));
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: nav.push, replace: nav.replace, refresh: nav.refresh, prefetch: vi.fn() }),
+  useRouter: () => ({
+    push: nav.push,
+    replace: nav.replace,
+    refresh: nav.refresh,
+    prefetch: vi.fn(),
+  }),
   useSearchParams: () => nav.params,
   usePathname: () => '/dashboard/reports/book-order-totals',
   redirect: vi.fn((url: string) => {
@@ -105,10 +110,7 @@ function optionsCalls(): number {
   return fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/options')).length;
 }
 
-async function body(
-  sp: Record<string, string> = {},
-  over: Partial<BookOrderTotalsBodyProps> = {},
-) {
+async function body(sp: Record<string, string> = {}, over: Partial<BookOrderTotalsBodyProps> = {}) {
   return BookOrderTotalsBody({
     searchParams: Promise.resolve(sp),
     organizationId: ORG,
@@ -158,7 +160,9 @@ describe('Book Order Totals page body', () => {
     expect(within(copies).getByText('642')).toBeInTheDocument();
     expect(within(copies).getByText('copies requested')).toBeInTheDocument();
     expect(
-      within(copies).getByText('Copies requested through Orders; not copies purchased or current stock.'),
+      within(copies).getByText(
+        'Copies requested through Orders; not copies purchased or current stock.',
+      ),
     ).toBeInTheDocument();
     expect(
       within(screen.getByRole('group', { name: 'Distinct book entries' })).getByText('32'),
@@ -237,9 +241,7 @@ describe('Book Order Totals page body', () => {
         }),
       );
     });
-    svc.page.mockResolvedValue(
-      totalsResponse({ totalCount: 30 }, { id: W1, source: 'view' }),
-    );
+    svc.page.mockResolvedValue(totalsResponse({ totalCount: 30 }, { id: W1, source: 'view' }));
     render(await body());
 
     expect(svc.page).toHaveBeenCalledTimes(1);
@@ -265,7 +267,9 @@ describe('Book Order Totals page body', () => {
     expect(csv.getAttribute('href')).toContain('format=csv');
 
     await waitFor(() =>
-      expect(fetchMock.mock.calls.some(([u]) => String(u).includes(`/items/${ITEM_A}/orders?`))).toBe(true),
+      expect(
+        fetchMock.mock.calls.some(([u]) => String(u).includes(`/items/${ITEM_A}/orders?`)),
+      ).toBe(true),
     );
     const drill = String(fetchMock.mock.calls.find(([u]) => String(u).includes('/orders?'))![0]);
     expect(drill).toContain(carried);
@@ -288,9 +292,7 @@ describe('Book Order Totals page body', () => {
   });
 
   it('an unenrolled admin sees the enroll state, not an error page', async () => {
-    svc.page.mockRejectedValue(
-      new ServiceError('forbidden', 'enroll', { reason: 'mfa_required' }),
-    );
+    svc.page.mockRejectedValue(new ServiceError('forbidden', 'enroll', { reason: 'mfa_required' }));
     render(await body());
     expect(screen.getByRole('alert')).toHaveTextContent(BOOK_REPORT_MFA_ENROLL);
     expect(screen.getByRole('link', { name: 'Set up two-step verification' })).toHaveAttribute(
@@ -375,7 +377,9 @@ describe('Book Order Totals page body', () => {
   });
 
   it('a filter change pushes a new URL with the page reset and the warehouse kept', async () => {
-    svc.page.mockResolvedValue(totalsResponse({ totalCount: 60, page: 2 }, { id: W1, source: 'explicit' }));
+    svc.page.mockResolvedValue(
+      totalsResponse({ totalCount: 60, page: 2 }, { id: W1, source: 'explicit' }),
+    );
     render(await body({ warehouse: W1, page: '2' }));
     await userEvent.selectOptions(screen.getByLabelText('Sort'), 'title');
     expect(nav.push).toHaveBeenCalledTimes(1);
@@ -438,7 +442,9 @@ describe('Book Order Totals page body', () => {
     render(await body());
     expect(screen.getByRole('button', { name: /CSV/ })).toBeDisabled();
     expect(
-      screen.getByText('Too many books for one file (20,001; the limit is 20,000). Narrow the filters.'),
+      screen.getByText(
+        'Too many books for one file (20,001; the limit is 20,000). Narrow the filters.',
+      ),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /PDF/ })).toBeDisabled();
     expect(
@@ -502,7 +508,10 @@ describe('Book Order Totals page body', () => {
   it('marks a row in another unit and leaves it out of the copy total with a disclosure', async () => {
     svc.page.mockResolvedValue(
       totalsResponse({
-        rows: [bookRow(ITEM_A), bookRow(ITEM_B, { countsAsCopies: false, unit: 'pack of 10', copies: '12' })],
+        rows: [
+          bookRow(ITEM_A),
+          bookRow(ITEM_B, { countsAsCopies: false, unit: 'pack of 10', copies: '12' }),
+        ],
         summary: {
           ...totalsResponse().summary,
           copies: '30',
@@ -515,8 +524,58 @@ describe('Book Order Totals page body', () => {
     expect(within(rowB).getByText('12 (pack of 10)')).toBeInTheDocument();
     expect(within(rowB).getByText('Other unit: pack of 10')).toBeInTheDocument();
     expect(
-      screen.getAllByText('Leaves out 1 book entry ordered in another unit (12 pack of 10).').length,
+      screen.getAllByText('Leaves out 1 book entry ordered in another unit (12 pack of 10).')
+        .length,
     ).toBeGreaterThan(0);
+  });
+
+  // Redesign (P4.E2): the look moved onto the shared patterns; every word,
+  // role and figure above stays. These pin the structure the restyle chose.
+  it('draws the three totals as one stat strip, each figure a named group with its definition', async () => {
+    render(await body());
+    const region = screen.getByRole('region', { name: BOOK_REPORT_UI.summaryRegion });
+    const strip = region.querySelector('[data-slot="stat-strip"]');
+    expect(strip).not.toBeNull();
+    const groups = within(region).getAllByRole('group');
+    expect(groups.map((g) => g.getAttribute('data-slot'))).toEqual([
+      'stat-strip-item',
+      'stat-strip-item',
+      'stat-strip-item',
+    ]);
+    for (const name of [
+      'Total books ordered',
+      'Distinct book entries',
+      'Orders containing books',
+    ]) {
+      expect(within(region).getByRole('heading', { level: 2, name })).toBeInTheDocument();
+    }
+  });
+
+  it('an empty answer is the shared no-match panel in place of the table, with no table', async () => {
+    svc.page.mockResolvedValue(
+      totalsResponse({
+        rows: [],
+        totalCount: 0,
+        summary: { ...totalsResponse().summary, copies: '0', entries: 0, orders: 0 },
+      }),
+    );
+    render(await body());
+    const heading = screen.getByRole('heading', { level: 3, name: BOOK_REPORT_EMPTY });
+    expect(heading.closest('[data-slot="state-panel"]')).toHaveAttribute(
+      'data-state-kind',
+      'no-match',
+    );
+    expect(screen.queryByRole('table')).toBeNull();
+  });
+
+  it('a timeout is the shared failed-read panel, announced, with Refresh', async () => {
+    svc.page.mockRejectedValue(
+      new ServiceError('internal_error', BOOK_REPORT_TIMEOUT, { reason: 'timeout' }),
+    );
+    render(await body());
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveAttribute('data-state-kind', 'failed');
+    expect(within(alert).getByRole('button', { name: 'Refresh' })).toBeInTheDocument();
   });
 });
 

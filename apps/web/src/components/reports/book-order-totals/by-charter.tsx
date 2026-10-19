@@ -1,5 +1,7 @@
 'use client';
 
+import { ChevronRight } from 'lucide-react';
+
 import {
   BOOK_REPORT_BY_CHARTER_TITLE,
   BOOK_REPORT_BY_CHARTER_UNITS_NOTE,
@@ -51,42 +53,55 @@ export function BookReportByCharter({
   );
   const otherUnits = summary.unresolved.entries > 0;
   return (
-    <details data-by-charter className="border-border bg-card group rounded-md border px-4 py-3">
-      <summary className="cursor-pointer text-sm font-medium">
+    <details data-by-charter className="border-border bg-card group rounded-lg border">
+      {/* A card header (DESIGN-SPEC 6.7) that opens the list; the chevron
+          turns while it is open. The words are the summary's own. */}
+      <summary className="hover:bg-muted flex cursor-pointer list-none items-center gap-2 rounded-lg px-[18px] py-3.5 text-[13.5px] font-medium transition-colors group-open:rounded-b-none [&::-webkit-details-marker]:hidden">
+        <ChevronRight
+          aria-hidden
+          className="text-muted-foreground h-3.5 w-3.5 shrink-0 transition-transform group-open:rotate-90"
+          strokeWidth={1.8}
+        />
         {BOOK_REPORT_BY_CHARTER_TITLE}
       </summary>
-      <ul className="mt-3 space-y-0.5 text-sm">
-        {rows.map((r) => {
-          const label = r.id
-            ? (labels.get(r.id) ?? bookReportCharterOptionLabel(r))
-            : BOOK_REPORT_NO_CHARTER;
-          const next = withBookReportFilter(current, { charter: r.id ?? 'none' });
-          const value = bookReportByCharterValue(r.copies, r.orders, otherUnits);
-          return (
-            <li key={r.id ?? 'none'} data-charter-row={r.id ?? 'none'}>
-              <BookReportLink
-                href={bookReportPageHref(next)}
-                query={next}
-                aria-label={`${bookReportByCharterApplyLabel(label)}, ${value}`}
-                className="hover:bg-accent focus-visible:ring-ring flex items-baseline gap-2 rounded px-1 py-1 focus-visible:outline-none focus-visible:ring-2"
-              >
-                <span className="min-w-0 underline-offset-2 [overflow-wrap:anywhere] hover:underline">
-                  {label}
-                </span>
-                <span
-                  aria-hidden
-                  className="border-muted-foreground/40 min-w-4 flex-1 translate-y-[-0.25em] border-b border-dotted"
-                />
-                <span className="shrink-0 tabular-nums">{value}</span>
-              </BookReportLink>
-            </li>
-          );
-        })}
-      </ul>
-      <p className="mt-3 text-sm font-medium">{bookReportByCharterTotalLine(summary)}</p>
-      {otherUnits ? (
-        <p className="text-muted-foreground mt-1 text-xs">{BOOK_REPORT_BY_CHARTER_UNITS_NOTE}</p>
-      ) : null}
+      <div className="border-border border-t px-[18px] pb-3.5 pt-2.5">
+        <ul className="space-y-0.5 text-[13px]">
+          {rows.map((r) => {
+            const label = r.id
+              ? (labels.get(r.id) ?? bookReportCharterOptionLabel(r))
+              : BOOK_REPORT_NO_CHARTER;
+            const next = withBookReportFilter(current, { charter: r.id ?? 'none' });
+            const value = bookReportByCharterValue(r.copies, r.orders, otherUnits);
+            return (
+              <li key={r.id ?? 'none'} data-charter-row={r.id ?? 'none'}>
+                <BookReportLink
+                  href={bookReportPageHref(next)}
+                  query={next}
+                  aria-label={`${bookReportByCharterApplyLabel(label)}, ${value}`}
+                  className="hover:bg-muted hover:text-foreground focus-visible:ring-ring -mx-1.5 flex min-h-8 items-baseline gap-2 rounded-md px-1.5 py-1.5 focus-visible:outline-none focus-visible:ring-2 max-sm:min-h-11"
+                >
+                  <span className="min-w-0 underline-offset-2 [overflow-wrap:anywhere] hover:underline">
+                    {label}
+                  </span>
+                  <span
+                    aria-hidden
+                    className="border-line-strong min-w-4 flex-1 translate-y-[-0.25em] border-b border-dotted"
+                  />
+                  <span className="text-ink-2 shrink-0 tabular-nums">{value}</span>
+                </BookReportLink>
+              </li>
+            );
+          })}
+        </ul>
+        <p className="border-border mt-2.5 border-t pt-2.5 text-[13px] font-medium">
+          {bookReportByCharterTotalLine(summary)}
+        </p>
+        {otherUnits ? (
+          <p className="text-muted-foreground mt-1 text-[12px]">
+            {BOOK_REPORT_BY_CHARTER_UNITS_NOTE}
+          </p>
+        ) : null}
+      </div>
     </details>
   );
 }
