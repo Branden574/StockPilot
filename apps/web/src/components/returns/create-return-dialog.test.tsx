@@ -98,7 +98,9 @@ describe('CreateReturnDialog request key', () => {
     expect((first![0] as { lines: Array<{ quantity: number }> }).lines[0]!.quantity).toBe(2);
     expect((second![0] as { lines: Array<{ quantity: number }> }).lines[0]!.quantity).toBe(1);
     expect(keyOf(second!)).toBe(keyOf(first!));
-    expect(keyOf(first!)).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(keyOf(first!)).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
   });
 
   it('mints a new key when the dialog is opened again', async () => {
@@ -135,7 +137,19 @@ describe('CreateReturnDialog exchange choice (returns RX-2)', () => {
         returnedItemId: 'm',
         groupId: 'g',
         siblings: [
-          { itemId: ITEM_L, name: 'Walk Shirt', sku: 'WS-L', variantSize: 'L', variantKey: 'l', groupId: 'g', sibling: true, isReturnedItem: false, onHand: 5, held: 1, free: 4 },
+          {
+            itemId: ITEM_L,
+            name: 'Walk Shirt',
+            sku: 'WS-L',
+            variantSize: 'L',
+            variantKey: 'l',
+            groupId: 'g',
+            sibling: true,
+            isReturnedItem: false,
+            onHand: 5,
+            held: 1,
+            free: 4,
+          },
         ],
         matches: [],
       },
@@ -146,7 +160,9 @@ describe('CreateReturnDialog exchange choice (returns RX-2)', () => {
     expect(within(dialog).getByRole('checkbox')).toBeChecked();
     expect(candidatesAction).not.toHaveBeenCalled();
     fireEvent.click(within(dialog).getByLabelText('Exchange for another size or item'));
-    await waitFor(() => expect(candidatesAction).toHaveBeenCalledWith({ orderRequestId: ORDER, line: LINE, q: '' }));
+    await waitFor(() =>
+      expect(candidatesAction).toHaveBeenCalledWith({ orderRequestId: ORDER, line: LINE, q: '' }),
+    );
     fireEvent.click(await within(dialog).findByLabelText(/Walk Shirt, L/));
     submit(dialog);
     await waitFor(() => expect(createAction).toHaveBeenCalledTimes(1));
@@ -180,7 +196,12 @@ describe('CreateReturnDialog exchange choice (returns RX-2)', () => {
 // line; it starts ticked. With several returnable lines nothing is ticked for
 // the person.
 describe('CreateReturnDialog starts the only returnable line ticked', () => {
-  const second = { ...LINES[0]!, orderRequestLineId: '55555555-5555-4555-8555-555555555555', itemName: 'Walk Shirt L', itemSku: 'WS-L' };
+  const second = {
+    ...LINES[0]!,
+    orderRequestLineId: '55555555-5555-4555-8555-555555555555',
+    itemName: 'Walk Shirt L',
+    itemSku: 'WS-L',
+  };
 
   it('one returnable line: ticked, and Create return sends it with no other tap', async () => {
     createAction.mockResolvedValue({ ok: true, data: { id: 'r1', replay: false } });
@@ -197,11 +218,24 @@ describe('CreateReturnDialog starts the only returnable line ticked', () => {
   it('two returnable lines: none ticked; one of them fully returned: the other is ticked', () => {
     const { unmount } = render(<CreateReturnDialog orderId={ORDER} lines={[LINES[0]!, second]} />);
     let dialog = openDialog();
-    expect(within(dialog).getAllByRole('checkbox').map((c) => (c as HTMLInputElement).checked)).toEqual([false, false]);
+    expect(
+      within(dialog)
+        .getAllByRole('checkbox')
+        .map((c) => (c as HTMLInputElement).checked),
+    ).toEqual([false, false]);
     unmount();
-    render(<CreateReturnDialog orderId={ORDER} lines={[{ ...LINES[0]!, quantityRemaining: 0 }, second]} />);
+    render(
+      <CreateReturnDialog
+        orderId={ORDER}
+        lines={[{ ...LINES[0]!, quantityRemaining: 0 }, second]}
+      />,
+    );
     dialog = openDialog();
-    expect(within(dialog).getAllByRole('checkbox').map((c) => (c as HTMLInputElement).checked)).toEqual([false, true]);
+    expect(
+      within(dialog)
+        .getAllByRole('checkbox')
+        .map((c) => (c as HTMLInputElement).checked),
+    ).toEqual([false, true]);
   });
 });
 
@@ -211,7 +245,9 @@ describe('CreateReturnDialog refusals stay in the dialog', () => {
   it('a refused create shows its words in the dialog as an alert, cleared on the next try', async () => {
     createAction.mockResolvedValueOnce({
       ok: false,
-      error: { message: 'Only 1 of these can still be exchanged; the rest can be returned, not exchanged.' },
+      error: {
+        message: 'Only 1 of these can still be exchanged; the rest can be returned, not exchanged.',
+      },
     });
     render(<CreateReturnDialog orderId={ORDER} lines={LINES} />);
     const dialog = openDialog();
@@ -240,7 +276,50 @@ describe('CreateReturnDialog refusals stay in the dialog', () => {
     render(<CreateReturnDialog orderId={ORDER} lines={LINES} />);
     const dialog = openDialog();
     submit(dialog);
-    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Something went wrong. Try again.');
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      'Something went wrong. Try again.',
+    );
     await settled(dialog);
+  });
+});
+
+// Redesign (P4.B3): "The item is here" is the shared switch. It starts off,
+// it is named by its words with the help as its description, its words turn
+// it on, and the create sends what it shows; reopening the dialog puts it back
+// off. The line checkbox stays a native checkbox (its `checked`, its label).
+describe('CreateReturnDialog "The item is here" switch', () => {
+  it('starts off, is named by its words, and sends itemIsHere as shown', async () => {
+    createAction.mockResolvedValue({ ok: true, data: { id: 'r1', replay: false } });
+    render(<CreateReturnDialog orderId={ORDER} lines={LINES} />);
+    const dialog = openDialog();
+    const sw = within(dialog).getByRole('switch', { name: 'The item is here' });
+    expect(sw).toHaveAttribute('aria-checked', 'false');
+    expect(sw).toHaveAccessibleDescription(/./);
+    fireEvent.click(within(dialog).getByText('The item is here'));
+    expect(sw).toHaveAttribute('aria-checked', 'true');
+    submit(dialog);
+    await waitFor(() => expect(createAction).toHaveBeenCalledTimes(1));
+    expect(createAction.mock.calls[0]![0]).toMatchObject({ itemIsHere: true });
+  });
+
+  it('sends itemIsHere false when left off, and is off again after reopening', async () => {
+    createAction.mockResolvedValue({ ok: false, error: { message: 'Busy. Try again.' } });
+    render(<CreateReturnDialog orderId={ORDER} lines={LINES} />);
+    let dialog = openDialog();
+    submit(dialog);
+    await waitFor(() => expect(createAction).toHaveBeenCalledTimes(1));
+    expect(createAction.mock.calls[0]![0]).toMatchObject({ itemIsHere: false });
+    await settled(dialog);
+    fireEvent.click(within(dialog).getByRole('switch', { name: 'The item is here' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    dialog = openDialog();
+    expect(within(dialog).getByRole('switch', { name: 'The item is here' })).toHaveAttribute(
+      'aria-checked',
+      'false',
+    );
+    const box = within(dialog).getByRole('checkbox');
+    expect(box.tagName).toBe('INPUT');
+    expect(box).toBeChecked();
   });
 });

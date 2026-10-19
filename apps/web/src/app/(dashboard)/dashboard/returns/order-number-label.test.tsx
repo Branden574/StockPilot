@@ -24,6 +24,10 @@ vi.mock('@/lib/modules/module-gate', () => ({
   checkModuleAccess: vi.fn(async (m: string) => ({ enabled: m === 'returns', canManage: true })),
 }));
 vi.mock('@/components/dashboard/module-not-enabled', () => ({ ModuleNotEnabled: () => null }));
+// The list's heading reads the sidebar rename (PLAN rule 10); no rename here.
+vi.mock('@/lib/nav-labels', () => ({
+  effectiveNavLabel: vi.fn(async (_href: string, fallback: string) => fallback),
+}));
 vi.mock('@/server/services/shipping', () => ({
   ShippingService: { forCurrentUser: vi.fn(async () => ({ getReturnLabel: vi.fn(async () => null) })) },
 }));

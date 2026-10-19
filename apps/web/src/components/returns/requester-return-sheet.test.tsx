@@ -465,3 +465,27 @@ describe('RequesterReturnSheetForm: sending', () => {
     expect(hp?.closest('[aria-hidden="true"]')).not.toBeNull();
   });
 });
+
+// Redesign (P4.B3): the line's tick box is drawn as the shared Checkbox's box,
+// but it stays the native checkbox the public page, the portal and the order
+// page rely on: an <input type="checkbox"> that its words tick, that Space
+// ticks, and that a line with nothing left to return cannot tick.
+describe('RequesterReturnSheetForm: the line tick box stays a native checkbox', () => {
+  it('is an input checkbox that its words and Space toggle', async () => {
+    const { user } = setup();
+    const box = screen.getByRole('checkbox', { name: /New Hire Shirt/ });
+    expect(box.tagName).toBe('INPUT');
+    expect(box).toHaveAttribute('type', 'checkbox');
+    expect(box).not.toBeChecked();
+    await user.click(screen.getByText('New Hire Shirt'));
+    expect(box).toBeChecked();
+    box.focus();
+    await user.keyboard(' ');
+    expect(box).not.toBeChecked();
+  });
+
+  it('cannot be ticked on a line with nothing left to return', () => {
+    setup({ lines: [SHIRT, { ...NOTEBOOK, quantityRemaining: 0 }] });
+    expect(screen.getByRole('checkbox', { name: /Composition Notebook/ })).toBeDisabled();
+  });
+});

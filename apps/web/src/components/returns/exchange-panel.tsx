@@ -4,7 +4,15 @@ import { ArrowRight, Loader2 } from 'lucide-react';
 import Link from 'next/link';
 import * as React from 'react';
 
+import { DetailSection } from '@/components/patterns/detail-section';
+import { Thumb } from '@/components/patterns/thumb';
 import { ReplacementPicker } from '@/components/returns/replacement-picker';
+import {
+  choiceRowClass,
+  eyebrowClass,
+  nativeRadioClass,
+  replacementCardClass,
+} from '@/components/returns/returns-ui';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -71,23 +79,43 @@ import {
 export function ExchangeRail({ rail }: { rail: RailStep[] }) {
   if (rail.length === 0) return null;
   return (
-    <ol className="flex flex-wrap items-center gap-1.5 text-xs" aria-label={RETURNS_COPY.railProgress}>
+    <ol
+      className="flex flex-wrap items-center gap-x-1.5 gap-y-2 text-[12px]"
+      aria-label={RETURNS_COPY.railProgress}
+    >
       {rail.map((s, i) => (
-        <li key={s.id} className="inline-flex items-center gap-1.5" aria-current={s.state === 'current' ? 'step' : undefined}>
+        <li
+          key={s.id}
+          className="inline-flex items-center gap-1.5"
+          aria-current={s.state === 'current' ? 'step' : undefined}
+        >
+          {/* The stage-strip pill (DESIGN-SPEC 6.10 tones): each state is
+              also said in words, so no state rests on colour or a dash. */}
           <span
             className={cn(
-              'rounded-full border px-2 py-0.5',
-              s.state === 'done' && 'border-foreground/30 bg-muted',
-              s.state === 'current' && 'border-foreground font-medium',
-              s.state === 'stopped' && 'border-destructive text-destructive font-medium',
-              s.state === 'upcoming' && 'text-muted-foreground border-dashed',
-              (s.state === 'skipped' || s.state === 'not_started') && 'text-muted-foreground border-dashed opacity-70',
+              // inline-block, not flex: a flex item would drop the space before "·".
+              'inline-block whitespace-nowrap rounded-full border px-2.5 py-[3px] leading-4',
+              s.state === 'done' && 'bg-sunk text-ink-2 border-line-strong',
+              s.state === 'current' && 'border-foreground text-foreground bg-card font-medium',
+              s.state === 'stopped' &&
+                'bg-destructive-wash text-destructive border-transparent font-medium',
+              s.state === 'upcoming' && 'text-muted-foreground border-line-strong border-dashed',
+              (s.state === 'skipped' || s.state === 'not_started') &&
+                'text-muted-foreground border-border border-dashed',
             )}
           >
             {s.label}
-            <span className="text-muted-foreground"> · {RAIL_STEP_STATE_WORDS[s.state]}</span>
+            <span
+              className={cn(
+                s.state === 'stopped' ? 'text-destructive' : 'text-muted-foreground',
+                'font-normal',
+              )}
+            >
+              {' '}
+              · {RAIL_STEP_STATE_WORDS[s.state]}
+            </span>
           </span>
-          {i < rail.length - 1 ? <ArrowRight className="text-muted-foreground h-3 w-3" aria-hidden /> : null}
+          {i < rail.length - 1 ? <ArrowRight className="text-ink-4 h-3 w-3" aria-hidden /> : null}
         </li>
       ))}
     </ol>
@@ -114,15 +142,9 @@ export const reviewDecision = exchangeReviewDecision;
 
 type CandidateLoader = (q: string) => Promise<ActionResult<ExchangeCandidatesAnswer>>;
 
+/** The replacement's photo in the 56 px frame (DESIGN-SPEC 6.14). */
 function ItemThumb({ url, alt }: { url: string | null; alt: string }) {
-  return (
-    <div className="bg-muted relative h-14 w-14 shrink-0 overflow-hidden rounded-lg">
-      {url ? (
-        // eslint-disable-next-line @next/next/no-img-element -- signed storage URL, sized box
-        <img src={url} alt={alt} className="h-full w-full object-cover" />
-      ) : null}
-    </div>
-  );
+  return <Thumb size={56} src={url} alt={alt} />;
 }
 
 /**
@@ -165,47 +187,70 @@ export function ReplacementSide({
     if (focusPickerToken !== null) pickerBox.current?.focus();
   }, [focusPickerToken]);
   const requested = line.requestedItem;
-  const requestedLabel = requested ? returnLineLabel(requested.name ?? 'Item', requested.variant) : null;
+  const requestedLabel = requested
+    ? returnLineLabel(requested.name ?? 'Item', requested.variant)
+    : null;
   const approved = line.approvedItem;
-  const approvedLabel = approved ? returnLineLabel(approved.name ?? 'Item', approved.variant) : null;
+  const approvedLabel = approved
+    ? returnLineLabel(approved.name ?? 'Item', approved.variant)
+    : null;
   const status = replacementCardStatusLabel(line, replacement);
 
   return (
     <article
-      className="bg-card border-l-primary space-y-3 rounded-xl border border-l-4 p-4"
+      className={cn(replacementCardClass, 'space-y-3 p-4')}
       aria-label={`${RETURNS_COPY.replacement} for ${returnedLabel}`}
     >
-      <div className="flex items-center gap-1.5 text-xs font-medium">
-        <ArrowRight className="h-3.5 w-3.5" aria-hidden />
-        <span className="font-mono uppercase tracking-[0.12em]">{RETURNS_COPY.replacement}</span>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <ArrowRight className="text-accent h-3.5 w-3.5" aria-hidden />
+        <span className={eyebrowClass}>{RETURNS_COPY.replacement}</span>
         <Badge variant="outline" className="ml-auto">
           {status}
         </Badge>
       </div>
 
       <div className="flex gap-3">
-        <ItemThumb url={(approved ?? requested)?.thumbUrl ?? (approved ?? requested)?.imageUrl ?? null} alt={approvedLabel ?? requestedLabel ?? 'Replacement'} />
-        <div className="min-w-0 space-y-1 text-sm">
+        <ItemThumb
+          url={(approved ?? requested)?.thumbUrl ?? (approved ?? requested)?.imageUrl ?? null}
+          alt={approvedLabel ?? requestedLabel ?? 'Replacement'}
+        />
+        <div className="min-w-0 space-y-1 text-[13px]">
           {requestedLabel ? (
-            <p className={cn(approvedLabel && line.changedByWarehouse ? 'text-muted-foreground line-through' : 'font-medium')}>
+            <p
+              className={cn(
+                approvedLabel && line.changedByWarehouse
+                  ? 'text-muted-foreground line-through'
+                  : 'font-medium',
+              )}
+            >
               {requestedLabel}
             </p>
           ) : (
             <p className="font-medium">{RETURNS_COPY.replacementWarehouseReview}</p>
           )}
           {line.requestNote ? (
-            <p className="text-muted-foreground text-xs">
+            <p className="text-muted-foreground text-[12px]">
               {RETURNS_COPY.replacementNoteFromRequester}: {line.requestNote}
             </p>
           ) : null}
           {approvedLabel && line.changedByWarehouse ? (
             <p className="font-medium">
-              {approvedLabel} <span className="text-muted-foreground text-xs">({RETURNS_COPY.replacementChangedByWarehouse})</span>
+              {approvedLabel}{' '}
+              <span className="text-muted-foreground text-[12px] font-normal">
+                ({RETURNS_COPY.replacementChangedByWarehouse})
+              </span>
             </p>
           ) : null}
           <p className="tabular-nums">{replacementCardQuantityLabel(line, replacement)}</p>
           {line.status === 'requested' && line.requestedFree !== null ? (
-            <p className={cn('text-xs tabular-nums', line.requestedFree < line.requestedQuantity ? 'text-destructive' : 'text-muted-foreground')}>
+            <p
+              className={cn(
+                'text-[12px] tabular-nums',
+                line.requestedFree < line.requestedQuantity
+                  ? 'text-destructive'
+                  : 'text-muted-foreground',
+              )}
+            >
               {line.requestedFree < line.requestedQuantity
                 ? shortLabel(line.requestedFree, line.requestedQuantity)
                 : availableLabel(line.requestedFree)}
@@ -217,36 +262,49 @@ export function ReplacementSide({
       {review && onReview ? (
         <fieldset disabled={disabled} className="space-y-2">
           <legend className="sr-only">Decision for the replacement of {returnedLabel}</legend>
-          <div role="radiogroup" aria-label={`Decision for the replacement of ${returnedLabel}`} className="space-y-1.5">
-            {exchangeReviewOptions(line, { canApproveOrders }).map(({ kind, label: words, disabled: off }) => (
-              <label
-                key={kind}
-                className={cn(
-                  'flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm',
-                  off ? 'text-muted-foreground cursor-not-allowed' : 'cursor-pointer',
-                  review.kind === kind ? 'border-foreground bg-muted' : 'border-border',
-                )}
-              >
-                <input
-                  type="radio"
-                  name={`${groupId}-decision`}
-                  value={kind}
-                  checked={review.kind === kind}
-                  disabled={off}
-                  onChange={() =>
-                    onReview(
-                      kind === 'as_requested'
-                        ? { kind }
-                        : kind === 'decline'
-                          ? { kind, reason: '' }
-                          : { kind, itemId: null, label: null, free: null, quantity: Math.min(line.requestedQuantity, returnedQty), reason: '' },
-                    )
-                  }
-                  className="h-3.5 w-3.5"
-                />
-                {words}
-              </label>
-            ))}
+          <div
+            role="radiogroup"
+            aria-label={`Decision for the replacement of ${returnedLabel}`}
+            className="space-y-1.5"
+          >
+            {exchangeReviewOptions(line, { canApproveOrders }).map(
+              ({ kind, label: words, disabled: off }) => (
+                <label
+                  key={kind}
+                  className={cn(
+                    choiceRowClass({ checked: review.kind === kind, disabled: off }),
+                    'flex min-h-9 items-center gap-2.5 px-3 py-1.5',
+                    off && 'text-muted-foreground',
+                  )}
+                >
+                  <input
+                    type="radio"
+                    name={`${groupId}-decision`}
+                    value={kind}
+                    checked={review.kind === kind}
+                    disabled={off}
+                    onChange={() =>
+                      onReview(
+                        kind === 'as_requested'
+                          ? { kind }
+                          : kind === 'decline'
+                            ? { kind, reason: '' }
+                            : {
+                                kind,
+                                itemId: null,
+                                label: null,
+                                free: null,
+                                quantity: Math.min(line.requestedQuantity, returnedQty),
+                                reason: '',
+                              },
+                      )
+                    }
+                    className={nativeRadioClass}
+                  />
+                  {words}
+                </label>
+              ),
+            )}
           </div>
           {review.kind === 'change' ? (
             <div
@@ -260,7 +318,9 @@ export function ReplacementSide({
                 load={load}
                 needed={review.quantity}
                 selectedItemId={review.itemId}
-                onSelect={(row, label) => onReview({ ...review, itemId: row.itemId, label, free: row.free })}
+                onSelect={(row, label) =>
+                  onReview({ ...review, itemId: row.itemId, label, free: row.free })
+                }
                 label={returnedLabel}
                 disabled={disabled}
               />
@@ -317,19 +377,30 @@ export function AddReplacement({
         variant="outline"
         size="sm"
         disabled={disabled}
-        onClick={() => onChange({ itemId: null, label: null, free: null, quantity: returnedQty, reason: '' })}
+        onClick={() =>
+          onChange({ itemId: null, label: null, free: null, quantity: returnedQty, reason: '' })
+        }
       >
         {RETURNS_COPY.addReplacement}
       </Button>
     );
   }
   return (
-    <article className="bg-card border-l-primary space-y-3 rounded-xl border border-l-4 p-4" aria-label={`${RETURNS_COPY.addReplacement} for ${returnedLabel}`}>
-      <div className="flex items-center gap-1.5 text-xs font-medium">
-        <ArrowRight className="h-3.5 w-3.5" aria-hidden />
-        <span className="font-mono uppercase tracking-[0.12em]">{RETURNS_COPY.replacement}</span>
+    <article
+      className={cn(replacementCardClass, 'space-y-3 p-4')}
+      aria-label={`${RETURNS_COPY.addReplacement} for ${returnedLabel}`}
+    >
+      <div className="flex items-center gap-1.5">
+        <ArrowRight className="text-accent h-3.5 w-3.5" aria-hidden />
+        <span className={eyebrowClass}>{RETURNS_COPY.replacement}</span>
         {/* Review fix P27: the undo reads as the action it is. */}
-        <Button variant="ghost" size="sm" className="ml-auto" onClick={() => onChange(null)} disabled={disabled}>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="ml-auto"
+          onClick={() => onChange(null)}
+          disabled={disabled}
+        >
           {RETURNS_COPY.keepAsReturnOnly}
         </Button>
       </div>
@@ -341,15 +412,30 @@ export function AddReplacement({
         label={returnedLabel}
         disabled={disabled}
       />
-      <QuantityField id={`${id}-qty`} value={state.quantity} max={returnedQty} onChange={(quantity) => onChange({ ...state, quantity })} />
+      <QuantityField
+        id={`${id}-qty`}
+        value={state.quantity}
+        max={returnedQty}
+        onChange={(quantity) => onChange({ ...state, quantity })}
+      />
     </article>
   );
 }
 
-function QuantityField({ id, value, max, onChange }: { id: string; value: number; max: number; onChange: (n: number) => void }) {
+function QuantityField({
+  id,
+  value,
+  max,
+  onChange,
+}: {
+  id: string;
+  value: number;
+  max: number;
+  onChange: (n: number) => void;
+}) {
   return (
     <div className="flex items-center gap-2">
-      <Label htmlFor={id} className="text-xs">
+      <Label htmlFor={id} className="text-[12.5px] font-normal">
         {RETURNS_COPY.replacementQuantity}
       </Label>
       <Input
@@ -364,7 +450,7 @@ function QuantityField({ id, value, max, onChange }: { id: string; value: number
           const n = Math.trunc(Number(e.target.value));
           onChange(Number.isFinite(n) ? Math.min(Math.max(n, 1), max) : 1);
         }}
-        className="h-8 w-20"
+        className="h-8 w-20 text-right font-mono tabular-nums"
       />
     </div>
   );
@@ -386,12 +472,18 @@ function ReasonField({
   max?: number;
 }) {
   return (
-    <div className="space-y-1">
-      <Label htmlFor={id} className="text-xs">
+    <div className="space-y-1.5">
+      <Label htmlFor={id} className="text-[12.5px]">
         {label}
       </Label>
-      <Textarea id={id} value={value} onChange={(e) => onChange(e.target.value)} rows={2} maxLength={max} />
-      {help ? <p className="text-muted-foreground text-xs">{help}</p> : null}
+      <Textarea
+        id={id}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        rows={2}
+        maxLength={max}
+      />
+      {help ? <p className="text-muted-foreground text-[12px]">{help}</p> : null}
     </div>
   );
 }
@@ -410,17 +502,22 @@ export function ReplacementOrderSection({
 }) {
   const repl = exchange.replacement;
   return (
-    <section className="bg-card space-y-3 rounded-xl border p-4" aria-label={RETURNS_COPY.replacementOrderHeading}>
-      <div className="flex flex-wrap items-center gap-2">
-        <h2 className="text-muted-foreground font-mono text-[10.5px] uppercase tracking-[0.12em]">{RETURNS_COPY.exchangeStatusHeading}</h2>
-        <Badge variant="outline">{exchange.statusLabel}</Badge>
-      </div>
+    <DetailSection
+      aria-label={RETURNS_COPY.replacementOrderHeading}
+      // Core's words are capitals: drawn as the card label recipe, like RETURNING.
+      title={<span className={eyebrowClass}>{RETURNS_COPY.exchangeStatusHeading}</span>}
+      aside={<Badge variant="outline">{exchange.statusLabel}</Badge>}
+      bodyClassName="space-y-3"
+    >
       <ExchangeRail rail={exchange.rail} />
       {repl ? (
-        <div className="space-y-2 text-sm">
+        <div className="space-y-2 text-[13.5px]">
           <p>
             {RETURNS_COPY.replacementOrderHeading}{' '}
-            <Link href={`/dashboard/orders/${repl.orderId}`} className="font-medium hover:underline">
+            <Link
+              href={`/dashboard/orders/${repl.orderId}`}
+              className="font-mono font-medium tabular-nums underline-offset-2 hover:underline"
+            >
               {formatOrderNumber(repl.orderNumber) ?? repl.orderId.slice(0, 8)}
             </Link>
             {!repl.live ? <span className="text-muted-foreground"> (cancelled)</span> : null}
@@ -438,33 +535,41 @@ export function ReplacementOrderSection({
                   status: repl.status,
                 });
                 return (
-                  <li key={l.orderLineId} className="text-sm">
+                  <li key={l.orderLineId} className="text-[13.5px]">
                     <span className="font-medium">{l.label}</span>
                     {summary.slice(l.label.length)}
-                    {l.take ? <span className="text-muted-foreground block text-xs">{l.take}</span> : null}
+                    {l.take ? (
+                      <span className="text-muted-foreground block text-[12px]">{l.take}</span>
+                    ) : null}
                   </li>
                 );
               })}
             </ul>
           ) : null}
           {repl.short ? (
-            <p className="text-destructive text-xs" role="status">
+            <p className="text-destructive text-[12.5px]" role="status">
               {RETURNS_COPY.notInStock}
             </p>
           ) : null}
           {exchange.releasedEarly ? (
-            <p className="text-muted-foreground text-xs">
-              {releasedBeforeReturnLine(exchange.release?.byName ?? null, canReadDecisions ? (exchange.release?.reason ?? null) : null)}
+            <p className="text-muted-foreground text-[12.5px]">
+              {releasedBeforeReturnLine(
+                exchange.release?.byName ?? null,
+                canReadDecisions ? (exchange.release?.reason ?? null) : null,
+              )}
             </p>
           ) : null}
           {exchange.history.length > 0 ? (
             // Review fix P22: the order status words (core), never a raw code.
-            <p className="text-muted-foreground text-xs">
+            <p className="text-muted-foreground text-[12.5px]">
               {RETURNS_COPY.earlierReplacements}:{' '}
               {earlierReplacementEntries(exchange.history).map((h, i) => (
                 <React.Fragment key={h.orderId}>
                   {i > 0 ? ', ' : null}
-                  <Link href={`/dashboard/orders/${h.orderId}`} className="hover:underline">
+                  <Link
+                    href={`/dashboard/orders/${h.orderId}`}
+                    className="underline-offset-2 hover:underline"
+                  >
                     {h.orderLabel}
                   </Link>
                   {h.statusWords ? ` (${h.statusWords})` : null}
@@ -476,9 +581,11 @@ export function ReplacementOrderSection({
       ) : (
         // Why there is no replacement order: not yet approved, declined, or
         // cancelled with the return (review fix P4, core noReplacementLine).
-        <p className="text-muted-foreground text-sm">{noReplacementLine(exchange.status, { returnStatus })}</p>
+        <p className="text-muted-foreground text-[13.5px]">
+          {noReplacementLine(exchange.status, { returnStatus })}
+        </p>
       )}
-    </section>
+    </DetailSection>
   );
 }
 
@@ -488,7 +595,7 @@ export function ReplacementOrderSection({
 function DialogError({ error }: { error: string | null }) {
   if (!error) return null;
   return (
-    <p className="text-destructive text-sm" role="alert">
+    <p className="text-destructive text-[13px]" role="alert">
       {error}
     </p>
   );
@@ -525,7 +632,14 @@ export function ReleaseEarlyDialog({
         </DialogHeader>
         <div className="flex flex-wrap gap-2">
           {[RETURNS_COPY.releasePresetInPerson, RETURNS_COPY.releasePresetDeliverySwap].map((p) => (
-            <Button key={p} type="button" variant="outline" size="sm" onClick={() => setReason(p)} aria-pressed={reason === p}>
+            <Button
+              key={p}
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setReason(p)}
+              aria-pressed={reason === p}
+            >
               {p}
             </Button>
           ))}
@@ -542,7 +656,12 @@ export function ReleaseEarlyDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             Keep waiting
           </Button>
-          <Button variant="gradient" onClick={() => onConfirm(reason.trim())} disabled={busy || !reason.trim()}>
+          {/* The ink primary: it commits the work in front of you (DESIGN-SPEC 6.2). */}
+          <Button
+            variant="default"
+            onClick={() => onConfirm(reason.trim())}
+            disabled={busy || !reason.trim()}
+          >
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
             {RETURNS_COPY.releaseBeforeReturn}
           </Button>
@@ -592,7 +711,7 @@ export function CancelReplacementDialog({
           {consequences
             .filter((c) => c.key !== 'effect')
             .map((c) => (
-              <p key={c.key} className="text-destructive text-sm" role="alert">
+              <p key={c.key} className="text-destructive text-[13px]" role="alert">
                 {c.text}
               </p>
             ))}
@@ -610,7 +729,11 @@ export function CancelReplacementDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             Keep it
           </Button>
-          <Button variant="destructive" onClick={() => onConfirm(reason.trim())} disabled={busy || !reason.trim()}>
+          <Button
+            variant="destructive"
+            onClick={() => onConfirm(reason.trim())}
+            disabled={busy || !reason.trim()}
+          >
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
             {RETURNS_COPY.cancelReplacement}
           </Button>
@@ -659,7 +782,13 @@ export function SiteChoiceDialog({
         </DialogHeader>
         <div role="radiogroup" aria-label={RETURNS_COPY.siteChoiceTitle} className="space-y-1.5">
           {options.map((o) => (
-            <label key={o.key} className="flex min-h-[44px] cursor-pointer items-center gap-2 rounded-md border px-3 text-sm">
+            <label
+              key={o.key}
+              className={cn(
+                choiceRowClass({ checked: key === o.key, disabled: busy }),
+                'flex min-h-[44px] items-center gap-2.5 px-3',
+              )}
+            >
               <input
                 type="radio"
                 name="replacement-site"
@@ -667,6 +796,7 @@ export function SiteChoiceDialog({
                 checked={key === o.key}
                 onChange={() => setKey(o.key)}
                 disabled={busy}
+                className={nativeRadioClass}
               />
               {o.label}
             </label>
@@ -847,21 +977,30 @@ export function ChangeReplacementDialog({
   // Fix round 1 (verification L1): a pick keeps the picked row's own label,
   // so a short refusal names it ("Walk Exchange Tee - 2XL: 0 available, 1
   // needed."), never "Item".
-  const [picks, setPicks] = React.useState<Record<string, { itemId: string | null; quantity: number; label?: string }>>({});
+  const [picks, setPicks] = React.useState<
+    Record<string, { itemId: string | null; quantity: number; label?: string }>
+  >({});
   const [reason, setReason] = React.useState('');
   // The short numbers belong to the picks they refused: a new pick hides them
   // (and the backorder button) until the next refusal (fix round 1, L1).
   const [shortSeen, setShortSeen] = React.useState<unknown>(null);
-  const pick = (l: ChangeLineInput) => picks[l.exchangeLineId] ?? { itemId: l.currentItemId, quantity: l.currentQuantity };
+  const pick = (l: ChangeLineInput) =>
+    picks[l.exchangeLineId] ?? { itemId: l.currentItemId, quantity: l.currentQuantity };
   const short =
-    Array.isArray(shortDetail) && shortDetail !== shortSeen ? replacementShortItems(shortDetail as Array<Record<string, unknown>>) : [];
+    Array.isArray(shortDetail) && shortDetail !== shortSeen
+      ? replacementShortItems(shortDetail as Array<Record<string, unknown>>)
+      : [];
   const labelOf = (itemId: string): string => {
     for (const p of Object.values(picks)) if (p.itemId === itemId && p.label) return p.label;
     return itemLabel(itemId);
   };
   const send = (whenShort: 'refuse' | 'backorder') =>
     onConfirm({
-      lines: lines.map((l) => ({ exchangeLineId: l.exchangeLineId, itemId: pick(l).itemId, quantity: pick(l).quantity })),
+      lines: lines.map((l) => ({
+        exchangeLineId: l.exchangeLineId,
+        itemId: pick(l).itemId,
+        quantity: pick(l).quantity,
+      })),
       reason: reason.trim(),
       whenShort,
     });
@@ -881,10 +1020,15 @@ export function ChangeReplacementDialog({
     >
       <DialogContent className="max-h-[90vh] max-w-xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{mode === 'issue' ? RETURNS_COPY.issueNewReplacement : RETURNS_COPY.changeReplacement}</DialogTitle>
+          <DialogTitle>
+            {mode === 'issue' ? RETURNS_COPY.issueNewReplacement : RETURNS_COPY.changeReplacement}
+          </DialogTitle>
           <DialogDescription>
             {/* Review fix P2: core's words for what is created. */}
-            {exchangeActionConsequences(mode === 'issue' ? 'issue_replacement' : 'change_replacement', { replacementStatus: null })
+            {exchangeActionConsequences(
+              mode === 'issue' ? 'issue_replacement' : 'change_replacement',
+              { replacementStatus: null },
+            )
               .map((c) => c.text)
               .join(' ')}
           </DialogDescription>
@@ -892,14 +1036,17 @@ export function ChangeReplacementDialog({
         <div className="space-y-4">
           {lines.map((l) => (
             <div key={l.exchangeLineId} className="space-y-2">
-              <p className="text-sm font-medium">{l.returnedLabel}</p>
+              <p className="text-[13.5px] font-medium">{l.returnedLabel}</p>
               <ReplacementPicker
                 load={loaderFor(l.orderRequestLineId)}
                 needed={pick(l).quantity}
                 selectedItemId={pick(l).itemId}
                 onSelect={(row, rowLabel) => {
                   setShortSeen(shortDetail);
-                  setPicks((p) => ({ ...p, [l.exchangeLineId]: { ...pick(l), itemId: row.itemId, label: rowLabel } }));
+                  setPicks((p) => ({
+                    ...p,
+                    [l.exchangeLineId]: { ...pick(l), itemId: row.itemId, label: rowLabel },
+                  }));
                 }}
                 label={l.returnedLabel}
                 disabled={busy}
@@ -908,7 +1055,9 @@ export function ChangeReplacementDialog({
                 id={`change-qty-${l.exchangeLineId}`}
                 value={pick(l).quantity}
                 max={l.returnedQty}
-                onChange={(quantity) => setPicks((p) => ({ ...p, [l.exchangeLineId]: { ...pick(l), quantity } }))}
+                onChange={(quantity) =>
+                  setPicks((p) => ({ ...p, [l.exchangeLineId]: { ...pick(l), quantity } }))
+                }
               />
             </div>
           ))}
@@ -919,12 +1068,18 @@ export function ChangeReplacementDialog({
             value={reason}
             onChange={setReason}
           />
+          {/* The alert's role and name sit on a wrapper so the list stays a
+              list (a role on the <ul> erased its list semantics). */}
           {short.length > 0 ? (
-            <ul className="text-destructive space-y-0.5 text-sm" role="alert" aria-label="Not in stock">
-              {short.map((s) => (
-                <li key={s.itemId}>{replacementShortLine(labelOf(s.itemId), s.available, s.needed)}</li>
-              ))}
-            </ul>
+            <div role="alert" aria-label="Not in stock">
+              <ul className="text-destructive space-y-0.5 text-[13px]">
+                {short.map((s) => (
+                  <li key={s.itemId}>
+                    {replacementShortLine(labelOf(s.itemId), s.available, s.needed)}
+                  </li>
+                ))}
+              </ul>
+            </div>
           ) : null}
           <DialogError error={error} />
         </div>
@@ -934,10 +1089,12 @@ export function ChangeReplacementDialog({
           </Button>
           {short.length > 0 ? (
             <Button variant="outline" onClick={() => send('backorder')} disabled={!ready}>
-              {mode === 'issue' ? RETURNS_COPY.issueReplacementOnBackorder : RETURNS_COPY.changeReplacementOnBackorder}
+              {mode === 'issue'
+                ? RETURNS_COPY.issueReplacementOnBackorder
+                : RETURNS_COPY.changeReplacementOnBackorder}
             </Button>
           ) : null}
-          <Button variant="gradient" onClick={() => send('refuse')} disabled={!ready}>
+          <Button variant="default" onClick={() => send('refuse')} disabled={!ready}>
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
             {mode === 'issue' ? RETURNS_COPY.issueNewReplacement : RETURNS_COPY.changeReplacement}
           </Button>

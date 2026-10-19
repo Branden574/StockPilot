@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 
+import { choiceRowClass, eyebrowClass, nativeRadioClass } from '@/components/returns/returns-ui';
 import { cn } from '@/lib/utils';
 
 import {
@@ -55,18 +56,21 @@ export function RestockDestinationPicker({
   return (
     <div className="space-y-3">
       <fieldset disabled={disabled} className="space-y-1.5">
-        <legend className="text-muted-foreground font-mono text-[10.5px] uppercase tracking-[0.12em]">
+        <legend className={eyebrowClass}>
           {RETURNS_COPY.returnDisposition}
           <span className="sr-only"> for {itemLabel}</span>
         </legend>
-        <div className="flex flex-wrap gap-2" role="radiogroup" aria-label={`${RETURNS_COPY.returnDisposition} for ${itemLabel}`}>
+        <div
+          className="flex flex-wrap gap-2"
+          role="radiogroup"
+          aria-label={`${RETURNS_COPY.returnDisposition} for ${itemLabel}`}
+        >
           {(['restock', 'scrap'] as const).map((d) => (
             <label
               key={d}
               className={cn(
-                'inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 py-1.5 text-sm',
-                choice.disposition === d ? 'border-foreground bg-muted' : 'border-border',
-                disabled && 'cursor-not-allowed opacity-60',
+                choiceRowClass({ checked: choice.disposition === d, disabled }),
+                'inline-flex min-h-9 items-center gap-2.5 px-3 py-1.5',
               )}
             >
               <input
@@ -74,57 +78,73 @@ export function RestockDestinationPicker({
                 name={`${groupId}-disposition`}
                 value={d}
                 checked={choice.disposition === d}
-                onChange={() => onChange(choiceFromKey(d, d === 'restock' ? (selectedKey ?? keyForRestock(line)) : null))}
-                className="h-3.5 w-3.5"
+                onChange={() =>
+                  onChange(
+                    choiceFromKey(d, d === 'restock' ? (selectedKey ?? keyForRestock(line)) : null),
+                  )
+                }
+                className={nativeRadioClass}
               />
               {d === 'restock' ? RETURNS_COPY.restock : RETURNS_COPY.scrap}
             </label>
           ))}
         </div>
-        {hint ? <p className="text-muted-foreground text-xs">{hint}</p> : null}
+        {hint ? <p className="text-muted-foreground text-[12px]">{hint}</p> : null}
       </fieldset>
 
       {choice.disposition === 'restock' ? (
         <fieldset disabled={disabled} className="space-y-1.5">
-          <legend className="text-muted-foreground font-mono text-[10.5px] uppercase tracking-[0.12em]">
+          <legend className={eyebrowClass}>
             {RETURNS_COPY.returnedItemDestination}
             <span className="sr-only"> for {itemLabel}</span>
           </legend>
-          <div className="space-y-1.5" role="radiogroup" aria-label={`${RETURNS_COPY.returnedItemDestination} for ${itemLabel}`}>
+          <div
+            className="space-y-1.5"
+            role="radiogroup"
+            aria-label={`${RETURNS_COPY.returnedItemDestination} for ${itemLabel}`}
+          >
             {rows.map((row) => {
               const checked = selectedKey === row.key;
               const whyId = `${groupId}-${row.key}-why`;
-              const showWhy = !row.enabled && row.disabledReason && row.disabledReason !== row.label;
+              const showWhy =
+                !row.enabled && row.disabledReason && row.disabledReason !== row.label;
               const helpId = `${groupId}-${row.key}-help`;
               return (
                 <div
                   key={row.key}
                   className={cn(
-                    'rounded-md border px-3 py-2 text-sm',
-                    checked ? 'border-foreground bg-muted' : 'border-border',
-                    row.enabled ? '' : 'opacity-70',
+                    choiceRowClass({ checked }),
+                    'px-3 py-2',
+                    row.enabled ? '' : 'bg-sunk hover:border-border cursor-not-allowed',
                   )}
                 >
-                  <label className={cn('flex items-start gap-2', row.enabled ? 'cursor-pointer' : 'cursor-not-allowed')}>
+                  <label
+                    className={cn(
+                      'flex items-start gap-2.5',
+                      row.enabled ? 'cursor-pointer' : 'text-muted-foreground cursor-not-allowed',
+                    )}
+                  >
                     <input
                       type="radio"
                       name={`${groupId}-destination`}
                       value={row.key}
                       checked={checked}
                       disabled={!row.enabled}
-                      aria-describedby={showWhy ? whyId : row.help && row.enabled ? helpId : undefined}
+                      aria-describedby={
+                        showWhy ? whyId : row.help && row.enabled ? helpId : undefined
+                      }
                       onChange={() => onChange(choiceFromKey('restock', row.key))}
-                      className="mt-0.5 h-3.5 w-3.5"
+                      className={cn(nativeRadioClass, 'mt-0.5')}
                     />
                     <span className="min-w-0">{row.label}</span>
                   </label>
                   {row.help && row.enabled ? (
-                    <p id={helpId} className="text-muted-foreground pl-5 text-xs">
+                    <p id={helpId} className="text-muted-foreground pl-[26px] text-[12px]">
                       {row.help}
                     </p>
                   ) : null}
                   {showWhy ? (
-                    <p id={whyId} className="text-muted-foreground pl-5 text-xs">
+                    <p id={whyId} className="text-muted-foreground pl-[26px] text-[12px]">
                       {row.disabledReason}
                     </p>
                   ) : null}
