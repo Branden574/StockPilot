@@ -18,7 +18,7 @@ import { cn } from '@/lib/utils';
  *  requester's tiles), so the dot draws none of its own: one ring per focus,
  *  as the shared RadioGroup's card look has it. */
 export const nativeRadioClass = cn(
-  'bg-card size-4 shrink-0 appearance-none rounded-full border border-[var(--ed-ink-4)] transition-colors',
+  'bg-card size-4 shrink-0 appearance-none rounded-full border border-ink-4 transition-colors',
   'checked:border-foreground checked:bg-foreground checked:shadow-[inset_0_0_0_3px_hsl(var(--card))]',
   'forced-colors:appearance-auto disabled:cursor-not-allowed focus-visible:outline-none',
 );
@@ -33,7 +33,7 @@ export const nativeRadioClass = cn(
  * colors keeps, so a ticked box still shows its tick there.
  */
 export const nativeCheckboxClass = cn(
-  'bg-card relative size-5 shrink-0 cursor-pointer appearance-none rounded-[5px] border border-[var(--ed-ink-4)] transition-colors hover:border-[var(--ed-ink-3)]',
+  'bg-card relative size-5 shrink-0 cursor-pointer appearance-none rounded-[5px] border border-ink-4 transition-colors hover:border-[var(--ed-ink-3)]',
   'checked:border-foreground checked:bg-foreground checked:hover:border-foreground',
   "after:border-background after:absolute after:left-[6px] after:top-[2.5px] after:hidden after:h-[11px] after:w-[6px] after:rotate-45 after:border-b-2 after:border-r-2 after:content-[''] checked:after:block",
   'disabled:cursor-not-allowed disabled:opacity-50',
@@ -58,7 +58,7 @@ export function choiceRowClass({
     'has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-offset-background has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-offset-2',
     checked
       ? 'border-foreground shadow-[0_0_0_1px_hsl(var(--foreground))]'
-      : 'border-border hover:border-[var(--ed-line-strong)]',
+      : 'border-border hover:border-line-strong',
     disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
   );
 }

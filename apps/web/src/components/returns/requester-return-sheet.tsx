@@ -89,7 +89,7 @@ const CHOICE_TILE =
 
 /** The native select and number fields in the shared Input's look (DESIGN-SPEC 6.3). */
 const FIELD =
-  'bg-card rounded-md border border-[var(--ed-line-strong)] text-[13px] transition-colors focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:text-base';
+  'bg-card rounded-md border border-line-strong text-[13px] transition-colors focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:text-base';
 
 /**
  * The requester's "Return or exchange" form (returns RX-3, plan RX-3 Web UI):
@@ -383,7 +383,7 @@ export function RequesterReturnSheetForm({
                             key={mode}
                             htmlFor={`${p}-mode-${id}-${mode}`}
                             className={cn(
-                              'bg-card inline-flex min-h-10 cursor-pointer items-center gap-2.5 rounded-md border px-3 py-2 text-[13px] transition-colors hover:border-[var(--ed-line-strong)]',
+                              'bg-card hover:border-line-strong inline-flex min-h-10 cursor-pointer items-center gap-2.5 rounded-md border px-3 py-2 text-[13px] transition-colors',
                               CHOICE_TILE,
                               mode === 'exchange' &&
                                 !exchangesOn &&
@@ -683,7 +683,7 @@ function OptionCard({
     <label
       htmlFor={inputId}
       className={cn(
-        'bg-card flex cursor-pointer flex-col gap-2 rounded-lg border p-2 transition-colors hover:border-[var(--ed-line-strong)]',
+        'bg-card hover:border-line-strong flex cursor-pointer flex-col gap-2 rounded-lg border p-2 transition-colors',
         CHOICE_TILE,
       )}
     >

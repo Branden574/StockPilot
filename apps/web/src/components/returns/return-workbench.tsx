@@ -1104,7 +1104,7 @@ export function ReturnWorkbench({
           title="What happens when you approve"
           aria-label="What happens when you approve"
         >
-          <ul className="list-disc space-y-1 pl-5 text-[13.5px] leading-5 marker:text-[var(--ed-ink-4)]">
+          <ul className="marker:text-ink-4 list-disc space-y-1 pl-5 text-[13.5px] leading-5">
             {approvalPreviewLines({
               lines: openLines.map((l) => ({
                 returnedLabel: lineLabel(l),
