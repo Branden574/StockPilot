@@ -82,4 +82,38 @@ describe('ScheduleEventForm', () => {
       screen.getByText('You can still save — overlaps are sometimes intentional.'),
     ).toBeInTheDocument();
   });
+
+  // DESIGN-SPEC 2.4: the warning's words are the warning tone on its wash
+  // (4.70:1 in light). opacity-80 on the date and requester and on "+N more"
+  // dropped them to about 3.3:1 (axe color-contrast, serious), so the whole
+  // list keeps the full tone; the title's weight still sets it apart.
+  it('keeps the overlap list at full tone: the date and requester and "+N more" carry no opacity', () => {
+    const conflict = (n: number) => ({
+      id: `ev-${n}`,
+      title: `Delivery ${n}`,
+      startsAt: new Date('2026-10-20T08:30').toISOString(),
+      endsAt: new Date('2026-10-20T10:00').toISOString(),
+      warehouseId: 'wh-1',
+      requesterName: 'Dana',
+    });
+    render(
+      <ScheduleEventForm
+        warehouses={WAREHOUSES}
+        bundles={[]}
+        initialDate="2026-10-20"
+        conflictCandidates={[1, 2, 3, 4, 5, 6].map(conflict)}
+      />,
+    );
+    expect(screen.getByText(/6 overlapping events/)).toBeInTheDocument();
+    const dates = screen.getAllByText('(Oct 20, 9:00 AM · Dana)');
+    expect(dates).toHaveLength(5);
+    for (const date of dates) expect(date.className).not.toMatch(/opacity-/);
+    expect(screen.getByText('Delivery 1')).toHaveClass('font-medium');
+    const more = screen.getByText('+1 more');
+    expect(more.tagName).toBe('LI');
+    expect(more.className).not.toMatch(/opacity-/);
+    const warning = more.closest('div')!;
+    expect(warning).toHaveClass('bg-warning-wash', 'text-warning');
+    expect(warning.querySelectorAll('[class*="opacity-"]')).toHaveLength(0);
+  });
 });

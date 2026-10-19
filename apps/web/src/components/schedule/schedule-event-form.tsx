@@ -314,7 +314,8 @@ export function ScheduleEventForm({
             {conflicts.slice(0, 5).map((c) => (
               <li key={c.id}>
                 <span className="font-medium">{c.title}</span>{' '}
-                <span className="opacity-80">
+                {/* Full tone: faded on the warning wash it read under 4.5:1. */}
+                <span>
                   ({formatOrgDateTime(c.startsAt, {
                     month: 'short',
                     day: 'numeric',
@@ -325,9 +326,7 @@ export function ScheduleEventForm({
                 </span>
               </li>
             ))}
-            {conflicts.length > 5 ? (
-              <li className="opacity-80">+{conflicts.length - 5} more</li>
-            ) : null}
+            {conflicts.length > 5 ? <li>+{conflicts.length - 5} more</li> : null}
           </ul>
           <p className="mt-1">
             You can still save — overlaps are sometimes intentional.

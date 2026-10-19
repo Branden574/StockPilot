@@ -248,8 +248,11 @@ export function ScheduleCalendar({ year, month, events, canManage = false }: Pro
                             )}
                             title={ev.title}
                           >
-                            {time ? <span className="tabular-nums opacity-80">{time} </span> : null}
-                            {ev.title}
+                            {/* The time at the chip's full tone: on a status wash a
+                                faded time fell under 4.5:1. The title's weight sets
+                                it apart instead. */}
+                            {time ? <span className="tabular-nums">{time} </span> : null}
+                            <span className="font-medium">{ev.title}</span>
                             <span className="sr-only">, {STATUS_LABEL[ev.status]}</span>
                           </Link>
                         );

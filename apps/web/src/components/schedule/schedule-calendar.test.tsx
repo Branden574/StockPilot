@@ -156,4 +156,47 @@ describe('ScheduleCalendar redesign', () => {
       run.unmount();
     }
   });
+
+  // DESIGN-SPEC 2.4: the chip's words sit on a status wash in that status's
+  // tone, which only just clears 4.5:1 in light (4.64 to 4.88). opacity-80 on
+  // the time dropped it to 3.28-3.39 in light and the cancelled chip's to 4.21
+  // in dark (axe color-contrast, serious), so every part of a chip keeps the
+  // full tone and the title's weight sets the time apart instead.
+  it('keeps every chip, its time and its title at full tone (no opacity), with the title in medium weight', async () => {
+    const t0 = Date.parse('2026-07-15T12:00:00.000Z');
+    const run = await hydrateAcrossClockShift(
+      () => (
+        <ScheduleCalendar
+          year={2026}
+          month={7}
+          events={[
+            at('scheduled', 'a', 13),
+            at('in_progress', 'b', 14),
+            at('completed', 'c', 15),
+            at('cancelled', 'd', 16),
+          ]}
+        />
+      ),
+      { serverNow: t0, browserNow: t0 },
+    );
+    try {
+      const chips = Array.from(run.container.querySelectorAll<HTMLElement>('a[data-status]'));
+      expect(chips.map((a) => a.dataset.status)).toEqual([
+        'scheduled',
+        'in_progress',
+        'completed',
+        'cancelled',
+      ]);
+      for (const chip of chips) {
+        const time = within(chip).getByText('9:00 AM');
+        expect(time).toHaveClass('tabular-nums');
+        expect(time.className).not.toMatch(/opacity-/);
+        expect(within(chip).getByText(/^Job /)).toHaveClass('font-medium');
+        expect(chip.className).not.toMatch(/opacity-/);
+        expect(chip.querySelectorAll('[class*="opacity-"]')).toHaveLength(0);
+      }
+    } finally {
+      run.unmount();
+    }
+  });
 });
