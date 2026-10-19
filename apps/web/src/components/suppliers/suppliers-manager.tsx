@@ -183,8 +183,12 @@ export function SuppliersManager({
                         <span className="text-muted-foreground">—</span>
                       )}
                     </TableCell>
-                    <TableCell className="text-ink-2 whitespace-nowrap font-mono text-[12.5px]">
-                      {row.phone ?? '—'}
+                    <TableCell className="text-ink-2 whitespace-nowrap">
+                      {row.phone ? (
+                        <span className="font-mono text-[12.5px]">{row.phone}</span>
+                      ) : (
+                        '—'
+                      )}
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center justify-end gap-2">

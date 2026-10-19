@@ -97,18 +97,15 @@ export default async function PlanningPage() {
         title="Reorder Planning"
         subline="Items ranked by urgency from actual demand velocity. Lowest days-of-cover first; non-moving items sink to the bottom."
         commitAction={
-          <div className="flex flex-col items-start gap-1 sm:items-end">
+          <div className="flex flex-col items-start gap-1">
             <DraftPosFromReorderButton itemCount={draftableCount} countIsPartial={truncated} />
             {onOpenPoCount === null ? (
-              <p
-                role="status"
-                className="text-warning max-w-xs text-[12px] leading-[18px] sm:text-right"
-              >
+              <p role="status" className="text-warning max-w-xs text-[12px] leading-[18px]">
                 Couldn&apos;t check which of the {formatNumber(belowPar.length)} below-par items are
                 already on open purchase orders. Drafting checks again and skips those.
               </p>
             ) : onOpenPoCount > 0 ? (
-              <p className="text-muted-foreground max-w-xs text-[12px] leading-[18px] sm:text-right">
+              <p className="text-muted-foreground max-w-xs text-[12px] leading-[18px]">
                 {formatNumber(draftableCount)} to draft · {formatNumber(onOpenPoCount)} already on
                 open POs (skipped)
               </p>
@@ -136,7 +133,7 @@ export default async function PlanningPage() {
       <DetailSection title="Reorder suggestions" flush data-slot="planning-suggestions">
         <Table className="min-w-[860px]">
           <TableHeader>
-            <TableRow className="hover:bg-transparent">
+            <TableRow className="hover:bg-transparent [&>th]:whitespace-nowrap xl:[&>th]:whitespace-normal">
               <TableHead>Item</TableHead>
               <TableHead>SKU</TableHead>
               <TableHead>Supplier</TableHead>
@@ -164,13 +161,15 @@ export default async function PlanningPage() {
             )}
             {suggestions.map((s) => (
               <TableRow key={s.itemId}>
-                <TableCell className="text-foreground max-w-[260px] truncate font-medium">
+                <TableCell className="text-foreground max-w-[200px] truncate font-medium">
                   {s.name}
                 </TableCell>
                 <TableCell className="text-muted-foreground whitespace-nowrap font-mono text-[12px]">
                   {s.sku ?? '—'}
                 </TableCell>
-                <TableCell className="text-ink-2 text-[12.5px]">{s.supplierName ?? '—'}</TableCell>
+                <TableCell className="text-ink-2 min-w-[140px] text-[12.5px]">
+                  {s.supplierName ?? '—'}
+                </TableCell>
                 <TableCell className={cn(NUM, 'text-foreground font-medium')}>
                   {formatNumber(s.quantityOnHand)}
                 </TableCell>

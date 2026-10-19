@@ -94,14 +94,16 @@ export function AutoReorderPanel({ initial, entitled }: Props) {
         Once a day, items at or below their reorder point are reordered automatically. Items already
         on an open PO are skipped, so it never double-orders.
       </p>
-      <Checkbox
-        checked={enabled}
-        onCheckedChange={setEnabled}
-        disabled={busy}
-        className="text-foreground font-medium"
-      >
-        Enable automatic reordering
-      </Checkbox>
+      <div>
+        <Checkbox
+          checked={enabled}
+          onCheckedChange={setEnabled}
+          disabled={busy}
+          className="text-foreground font-medium"
+        >
+          Enable automatic reordering
+        </Checkbox>
+      </div>
 
       {enabled && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -144,10 +146,12 @@ export function AutoReorderPanel({ initial, entitled }: Props) {
         </div>
       )}
 
-      <Button onClick={save} disabled={busy}>
-        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-        Save settings
-      </Button>
+      <div>
+        <Button onClick={save} disabled={busy}>
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          Save settings
+        </Button>
+      </div>
     </DetailSection>
   );
 }
