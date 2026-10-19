@@ -10,16 +10,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 //   • Unlink is wired into the linked-items view (the brief requires unlink
 //     support in the tool, not only on the API).
 
-const { routerMock, loadVariantsMock, unlinkMock, archiveMock, restoreMock, toastMock } = vi.hoisted(
-  () => ({
+const { routerMock, loadVariantsMock, unlinkMock, archiveMock, restoreMock, toastMock } =
+  vi.hoisted(() => ({
     routerMock: { refresh: vi.fn(), push: vi.fn(), replace: vi.fn(), prefetch: vi.fn() },
     loadVariantsMock: vi.fn(),
     unlinkMock: vi.fn(),
     archiveMock: vi.fn(),
     restoreMock: vi.fn(),
     toastMock: { error: vi.fn(), success: vi.fn() },
-  }),
-);
+  }));
 
 vi.mock('next/navigation', () => ({ useRouter: () => routerMock }));
 vi.mock('sonner', () => ({ toast: toastMock }));
@@ -48,7 +47,11 @@ vi.mock('@/server/actions/product-group-linking', () => ({
   unlinkItemsAction: unlinkMock,
 }));
 
-import { ProductGroupRollupList, type RollupGroup, type RollupVariant } from './product-group-rollup-list';
+import {
+  ProductGroupRollupList,
+  type RollupGroup,
+  type RollupVariant,
+} from './product-group-rollup-list';
 
 function group(over: Partial<RollupGroup> = {}): RollupGroup {
   return {
@@ -89,7 +92,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   loadVariantsMock.mockResolvedValue({
     ok: true,
-    data: { variants: [variant(), variant({ id: 'itm-10', sku: 'PEG-10', variantSize: '10', quantity: 20 })] },
+    data: {
+      variants: [
+        variant(),
+        variant({ id: 'itm-10', sku: 'PEG-10', variantSize: '10', quantity: 20 }),
+      ],
+    },
   });
   unlinkMock.mockResolvedValue({ ok: true, data: { unlinked: 1, skuSiblingIds: [] } });
   archiveMock.mockResolvedValue({ ok: true, data: { id: 'grp-1' } });
@@ -226,7 +234,10 @@ describe('ProductGroupRollupList — unlink', () => {
 
   it('keeps the row when the server refuses the unlink', async () => {
     const user = userEvent.setup();
-    unlinkMock.mockResolvedValue({ ok: false, error: { code: 'forbidden', message: 'Not allowed.' } });
+    unlinkMock.mockResolvedValue({
+      ok: false,
+      error: { code: 'forbidden', message: 'Not allowed.' },
+    });
     render(<ProductGroupRollupList groups={[group()]} />);
     await user.click(screen.getByRole('button', { name: /expand/i }));
     await screen.findByText('PEG-9');
@@ -338,6 +349,11 @@ describe('ProductGroupRollupList — layout follows the card, not the window', (
     const row = container.querySelector('[data-slot="product-group-row"]')!;
     expect(row).toHaveClass('flex-wrap', '@min-[560px]/groups:flex-nowrap');
     expect(row.className).not.toMatch(/(^|\s)sm:/);
+    // On a phone the name holds its own line beside the chevron, so the roll-up
+    // wraps under it instead of crushing the name to "Lab ..." (it shrank to
+    // nothing while the roll-up sat beside it, and the mode chip ran under it).
+    const name = row.querySelector('[data-slot="product-group-name"]')!;
+    expect(name).toHaveClass('flex-1', 'basis-[calc(100%-36px)]', '@min-[560px]/groups:basis-0');
 
     await user.click(screen.getByRole('button', { name: /expand nike pegasus 41/i }));
     const variantHeader = await screen.findByRole('columnheader', { name: 'Variant' });

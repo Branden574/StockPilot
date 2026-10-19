@@ -312,7 +312,13 @@ function GroupRow({
             className={cn('h-3.5 w-3.5 transition-transform', expanded && 'rotate-90')}
           />
         </button>
-        <div className="min-w-0 flex-1">
+        {/* In a narrow card the name takes the whole line beside the chevron
+            (the chevron's 24 px and the 12 px gap), so the roll-up wraps under
+            it instead of squeezing the name to a few letters. */}
+        <div
+          data-slot="product-group-name"
+          className="@min-[560px]/groups:basis-0 min-w-0 flex-1 basis-[calc(100%-36px)]"
+        >
           <div className="flex flex-wrap items-center gap-2">
             <span className="min-w-0 truncate text-[13.5px] font-medium">{group.name}</span>
             {/* The tracking mode is admin-facing detail; this whole route is
