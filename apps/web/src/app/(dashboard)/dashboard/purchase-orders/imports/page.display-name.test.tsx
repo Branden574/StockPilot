@@ -28,14 +28,18 @@ describe('imports LIST — name first, filename still visible', () => {
 
   it('still renders the source filename as secondary text under the name', () => {
     expect(listSrc).toMatch(
-      /\{i\.display_name && \(\s*<p className="text-muted-foreground mt-0\.5 truncate text-xs">\s*\{i\.file_name\}/,
+      // Look-only class list re-pinned for the redesign (P4.C1): the filename
+      // line is now the muted 11.5 px mono line; the claim is unchanged.
+      /\{i\.display_name && \(\s*<p className="text-muted-foreground mt-0\.5 truncate font-mono text-\[11\.5px\]">\s*\{i\.file_name\}/,
     );
   });
 
   it('never labels the row by the raw filename alone', () => {
     // The only two file_name references left are the fallback and the
     // secondary line above; a bare `{i.file_name}` as the link text is gone.
-    expect(listSrc).not.toMatch(/className="font-medium hover:underline"\s*>\s*\{i\.file_name\}/);
+    expect(listSrc).not.toMatch(
+      /className="text-foreground font-medium hover:underline"\s*>\s*\{i\.file_name\}/,
+    );
   });
 });
 
