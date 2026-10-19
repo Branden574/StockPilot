@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation';
 
 import { MaintenanceSettingsPanel } from '@/components/maintenance/maintenance-settings-panel';
 import { PageHeader } from '@/components/patterns/page-header';
-import { SettingsPage } from '@/components/settings/settings-panel';
+import { SettingsPage } from '@/components/settings/settings-nav';
 import { withContext } from '@/server/services/context';
 
 import { can, MAINTENANCE_CATEGORIES } from '@stockpilot/core';

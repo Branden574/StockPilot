@@ -5,7 +5,7 @@ import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-heade
 import { StatePanel } from '@/components/patterns/state-panel';
 import { PublicLinksManager } from '@/components/settings/public-links-manager';
 import { PublicRequestsGlobalSettings } from '@/components/settings/public-requests-global-settings';
-import { SettingsPage, SettingsPanel } from '@/components/settings/settings-panel';
+import { SettingsPage, SettingsPanel } from '@/components/settings/settings-nav';
 import { can } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';

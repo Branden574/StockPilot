@@ -7,7 +7,7 @@ import { can } from '@stockpilot/core';
 import { PageHeader } from '@/components/patterns/page-header';
 import { StatePanel } from '@/components/patterns/state-panel';
 import { DeletedAtTooltip, RestoreButton } from '@/components/settings/restore-button';
-import { SettingsPage, SettingsPanel } from '@/components/settings/settings-panel';
+import { SettingsPage, SettingsPanel } from '@/components/settings/settings-nav';
 import { requireOrgContext } from '@/lib/auth/session';
 import { formatRelative } from '@/lib/utils';
 import {

@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
-import { SettingsPanel } from '@/components/settings/settings-panel';
+import { SettingsPanel } from '@/components/settings/settings-nav';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';

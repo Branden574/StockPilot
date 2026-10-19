@@ -17,7 +17,7 @@ import { useStepUp } from '@/components/auth/step-up-modal';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { SettingsPanel } from '@/components/settings/settings-panel';
+import { SettingsPanel } from '@/components/settings/settings-nav';
 import { setOrgEmailRoutingAction } from '@/server/actions/email-routing-settings';
 
 import {

@@ -5,7 +5,7 @@ import { can } from '@stockpilot/core';
 
 import { PageHeader } from '@/components/patterns/page-header';
 import { EmbeddingsBackfillPanel } from '@/components/settings/embeddings-backfill-panel';
-import { SettingsPage, SettingsPanel } from '@/components/settings/settings-panel';
+import { SettingsPage, SettingsPanel } from '@/components/settings/settings-nav';
 import { requireOrgContext } from '@/lib/auth/session';
 import { withContext } from '@/server/services/context';
 

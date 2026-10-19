@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation';
 
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { Sage50ImportWizard } from '@/components/settings/sage50-import-wizard';
-import { SettingsPage } from '@/components/settings/settings-panel';
+import { SettingsPage } from '@/components/settings/settings-nav';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';

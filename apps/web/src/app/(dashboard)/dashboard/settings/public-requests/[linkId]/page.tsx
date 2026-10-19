@@ -5,7 +5,7 @@ import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { StatePanel } from '@/components/patterns/state-panel';
 import { PublicLinkEditor } from '@/components/settings/public-link-editor';
-import { SettingsPage } from '@/components/settings/settings-panel';
+import { SettingsPage } from '@/components/settings/settings-nav';
 import { can } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';

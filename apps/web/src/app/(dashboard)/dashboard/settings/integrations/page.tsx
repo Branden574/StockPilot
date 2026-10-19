@@ -9,7 +9,7 @@ import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-heade
 import { ApiKeysPanel } from '@/components/settings/api-keys-panel';
 import { IntegrationsPanel } from '@/components/settings/integrations-panel';
 import { SageIntacctCard } from '@/components/settings/sage-intacct-card';
-import { SettingsPage, SettingsPanel } from '@/components/settings/settings-panel';
+import { SettingsPage, SettingsPanel } from '@/components/settings/settings-nav';
 import { Button } from '@/components/ui/button';
 import { WebhooksPanel } from '@/components/settings/webhooks-panel';
 import { env } from '@/lib/env';

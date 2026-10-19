@@ -6,7 +6,7 @@ import { Lock } from 'lucide-react';
 import { PageHeader } from '@/components/patterns/page-header';
 import { CreateRestorePointButton } from '@/components/settings/create-restore-point-button';
 import { RestoreSnapshotButton } from '@/components/settings/restore-snapshot-button';
-import { SettingsPage, SettingsPanel } from '@/components/settings/settings-panel';
+import { SettingsPage, SettingsPanel } from '@/components/settings/settings-nav';
 import { LocalDateTime } from '@/components/ui/local-datetime';
 import {
   Table,

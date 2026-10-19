@@ -4,7 +4,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { KeyValueList, KeyValueRow } from '@/components/patterns/key-value-row';
-import { SettingsPanel } from '@/components/settings/settings-panel';
+import { SettingsPanel } from '@/components/settings/settings-nav';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';

@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation';
 
 import { PageHeader } from '@/components/patterns/page-header';
 import { EmailRoutingPanel } from '@/components/settings/email-routing-panel';
-import { SettingsPage } from '@/components/settings/settings-panel';
+import { SettingsPage } from '@/components/settings/settings-nav';
 import { getOrgEmailRouting } from '@/lib/dashboard/cached-org';
 import { withContext } from '@/server/services/context';
 

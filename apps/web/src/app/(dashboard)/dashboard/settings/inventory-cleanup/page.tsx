@@ -4,7 +4,7 @@ import { redirect } from 'next/navigation';
 import { PageHeader } from '@/components/patterns/page-header';
 import { ArchiveCleanupPanel } from '@/components/settings/archive-cleanup-panel';
 import { AutoArchivePanel } from '@/components/settings/auto-archive-panel';
-import { SettingsPage } from '@/components/settings/settings-panel';
+import { SettingsPage } from '@/components/settings/settings-nav';
 import { parseAutoDeleteArchivedSettings } from '@/server/services/archive-cleanup';
 import {
   countEligibleForAutoArchive,

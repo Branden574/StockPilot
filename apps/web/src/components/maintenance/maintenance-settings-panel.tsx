@@ -7,7 +7,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { touchTargetClass } from '@/components/patterns/touch-target';
-import { SettingsPanel } from '@/components/settings/settings-panel';
+import { SettingsPanel } from '@/components/settings/settings-nav';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
