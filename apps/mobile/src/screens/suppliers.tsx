@@ -159,8 +159,10 @@ export default function SuppliersScreen() {
  * one person: '?' and '&' (a query: more recipients, a subject, a body), ','
  * and ';' (another address), '#' and '%' (a fragment, an escape), quotes,
  * brackets, slashes, colons, any space, and any control or invisible
- * formatting character. The address goes out percent-encoded
- * (encodeURIComponent), which the mail app reads back as the same address.
+ * formatting character. The name and the domain go out percent-encoded
+ * (encodeURIComponent) on either side of a literal '@': RFC 6068 keeps the
+ * separating '@' literal (addr-spec = local-part "@" domain), and an encoded
+ * %40 would be a character inside the name, leaving no domain.
  */
 function supplierMailtoUrl(email: string | null): string | null {
   const address = (email ?? '').trim();
@@ -188,7 +190,7 @@ function supplierMailtoUrl(email: string | null): string | null {
       return null;
     }
   }
-  return `mailto:${encodeURIComponent(address)}`;
+  return `mailto:${encodeURIComponent(name)}@${encodeURIComponent(domain)}`;
 }
 
 /**

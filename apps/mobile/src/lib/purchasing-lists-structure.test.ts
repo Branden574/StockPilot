@@ -625,10 +625,13 @@ describe('security: a supplier link opens only what the card shows', () => {
   const tel: LinkFor = (phone) => helper('supplierTelUrl')(phone);
 
   it('a plain address becomes a mailto: link, trimmed and percent-encoded', () => {
-    expect(mailto('orders@acme.com')).toBe('mailto:orders%40acme.com');
-    expect(mailto('  orders@acme.com  ')).toBe('mailto:orders%40acme.com');
-    expect(mailto('first.last+po@acme.co.uk')).toBe('mailto:first.last%2Bpo%40acme.co.uk');
-    expect(mailto("o'brien@acme.com")).toBe("mailto:o'brien%40acme.com");
+    expect(mailto('orders@acme.com')).toBe('mailto:orders@acme.com');
+    expect(mailto('  orders@acme.com  ')).toBe('mailto:orders@acme.com');
+    expect(mailto('first.last+po@acme.co.uk')).toBe('mailto:first.last%2Bpo@acme.co.uk');
+    expect(mailto("o'brien@acme.com")).toBe("mailto:o'brien@acme.com");
+    // RFC 6068: the '@' between the name and the domain stays literal; an
+    // encoded %40 is a character inside the name and leaves no domain.
+    expect(mailto('orders@acme.com')).not.toContain('%40');
     // Read back by the mail app as the same one address.
     expect(decodeURIComponent(mailto('first.last+po@acme.co.uk')!.slice('mailto:'.length))).toBe(
       'first.last+po@acme.co.uk',
