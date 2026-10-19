@@ -39,6 +39,10 @@ export interface CountMember {
  * the confirm form. Selection lives in the shared count-selection store,
  * so the legacy path (Items/Books select-mode → "Cycle count" action)
  * lands here with its picks pre-checked and both paths converge.
+ *
+ * The footer (how many are picked, and Start count) sticks to the bottom of
+ * the window while the form runs past it, so a long selection never pushes
+ * the start out of reach. It spans the form card's 18 px padding edge to edge.
  */
 export function SelectionConfirm({
   members,
@@ -58,6 +62,8 @@ export function SelectionConfirm({
   const [notes, setNotes] = React.useState('');
   const [assignee, setAssignee] = React.useState<string>(UNASSIGNED);
   const [busy, setBusy] = React.useState(false);
+  const notesId = React.useId();
+  const assignId = React.useId();
 
   const books = picks.filter((p) => p.itemType === 'book');
   const products = picks.filter((p) => p.itemType !== 'book');
@@ -91,26 +97,23 @@ export function SelectionConfirm({
   }
 
   return (
-    <div className="space-y-5">
+    <div className="flex flex-col gap-5">
       <CountItemPicker warehouses={warehouses} sportsEnabled={sportsEnabled} />
 
       {picks.length > 0 && (
-        <div className="space-y-3">
-          {products.length > 0 && (
-            <PickGroup title="Products" picks={products} onRemove={remove} />
-          )}
-          {books.length > 0 && (
-            <PickGroup title="Books" picks={books} onRemove={remove} />
-          )}
+        <div className="flex flex-col gap-3">
+          {products.length > 0 && <PickGroup title="Products" picks={products} onRemove={remove} />}
+          {books.length > 0 && <PickGroup title="Books" picks={books} onRemove={remove} />}
         </div>
       )}
 
-      <div className="space-y-1.5">
-        <Label>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor={notesId}>
           Notes
-          <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+          <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
         </Label>
         <Textarea
+          id={notesId}
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
           rows={2}
@@ -120,13 +123,13 @@ export function SelectionConfirm({
       </div>
 
       {canAssign && (
-        <div className="space-y-1.5">
-          <Label>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor={assignId}>
             Assign to
-            <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+            <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
           </Label>
           <Select value={assignee} onValueChange={setAssignee}>
-            <SelectTrigger>
+            <SelectTrigger id={assignId} className="sm:max-w-[320px]">
               <SelectValue placeholder="Unassigned" />
             </SelectTrigger>
             <SelectContent>
@@ -138,24 +141,31 @@ export function SelectionConfirm({
               ))}
             </SelectContent>
           </Select>
-          <p className="text-muted-foreground text-xs">
+          <p className="text-muted-foreground text-[12px]">
             The assignee gets a notification to start the count.
           </p>
         </div>
       )}
 
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-muted-foreground text-sm">
+      <div className="border-border bg-card sticky bottom-0 z-10 -mx-[18px] -mb-[18px] flex flex-wrap items-center justify-between gap-3 rounded-b-lg border-t px-[18px] py-3">
+        <span className="text-muted-foreground text-[13px]">
           {picks.length === 0 ? (
             'Pick at least one item above to start a count.'
           ) : (
-            <span className="tabular-nums">
+            <span className="text-foreground font-medium tabular-nums">
               {picks.length} item{picks.length === 1 ? '' : 's'} selected
             </span>
           )}
         </span>
         <Button onClick={start} disabled={busy || picks.length === 0} variant="gradient">
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Start count'}
+          {busy ? (
+            <>
+              <Loader2 aria-hidden className="h-4 w-4 animate-spin" />
+              <span className="sr-only">Start count</span>
+            </>
+          ) : (
+            'Start count'
+          )}
         </Button>
       </div>
     </div>
@@ -172,27 +182,31 @@ function PickGroup({
   onRemove: (id: string) => void;
 }) {
   return (
-    <div className="space-y-1.5">
-      <p className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
+    <div className="flex flex-col gap-1.5">
+      <p className="text-muted-foreground text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em]">
         {title} · {picks.length}
       </p>
       <ul className="divide-border border-border divide-y rounded-md border">
         {picks.map((p) => (
-          <li key={p.id} className="flex items-center justify-between gap-3 px-3 py-2">
+          <li key={p.id} className="flex items-center justify-between gap-3 py-1.5 pl-3 pr-1.5">
             <div className="min-w-0">
-              <p className="truncate text-sm">{p.name}</p>
+              <p className="truncate text-[13.5px] leading-5">{p.name}</p>
               {p.sku ? (
-                <p className="text-muted-foreground truncate font-mono text-xs">{p.sku}</p>
+                <p className="text-muted-foreground truncate font-mono text-[11.5px] leading-[17px]">
+                  {p.sku}
+                </p>
               ) : null}
             </div>
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="icon"
               onClick={() => onRemove(p.id)}
               aria-label={`Remove ${p.name}`}
-              className="text-muted-foreground hover:text-destructive shrink-0"
+              className="text-muted-foreground hover:text-destructive h-7 w-7 shrink-0"
             >
-              <X className="h-4 w-4" />
-            </button>
+              <X aria-hidden className="h-4 w-4" />
+            </Button>
           </li>
         ))}
       </ul>

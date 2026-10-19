@@ -148,3 +148,61 @@ describe('SelectionConfirm (embedded picker flow)', () => {
     expect(screen.getByRole('button', { name: 'Start count' })).toBeDisabled();
   });
 });
+
+// The confirm form's fields are named by their visible labels (before the
+// redesign the Notes and Assign to labels were not tied to their fields, so a
+// screen reader heard only the placeholder or the chosen name).
+describe('SelectionConfirm fields', () => {
+  const fetchSpy = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useCountSelection.getState().clear();
+    vi.stubGlobal('fetch', fetchSpy);
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [], total: 0 }),
+    } as Response);
+  });
+
+  it('labels Notes, and Assign to for someone who can assign', () => {
+    render(
+      <SelectionConfirm
+        members={[{ id: 'u-leo', name: 'Leo Fairbanks', email: 'leo@x' }]}
+        canAssign
+        warehouses={WAREHOUSES}
+      />,
+    );
+    expect(screen.getByRole('textbox', { name: 'Notes (optional)' })).toHaveAttribute(
+      'placeholder',
+      'e.g. Spot count · Rack 3 chargers',
+    );
+    expect(screen.getByRole('combobox', { name: 'Assign to (optional)' })).toHaveTextContent(
+      'Unassigned',
+    );
+    expect(
+      screen.getByText('The assignee gets a notification to start the count.'),
+    ).toBeInTheDocument();
+  });
+
+  it('offers no assignee to someone who cannot assign', () => {
+    render(<SelectionConfirm members={NO_MEMBERS} canAssign={false} warehouses={WAREHOUSES} />);
+    expect(
+      screen.queryByRole('combobox', { name: 'Assign to (optional)' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('sends the typed notes, trimmed, with the picks', async () => {
+    const user = userEvent.setup();
+    useCountSelection
+      .getState()
+      .add([{ id: 'a', sku: 'SP-A', name: 'Alpha Charger', itemType: 'product' }]);
+    startActionMock.mockResolvedValue({ ok: true, data: { id: 'cc-9', lineCount: 1, skipped: 0 } });
+    render(<SelectionConfirm members={NO_MEMBERS} canAssign={false} warehouses={WAREHOUSES} />);
+    await user.type(screen.getByRole('textbox', { name: 'Notes (optional)' }), ' Rack 3 ');
+    await user.click(screen.getByRole('button', { name: 'Start count' }));
+    expect(startActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ itemIds: ['a'], notes: 'Rack 3', assignedTo: null }),
+    );
+  });
+});

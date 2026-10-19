@@ -4,8 +4,8 @@ import * as React from 'react';
 
 import { SelectionConfirm, type CountMember } from '@/components/cycle-counts/selection-confirm';
 import { StartCycleCountForm } from '@/components/cycle-counts/start-cycle-count-form';
+import { SegmentedTabs } from '@/components/patterns/segmented-tabs';
 import { useCountPicks } from '@/lib/cycle-counts/use-count-selection';
-import { cn } from '@/lib/utils';
 
 type Mode = 'selection' | 'warehouse';
 
@@ -20,6 +20,9 @@ type Mode = 'selection' | 'warehouse';
  * Defaults to selection mode when the store has picks, otherwise warehouse.
  * A mounted gate avoids a hydration mismatch (the store rehydrates from
  * sessionStorage on the client, so picks are empty during SSR).
+ *
+ * The two modes are a segmented switch (DESIGN-SPEC 6.5): two buttons that
+ * say which one is chosen (aria-pressed), the same two words as always.
  */
 export function NewCycleCount({
   warehouses,
@@ -42,21 +45,26 @@ export function NewCycleCount({
 
   if (!mounted) {
     // Stable placeholder so SSR and first client render agree.
-    return <div className="text-muted-foreground text-sm">Loading…</div>;
+    return <div className="text-muted-foreground text-[13px]">Loading…</div>;
   }
 
   const mode: Mode = override ?? (picks.length > 0 ? 'selection' : 'warehouse');
 
   return (
-    <div className="space-y-4">
-      <div className="bg-muted/50 inline-flex rounded-md p-0.5 text-sm">
-        <TabButton active={mode === 'selection'} onClick={() => setOverride('selection')}>
-          Selected items{picks.length > 0 ? ` (${picks.length})` : ''}
-        </TabButton>
-        <TabButton active={mode === 'warehouse'} onClick={() => setOverride('warehouse')}>
-          Whole warehouse
-        </TabButton>
-      </div>
+    <div className="flex flex-col gap-4">
+      <SegmentedTabs
+        semantics="nav"
+        aria-label="Scope"
+        activeId={mode}
+        items={[
+          {
+            id: 'selection',
+            label: `Selected items${picks.length > 0 ? ` (${picks.length})` : ''}`,
+          },
+          { id: 'warehouse', label: 'Whole warehouse' },
+        ]}
+        onSelect={(id) => setOverride(id === 'selection' ? 'selection' : 'warehouse')}
+      />
 
       {mode === 'selection' ? (
         <SelectionConfirm
@@ -69,30 +77,5 @@ export function NewCycleCount({
         <StartCycleCountForm warehouses={warehouses} />
       )}
     </div>
-  );
-}
-
-function TabButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        'rounded px-3 py-1.5 font-medium transition-colors',
-        active
-          ? 'bg-background text-foreground shadow-sm'
-          : 'text-muted-foreground hover:text-foreground',
-      )}
-    >
-      {children}
-    </button>
   );
 }

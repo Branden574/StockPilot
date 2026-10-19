@@ -4,7 +4,11 @@ import { Loader2, Search } from 'lucide-react';
 import Link from 'next/link';
 import * as React from 'react';
 
+import { SegmentedTabs } from '@/components/patterns/segmented-tabs';
+import { StatePanel } from '@/components/patterns/state-panel';
+import { touchTargetClass } from '@/components/patterns/touch-target';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import {
   Select,
@@ -283,24 +287,29 @@ export function CountItemPicker({
   const selectedCount = Object.keys(picks).length;
 
   return (
-    <div className="space-y-3">
-      <div className="bg-muted/50 inline-flex rounded-md p-0.5 text-sm">
-        <PickerTabButton active={tab === 'product'} onClick={() => setTab('product')}>
-          Inventory
-        </PickerTabButton>
-        <PickerTabButton active={tab === 'book'} onClick={() => setTab('book')}>
-          Books
-        </PickerTabButton>
-        {sportsEnabled && (
-          <PickerTabButton active={tab === 'group'} onClick={() => setTab('group')}>
-            Product groups
-          </PickerTabButton>
-        )}
-      </div>
+    <div className="flex flex-col gap-3">
+      {/* What to pick from: a segmented switch of toggle buttons (aria-pressed),
+          the same words and the same sports gate as always. */}
+      <SegmentedTabs
+        semantics="nav"
+        size="sm"
+        aria-label="Items to count"
+        activeId={tab}
+        items={[
+          { id: 'product', label: 'Inventory' },
+          { id: 'book', label: 'Books' },
+          ...(sportsEnabled ? [{ id: 'group', label: 'Product groups' }] : []),
+        ]}
+        onSelect={(id) => setTab(id === 'book' ? 'book' : id === 'group' ? 'group' : 'product')}
+      />
 
       <div className="flex flex-col gap-2 sm:flex-row">
-        <div className="relative flex-1">
-          <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2" />
+        <div className="relative min-w-0 flex-1">
+          <Search
+            aria-hidden
+            className="text-muted-foreground pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+            strokeWidth={1.8}
+          />
           <Input
             value={q}
             onChange={(e) => setQ(e.target.value)}
@@ -317,7 +326,7 @@ export function CountItemPicker({
         </div>
         {warehouses.length > 0 && tab !== 'group' && (
           <Select value={warehouseId} onValueChange={setWarehouseId}>
-            <SelectTrigger className="sm:w-44" aria-label="Filter by warehouse">
+            <SelectTrigger className="sm:w-48" aria-label="Filter by warehouse">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -343,95 +352,82 @@ export function CountItemPicker({
           onToggle={toggleGroup}
         />
       ) : (
-      <div className="border-border overflow-hidden rounded-md border">
-        {status === 'loading' ? (
-          <div className="text-muted-foreground flex items-center justify-center gap-2 py-8 text-sm">
-            <Loader2 className="h-4 w-4 animate-spin" /> Loading items…
-          </div>
-        ) : status === 'failed' ? (
-          <p className="text-muted-foreground px-3 py-8 text-center text-sm">
-            Couldn&apos;t load items. Check your connection and try again.
-          </p>
-        ) : rows.length === 0 ? (
-          <p className="text-muted-foreground px-3 py-8 text-center text-sm">
-            {q.trim()
-              ? `No ${tab === 'book' ? 'books' : 'items'} match “${q.trim()}”.`
-              : `No ${tab === 'book' ? 'books' : 'items'} here yet.`}
-          </p>
-        ) : (
-          <ul className="divide-border max-h-80 divide-y overflow-y-auto">
-            {rows.map((row) => {
-              const checked = Boolean(picks[row.id]);
-              // Same predicate, same rendering as the count SHEET this
-               // selection feeds (lib/pdf/count-sheet-location.ts) — both go
-               // through resolvePlacement + formatPlacementLabel, so the picker
-               // and the printed sheet can no longer name different aisles.
-              const placeLabel =
-                formatPlacementLabel(
-                  resolvePlacement({
-                    itemType: row.item_type,
-                    customFields: row.custom_fields,
-                    holdings: row.placed_holdings,
-                  }),
-                ) ?? '';
-              return (
-                <li key={row.id}>
-                  <label
-                    className={cn(
-                      'hover:bg-muted/40 flex cursor-pointer items-center gap-3 px-3 py-2',
-                      checked && 'bg-muted/30',
-                    )}
-                  >
-                    <input
-                      type="checkbox"
+        <div className="border-border bg-card overflow-hidden rounded-md border">
+          {status === 'loading' ? (
+            <PickerLoading>Loading items…</PickerLoading>
+          ) : status === 'failed' ? (
+            <PickerState kind="failed">
+              Couldn&apos;t load items. Check your connection and try again.
+            </PickerState>
+          ) : rows.length === 0 ? (
+            <PickerState kind={q.trim() ? 'no-match' : 'empty'}>
+              {q.trim()
+                ? `No ${tab === 'book' ? 'books' : 'items'} match “${q.trim()}”.`
+                : `No ${tab === 'book' ? 'books' : 'items'} here yet.`}
+            </PickerState>
+          ) : (
+            <ul className="divide-border max-h-80 divide-y overflow-y-auto">
+              {rows.map((row) => {
+                const checked = Boolean(picks[row.id]);
+                // Same predicate, same rendering as the count SHEET this
+                // selection feeds (lib/pdf/count-sheet-location.ts) — both go
+                // through resolvePlacement + formatPlacementLabel, so the picker
+                // and the printed sheet can no longer name different aisles.
+                const placeLabel =
+                  formatPlacementLabel(
+                    resolvePlacement({
+                      itemType: row.item_type,
+                      customFields: row.custom_fields,
+                      holdings: row.placed_holdings,
+                    }),
+                  ) ?? '';
+                return (
+                  <li key={row.id}>
+                    <PickerRow
                       checked={checked}
-                      onChange={() => toggle(row)}
-                      aria-label={`Select ${row.name}`}
-                      className="border-border text-primary focus:ring-primary h-4 w-4 shrink-0 rounded"
+                      onToggle={() => toggle(row)}
+                      label={`Select ${row.name}`}
+                      title={row.name}
+                      detail={
+                        <span className="font-mono text-[11.5px]">
+                          {row.sku}
+                          {placeLabel ? ` · ${placeLabel}` : ''}
+                        </span>
+                      }
+                      aside={`${row.quantity_on_hand} on hand`}
                     />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm">{row.name}</span>
-                      <span className="text-muted-foreground block truncate font-mono text-xs">
-                        {row.sku}
-                        {placeLabel ? ` · ${placeLabel}` : ''}
-                      </span>
-                    </span>
-                    <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
-                      {row.quantity_on_hand} on hand
-                    </span>
-                  </label>
-                </li>
-              );
-            })}
-            {rows.length < total && (
-              <li className="p-2">
-                {loadMoreError && (
-                  <p className="text-destructive pb-1.5 text-center text-xs" role="alert">
-                    Couldn&apos;t load more — try again.
-                  </p>
-                )}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="w-full"
-                  onClick={loadMore}
-                  disabled={loadingMore}
-                >
-                  {loadingMore ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    `Load more (${rows.length} of ${total})`
+                  </li>
+                );
+              })}
+              {rows.length < total && (
+                <li className="p-2">
+                  {loadMoreError && (
+                    <p className="text-destructive pb-1.5 text-center text-[12px]" role="alert">
+                      Couldn&apos;t load more — try again.
+                    </p>
                   )}
-                </Button>
-              </li>
-            )}
-          </ul>
-        )}
-      </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="text-muted-foreground w-full"
+                    onClick={loadMore}
+                    disabled={loadingMore}
+                  >
+                    {loadingMore ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      `Load more (${rows.length} of ${total})`
+                    )}
+                  </Button>
+                </li>
+              )}
+            </ul>
+          )}
+        </div>
       )}
 
-      <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 text-[13px]">
         <span className="text-muted-foreground tabular-nums" data-testid="picker-selected-bar">
           {selectedCount} item{selectedCount === 1 ? '' : 's'} selected
           {selectedCount > 0 && (
@@ -440,7 +436,10 @@ export function CountItemPicker({
               <button
                 type="button"
                 onClick={clear}
-                className="hover:text-foreground underline underline-offset-2"
+                className={cn(
+                  'hover:text-foreground focus-visible:ring-ring rounded-sm underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2',
+                  touchTargetClass,
+                )}
               >
                 Clear
               </button>
@@ -449,12 +448,90 @@ export function CountItemPicker({
         </span>
         <Link
           href="/dashboard/inventory"
-          className="text-muted-foreground hover:text-foreground text-xs underline underline-offset-2"
+          className="text-muted-foreground hover:text-foreground text-[12.5px] underline underline-offset-2"
         >
           or pick from the full Inventory page
         </Link>
       </div>
     </div>
+  );
+}
+
+/**
+ * One pickable row: the shared checkbox (DESIGN-SPEC 6.21, the Items table's
+ * box) with the row's words beside it, and the selected row's accent wash.
+ * A click anywhere on the row toggles it, as the old label row did; the box
+ * itself is the keyboard control (Tab to it, Space toggles) and stops its own
+ * click, so a click on it toggles once, never twice.
+ */
+function PickerRow({
+  checked,
+  onToggle,
+  label,
+  title,
+  detail,
+  aside,
+  disabled = false,
+}: {
+  checked: boolean;
+  onToggle: () => void;
+  /** The checkbox's accessible name ("Select Alpha Charger"). */
+  label: string;
+  title: React.ReactNode;
+  detail?: React.ReactNode;
+  aside: React.ReactNode;
+  disabled?: boolean;
+}) {
+  return (
+    <div
+      data-state={checked ? 'checked' : 'unchecked'}
+      onClick={() => {
+        if (!disabled) onToggle();
+      }}
+      className={cn(
+        'flex items-center gap-3 px-3 py-2.5 transition-colors',
+        disabled ? 'cursor-wait' : 'cursor-pointer',
+        checked ? 'bg-success-wash' : 'hover:bg-muted',
+      )}
+    >
+      <Checkbox checked={checked} disabled={disabled} label={label} onCheckedChange={onToggle} />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[13.5px] font-medium leading-5">{title}</span>
+        {detail ? (
+          <span className="text-muted-foreground block truncate leading-[17px]">{detail}</span>
+        ) : null}
+      </span>
+      <span className="text-muted-foreground shrink-0 text-[12.5px] tabular-nums">{aside}</span>
+    </div>
+  );
+}
+
+/** The list's loading line: a spinner and the list's own words. */
+function PickerLoading({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="text-muted-foreground flex items-center justify-center gap-2 px-3 py-8 text-[13px]">
+      <Loader2 aria-hidden className="h-4 w-4 animate-spin" /> {children}
+    </div>
+  );
+}
+
+/** The list's empty, no-match and failed lines (the quiet in-list state). */
+function PickerState({
+  kind,
+  children,
+}: {
+  kind: 'empty' | 'no-match' | 'failed';
+  children: React.ReactNode;
+}) {
+  return (
+    <StatePanel
+      kind={kind}
+      surface="plain"
+      icon={null}
+      headingLevel={null}
+      title={children}
+      className="px-3 py-8"
+    />
   );
 }
 
@@ -484,64 +561,43 @@ function GroupList({
   onToggle: (g: GroupRow) => void;
 }) {
   return (
-    <div className="space-y-2">
-      <div className="border-border overflow-hidden rounded-md border">
+    <div className="flex flex-col gap-2">
+      <div className="border-border bg-card overflow-hidden rounded-md border">
         {status === 'loading' ? (
-          <div className="text-muted-foreground flex items-center justify-center gap-2 py-8 text-sm">
-            <Loader2 className="h-4 w-4 animate-spin" /> Loading product groups…
-          </div>
+          <PickerLoading>Loading product groups…</PickerLoading>
         ) : status === 'failed' ? (
-          <p className="text-muted-foreground px-3 py-8 text-center text-sm">
+          <PickerState kind="failed">
             Couldn&apos;t load product groups. Check your connection and try again.
-          </p>
+          </PickerState>
         ) : groups.length === 0 ? (
-          <p className="text-muted-foreground px-3 py-8 text-center text-sm">
-            {query.trim()
-              ? `No product groups match “${query.trim()}”.`
-              : 'No product groups yet.'}
-          </p>
+          <PickerState kind={query.trim() ? 'no-match' : 'empty'}>
+            {query.trim() ? `No product groups match “${query.trim()}”.` : 'No product groups yet.'}
+          </PickerState>
         ) : (
           <ul className="divide-border max-h-80 divide-y overflow-y-auto">
             {groups.map((g) => {
               const checked = Boolean(expandedIds[g.id]);
               const busy = expanding === g.id;
-              const detail = [g.brand, g.model, g.styleNumber, g.team]
-                .filter(Boolean)
-                .join(' · ');
+              const detail = [g.brand, g.model, g.styleNumber, g.team].filter(Boolean).join(' · ');
               return (
                 <li key={g.id}>
-                  <label
-                    className={cn(
-                      'hover:bg-muted/40 flex cursor-pointer items-center gap-3 px-3 py-2',
-                      checked && 'bg-muted/30',
-                    )}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      disabled={busy}
-                      onChange={() => onToggle(g)}
-                      aria-label={`Count every variant of ${g.name}`}
-                      className="border-border text-primary focus:ring-primary h-4 w-4 shrink-0 rounded"
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm">{g.name}</span>
-                      {detail ? (
-                        <span className="text-muted-foreground block truncate text-xs">
-                          {detail}
-                        </span>
-                      ) : null}
-                    </span>
-                    <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
-                      {busy ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
+                  <PickerRow
+                    checked={checked}
+                    disabled={busy}
+                    onToggle={() => onToggle(g)}
+                    label={`Count every variant of ${g.name}`}
+                    title={g.name}
+                    detail={detail ? <span className="text-[12px]">{detail}</span> : null}
+                    aside={
+                      busy ? (
+                        <Loader2 aria-hidden className="h-4 w-4 animate-spin" />
                       ) : (
                         // The roll-up is DERIVED at read time. The group holds
                         // no stored total and never will.
                         `${g.variantCount} variant${g.variantCount === 1 ? '' : 's'} · ${g.totalQuantity} ${g.countingUnit}`
-                      )}
-                    </span>
-                  </label>
+                      )
+                    }
+                  />
                 </li>
               );
             })}
@@ -549,41 +605,15 @@ function GroupList({
         )}
       </div>
       {error ? (
-        <p className="text-destructive text-xs" role="alert">
+        <p className="text-destructive text-[12px]" role="alert">
           {error}
         </p>
       ) : (
-        <p className="text-muted-foreground text-xs">
-          Ticking a group adds every one of its variants as its own count line —
-          each size is counted separately.
+        <p className="text-muted-foreground text-[12px]">
+          Ticking a group adds every one of its variants as its own count line — each size is
+          counted separately.
         </p>
       )}
     </div>
-  );
-}
-
-function PickerTabButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={cn(
-        'rounded px-3 py-1.5 font-medium transition-colors',
-        active
-          ? 'bg-background text-foreground shadow-sm'
-          : 'text-muted-foreground hover:text-foreground',
-      )}
-    >
-      {children}
-    </button>
   );
 }
