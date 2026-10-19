@@ -14,6 +14,7 @@ import {
 
 import { Button } from '@/components/ui/button';
 import { Display, Eyebrow, Mono } from '@/components/ui/text';
+import { SheetChip } from '@/components/move-stock-modal';
 // The write-off's crate verdict shares the move sheet's module deliberately:
 // one precedence chain, one vocabulary, both flavours side by side.
 import { removeStockCrateWarning } from '@/lib/move-stock-form';
@@ -24,7 +25,7 @@ import {
   SHEET_HOLDINGS_UNREADABLE_NOTE,
 } from '@/lib/holdings-elsewhere';
 import { supabase } from '@/lib/supabase';
-import { ACCENT, FONT, SHADOW } from '@/lib/theme';
+import { FONT, SHADOW } from '@/lib/theme';
 import { useRole } from '@/lib/use-role';
 import { useTheme } from '@/lib/use-theme';
 import type { ItemElsewhere } from '@stockpilot/core';
@@ -134,6 +135,9 @@ function RemoveFromRackContent({
   const [reason, setReason] = React.useState('');
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  // Which box is being typed in: its border deepens to ink, as the shared
+  // Field's does. Look only.
+  const [focusedBox, setFocusedBox] = React.useState<'qty' | 'reason' | null>(null);
 
   React.useEffect(() => {
     if (!visible) return;
@@ -240,223 +244,228 @@ function RemoveFromRackContent({
     }
   }
 
-  function Chip({
-    label,
-    active,
-    onPress,
-  }: {
-    label: string;
-    active: boolean;
-    onPress: () => void;
-  }) {
-    return (
-      <Pressable
-        onPress={onPress}
-        style={{
-          paddingHorizontal: 12,
-          paddingVertical: 9,
-          borderRadius: 8,
-          borderWidth: 1,
-          borderColor: active ? c.ink : c.hair,
-          backgroundColor: active ? c.ink : c.paper2,
-        }}
-      >
-        <Mono size={12.5} color={active ? c.card : c.ink}>
-          {label}
-        </Mono>
-      </Pressable>
-    );
-  }
-
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       style={{ flex: 1 }}
     >
-        {/*
-         * Backdrop is a SIBLING behind the sheet, not its parent. A Pressable
-         * ancestor claims the touch on press-down and beats the ScrollView's
-         * pan recogniser, so the body would not scroll until something else
-         * took the responder first (focusing a text field). Do not re-nest
-         * this card inside the scrim — taps outside still close because the
-         * scrim fills the screen behind it. See add-order-items-sheet.tsx.
-         */}
-        <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-          <Pressable
-            onPress={onClose}
-            style={[
-              StyleSheet.absoluteFill,
-              {
-                backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)',
-              },
-            ]}
-          />
-          <View
-            style={[
-              {
-                backgroundColor: c.card,
-                borderTopLeftRadius: 24,
-                borderTopRightRadius: 24,
-                paddingTop: 12,
-                paddingBottom: 36,
-                paddingHorizontal: 22,
-                maxHeight: '88%',
-              },
-              SHADOW.sheet,
-            ]}
-          >
-            <View style={{ alignItems: 'center', marginBottom: 18 }}>
-              <View
-                style={{
-                  width: 36,
-                  height: 5,
-                  borderRadius: 100,
-                  backgroundColor:
-                    mode === 'dark' ? 'rgba(250,250,247,0.22)' : 'rgba(14,15,13,0.18)',
-                }}
-              />
+      {/*
+       * Backdrop is a SIBLING behind the sheet, not its parent. A Pressable
+       * ancestor claims the touch on press-down and beats the ScrollView's
+       * pan recogniser, so the body would not scroll until something else
+       * took the responder first (focusing a text field). Do not re-nest
+       * this card inside the scrim — taps outside still close because the
+       * scrim fills the screen behind it. See add-order-items-sheet.tsx.
+       *
+       * The scrim is a "Close" button to VoiceOver, which a double tap or the
+       * escape scrub closes (onAccessibilityTap / onAccessibilityEscape, the
+       * app's sheet rule: sheet-a11y-structure.test.ts has the why), and
+       * accessibilityViewIsModal keeps VoiceOver inside the open sheet. Before,
+       * the scrim was an unnamed element VoiceOver could land on.
+       */}
+      <View
+        style={{ flex: 1, justifyContent: 'flex-end' }}
+        accessibilityViewIsModal
+        onAccessibilityEscape={onClose}
+      >
+        <Pressable
+          onPress={onClose}
+          onAccessibilityTap={onClose}
+          accessibilityRole="button"
+          accessibilityLabel="Close"
+          style={[
+            StyleSheet.absoluteFill,
+            {
+              backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)',
+            },
+          ]}
+        />
+        <View
+          style={[
+            {
+              backgroundColor: c.card,
+              borderTopLeftRadius: 24,
+              borderTopRightRadius: 24,
+              paddingTop: 12,
+              paddingBottom: 36,
+              paddingHorizontal: 22,
+              maxHeight: '88%',
+            },
+            SHADOW.sheet,
+          ]}
+        >
+          <View style={{ alignItems: 'center', marginBottom: 18 }}>
+            {/* The grabber is a decorative mark in the faint ink. */}
+            <View style={{ width: 36, height: 5, borderRadius: 100, backgroundColor: c.ink5 }} />
+          </View>
+
+          <Eyebrow>REMOVE FROM RACK</Eyebrow>
+          <Display size={24} style={{ marginTop: 10 }}>
+            {itemName}
+          </Display>
+          {/* What the write-off does, and every state below: information, in
+              the muted ink (the faint ink held these at 3.0-3.7:1). */}
+          <Mono size={11.5} color={c.ink3} style={{ marginTop: 8, lineHeight: 18 }}>
+            Writes off stock from one rack. Stock in every other rack is left untouched, and this is
+            recorded in the item&apos;s history.
+          </Mono>
+
+          {loading ? (
+            <View style={{ paddingVertical: 40, alignItems: 'center' }}>
+              <ActivityIndicator color={c.ink3} />
             </View>
-
-            <Eyebrow>REMOVE FROM RACK</Eyebrow>
-            <Display size={24} style={{ marginTop: 10 }}>
-              {itemName}
-            </Display>
-            <Mono size={11.5} color={c.ink4} style={{ marginTop: 8, lineHeight: 18 }}>
-              Writes off stock from one rack. Stock in every other rack is left untouched, and this
-              is recorded in the item&apos;s history.
+          ) : holdingsUnreadable ? (
+            <Mono size={13} color={c.ink3} style={{ marginTop: 18, lineHeight: 20 }}>
+              {SHEET_HOLDINGS_UNREADABLE_NOTE}
             </Mono>
-
-            {loading ? (
-              <View style={{ paddingVertical: 40, alignItems: 'center' }}>
-                <ActivityIndicator color={c.ink4} />
+          ) : holdings.length === 0 ? (
+            <Mono size={13} color={c.ink3} style={{ marginTop: 18, lineHeight: 20 }}>
+              {elsewhereCopy.empty}
+            </Mono>
+          ) : (
+            <ScrollView
+              style={{ marginTop: 18 }}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              <View style={{ gap: 6, marginBottom: 16 }}>
+                <Mono size={10} tracking={0.12} upper color={c.ink3}>
+                  RACK / CRATE
+                </Mono>
+                {/* The move sheet's 44pt chip: a button that says which
+                    holding is chosen. It was a copy declared inside this
+                    component's render, so every render remounted the chips. */}
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                  {holdings.map((h) => (
+                    <SheetChip
+                      key={h.locationId}
+                      label={`${h.name} · ${h.quantity}`}
+                      active={h.locationId === fromId}
+                      onPress={() => {
+                        setFromId(h.locationId);
+                        // Re-seed the whole-holding default against the newly
+                        // chosen rack, so a partial edit never carries over.
+                        setQty(String(h.quantity));
+                      }}
+                    />
+                  ))}
+                </View>
+                {/* 0371: the rest of the item's stock is in warehouses this
+                    member cannot write off from, or could not be looked up.
+                    Body copy, so no text-size cap. */}
+                {elsewhereCopy.note ? (
+                  <Mono size={11} color={c.ink3} style={{ lineHeight: 16 }}>
+                    {elsewhereCopy.note}
+                  </Mono>
+                ) : null}
               </View>
-            ) : holdingsUnreadable ? (
-              <Mono size={13} color={c.ink4} style={{ marginTop: 18, lineHeight: 20 }}>
-                {SHEET_HOLDINGS_UNREADABLE_NOTE}
-              </Mono>
-            ) : holdings.length === 0 ? (
-              <Mono size={13} color={c.ink4} style={{ marginTop: 18, lineHeight: 20 }}>
-                {elsewhereCopy.empty}
-              </Mono>
-            ) : (
-              <ScrollView
-                style={{ marginTop: 18 }}
-                keyboardShouldPersistTaps="handled"
-                showsVerticalScrollIndicator={false}
-              >
-                <View style={{ gap: 6, marginBottom: 16 }}>
-                  <Mono size={10} tracking={0.12} upper color={c.ink4}>
-                    RACK / CRATE
+
+              <View style={{ gap: 6, marginBottom: 16 }}>
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    justifyContent: 'space-between',
+                    alignItems: 'baseline',
+                  }}
+                >
+                  <Mono size={10} tracking={0.12} upper color={c.ink3}>
+                    QUANTITY TO REMOVE
                   </Mono>
-                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                    {holdings.map((h) => (
-                      <Chip
-                        key={h.locationId}
-                        label={`${h.name} · ${h.quantity}`}
-                        active={h.locationId === fromId}
-                        onPress={() => {
-                          setFromId(h.locationId);
-                          // Re-seed the whole-holding default against the newly
-                          // chosen rack, so a partial edit never carries over.
-                          setQty(String(h.quantity));
-                        }}
-                      />
-                    ))}
-                  </View>
-                  {/* 0371: the rest of the item's stock is in warehouses this
-                      member cannot write off from, or could not be looked up.
-                      Body copy, so no text-size cap. */}
-                  {elsewhereCopy.note ? (
-                    <Mono size={11} color={c.ink4} style={{ lineHeight: 16 }}>
-                      {elsewhereCopy.note}
-                    </Mono>
-                  ) : null}
-                </View>
-
-                <View style={{ gap: 6, marginBottom: 16 }}>
-                  <View
-                    style={{
-                      flexDirection: 'row',
-                      justifyContent: 'space-between',
-                      alignItems: 'baseline',
-                    }}
-                  >
-                    <Mono size={10} tracking={0.12} upper color={c.ink4}>
-                      QUANTITY TO REMOVE
-                    </Mono>
-                    <Mono size={10.5} color={c.ink4}>
-                      {maxQty} in {selected?.name ?? 'rack'}
-                    </Mono>
-                  </View>
-                  <TextInput
-                    value={qty}
-                    onChangeText={(t) => setQty(t.replace(/[^0-9]/g, ''))}
-                    placeholder="0"
-                    placeholderTextColor={c.ink5}
-                    keyboardType="number-pad"
-                    style={{
-                      fontFamily: FONT.display,
-                      fontSize: 18,
-                      height: 52,
-                      paddingHorizontal: 14,
-                      borderWidth: 1,
-                      borderColor: !Number.isNaN(qtyNum) && qtyNum > maxQty ? ACCENT.crit : c.hair,
-                      borderRadius: 8,
-                      color: c.ink,
-                      backgroundColor: c.paper2,
-                    }}
-                  />
-                  {!Number.isNaN(qtyNum) && qtyNum > maxQty && (
-                    <Mono size={11} color={ACCENT.crit}>
-                      Only {maxQty} in this rack.
-                    </Mono>
-                  )}
-                </View>
-
-                <View style={{ gap: 6, marginBottom: 4 }}>
-                  <Mono size={10} tracking={0.12} upper color={c.ink4}>
-                    REASON *
+                  <Mono size={10.5} color={c.ink3}>
+                    {maxQty} in {selected?.name ?? 'rack'}
                   </Mono>
-                  <TextInput
-                    value={reason}
-                    onChangeText={setReason}
-                    placeholder="e.g. Damaged in storage, cycle-count correction"
-                    placeholderTextColor={c.ink5}
-                    maxLength={500}
-                    style={{
-                      fontFamily: FONT.displayRegular,
-                      fontSize: 15,
-                      height: 50,
-                      paddingHorizontal: 14,
-                      borderWidth: 1,
-                      borderColor: c.hair,
-                      borderRadius: 8,
-                      color: c.ink,
-                      backgroundColor: c.paper2,
-                    }}
-                  />
                 </View>
-
-                {error && (
-                  <Mono size={11.5} color={ACCENT.crit} style={{ marginTop: 12 }}>
-                    {error}
+                {/* The sheet's box recipe (the recessed fill with the control
+                    border, deepening to ink while typed in; refusal red over the
+                    cap), and minHeight, never height: the typed number is
+                    uncapped, and a fixed 52pt box clipped it. */}
+                <TextInput
+                  value={qty}
+                  onChangeText={(t) => setQty(t.replace(/[^0-9]/g, ''))}
+                  placeholder="0"
+                  accessibilityLabel="Quantity to remove"
+                  placeholderTextColor={c.ink3}
+                  keyboardType="number-pad"
+                  onFocus={() => setFocusedBox('qty')}
+                  onBlur={() => setFocusedBox(null)}
+                  style={{
+                    fontFamily: FONT.display,
+                    fontSize: 18,
+                    minHeight: 52,
+                    paddingHorizontal: 14,
+                    paddingVertical: 12,
+                    borderWidth: 1,
+                    borderColor:
+                      !Number.isNaN(qtyNum) && qtyNum > maxQty
+                        ? c.critText
+                        : focusedBox === 'qty'
+                          ? c.ink
+                          : c.hair2,
+                    borderRadius: 8,
+                    color: c.ink,
+                    backgroundColor: c.sunk,
+                  }}
+                />
+                {!Number.isNaN(qtyNum) && qtyNum > maxQty && (
+                  <Mono size={11} color={c.critText}>
+                    Only {maxQty} in this rack.
                   </Mono>
                 )}
-              </ScrollView>
-            )}
+              </View>
 
-            <View style={{ flexDirection: 'row', gap: 10, marginTop: 18 }}>
-              <View style={{ flex: 1 }}>
-                <Button block variant="ghost" onPress={onClose}>
-                  Cancel
-                </Button>
+              <View style={{ gap: 6, marginBottom: 4 }}>
+                <Mono size={10} tracking={0.12} upper color={c.ink3}>
+                  REASON *
+                </Mono>
+                <TextInput
+                  value={reason}
+                  onChangeText={setReason}
+                  placeholder="e.g. Damaged in storage, cycle-count correction"
+                  accessibilityLabel="Reason, required"
+                  placeholderTextColor={c.ink3}
+                  maxLength={500}
+                  onFocus={() => setFocusedBox('reason')}
+                  onBlur={() => setFocusedBox(null)}
+                  style={{
+                    fontFamily: FONT.displayRegular,
+                    fontSize: 15,
+                    minHeight: 50,
+                    paddingHorizontal: 14,
+                    paddingVertical: 12,
+                    borderWidth: 1,
+                    borderColor: focusedBox === 'reason' ? c.ink : c.hair2,
+                    borderRadius: 8,
+                    color: c.ink,
+                    backgroundColor: c.sunk,
+                  }}
+                />
               </View>
-              <View style={{ flex: 1 }}>
-                <Button block variant="destructive" onPress={submit} disabled={!canSubmit}>
-                  {submitting ? 'Removing…' : 'Remove stock'}
-                </Button>
-              </View>
+
+              {error && (
+                <Mono
+                  size={11.5}
+                  color={c.critText}
+                  accessibilityRole="alert"
+                  style={{ marginTop: 12 }}
+                >
+                  {error}
+                </Mono>
+              )}
+            </ScrollView>
+          )}
+
+          <View style={{ flexDirection: 'row', gap: 10, marginTop: 18 }}>
+            <View style={{ flex: 1 }}>
+              <Button block variant="ghost" onPress={onClose}>
+                Cancel
+              </Button>
             </View>
+            <View style={{ flex: 1 }}>
+              <Button block variant="destructive" onPress={submit} disabled={!canSubmit}>
+                {submitting ? 'Removing…' : 'Remove stock'}
+              </Button>
+            </View>
+          </View>
         </View>
       </View>
     </KeyboardAvoidingView>

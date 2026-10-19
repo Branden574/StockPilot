@@ -12,7 +12,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Body, Eyebrow } from '@/components/ui/text';
 import { isOfflineState } from '@/lib/exceptions-api';
-import { ACCENT, FONT } from '@/lib/theme';
+import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import {
   VERIFICATION_ISSUES_TRUNCATED_COPY,
@@ -136,7 +136,7 @@ export function ItemVerificationCard({
             accessibilityLabel="Loading the last physical count"
             style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}
           >
-            <ActivityIndicator color={c.ink4} />
+            <ActivityIndicator color={c.ink3} />
             <Body size={14} muted>
               Loading...
             </Body>
@@ -216,8 +216,11 @@ function Summary({
 
   return (
     <>
+      {/* The as-of banner, in the mode's warning ink (5.40:1 on the light
+          card, 9.33:1 on the dark one; the single-mode amber was 3.58:1 on the
+          light card). */}
       {banner ? (
-        <Body size={13} color={ACCENT.warn} accessibilityRole="alert">
+        <Body size={13} color={c.warnText} accessibilityRole="alert">
           {banner}
         </Body>
       ) : null}
@@ -353,7 +356,12 @@ function LinkLine({
   );
 }
 
-/** "EX-000042 · Count did not match the stock on record": opens the exception. */
+/**
+ * "EX-000042 · Count did not match the stock on record": opens the exception.
+ * On the mode's warning wash (the warning pill's fill, tones.ts pillTone),
+ * its words in full ink (16.7:1 light, 13.8:1 dark); the fixed amber tints it
+ * replaces did not follow the device's mode.
+ */
 export function IssueChip({ text, onPress }: { text: string; onPress: () => void }) {
   const { c } = useTheme();
   return (
@@ -367,8 +375,8 @@ export function IssueChip({ text, onPress }: { text: string; onPress: () => void
         paddingVertical: 7,
         borderRadius: 8,
         borderWidth: 1,
-        borderColor: 'rgba(185,122,29,0.3)',
-        backgroundColor: 'rgba(245,176,66,0.10)',
+        borderColor: c.warnWash,
+        backgroundColor: c.warnWash,
         justifyContent: 'center',
         opacity: pressed ? 0.7 : 1,
       })}

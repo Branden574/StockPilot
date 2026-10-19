@@ -14,7 +14,6 @@ import {
 
 import { Button } from '@/components/ui/button';
 import { Display, Eyebrow, Mono } from '@/components/ui/text';
-import { Chip } from '@/components/ui/chip';
 import { CRATE_COLOR_OPTIONS, selectedCrateColor } from '@/lib/crate-color-options';
 import {
   bookCrateRefusal,
@@ -72,7 +71,7 @@ import {
   type ItemElsewhere,
 } from '@stockpilot/core';
 import { supabase } from '@/lib/supabase';
-import { ACCENT, FONT, SHADOW } from '@/lib/theme';
+import { FONT, SHADOW } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 type Holding = MoveHolding;
@@ -87,14 +86,87 @@ const NO_STOCK_ANYWHERE = 'This item has no stock in any location yet — receiv
 /** Sentinel `toId` value for the inline "create a new rack" branch. */
 const NEW_RACK = '__new__';
 
+/** The smallest target a sheet's choice may be. */
+const MIN_TAP = 44;
+
+/**
+ * A choice in the move and remove sheets: the FROM and TO holdings, "+ New
+ * rack…", the crate colours (here) and Remove from rack's RACK / CRATE
+ * holdings (imported there). The shared chip's exact recipe (components/ui/
+ * chip.tsx): the recessed fill with the control border, the ink fill with its
+ * words in the card colour when chosen, a button that says whether it is the
+ * one chosen, and the optional crate swatch ringed in the chip's foreground.
+ * It adds only a 44pt minimum height: the shared chip is about 36.5pt (9pt
+ * padding twice, a 16.5pt mono line, the border), under the 44pt rule.
+ * Declared at module level, so its identity is stable across renders.
+ */
+export function SheetChip({
+  label,
+  active,
+  onPress,
+  swatch,
+}: {
+  label: string;
+  active: boolean;
+  onPress: () => void;
+  swatch?: string | null;
+}) {
+  const { c } = useTheme();
+  const text = (
+    <Mono size={12.5} color={active ? c.card : c.ink}>
+      {label}
+    </Mono>
+  );
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+      style={{
+        minHeight: MIN_TAP,
+        justifyContent: 'center',
+        paddingHorizontal: 12,
+        paddingVertical: 9,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: active ? c.ink : c.hair2,
+        backgroundColor: active ? c.ink : c.sunk,
+      }}
+    >
+      {swatch ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <View
+            style={{
+              width: 10,
+              height: 10,
+              borderRadius: 5,
+              backgroundColor: swatch,
+              borderWidth: 1,
+              borderColor: active ? c.card : c.hair2,
+            }}
+          />
+          {text}
+        </View>
+      ) : (
+        text
+      )}
+    </Pressable>
+  );
+}
+
 /** Colors this file reads off the theme palette — a subset of `useTheme().c`. */
-type FieldColors = { ink: string; ink4: string; ink5: string; hair: string; paper2: string };
+type FieldColors = { ink: string; ink3: string; hair2: string; sunk: string };
 
 /**
  * A labeled text input for the inline "+ New rack" form. Defined at MODULE level
  * (not inside MoveStockModal) so its component identity is stable across
  * renders — a component re-created every render would remount its TextInput and
  * drop focus after each keystroke.
+ *
+ * The sheet's box recipe: the recessed fill with the control border, which
+ * deepens to ink while the box is typed in, and the label and placeholder in
+ * the muted ink. minHeight, never height: the typed text is uncapped, and a
+ * fixed 46pt box clipped it at the larger text sizes.
  */
 function RackField({
   label,
@@ -109,26 +181,32 @@ function RackField({
   placeholder: string;
   c: FieldColors;
 }) {
+  const [focused, setFocused] = React.useState(false);
   return (
     <View style={{ gap: 6 }}>
-      <Mono size={10} tracking={0.12} upper color={c.ink4}>
+      <Mono size={10} tracking={0.12} upper color={c.ink3}>
         {label}
       </Mono>
       <TextInput
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}
-        placeholderTextColor={c.ink5}
+        // Named with its label for VoiceOver (it read the placeholder).
+        accessibilityLabel={label}
+        placeholderTextColor={c.ink3}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
         style={{
           fontFamily: FONT.displayRegular,
           fontSize: 15,
-          height: 46,
+          minHeight: 46,
           paddingHorizontal: 12,
+          paddingVertical: 10,
           borderWidth: 1,
-          borderColor: c.hair,
+          borderColor: focused ? c.ink : c.hair2,
           borderRadius: 8,
           color: c.ink,
-          backgroundColor: c.paper2,
+          backgroundColor: c.sunk,
         }}
       />
     </View>
@@ -248,6 +326,9 @@ export function MoveStockModal({
   const [notes, setNotes] = React.useState('');
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  // Which of the QUANTITY and NOTES boxes is being typed in: its border
+  // deepens to ink, as the shared Field's does. Look only.
+  const [focusedBox, setFocusedBox] = React.useState<'qty' | 'notes' | null>(null);
   // ═══ THE FOUR FIELDS ARE THE DESTINATION (books) — Maus I, 2026-08-17 ═══
   // For a BOOK: rack number, row, crate colour, crate number — always visible,
   // SEEDED from the recorded storage, FILLED by tapping an existing chip. The
@@ -790,10 +871,23 @@ export function MoveStockModal({
          * re-nest this card inside the scrim — taps outside still close
          * because the scrim fills the screen behind it. See
          * add-order-items-sheet.tsx for the measured detail.
+         *
+         * The scrim is a "Close" button to VoiceOver, which a double tap or the
+         * escape scrub closes (onAccessibilityTap / onAccessibilityEscape, the
+         * app's sheet rule: sheet-a11y-structure.test.ts has the why), and
+         * accessibilityViewIsModal keeps VoiceOver inside the open sheet. Before,
+         * the scrim was an unnamed element VoiceOver could land on.
          */}
-        <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+        <View
+          style={{ flex: 1, justifyContent: 'flex-end' }}
+          accessibilityViewIsModal
+          onAccessibilityEscape={onClose}
+        >
           <Pressable
             onPress={onClose}
+            onAccessibilityTap={onClose}
+            accessibilityRole="button"
+            accessibilityLabel="Close"
             style={[
               StyleSheet.absoluteFill,
               {
@@ -816,15 +910,8 @@ export function MoveStockModal({
             ]}
           >
             <View style={{ alignItems: 'center', marginBottom: 18 }}>
-              <View
-                style={{
-                  width: 36,
-                  height: 5,
-                  borderRadius: 100,
-                  backgroundColor:
-                    mode === 'dark' ? 'rgba(250,250,247,0.22)' : 'rgba(14,15,13,0.18)',
-                }}
-              />
+              {/* The grabber is a decorative mark in the faint ink. */}
+              <View style={{ width: 36, height: 5, borderRadius: 100, backgroundColor: c.ink5 }} />
             </View>
 
             <Eyebrow>{isPutAway ? 'PUT AWAY' : 'MOVE STOCK'}</Eyebrow>
@@ -832,12 +919,14 @@ export function MoveStockModal({
               {itemName}
             </Display>
 
+            {/* Every state below is information: the muted ink (the faint ink
+                held these sentences at 3.0-3.7:1, under AA). */}
             {loading ? (
               <View style={{ paddingVertical: 40, alignItems: 'center' }}>
-                <ActivityIndicator color={c.ink4} />
+                <ActivityIndicator color={c.ink3} />
               </View>
             ) : holdingsUnreadable ? (
-              <Mono size={13} color={c.ink4} style={{ marginTop: 18, lineHeight: 20 }}>
+              <Mono size={13} color={c.ink3} style={{ marginTop: 18, lineHeight: 20 }}>
                 {SHEET_HOLDINGS_UNREADABLE_NOTE}
               </Mono>
             ) : sourceMissing ? (
@@ -845,22 +934,22 @@ export function MoveStockModal({
               // was consumed. That is a REFRESH, not a different move: silently
               // falling back to another of this item's holdings is what armed a
               // one-tap whole-holding move of an unrelated pile.
-              <Mono size={13} color={c.ink4} style={{ marginTop: 18, lineHeight: 20 }}>
+              <Mono size={13} color={c.ink3} style={{ marginTop: 18, lineHeight: 20 }}>
                 This stock is no longer in that location — someone may have already placed
                 it. Close this and pull down to refresh the worklist.
               </Mono>
             ) : fixedSource && !fixedSource.warehouseId ? (
               // Same refusal, same words, as the web table's disabled Place.
-              <Mono size={13} color={c.ink4} style={{ marginTop: 18, lineHeight: 20 }}>
+              <Mono size={13} color={c.ink3} style={{ marginTop: 18, lineHeight: 20 }}>
                 No warehouse — cannot place. This holding is not attached to a warehouse, so
                 there is no rack it belongs in.
               </Mono>
             ) : holdings.length === 0 ? (
-              <Mono size={13} color={c.ink4} style={{ marginTop: 18, lineHeight: 20 }}>
+              <Mono size={13} color={c.ink3} style={{ marginTop: 18, lineHeight: 20 }}>
                 {elsewhereCopy.empty}
               </Mono>
             ) : destChoices.length === 0 && !canCreateLocation ? (
-              <Mono size={13} color={c.ink4} style={{ marginTop: 18, lineHeight: 20 }}>
+              <Mono size={13} color={c.ink3} style={{ marginTop: 18, lineHeight: 20 }}>
                 {destScope.unreadable ? (
                   DESTINATION_ACCESS_UNREADABLE_NOTE
                 ) : (
@@ -877,7 +966,7 @@ export function MoveStockModal({
                 showsVerticalScrollIndicator={false}
               >
                 <View style={{ gap: 6, marginBottom: 16 }}>
-                  <Mono size={10} tracking={0.12} upper color={c.ink4}>
+                  <Mono size={10} tracking={0.12} upper color={c.ink3}>
                     FROM
                   </Mono>
                   {fixedSource ? (
@@ -885,16 +974,19 @@ export function MoveStockModal({
                     // as a READ-ONLY field — the same shape as the web dialog's
                     // disabled "From" box. There are no chips here on purpose:
                     // a picker would make a cross-warehouse move expressible
-                    // again, which is the whole reason this mode exists.
+                    // again, which is the whole reason this mode exists. The
+                    // box grows with its words (minHeight; a fixed 46pt box
+                    // clipped them at the larger text sizes).
                     <View
                       style={{
-                        height: 46,
+                        minHeight: 46,
                         justifyContent: 'center',
                         paddingHorizontal: 12,
+                        paddingVertical: 10,
                         borderWidth: 1,
-                        borderColor: c.hair,
+                        borderColor: c.hair2,
                         borderRadius: 8,
-                        backgroundColor: c.paper2,
+                        backgroundColor: c.sunk,
                       }}
                     >
                       <Mono size={12.5} color={c.ink2}>
@@ -904,7 +996,7 @@ export function MoveStockModal({
                   ) : (
                     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
                       {holdings.map((h) => (
-                        <Chip
+                        <SheetChip
                           key={h.locationId}
                           label={holdingLabel(h)}
                           active={h.locationId === fromId}
@@ -944,7 +1036,7 @@ export function MoveStockModal({
                       member cannot move from, or could not be looked up. Body
                       copy, so no text-size cap. */}
                   {!fixedSource && elsewhereCopy.note ? (
-                    <Mono size={11} color={c.ink4} style={{ lineHeight: 16 }}>
+                    <Mono size={11} color={c.ink3} style={{ lineHeight: 16 }}>
                       {elsewhereCopy.note}
                     </Mono>
                   ) : null}
@@ -953,13 +1045,15 @@ export function MoveStockModal({
                 <View style={{ gap: 6, marginBottom: 16 }}>
                   {/* Owner decision Q4 (0371): destinations are narrowed to the
                       member's writable warehouses. When those could not be read,
-                      the narrowed list is not presented as complete. */}
+                      the narrowed list is not presented as complete. In the
+                      mode's refusal red (the single-mode red was 3.1-3.3:1 on
+                      the dark card). */}
                   {destScope.unreadable ? (
-                    <Mono size={11} color={ACCENT.crit} style={{ lineHeight: 16 }}>
+                    <Mono size={11} color={c.critText} style={{ lineHeight: 16 }}>
                       {DESTINATION_ACCESS_UNREADABLE_NOTE}
                     </Mono>
                   ) : null}
-                  <Mono size={10} tracking={0.12} upper color={c.ink4}>
+                  <Mono size={10} tracking={0.12} upper color={c.ink3}>
                     {offersUnplaced
                       ? isBook
                         ? 'TO RACK, CRATE, OR UNPLACED — TAP TO FILL IN'
@@ -970,7 +1064,7 @@ export function MoveStockModal({
                   </Mono>
                   <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
                     {destChoices.map((d) => (
-                      <Chip
+                      <SheetChip
                         key={d.id}
                         label={d.name}
                         // For a BOOK a chip is a shortcut that FILLS the four
@@ -991,7 +1085,7 @@ export function MoveStockModal({
                       />
                     ))}
                     {!isBook && canCreateLocation ? (
-                      <Chip
+                      <SheetChip
                         label="+ New rack…"
                         active={isNewRack}
                         onPress={() => setToId(NEW_RACK)}
@@ -1017,10 +1111,10 @@ export function MoveStockModal({
                         padding: 12,
                       }}
                     >
-                      <Mono size={10} tracking={0.12} upper color={c.ink4}>
+                      <Mono size={10} tracking={0.12} upper color={c.ink3}>
                         PLACE INTO
                       </Mono>
-                      <Mono size={10.5} color={c.ink4} style={{ lineHeight: 15 }}>
+                      <Mono size={10.5} color={c.ink3} style={{ lineHeight: 15 }}>
                         The rack and, if it sits in one, the crate on that rack. Leave the crate
                         blank to place on the bare rack — the crate label is then cleared, and you
                         will be asked first.
@@ -1043,7 +1137,7 @@ export function MoveStockModal({
                           (CRATE_COLORS), never free text. "No color" leads the
                           row because a crate is identified by its NUMBER. */}
                       <View style={{ gap: 6 }}>
-                        <Mono size={10} tracking={0.12} upper color={c.ink4}>
+                        <Mono size={10} tracking={0.12} upper color={c.ink3}>
                           CRATE COLOR
                         </Mono>
                         <View
@@ -1052,7 +1146,7 @@ export function MoveStockModal({
                           accessibilityLabel="Crate color"
                         >
                           {CRATE_COLOR_OPTIONS.map((opt) => (
-                            <Chip
+                            <SheetChip
                               key={opt.label}
                               label={opt.label}
                               swatch={opt.hex}
@@ -1062,7 +1156,7 @@ export function MoveStockModal({
                           ))}
                         </View>
                         {unknownCrateColor ? (
-                          <Mono size={10.5} color={c.ink4} style={{ lineHeight: 15 }}>
+                          <Mono size={10.5} color={c.ink3} style={{ lineHeight: 15 }}>
                             This book’s recorded crate color, “{unknownCrateColor}”, is not one of
                             the crate colors, so it could not be filled in. Pick the nearest one,
                             or leave it blank to record no color.
@@ -1077,7 +1171,7 @@ export function MoveStockModal({
                         c={c}
                       />
                       {bookProblem ? (
-                        <Mono size={11} color={ACCENT.crit} style={{ lineHeight: 15 }}>
+                        <Mono size={11} color={c.critText} style={{ lineHeight: 15 }}>
                           {bookProblem}
                         </Mono>
                       ) : null}
@@ -1119,64 +1213,81 @@ export function MoveStockModal({
                       alignItems: 'baseline',
                     }}
                   >
-                    <Mono size={10} tracking={0.12} upper color={c.ink4}>
+                    <Mono size={10} tracking={0.12} upper color={c.ink3}>
                       QUANTITY
                     </Mono>
-                    <Mono size={10.5} color={c.ink4}>
+                    <Mono size={10.5} color={c.ink3}>
                       {maxQty} available
                     </Mono>
                   </View>
+                  {/* The sheet's box recipe (the recessed fill with the control
+                      border, deepening to ink while typed in; refusal red over
+                      the cap), and minHeight, never height: the typed number is
+                      uncapped, and a fixed 52pt box clipped it. */}
                   <TextInput
                     value={qty}
                     onChangeText={(t) => setQty(t.replace(/[^0-9]/g, ''))}
                     placeholder="1"
-                    placeholderTextColor={c.ink5}
+                    accessibilityLabel="Quantity"
+                    placeholderTextColor={c.ink3}
                     keyboardType="number-pad"
+                    onFocus={() => setFocusedBox('qty')}
+                    onBlur={() => setFocusedBox(null)}
                     style={{
                       fontFamily: FONT.display,
                       fontSize: 18,
-                      height: 52,
+                      minHeight: 52,
                       paddingHorizontal: 14,
+                      paddingVertical: 12,
                       borderWidth: 1,
-                      borderColor: !Number.isNaN(qtyNum) && qtyNum > maxQty ? ACCENT.crit : c.hair,
+                      borderColor:
+                        !Number.isNaN(qtyNum) && qtyNum > maxQty
+                          ? c.critText
+                          : focusedBox === 'qty'
+                            ? c.ink
+                            : c.hair2,
                       borderRadius: 8,
                       color: c.ink,
-                      backgroundColor: c.paper2,
+                      backgroundColor: c.sunk,
                     }}
                   />
                   {!Number.isNaN(qtyNum) && qtyNum > maxQty && (
-                    <Mono size={11} color={ACCENT.crit}>
+                    <Mono size={11} color={c.critText}>
                       Only {maxQty} available in the source location.
                     </Mono>
                   )}
                 </View>
 
                 <View style={{ gap: 6, marginBottom: 4 }}>
-                  <Mono size={10} tracking={0.12} upper color={c.ink4}>
+                  <Mono size={10} tracking={0.12} upper color={c.ink3}>
                     NOTES (OPTIONAL)
                   </Mono>
                   <TextInput
                     value={notes}
                     onChangeText={setNotes}
                     placeholder="Why is this stock moving?"
-                    placeholderTextColor={c.ink5}
+                    accessibilityLabel="Notes, optional"
+                    placeholderTextColor={c.ink3}
                     maxLength={2000}
+                    onFocus={() => setFocusedBox('notes')}
+                    onBlur={() => setFocusedBox(null)}
                     style={{
                       fontFamily: FONT.displayRegular,
                       fontSize: 15,
-                      height: 50,
+                      minHeight: 50,
                       paddingHorizontal: 14,
+                      paddingVertical: 12,
                       borderWidth: 1,
-                      borderColor: c.hair,
+                      borderColor: focusedBox === 'notes' ? c.ink : c.hair2,
                       borderRadius: 8,
                       color: c.ink,
-                      backgroundColor: c.paper2,
+                      backgroundColor: c.sunk,
                     }}
                   />
                 </View>
 
                 {error && (
-                  <Mono size={11.5} color={ACCENT.crit} style={{ marginTop: 12 }}>
+                  <Mono size={11.5} color={c.critText} style={{ marginTop: 12 }}>
                     {error}
                   </Mono>
                 )}

@@ -13,6 +13,7 @@ import {
 
 import { formatHistoryMovement, type ItemHistoryMovement } from '@stockpilot/core';
 
+import { MIN_TAP } from '@/components/item-verification-card';
 import { Button } from '@/components/ui/button';
 import { Body, Display, Mono } from '@/components/ui/text';
 import { api } from '@/lib/api';
@@ -26,7 +27,7 @@ import {
   nextHistoryOffset,
   parseItemHistoryPage,
 } from '@/lib/item-history';
-import { ACCENT, FONT, SHADOW } from '@/lib/theme';
+import { FONT, SHADOW } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -94,14 +95,23 @@ export function ItemHistorySheet({
        * lived in ItemHistorySheetContent — so neither file looked wrong on its
        * own. Do not re-nest the content inside the scrim. See
        * add-order-items-sheet.tsx for the measured detail.
+       *
+       * The scrim is a "Close" button to VoiceOver, which a double tap or the
+       * escape scrub closes (onAccessibilityTap / onAccessibilityEscape, the
+       * app's sheet rule: sheet-a11y-structure.test.ts has the why), and
+       * accessibilityViewIsModal keeps VoiceOver inside the open sheet. Before,
+       * the scrim was an unnamed element VoiceOver could land on.
        */}
-      <View style={styles.scrim}>
+      <View style={styles.scrim} accessibilityViewIsModal onAccessibilityEscape={onClose}>
         <Pressable
           style={[
             StyleSheet.absoluteFill,
             { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
           ]}
           onPress={onClose}
+          onAccessibilityTap={onClose}
+          accessibilityRole="button"
+          accessibilityLabel="Close"
         />
         {/* key: remount the content per open/close transition AND per item, so
             every session starts from the empty `loading: true` initial state —
@@ -132,7 +142,7 @@ function ItemHistorySheetContent({
   itemSku: string;
   onClose: () => void;
 }) {
-  const { c, mode } = useTheme();
+  const { c } = useTheme();
   // The list is capped as a FRACTION of the screen, not at a fixed 460pt: on a
   // 4.7" phone a fixed cap pushes the "Load older movements" footer and the
   // error line off the bottom of the sheet, where neither can be reached.
@@ -209,126 +219,131 @@ function ItemHistorySheetContent({
     <View
       style={[
         styles.sheet,
-            {
-              backgroundColor: c.card,
-              paddingTop: Platform.OS === 'ios' ? 10 : 18,
-              paddingBottom: Platform.OS === 'ios' ? 28 : 22,
-            },
-            SHADOW.sheet,
-          ]}
+        {
+          backgroundColor: c.card,
+          paddingTop: Platform.OS === 'ios' ? 10 : 18,
+          paddingBottom: Platform.OS === 'ios' ? 28 : 22,
+        },
+        SHADOW.sheet,
+      ]}
+    >
+      {Platform.OS === 'ios' ? (
+        <View style={styles.grabberRow}>
+          {/* The grabber is a decorative mark in the faint ink. */}
+          <View style={[styles.grabber, { backgroundColor: c.ink5 }]} />
+        </View>
+      ) : null}
+
+      <View style={styles.header}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+          <History size={16} color={c.ink} strokeWidth={1.6} />
+          <Mono size={13} tracking={0.08} style={{ fontFamily: FONT.display, color: c.ink }}>
+            HISTORY
+          </Mono>
+        </View>
+        {/* Close: a named button (VoiceOver found an icon with no words and
+            no role) in a 44pt frame around the same 18pt X, its margins giving
+            the space back (it was the X with hitSlop), in the muted ink. */}
+        <Pressable
+          onPress={onClose}
+          accessibilityRole="button"
+          accessibilityLabel="Close"
+          style={({ pressed }) => [styles.close, { opacity: pressed ? 0.6 : 1 }]}
         >
-          {Platform.OS === 'ios' ? (
-            <View style={styles.grabberRow}>
-              <View
-                style={[
-                  styles.grabber,
-                  {
-                    backgroundColor:
-                      mode === 'dark' ? 'rgba(250,250,247,0.22)' : 'rgba(14,15,13,0.18)',
-                  },
-                ]}
-              />
+          <X size={18} color={c.ink3} strokeWidth={1.6} />
+        </Pressable>
+      </View>
+
+      <View style={styles.title}>
+        <Display size={19} style={{ marginBottom: 4 }}>
+          {itemName}
+        </Display>
+        {/* The SKU and the count of movements: information, in the muted ink
+            (the faint ink held them under AA). */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          <Mono size={10.5} color={c.ink3}>
+            {itemSku}
+          </Mono>
+          {/* The counter must never assert an empty ledger for a request
+              that never came back — see historyProgressLabel's `failed`
+              argument, and the ListEmptyComponent comment below. */}
+          {loading ? null : (
+            <Mono size={10.5} color={c.ink3}>
+              {historyProgressLabel(rows.length, total, error !== null)}
+            </Mono>
+          )}
+        </View>
+      </View>
+
+      <FlatList
+        data={loading ? [] : rows}
+        keyExtractor={(m) => m.id}
+        style={{ maxHeight: listMaxHeight }}
+        contentContainerStyle={styles.list}
+        showsVerticalScrollIndicator={false}
+        ListEmptyComponent={
+          loading ? (
+            <ActivityIndicator color={c.ink} style={{ marginTop: 28, marginBottom: 28 }} />
+          ) : error ? (
+            // The failure is already spelled out below the list. Do NOT also
+            // claim "no movements" — an unread request is not an empty
+            // ledger, and conflating the two is the same category of lie as
+            // the em dash this feature exists to remove.
+            <View style={styles.empty}>
+              <Body muted style={{ textAlign: 'center' }}>
+                Try again.
+              </Body>
             </View>
-          ) : null}
-
-          <View style={styles.header}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
-              <History size={16} color={c.ink} strokeWidth={1.6} />
-              <Mono size={13} tracking={0.08} style={{ fontFamily: FONT.display, color: c.ink }}>
-                HISTORY
-              </Mono>
+          ) : (
+            <View style={styles.empty}>
+              <Body muted style={{ textAlign: 'center' }}>
+                No stock movements recorded for this item.
+              </Body>
             </View>
-            <Pressable
-              onPress={onClose}
-              hitSlop={10}
-              style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
-            >
-              <X size={18} color={c.ink4} strokeWidth={1.6} />
-            </Pressable>
-          </View>
-
-          <View style={styles.title}>
-            <Display size={19} style={{ marginBottom: 4 }}>
-              {itemName}
-            </Display>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-              <Mono size={10.5} color={c.ink4}>
-                {itemSku}
-              </Mono>
-              {/* The counter must never assert an empty ledger for a request
-                  that never came back — see historyProgressLabel's `failed`
-                  argument, and the ListEmptyComponent comment below. */}
-              {loading ? null : (
-                <Mono size={10.5} color={c.ink4}>
-                  {historyProgressLabel(rows.length, total, error !== null)}
-                </Mono>
-              )}
-            </View>
-          </View>
-
-          <FlatList
-            data={loading ? [] : rows}
-            keyExtractor={(m) => m.id}
-            style={{ maxHeight: listMaxHeight }}
-            contentContainerStyle={styles.list}
-            showsVerticalScrollIndicator={false}
-            ListEmptyComponent={
-              loading ? (
-                <ActivityIndicator color={c.ink} style={{ marginTop: 28, marginBottom: 28 }} />
-              ) : error ? (
-                // The failure is already spelled out below the list. Do NOT also
-                // claim "no movements" — an unread request is not an empty
-                // ledger, and conflating the two is the same category of lie as
-                // the em dash this feature exists to remove.
-                <View style={styles.empty}>
-                  <Body muted style={{ textAlign: 'center' }}>
-                    Try again.
-                  </Body>
-                </View>
-              ) : (
-                <View style={styles.empty}>
-                  <Body muted style={{ textAlign: 'center' }}>
-                    No stock movements recorded for this item.
-                  </Body>
-                </View>
-              )
-            }
-            renderItem={({ item }) => <MovementRow row={item} />}
-            ListFooterComponent={
-              !loading && hasMore ? (
-                <View style={{ paddingTop: 12 }}>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    block
-                    disabled={loadingMore}
-                    onPress={loadMore}
-                  >
-                    {loadingMore ? 'Loading…' : 'Load older movements'}
-                  </Button>
-                </View>
-              ) : null
-            }
-          />
-
-          {error ? (
-            <View style={{ paddingHorizontal: 22, paddingTop: 10, gap: 10 }}>
-              <Mono size={11.5} color={ACCENT.crit}>
-                {error}
-              </Mono>
+          )
+        }
+        renderItem={({ item }) => <MovementRow row={item} />}
+        ListFooterComponent={
+          !loading && hasMore ? (
+            <View style={{ paddingTop: 12 }}>
               <Button
                 size="sm"
                 variant="outline"
                 block
-                onPress={() => {
-                  setLoading(true);
-                  void load(0);
-                }}
+                disabled={loadingMore}
+                onPress={loadMore}
+                // 44pt, not the small Button's 36.
+                style={{ minHeight: MIN_TAP }}
               >
-                Try again
+                {loadingMore ? 'Loading…' : 'Load older movements'}
               </Button>
             </View>
-          ) : null}
+          ) : null
+        }
+      />
+
+      {error ? (
+        <View style={{ paddingHorizontal: 22, paddingTop: 10, gap: 10 }}>
+          {/* The failure, in the mode's refusal red (the single-mode red was
+              3.1-3.3:1 on the dark card). */}
+          <Mono size={11.5} color={c.critText} accessibilityRole="alert">
+            {error}
+          </Mono>
+          <Button
+            size="sm"
+            variant="outline"
+            block
+            onPress={() => {
+              setLoading(true);
+              void load(0);
+            }}
+            // 44pt, not the small Button's 36.
+            style={{ minHeight: MIN_TAP }}
+          >
+            Try again
+          </Button>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -342,24 +357,26 @@ function ItemHistorySheetContent({
  * the whole truthfulness contract: say nothing you cannot support.
  */
 function MovementRow({ row }: { row: ItemHistoryMovement }) {
-  const { c, mode } = useTheme();
+  const { c } = useTheme();
   const f = formatHistoryMovement(row);
   const when = formatHistoryWhen(f.whenIso);
   const amount = historyAmountLines(f);
 
+  // The amount in the mode's tones (accent for stock in, refusal red for
+  // stock out, warning amber for the rest), each 4.5:1 or more on the row's
+  // recessed fill in both modes; the single-mode red and amber were not.
   const toneColor =
     f.tone === 'pos'
-      ? mode === 'dark'
-        ? ACCENT.mintInkDark
-        : ACCENT.mintInk
+      ? c.accent
       : f.tone === 'neg'
-        ? ACCENT.crit
+        ? c.critText
         : f.tone === 'warn'
-          ? ACCENT.warn
+          ? c.warnText
           : c.ink3;
 
   return (
-    <View style={[styles.row, { borderColor: c.hair, backgroundColor: c.paper }]}>
+    // A movement on the recessed fill, inside the sheet's card.
+    <View style={[styles.row, { borderColor: c.hair, backgroundColor: c.sunk }]}>
       <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
         <View style={{ flex: 1, minWidth: 0 }}>
           <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
@@ -369,7 +386,7 @@ function MovementRow({ row }: { row: ItemHistoryMovement }) {
               and time", and a relative "2 days ago" cannot answer that. Omitted
               entirely if the timestamp does not parse. */}
           {when ? (
-            <Mono size={10.5} color={c.ink4} style={{ marginTop: 3 }}>
+            <Mono size={10.5} color={c.ink3} style={{ marginTop: 3 }}>
               {when}
             </Mono>
           ) : null}
@@ -382,7 +399,7 @@ function MovementRow({ row }: { row: ItemHistoryMovement }) {
             {/* A row carrying BOTH an on-hand delta and a moved quantity shows
                 both — dropping one is how a number goes missing. */}
             {amount.secondary ? (
-              <Mono size={10} color={c.ink4} style={{ marginTop: 2 }}>
+              <Mono size={10.5} color={c.ink3} style={{ marginTop: 2 }}>
                 {amount.secondary}
               </Mono>
             ) : null}
@@ -408,13 +425,10 @@ function MovementRow({ row }: { row: ItemHistoryMovement }) {
           stayed, so the link is called out rather than left to be inferred from
           two rows that happen to be equal and opposite. */}
       {f.reversalLabel ? (
-        <View
-          style={[
-            styles.reversal,
-            { borderColor: 'rgba(185,122,29,0.3)', backgroundColor: 'rgba(245,176,66,0.10)' },
-          ]}
-        >
-          <Mono size={10.5} color={ACCENT.warn}>
+        // On the warning wash with the warning ink (4.70:1 light, 8.01:1
+        // dark); the fixed amber tints read 3.0:1 or less in light.
+        <View style={[styles.reversal, { borderColor: c.warnWash, backgroundColor: c.warnWash }]}>
+          <Mono size={10.5} color={c.warnText}>
             {f.reversalLabel}
           </Mono>
         </View>
@@ -429,7 +443,8 @@ function Field({ label, value }: { label: string; value: string | null }) {
   if (!value) return null;
   return (
     <View style={styles.fieldRow}>
-      <Mono size={9.5} tracking={0.12} upper color={c.ink4}>
+      {/* The label names the value beside it: the muted ink. */}
+      <Mono size={10} tracking={0.12} upper color={c.ink3}>
         {label}
       </Mono>
       <Mono size={11.5} color={c.ink2} style={{ flexShrink: 1, textAlign: 'right' }}>
@@ -465,6 +480,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
+  },
+  // The frame keeps the X's 18pt in the layout, so the header and the X stay
+  // where they were. Below, it reaches only the header's 8pt bottom padding,
+  // ending where the item name (a later sibling, which would win the tap)
+  // starts; the other 18pt go above, into the header's top padding and the
+  // grabber row's empty right side, where nothing is tappable. The equal
+  // padding keeps the X centred where it was; to the right, (44 - 18) / 2.
+  close: {
+    minWidth: MIN_TAP,
+    minHeight: MIN_TAP,
+    marginTop: -18,
+    marginBottom: -8,
+    paddingTop: 18,
+    paddingBottom: 8,
+    marginRight: -13,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   title: {
     paddingHorizontal: 22,
