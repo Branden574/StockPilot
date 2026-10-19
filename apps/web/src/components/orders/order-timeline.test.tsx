@@ -306,3 +306,37 @@ describe('OrderTimeline — an exchange replacement (returns RX-2)', () => {
     expect(screen.queryByText('What was handed over stays. The rest will not be sent.')).toBeNull();
   });
 });
+
+// Redesign P4.B1: the history sits on the shared rail (Timeline +
+// TimelineEntry): each event one entry with its label, who did it and its
+// detail lines, in the order the audit log returned them.
+describe('OrderTimeline — on the shared history rail (P4.B1)', () => {
+  it('draws one rail entry per event with the label, the actor and the detail lines', async () => {
+    await renderTimeline([
+      {
+        id: 'e1',
+        event: 'order_request.created',
+        created_at: '2026-09-28T17:00:00Z',
+        user_id: 'u1',
+        metadata: { entity_type: 'order_request', entity_id: 'order-1' },
+      },
+      stockHeld('e2', { trigger: 'manual', held: 4, requested: 4, items: 1 }),
+    ]);
+    const rail = document.querySelector('[data-slot="timeline"]');
+    expect(rail).not.toBeNull();
+    expect(rail!.tagName).toBe('OL');
+    const entries = rail!.querySelectorAll('[data-slot="timeline-entry"]');
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toHaveTextContent('Dana Diaz');
+    expect(entries[1]).toHaveTextContent('Dana Diaz');
+    // No raw metadata for anyone who is not a platform admin.
+    expect(screen.queryByText(/Raw event/)).toBeNull();
+  });
+
+  it('a viewer who cannot see activity still gets the sentence alone, outside any rail', async () => {
+    render(
+      await OrderTimeline({ orderId: 'order-1', organizationId: 'org-1', canReadActivity: false }),
+    );
+    expect(document.querySelector('[data-slot="timeline"]')).toBeNull();
+  });
+});

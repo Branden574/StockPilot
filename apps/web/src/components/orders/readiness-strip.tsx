@@ -137,7 +137,6 @@ export function ReadinessStrip({
               type="button"
               variant="outline"
               size="sm"
-
               onClick={() => void holdAvailableStock()}
               disabled={holding || pending}
               data-testid="readiness-hold-stock"
@@ -154,7 +153,6 @@ export function ReadinessStrip({
             type="button"
             variant="outline"
             size="sm"
-
             onClick={() => startTransition(() => router.refresh())}
             disabled={pending}
             data-testid="readiness-recheck"

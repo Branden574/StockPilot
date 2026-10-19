@@ -2795,3 +2795,67 @@ describe('orders/[id]: ?sign=physical from the RMA\'s Hand over', () => {
     expect((managerActionsProps.mock.calls.at(-1)![0] as Record<string, unknown>).openPhysicalSignature).toBe(false);
   });
 });
+
+// Redesign P4.B1: the record page in the shared patterns. The header is
+// PageHeader (the way back, the SO number in the h1, who it is from and the
+// warehouse); every block of the main column is a titled section; Dates and
+// Details are label / value lists (dt / dd pairs) in the page's aside, the
+// tour's `main aside`. Words, order and gates are the page's own.
+describe('orders/[id]: the record layout keeps every section (P4.B1)', () => {
+  it('the page header carries the way back, the number and who it is from', async () => {
+    await renderPage();
+    const header = document.querySelector('[data-slot="page-header"]')!;
+    expect(header).not.toBeNull();
+    expect(within(header as HTMLElement).getByRole('heading', { level: 1 })).toHaveTextContent(
+      'Order request SO-000042',
+    );
+    expect(
+      within(header as HTMLElement).getByRole('link', { name: '← Back to orders' }),
+    ).toHaveAttribute('href', '/dashboard/orders');
+    expect(header).toHaveTextContent('From Jane Smith · Main DC');
+  });
+
+  it('the lines, reservations, note, denied reason and timeline are titled sections; Dates and Details sit in the aside as label / value rows', async () => {
+    orderGet.mockResolvedValue(
+      detailFixture({
+        request: requestFixture({
+          status: 'denied',
+          denied_reason: 'Over the term budget',
+          notes: 'For room 4',
+          requester_email: 'jane@school.test',
+        }),
+        reservations: [{ id: 'r1', quantity: 3 }],
+      }),
+    );
+    const { container } = await renderPage();
+    for (const title of [
+      'Lines (0)',
+      'Active reservations',
+      'Requester note',
+      'Denied',
+      'Timeline',
+    ]) {
+      const heading = screen.getByRole('heading', { level: 2, name: title });
+      expect(heading.closest('section'), title).toHaveAttribute('data-slot', 'detail-section');
+    }
+    expect(screen.getByText('No lines on this request.')).toBeInTheDocument();
+    expect(screen.getByText('For room 4')).toBeInTheDocument();
+    expect(screen.getByText('Over the term budget')).toBeInTheDocument();
+
+    const aside = container.querySelector('aside')!;
+    expect(aside).not.toBeNull();
+    const pairs = (title: string) => {
+      const section = within(aside as HTMLElement)
+        .getByRole('heading', { level: 2, name: title })
+        .closest('section')!;
+      return Array.from(section.querySelectorAll('dl > div')).map(
+        (row) => row.querySelector('dt')?.textContent,
+      );
+    };
+    expect(pairs('Dates')).toEqual(['Submitted', 'Approved']);
+    expect(pairs('Details')).toEqual(['Requester', 'Email', 'Source', 'Warehouse', 'Updated']);
+    expect(aside).toHaveTextContent('jane@school.test');
+    expect(aside).toHaveTextContent('Internal');
+    expect(aside).toHaveTextContent('Main DC');
+  });
+});

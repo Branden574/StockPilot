@@ -53,6 +53,13 @@ describe('detail titles have room before their actions share the line', () => {
     );
   });
 
+  it('every title column asks for 18rem (basis-72)', () => {
+    const wrong = withColumns.flatMap((p) =>
+      p.columns.filter((c) => !c.split(/\s+/).includes('basis-72')).map((c) => `${p.file}: "${c}"`),
+    );
+    expect(wrong).toEqual([]);
+  });
+
   // Pages whose title column moved into the shared PageHeader in the
   // redesign (P4.B1: the order page). PageHeader's title block is not a
   // flex-1 column: it takes its own width and the actions row wraps under it,
@@ -68,12 +75,5 @@ describe('detail titles have room before their actions share the line', () => {
       expect(src, file).not.toMatch(/<h1\b/);
       expect(titleColumns(src), file).toEqual([]);
     }
-  });
-
-  it('every title column asks for 18rem (basis-72)', () => {
-    const wrong = withColumns.flatMap((p) =>
-      p.columns.filter((c) => !c.split(/\s+/).includes('basis-72')).map((c) => `${p.file}: "${c}"`),
-    );
-    expect(wrong).toEqual([]);
   });
 });
