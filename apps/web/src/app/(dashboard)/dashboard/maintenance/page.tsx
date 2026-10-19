@@ -6,8 +6,11 @@ import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { MaintenanceSearch } from '@/components/maintenance/maintenance-search';
 import { MaintenanceStatusBadge } from '@/components/maintenance/maintenance-status-badge';
 import { PageTour } from '@/components/onboarding/page-tour';
+import { PageHeader } from '@/components/patterns/page-header';
+import { SegmentedTabs } from '@/components/patterns/segmented-tabs';
+import { StatePanel } from '@/components/patterns/state-panel';
+import { StatStrip, StatStripLink } from '@/components/patterns/stat-strip';
 import { Button } from '@/components/ui/button';
-import { EmptyState } from '@/components/ui/empty-state';
 import { Pagination } from '@/components/ui/pagination';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
@@ -28,6 +31,14 @@ export const dynamic = 'force-dynamic';
  * instead of a numbered "Page N of M" pager backed by a COUNT query.
  */
 const PAGE_SIZE = 25;
+
+/**
+ * The page box every redesigned dashboard page shares (DESIGN-SPEC 4 and 5.3:
+ * max 1320, 28 / 32 / 64 padding, 16 px gutters on a phone, 16 px between
+ * blocks), the same box as the Orders list this page follows.
+ */
+const PAGE_BOX =
+  'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
 
 const STATUS_FILTERS: Array<{ value: MaintenanceStatus | 'active'; label: string }> = [
   // 'active' is a synthetic filter (saved + draft_opened) with no matching
@@ -124,172 +135,196 @@ export default async function MaintenancePage({
   const visible = hasNext ? rows.slice(0, PAGE_SIZE) : rows;
   const hasActiveFilters = Boolean(q || status);
 
+  const statusTiles: Array<{ id: string; label: string; status?: MaintenanceStatus | 'active' }> = [
+    { id: 'all', label: 'All statuses' },
+    ...STATUS_FILTERS.map((f) => ({ id: f.value, label: f.label, status: f.value })),
+  ];
+
   return (
-    <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
-      <div className="flex flex-wrap items-end justify-between gap-3 sm:gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {scope === 'all' ? 'All maintenance requests' : 'My maintenance requests'}
-          </h1>
-          {/* Verbatim, brief section 22 — the list must never imply it
-              reflects current Zendesk/Outlook ticket status. Kept on one
-              source line deliberately: the test suite literal-pins this
-              exact sentence and JSX text spanning multiple lines is a
-              needless risk against that pin. */}
-          <p className="text-muted-foreground mt-1 max-w-2xl text-sm">
+    <div className={PAGE_BOX}>
+      <PageHeader
+        title={scope === 'all' ? 'All maintenance requests' : 'My maintenance requests'}
+        subline={
+          // Verbatim, brief section 22 — the list must never imply it
+          // reflects current Zendesk/Outlook ticket status. Kept on one
+          // source line deliberately: the test suite literal-pins this exact
+          // sentence and JSX text spanning multiple lines is a needless risk
+          // against that pin.
+          <span className="block max-w-2xl">
             Ticket updates and replies are handled through the Outlook/Zendesk email conversation and are not synchronized into StockPilot.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <PageTour tour={MAINTENANCE_REQUESTS_TOUR} />
-          {canSubmit && (
+          </span>
+        }
+        tour={<PageTour tour={MAINTENANCE_REQUESTS_TOUR} />}
+        primaryAction={
+          canSubmit ? (
             <Button asChild variant="gradient">
               <Link href="/dashboard/maintenance/new">New maintenance request</Link>
             </Button>
-          )}
-        </div>
-      </div>
+          ) : null
+        }
+      />
 
-      <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
-        <nav className="flex flex-wrap items-center gap-2 text-sm" aria-label="Filter maintenance requests">
-          <Link
-            href={buildMaintenanceHref({ scope: 'mine', status, q })}
-            aria-current={scope === 'mine' ? 'page' : undefined}
-            className={
-              scope === 'mine' ? 'font-medium underline' : 'text-muted-foreground hover:text-foreground'
-            }
-          >
-            My requests
-          </Link>
-          {canReadAll && (
-            <Link
-              href={buildMaintenanceHref({ scope: 'all', status, q })}
-              aria-current={scope === 'all' ? 'page' : undefined}
-              className={
-                scope === 'all' ? 'font-medium underline' : 'text-muted-foreground hover:text-foreground'
-              }
-            >
-              All requests
-            </Link>
-          )}
-          <span className="text-muted-foreground/50" aria-hidden="true">
-            ·
-          </span>
-          <Link
-            href={buildMaintenanceHref({ scope, q })}
-            aria-current={!status ? 'page' : undefined}
-            className={!status ? 'font-medium underline' : 'text-muted-foreground hover:text-foreground'}
-          >
-            All statuses
-          </Link>
-          {STATUS_FILTERS.map((f) => (
-            <Link
-              key={f.value}
-              href={buildMaintenanceHref({ scope, status: f.value, q })}
-              aria-current={status === f.value ? 'page' : undefined}
-              className={
-                status === f.value ? 'font-medium underline' : 'text-muted-foreground hover:text-foreground'
-              }
-            >
-              {f.label}
-            </Link>
-          ))}
-        </nav>
+      {/* One navigation landmark holds every filter link, as before: the
+          scope switch (drawn as the segmented view tabs, DESIGN-SPEC 6.5)
+          and the status links (drawn as the Orders stage strip, 6.8). Every
+          link keeps its URL (scope, status and q carried over) and
+          aria-current on the open one. The tiles carry no figures: the list
+          service has no count, and this page reads none (owner decision
+          O2). With no figure in a tile, the open stage's label takes the ink
+          and weight the figure would have. */}
+      <nav aria-label="Filter maintenance requests" className="flex min-w-0 flex-col gap-3">
+        <SegmentedTabs
+          semantics="nav"
+          aria-label="Request scope"
+          activeId={scope}
+          items={[
+            {
+              id: 'mine',
+              label: 'My requests',
+              href: buildMaintenanceHref({ scope: 'mine', status, q }),
+            },
+            ...(canReadAll
+              ? [
+                  {
+                    id: 'all',
+                    label: 'All requests',
+                    href: buildMaintenanceHref({ scope: 'all', status, q }),
+                  },
+                ]
+              : []),
+          ]}
+        />
+        <StatStrip variant="stages">
+          {statusTiles.map((t) => {
+            const isActive = t.status === status;
+            return (
+              <StatStripLink
+                key={t.id}
+                href={buildMaintenanceHref({ scope, status: t.status, q })}
+                active={isActive}
+                label={
+                  <span className={isActive ? 'text-foreground font-medium' : undefined}>
+                    {t.label}
+                  </span>
+                }
+              />
+            );
+          })}
+        </StatStrip>
+      </nav>
 
-        {/* Search is a read_all/manage affordance only (brief section 22:
-            filtering + search belong to the "All maintenance requests"
-            view — the plain "My requests" list has no search box). The
-            placeholder names exactly what MaintenanceRequestsService.list()
-            searches (subject/description/requester + request number) —
-            never claims site/SKU/order-number matching the service does
-            not implement. */}
-        {scope === 'all' && (
+      {/* Search is a read_all/manage affordance only (brief section 22:
+          filtering + search belong to the "All maintenance requests" view —
+          the plain "My requests" list has no search box). The placeholder
+          names exactly what MaintenanceRequestsService.list() searches
+          (subject/description/requester + request number) — never claims
+          site/SKU/order-number matching the service does not implement. */}
+      {scope === 'all' && (
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <MaintenanceSearch key={`${scope}:${status ?? ''}:${q}`} scope={scope} status={status} initialQuery={q} />
-        )}
-      </div>
+        </div>
+      )}
 
-      <div className="mt-4">
-        {visible.length === 0 ? (
-          hasActiveFilters ? (
-            <EmptyState
-              icon={Wrench}
-              title="No matches"
-              description="Nothing found for the current filters. Try a different search or status, or clear filters."
-              cta={{ label: 'Clear filters', href: buildMaintenanceHref({ scope }) }}
-            />
-          ) : page > 1 ? (
-            <EmptyState
-              icon={Wrench}
-              title="Nothing on this page"
-              description="You've paged past the end of the list."
-              cta={{ label: 'Back to page 1', href: buildMaintenanceHref({ scope }) }}
-            />
-          ) : (
-            <EmptyState
-              icon={Wrench}
-              title="No maintenance requests"
-              description="Report a facilities or equipment issue and StockPilot will prepare the email for you."
-              cta={
-                canSubmit
-                  ? { label: 'Create your first maintenance request', href: '/dashboard/maintenance/new' }
-                  : undefined
-              }
-            />
-          )
+      {visible.length === 0 ? (
+        hasActiveFilters ? (
+          <StatePanel
+            kind="no-match"
+            icon={Wrench}
+            title="No matches"
+            description="Nothing found for the current filters. Try a different search or status, or clear filters."
+            action={
+              <Button asChild variant="outline">
+                <Link href={buildMaintenanceHref({ scope })}>Clear filters</Link>
+              </Button>
+            }
+          />
+        ) : page > 1 ? (
+          <StatePanel
+            kind="empty"
+            icon={Wrench}
+            title="Nothing on this page"
+            description="You've paged past the end of the list."
+            action={
+              <Button asChild variant="outline">
+                <Link href={buildMaintenanceHref({ scope })}>Back to page 1</Link>
+              </Button>
+            }
+          />
         ) : (
-          <div className="bg-card overflow-x-auto rounded-xl border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Request</TableHead>
-                  <TableHead>Subject</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Priority</TableHead>
-                  <TableHead>Site</TableHead>
-                  {scope === 'all' ? <TableHead>Requester</TableHead> : null}
-                  <TableHead className="text-right">Photos</TableHead>
-                  <TableHead className="text-right">Created</TableHead>
+          <StatePanel
+            kind="empty"
+            icon={Wrench}
+            title="No maintenance requests"
+            description="Report a facilities or equipment issue and StockPilot will prepare the email for you."
+            action={
+              canSubmit ? (
+                <Button asChild variant="gradient">
+                  <Link href="/dashboard/maintenance/new">
+                    Create your first maintenance request
+                  </Link>
+                </Button>
+              ) : undefined
+            }
+          />
+        )
+      ) : (
+        // The table card (DESIGN-SPEC 6.9): every column kept, at least
+        // 760 px wide and scrolling sideways inside the card, never the page,
+        // when the content area is narrower. It stays a real table: the tour
+        // spotlights its first body row (`table tbody tr`).
+        <div className="border-border bg-card overflow-hidden rounded-lg border">
+          <Table className="min-w-[760px]">
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>Request</TableHead>
+                <TableHead>Subject</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Priority</TableHead>
+                <TableHead>Site</TableHead>
+                {scope === 'all' ? <TableHead>Requester</TableHead> : null}
+                <TableHead className="text-right">Photos</TableHead>
+                <TableHead className="text-right">Created</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {visible.map((r) => (
+                <TableRow key={r.id}>
+                  <TableCell className="whitespace-nowrap">
+                    <Link
+                      className="text-foreground font-mono text-[13px] font-medium tabular-nums underline-offset-2 hover:underline"
+                      href={`/dashboard/maintenance/${r.id}`}
+                    >
+                      {formatMaintenanceRequestNumber(r.requestNumber, r.createdAt) ??
+                        r.requestNumber}
+                    </Link>
+                  </TableCell>
+                  <TableCell className="max-w-[28ch] truncate">{r.subject}</TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    <MaintenanceStatusBadge status={r.status} />
+                  </TableCell>
+                  <TableCell className="text-ink-2 capitalize">{r.priority}</TableCell>
+                  <TableCell className="text-ink-2">{r.siteName ?? '—'}</TableCell>
+                  {scope === 'all' ? (
+                    <TableCell className="text-ink-2">{r.requesterName}</TableCell>
+                  ) : null}
+                  <TableCell className="text-right font-mono text-[13px] tabular-nums">
+                    {r.photoCount || '—'}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground whitespace-nowrap text-right text-[12.5px]">
+                    {formatRelative(r.createdAt)}
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {visible.map((r) => (
-                  <TableRow key={r.id}>
-                    <TableCell>
-                      <Link
-                        className="font-medium underline-offset-2 hover:underline"
-                        href={`/dashboard/maintenance/${r.id}`}
-                      >
-                        {formatMaintenanceRequestNumber(r.requestNumber, r.createdAt) ?? r.requestNumber}
-                      </Link>
-                    </TableCell>
-                    <TableCell className="max-w-[28ch] truncate">{r.subject}</TableCell>
-                    <TableCell>
-                      <MaintenanceStatusBadge status={r.status} />
-                    </TableCell>
-                    <TableCell className="capitalize">{r.priority}</TableCell>
-                    <TableCell className="text-muted-foreground text-sm">{r.siteName ?? '—'}</TableCell>
-                    {scope === 'all' ? (
-                      <TableCell className="text-sm">{r.requesterName}</TableCell>
-                    ) : null}
-                    <TableCell className="text-right tabular-nums">{r.photoCount || '—'}</TableCell>
-                    <TableCell className="text-muted-foreground text-right text-xs">
-                      {formatRelative(r.createdAt)}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-
-        {visible.length > 0 && (
-          <div className="mt-4 flex items-center justify-end">
-            {/* SERIALIZABLE props only: this is a server component rendering a
-                'use client' pager, and a function prop (hrefForPage) crashes
-                any non-empty list at runtime — RSC refuses to serialize
-                functions (digest 3969804129; 2026-08-05 walk, BUG 1). The
-                pager rebuilds buildMaintenanceHref's exact URL shape from
-                basePath + baseParams (page param appended, omitted on page 1). */}
+              ))}
+            </TableBody>
+          </Table>
+          {/* The pager is the table card's footer (DESIGN-SPEC 6.9).
+              SERIALIZABLE props only: this is a server component rendering a
+              'use client' pager, and a function prop (hrefForPage) crashes
+              any non-empty list at runtime — RSC refuses to serialize
+              functions (digest 3969804129; 2026-08-05 walk, BUG 1). The
+              pager rebuilds buildMaintenanceHref's exact URL shape from
+              basePath + baseParams (page param appended, omitted on page 1). */}
+          <div className="border-border flex justify-end border-t px-4 py-2.5">
             <Pagination
               page={page}
               hasNext={hasNext}
@@ -297,8 +332,8 @@ export default async function MaintenancePage({
               baseParams={maintenanceListParams({ scope, status, q })}
             />
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
