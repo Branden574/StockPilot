@@ -5,6 +5,7 @@ import { TeamManager } from '@/components/team/team-manager';
 
 export const metadata: Metadata = { title: 'Team' };
 import { requireOrgContext } from '@/lib/auth/session';
+import { effectiveNavLabel } from '@/lib/nav-labels';
 import { ChartersService } from '@/server/services/charters';
 import { TeamService } from '@/server/services/team';
 import { WarehousesService } from '@/server/services/warehouses';
@@ -30,7 +31,7 @@ export default async function TeamPage() {
 
   const supabase = await createClient();
 
-  const [team, charterSvc, warehouseSvc, whCharterSvc, orgRow] = await Promise.all([
+  const [team, charterSvc, warehouseSvc, whCharterSvc, orgRow, title] = await Promise.all([
     TeamService.forCurrentUser(),
     ChartersService.forCurrentUser(),
     WarehousesService.forCurrentUser(),
@@ -40,6 +41,10 @@ export default async function TeamPage() {
       .select('terminology')
       .eq('id', ctx.organizationId)
       .maybeSingle(),
+    // The heading follows a Settings > Navigation rename of Team (PLAN rule
+    // 10). It reads the request-cached org row the layout already holds, so
+    // it adds no request; an unreadable row keeps the page's own heading.
+    effectiveNavLabel('/dashboard/team', 'Team').catch(() => 'Team'),
   ]);
 
   const [members, invites, chartersList, warehousesList, warehouseCharters] =
@@ -115,14 +120,10 @@ export default async function TeamPage() {
   );
 
   return (
-    <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Team</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Invite, assign roles, and manage workspace access.
-        </p>
-      </div>
+    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
       <TeamManager
+        title={title}
+        subline="Invite, assign roles, and manage workspace access."
         currentUserRole={ctx.role}
         members={members.map((m) => ({
           id: m.id,

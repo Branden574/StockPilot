@@ -93,3 +93,110 @@ describe('ScheduleCalendar hydrates with the server in UTC and the browser in Lo
     }
   });
 });
+
+// The redesign (P4.F2, row W-WS-04): status chips moved to the tokens, and the
+// hover-only "+ Add" link shows on keyboard focus and on touch screens too
+// (CONFLICTS D18), where there is no hover to reveal it.
+describe('ScheduleCalendar redesign', () => {
+  // One event a day (a day shows three chips and then "+N more").
+  const at = (
+    status: 'scheduled' | 'in_progress' | 'completed' | 'cancelled',
+    id: string,
+    day: number,
+  ) => ({
+    ...EVENT,
+    id,
+    title: `Job ${status}`,
+    status,
+    startsAt: `2026-07-${String(day).padStart(2, '0')}T16:00:00Z`,
+  });
+
+  it('"+ Add" is revealed on focus (its own and its day\'s) and on coarse pointers, not by hover alone', () => {
+    render(<ScheduleCalendar year={2026} month={7} events={[]} canManage />);
+    const add = screen.getAllByLabelText(/Add event on/)[0]!;
+    expect(add).toHaveClass('opacity-0', 'group-hover:opacity-100');
+    expect(add).toHaveClass(
+      'focus-visible:opacity-100',
+      'group-focus-within:opacity-100',
+      'pointer-coarse:opacity-100',
+    );
+  });
+
+  it('every chip says its status in words, keeps the strike-through on finished ones, and uses no raw palette colour', async () => {
+    const t0 = Date.parse('2026-07-15T12:00:00.000Z');
+    const run = await hydrateAcrossClockShift(
+      () => (
+        <ScheduleCalendar
+          year={2026}
+          month={7}
+          events={[
+            at('scheduled', 'a', 13),
+            at('in_progress', 'b', 14),
+            at('completed', 'c', 15),
+            at('cancelled', 'd', 16),
+          ]}
+        />
+      ),
+      { serverNow: t0, browserNow: t0 },
+    );
+    try {
+      const chip = (title: string) =>
+        within(run.container).getByText(title).closest('a') as HTMLAnchorElement;
+      expect(chip('Job scheduled')).toHaveTextContent('Job scheduled, Scheduled');
+      expect(chip('Job in_progress')).toHaveTextContent('Job in_progress, In progress');
+      expect(chip('Job completed')).toHaveTextContent('Job completed, Completed');
+      expect(chip('Job cancelled')).toHaveTextContent('Job cancelled, Cancelled');
+      expect(chip('Job completed')).toHaveClass('line-through');
+      expect(chip('Job cancelled')).toHaveClass('line-through');
+      expect(chip('Job scheduled')).not.toHaveClass('line-through');
+      for (const a of run.container.querySelectorAll('a[data-status]')) {
+        expect(a.className).not.toMatch(/\b(sky|amber|emerald|rose)-\d/);
+      }
+    } finally {
+      run.unmount();
+    }
+  });
+
+  // DESIGN-SPEC 2.4: the chip's words sit on a status wash in that status's
+  // tone, which only just clears 4.5:1 in light (4.64 to 4.88). opacity-80 on
+  // the time dropped it to 3.28-3.39 in light and the cancelled chip's to 4.21
+  // in dark (axe color-contrast, serious), so every part of a chip keeps the
+  // full tone and the title's weight sets the time apart instead.
+  it('keeps every chip, its time and its title at full tone (no opacity), with the title in medium weight', async () => {
+    const t0 = Date.parse('2026-07-15T12:00:00.000Z');
+    const run = await hydrateAcrossClockShift(
+      () => (
+        <ScheduleCalendar
+          year={2026}
+          month={7}
+          events={[
+            at('scheduled', 'a', 13),
+            at('in_progress', 'b', 14),
+            at('completed', 'c', 15),
+            at('cancelled', 'd', 16),
+          ]}
+        />
+      ),
+      { serverNow: t0, browserNow: t0 },
+    );
+    try {
+      const chips = Array.from(run.container.querySelectorAll<HTMLElement>('a[data-status]'));
+      expect(chips.map((a) => a.dataset.status)).toEqual([
+        'scheduled',
+        'in_progress',
+        'completed',
+        'cancelled',
+      ]);
+      for (const chip of chips) {
+        const time = within(chip).getByText('9:00 AM');
+        expect(time).toHaveClass('tabular-nums');
+        expect(time.className).not.toMatch(/opacity-/);
+        expect(within(chip).getByText(/^Job /)).toHaveClass('font-medium');
+        expect(chip.className).not.toMatch(/opacity-/);
+        expect(chip.querySelectorAll('[class*="opacity-"]')).toHaveLength(0);
+      }
+    } finally {
+      run.unmount();
+    }
+  });
+});

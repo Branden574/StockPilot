@@ -5,8 +5,9 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { DetailSection } from '@/components/patterns/detail-section';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { setPortalPricingModeAction } from '@/server/actions/customers';
 
 import type { PortalPricingMode } from '@stockpilot/core';
@@ -57,46 +58,45 @@ export function PortalPricingModePanel({ initial }: { initial: PortalPricingMode
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <CircleDollarSign className="h-4 w-4" /> Portal pricing
-        </CardTitle>
-        <CardDescription>
-          Controls whether the customer portal shows prices and order totals.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="space-y-2">
-          {OPTIONS.map((opt) => (
-            <label
-              key={opt.value}
-              className="border-input has-[:checked]:border-primary has-[:checked]:bg-primary/5 flex cursor-pointer items-start gap-3 rounded-lg border p-3"
-            >
-              <input
-                type="radio"
-                name="portal-pricing-mode"
-                value={opt.value}
-                checked={mode === opt.value}
-                onChange={() => setMode(opt.value)}
-                disabled={busy}
-                className="mt-1"
-              />
-              <span className="space-y-0.5">
-                <span className="block text-sm font-medium">{opt.label}</span>
-                <span className="text-muted-foreground block text-xs">{opt.helper}</span>
-              </span>
-            </label>
-          ))}
-        </div>
-
-        <div className="flex justify-end">
-          <Button onClick={save} disabled={!dirty || busy} size="sm">
+    <DetailSection
+      title={
+        <span className="inline-flex items-center gap-2">
+          <CircleDollarSign aria-hidden className="text-muted-foreground h-4 w-4" /> Portal pricing
+        </span>
+      }
+      footer={
+        <>
+          <span />
+          <Button onClick={save} disabled={!dirty || busy}>
             {busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null}
             Save
           </Button>
-        </div>
-      </CardContent>
-    </Card>
+        </>
+      }
+    >
+      <p className="text-muted-foreground mb-3 text-[13px]">
+        Controls whether the customer portal shows prices and order totals.
+      </p>
+      {/* Native radios under one name (the shared RadioGroup), so the arrow
+          keys move between the two choices; Save stays disabled until the
+          choice differs from the saved one. */}
+      <RadioGroup
+        name="portal-pricing-mode"
+        aria-label="Portal pricing"
+        variant="card"
+        value={mode}
+        onValueChange={(v) => setMode(v as PortalPricingMode)}
+        disabled={busy}
+      >
+        {OPTIONS.map((opt) => (
+          <RadioGroupItem
+            key={opt.value}
+            value={opt.value}
+            label={opt.label}
+            description={opt.helper}
+          />
+        ))}
+      </RadioGroup>
+    </DetailSection>
   );
 }

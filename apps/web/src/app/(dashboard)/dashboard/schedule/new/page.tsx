@@ -1,8 +1,8 @@
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
+import { DetailSection } from '@/components/patterns/detail-section';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { ScheduleEventForm } from '@/components/schedule/schedule-event-form';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { requireOrgContext } from '@/lib/auth/session';
 import { BundlesService } from '@/server/services/bundles';
 import { ScheduleService } from '@/server/services/schedule';
@@ -63,31 +63,19 @@ export default async function NewScheduleEventPage({
     }));
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href="/dashboard/schedule"
-          className="text-muted-foreground hover:text-foreground text-sm"
-        >
-          ← Back to calendar
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">
-          New event
-        </h1>
-      </div>
-      <Card>
-        <CardHeader>
-          <CardTitle>Event details</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <ScheduleEventForm
-            warehouses={warehouses.map((w) => ({ id: w.id, name: w.name }))}
-            bundles={bundles.map((b) => ({ id: b.id, name: b.name, sku: b.sku }))}
-            initialDate={initialDate}
-            conflictCandidates={conflictCandidates}
-          />
-        </CardContent>
-      </Card>
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <PageHeader
+        back={<PageHeaderBackLink href="/dashboard/schedule">← Back to calendar</PageHeaderBackLink>}
+        title="New event"
+      />
+      <DetailSection title="Event details">
+        <ScheduleEventForm
+          warehouses={warehouses.map((w) => ({ id: w.id, name: w.name }))}
+          bundles={bundles.map((b) => ({ id: b.id, name: b.name, sku: b.sku }))}
+          initialDate={initialDate}
+          conflictCandidates={conflictCandidates}
+        />
+      </DetailSection>
     </div>
   );
 }

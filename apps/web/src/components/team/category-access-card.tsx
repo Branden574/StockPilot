@@ -5,6 +5,7 @@ import { useState, useTransition } from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { setUserCategoryAccessAction } from '@/server/actions/user-categories';
 
 interface Props {
@@ -15,7 +16,8 @@ interface Props {
 }
 
 /**
- * Checkbox grid for granting a viewer access to specific categories.
+ * Checkbox grid (the shared Checkbox) for granting a viewer access to
+ * specific categories.
  * Mounts inside the existing user-edit dialog in team-manager.
  * Only renders when the target user's role is 'viewer' — the parent
  * gates this; managers and above always see every category and the
@@ -76,8 +78,8 @@ export function CategoryAccessCard({
   return (
     <section className="space-y-3">
       <div>
-        <h3 className="text-sm font-medium">Category access</h3>
-        <p className="text-muted-foreground mt-1 text-xs">
+        <h3 className="text-foreground text-[13.5px] font-medium">Category access</h3>
+        <p className="text-muted-foreground mt-1 text-[12.5px]">
           Pick which categories <span className="text-foreground">{targetUserName}</span>{' '}
           can see. Leave empty for unrestricted access (sees everything
           in their warehouses).
@@ -94,32 +96,30 @@ export function CategoryAccessCard({
       </div>
 
       {allCategories.length === 0 ? (
-        <p className="text-muted-foreground rounded-md border border-dashed p-3 text-xs">
+        <p className="border-line-strong bg-sunk text-muted-foreground rounded-lg border border-dashed p-3 text-[12px]">
           No categories exist yet. Create some at{' '}
           <span className="font-mono">/dashboard/categories</span> first.
         </p>
       ) : (
-        <div className="grid max-h-64 grid-cols-2 gap-2 overflow-y-auto rounded-md border p-2 sm:grid-cols-3">
+        <div className="border-border grid max-h-64 grid-cols-1 gap-1 overflow-y-auto rounded-lg border p-1.5 min-[420px]:grid-cols-2 sm:grid-cols-3">
           {allCategories.map((c) => (
-            <label
+            // The shared Checkbox: one control per category, named by the
+            // category's own name, toggling exactly as the native box did.
+            <Checkbox
               key={c.id}
-              className="hover:bg-muted/40 flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm"
+              checked={granted.has(c.id)}
+              onCheckedChange={() => toggle(c.id)}
+              disabled={pending}
+              className="hover:bg-muted min-h-9 w-full min-w-0 rounded-md px-2 py-1.5 text-[13.5px]"
             >
-              <input
-                type="checkbox"
-                checked={granted.has(c.id)}
-                onChange={() => toggle(c.id)}
-                disabled={pending}
-                className="cursor-pointer"
-              />
-              <span className="truncate">{c.name}</span>
-            </label>
+              <span className="min-w-0 truncate">{c.name}</span>
+            </Checkbox>
           ))}
         </div>
       )}
 
-      <div className="flex items-center justify-between">
-        <p className="text-muted-foreground text-[11px]">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-muted-foreground text-[12px]">
           {granted.size === 0
             ? 'No categories selected — sees everything.'
             : `${granted.size} categor${granted.size === 1 ? 'y' : 'ies'} selected.`}
