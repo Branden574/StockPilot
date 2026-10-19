@@ -426,7 +426,7 @@ function ItemPicker({
       <PopoverTrigger
         type="button"
         className={cn(
-          'bg-card flex h-8 w-full min-w-0 items-center gap-2 rounded-md border border-[var(--ed-line-strong)] px-2.5 text-left text-[13px] outline-none transition-colors max-sm:h-11',
+          'bg-card border-line-strong flex h-8 w-full min-w-0 items-center gap-2 rounded-md border px-2.5 text-left text-[13px] outline-none transition-colors max-sm:h-11',
           'hover:bg-muted focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:ring-2 focus-visible:ring-offset-2',
           'data-[state=open]:border-foreground/40',
         )}

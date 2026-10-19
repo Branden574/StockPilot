@@ -247,7 +247,7 @@ export function StockImpactPreview({
       <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
         <h2
           id={headingId}
-          className="text-foreground text-[15px] font-medium tracking-[-0.01em] [font-family:var(--font-display)]"
+          className="text-foreground font-display text-[15px] font-medium tracking-[-0.01em]"
         >
           Stock impact preview
         </h2>

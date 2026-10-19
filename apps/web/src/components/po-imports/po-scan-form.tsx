@@ -254,7 +254,7 @@ export function PoScanForm() {
         className={cn(
           // The drop zone (DESIGN-SPEC 6.21 extension): the sunk well with a
           // dashed stronger hairline that turns ink while a file is over it.
-          'bg-sunk hover:bg-muted focus-visible:ring-ring focus-visible:ring-offset-background flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-[var(--ed-line-strong)] px-6 py-10 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
+          'bg-sunk hover:bg-muted focus-visible:ring-ring focus-visible:ring-offset-background border-line-strong flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed px-6 py-10 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
           dragOver && 'border-foreground bg-muted',
         )}
       >
@@ -345,7 +345,7 @@ export function PoScanForm() {
                 'focus-visible:ring-ring focus-visible:ring-offset-background rounded-md border px-3 py-2 text-left text-[12.5px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
                 separate
                   ? 'border-foreground bg-card shadow-[0_0_0_1px_hsl(var(--foreground))]'
-                  : 'bg-card/60 hover:bg-card border-[var(--ed-line-strong)]',
+                  : 'bg-card/60 hover:bg-card border-line-strong',
               )}
             >
               <span className="text-foreground block font-medium">Separate POs</span>
@@ -362,7 +362,7 @@ export function PoScanForm() {
                 'focus-visible:ring-ring focus-visible:ring-offset-background rounded-md border px-3 py-2 text-left text-[12.5px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
                 !separate
                   ? 'border-foreground bg-card shadow-[0_0_0_1px_hsl(var(--foreground))]'
-                  : 'bg-card/60 hover:bg-card border-[var(--ed-line-strong)]',
+                  : 'bg-card/60 hover:bg-card border-line-strong',
               )}
             >
               <span className="text-foreground block font-medium">One multi-page PO</span>
@@ -382,7 +382,7 @@ export function PoScanForm() {
           </div>
           {/* The progress bar's look (DESIGN-SPEC 6.11): a 4 px track with
               the accent fill. */}
-          <div className="h-1 w-full overflow-hidden rounded-full bg-[var(--ed-line-strong)]">
+          <div className="bg-line-strong h-1 w-full overflow-hidden rounded-full">
             <div
               className="bg-accent h-full rounded-full transition-[width] duration-200 ease-out"
               style={{ width: `${pct}%` }}

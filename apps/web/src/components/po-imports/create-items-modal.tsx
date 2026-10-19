@@ -511,7 +511,7 @@ export function CreateItemsModal({
                             'bg-card focus-visible:ring-ring focus-visible:ring-offset-background flex w-full items-center justify-between gap-3 rounded-md border px-3 py-2 text-left text-[12.5px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
                             picked
                               ? 'border-foreground shadow-[0_0_0_1px_hsl(var(--foreground))]'
-                              : 'hover:bg-muted border-[var(--ed-line-strong)]',
+                              : 'hover:bg-muted border-line-strong',
                           )}
                         >
                           <div className="min-w-0">
