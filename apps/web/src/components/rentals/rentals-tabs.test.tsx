@@ -41,9 +41,9 @@ describe('RentalsTabs', () => {
     const tabs = Array.from(list.querySelectorAll('[role="tab"]'));
     expect(tabs.map((t) => t.textContent)).toEqual(['Activity', 'Items']);
     const [activity, items] = tabs as HTMLAnchorElement[];
-    expect(activity.getAttribute('aria-selected')).toBe('true');
-    expect(items.getAttribute('aria-selected')).toBe('false');
-    expect(items.getAttribute('href')).toBe('/dashboard/rentals/items');
+    expect(activity!.getAttribute('aria-selected')).toBe('true');
+    expect(items!.getAttribute('aria-selected')).toBe('false');
+    expect(items!.getAttribute('href')).toBe('/dashboard/rentals/items');
   });
 
   it('Items selected on the catalog, Activity linking back to the checkouts', () => {

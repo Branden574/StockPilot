@@ -323,7 +323,7 @@ export function RentalsListTable({
               return (
                 <TableRow key={rental.id}>
                   {/* Borrower */}
-                  <TableCell className="min-w-0">
+                  <TableCell className="min-w-[150px]">
                     <p className="text-foreground font-medium leading-tight [overflow-wrap:anywhere]">
                       {rental.borrower_name}
                     </p>
@@ -370,7 +370,7 @@ export function RentalsListTable({
                   </TableCell>
 
                   {/* Expected return */}
-                  <TableCell>
+                  <TableCell className="min-w-[120px]">
                     {rental.status === 'out' ? (
                       <>
                         <DueLabel
@@ -405,9 +405,12 @@ export function RentalsListTable({
                   </TableCell>
 
                   {/* Actions: 28 px buttons 8 px apart (the touch rule in
-                      button.tsx), wrapping under each other on a phone. */}
+                      button.tsx): one row from sm up, stacked on a phone. The
+                      borrower and return cells keep a reading width there, so
+                      a phone scrolls the table inside its card instead of
+                      squeezing the names to a word a line. */}
                   <TableCell>
-                    <div className="flex flex-wrap items-center justify-end gap-2">
+                    <div className="flex flex-col items-end gap-2 sm:flex-row sm:items-center sm:justify-end">
                       <Button asChild variant="ghost" size="sm">
                         <Link href={`/dashboard/rentals/${rental.id}`}>View</Link>
                       </Button>
