@@ -1,8 +1,11 @@
+import { Info } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { ModuleToggles } from '@/components/settings/module-toggles';
+import { SettingsPage } from '@/components/settings/settings-nav';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 import { createClient } from '@/lib/supabase/server';
@@ -50,40 +53,41 @@ export default async function ModulesSettingsPage() {
   }));
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href="/dashboard/settings"
-          className="text-muted-foreground hover:text-foreground inline-flex items-center text-sm"
-        >
-          ← Back to settings
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">Modules</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Turn features on or off for your whole organization. Core modules are always on.
-        </p>
-      </div>
+    <SettingsPage>
+      <PageHeader
+        title="Modules"
+        subline="Turn features on or off for your whole organization. Core modules are always on."
+        back={
+          <PageHeaderBackLink href="/dashboard/settings">← Back to settings</PageHeaderBackLink>
+        }
+      />
 
       {comped ? (
         <div
           role="note"
-          className="bg-muted/50 mb-6 rounded-md border px-4 py-3 text-sm leading-relaxed"
+          className="bg-sunk flex items-start gap-3 rounded-lg border px-4 py-3 text-[13px] leading-relaxed"
         >
-          <p className="font-medium">Every module is included for your organization.</p>
-          <p className="text-muted-foreground mt-1">
-            Each one is available to your team in the app whether or not it is switched on here. A
-            switch still controls what that module does on its own or shows to people outside your
-            team: scheduled jobs, exports to accounting, emails to customers, public links and the
-            customer portal. To hide a module from the sidebar, use{' '}
-            <Link href="/dashboard/settings/navigation" className="text-foreground underline">
-              Navigation
-            </Link>
-            .
-          </p>
+          <Info aria-hidden className="text-muted-foreground mt-0.5 h-4 w-4 shrink-0" />
+          <div className="min-w-0">
+            <p className="font-medium">Every module is included for your organization.</p>
+            <p className="text-ink-2 mt-1">
+              Each one is available to your team in the app whether or not it is switched on here. A
+              switch still controls what that module does on its own or shows to people outside your
+              team: scheduled jobs, exports to accounting, emails to customers, public links and the
+              customer portal. To hide a module from the sidebar, use{' '}
+              <Link
+                href="/dashboard/settings/navigation"
+                className="text-foreground underline underline-offset-4"
+              >
+                Navigation
+              </Link>
+              .
+            </p>
+          </div>
         </div>
       ) : null}
 
       <ModuleToggles modules={modules} enabledIds={enabledIds} comped={comped} />
-    </div>
+    </SettingsPage>
   );
 }

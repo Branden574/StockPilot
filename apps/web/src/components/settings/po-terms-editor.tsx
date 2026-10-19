@@ -54,17 +54,18 @@ export function PoTermsEditor({ current }: PoTermsEditorProps) {
           maxLength={2000}
           placeholder={`e.g.\nNet 30 days. 2% discount if paid within 10 days.\nReturns require RMA. Damaged goods reported within 5 business days.\nSignature required upon delivery.`}
         />
-        <p className="text-xs text-muted-foreground">
-          Printed at the bottom of every PO PDF you send to suppliers — net-30
-          / return policy / signature requirement / etc. Leave blank to omit.
+        <p className="text-muted-foreground text-[12px]">
+          Printed at the bottom of every PO PDF you send to suppliers — net-30 / return policy /
+          signature requirement / etc. Leave blank to omit.
         </p>
       </div>
       <div className="flex items-center justify-between">
-        <span className="text-xs text-muted-foreground">
+        <span className="text-muted-foreground font-mono text-[12px] tabular-nums">
           {value.length}/2000
         </span>
         <Button onClick={save} disabled={!dirty || busy} variant="gradient">
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save terms'}
+          {busy ? <Loader2 aria-hidden className="animate-spin" /> : null}
+          Save terms
         </Button>
       </div>
     </div>

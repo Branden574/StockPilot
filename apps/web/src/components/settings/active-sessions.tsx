@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -106,13 +107,16 @@ export function ActiveSessions({ sessions }: { sessions: SessionInfo[] }) {
 
   return (
     <div className="space-y-3">
-      <ul className="divide-border divide-y rounded-md border">
+      <ul className="divide-border divide-y rounded-lg border">
         {sessions.map((s) => {
           const display = s.customName ?? s.label;
           const isEditing = editingId === s.id;
           return (
-            <li key={s.id} className="flex items-center gap-3 px-3 py-3">
-              <MonitorSmartphone className="text-muted-foreground h-4 w-4 shrink-0" aria-hidden="true" />
+            <li key={s.id} className="flex min-h-[60px] items-center gap-3 px-4 py-3">
+              <MonitorSmartphone
+                className="text-muted-foreground h-4 w-4 shrink-0"
+                aria-hidden="true"
+              />
               <div className="min-w-0 flex-1">
                 {isEditing ? (
                   <div className="flex items-center gap-2">
@@ -162,34 +166,37 @@ export function ActiveSessions({ sessions }: { sessions: SessionInfo[] }) {
                   </div>
                 ) : (
                   <>
-                    <div className="flex items-center gap-2 text-sm font-medium">
+                    <div className="flex min-w-0 items-center gap-2 text-[13.5px] font-medium">
                       <span className="truncate">{display}</span>
                       {s.isMfa && (
                         <ShieldCheck
-                          className="h-3.5 w-3.5 text-[hsl(var(--accent))]"
+                          className="text-accent h-3.5 w-3.5 shrink-0"
                           aria-label="MFA verified"
                         />
                       )}
                       {s.isCurrent && (
-                        <span className="rounded-full bg-[hsl(var(--accent)/0.12)] px-2 py-0.5 text-[10.5px] font-medium text-[hsl(var(--accent))]">
+                        <Badge variant="success" className="shrink-0">
                           This device
-                        </span>
+                        </Badge>
                       )}
                       <button
                         type="button"
                         data-pencil={s.id}
                         aria-label={`Rename ${display}`}
                         title="Rename device"
-                        className="text-muted-foreground hover:text-foreground shrink-0"
+                        className="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring focus-visible:ring-offset-background pointer-coarse:before:content-[''] relative inline-grid size-7 shrink-0 place-items-center rounded-md transition-colors before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 max-sm:before:content-['']"
                         onClick={() => startEdit(s)}
                       >
-                        <Pencil className="h-3 w-3" />
+                        <Pencil aria-hidden className="h-3.5 w-3.5" />
                       </button>
                     </div>
                     {/* "active 4 min ago" is rendered on the server and
                         hydrated moments later, often after the minute rolls
                         over: tolerate it instead of React error #418. */}
-                    <div className="text-muted-foreground text-xs" suppressHydrationWarning>
+                    <div
+                      className="text-muted-foreground mt-0.5 text-[12.5px]"
+                      suppressHydrationWarning
+                    >
                       {s.customName ? `${s.label} · ` : ''}
                       {s.ip ?? 'unknown IP'} · active {formatLastActive(s.lastActiveAt)}
                     </div>
@@ -203,7 +210,8 @@ export function ActiveSessions({ sessions }: { sessions: SessionInfo[] }) {
                   disabled={busyId === s.id}
                   onClick={() => signOut(s.id)}
                 >
-                  {busyId === s.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Sign out'}
+                  {busyId === s.id ? <Loader2 aria-hidden className="animate-spin" /> : null}
+                  Sign out
                 </Button>
               )}
             </li>
@@ -213,16 +221,13 @@ export function ActiveSessions({ sessions }: { sessions: SessionInfo[] }) {
 
       {others.length > 0 && (
         <Button variant="outline" size="sm" disabled={busyId === 'others'} onClick={signOutOthers}>
-          {busyId === 'others' ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            'Sign out all other devices'
-          )}
+          {busyId === 'others' ? <Loader2 aria-hidden className="animate-spin" /> : null}
+          Sign out all other devices
         </Button>
       )}
-      <p className="text-muted-foreground text-xs">
-        Signing out takes effect immediately on devices that are online; a device
-        that&apos;s offline is signed out within the hour.
+      <p className="text-muted-foreground text-[12px]">
+        Signing out takes effect immediately on devices that are online; a device that&apos;s
+        offline is signed out within the hour.
       </p>
     </div>
   );

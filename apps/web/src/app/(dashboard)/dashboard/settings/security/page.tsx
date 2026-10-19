@@ -1,13 +1,14 @@
-import { ShieldCheck } from 'lucide-react';
+import { ShieldCheck, TriangleAlert } from 'lucide-react';
 import Link from 'next/link';
 
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { ActiveSessions } from '@/components/settings/active-sessions';
 import { ChangePasswordForm } from '@/components/settings/change-password-form';
 import { MfaEnrollment } from '@/components/settings/mfa-enrollment';
 import { MfaPolicyEditor } from '@/components/settings/mfa-policy-editor';
 import { MfaRecoveryCodes } from '@/components/settings/mfa-recovery-codes';
+import { SettingsPage, SettingsPanel } from '@/components/settings/settings-nav';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { sessionIdFromJwt } from '@/lib/auth/api-context';
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
 import { requireOrgContext } from '@/lib/auth/session';
@@ -38,11 +39,7 @@ export default async function SecuritySettingsPage({
 
   const [factorsRes, orgRow, recoveryStatus, aalRes] = await Promise.all([
     supabase.auth.mfa.listFactors(),
-    supabase
-      .from('organizations')
-      .select('mfa_policy')
-      .eq('id', ctx.organizationId)
-      .maybeSingle(),
+    supabase.from('organizations').select('mfa_policy').eq('id', ctx.organizationId).maybeSingle(),
     getMfaRecoveryCodeStatus(),
     supabase.auth.mfa.getAuthenticatorAssuranceLevel(),
   ]);
@@ -65,8 +62,7 @@ export default async function SecuritySettingsPage({
   // the layout is demanding enrollment.
   const policy: Policy = enforcedMfaPolicy(orgRow.data);
   const isAdmin = ctx.role === 'owner' || ctx.role === 'admin';
-  const policyRequired =
-    policy === 'all_required' || (policy === 'admins_required' && isAdmin);
+  const policyRequired = policy === 'all_required' || (policy === 'admins_required' && isAdmin);
 
   // Supabase requires AAL2 to update the password when MFA is enabled.
   // If the user has verified factors but their current session is AAL1
@@ -83,146 +79,109 @@ export default async function SecuritySettingsPage({
   const passwordChangeBlockedByMfa = hasVerifiedFactor && aalRes.data?.currentLevel !== 'aal2';
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href="/dashboard/settings"
-          className="text-muted-foreground hover:text-foreground text-sm"
-        >
-          ← Back to settings
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">Security</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Two-factor authentication and your sign-in safety net.
-        </p>
-      </div>
+    <SettingsPage>
+      <PageHeader
+        title="Security"
+        subline="Two-factor authentication and your sign-in safety net."
+        back={
+          <PageHeaderBackLink href="/dashboard/settings">← Back to settings</PageHeaderBackLink>
+        }
+      />
 
-      <div className="space-y-6">
-        {enrollMode && !factorsUnreadable && verifiedFactors.length === 0 && (
-          <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm dark:border-amber-900/50 dark:bg-amber-950/30">
+      {enrollMode && !factorsUnreadable && verifiedFactors.length === 0 && (
+        <div className="border-warning/40 bg-warning-wash flex items-start gap-3 rounded-lg border px-4 py-3 text-[13px]">
+          <TriangleAlert aria-hidden className="text-warning mt-0.5 h-4 w-4 shrink-0" />
+          <div className="min-w-0">
             <p className="font-medium">Enroll to continue</p>
-            <p className="text-muted-foreground mt-0.5 text-xs">
-              Your organization requires two-factor authentication. Set up your
-              authenticator app below to access the dashboard.
+            <p className="text-ink-2 mt-0.5 text-[12.5px]">
+              Your organization requires two-factor authentication. Set up your authenticator app
+              below to access the dashboard.
             </p>
           </div>
-        )}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Change password</CardTitle>
-            <CardDescription>
-              Update the password you use to sign in. You&apos;ll need your current password.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {passwordChangeBlockedByMfa ? (
-              <div className="border-border bg-muted/40 flex flex-col gap-3 rounded-lg border p-4 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex items-start gap-3">
-                  <ShieldCheck className="text-muted-foreground mt-0.5 h-4 w-4 shrink-0" />
-                  <div className="text-sm">
-                    <p className="font-medium">Verify it&apos;s you first</p>
-                    <p className="text-muted-foreground mt-0.5 text-xs">
-                      Two-factor is on but this session hasn&apos;t completed
-                      the MFA challenge. Step up with your authenticator code,
-                      then come back here.
-                    </p>
-                  </div>
-                </div>
-                <Button asChild size="sm">
-                  <Link href="/signin/mfa?redirect=/dashboard/settings/security">
-                    Verify with code
-                  </Link>
-                </Button>
-              </div>
-            ) : (
-              <ChangePasswordForm />
-            )}
-          </CardContent>
-        </Card>
+        </div>
+      )}
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Authenticator app</CardTitle>
-            <CardDescription>
-              Use Google Authenticator, 1Password, or any TOTP app to add a 6-digit code at
-              sign-in.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {factorsUnreadable ? (
-              <div
-                role="alert"
-                className="border-border bg-muted/40 rounded-lg border p-4 text-sm"
-              >
-                <p className="font-medium">Could not load your authenticator status</p>
-                <p className="text-muted-foreground mt-0.5 text-xs">
-                  Nothing about your two-factor setup has changed; this page could not
-                  read it.{' '}
-                  <Link
-                    href={
-                      enrollMode
-                        ? '/dashboard/settings/security?enroll=1'
-                        : '/dashboard/settings/security'
-                    }
-                    className="text-foreground font-medium underline underline-offset-4"
-                  >
-                    Try again
-                  </Link>
+      <SettingsPanel
+        title="Change password"
+        description="Update the password you use to sign in. You'll need your current password."
+      >
+        {passwordChangeBlockedByMfa ? (
+          <div className="border-border bg-sunk flex flex-col gap-3 rounded-lg border p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              <ShieldCheck aria-hidden className="text-muted-foreground mt-0.5 h-4 w-4 shrink-0" />
+              <div className="text-[13px]">
+                <p className="font-medium">Verify it&apos;s you first</p>
+                <p className="text-muted-foreground mt-0.5 text-[12.5px]">
+                  Two-factor is on but this session hasn&apos;t completed the MFA challenge. Step up
+                  with your authenticator code, then come back here.
                 </p>
               </div>
-            ) : (
-              <MfaEnrollment
-                verifiedFactors={verifiedFactors}
-                policyRequired={policyRequired}
-              />
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Active sessions</CardTitle>
-            <CardDescription>
-              Devices you&apos;re signed in on. Sign out any you don&apos;t recognize.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ActiveSessions sessions={activeSessions} />
-          </CardContent>
-        </Card>
-
-        {verifiedFactors.length > 0 && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Recovery codes</CardTitle>
-              <CardDescription>
-                Single-use codes that let you back into your account if you
-                lose access to your authenticator. Treat them like passwords.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <MfaRecoveryCodes
-                total={recoveryStatus.total}
-                unused={recoveryStatus.unused}
-              />
-            </CardContent>
-          </Card>
+            </div>
+            <Button asChild size="sm" className="self-start sm:self-auto">
+              <Link href="/signin/mfa?redirect=/dashboard/settings/security">Verify with code</Link>
+            </Button>
+          </div>
+        ) : (
+          <ChangePasswordForm />
         )}
+      </SettingsPanel>
 
-        {isAdmin && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Organization MFA policy</CardTitle>
-              <CardDescription>
-                Choose how strictly to require MFA across the team.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <MfaPolicyEditor current={policy} />
-            </CardContent>
-          </Card>
+      <SettingsPanel
+        title="Authenticator app"
+        description="Use Google Authenticator, 1Password, or any TOTP app to add a 6-digit code at sign-in."
+      >
+        {factorsUnreadable ? (
+          <div
+            role="alert"
+            className="border-destructive/30 bg-destructive-wash flex items-start gap-3 rounded-lg border p-4 text-[13px]"
+          >
+            <TriangleAlert aria-hidden className="text-destructive mt-0.5 h-4 w-4 shrink-0" />
+            <div className="min-w-0">
+              <p className="font-medium">Could not load your authenticator status</p>
+              <p className="text-ink-2 mt-0.5 text-[12.5px]">
+                Nothing about your two-factor setup has changed; this page could not read it.{' '}
+                <Link
+                  href={
+                    enrollMode
+                      ? '/dashboard/settings/security?enroll=1'
+                      : '/dashboard/settings/security'
+                  }
+                  className="text-foreground font-medium underline underline-offset-4"
+                >
+                  Try again
+                </Link>
+              </p>
+            </div>
+          </div>
+        ) : (
+          <MfaEnrollment verifiedFactors={verifiedFactors} policyRequired={policyRequired} />
         )}
-      </div>
-    </div>
+      </SettingsPanel>
+
+      <SettingsPanel
+        title="Active sessions"
+        description="Devices you're signed in on. Sign out any you don't recognize."
+      >
+        <ActiveSessions sessions={activeSessions} />
+      </SettingsPanel>
+
+      {verifiedFactors.length > 0 && (
+        <SettingsPanel
+          title="Recovery codes"
+          description="Single-use codes that let you back into your account if you lose access to your authenticator. Treat them like passwords."
+        >
+          <MfaRecoveryCodes total={recoveryStatus.total} unused={recoveryStatus.unused} />
+        </SettingsPanel>
+      )}
+
+      {isAdmin && (
+        <SettingsPanel
+          title="Organization MFA policy"
+          description="Choose how strictly to require MFA across the team."
+        >
+          <MfaPolicyEditor current={policy} />
+        </SettingsPanel>
+      )}
+    </SettingsPage>
   );
 }

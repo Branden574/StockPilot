@@ -1,12 +1,12 @@
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { OrgLogoUploader } from '@/components/settings/org-logo-uploader';
 import { OrgNameEditor } from '@/components/settings/org-name-editor';
 import { OrgTimezoneEditor } from '@/components/settings/org-timezone-editor';
 import { PoTermsEditor } from '@/components/settings/po-terms-editor';
+import { SettingsPage, SettingsPanel } from '@/components/settings/settings-nav';
 import { TerminologyEditor } from '@/components/settings/terminology-editor';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
 
@@ -30,93 +30,57 @@ export default async function OrganizationSettingsPage() {
   );
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href="/dashboard/settings"
-          className="text-muted-foreground hover:text-foreground text-sm"
-        >
-          ← Back to settings
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">Organization</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Workspace name, labels for {current.charter_plural.toLowerCase()} and{' '}
-          {current.warehouse_plural.toLowerCase()}.
-        </p>
-      </div>
+    <SettingsPage>
+      <PageHeader
+        title="Organization"
+        subline={
+          <>
+            Workspace name, labels for {current.charter_plural.toLowerCase()} and{' '}
+            {current.warehouse_plural.toLowerCase()}.
+          </>
+        }
+        back={
+          <PageHeaderBackLink href="/dashboard/settings">← Back to settings</PageHeaderBackLink>
+        }
+      />
 
-      <div className="space-y-6">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Logo</CardTitle>
-            <CardDescription>
-              Square or wordmark, max 5 MB. Shown in the sidebar and on
-              outbound emails.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <OrgLogoUploader
-              organizationId={ctx.organizationId}
-              initialUrl={(data?.logo_url as string | null) ?? null}
-            />
-          </CardContent>
-        </Card>
+      <SettingsPanel
+        title="Logo"
+        description="Square or wordmark, max 5 MB. Shown in the sidebar and on outbound emails."
+      >
+        <OrgLogoUploader
+          organizationId={ctx.organizationId}
+          initialUrl={(data?.logo_url as string | null) ?? null}
+        />
+      </SettingsPanel>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Name</CardTitle>
-            <CardDescription>
-              The display name of your organization. Shows in the sidebar header
-              and on outbound emails.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <OrgNameEditor current={(data?.name as string | null) ?? ''} />
-          </CardContent>
-        </Card>
+      <SettingsPanel
+        title="Name"
+        description="The display name of your organization. Shows in the sidebar header and on outbound emails."
+      >
+        <OrgNameEditor current={(data?.name as string | null) ?? ''} />
+      </SettingsPanel>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Timezone</CardTitle>
-            <CardDescription>
-              Pin every date and time the system renders — pick slips,
-              packing slips, reports, schedule, dashboard — to your
-              warehouse&apos;s local time.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <OrgTimezoneEditor current={(data?.timezone as string | null) ?? null} />
-          </CardContent>
-        </Card>
+      <SettingsPanel
+        title="Timezone"
+        description="Pin every date and time the system renders — pick slips, packing slips, reports, schedule, dashboard — to your warehouse's local time."
+      >
+        <OrgTimezoneEditor current={(data?.timezone as string | null) ?? null} />
+      </SettingsPanel>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Labels</CardTitle>
-            <CardDescription>
-              Rename the top-level grouping and physical-site terms to match how
-              your organization talks about them. Applies everywhere in the app.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <TerminologyEditor current={current} defaults={DEFAULT_TERMINOLOGY} />
-          </CardContent>
-        </Card>
+      <SettingsPanel
+        title="Labels"
+        description="Rename the top-level grouping and physical-site terms to match how your organization talks about them. Applies everywhere in the app."
+      >
+        <TerminologyEditor current={current} defaults={DEFAULT_TERMINOLOGY} />
+      </SettingsPanel>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Purchase order terms</CardTitle>
-            <CardDescription>
-              Free-form text printed at the bottom of every PO PDF you send
-              to suppliers. Leave blank to omit the section entirely.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <PoTermsEditor
-              current={(data?.po_terms as string | null) ?? null}
-            />
-          </CardContent>
-        </Card>
-      </div>
-    </div>
+      <SettingsPanel
+        title="Purchase order terms"
+        description="Free-form text printed at the bottom of every PO PDF you send to suppliers. Leave blank to omit the section entirely."
+      >
+        <PoTermsEditor current={(data?.po_terms as string | null) ?? null} />
+      </SettingsPanel>
+    </SettingsPage>
   );
 }

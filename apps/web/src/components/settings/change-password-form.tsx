@@ -47,7 +47,7 @@ export function ChangePasswordForm() {
           aria-invalid={!!errors.currentPassword}
         />
         {errors.currentPassword && (
-          <p className="text-destructive text-xs">{errors.currentPassword.message}</p>
+          <p className="text-destructive text-[12.5px]">{errors.currentPassword.message}</p>
         )}
       </div>
 
@@ -60,7 +60,7 @@ export function ChangePasswordForm() {
           aria-invalid={!!errors.newPassword}
         />
         {errors.newPassword && (
-          <p className="text-destructive text-xs">{errors.newPassword.message}</p>
+          <p className="text-destructive text-[12.5px]">{errors.newPassword.message}</p>
         )}
       </div>
 
@@ -73,12 +73,13 @@ export function ChangePasswordForm() {
           aria-invalid={!!errors.confirmPassword}
         />
         {errors.confirmPassword && (
-          <p className="text-destructive text-xs">{errors.confirmPassword.message}</p>
+          <p className="text-destructive text-[12.5px]">{errors.confirmPassword.message}</p>
         )}
       </div>
 
-      <Button type="submit" variant="gradient" size="lg" disabled={isSubmitting}>
-        {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Update password'}
+      <Button type="submit" variant="gradient" disabled={isSubmitting}>
+        {isSubmitting ? <Loader2 aria-hidden className="animate-spin" /> : null}
+        Update password
       </Button>
     </form>
   );

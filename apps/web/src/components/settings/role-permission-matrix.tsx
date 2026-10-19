@@ -10,8 +10,12 @@ import {
   setUserPermissionOverrideAction,
 } from '@/server/actions/permissions';
 
-import { AUDITOR_PRESET_PERMISSIONS } from '@/lib/auditor-preset';
+import { SettingsPanel } from '@/components/settings/settings-nav';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Label } from '@/components/ui/label';
+import { AUDITOR_PRESET_PERMISSIONS } from '@/lib/auditor-preset';
+import { cn } from '@/lib/utils';
 
 import {
   FULLY_GRANTABLE_PERMISSIONS,
@@ -71,6 +75,19 @@ function groupedPermissions(): GroupedRow[] {
 const EDITABLE_ROLES: EditableRole[] = ROLES.filter((r): r is EditableRole => r !== 'owner');
 
 const rk = (role: string, perm: string) => `${role}::${perm}`;
+
+/** Put one cell back as it was before its save: its old value, or no row at all. */
+function revertKey(
+  map: Map<string, boolean>,
+  key: string,
+  hadOverride: boolean,
+  previous: boolean | undefined,
+): Map<string, boolean> {
+  const next = new Map(map);
+  if (hadOverride && previous !== undefined) next.set(key, previous);
+  else next.delete(key);
+  return next;
+}
 const uk = (userId: string, perm: string) => `${userId}::${perm}`;
 
 // Single reused toast id so rapid toggles update ONE bottom-right toast
@@ -83,10 +100,18 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
 
   // Override maps keyed for O(1) lookup. Value = granted (true/false). Absent = no override.
   const [roleMap, setRoleMap] = React.useState<Map<string, boolean>>(
-    () => new Map(roleOverrides.filter((o) => o.role).map((o) => [rk(o.role!, o.permission), o.granted])),
+    () =>
+      new Map(
+        roleOverrides.filter((o) => o.role).map((o) => [rk(o.role!, o.permission), o.granted]),
+      ),
   );
   const [userMap, setUserMap] = React.useState<Map<string, boolean>>(
-    () => new Map(userOverrides.filter((o) => o.user_id).map((o) => [uk(o.user_id!, o.permission), o.granted])),
+    () =>
+      new Map(
+        userOverrides
+          .filter((o) => o.user_id)
+          .map((o) => [uk(o.user_id!, o.permission), o.granted]),
+      ),
   );
 
   const [isSaving, startTransition] = React.useTransition();
@@ -127,6 +152,7 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
   // ── Role cell toggle ─────────────────────────────────────────────────────
   function toggleRole(role: EditableRole, perm: Permission) {
     const key = rk(role, perm);
+    if (busy.has(key)) return; // one save per cell at a time
     const def = hasPermission(role, perm);
     const current = roleMap.has(key) ? roleMap.get(key)! : def;
     const next = !current;
@@ -138,10 +164,11 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
     // a no-op, so persisting a "matches default" row is harmless.
     const granted = next;
 
-    const prevMap = roleMap;
-    const optimistic = new Map(prevMap);
-    optimistic.set(key, granted);
-    setRoleMap(optimistic);
+    // Optimistic, and reverted for THIS cell only: a refused save must not
+    // undo another cell that was toggled (and saved) while it was in flight.
+    const hadOverride = roleMap.has(key);
+    const previous = roleMap.get(key);
+    setRoleMap((prev) => new Map(prev).set(key, granted));
     markBusy(key, true);
     toast.loading('Saving…', { id: SAVE_TOAST });
 
@@ -149,7 +176,7 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
       const res = await setRolePermissionOverrideAction({ role, permission: perm, granted });
       markBusy(key, false);
       if (!res.ok) {
-        setRoleMap(prevMap); // revert
+        setRoleMap((prev) => revertKey(prev, key, hadOverride, previous)); // revert
         toast.error(res.error.message, { id: SAVE_TOAST });
       } else {
         flashSaved();
@@ -161,6 +188,7 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
   // ── User cell toggle ─────────────────────────────────────────────────────
   function toggleUser(member: MemberLite, perm: Permission) {
     const key = uk(member.userId, perm);
+    if (busy.has(key)) return; // one save per cell at a time
     // Baseline = the member's ROLE-effective permission (role defaults + role overrides).
     const roleEff = roleEffectiveSet(member.role, roleMap);
     const base = roleEff.has(perm);
@@ -170,10 +198,9 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
     // change pushes live over realtime).
     const granted = next;
 
-    const prevMap = userMap;
-    const optimistic = new Map(prevMap);
-    optimistic.set(key, granted);
-    setUserMap(optimistic);
+    const hadOverride = userMap.has(key);
+    const previous = userMap.get(key);
+    setUserMap((prev) => new Map(prev).set(key, granted));
     markBusy(key, true);
     toast.loading('Saving…', { id: SAVE_TOAST });
 
@@ -185,7 +212,7 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
       });
       markBusy(key, false);
       if (!res.ok) {
-        setUserMap(prevMap);
+        setUserMap((prev) => revertKey(prev, key, hadOverride, previous));
         toast.error(res.error.message, { id: SAVE_TOAST });
       } else {
         flashSaved();
@@ -236,12 +263,27 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
   }
 
   return (
-    <div className="space-y-10">
+    <>
       {/* ── Role matrix ──────────────────────────────────────────────── */}
-      <section>
-        <div className="flex items-center justify-between gap-3">
-          <h2 className="text-lg font-semibold">Permissions by role</h2>
-          <div className="flex shrink-0 items-center gap-3">
+      <SettingsPanel
+        title="Permissions by role"
+        description={
+          <>
+            <p>
+              Toggle a box to grant or revoke a permission for an entire role. Changes save
+              instantly. A dot marks a permission you&apos;ve changed from its default. Owner always
+              has every permission and can&apos;t be edited.
+            </p>
+            <p className="mt-1">
+              Apply Auditor preset: grants the Read-Only Auditor role read access to every reporting
+              and operations surface, plus item and report CSV exports. Individual toggles can still
+              be changed afterward.
+            </p>
+          </>
+        }
+        aside={
+          <div className="flex shrink-0 flex-wrap items-center gap-3">
+            <SaveStatus isSaving={isSaving} justSaved={justSaved} />
             <Button
               type="button"
               variant="outline"
@@ -257,30 +299,20 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
                 'Apply Auditor preset'
               )}
             </Button>
-            <SaveStatus isSaving={isSaving} justSaved={justSaved} />
           </div>
-        </div>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Toggle a box to grant or revoke a permission for an entire role. Changes save instantly.
-          A dot marks a permission you&apos;ve changed from its default. Owner always has every
-          permission and can&apos;t be edited.
-        </p>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Apply Auditor preset: grants the Read-Only Auditor role read access to every reporting
-          and operations surface, plus item and report CSV exports. Individual toggles can still
-          be changed afterward.
-        </p>
+        }
+        flush
+      >
         <Legend />
-
-        <div className="mt-4 overflow-x-auto rounded-lg border border-border">
+        <MatrixScroll label="Permissions by role">
           <table className="w-full min-w-[680px] text-[12.5px]">
-            <thead className="bg-muted/40">
-              <tr>
-                <th className="sticky left-0 z-10 bg-muted/40 px-4 py-2 text-left font-medium text-[var(--ed-ink-3)]">
+            <thead>
+              <tr className="border-border border-b">
+                <th scope="col" className={cn(HEAD_CELL, 'bg-card sticky left-0 z-10 text-left')}>
                   Permission
                 </th>
                 {ROLES.map((r) => (
-                  <th key={r} className="px-3 py-2 text-center font-medium text-[var(--ed-ink-3)]">
+                  <th key={r} scope="col" className={cn(HEAD_CELL, 'w-[88px] text-center')}>
                     {ROLE_DEFINITIONS[r].name}
                   </th>
                 ))}
@@ -289,29 +321,25 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
             <tbody>
               {groups.map((g) => (
                 <React.Fragment key={g.group}>
-                  <tr className="border-t border-border bg-background">
-                    <td
-                      colSpan={1 + ROLES.length}
-                      className="bg-background px-4 py-2 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-[var(--ed-ink-4)]"
-                    >
-                      {g.group}
-                    </td>
-                  </tr>
+                  <GroupRow label={g.group} span={1 + ROLES.length} />
                   {g.permissions.map((p) => (
-                    <tr key={p.id} className="border-t border-border hover:bg-muted/30">
+                    <tr key={p.id} className={ROW}>
                       <th
                         scope="row"
-                        className="sticky left-0 z-10 bg-background px-4 py-2 text-left align-top font-normal"
+                        className={cn(ROW_HEAD, 'sticky left-0 z-10')}
                         title={`${p.description}\n(${p.id})`}
                       >
                         <div className="text-foreground">{p.label}</div>
-                        <div className="mt-0.5 hidden text-[11px] text-muted-foreground sm:block">
+                        <div className="text-muted-foreground mt-0.5 text-[11.5px]">
                           {p.description}
                         </div>
                       </th>
                       {/* Owner: always on, disabled. */}
-                      <td className="px-3 py-2 text-center align-middle">
-                        <Check className="mx-auto h-4 w-4 text-[var(--ed-ink-4)]/50" aria-label="Owner always has this" />
+                      <td className={CELL}>
+                        <Check
+                          className="text-ink-4 mx-auto h-4 w-4"
+                          aria-label="Owner always has this"
+                        />
                       </td>
                       {EDITABLE_ROLES.map((role) => {
                         const key = rk(role, p.id);
@@ -320,9 +348,10 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
                         // "Changed from default" — a persisted row that matches
                         // the default (after a toggle back) is NOT a change.
                         const overridden = roleMap.has(key) && roleMap.get(key) !== def;
-                        const isRollingOutGrant = eff && !def && !FULLY_GRANTABLE_PERMISSIONS.has(p.id);
+                        const isRollingOutGrant =
+                          eff && !def && !FULLY_GRANTABLE_PERMISSIONS.has(p.id);
                         return (
-                          <td key={role} className="px-3 py-2 text-center align-middle">
+                          <td key={role} className={CELL}>
                             <Cell
                               checked={eff}
                               overridden={overridden}
@@ -340,48 +369,47 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
               ))}
             </tbody>
           </table>
-        </div>
-      </section>
+        </MatrixScroll>
+      </SettingsPanel>
 
       {/* ── Per-user exceptions ──────────────────────────────────────── */}
       {selectableMembers.length > 0 && (
-        <section>
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="text-lg font-semibold">Per-user exceptions</h2>
-            <SaveStatus isSaving={isSaving} justSaved={justSaved} />
-          </div>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Override a single person&apos;s access on top of their role. A user exception always
-            wins over the role setting.
-          </p>
-
-          <div className="mt-3 max-w-sm">
-            <label htmlFor="perm-user" className="text-xs font-medium">
-              Member
-            </label>
-            <select
-              id="perm-user"
-              value={selectedUserId}
-              onChange={(e) => setSelectedUserId(e.target.value)}
-              className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-            >
-              {selectableMembers.map((m) => (
-                <option key={m.userId} value={m.userId}>
-                  {m.name} · {ROLE_DEFINITIONS[m.role].name}
-                </option>
-              ))}
-            </select>
+        <SettingsPanel
+          title="Per-user exceptions"
+          description="Override a single person's access on top of their role. A user exception always wins over the role setting."
+          aside={<SaveStatus isSaving={isSaving} justSaved={justSaved} />}
+          flush
+        >
+          <div className="border-border border-b px-[18px] py-3.5">
+            <div className="max-w-sm">
+              <Label htmlFor="perm-user">Member</Label>
+              <select
+                id="perm-user"
+                value={selectedUserId}
+                onChange={(e) => setSelectedUserId(e.target.value)}
+                className="border-line-strong bg-card focus-visible:ring-ring focus-visible:ring-offset-background mt-1.5 h-8 w-full rounded-md border px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 max-sm:h-11 max-sm:text-base"
+              >
+                {selectableMembers.map((m) => (
+                  <option key={m.userId} value={m.userId}>
+                    {m.name} · {ROLE_DEFINITIONS[m.role].name}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           {selectedMember && (
-            <div className="mt-4 overflow-x-auto rounded-lg border border-border">
+            <MatrixScroll label={`Permissions for ${selectedMember.name}`}>
               <table className="w-full min-w-[480px] text-[12.5px]">
-                <thead className="bg-muted/40">
-                  <tr>
-                    <th className="px-4 py-2 text-left font-medium text-[var(--ed-ink-3)]">
+                <thead>
+                  <tr className="border-border border-b">
+                    <th scope="col" className={cn(HEAD_CELL, 'text-left')}>
                       Permission
                     </th>
-                    <th className="px-3 py-2 text-center font-medium text-[var(--ed-ink-3)]">
+                    <th
+                      scope="col"
+                      className={cn(HEAD_CELL, 'w-[160px] text-center normal-case tracking-normal')}
+                    >
                       {selectedMember.name}
                     </th>
                   </tr>
@@ -391,14 +419,7 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
                     const roleEff = roleEffectiveSet(selectedMember.role, roleMap);
                     return (
                       <React.Fragment key={g.group}>
-                        <tr className="border-t border-border bg-background">
-                          <td
-                            colSpan={2}
-                            className="bg-background px-4 py-2 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-[var(--ed-ink-4)]"
-                          >
-                            {g.group}
-                          </td>
-                        </tr>
+                        <GroupRow label={g.group} span={2} />
                         {g.permissions.map((p) => {
                           const key = uk(selectedMember.userId, p.id);
                           const base = roleEff.has(p.id);
@@ -407,15 +428,15 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
                           const isRollingOutGrant =
                             eff && !base && !FULLY_GRANTABLE_PERMISSIONS.has(p.id);
                           return (
-                            <tr key={p.id} className="border-t border-border hover:bg-muted/30">
+                            <tr key={p.id} className={ROW}>
                               <th
                                 scope="row"
-                                className="px-4 py-2 text-left align-middle font-normal text-foreground"
+                                className={cn(ROW_HEAD, 'align-middle')}
                                 title={`${p.description}\n(${p.id})`}
                               >
-                                {p.label}
+                                <div className="text-foreground">{p.label}</div>
                               </th>
-                              <td className="px-3 py-2 text-center align-middle">
+                              <td className={CELL}>
                                 <Cell
                                   checked={eff}
                                   overridden={overridden}
@@ -433,14 +454,55 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
                   })}
                 </tbody>
               </table>
-            </div>
+            </MatrixScroll>
           )}
-        </section>
+        </SettingsPanel>
       )}
+    </>
+  );
+}
+
+// The matrices keep the comfortable density on every screen (no shrinking
+// boxes): 20 px checkboxes in 44 px rows, 11 px uppercase column heads.
+const HEAD_CELL =
+  'text-muted-foreground px-3 py-2.5 text-[11px] font-medium uppercase tracking-[0.06em] first:px-4';
+const ROW = 'border-border hover:bg-muted group/row border-b last:border-b-0';
+const ROW_HEAD =
+  'bg-card group-hover/row:bg-muted px-4 py-2.5 text-left align-top font-normal transition-colors';
+const CELL = 'px-3 py-2.5 text-center align-middle';
+
+/** A wide table's contained sideways scroll: a named, keyboard-reachable region. */
+function MatrixScroll({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div
+      role="region"
+      aria-label={label}
+      tabIndex={0}
+      className="overflow-x-auto focus-visible:ring-inset focus-visible:ring-offset-0"
+    >
+      {children}
     </div>
   );
 }
 
+function GroupRow({ label, span }: { label: string; span: number }) {
+  return (
+    <tr className="border-border bg-sunk border-b">
+      <td
+        colSpan={span}
+        className="text-muted-foreground px-4 py-2 text-[10.5px] font-medium uppercase tracking-[0.08em]"
+      >
+        {label}
+      </td>
+    </tr>
+  );
+}
+
+/**
+ * One permission box. While its save is out the box stays where it is (so a
+ * keyboard user keeps focus on it and Space cannot fire a second save) and a
+ * spinner covers it; a refused save puts the old value back.
+ */
 function Cell({
   checked,
   overridden,
@@ -457,26 +519,27 @@ function Cell({
   onToggle: () => void;
 }) {
   return (
-    <span className="relative inline-flex items-center justify-center">
-      {busy ? (
+    <span className="relative inline-grid place-items-center align-middle">
+      <Checkbox
+        checked={checked}
+        label={label}
+        aria-busy={busy || undefined}
+        onCheckedChange={() => {
+          if (!busy) onToggle();
+        }}
+        className={cn(busy && 'cursor-progress [&>span]:opacity-0')}
+      />
+      {busy && (
         // Saving THIS box — show a spinner right where the click happened, so
         // the save is visible even when the header status is scrolled away.
         <Loader2
-          className="h-4 w-4 animate-spin text-[hsl(var(--accent))]"
+          className="text-accent pointer-events-none absolute h-4 w-4 animate-spin"
           aria-label={`Saving ${label}`}
-        />
-      ) : (
-        <input
-          type="checkbox"
-          checked={checked}
-          aria-label={label}
-          onChange={onToggle}
-          className="h-4 w-4 cursor-pointer rounded border-border accent-[hsl(var(--accent))]"
         />
       )}
       {overridden && !busy && (
         <span
-          className="absolute -right-2 -top-1 h-1.5 w-1.5 rounded-full bg-[hsl(var(--accent))]"
+          className="bg-accent absolute -right-2 -top-1 h-1.5 w-1.5 rounded-full"
           aria-label="Changed from default"
           title="Changed from default"
         />
@@ -487,7 +550,7 @@ function Cell({
           title="Granted at the app level. Full data-write access for this permission is rolling out — purchase orders are already fully enabled."
         >
           <AlertTriangle
-            className="h-3 w-3 text-amber-500"
+            className="text-warning h-3 w-3"
             aria-label="Grant takes full effect after the row-level enforcement rollout"
           />
         </span>
@@ -498,20 +561,17 @@ function Cell({
 
 function SaveStatus({ isSaving, justSaved }: { isSaving: boolean; justSaved: boolean }) {
   return (
-    <span
-      className="inline-flex shrink-0 items-center gap-1.5 text-[11px]"
-      aria-live="polite"
-    >
+    <span className="inline-flex shrink-0 items-center gap-1.5 text-[12px]" aria-live="polite">
       {isSaving ? (
-        <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+        <span className="text-muted-foreground inline-flex items-center gap-1.5">
           <Loader2 className="h-3 w-3 animate-spin" /> Saving…
         </span>
       ) : justSaved ? (
-        <span className="inline-flex items-center gap-1.5 text-[hsl(var(--accent))]">
+        <span className="text-accent inline-flex items-center gap-1.5">
           <Check className="h-3 w-3" /> Saved
         </span>
       ) : (
-        <span className="text-[var(--ed-ink-4)]">Changes save automatically</span>
+        <span className="text-muted-foreground">Changes save automatically</span>
       )}
     </span>
   );
@@ -519,15 +579,16 @@ function SaveStatus({ isSaving, justSaved }: { isSaving: boolean; justSaved: boo
 
 function Legend() {
   return (
-    <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[11px] text-muted-foreground">
+    <div className="text-muted-foreground border-border flex flex-wrap items-center gap-x-5 gap-y-1.5 border-b px-[18px] py-2.5 text-[12px]">
       <span className="inline-flex items-center gap-1.5">
-        <span className="h-1.5 w-1.5 rounded-full bg-[hsl(var(--accent))]" /> Changed from default
+        <span aria-hidden className="bg-accent h-1.5 w-1.5 rounded-full" /> Changed from default
       </span>
       <span className="inline-flex items-center gap-1.5">
-        <AlertTriangle className="h-3 w-3 text-amber-500" /> Grant rolling out (app-level today)
+        <AlertTriangle aria-hidden className="text-warning h-3 w-3" /> Grant rolling out (app-level
+        today)
       </span>
       <span className="inline-flex items-center gap-1.5">
-        <RotateCcw className="h-3 w-3" /> Toggle back to default to clear an override
+        <RotateCcw aria-hidden className="h-3 w-3" /> Toggle back to default to clear an override
       </span>
     </div>
   );

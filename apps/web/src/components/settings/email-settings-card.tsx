@@ -73,7 +73,10 @@ async function withStepUp<T>(
   run: () => Promise<ActionResult<T>>,
 ): Promise<ActionResult<T>> {
   let res = await run();
-  if (!res.ok && (res.error.details as { reason?: string } | undefined)?.reason === 'aal2_required') {
+  if (
+    !res.ok &&
+    (res.error.details as { reason?: string } | undefined)?.reason === 'aal2_required'
+  ) {
     if (await ensure()) res = await run();
   }
   return res;
@@ -125,7 +128,8 @@ export function EmailSettingsCard(props: EmailSettingsCardProps) {
     router.replace('/dashboard/settings/profile');
   }, [props.justChanged, router]);
 
-  const expired = pending && now !== null ? now > new Date(pending.expiresAt).getTime() : props.expired;
+  const expired =
+    pending && now !== null ? now > new Date(pending.expiresAt).getTime() : props.expired;
 
   const onResend = async () => {
     setBusy('resend');
@@ -135,7 +139,11 @@ export function EmailSettingsCard(props: EmailSettingsCardProps) {
         toast.error(res.error.message);
         return;
       }
-      setPending({ pendingEmail: res.data.pendingEmail, sentAt: res.data.sentAt, expiresAt: res.data.expiresAt });
+      setPending({
+        pendingEmail: res.data.pendingEmail,
+        sentAt: res.data.sentAt,
+        expiresAt: res.data.expiresAt,
+      });
       toast.success(`Verification re-sent to ${res.data.pendingEmail}.`);
       router.refresh();
     } finally {
@@ -165,10 +173,10 @@ export function EmailSettingsCard(props: EmailSettingsCardProps) {
       {showChanged ? (
         <div
           role="status"
-          className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm"
+          className="border-success/30 bg-success-wash rounded-lg border px-3.5 py-3 text-[13px]"
         >
           <p className="font-medium">Email updated</p>
-          <p className="text-muted-foreground">
+          <p className="text-ink-2">
             <span className="tabular-nums">{props.email}</span> is now your sign-in email. Use it
             next time you sign in.
           </p>
@@ -176,7 +184,7 @@ export function EmailSettingsCard(props: EmailSettingsCardProps) {
             type="button"
             variant="ghost"
             size="sm"
-            className="mt-1 h-7 px-2"
+            className="mt-1.5"
             onClick={() => setShowChanged(false)}
           >
             Dismiss
@@ -185,7 +193,7 @@ export function EmailSettingsCard(props: EmailSettingsCardProps) {
       ) : null}
 
       <div className="flex flex-wrap items-center gap-2">
-        <p className="text-sm tabular-nums">{props.email}</p>
+        <p className="text-[13.5px] tabular-nums">{props.email}</p>
         <Badge variant="secondary">{pending ? 'Current' : 'Verified'}</Badge>
       </div>
 
@@ -193,7 +201,7 @@ export function EmailSettingsCard(props: EmailSettingsCardProps) {
         <div
           role="status"
           aria-live="polite"
-          className="space-y-2 rounded-md border px-3 py-2 text-sm"
+          className="bg-sunk space-y-2 rounded-lg border px-3.5 py-3 text-[13px]"
         >
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-muted-foreground">Pending:</span>
@@ -208,13 +216,32 @@ export function EmailSettingsCard(props: EmailSettingsCardProps) {
               : `Verification links sent${now ? ` ${relativeTime(pending.sentAt, now)}` : ''} to both addresses. Your account keeps using ${props.email} until both are confirmed.`}
           </p>
           <div className="flex flex-wrap gap-2 pt-1">
-            <Button type="button" size="sm" variant="outline" disabled={busy !== null} onClick={onResend}>
-              {busy === 'resend' ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Resend verification'}
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={busy !== null}
+              onClick={onResend}
+            >
+              {busy === 'resend' ? <Loader2 aria-hidden className="animate-spin" /> : null}
+              Resend verification
             </Button>
-            <Button type="button" size="sm" variant="outline" disabled={busy !== null} onClick={() => setDialogOpen(true)}>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={busy !== null}
+              onClick={() => setDialogOpen(true)}
+            >
               Use a different address
             </Button>
-            <Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={() => setCancelOpen(true)}>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={busy !== null}
+              onClick={() => setCancelOpen(true)}
+            >
               Cancel change
             </Button>
           </div>
@@ -246,11 +273,17 @@ export function EmailSettingsCard(props: EmailSettingsCardProps) {
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button type="button" variant="ghost" onClick={() => setCancelOpen(false)} disabled={busy !== null}>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setCancelOpen(false)}
+              disabled={busy !== null}
+            >
               Keep it
             </Button>
             <Button type="button" variant="destructive" onClick={onCancel} disabled={busy !== null}>
-              {busy === 'cancel' ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Cancel change'}
+              {busy === 'cancel' ? <Loader2 aria-hidden className="animate-spin" /> : null}
+              Cancel change
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -332,7 +365,7 @@ function ChangeEmailDialog(props: {
                 aria-describedby={errors.newEmail ? 'newEmail-error' : undefined}
               />
               {errors.newEmail && (
-                <p id="newEmail-error" className="text-destructive text-xs">
+                <p id="newEmail-error" className="text-destructive text-[12.5px]">
                   {errors.newEmail.message}
                 </p>
               )}
@@ -348,7 +381,7 @@ function ChangeEmailDialog(props: {
                 aria-describedby={errors.currentPassword ? 'currentPassword-error' : undefined}
               />
               {errors.currentPassword && (
-                <p id="currentPassword-error" className="text-destructive text-xs">
+                <p id="currentPassword-error" className="text-destructive text-[12.5px]">
                   {errors.currentPassword.message}
                 </p>
               )}
@@ -356,11 +389,17 @@ function ChangeEmailDialog(props: {
           </div>
 
           <DialogFooter>
-            <Button type="button" variant="ghost" onClick={() => close(false)} disabled={isSubmitting}>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => close(false)}
+              disabled={isSubmitting}
+            >
               Cancel
             </Button>
             <Button type="submit" variant="gradient" disabled={isSubmitting}>
-              {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Send verification'}
+              {isSubmitting ? <Loader2 aria-hidden className="animate-spin" /> : null}
+              Send verification
             </Button>
           </DialogFooter>
         </form>

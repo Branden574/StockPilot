@@ -62,20 +62,23 @@ export function IndustryPacks({ presets, activePack }: IndustryPacksProps) {
 
   return (
     <>
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid gap-3 sm:grid-cols-2">
         {presets.map((preset) => {
           const isActive = active === preset.id;
           return (
             <Card
               key={preset.id}
-              className={cn('h-full', isActive && 'border-primary ring-1 ring-primary')}
+              className={cn(
+                'flex h-full flex-col',
+                isActive && 'border-foreground shadow-[0_0_0_1px_hsl(var(--foreground))]',
+              )}
             >
-              <CardHeader>
+              <CardHeader className="flex-1">
                 <div className="flex items-center justify-between gap-2">
-                  <CardTitle className="text-base">{preset.label}</CardTitle>
+                  <CardTitle className="text-[13.5px]">{preset.label}</CardTitle>
                   {isActive && <Badge>Active</Badge>}
                 </div>
-                <CardDescription>{preset.blurb}</CardDescription>
+                <CardDescription className="text-[12.5px]">{preset.blurb}</CardDescription>
               </CardHeader>
               <CardContent>
                 <Button
@@ -102,19 +105,16 @@ export function IndustryPacks({ presets, activePack }: IndustryPacksProps) {
           <DialogHeader>
             <DialogTitle>Set up as {confirm?.label}?</DialogTitle>
             <DialogDescription asChild>
-              <div className="space-y-2 text-sm text-muted-foreground">
+              <div className="text-muted-foreground space-y-2 text-[13px]">
                 <p>
-                  This turns on the modules for this industry and sets it as your
-                  active setup. It will <span className="font-medium">not</span>{' '}
-                  turn off modules you already enabled, and it keeps any labels
-                  you have already customized.
+                  This turns on the modules for this industry and sets it as your active setup. It
+                  will <span className="font-medium">not</span> turn off modules you already
+                  enabled, and it keeps any labels you have already customized.
                 </p>
                 {confirmModules.length > 0 && (
                   <p>
                     Modules included:{' '}
-                    <span className="font-medium text-foreground">
-                      {confirmModules.join(', ')}
-                    </span>
+                    <span className="text-foreground font-medium">{confirmModules.join(', ')}</span>
                     .
                   </p>
                 )}
@@ -130,11 +130,7 @@ export function IndustryPacks({ presets, activePack }: IndustryPacksProps) {
             >
               Cancel
             </Button>
-            <Button
-              type="button"
-              onClick={() => confirm && apply(confirm)}
-              disabled={pending}
-            >
+            <Button type="button" onClick={() => confirm && apply(confirm)} disabled={pending}>
               {pending ? 'Applying…' : 'Set up'}
             </Button>
           </DialogFooter>

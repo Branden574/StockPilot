@@ -1,7 +1,8 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
+import { SettingsPage } from '@/components/settings/settings-nav';
 import { OrderStatusesEditor } from '@/components/settings/order-statuses-editor';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
@@ -29,23 +30,18 @@ export default async function OrderStatusesSettingsPage() {
   const orgRow = await getOrgRowForRequest(ctx.organizationId);
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href="/dashboard/settings"
-          className="text-muted-foreground hover:text-foreground inline-flex items-center text-sm"
-        >
-          ← Back to settings
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">Order statuses</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Rename and recolor the badges shown on order requests for your whole organization. This
-          changes only how each status is labeled and colored — the underlying order workflow and
-          its steps are unchanged.
-        </p>
-      </div>
+    <SettingsPage>
+      <PageHeader
+        title="Order statuses"
+        subline={
+          'Rename and recolor the badges shown on order requests for your whole organization. This changes only how each status is labeled and colored — the underlying order workflow and its steps are unchanged.'
+        }
+        back={
+          <PageHeaderBackLink href="/dashboard/settings">← Back to settings</PageHeaderBackLink>
+        }
+      />
 
       <OrderStatusesEditor initialConfig={orgRow?.order_status_config ?? null} />
-    </div>
+    </SettingsPage>
   );
 }

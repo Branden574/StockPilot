@@ -80,13 +80,12 @@ export function NotificationSoundToggle() {
 
   return (
     <div className="flex items-start justify-between gap-4">
-      <div className="text-sm">
+      <div className="text-[13px]">
         <p className="font-medium">{muted ? 'Muted on this device' : 'Sound on'}</p>
-        <p className="text-muted-foreground text-xs">
-          Plays a short chime when a notification toast appears in the
-          focused tab. Operating-system notifications (when the tab is
-          backgrounded) keep using your OS&apos;s default sound regardless of
-          this setting.
+        <p className="text-muted-foreground text-[12.5px]">
+          Plays a short chime when a notification toast appears in the focused tab. Operating-system
+          notifications (when the tab is backgrounded) keep using your OS&apos;s default sound
+          regardless of this setting.
         </p>
       </div>
       <div className="flex gap-2">

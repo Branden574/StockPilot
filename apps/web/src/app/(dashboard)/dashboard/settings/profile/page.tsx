@@ -1,11 +1,10 @@
-import Link from 'next/link';
-
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { AvatarUploader } from '@/components/settings/avatar-uploader';
 import { DeleteAccountButton } from '@/components/settings/delete-account-button';
 import { DELETE_ACCOUNT_CARD_COPY } from '@/components/settings/delete-account-copy';
 import { EmailSettingsCard } from '@/components/settings/email-settings-card';
 import { ProfileNameEditor } from '@/components/settings/profile-name-editor';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { SettingsPage, SettingsPanel } from '@/components/settings/settings-nav';
 import { requireSession } from '@/lib/auth/session';
 import { reportError } from '@/lib/error-reporter';
 import { createClient } from '@/lib/supabase/server';
@@ -49,80 +48,53 @@ export default async function ProfileSettingsPage({
   const email = status?.email || (profile?.email as string | null) || session.email;
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href="/dashboard/settings"
-          className="text-muted-foreground hover:text-foreground text-sm"
-        >
-          ← Back to settings
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">Profile</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Your name, avatar, and sign-in email.
-        </p>
-      </div>
+    <SettingsPage>
+      <PageHeader
+        title="Profile"
+        subline="Your name, avatar, and sign-in email."
+        back={
+          <PageHeaderBackLink href="/dashboard/settings">← Back to settings</PageHeaderBackLink>
+        }
+      />
 
-      <div className="space-y-6">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Avatar</CardTitle>
-            <CardDescription>
-              Square images look best. Max 5 MB. PNG, JPG, WEBP, or AVIF.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <AvatarUploader
-              userId={session.userId}
-              initialUrl={avatarUrl}
-              fullName={fullName}
-              email={email}
-            />
-          </CardContent>
-        </Card>
+      <SettingsPanel
+        title="Avatar"
+        description="Square images look best. Max 5 MB. PNG, JPG, WEBP, or AVIF."
+      >
+        <AvatarUploader
+          userId={session.userId}
+          initialUrl={avatarUrl}
+          fullName={fullName}
+          email={email}
+        />
+      </SettingsPanel>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Name</CardTitle>
-            <CardDescription>
-              Shown on movements, invites, and audit log entries you create.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ProfileNameEditor current={fullName ?? ''} />
-          </CardContent>
-        </Card>
+      <SettingsPanel
+        title="Name"
+        description="Shown on movements, invites, and audit log entries you create."
+      >
+        <ProfileNameEditor current={fullName ?? ''} />
+      </SettingsPanel>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Email</CardTitle>
-            <CardDescription>
-              Your sign-in email. Changing it requires confirming from both the current and the
-              new address; account emails follow the new one once confirmed.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <EmailSettingsCard
-              email={email}
-              pendingEmail={status?.pendingEmail ?? null}
-              sentAt={status?.sentAt ?? null}
-              expiresAt={status?.expiresAt ?? null}
-              expired={status?.expired ?? false}
-              justChanged={justChanged}
-            />
-          </CardContent>
-        </Card>
+      <SettingsPanel
+        title="Email"
+        description="Your sign-in email. Changing it requires confirming from both the current and the new address; account emails follow the new one once confirmed."
+      >
+        <EmailSettingsCard
+          email={email}
+          pendingEmail={status?.pendingEmail ?? null}
+          sentAt={status?.sentAt ?? null}
+          expiresAt={status?.expiresAt ?? null}
+          expired={status?.expired ?? false}
+          justChanged={justChanged}
+        />
+      </SettingsPanel>
 
-        <Card className="border-destructive/40">
-          <CardHeader>
-            <CardTitle className="text-base text-destructive">Delete account</CardTitle>
-            <CardDescription>{DELETE_ACCOUNT_CARD_COPY}</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <DeleteAccountButton />
-          </CardContent>
-        </Card>
-      </div>
-    </div>
+      {/* The danger zone: set apart below the everyday cards, destructive in
+          its edge, its title and its button, and in its words. */}
+      <SettingsPanel tone="danger" title="Delete account" description={DELETE_ACCOUNT_CARD_COPY}>
+        <DeleteAccountButton />
+      </SettingsPanel>
+    </SettingsPage>
   );
 }

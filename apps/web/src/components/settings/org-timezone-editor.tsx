@@ -14,10 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import {
-  ORG_TIMEZONE_OPTIONS,
-  type OrgTimezoneOption,
-} from '@/lib/timezone-options';
+import { ORG_TIMEZONE_OPTIONS, type OrgTimezoneOption } from '@/lib/timezone-options';
 import { updateOrgTimezoneAction } from '@/server/actions/organization';
 
 type Timezone = OrgTimezoneOption;
@@ -71,9 +68,7 @@ function nowInTimezone(tz: Timezone): string {
 export function OrgTimezoneEditor({ current }: { current: string | null }) {
   const router = useRouter();
   const initial = (
-    current && (ORG_TIMEZONE_OPTIONS as readonly string[]).includes(current)
-      ? current
-      : 'UTC'
+    current && (ORG_TIMEZONE_OPTIONS as readonly string[]).includes(current) ? current : 'UTC'
   ) as Timezone;
   const [tz, setTz] = React.useState<Timezone>(initial);
   const [busy, setBusy] = React.useState(false);
@@ -96,10 +91,7 @@ export function OrgTimezoneEditor({ current }: { current: string | null }) {
     <div className="space-y-3">
       <div className="space-y-1.5">
         <Label htmlFor="org-timezone">Workspace timezone</Label>
-        <Select
-          value={tz}
-          onValueChange={(v) => setTz(v as Timezone)}
-        >
+        <Select value={tz} onValueChange={(v) => setTz(v as Timezone)}>
           <SelectTrigger id="org-timezone">
             <SelectValue />
           </SelectTrigger>
@@ -116,16 +108,16 @@ export function OrgTimezoneEditor({ current }: { current: string | null }) {
             ))}
           </SelectContent>
         </Select>
-        <p className="text-muted-foreground text-[11px]">
-          Used everywhere the system renders a date or time —
-          PDFs (pick slips, packing slips, reports), the schedule
-          calendar, dashboard timestamps, and emails. Set this to where
-          your warehouse operates, not where each user lives.
+        <p className="text-muted-foreground text-[12px]">
+          Used everywhere the system renders a date or time — PDFs (pick slips, packing slips,
+          reports), the schedule calendar, dashboard timestamps, and emails. Set this to where your
+          warehouse operates, not where each user lives.
         </p>
       </div>
       <div className="flex justify-end">
         <Button onClick={save} disabled={!dirty || busy} variant="gradient">
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save timezone'}
+          {busy ? <Loader2 aria-hidden className="animate-spin" /> : null}
+          Save timezone
         </Button>
       </div>
     </div>
