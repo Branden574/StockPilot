@@ -1,6 +1,6 @@
 'use client';
 
-import { Download } from 'lucide-react';
+import { ChevronDown, Download } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -18,14 +18,21 @@ import {
  * status tab so the file matches what's on screen. The routes re-check the
  * orders:approve permission server-side; the page additionally gates
  * rendering this menu on the same permission.
+ *
+ * The trigger is the header's secondary button with a trailing chevron, the
+ * look of a button that opens a menu (DESIGN-SPEC 6.21 "Export"). Its icons are
+ * decorative, so its name stays "Export".
  */
 export function OrdersExportMenu({ tab }: { tab: string }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline">
-          <Download className="mr-1.5 h-4 w-4" />
+        {/* The chevron is the last svg: 12 px, quieter than the 16 px icons
+            Button gives every svg inside it. */}
+        <Button variant="outline" className="[&_svg:last-child]:size-3">
+          <Download aria-hidden />
           Export
+          <ChevronDown aria-hidden strokeWidth={2} className="text-muted-foreground" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">

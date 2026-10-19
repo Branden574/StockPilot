@@ -22,14 +22,25 @@ describe('OrdersExportMenu', () => {
     expect(pdf).toHaveTextContent('PDF (print)');
   });
 
+  it('is a menu button named Export whose icons (the download glyph and the chevron) are decorative', () => {
+    render(<OrdersExportMenu tab="picking" />);
+    const trigger = screen.getByRole('button', { name: 'Export' });
+    expect(trigger).toHaveAttribute('aria-haspopup', 'menu');
+    expect(trigger).toHaveTextContent(/^Export$/);
+    const icons = trigger.querySelectorAll('svg');
+    expect(icons).toHaveLength(2);
+    for (const icon of icons) expect(icon).toHaveAttribute('aria-hidden', 'true');
+  });
+
   it('carries whichever status tab is active', async () => {
     const user = userEvent.setup();
     render(<OrdersExportMenu tab="denied_cancelled" />);
 
     await user.click(screen.getByRole('button', { name: 'Export' }));
 
-    expect(
-      await screen.findByRole('menuitem', { name: 'Export orders to PDF' }),
-    ).toHaveAttribute('href', '/api/orders/export.pdf?status=denied_cancelled');
+    expect(await screen.findByRole('menuitem', { name: 'Export orders to PDF' })).toHaveAttribute(
+      'href',
+      '/api/orders/export.pdf?status=denied_cancelled',
+    );
   });
 });
