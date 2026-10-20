@@ -649,6 +649,66 @@ describe('Grid card content: what the row shows, nothing else', () => {
   });
 });
 
+/**
+ * FX2 (verified on the lab, pre-existing): a category's name was drawn in the
+ * org's own colour, which fails 4.5:1 for most colours (Supplies #22c55e
+ * 2.28:1, Science #14b8a6 2.49:1 on a white row; 7 of the 8 colours the
+ * categories manager offers fail on white). DESIGN-SPEC 6.9 draws Category in
+ * ink 2 and CONFLICTS C8 keeps the dot: the name now reads in ink 2 (#2a2c28
+ * light, #d8d6cc dark) and the 6 px dot keeps the colour, hidden from readers.
+ */
+describe('a category reads in ink 2, its colour on the dot (FX2)', () => {
+  const COLOURED = {
+    ...LOOKUPS,
+    categories: new Map<string, { name: string; color: string | null }>([
+      ['cat-sci', { name: 'Science', color: '#14b8a6' }],
+      ['cat-swag', { name: 'Swag', color: null }],
+    ]),
+  };
+  const sciencePage = () => [
+    row('sci-1', { name: 'Beaker', sku: 'BK-1', category_id: 'cat-sci' }),
+    row('tee-s', { name: 'Lab Coat - S', sku: 'LC-S', category_id: 'cat-sci' }),
+    row('tee-m', { name: 'Lab Coat - M', sku: 'LC-M', category_id: 'cat-sci' }),
+    row('plain', { name: 'Mousepad', sku: 'MP-1' }),
+  ];
+
+  /** Every label the Category cell or a card's meta line draws for `name`. */
+  const labels = (root: HTMLElement, name: string) =>
+    within(root)
+      .getAllByText(name)
+      .filter((el) => el.tagName === 'SPAN');
+
+  // Mutation caught: the inline text colour back on the label, or ink 2 lost
+  // from the table, a record card or a group card.
+  it.each(['table', 'grid'] as const)(
+    'in the %s, the name is ink 2 with no colour of its own, and the dot keeps the colour',
+    (view) => {
+      const { container } = renderTable({
+        initialView: view,
+        lookups: COLOURED,
+        items: sciencePage() as never,
+      });
+      // A record and a size run (its header row or card).
+      const science = labels(container, 'Science');
+      expect(science.length).toBeGreaterThanOrEqual(2);
+      for (const label of science) {
+        expect(label).toHaveClass('text-ink-2');
+        expect(label.style.color).toBe('');
+        const dot = label.querySelector(':scope > span[aria-hidden]') as HTMLElement;
+        expect(dot).not.toBeNull();
+        expect(dot).toHaveClass('h-1.5', 'w-1.5', 'rounded-full');
+        expect(dot.style.backgroundColor).toMatch(/^(#14b8a6|rgb\(20, 184, 166\))$/i);
+        expect(dot.textContent).toBe('');
+      }
+      // A category with no colour: the same ink 2, and no dot.
+      const [swag] = labels(container, 'Swag');
+      expect(swag).toHaveClass('text-ink-2');
+      expect(swag!.style.color).toBe('');
+      expect(swag!.querySelector('span')).toBeNull();
+    },
+  );
+});
+
 describe('Grid group cards: the header row, as a card', () => {
   it('a size run: its "N sizes" badge, roll-up on hand, rack summary and a drill-down named like the chevron', () => {
     const { container } = renderTable({ initialView: 'grid' });
