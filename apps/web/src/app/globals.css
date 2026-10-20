@@ -641,3 +641,22 @@ html[data-sp-update-card] ol[data-sonner-toaster][data-y-position='bottom'] {
 html[data-sp-update-card] #main-content {
   padding-bottom: var(--sp-update-card-offset, 0px);
 }
+
+/* ── Keyboard focus clears the item page's sticky header (P68-KBD-01) ─────────
+   The item page's header (back link, title, actions and tab strip) sticks to
+   the top of this scroller, 200 to 410 px tall, and its tab strip keeps the
+   header's measured height in --item-detail-header-h on the scroller as well
+   (item-detail-tabs.tsx). Browsers scroll a newly focused control only until
+   it is inside the scroller, so Tab could stop on a control under the header
+   (Market price's Refresh, reached from the right column's last link at
+   1280). While focus is in the page below the header, the scroll padding is
+   the header's height plus 12 px, so that control is scrolled into view below
+   the header with its whole focus ring. While focus is in the header itself,
+   or anywhere else, there is no padding: the header's own controls are always
+   in view (with the padding, Chromium scrolled the page up each time one of
+   them took focus), and anchors, the skip link and every other page scroll as
+   before. Page Down pressed on a control below the header now moves by the
+   view below the header, as the padding asks. */
+#main-content:has([data-item-detail-header] ~ :focus-within) {
+  scroll-padding-top: calc(var(--item-detail-header-h, 0px) + 0.75rem);
+}

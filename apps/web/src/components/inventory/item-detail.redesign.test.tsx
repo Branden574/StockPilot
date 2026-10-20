@@ -367,6 +367,21 @@ describe('the tabs are the URL', () => {
     }
   });
 
+  it('every panel follows the sticky header as its sibling, which the main scroller keys its scroll padding on', async () => {
+    // P68-KBD-01: globals.css pads main#main-content by the header's height
+    // while focus is in `[data-item-detail-header] ~ *`, so a control reached
+    // with Tab below the header is scrolled clear of it.
+    for (const tab of [undefined, 'movements', 'activity']) {
+      cleanup();
+      const { container } = render(await page(tab));
+      const header = screen.getByTestId('item-detail-header');
+      expect(header).toHaveAttribute('data-item-detail-header', '');
+      const panel = container.querySelector('[data-item-detail-header] ~ [role="tabpanel"]');
+      expect(panel).not.toBeNull();
+      expect(panel!.parentElement).toBe(header.parentElement);
+    }
+  });
+
   it('the Movements tab shows the movements-only feed, the Activity tab the merged one', async () => {
     render(await page('movements'));
     expect(screen.getByTestId('feed-movement')).toBeTruthy();
