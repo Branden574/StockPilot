@@ -248,7 +248,7 @@ export async function postUngroupSelected(
   return outcome;
 }
 
-// ── A "keeps the SKU" radio's name (redesign Stage 6, F9) ─────────────────
+// ── The "keeps the SKU" radios' names (redesign Stage 6, F9) ──────────────
 // When every record of a SKU the person can see is ticked, each of its rows
 // carries a radio for the one that keeps the SKU. Each radio was named "Keeps
 // SKU <sku>: <name>" and nothing more, so three Wireless Mouse records were
@@ -259,36 +259,42 @@ export async function postUngroupSelected(
 const RECORD_LINE_SEPARATOR = ' · ';
 
 /**
- * The spoken name of a record's "keeps the SKU" radio: the choice and the
- * record's name, then what tells the record apart from the SKU's other
- * records, in the words its line shows (reviewRecordDetail): every part of
- * its line that is not on all of theirs, such as its rack or placement,
- * warehouse, charter, on hand, size or ISBN. Records whose names and lines
- * read the same are told apart by where they are listed ("record 2 of 3").
- * The outcome beside the radio is its value, never part of its name.
+ * The spoken names of one SKU's "keeps the SKU" radios, by record id. Each
+ * is the choice and the record's name, then what tells the record apart from
+ * the SKU's other records, in the words its line shows (reviewRecordDetail):
+ * every part of its line that is not on all of theirs, such as its rack or
+ * placement, warehouse, charter, on hand, size or ISBN. Records whose names
+ * and lines read the same are told apart by where they are listed ("record 2
+ * of 3"). The outcome beside a radio is its value, never part of its name.
  *
  * `rows` are the review's records in the order listed, and `skuRecords` the
- * SKU's records that each carry a radio (core's group.selected).
+ * SKU's records that each carry a radio (core's group.selected); only those
+ * are named. Every name comes from one pass that builds each record's line
+ * once (F9 review: naming one radio at a time rebuilt every other record's
+ * line twice, 2n² lines per render for a SKU of n records).
  */
-export function keepsSkuRadioLabel(
+export function keepsSkuRadioLabels(
   choice: string,
-  record: PhoneGroupingRecord,
   rows: readonly PhoneGroupingRecord[],
   skuRecords: readonly { id: string }[],
   view: 'items' | 'books',
-): string {
+): Map<string, string> {
   const withRadio = new Set(skuRecords.map((s) => s.id));
   const peers = rows.filter((r) => withRadio.has(r.id));
-  const parts = (r: PhoneGroupingRecord) =>
-    reviewRecordDetail(r, view).split(RECORD_LINE_SEPARATOR);
-  const lines = peers.map(parts);
+  const lines = peers.map((r) => reviewRecordDetail(r, view).split(RECORD_LINE_SEPARATOR));
   const onEvery = new Set((lines[0] ?? []).filter((p) => lines.every((l) => l.includes(p))));
-  const named = (r: PhoneGroupingRecord) =>
-    [`${choice}: ${r.name}`, ...parts(r).filter((p) => !onEvery.has(p))].join(', ');
-  const label = named(record);
-  const at = peers.findIndex((p) => p.id === record.id);
-  const readsTheSame = peers.some((p) => p.id !== record.id && named(p) === label);
-  return at >= 0 && readsTheSame ? `${label}, record ${at + 1} of ${peers.length}` : label;
+  const labels = peers.map((r, i) =>
+    [`${choice}: ${r.name}`, ...lines[i]!.filter((p) => !onEvery.has(p))].join(', '),
+  );
+  const timesSaid = new Map<string, number>();
+  for (const label of labels) timesSaid.set(label, (timesSaid.get(label) ?? 0) + 1);
+  return new Map(
+    peers.map((r, i): [string, string] => {
+      const label = labels[i]!;
+      const readsTheSame = (timesSaid.get(label) ?? 0) > 1;
+      return [r.id, readsTheSame ? `${label}, record ${i + 1} of ${peers.length}` : label];
+    }),
+  );
 }
 
 // ── A change elsewhere ─────────────────────────────────────────────────────

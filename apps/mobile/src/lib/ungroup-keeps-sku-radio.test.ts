@@ -5,6 +5,7 @@ import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  GROUPING_MAX_ITEMS,
   planUngroupSelected,
   UNGROUP_COPY,
   ungroupAnchorFor,
@@ -22,12 +23,25 @@ import {
 } from './__fixtures__/jsx-touch-audit';
 import type { PhoneGroupingRecord } from './display-groups';
 // vi.mock below is hoisted above every import by vitest.
-import { keepsSkuRadioLabel, type PhoneUngroupReview } from './ungroup-selected';
+import { keepsSkuRadioLabels, type PhoneUngroupReview } from './ungroup-selected';
 
 vi.mock('./api', () => ({
   api: () => Promise.reject(new Error('no request leaves this test')),
   ApiError: class extends Error {},
 }));
+
+/** How many record lines were built (reviewRecordDetail, counted below). */
+const lineBuilds = vi.hoisted(() => ({ count: 0 }));
+vi.mock('./display-groups', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./display-groups')>();
+  return {
+    ...actual,
+    reviewRecordDetail: (...args: Parameters<typeof actual.reviewRecordDetail>) => {
+      lineBuilds.count += 1;
+      return actual.reviewRecordDetail(...args);
+    },
+  };
+});
 
 /**
  * THE UNGROUP REVIEW'S "KEEPS THE SKU" RADIOS, AS VOICEOVER HEARS THEM
@@ -45,6 +59,11 @@ vi.mock('./api', () => ({
  * placement, warehouse, charter or on hand), and the outcome is its value.
  * VoiceOver: "Keeps SKU WM-1: Wireless Mouse, B-2, 4 on hand, radio button,
  * unchecked, Gets its own SKU". The role and the checked state are kept.
+ *
+ * The F9 review found the names cost quadratic work on every render: each
+ * radio's name rebuilt every other record's line twice. keepsSkuRadioLabels
+ * names all of a SKU's radios in one pass, and the screen works them out
+ * once per plan.
  */
 
 const M1 = 'dddddddd-0000-4000-8000-000000000001';
@@ -82,10 +101,16 @@ const rec = (over: Partial<PhoneGroupingRecord>): PhoneGroupingRecord => ({
 const keeps = UNGROUP_COPY.keepsSku('WM-1');
 
 /** Every radio's name for these records, all of them the SKU's radios. */
-const names = (records: PhoneGroupingRecord[], view: 'items' | 'books' = 'items') =>
-  records.map((r) => keepsSkuRadioLabel(keeps, r, records, records, view));
+const names = (records: PhoneGroupingRecord[], view: 'items' | 'books' = 'items') => {
+  const byId = keepsSkuRadioLabels(keeps, records, records, view);
+  return records.map((r) => {
+    const name = byId.get(r.id);
+    if (name === undefined) throw new Error(`the radio of ${r.id} has no name`);
+    return name;
+  });
+};
 
-describe('keepsSkuRadioLabel: each radio is named for what tells its record apart', () => {
+describe('keepsSkuRadioLabels: each radio is named for what tells its record apart', () => {
   it('three Wireless Mouse records on three racks are three radios, each named with its rack', () => {
     const mice = [
       rec({ id: M1, placementLabel: 'A-1' }),
@@ -179,12 +204,30 @@ describe('keepsSkuRadioLabel: each radio is named for what tells its record apar
       rec({ id: M1 }),
     ];
     const skuRecords = [{ id: M1 }, { id: M2 }];
-    expect(keepsSkuRadioLabel(keeps, rows[2]!, rows, skuRecords, 'items')).toBe(
-      'Keeps SKU WM-1: Wireless Mouse, record 2 of 2',
+    const byId = keepsSkuRadioLabels(keeps, rows, skuRecords, 'items');
+    expect(byId.get(M1)).toBe('Keeps SKU WM-1: Wireless Mouse, record 2 of 2');
+    expect(byId.get(M2)).toBe('Keeps SKU WM-1: Wireless Mouse, record 1 of 2');
+    // Only the SKU's records with a radio are named, in the order listed.
+    expect([...byId.keys()]).toEqual([M2, M1]);
+  });
+
+  // F9 review: naming one radio at a time rebuilt every other record's line
+  // twice, 2n² lines per render (20,000 for a SKU of 100 ticked records, the
+  // most one review takes). Mutation caught: the names worked out one radio
+  // at a time again, or a line built more than once per record.
+  it("names a SKU's radios in one pass, building each record's line once", () => {
+    const many = Array.from({ length: GROUPING_MAX_ITEMS }, (_, i) =>
+      rec({
+        id: `dddddddd-0000-4000-8000-${String(100 + i).padStart(12, '0')}`,
+        placementLabel: `R-${i + 1}`,
+      }),
     );
-    expect(keepsSkuRadioLabel(keeps, rows[1]!, rows, skuRecords, 'items')).toBe(
-      'Keeps SKU WM-1: Wireless Mouse, record 1 of 2',
-    );
+    lineBuilds.count = 0;
+    const byId = keepsSkuRadioLabels(keeps, many, many, 'items');
+    expect(lineBuilds.count).toBe(GROUPING_MAX_ITEMS);
+    expect(byId.size).toBe(GROUPING_MAX_ITEMS);
+    expect(new Set(byId.values()).size).toBe(GROUPING_MAX_ITEMS);
+    expect(byId.get(many[41]!.id)).toBe('Keeps SKU WM-1: Wireless Mouse, R-42');
   });
 
   it("starts as before, with core's choice and the record's name, and never says the outcome", () => {
@@ -265,6 +308,14 @@ function spoken(
     serverOrder.map(candidateOf),
     { canUnlinkFamilies: true, shownUnder },
   );
+  // The screen's names for the plan's radios, worked out once as it does.
+  const radioNames = run(initializerOf('radioNames'), {
+    React: { useMemo: (make: () => unknown) => make() },
+    plan,
+    view: 'items',
+    keepsSkuRadioLabels,
+    UNGROUP_COPY,
+  });
   const [radio] = radios;
   const label = attrText(radio!, 'accessibilityLabel', sf)!;
   const value = attrText(radio!, 'accessibilityValue', sf);
@@ -283,7 +334,7 @@ function spoken(
     return {
       id: r.id,
       role: attrText(radio!, 'accessibilityRole', sf),
-      name: run(label, { keepsSkuRadioLabel, UNGROUP_COPY, group, r, plan, view: 'items' }),
+      name: run(label, { radioNames, rec: r }),
       value: value === undefined ? undefined : run(value, { ungroupOutcomeWords, o }),
       state: run(state, { keeps: checked, busy: false }),
     };
@@ -296,6 +347,19 @@ describe('the Ungroup review radios, run from the screen over core plan', () => 
     expect(attrText(radios[0]!, 'accessibilityState', sf)).toBe(
       '{ checked: keeps, disabled: busy }',
     );
+  });
+
+  // F9 review: each radio named itself as it rendered, so every tap (which
+  // renders the review again) rebuilt every name. Mutation caught: the name
+  // worked out in the radio again, or the names worked out on every render.
+  it("reads its name from the screen's names, worked out once per plan", () => {
+    expect(attrText(radios[0]!, 'accessibilityLabel', sf)).toBe('radioNames.get(rec.id)');
+    const memo = initializerOf('radioNames').replace(/\s+/g, ' ');
+    expect(memo.startsWith('React.useMemo( () => new Map(')).toBe(true);
+    expect(memo).toContain(
+      'keepsSkuRadioLabels( UNGROUP_COPY.keepsSku(g.sku), plan.records, g.selected, view, )',
+    );
+    expect(memo.endsWith(', [plan, view], )')).toBe(true);
   });
 
   // The F9 walk: three Wireless Mouse records sharing SKU WM-1, every one

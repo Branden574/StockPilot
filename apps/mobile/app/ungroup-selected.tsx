@@ -49,7 +49,7 @@ import { footerReservation } from '@/lib/dynamic-type-layout';
 import { isOnline } from '@/lib/sync';
 import { FONT } from '@/lib/theme';
 import {
-  keepsSkuRadioLabel,
+  keepsSkuRadioLabels,
   notifyRecordsUngrouped,
   postUngroupSelected,
   previewUngroupSelected,
@@ -200,6 +200,28 @@ function UngroupSelectedReview({ params: routeParams }: { params: UngroupSelecte
           })
         : null,
     [data, params],
+  );
+  // Every "keeps the SKU" radio's name, by record, worked out once per plan
+  // (redesign Stage 6, F9 review): naming each radio as it rendered rebuilt
+  // every other record's line twice, 20,000 lines on every tap for a SKU of
+  // 100 ticked records.
+  const radioNames = React.useMemo(
+    () =>
+      new Map(
+        plan
+          ? plan.split.groups
+              .filter((g) => g.allSelected)
+              .flatMap((g) => [
+                ...keepsSkuRadioLabels(
+                  UNGROUP_COPY.keepsSku(g.sku),
+                  plan.records,
+                  g.selected,
+                  view,
+                ),
+              ])
+          : [],
+      ),
+    [plan, view],
   );
   const changing = plan ? ungroupChangeCount(plan, anchorBySku) : 0;
   const reviewById = new Map((data?.review.records ?? []).map((r) => [r.id, r]));
@@ -391,13 +413,7 @@ function UngroupSelectedReview({ params: routeParams }: { params: UngroupSelecte
                             onPress={() => setAnchorBySku((m) => ({ ...m, [group.sku]: rec.id }))}
                             disabled={busy}
                             accessibilityRole="radio"
-                            accessibilityLabel={keepsSkuRadioLabel(
-                              UNGROUP_COPY.keepsSku(group.sku),
-                              r,
-                              plan.records,
-                              group.selected,
-                              view,
-                            )}
+                            accessibilityLabel={radioNames.get(rec.id)}
                             accessibilityValue={{ text: ungroupOutcomeWords(o) }}
                             accessibilityState={{ checked: keeps, disabled: busy }}
                             style={styles.choiceRow}

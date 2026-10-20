@@ -362,9 +362,11 @@ describe('screen pins', () => {
     // "Keeps SKU X" and the record, as before) and for what tells it apart
     // from the SKU's other records, with the outcome beside it as its value.
     // Redesign Stage 6, F9: the name alone read the same on three Wireless
-    // Mouse radios, and the outcome was never heard.
+    // Mouse radios, and the outcome was never heard. F9 review: the names are
+    // worked out once per plan (radioNames), never by each radio as it renders.
+    expect(screen).toContain('accessibilityLabel={radioNames.get(rec.id)}');
     expect(screen).toMatch(
-      /accessibilityLabel=\{keepsSkuRadioLabel\(\s*UNGROUP_COPY\.keepsSku\(group\.sku\),\s*r,\s*plan\.records,\s*group\.selected,\s*view,\s*\)\}/,
+      /keepsSkuRadioLabels\(\s*UNGROUP_COPY\.keepsSku\(g\.sku\),\s*plan\.records,\s*g\.selected,\s*view,\s*\)/,
     );
     expect(screen).toContain('accessibilityValue={{ text: ungroupOutcomeWords(o) }}');
     expect(screen).not.toContain(
