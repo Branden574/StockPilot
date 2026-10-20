@@ -780,6 +780,8 @@ describe('the Items tour reaches a record in both views', () => {
     expect(table.container.querySelector(step!.target!)?.tagName).toBe('TR');
     table.unmount();
     const grid = renderTable({ initialView: 'grid' });
-    expect(grid.container.querySelector(step!.target!)?.getAttribute('data-slot')).toBe('grid-card');
+    expect(grid.container.querySelector(step!.target!)?.getAttribute('data-slot')).toBe(
+      'grid-card',
+    );
   });
 });
