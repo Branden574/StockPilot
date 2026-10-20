@@ -63,4 +63,36 @@ describe('ItemCell', () => {
     const { container } = render(<ItemCell name="Mug" />);
     expect(container.querySelector('[data-slot="item-cell-sku"]')).toBeNull();
   });
+
+  it('puts a header`s own actions on a line of their own under the SKU, which may wrap between them', () => {
+    const { container } = render(
+      <ItemCell
+        name="Desk Set"
+        sku="Multiple"
+        actions={
+          <>
+            <button type="button" className="whitespace-nowrap">
+              Rename group
+            </button>
+            <button type="button" className="whitespace-nowrap">
+              Remove from group
+            </button>
+          </>
+        }
+      />,
+    );
+    const sku = container.querySelector('[data-slot="item-cell-sku"]')!;
+    const actions = container.querySelector('[data-slot="item-cell-actions"]')!;
+    expect(actions).toHaveClass('flex', 'flex-wrap');
+    expect(actions).toContainElement(screen.getByRole('button', { name: 'Rename group' }));
+    expect(actions).toContainElement(screen.getByRole('button', { name: 'Remove from group' }));
+    // After the SKU line and outside it: the SKU's block holds the SKU alone.
+    expect(sku.textContent).toBe('Multiple');
+    expect(sku.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('prints no actions line when the page passes none', () => {
+    const { container } = render(<ItemCell name="Mug" sku="MUG-1" />);
+    expect(container.querySelector('[data-slot="item-cell-actions"]')).toBeNull();
+  });
 });

@@ -19,6 +19,9 @@ import { Thumb } from './thumb';
  * - `badge` is the size badge ("8 sizes"); `chip` the row's group chip ("In
  *   group X", "Same SKU as records in X") with its "Add to group" action.
  *   The cell only places what the page hands it and reads no group itself.
+ * - `actions` is a header row's own text actions ("Rename group", "Remove
+ *   from group") on a line of their own under the SKU. The line may wrap
+ *   between two actions; the caller keeps each action on one line.
  * - `nested` indents a member row 24 px so its thumbnail sits under its
  *   header's.
  */
@@ -30,6 +33,7 @@ export interface ItemCellProps extends Omit<React.ComponentProps<'div'>, 'childr
   imageAlt?: string;
   badge?: React.ReactNode;
   chip?: React.ReactNode;
+  actions?: React.ReactNode;
   nested?: boolean;
 }
 
@@ -41,6 +45,7 @@ export function ItemCell({
   imageAlt = '',
   badge,
   chip,
+  actions,
   nested = false,
   className,
   ...props
@@ -70,6 +75,14 @@ export function ItemCell({
             className="text-muted-foreground whitespace-nowrap font-mono text-[11.5px] leading-[17.25px]"
           >
             {sku}
+          </div>
+        ) : null}
+        {actions != null ? (
+          <div
+            data-slot="item-cell-actions"
+            className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5"
+          >
+            {actions}
           </div>
         ) : null}
       </div>

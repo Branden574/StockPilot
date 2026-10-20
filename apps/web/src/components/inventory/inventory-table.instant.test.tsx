@@ -627,9 +627,12 @@ describe('InventoryTable instant mode', () => {
 // charter_id, bin_location) — so one title legitimately exists as several
 // inventory_items rows, one per charter/rack, and the Books list rendered
 // the same title several times. These pin both halves of the fix: the
-// grouping itself, and the 14-column header layout it has to line up with
+// grouping itself, and the 13-column header layout it has to line up with
 // (the books body row emits Grade/Rack/Crate where items emits one Rack
-// cell, so a 12-cell header would shift every column right of Location).
+// cell, so an 11-cell header would shift every column right of Location).
+// CHANGED (owner decision 2026-10-19: SKU stacked under the item name): the
+// SKU is the Item cell's second line, not a column, so every row kind emits
+// one cell fewer than it did (14 → 13 on Books, 12 → 11 on Items).
 describe('InventoryTable books SKU grouping', () => {
   const fetchSpy = vi.fn();
 
@@ -703,26 +706,29 @@ describe('InventoryTable books SKU grouping', () => {
     expect(screen.getByText('2')).toBeInTheDocument();
   });
 
-  // The structural risk: the books layout is 14 columns, the SKU header
-  // was written for the 12-column items layout. A cell-count assertion is
+  // The structural risk: the books layout is 13 columns, the SKU header
+  // was written for the 11-column items layout. A cell-count assertion is
   // the only thing that catches a future column being added to the body
   // but not the header.
-  it('books group header emits the SAME 14 cells as a books body row', async () => {
+  // CHANGED (owner decision 2026-10-19: SKU stacked under the item name):
+  // 14 → 13, the SKU column is gone from every row kind.
+  it('books group header emits the SAME 13 cells as a books body row', async () => {
     const user = userEvent.setup();
     const { container } = renderBooks({ items: algebraRows() });
 
     const collapsed = bodyRows(container);
     expect(collapsed).toHaveLength(1);
-    expect(collapsed[0]!.children).toHaveLength(14);
+    expect(collapsed[0]!.children).toHaveLength(13);
 
     await user.click(screen.getByRole('button', { name: /expand/i }));
     const expanded = bodyRows(container);
     expect(expanded).toHaveLength(4); // header + 3 placements
-    expect(expanded[0]!.children).toHaveLength(14);
-    expect(expanded[1]!.children).toHaveLength(14);
+    expect(expanded[0]!.children).toHaveLength(13);
+    expect(expanded[1]!.children).toHaveLength(13);
   });
 
-  it('items group header still emits 12 cells, matching an items body row (no regression)', async () => {
+  // CHANGED (owner decision 2026-10-19: SKU stacked under the item name): 12 → 11.
+  it('items group header still emits 11 cells, matching an items body row (no regression)', async () => {
     const user = userEvent.setup();
     getSearchParams('');
     window.history.replaceState(null, '', '/dashboard/inventory');
@@ -740,11 +746,11 @@ describe('InventoryTable books SKU grouping', () => {
       />,
     );
 
-    expect(bodyRows(container)[0]!.children).toHaveLength(12);
+    expect(bodyRows(container)[0]!.children).toHaveLength(11);
     await user.click(screen.getByRole('button', { name: /expand/i }));
     const expanded = bodyRows(container);
-    expect(expanded[0]!.children).toHaveLength(12);
-    expect(expanded[1]!.children).toHaveLength(12);
+    expect(expanded[0]!.children).toHaveLength(11);
+    expect(expanded[1]!.children).toHaveLength(11);
   });
 
   // book_grade lives in custom_fields PER inventory_items row, so two
@@ -859,8 +865,9 @@ describe('InventoryTable books SKU grouping', () => {
       ],
     });
     const header = bodyRows(differing.container)[0]!;
-    // Crate is col 9 of 14 (0-indexed 8).
-    const crateCell = header.children[8] as HTMLElement;
+    // Crate is col 8 of 13 (0-indexed 7). CHANGED (owner decision
+    // 2026-10-19: SKU stacked under the item name): was col 9 of 14.
+    const crateCell = header.children[7] as HTMLElement;
     expect(crateCell.textContent).toBe('Multiple');
     expect(crateCell.querySelectorAll('[style*="background-color"]')).toHaveLength(0);
     differing.unmount();
@@ -881,7 +888,7 @@ describe('InventoryTable books SKU grouping', () => {
         }),
       ],
     });
-    const agreeCell = bodyRows(agreeing.container)[0]!.children[8] as HTMLElement;
+    const agreeCell = bodyRows(agreeing.container)[0]!.children[7] as HTMLElement;
     expect(agreeCell.textContent).toBe('5');
     expect(agreeCell.querySelectorAll('[style*="background-color"]')).toHaveLength(1);
   });
@@ -927,7 +934,8 @@ describe('InventoryTable books SKU grouping', () => {
     // Redesign P3.2 (visual locator only): a plain record row, not a header
     // (was: no bg-muted/30 header tint).
     expect(rows[0]!.getAttribute('data-row-kind')).toBe('record');
-    expect(rows[0]!.children).toHaveLength(14);
+    // CHANGED (owner decision 2026-10-19: SKU stacked under the item name): 14 → 13.
+    expect(rows[0]!.children).toHaveLength(13);
   });
 
   // Books are never sized — groupBySizeRun must stay OFF for them. This
@@ -977,8 +985,10 @@ describe('InventoryTable books SKU grouping', () => {
 
     expect(screen.getByText('10')).toBeInTheDocument();
     expect(screen.getByText('*')).toBeInTheDocument();
-    // On hand is col 10 of 14 (0-indexed 9) and carries the disclosure.
-    const onHand = bodyRows(container)[0]!.children[9] as HTMLElement;
+    // On hand is col 9 of 13 (0-indexed 8) and carries the disclosure.
+    // CHANGED (owner decision 2026-10-19: SKU stacked under the item name):
+    // was col 10 of 14.
+    const onHand = bodyRows(container)[0]!.children[8] as HTMLElement;
     expect(onHand.getAttribute('title')).toContain('only counts placements on the current page');
   });
 
@@ -1014,9 +1024,12 @@ describe('InventoryTable SKU-group correctness (Items and Books)', () => {
     window.localStorage.clear();
   });
 
+  // CHANGED (owner decision 2026-10-19: SKU stacked under the item name):
+  // 12 → 11 and 14 → 13 cells. Status, 14-day, Coverage and On hand keep their
+  // order at the end, so the end-relative indices below still hold.
   const SURFACES = [
-    { label: 'items', books: false, base: '/dashboard/inventory', cells: 12 },
-    { label: 'books', books: true, base: '/dashboard/books', cells: 14 },
+    { label: 'items', books: false, base: '/dashboard/inventory', cells: 11 },
+    { label: 'books', books: true, base: '/dashboard/books', cells: 13 },
   ] as const;
 
   function renderSurface(
@@ -1232,8 +1245,8 @@ describe('InventoryTable SKU-group correctness (Items and Books)', () => {
           }),
         ],
       });
-      // On hand is the cell right before the coverage bar: 12-cell items
-      // layout → index 7, 14-cell books layout → index 9.
+      // On hand is the cell right before the coverage bar: 11-cell items
+      // layout → index 6, 13-cell books layout → index 8.
       const onHandIdx = surface.cells - 5;
       const headerOnHand = () => headerRows(container)[0]!.children[onHandIdx]!.textContent ?? '';
 
@@ -1257,7 +1270,7 @@ describe('InventoryTable SKU-group correctness (Items and Books)', () => {
 
     // The common case must stay byte-identical: one placement, no header,
     // no chevron — and the header's cell count must match a body row's
-    // exactly (12 items / 14 books) or every column right of Location
+    // exactly (11 items / 13 books) or every column right of Location
     // shifts.
     it('a one-placement SKU renders as a plain row, and a group header matches the body cell count', async () => {
       const user = userEvent.setup();
@@ -1464,10 +1477,12 @@ describe('InventoryTable SKU-group correctness (Items and Books)', () => {
       ]),
       charters: new Map<string, { name: string; code: string | null }>(),
     };
-    // 12-cell items layout: checkbox, name, sku, CATEGORY, charter,
-    // LOCATION, N locations, on hand, bar, spark, badge, updated.
-    const CATEGORY_CELL = 3;
-    const LOCATION_CELL = 5;
+    // 11-cell items layout: checkbox, name (with the SKU under it), CATEGORY,
+    // charter, LOCATION, N locations, on hand, bar, spark, badge, updated.
+    // CHANGED (owner decision 2026-10-19: SKU stacked under the item name):
+    // was 3 and 5, with the SKU column after the name.
+    const CATEGORY_CELL = 2;
+    const LOCATION_CELL = 4;
 
     const pair = (over: Partial<InstantDatasetItem>[]) =>
       over.map((o, i) => item({ id: `m${i}`, name: 'Acer Chromebook', sku: 'SP-G69UU-05H', ...o }));
@@ -1515,7 +1530,9 @@ describe('InventoryTable SKU-group correctness (Items and Books)', () => {
   // PLACEMENTS. Three placements sharing two racks read "3 racks" while
   // the tooltip beside it correctly listed only "38-A, 12-B".
   describe('books list: the Rack cell counts DISTINCT racks', () => {
-    const RACK_CELL = 7; // 14-cell books layout: ..., grade(6), RACK(7), crate(8)
+    // 13-cell books layout: ..., grade(5), RACK(6), crate(7). CHANGED (owner
+    // decision 2026-10-19: SKU stacked under the item name): was 7 of 14.
+    const RACK_CELL = 6;
     const rack = (id: string, number: string | null, row: string | null) =>
       item({
         id,
@@ -1609,7 +1626,9 @@ describe('InventoryTable SKU-group correctness (Items and Books)', () => {
   // printed `items.length` — a count of placement ROWS — under the label
   // "locations". Same fix, same shape.
   describe('items list: the "N locations" cell counts DISTINCT racks', () => {
-    const LOCATIONS_CELL = 6; // 12-cell items layout: ..., location(5), N LOCATIONS(6)
+    // 11-cell items layout: ..., location(4), N LOCATIONS(5). CHANGED (owner
+    // decision 2026-10-19: SKU stacked under the item name): was 6 of 12.
+    const LOCATIONS_CELL = 5;
     const shelf = (id: string, number: string | null, row: string | null) =>
       item({
         id,
@@ -2508,8 +2527,10 @@ describe('InventoryTable — size runs keyed on a stored product group', () => {
   // size label legitimately still appears elsewhere in the row.
   function headerRackCell(container: HTMLElement): string {
     const cells = bodyRows(container)[0]!.querySelectorAll('td');
-    // checkbox, Item, SKU, Category, Charter, Location, Rack -> index 6
-    return cells[6]?.textContent?.trim() ?? '';
+    // checkbox, Item (SKU under the name), Category, Charter, Location, Rack
+    // -> index 5. CHANGED (owner decision 2026-10-19: SKU stacked under the
+    // item name): was index 6, with a SKU column after the Item.
+    return cells[5]?.textContent?.trim() ?? '';
   }
 
   it('shows the concrete rack in the header when every variant sits in the same one', () => {
