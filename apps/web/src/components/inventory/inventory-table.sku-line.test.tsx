@@ -493,9 +493,32 @@ describe('On hand: the figure is mono, the notes are not', () => {
     });
     const cell = onHandCell(recordRow(container, 'cam'));
     expect(within(cell).getByText('1')).toHaveClass('font-mono');
-    const note = within(cell).getByText('0 avail · 1 out', { exact: false });
+    // The same words; each phrase stays whole, so a second line starts with
+    // "1 out", never with the dot.
+    const avail = within(cell).getByText('0 avail ·');
+    const out = within(cell).getByText('1 out');
+    expect(avail).toHaveClass('whitespace-nowrap');
+    expect(out).toHaveClass('whitespace-nowrap');
+    const note = avail.parentElement!;
+    expect(note).toBe(out.parentElement);
+    expect(note.textContent).toBe('0 avail · 1 out');
+    expect(note).toHaveClass('text-balance');
     expect(note.closest('.font-mono')).toBeNull();
     expect(within(cell.closest('tr')!).getByText('Out of stock')).toBeInTheDocument();
+  });
+
+  it('Rentals items in Grid keep "{avail} avail · {out} out" as one run of text', () => {
+    const { container } = renderTable({
+      initialView: 'grid',
+      basePath: '/dashboard/rentals/items',
+      rowLinkPrefix: '/dashboard/rentals/items',
+      reservedByItem: new Map([['cam', 1]]),
+      items: [row('cam', { name: 'Camera', quantity_on_hand: 1 })] as never,
+    });
+    const card = container.querySelector('[data-row-key="cam"]') as HTMLElement;
+    const note = within(card).getByText('0 avail · 1 out');
+    expect(note.children).toHaveLength(0);
+    expect(note).not.toHaveClass('text-balance');
   });
 
   it('a header keeps its "*" with the figure, and the explanation on the cell', () => {

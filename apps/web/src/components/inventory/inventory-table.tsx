@@ -3667,10 +3667,10 @@ function MetaLine({ children }: { children: React.ReactNode }) {
  *
  * `table` (owner decision 2026-10-19: no extra space in On hand): in the table
  * the notes may wrap between words, so they no longer set the column's width
- * (its label and figure do). "N placed ·" stays whole, the count stays with
- * "awaiting" (a no-break space), and the lines are balanced, so "put-away" is
- * never split at its hyphen. A Grid card passes nothing and keeps every phrase
- * on one line, exactly as before.
+ * (its label and figure do). "N placed ·", "N avail ·" and "N out" stay whole,
+ * the count stays with "awaiting" (a no-break space), and the lines are
+ * balanced, so "put-away" is never split at its hyphen. A Grid card passes
+ * nothing and keeps every phrase on one line, exactly as before.
  */
 function OnHandNotes({
   item,
@@ -3697,8 +3697,21 @@ function OnHandNotes({
             : 'text-muted-foreground mt-0.5 text-[11px] font-normal leading-tight'
         }
       >
-        {formatNumber(Math.max(0, item.quantity_on_hand - reserved))} avail ·{' '}
-        {formatNumber(reserved)} out
+        {table ? (
+          // Each phrase stays whole, so a second line starts with the "out"
+          // count, never with the dot.
+          <>
+            <span className="whitespace-nowrap">
+              {formatNumber(Math.max(0, item.quantity_on_hand - reserved))} avail ·
+            </span>{' '}
+            <span className="whitespace-nowrap">{formatNumber(reserved)} out</span>
+          </>
+        ) : (
+          <>
+            {formatNumber(Math.max(0, item.quantity_on_hand - reserved))} avail ·{' '}
+            {formatNumber(reserved)} out
+          </>
+        )}
       </div>
     ) : null;
   // Split "one line per rack" row: ON HAND is THIS rack's quantity. If the
