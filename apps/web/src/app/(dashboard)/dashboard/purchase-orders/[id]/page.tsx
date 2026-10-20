@@ -371,7 +371,10 @@ function receivedPercent(received: number, ordered: number): number {
  * at 320 px, a SKU built from a book's title) the table's scroll area is a
  * Tab stop; it is named by the card's Line items heading. The space after the
  * SKU's separator sits outside its no-wrap span, so the line can break there:
- * an ISBN or an automatic SKU then fits from 360 px up.
+ * an ISBN or an automatic SKU then fits from 360 px up. That needs the photo
+ * column at 58 px on a phone: below sm the photo's cell keeps 8 px on its
+ * right (18 + 32 + 8), since 12 px made it 62 px and a 16-character automatic
+ * SKU's line 2 px wider than the card at 360 px.
  */
 function LineItems({ rows }: { rows: LineRow[] }) {
   return (
@@ -394,7 +397,7 @@ function LineItems({ rows }: { rows: LineRow[] }) {
           const lineTotal = formatCurrency(l.lineTotal);
           return (
             <TableRow key={l.id} className="hover:bg-transparent" data-testid="po-line">
-              <TableCell className="py-2.5 first:pl-[18px]">
+              <TableCell className="py-2.5 first:pl-[18px] max-sm:pr-2">
                 <ItemThumb
                   imageUrl={l.imageUrl}
                   previewUrl={l.previewUrl}

@@ -270,6 +270,24 @@ describe('the PO page lines', () => {
     expect(imageHeader).not.toHaveClass('w-[46px]');
   });
 
+  // Review of FX9: with 12 px beside it, the 32 px photo widened the image
+  // column on a phone from 58 px (18 + 28 + 12) to 62 px (18 + 32 + 12), so a
+  // line whose SKU is an automatic one (SP-XXXXX-XXXXXXX, 16 characters) drew
+  // a 328 px table in the 326 px card at 360 px and scrolled 2 px sideways.
+  // Below sm the photo's cell keeps 8 px on its right, so the column stays
+  // 58 px (18 + 32 + 8); from sm up it keeps the cell's 12 px.
+  it('keeps the photo column 58 px wide on a phone: 8 px beside the photo below sm', async () => {
+    await renderPage();
+    const lines = screen.getAllByTestId('po-line');
+    expect(lines.length).toBeGreaterThan(0);
+    for (const line of lines) {
+      const imageCell = within(line).getByTestId('thumb').closest('td')!;
+      expect(imageCell).toHaveClass('first:pl-[18px]', 'max-sm:pr-2');
+      // Only below sm: no bare pr-2 that would narrow the gap on every screen.
+      expect(imageCell).not.toHaveClass('pr-2');
+    }
+  });
+
   // FX13 (DESIGN-SPEC 6.11 "a 4 px bar (radius 2 ...)" and section 4 "2
   // (bars)"): the received bar's fill drew its own rounded ends; the
   // reference fill has none, so only the track rounds its start.
