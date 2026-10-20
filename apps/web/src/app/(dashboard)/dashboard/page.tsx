@@ -16,7 +16,6 @@ import {
   type DashboardWidgetProps,
 } from '@/components/dashboard/widgets';
 import { percentDelta, worseWhenUpDelta } from '@/components/dashboard/widgets/deltas';
-import { movementTypeLabel } from '@/components/movements/movements-table';
 import { PageHeader } from '@/components/patterns/page-header';
 import { Button } from '@/components/ui/button';
 import {
@@ -40,6 +39,7 @@ import { OrderRequestsService } from '@/server/services/order-requests';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
 import { ReportsService } from '@/server/services/reports';
 import { requireOrgContext } from '@/lib/auth/session';
+import { movementTypeLabel } from '@/lib/movements/movement-type';
 import { ORDERS_AWAITING_SIGNATURE_HREF } from '@/lib/orders/export';
 import { orSessionEnded } from '@/lib/auth/session-ended';
 import {

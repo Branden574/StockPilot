@@ -1,7 +1,6 @@
 import { Boxes } from 'lucide-react';
 import Link from 'next/link';
 
-import { movementTypeLabel, movementTypeTone } from '@/components/movements/movements-table';
 import {
   DetailSection,
   DetailSectionLink,
@@ -23,6 +22,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { movementActorLabel } from '@/lib/movements/actor-label';
+import { movementTypeLabel, movementTypeTone } from '@/lib/movements/movement-type';
 import { cn, formatNumber, formatRelative } from '@/lib/utils';
 
 import { WidgetHeading } from './shared';
