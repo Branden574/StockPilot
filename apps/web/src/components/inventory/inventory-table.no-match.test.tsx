@@ -623,3 +623,84 @@ describe('Phone width: the empty area is never inside the sideways scroller (rev
     },
   );
 });
+
+/**
+ * Review of batch D (2026-10-20): two narrowings had nothing on screen naming
+ * them. An empty Discontinued view (?status=discontinued) showed "No items
+ * match your filters." with the Active toggle marked and no way to see or undo
+ * Discontinued; an Items type (?type=asset, kept by a saved view) had no
+ * marker. Each is now a pressed chip in the views row that drops it.
+ */
+describe('The Discontinued view and an Items type show as pressed chips that drop them', () => {
+  it.each<List>(['items', 'books', 'rentals'])(
+    '%s, server mode, the Discontinued view: a pressed "Discontinued" chip back to Active',
+    async (list) => {
+      setAddress(`${BASE[list]}?status=discontinued&sort=name_asc`);
+      render(tableFor(list, 'server', { items: [] }));
+      await settle();
+      const chip = screen.getByRole('link', { name: 'Discontinued' });
+      expect(chip).toHaveAttribute('aria-pressed', 'true');
+      expect(chip).toHaveAttribute('href', `${BASE[list]}?sort=name_asc`);
+      expect(norm(emptyArea()?.textContent)).toBe('No items match your filters.');
+    },
+  );
+
+  it('items, instant mode: pressing "Discontinued" is a shallow push to the Active list', async () => {
+    setAddress(`${BASE.items}?status=discontinued`);
+    render(tableFor('items', 'instant', { items: ITEMS }));
+    expect(norm(emptyArea()?.textContent)).toBe('No items match your filters.');
+    await userEvent.setup().click(screen.getByRole('link', { name: 'Discontinued' }));
+    await settle();
+    expect(window.location.search).toBe('');
+    expect(screen.queryByRole('link', { name: 'Discontinued' })).toBeNull();
+    expect(document.querySelectorAll('tbody tr[data-row-key]')).toHaveLength(ITEMS.length);
+    expect(routerMock.push).not.toHaveBeenCalled();
+  });
+
+  it('no Discontinued chip on the other views', async () => {
+    for (const status of ['active', 'all', 'archived']) {
+      setAddress(`${BASE.items}?status=${status}`);
+      const view = render(tableFor('items', 'server', { items: ITEMS }));
+      expect(screen.queryByRole('link', { name: 'Discontinued' })).toBeNull();
+      view.unmount();
+    }
+  });
+
+  it.each([
+    ['asset', 'Asset'],
+    ['consumable', 'Consumable'],
+    ['book', 'Book'],
+  ])('items, ?type=%s: a pressed "%s" chip back to the products list', async (type, label) => {
+    setAddress(`${BASE.items}?type=${type}&q=zz`);
+    render(tableFor('items', 'server', { items: [], initialQuery: 'zz' }));
+    await settle();
+    const chip = screen.getByRole('link', { name: label });
+    expect(chip).toHaveAttribute('aria-pressed', 'true');
+    expect(chip).toHaveAttribute('href', `${BASE.items}?q=zz`);
+  });
+
+  it('no type chip for products or every type, nor on Books or Rentals items', async () => {
+    for (const [list, address] of [
+      ['items', 'type=product'],
+      ['items', 'type=all&stock=low'],
+      ['books', 'type=asset'],
+      ['rentals', 'type=asset'],
+    ] as Array<[List, string]>) {
+      setAddress(`${BASE[list]}?${address}`);
+      const view = render(tableFor(list, 'server', { items: [] }));
+      for (const label of ['Asset', 'Consumable', 'Book', 'Product']) {
+        expect(screen.queryByRole('link', { name: label })).toBeNull();
+      }
+      view.unmount();
+    }
+  });
+
+  it('?type=all&stock=low (the dashboard\'s low-stock link) still says "No low-stock items"', async () => {
+    setAddress(`${BASE.items}?stock=low&type=all`);
+    render(tableFor('items', 'server', { items: [] }));
+    await settle();
+    expect(
+      screen.getByRole('heading', { level: 3, name: 'No low-stock items' }),
+    ).toBeInTheDocument();
+  });
+});

@@ -714,6 +714,31 @@ describe('Items page: a filter that leaves nothing is the table, with its filter
     },
   );
 
+  // Review of batch D (2026-10-20): an Asset, Consumable or Book type (?type=,
+  // kept by a saved view) is a narrowing; the table names it as a chip.
+  it.each(['asset', 'consumable', 'book'])(
+    'staff, ?type=%s with nothing of that type: the table, never "No items yet"',
+    async (type) => {
+      h.role = 'staff';
+      h.listTotal = 0;
+      render(await callPage({ type }));
+      expect(m.emptyStateProps).not.toHaveBeenCalled();
+      expect(m.tableProps).toHaveBeenCalledTimes(1);
+      expect(m.inventoryList).toHaveBeenCalledWith(expect.objectContaining({ itemType: type }));
+    },
+  );
+
+  it.each(['product', 'all'])(
+    'staff, ?type=%s and an empty list: "No items yet", as before',
+    async (type) => {
+      h.role = 'staff';
+      h.listTotal = 0;
+      render(await callPage({ type }));
+      expect(m.tableProps).not.toHaveBeenCalled();
+      expect(m.emptyStateProps.mock.calls[0]![0]).toMatchObject({ title: 'No items yet' });
+    },
+  );
+
   it('manager: no warehouse-scope sentence (all access), in either branch', async () => {
     render(await callPage({ q: 'zzqqxx' }));
     expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ emptyNote: null });

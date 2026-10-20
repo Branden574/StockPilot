@@ -24,7 +24,7 @@ import {
   type InstantFirstPage,
   type PlannedServerPage,
 } from '@/lib/inventory/instant-mode';
-import { listFilterActive } from '@/lib/inventory/list-filter-active';
+import { itemsTypeNarrowing, listFilterActive } from '@/lib/inventory/list-filter-active';
 import {
   ALL_WAREHOUSES_KEY,
   canUseSharedInventoryCaches,
@@ -1151,7 +1151,8 @@ function inventoryEmptyState({
   if (
     filteredWarehouseName &&
     (otherWarehouseMatches ?? 0) > 0 &&
-    !listFilterActive({ ...params, q: undefined })
+    !listFilterActive({ ...params, q: undefined }) &&
+    !itemsTypeNarrowing(params.type)
   ) {
     const n = otherWarehouseMatches as number;
     return (
@@ -1175,7 +1176,9 @@ function inventoryEmptyState({
   // view or the Expected chip each had a page-level state without the bar:
   // their words ("No items match your search", "No low-stock items", "Nothing
   // is out of stock", "No expected items") are the table's now, unchanged.
-  if (listFilterActive(params)) return null;
+  // An Asset, Consumable or Book type (?type=, which a saved view keeps) is a
+  // narrowing too: the table shows it as a chip that drops it.
+  if (listFilterActive(params) || itemsTypeNarrowing(params.type)) return null;
   // Append the warehouse-scoping explanation (when present) to whichever
   // branch fires — one place, so no branch can forget it.
   const withScope = (description: string): string =>

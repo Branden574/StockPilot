@@ -119,6 +119,7 @@ import {
   selectPage,
 } from '@/components/inventory/selection-utils';
 import { listEmptyMessage } from '@/lib/inventory/list-empty-message';
+import { itemsTypeNarrowing } from '@/lib/inventory/list-filter-active';
 import { rememberLastListUrl } from '@/lib/last-list-url';
 import { isSplitRackItem } from '@/lib/inventory/rack-holdings';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
@@ -1079,6 +1080,14 @@ export function InventoryTable({
   // when the URL is already scoped to the Archived tab.
   const isArchivedView = params.get('status') === 'archived';
   const autoArchivedOnly = params.get('auto') === '1';
+  // Two narrowings the views row did not show (review 2026-10-20): the
+  // Discontinued view (?status=discontinued, from a typed address or a saved
+  // view) left the Active / Archived toggle on Active with nothing naming it,
+  // and the Items list's Asset, Consumable or Book type (?type=, which a saved
+  // view keeps) had no marker at all. Each is a pressed chip that drops it.
+  const isDiscontinuedView = params.get('status') === 'discontinued';
+  const typeNarrowing =
+    showBookFields || rentalsOnly ? null : itemsTypeNarrowing(params.get('type'));
   // Expected chip state (mig 0277): ?expected=1 shows ONLY items awaiting
   // their first receipt. The chip's count badge is server-computed in
   // server mode (expectedCount prop, countExpected with the page's active
@@ -1147,6 +1156,27 @@ export function InventoryTable({
     const next = new URLSearchParams(params.toString());
     if (next.get('auto') === '1') next.delete('auto');
     else next.set('auto', '1');
+    next.delete('page');
+    const qs = next.toString();
+    return qs ? `${basePath}?${qs}` : basePath;
+  }
+
+  // The pressed "Discontinued" chip: back to the Active view (as the Active
+  // toggle does, Auto-archived only goes with it).
+  function hrefWithoutDiscontinued(): string {
+    const next = new URLSearchParams(params.toString());
+    next.delete('status');
+    next.delete('auto');
+    next.delete('page');
+    const qs = next.toString();
+    return qs ? `${basePath}?${qs}` : basePath;
+  }
+
+  // The pressed type chip (Items): back to the products list. A server
+  // navigation in every mode, since another type is another dataset.
+  function hrefWithoutType(): string {
+    const next = new URLSearchParams(params.toString());
+    next.delete('type');
     next.delete('page');
     const qs = next.toString();
     return qs ? `${basePath}?${qs}` : basePath;
@@ -2823,6 +2853,33 @@ export function InventoryTable({
               className={filterChipClass({ active: autoArchivedOnly })}
             >
               Auto-archived only
+            </Link>
+          )}
+          {isDiscontinuedView && (
+            <Link
+              href={hrefWithoutDiscontinued()}
+              scroll={false}
+              prefetch={false}
+              onClick={
+                instantMode
+                  ? (e) => interceptShallowNav(e, hrefWithoutDiscontinued(), shallowPush)
+                  : undefined
+              }
+              aria-pressed
+              className={filterChipClass({ active: true })}
+            >
+              Discontinued
+            </Link>
+          )}
+          {typeNarrowing && (
+            <Link
+              href={hrefWithoutType()}
+              scroll={false}
+              prefetch={false}
+              aria-pressed
+              className={filterChipClass({ active: true })}
+            >
+              {typeNarrowing}
             </Link>
           )}
           {(effectiveExpectedCount > 0 || expectedOnly) && (

@@ -41,3 +41,22 @@ export function listFilterActive(params: ListFilterParams): boolean {
     s.status === 'discontinued'
   );
 }
+
+/** The Items list's item types, by their labels elsewhere in the app (the public item page, the bundle picker). */
+const ITEM_TYPE_LABELS = { asset: 'Asset', consumable: 'Consumable', book: 'Book' } as const;
+
+/**
+ * The Items list's ?type= when it narrows the list: Asset, Consumable or Book
+ * lists that type instead of the default products; product, all (every type,
+ * where the dashboard's low-stock links go) and anything else do not. Returns
+ * the type's label, or null. Review of batch D (2026-10-20): a saved view keeps
+ * and re-applies ?type=, and with no record of that type the page said "No
+ * items yet" and offered to add a first item, with no filter bar and nothing
+ * on screen naming the type. Only the Items page reads it (Books and Rentals
+ * items fix their own types).
+ */
+export function itemsTypeNarrowing(type: string | null | undefined): string | null {
+  return type === 'asset' || type === 'consumable' || type === 'book'
+    ? ITEM_TYPE_LABELS[type]
+    : null;
+}

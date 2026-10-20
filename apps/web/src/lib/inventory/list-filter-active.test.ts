@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { listFilterActive, type ListFilterParams } from './list-filter-active';
+import { itemsTypeNarrowing, listFilterActive, type ListFilterParams } from './list-filter-active';
 
 /**
  * The Items, Books and Rentals items pages pick their empty state with this
@@ -50,4 +50,28 @@ describe('listFilterActive: what narrows a list', () => {
   ])('%s does not', (_label, params) => {
     expect(listFilterActive(params)).toBe(false);
   });
+});
+
+/**
+ * Review of batch D (2026-10-20): the Items list's ?type= narrows it to another
+ * item type, which a saved view keeps and re-applies; with no record of that
+ * type the page offered to add a first item, with no filter bar. Products (the
+ * default) and every type (?type=all, the dashboard's low-stock links) do not
+ * narrow.
+ */
+describe("itemsTypeNarrowing: the Items list's item type", () => {
+  it.each([
+    ['asset', 'Asset'],
+    ['consumable', 'Consumable'],
+    ['book', 'Book'],
+  ])('?type=%s narrows it, named "%s"', (type, label) => {
+    expect(itemsTypeNarrowing(type)).toBe(label);
+  });
+
+  it.each([['product'], ['all'], [''], ['rental'], [null], [undefined]])(
+    '?type=%s does not',
+    (type) => {
+      expect(itemsTypeNarrowing(type)).toBeNull();
+    },
+  );
 });
