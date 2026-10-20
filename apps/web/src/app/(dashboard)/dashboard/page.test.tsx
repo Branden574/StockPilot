@@ -140,6 +140,8 @@ vi.mock('@/components/onboarding/demo-scenarios', () => ({
   DemoScenarios: () => null,
 }));
 
+import { getThirtyDayMetrics } from '@/server/services/movements';
+
 import DashboardHome from './page';
 
 type AnyElement = ReactElement<Record<string, unknown>>;
@@ -258,6 +260,39 @@ describe('/dashboard data body: one wave', () => {
     ).done;
     // warehouse yes, team (2 members) yes, item yes, MFA no: not complete.
     expect(widgetProps.mock.calls[0]![0]).toMatchObject({ checklistComplete: false });
+  });
+});
+
+// FX5 (DESIGN-SPEC 6.10, the movement type words): the Movements · 30 days
+// card printed each type as its raw code with a capital ("Receive_po",
+// "Bundle_assembly"). The page now hands the card the Movements page's own
+// words (movementTypeLabel), still the top five types with their shares.
+describe('/dashboard: the 30-day breakdown names each type in words (FX5)', () => {
+  it('labels each type as the Movements page does', async () => {
+    vi.mocked(getThirtyDayMetrics).mockResolvedValueOnce({
+      dailyCounts: Array(30).fill(0),
+      byType: [
+        { type: 'receive_po', count: 10, share: 1 },
+        { type: 'bundle_assembly', count: 6, share: 0.6 },
+        { type: 'correction', count: 3, share: 0.3 },
+        { type: 'add', count: 2, share: 0.2 },
+        { type: 'loss', count: 1, share: 0.1 },
+        { type: 'damage', count: 1, share: 0.1 },
+      ],
+    });
+    await (
+      await startBody()
+    ).done;
+    const props = widgetProps.mock.calls[0]![0] as {
+      breakdownRows: Array<{ label: string; share: number; val: number }>;
+    };
+    expect(props.breakdownRows).toEqual([
+      { label: 'Receive PO', share: 1, val: 10 },
+      { label: 'Bundle assembly', share: 0.6, val: 6 },
+      { label: 'Correction', share: 0.3, val: 3 },
+      { label: 'Add', share: 0.2, val: 2 },
+      { label: 'Loss', share: 0.1, val: 1 },
+    ]);
   });
 });
 

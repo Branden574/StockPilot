@@ -360,8 +360,8 @@ function receivedPercent(received: number, ordered: number): number {
 }
 
 /**
- * The PO's lines in M4's row look (DESIGN-SPEC 6.18): the photo with its hover
- * preview, the name, then the SKU with the unit cost and the line total in
+ * The PO's lines in M4's row look (DESIGN-SPEC 6.18): the 32 px photo with its
+ * hover preview, the name, then the SKU with the unit cost and the line total in
  * mono, and on the right what was received against what was ordered over a
  * thin bar drawn from those two numbers. Every value the old columns held
  * (Image, Item, SKU, Ordered, Received, Unit cost, Total) is still printed,
@@ -371,14 +371,18 @@ function receivedPercent(received: number, ordered: number): number {
  * at 320 px, a SKU built from a book's title) the table's scroll area is a
  * Tab stop; it is named by the card's Line items heading. The space after the
  * SKU's separator sits outside its no-wrap span, so the line can break there:
- * an ISBN or an automatic SKU then fits from 360 px up.
+ * an ISBN or an automatic SKU then fits from 360 px up. That needs the photo
+ * column at 58 px on a phone: below sm the photo's cell keeps 8 px on its
+ * right (18 + 32 + 8), since 12 px made it 62 px and a 16-character automatic
+ * SKU's line 2 px wider than the card at 360 px.
  */
 function LineItems({ rows }: { rows: LineRow[] }) {
   return (
     <Table scrollLabelledBy="po-line-items-heading">
       <TableHeader>
         <TableRow className="hover:bg-transparent">
-          <TableHead className="w-[46px] first:pl-[18px]">
+          {/* The 18 px gutter and the 32 px line photo (FX9). */}
+          <TableHead className="w-[50px] first:pl-[18px]">
             <span className="sr-only">Image</span>
           </TableHead>
           <TableHead className="pl-0">Item</TableHead>
@@ -393,12 +397,12 @@ function LineItems({ rows }: { rows: LineRow[] }) {
           const lineTotal = formatCurrency(l.lineTotal);
           return (
             <TableRow key={l.id} className="hover:bg-transparent" data-testid="po-line">
-              <TableCell className="py-2.5 first:pl-[18px]">
+              <TableCell className="py-2.5 first:pl-[18px] max-sm:pr-2">
                 <ItemThumb
                   imageUrl={l.imageUrl}
                   previewUrl={l.previewUrl}
                   alt={l.name}
-                  size="sm"
+                  size="line"
                   itemId={l.itemId}
                 />
               </TableCell>
@@ -435,12 +439,15 @@ function LineItems({ rows }: { rows: LineRow[] }) {
                       <span className="sr-only"> ordered</span>
                     </span>
                   </div>
+                  {/* The fill has no radius of its own: the track rounds its
+                      start and its end is square, as the reference draws it
+                      (DESIGN-SPEC 6.11; FX13). */}
                   <div
                     aria-hidden="true"
                     className="bg-line-strong mt-1 h-1 overflow-hidden rounded-sm"
                   >
                     <div
-                      className="bg-accent h-full rounded-sm"
+                      className="bg-accent h-full"
                       style={{
                         width: `${receivedPercent(l.quantityReceived, l.quantityOrdered)}%`,
                       }}

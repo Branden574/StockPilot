@@ -105,3 +105,35 @@ describe('Pagination row range', () => {
     expect(screen.getByRole('button', { name: 'Next →' })).toBeDisabled();
   });
 });
+
+/**
+ * FX8 (DESIGN-SPEC 6.9 pagination footer, 6.2 pager rows): the reference
+ * pager is 12.5/400 with the range figures in --ink at 400. The range figures
+ * carried font-medium and Prev / Next took the Button's weight 500.
+ */
+describe('Pagination weight', () => {
+  it('prints the range figures in ink at weight 400, and Prev and Next at 400', () => {
+    render(<Pagination page={2} pageSize={25} total={60} onPageChange={() => {}} />);
+    for (const figure of ['26', '50', '60']) {
+      const el = screen.getByText(figure);
+      expect(el).toHaveClass('text-foreground');
+      expect(el).not.toHaveClass('font-medium');
+    }
+    for (const name of ['← Prev', 'Next →']) {
+      const control = screen.getByRole('button', { name });
+      expect(control).toHaveClass('font-normal');
+      expect(control).not.toHaveClass('font-medium');
+    }
+  });
+
+  it('keeps weight 400 on a disabled end and on a link end', () => {
+    render(<Pagination page={1} pageSize={25} total={60} basePath="/dashboard/movements" />);
+    const prev = screen.getByRole('button', { name: '← Prev' });
+    expect(prev).toBeDisabled();
+    expect(prev).toHaveClass('font-normal');
+    const next = screen.getByRole('link', { name: 'Next →' });
+    expect(next).toHaveAttribute('href', '/dashboard/movements?page=2');
+    expect(next).toHaveClass('font-normal');
+    expect(next).not.toHaveClass('font-medium');
+  });
+});

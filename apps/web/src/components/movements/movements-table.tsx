@@ -9,12 +9,27 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { MOVEMENT_TYPE_OPTIONS } from '@/lib/movements-filters';
+import {
+  movementTypeLabel,
+  movementTypeTone,
+  type MovementTypeTone,
+} from '@/lib/movements/movement-type';
 import { cn, formatNumber, formatRelative } from '@/lib/utils';
 
-import { movementTitle } from '@stockpilot/core';
-
 import { EditableMovementNote } from './editable-movement-note';
+
+/**
+ * A type's words and tone live in lib/movements/movement-type.ts, which imports
+ * no component, so the Overview reads them there without this table's client
+ * islands (the note editor and LocalDateTime). Re-exported for the table's
+ * callers and tests.
+ */
+export {
+  movementTypeLabel,
+  MOVEMENT_TYPE_TONE,
+  movementTypeTone,
+  type MovementTypeTone,
+} from '@/lib/movements/movement-type';
 
 /** One ledger row as the Movements table prints it, in either page mode. */
 export interface MovementDisplayRow {
@@ -48,43 +63,12 @@ export interface MovementDisplayRow {
  */
 export const MOVEMENTS_TITLE_ID = 'movements-title';
 
-/** The type's words: the same labels the type filter offers (Receive PO, ...). */
-const TYPE_LABEL = new Map<string, string>(MOVEMENT_TYPE_OPTIONS.map((o) => [o.value, o.label]));
-
-/**
- * The words for a type: the filter's label for the 10 real types, and for any
- * other code the ledger holds (the database also allows bundle_assembly,
- * bundle_distribution and bundle_shortage, which the filter does not offer)
- * core's own fallback, the code title-cased ("Bundle assembly"), so a row never
- * prints a raw code or nothing. These used to print as the raw code in capitals.
- *
- * A deliberate word change, recorded for the integrator and the owner: DESIGN-SPEC
- * 6.10 names these filter labels as the movement type's words, and the row now
- * reads the same as the chip that is pressed. The page's Export CSV keeps the
- * raw code (movement_type), as the stock movement report keeps its codes in its
- * CSV and PDF (CONFLICTS RP9), so the screen and the file use different words.
- */
-export function movementTypeLabel(type: string): string {
-  return TYPE_LABEL.get(type) ?? movementTitle(type);
-}
-
-/**
- * The type label's tone (DESIGN-SPEC 6.10, the reference's coloured type with
- * a dot): stock coming in reads in the accent, adjustments in caution,
- * write-offs in danger, and moves, removals and opening counts in the
- * secondary ink. The words are always printed, so colour is never the only cue.
- */
-const TYPE_TONE: Record<string, string> = {
-  add: 'text-success',
-  receive_po: 'text-success',
-  return: 'text-success',
-  adjust: 'text-warning',
-  correction: 'text-warning',
-  damage: 'text-destructive',
-  loss: 'text-destructive',
-  remove: 'text-ink-2',
-  transfer: 'text-ink-2',
-  initial: 'text-ink-2',
+/** Each tone's text colour on this table (--success is the accent). */
+const TYPE_TONE: Record<MovementTypeTone, string> = {
+  accent: 'text-success',
+  warning: 'text-warning',
+  destructive: 'text-destructive',
+  muted: 'text-ink-2',
 };
 
 export function MovementTypeLabel({ type }: { type: string }) {
@@ -93,7 +77,7 @@ export function MovementTypeLabel({ type }: { type: string }) {
       data-movement-type={type}
       className={cn(
         'inline-flex items-center gap-1.5 whitespace-nowrap font-medium',
-        TYPE_TONE[type] ?? 'text-ink-2',
+        TYPE_TONE[movementTypeTone(type)],
       )}
     >
       <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-current" />

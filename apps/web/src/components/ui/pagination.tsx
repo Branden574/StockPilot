@@ -84,13 +84,14 @@ export function Pagination({
 
   // Row-range text ("Showing 51–100 of 350") when we know the totals and
   // there is at least one row: a total of 0 prints no range (it read
-  // "Showing 1–0 of 0").
+  // "Showing 1–0 of 0"). The figures are in the ink at weight 400, the
+  // reference pager's (DESIGN-SPEC 6.9; FX8: they were 500).
   const range =
     total != null && total > 0 && pageSize ? (
       <span>
-        Showing <span className="text-foreground font-medium">{(safePage - 1) * pageSize + 1}</span>–
-        <span className="text-foreground font-medium">{Math.min(safePage * pageSize, total)}</span>{' '}
-        of <span className="text-foreground font-medium">{total}</span>
+        Showing <span className="text-foreground">{(safePage - 1) * pageSize + 1}</span>–
+        <span className="text-foreground">{Math.min(safePage * pageSize, total)}</span> of{' '}
+        <span className="text-foreground">{total}</span>
       </span>
     ) : null;
 
@@ -98,7 +99,11 @@ export function Pagination({
     <div className={cn('text-muted-foreground flex items-center gap-3 text-[12.5px]', className)}>
       {range}
       <div className="flex items-center gap-2">
-        <PageBtn disabled={prevDisabled} href={linkForPage?.(safePage - 1)} onClick={() => go(safePage - 1)}>
+        <PageBtn
+          disabled={prevDisabled}
+          href={linkForPage?.(safePage - 1)}
+          onClick={() => go(safePage - 1)}
+        >
           ← Prev
         </PageBtn>
 
@@ -113,7 +118,11 @@ export function Pagination({
                 Page {safePage} of {totalPages}
               </button>
             </PopoverTrigger>
-            <PopoverContent align="center" side="top" className="max-h-[360px] w-auto min-w-[260px] overflow-y-auto p-2">
+            <PopoverContent
+              align="center"
+              side="top"
+              className="max-h-[360px] w-auto min-w-[260px] overflow-y-auto p-2"
+            >
               <JumpGrid
                 totalPages={totalPages as number}
                 current={safePage}
@@ -126,7 +135,11 @@ export function Pagination({
           <span className="px-2 tabular-nums">Page {safePage}</span>
         )}
 
-        <PageBtn disabled={nextDisabled} href={linkForPage?.(safePage + 1)} onClick={() => go(safePage + 1)}>
+        <PageBtn
+          disabled={nextDisabled}
+          href={linkForPage?.(safePage + 1)}
+          onClick={() => go(safePage + 1)}
+        >
           Next →
         </PageBtn>
       </div>
@@ -136,9 +149,11 @@ export function Pagination({
 
 /** The pager recipe (DESIGN-SPEC 6.2): an enabled Prev/Next is the 28 px
  *  secondary button; a disabled one goes quiet (no fill, the plain hairline,
- *  the faint ink) instead of fading. */
+ *  the faint ink) instead of fading. Both are at weight 400, the reference
+ *  pager's, not the Button's 500 (FX8). */
+const PAGE_BTN = 'font-normal';
 const PAGE_BTN_DISABLED =
-  'disabled:opacity-100 disabled:border-border disabled:bg-transparent disabled:text-[var(--ed-ink-4)]';
+  'font-normal disabled:opacity-100 disabled:border-border disabled:bg-transparent disabled:text-[var(--ed-ink-4)]';
 
 /** Prev/Next control — a Link in href mode, a button in client mode. */
 function PageBtn({
@@ -161,13 +176,13 @@ function PageBtn({
   }
   if (href) {
     return (
-      <Button asChild variant="outline" size="sm">
+      <Button asChild variant="outline" size="sm" className={PAGE_BTN}>
         <Link href={href}>{children}</Link>
       </Button>
     );
   }
   return (
-    <Button variant="outline" size="sm" onClick={onClick}>
+    <Button variant="outline" size="sm" className={PAGE_BTN} onClick={onClick}>
       {children}
     </Button>
   );
@@ -178,8 +193,7 @@ function PageBtn({
 const JUMP_GRID = 'grid grid-cols-5 gap-1 sm:grid-cols-8 pointer-coarse:grid-cols-5';
 /** A page button: 28 px on desktop, a full 44 px target where Button grows its
  *  touch area (below sm and on coarse pointers). */
-const JUMP_TARGET =
-  'h-7 w-full px-2 text-[12.5px] tabular-nums max-sm:h-11 pointer-coarse:h-11';
+const JUMP_TARGET = 'h-7 w-full px-2 text-[12.5px] tabular-nums max-sm:h-11 pointer-coarse:h-11';
 
 /**
  * The jump target. For a manageable page count, a grid of every page (like

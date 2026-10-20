@@ -217,6 +217,34 @@ describe('Shift command', () => {
   });
 });
 
+// P68-04 (DESIGN-SPEC 7.1 and 4: the Overview's page box caps the content at
+// 1320 px, so this card's link grid is never wider than about 1218 px): five
+// links in a row, from a 1180 px grid, cut "Open purchase orders" and "Cycle
+// counts in progress" with their counts at every window from about 1510 px up
+// (1600, 1680, 1920, 2560). The fast paths now stop at three to a row (3 + 2),
+// the layout 1440 already had, where every label is whole.
+//
+// The steps sit where no link is cut just past them either: "Cycle counts in
+// progress" with its count needs about 251 px and "Open purchase orders" with a
+// two-digit count about 243 px, and two to a row from a 480 px grid or three
+// from 760 px gave links of about 237 to 249 px, which cut them at windows of
+// 552 to 576, 812 to 836 (a tablet in portrait, sidebar pinned) and 1092 to
+// 1096 px. Two from 528 px and three from 792 px keep every link at least
+// (528 - 8) / 2 = 260 and (792 - 16) / 3 = 258.7 px wide.
+describe('Shift command: the fast paths on a wide screen (P68-04)', () => {
+  it('lays the five fast paths out at most three to a row, each link about 258 px or wider', () => {
+    render(<ShiftCommandWidget {...makeProps()} />);
+    const grid = screen.getByRole('link', { name: /Review low stock/ }).parentElement!;
+    expect(grid).toHaveClass('grid', '@min-[528px]:grid-cols-2', '@min-[792px]:grid-cols-3');
+    expect(grid.className.match(/@min-\[\d+px\]:grid-cols-\d+/g)).toEqual([
+      '@min-[528px]:grid-cols-2',
+      '@min-[792px]:grid-cols-3',
+    ]);
+    expect(grid.className).not.toMatch(/grid-cols-5/);
+    expect(grid.children).toHaveLength(5);
+  });
+});
+
 describe('Key stats', () => {
   it('keeps the four figures, their feet and their deltas', () => {
     const { container } = render(<StatRowWidget {...makeProps()} />);
@@ -340,11 +368,73 @@ describe("Recent activity: today's activity", () => {
     expect(screen.getByRole('heading', { name: "Today's activity" })).toBeInTheDocument();
     expect(screen.getByText('Live · across all locations')).toBeInTheDocument();
     const [first, second] = screen.getAllByRole('listitem');
-    expect(first).toHaveTextContent('return · Index Cards');
+    // FX5 (DESIGN-SPEC 6.16 and 6.10): the type prints in the Movements
+    // page's words ("Return", "Damage"), no longer the raw code ("return").
+    expect(first).toHaveTextContent('Return · Index Cards');
     expect(first).toHaveTextContent('Dana Whitcombe · Return restock · 5 m');
     expect(first).toHaveTextContent('+5');
-    expect(second).toHaveTextContent('damage · Unknown');
+    expect(second).toHaveTextContent('Damage · Unknown');
     expect(second).toHaveTextContent('-2');
+  });
+
+  // FX5 (DESIGN-SPEC 6.16 "the type in its tone at 500", 6.10 movement type
+  // tones and words): the type took its colour from the sign of the change
+  // and printed the raw code, so Correction read in the accent here and in
+  // caution on Movements, and Loss and Damage read grey here and red there.
+  it('names and colours each type as the Movements page does, whatever the sign of the change', () => {
+    const cases: Array<[type: string, change: number, words: string, tone: string]> = [
+      ['receive_po', 10, 'Receive PO', 'text-accent'],
+      ['correction', 0.5, 'Correction', 'text-warning'],
+      ['adjust', -1, 'Adjust', 'text-warning'],
+      ['loss', -5, 'Loss', 'text-destructive'],
+      ['damage', -2, 'Damage', 'text-destructive'],
+      ['return', 3, 'Return', 'text-accent'],
+      ['remove', -4, 'Remove', 'text-[var(--ed-ink-2)]'],
+      ['bundle_assembly', 6, 'Bundle assembly', 'text-[var(--ed-ink-2)]'],
+    ];
+    render(
+      <RecentActivityWidget
+        {...makeProps({
+          recentMovements: cases.map(([type, change], i) =>
+            movement({ id: `t${i}`, movement_type: type, quantity_change: change }),
+          ),
+        })}
+      />,
+    );
+    const rows = screen.getAllByRole('listitem');
+    cases.forEach(([type, , words, tone], i) => {
+      expect(rows[i]).toHaveAttribute('data-movement-type', type);
+      const label = within(rows[i]!).getByText(words);
+      expect(label).toHaveClass('font-medium', tone);
+      expect(label.className).not.toContain('first-letter:uppercase');
+    });
+  });
+
+  // FX1 (DESIGN-SPEC 6.16, the activity row's second line: name · time): a
+  // movement from a day ago printed "yesterd", because the unit shortening
+  // /days?/ also matched inside "yesterday". Units are shortened as whole
+  // words only, so the relative words print in full.
+  it('prints yesterday, last week and now in full, and shortens only whole unit words', () => {
+    const HOUR = 3_600_000;
+    const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+    render(
+      <RecentActivityWidget
+        {...makeProps({
+          recentMovements: [
+            movement({ id: 'yesterday', created_at: ago(24 * HOUR) }),
+            movement({ id: 'two-days', created_at: ago(48 * HOUR) }),
+            movement({ id: 'three-hours', created_at: ago(3 * HOUR) }),
+            movement({ id: 'last-week', created_at: ago(7 * 24 * HOUR) }),
+            movement({ id: 'now', created_at: ago(0) }),
+          ],
+        })}
+      />,
+    );
+    const times = screen
+      .getAllByRole('listitem')
+      .map((li) => within(li).getByText(/Dana Whitcombe/).lastElementChild?.textContent);
+    expect(times).toEqual(['yesterday', '2 d', '3 h', 'last week', 'now']);
+    expect(screen.queryByText(/yesterd(?!ay)/)).toBeNull();
   });
 
   it('shows a transfer by the quantity moved, and nothing (never 0) before migration 0231', () => {
@@ -382,27 +472,32 @@ describe("Recent activity: today's activity", () => {
 });
 
 describe('Movements breakdown', () => {
-  it('lets a long type wrap only after its underscore, keeping the label whole', () => {
+  // The card prints each label it is handed whole, as one text node with no
+  // <wbr>. This cannot catch the raw codes coming back: these labels have no
+  // underscore, so the card before FX5 (which split a label at '_' and put a
+  // <wbr> there) drew them the same way, and this test passes on it too. The
+  // words themselves ("Receive PO" and "Bundle assembly", never "Receive_po"
+  // or "Bundle_assembly") are guarded by '/dashboard: the 30-day breakdown
+  // names each type in words (FX5)' in app/(dashboard)/dashboard/page.test.tsx.
+  it('prints each label whole, with no <wbr>', () => {
     render(
       <MovementsBreakdownWidget
         {...makeProps({
           barValues: [1, 2, 3],
           breakdownRows: [
-            { label: 'Bundle_assembly', share: 0.5, val: 10 },
-            { label: 'Receive', share: 0.5, val: 10 },
+            { label: 'Bundle assembly', share: 0.5, val: 10 },
+            { label: 'Receive PO', share: 0.5, val: 10 },
           ],
         })}
       />,
     );
-    const label = screen.getByText('Bundle_assembly');
-    expect(label.textContent).toBe('Bundle_assembly');
-    // The only break opportunity sits right after the underscore.
-    const wbrs = label.querySelectorAll('wbr');
-    expect(wbrs).toHaveLength(1);
-    expect(wbrs[0]!.previousSibling?.textContent).toBe('_');
-    expect(label.innerHTML).toBe('Bundle_<wbr>assembly');
-    expect(label.className).not.toContain('overflow-wrap:anywhere');
-    expect(screen.getByText('Receive').querySelector('wbr')).toBeNull();
+    for (const words of ['Bundle assembly', 'Receive PO']) {
+      const label = screen.getByText(words);
+      expect(label.innerHTML).toBe(words);
+      expect(label.querySelector('wbr')).toBeNull();
+      expect(label.className).not.toContain('overflow-wrap:anywhere');
+    }
+    expect(screen.queryByText(/_/)).toBeNull();
   });
 });
 

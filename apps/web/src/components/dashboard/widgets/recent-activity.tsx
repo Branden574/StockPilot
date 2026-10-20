@@ -22,6 +22,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { movementActorLabel } from '@/lib/movements/actor-label';
+import { movementTypeLabel, movementTypeTone } from '@/lib/movements/movement-type';
 import { cn, formatNumber, formatRelative } from '@/lib/utils';
 
 import { WidgetHeading } from './shared';
@@ -198,23 +199,28 @@ export function RecentActivityWidget({
                   // Pre-0231 transfer rows have none → no number, never "0".
                   const isTransfer = m.movement_type === 'transfer';
                   const moved = m.moved_quantity == null ? null : Number(m.moved_quantity);
+                  // Units shorten as whole words only ("2 days" reads "2 d"):
+                  // a bare /days?/ also matched inside "yesterday" and printed
+                  // "yesterd" (FX1). "yesterday", "last week" and "now" print
+                  // in full.
                   const when = formatRelative(m.created_at)
                     .replace(' ago', '')
-                    .replace(/seconds?/, 's')
-                    .replace(/minutes?/, 'm')
-                    .replace(/hours?/, 'h')
-                    .replace(/days?/, 'd');
+                    .replace(/\bseconds?\b/, 's')
+                    .replace(/\bminutes?\b/, 'm')
+                    .replace(/\bhours?\b/, 'h')
+                    .replace(/\bdays?\b/, 'd');
                   return (
                     <TimelineRow
                       key={m.id}
                       data-movement-type={m.movement_type}
                       title={
                         <>
-                          <TimelineLabel
-                            tone={change > 0 ? 'accent' : 'muted'}
-                            className="inline-block first-letter:uppercase"
-                          >
-                            {m.movement_type.replace('_', ' ')}
+                          {/* The type in the Movements page's words and tone
+                              (DESIGN-SPEC 6.16 and 6.10): Receive PO, not
+                              "Receive po", and its colour from the type, not
+                              the sign of the change (FX5). */}
+                          <TimelineLabel tone={movementTypeTone(m.movement_type)}>
+                            {movementTypeLabel(m.movement_type)}
                           </TimelineLabel>
                           {' · '}
                           {item?.name ?? 'Unknown'}

@@ -45,6 +45,10 @@ export function membershipRoleLabel(role: string): string {
  * Sidebar org selector: a full-width control under the brand row. Interactive
  * when the user belongs to >1 org, otherwise a static label so single-org
  * users (the common case for L4L right now) don't see a useless menu.
+ *
+ * The name is in the ink, as the reference's switcher draws it (DESIGN-SPEC
+ * 5.1; FX12: it was ink 2). Only the name: the row keeps ink 2, so the static
+ * row's faint chevron and the button's loading spinner keep their colours.
  */
 export function OrgSwitcher({ orgs, activeId }: OrgSwitcherProps) {
   const router = useRouter();
@@ -86,7 +90,7 @@ export function OrgSwitcher({ orgs, activeId }: OrgSwitcherProps) {
         className="border-border bg-card flex h-[34px] w-full items-center gap-2 rounded-md border px-2.5 text-[13px] text-[var(--ed-ink-2)]"
       >
         {mark}
-        <span className="min-w-0 flex-1 truncate text-left">
+        <span className="text-foreground min-w-0 flex-1 truncate text-left">
           <span className="sr-only">Organization: </span>
           {active.name}
         </span>
@@ -103,7 +107,7 @@ export function OrgSwitcher({ orgs, activeId }: OrgSwitcherProps) {
         aria-label="Switch organization"
       >
         {pending ? <Loader2 aria-hidden className="size-3 shrink-0 animate-spin" /> : mark}
-        <span className="min-w-0 flex-1 truncate text-left">{active.name}</span>
+        <span className="text-foreground min-w-0 flex-1 truncate text-left">{active.name}</span>
         <ChevronsUpDown
           aria-hidden
           strokeWidth={2}

@@ -14,7 +14,7 @@ import { ImageHoverPreview } from '@/components/ui/image-hover-preview';
  * placeholder than a broken-image glyph.
  *
  * Single source of truth for item thumbnails across the app:
- *   • PO detail line table (sm)
+ *   • PO detail line table (line, 32px)
  *   • ⌘K command palette item rows (sm)
  *
  * Every instance wraps in an <ImageHoverPreview> so hovering the small
@@ -40,8 +40,9 @@ interface Props {
    *  `imageUrl` when omitted, so callers that only have one URL still work. */
   previewUrl?: string | null;
   alt: string;
-  /** sm = 28×28 (compact rows); md = 40×40 (line tables / pickers). Default md. */
-  size?: 'sm' | 'md';
+  /** sm = 28×28 (compact rows); line = 32×32 (PO lines); md = 40×40 (pickers).
+   *  Default md. */
+  size?: 'sm' | 'md' | 'line';
   /**
    * When provided, resets the internal `failed` state any time the
    * itemId changes — useful for virtualised / re-keyed rows that reuse
@@ -55,10 +56,13 @@ interface Props {
 }
 
 /** The Thumb frame for each size. sm is Thumb's own 28px frame (radius 5).
- *  Thumb's declared sizes stop at 34 below the 56 and 64 media, so md keeps
- *  ItemThumb's 40px box on the 32px frame and its 6px radius. */
+ *  line is Thumb's 32px frame (radius 6), the PO line's thumbnail (DESIGN-SPEC
+ *  4 and 6.18; FX9: PO lines drew sm). Thumb's declared sizes stop at 34 below
+ *  the 56 and 64 media, so md keeps ItemThumb's 40px box on the 32px frame and
+ *  its 6px radius. */
 const FRAME: Record<NonNullable<Props['size']>, { size: ThumbSize; className?: string }> = {
   sm: { size: 28 },
+  line: { size: 32 },
   md: { size: 32, className: 'size-10' },
 };
 

@@ -502,6 +502,8 @@
 }
 
 /* ---- Catalog toolbar (sticky) -------------------------------- */
+/* The sticky bar is a size container: the toolbar wraps on the catalog
+   column's own width (see sf-toolbar below), not on the window's. */
 .sp-storefront .sf-sticky {
   position: sticky;
   top: 0;
@@ -509,6 +511,7 @@
   background: var(--sf-bg);
   margin: 0 -8px 4px;
   padding: 8px 8px 0;
+  container: sf-toolbar / inline-size;
 }
 .sp-storefront .sf-tools {
   display: flex;
@@ -632,6 +635,23 @@
   background: var(--sf-bg-elev);
   color: var(--sf-ink);
   box-shadow: 0 0 0 1px var(--sf-line-strong);
+}
+/* The toolbar in one row needs about 632 px at its widest: the search's
+   220 px floor, Availability with its count, the longest sort label ("Most
+   ordered here"), the view switch and the 8 px gaps. Below 640 px of the
+   catalog column's own width the search takes its own row and Availability,
+   sort and the view switch share the next, so the column never scrolls
+   sideways. Keyed to the window (below 640 px only), the view switch ran
+   54 px past the column's edge at 768 px beside the pinned sidebar, 12 at
+   810 and 2 at 820 (P68-02). On a phone the column is always narrower. */
+@container sf-toolbar (max-width: 639.98px) {
+  .sp-storefront .sf-tools {
+    flex-wrap: wrap;
+  }
+  .sp-storefront .sf-search {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
 }
 
 /* category pills */
@@ -2863,13 +2883,6 @@ html[data-sp-update-card] .sp-storefront .sf-fab {
   .sp-storefront .sf-flow-sep {
     width: 12px;
     margin: 0 6px;
-  }
-  .sp-storefront .sf-tools {
-    flex-wrap: wrap;
-  }
-  .sp-storefront .sf-search {
-    flex: 1 1 100%;
-    min-width: 0;
   }
   .sp-storefront .sf-search input,
   .sp-storefront .sf-pop .srch input,

@@ -28,11 +28,18 @@ import { cn } from '@/lib/utils';
  * FOCUS: the track scrolls sideways, which clips anything drawn outside it,
  * so a focused tab draws the app's focus ring inside its own edge.
  *
- * SIZE: 28 px segments (26 for `sm`) on a 36 (32) px track, and 44 px
- * segments below sm, the same rule as the search field and filter triggers
- * in the row, so a toolbar on a touch tablet stays one height. The track
- * clips anything drawn outside it, so a segment's tap area reaches the
+ * SIZE: 28 px segments (26 for `sm`, 22 for `xs`) on a 36 (32, 28) px track,
+ * and 44 px segments below sm, the same rule as the search field and filter
+ * triggers in the row, so a toolbar on a touch tablet stays one height. The
+ * track clips anything drawn outside it, so a segment's tap area reaches the
  * track's full inner height instead of growing past it.
+ *
+ * `xs` is the range toggle (DESIGN-SPEC 4 "Range toggle track / chip 28 / 22"
+ * and 6.5's 30d / 90d row), for the chart cards' small switches: no sunk fill
+ * on the track (the --line hairline only), 12 px chips at weight 400, and the
+ * chosen chip on the hover fill with no ring. That fill is faint (about 1.07:1
+ * on the card), so the chosen chip keeps weight 500, and the choice is never
+ * shown by colour alone; aria-pressed / aria-selected still carry it (FX7).
  *
  * COUNTS: `count` prints only when the page passes one, and a page passes one
  * only where it already has the figure (owner decision O2: no new counts).
@@ -71,8 +78,11 @@ export interface SegmentedTabsProps {
   /** Names the strip for assistive technology ("View filter", "Filter by status"). */
   'aria-label': string;
   semantics?: 'tablist' | 'nav';
-  /** `md` (default): view tabs, 36 px track. `sm`: the List / Grid toggle, 32 px. */
-  size?: 'md' | 'sm';
+  /**
+   * `md` (default): view tabs, 36 px track. `sm`: the List / Grid toggle, 32 px.
+   * `xs`: the range toggle on a chart card (30d / 90d, Cost / Retail), 28 px.
+   */
+  size?: 'md' | 'sm' | 'xs';
   /** Button mode: called with the id of a tab that has no `href`. */
   onSelect?(id: string, event: React.MouseEvent<HTMLButtonElement>): void;
   id?: string;
@@ -82,14 +92,25 @@ export interface SegmentedTabsProps {
 const TRACK: Record<NonNullable<SegmentedTabsProps['size']>, string> = {
   md: 'gap-0.5 rounded-lg p-[3px]',
   sm: 'gap-0.5 rounded-md p-0.5',
+  // The range toggle's track has no fill of its own (cn drops bg-sunk).
+  xs: 'gap-0.5 rounded-md p-0.5 bg-transparent',
 };
 
 // Each segment's ::before spans the track's padding above and below it (3 px
-// on `md`, 2 px on `sm`), so the whole inner height of the track is the tap
-// area without overflowing the scrolling track.
+// on `md`, 2 px on `sm` and `xs`), so the whole inner height of the track is
+// the tap area without overflowing the scrolling track.
 const SEGMENT: Record<NonNullable<SegmentedTabsProps['size']>, string> = {
   md: 'h-7 gap-1.5 rounded-[5px] px-2.5 text-[13px] before:-inset-y-[3px]',
   sm: 'h-[26px] gap-1.5 rounded px-2 text-[12.5px] before:-inset-y-0.5 [&_svg]:h-3.5 [&_svg]:w-3.5',
+  xs: 'h-[22px] gap-1.5 rounded px-2 text-[12px] font-normal before:-inset-y-0.5 [&_svg]:h-3.5 [&_svg]:w-3.5',
+};
+
+// The chosen segment: raised on the card colour with the stronger ring (the
+// view tabs and List / Grid), or the range toggle's hover fill and weight 500.
+const ACTIVE: Record<NonNullable<SegmentedTabsProps['size']>, string> = {
+  md: 'bg-card text-foreground shadow-[0_0_0_1px_var(--ed-line-strong)]',
+  sm: 'bg-card text-foreground shadow-[0_0_0_1px_var(--ed-line-strong)]',
+  xs: 'bg-muted text-foreground font-medium',
 };
 
 function dataAttributesOf(item: SegmentedTabItem): DataAttributes {
@@ -121,9 +142,7 @@ export function SegmentedTabs({
     const segmentClass = cn(
       "relative inline-flex shrink-0 items-center whitespace-nowrap font-medium transition-colors before:absolute before:inset-x-0 before:content-[''] focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11 [&_svg]:shrink-0",
       SEGMENT[size],
-      active
-        ? 'bg-card text-foreground shadow-[0_0_0_1px_var(--ed-line-strong)]'
-        : 'text-muted-foreground hover:text-foreground',
+      active ? ACTIVE[size] : 'text-muted-foreground hover:text-foreground',
     );
     const content = (
       <>

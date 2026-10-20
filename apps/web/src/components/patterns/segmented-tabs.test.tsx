@@ -185,6 +185,51 @@ describe('SegmentedTabs (tablist semantics)', () => {
     }
   });
 
+  // FX7 (DESIGN-SPEC 4 "Range toggle track / chip 28 / 22", 6.5's 30d / 90d
+  // row): the chart toggles drew the List / Grid look (a 32 px sunk track,
+  // 26 px segments at 12.5/500, a ringed card-colour active segment). `xs` is
+  // the range toggle: a transparent 28 px track with the --line hairline,
+  // 22 px chips at 12/400, the chosen one on the hover fill with no ring. It
+  // keeps weight 500 on the chosen chip, so the choice is not shown by colour
+  // alone, and the 44 px segments below sm.
+  it('xs draws the range toggle: a transparent track, 22 px chips, the chosen one filled without a ring', () => {
+    const { container } = render(
+      <SegmentedTabs
+        semantics="nav"
+        size="xs"
+        aria-label="Range"
+        activeId="30"
+        onSelect={() => {}}
+        items={[
+          { id: '30', label: '30d' },
+          { id: '90', label: '90d' },
+        ]}
+      />,
+    );
+    const track = container.querySelector('[data-slot="segmented-tabs"]')!;
+    expect(track).toHaveClass('border', 'border-border', 'rounded-md', 'p-0.5', 'bg-transparent');
+    expect(track).not.toHaveClass('bg-sunk');
+    const active = screen.getByRole('button', { name: '30d' });
+    const idle = screen.getByRole('button', { name: '90d' });
+    for (const chip of [active, idle]) {
+      expect(chip).toHaveClass(
+        'h-[22px]',
+        'rounded',
+        'px-2',
+        'text-[12px]',
+        'max-sm:min-h-11',
+        'before:-inset-y-0.5',
+      );
+    }
+    expect(active).toHaveAttribute('aria-pressed', 'true');
+    expect(active).toHaveClass('bg-muted', 'text-foreground', 'font-medium');
+    expect(active.className).not.toContain('shadow-[0_0_0_1px');
+    expect(active).not.toHaveClass('bg-card');
+    expect(idle).toHaveAttribute('aria-pressed', 'false');
+    expect(idle).toHaveClass('font-normal', 'text-muted-foreground');
+    expect(idle).not.toHaveClass('bg-muted', 'font-medium');
+  });
+
   it('passes data attributes, a title and an aria-label through to the tab', () => {
     render(
       <SegmentedTabs

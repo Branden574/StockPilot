@@ -4,8 +4,9 @@ import { SegmentedTabs } from '@/components/patterns/segmented-tabs';
 
 /**
  * Tiny segmented toggle shared by the analytics chart widgets, drawn by the
- * shared SegmentedTabs (the sunk track, the active segment on the card colour
- * with the stronger ring). Same semantics as before: a named `role="group"`
+ * shared SegmentedTabs at the range toggle's size (`xs`, DESIGN-SPEC 4 and
+ * 6.5: a 28 px track with no fill, 22 px chips, the chosen one on the hover
+ * fill with no ring; FX7). Same semantics as before: a named `role="group"`
  * of real `<button>`s that carry `aria-pressed`, every one in the Tab order.
  * Renders nothing when there are fewer than two options.
  */
@@ -24,7 +25,7 @@ export function ToggleGroup({
   return (
     <SegmentedTabs
       semantics="nav"
-      size="sm"
+      size="xs"
       aria-label={ariaLabel}
       activeId={value}
       onSelect={(id) => onChange(id)}

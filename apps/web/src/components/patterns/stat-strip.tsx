@@ -9,7 +9,15 @@ import { cn } from '@/lib/utils';
  * tiles).
  *
  * The cells flow in an auto-fit grid (180 / 150 / 130 px minimum per variant)
- * and wrap on narrow screens. Every cell draws a right and a bottom hairline;
+ * and wrap on narrow screens. The stage strip is one row (DESIGN-SPEC 6.8 and
+ * 7.6): it is its own size container, and from 880 px of its own width its
+ * tiles sit in one row at their own widths, sharing the spare room (the nine
+ * Orders stages need about 870 px); narrower, it keeps the 130 px grid as
+ * before (the nine sit 6 + 3 or 5 + 4 from 650 px, and wrap as they did on a
+ * tablet or phone). In the 130 px grid alone the nine wrapped 8 + 1 at 1440
+ * and 7 + 2 at 1280 (FX4), and a content-sized row alone left
+ * Denied/Cancelled alone on a row from about 730 to 870 px.
+ * Every cell draws a right and a bottom hairline;
  * the grid overhangs the card's padding box by 1 px on those two sides, so the
  * lines that would sit against the card's own border are clipped, whatever the
  * column count. The last cell also drops its right border (the reference's
@@ -27,7 +35,8 @@ export type StatStripVariant = 'overview' | 'detail' | 'stages';
 const COLUMNS: Record<StatStripVariant, string> = {
   overview: 'grid-cols-[repeat(auto-fit,minmax(min(100%,180px),1fr))]',
   detail: 'grid-cols-[repeat(auto-fit,minmax(min(100%,150px),1fr))]',
-  stages: 'grid-cols-[repeat(auto-fit,minmax(min(100%,130px),1fr))]',
+  stages:
+    'grid-cols-[repeat(auto-fit,minmax(min(100%,130px),1fr))] @min-[880px]:flex @min-[880px]:flex-wrap @min-[880px]:[&>*]:flex-[1_0_auto]',
 };
 
 export interface StatStripProps extends React.ComponentProps<'div'> {
@@ -50,6 +59,8 @@ export function StatStrip({
       data-variant={variant}
       className={cn(
         'border-border bg-card overflow-hidden rounded-lg border supports-[overflow:clip]:overflow-clip',
+        // The stage strip lays its tiles out by its own width (one row from 880 px).
+        variant === 'stages' && '@container',
         className,
       )}
       {...(props as React.ComponentProps<'div'>)}

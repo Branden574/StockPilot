@@ -114,6 +114,21 @@ describe('ItemThumb', () => {
     expect(frame()).not.toHaveClass('size-8');
   });
 
+  // FX9 (DESIGN-SPEC 4 "32 low stock, PO line ... (radius 6)" and 6.18's line
+  // rows "Thumbnail 32"): PO lines drew the 28 px sm frame (radius 5). The
+  // line size is the shared Thumb's 32 px frame, radius 6.
+  it('has a line size: the 32 px frame with radius 6, for PO lines', () => {
+    const frame = () => screen.getByTestId('item-thumb-placeholder').closest('[data-slot="thumb"]');
+    const { rerender } = render(<ItemThumb imageUrl={null} alt="Polo" size="line" />);
+    expect(frame()).toHaveClass('size-8', 'rounded-md');
+    expect(frame()).not.toHaveClass('size-7', 'size-10', 'rounded-[5px]');
+    rerender(<ItemThumb imageUrl="https://x.test/thumb.webp" alt="Polo" size="line" />);
+    expect(screen.getByRole('img', { name: 'Polo' }).closest('[data-slot="thumb"]')).toHaveClass(
+      'size-8',
+      'rounded-md',
+    );
+  });
+
   // PLAN P2.4 / P2.6 "one owner per pattern": the frame and the hatch are the
   // shared patterns (patterns/thumb.tsx, patterns/missing-photo.tsx), so
   // ItemThumb, the grid card and the item cell show one frame and one hatch.

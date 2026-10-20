@@ -245,7 +245,10 @@ export default async function OrdersPage({
         // The table card (DESIGN-SPEC 6.9): every column kept, the table at
         // least 860 px wide (the reference's Orders minimum) and scrolling
         // sideways inside the card, never the page, when the content area is
-        // narrower than its columns.
+        // narrower than its columns. At 1440 every column fits (DESIGN-SPEC
+        // 8): picker and driver names wrap, the requester's floor is 8rem and
+        // an exchange's state wraps beside its pill. With those on one line
+        // the table needed 1320 px of the 1146 px card on All active (FX3).
         <div className="border-border bg-card overflow-hidden rounded-lg border">
           <Table scrollLabelledBy="orders-title" className="min-w-[860px]">
             <TableHeader>
@@ -275,7 +278,7 @@ export default async function OrdersPage({
                     </Link>
                   </TableCell>
                   <TableCell>
-                    <div className="flex min-w-44 items-start gap-2">
+                    <div className="flex min-w-32 items-start gap-2">
                       <Link
                         href={`/dashboard/orders/${r.id}`}
                         className="text-foreground min-w-0 underline-offset-2 hover:underline"
@@ -301,14 +304,27 @@ export default async function OrdersPage({
                       <OrderStatusBadge status={r.status} fulfillmentType={r.fulfillmentType} />
                       {/* Returns RX-2: the Exchange chip from the order's own
                           column; the gate's words from the page's one batched
-                          return_overview read (no read per row). */}
+                          return_overview read (no read per row). The pill
+                          holds "Exchange" and the state follows it as text
+                          that may wrap, so the words still read "Exchange ·
+                          Waiting for return" without one 183 px pill setting
+                          the Status column's width (FX3). The separator is for
+                          the text and screen readers only: the state usually
+                          wraps under the pill, where a leading dot read as a
+                          list bullet. */}
                       {r.replacementForReturnId ? (
-                        <Badge variant="outline" data-testid="order-exchange-chip">
-                          {RETURNS_COPY.typeExchange}
+                        <div
+                          data-testid="order-exchange-chip"
+                          className="inline-flex min-w-0 flex-wrap items-center gap-x-1"
+                        >
+                          <Badge variant="outline">{RETURNS_COPY.typeExchange}</Badge>
                           {r.exchange?.state ? (
-                            <span className="text-muted-foreground"> · {r.exchange.state}</span>
+                            <span className="text-muted-foreground text-[12px]">
+                              <span className="sr-only">{' · '}</span>
+                              {r.exchange.state}
+                            </span>
                           ) : null}
-                        </Badge>
+                        </div>
                       ) : null}
                     </div>
                   </TableCell>
@@ -327,10 +343,11 @@ export default async function OrdersPage({
                       )}
                     </span>
                   </TableCell>
-                  <TableCell className="whitespace-nowrap">
+                  {/* Picker and driver names wrap (FX3). */}
+                  <TableCell>
                     <PersonName name={r.assignedPickerName} />
                   </TableCell>
-                  <TableCell className="whitespace-nowrap">
+                  <TableCell>
                     <PersonName
                       name={r.fulfillmentType === 'delivery' ? r.assignedDeliveryUserName : null}
                     />

@@ -62,6 +62,40 @@ describe('StatStrip', () => {
     ).toContain('130px');
   });
 
+  // FX4 (DESIGN-SPEC 6.8 and 7.6: the stage strip is one row): in the 130 px
+  // auto-fit grid the nine Orders stages wrapped 8 + 1 at 1440 (Denied/Cancelled
+  // alone on a second row) and 7 + 2 at 1280. The stage strip is now its own
+  // size container: from 880 px of its own width (the nine stages need about
+  // 870 px at their own widths) its tiles sit in one row at their own widths,
+  // sharing the spare room; narrower, they keep the 130 px grid as before
+  // (6 + 3 or 5 + 4 from 650 px, never 8 + 1). The overview and detail strips
+  // are unchanged.
+  it('lays the stages in one content-sized row once the strip`s own width holds them', () => {
+    const { container, rerender } = render(
+      <StatStrip as="nav" variant="stages" aria-label="Status">
+        <StatStripLink href="/dashboard/orders?status=all_active" label="All active" />
+        <StatStripLink href="/dashboard/orders?status=denied_cancelled" label="Denied/Cancelled" />
+      </StatStrip>,
+    );
+    const root = () => container.querySelector('[data-slot="stat-strip"]')!;
+    expect(root()).toHaveClass('@container');
+    const tiles = root().firstElementChild!;
+    expect(tiles).toHaveClass(
+      'grid',
+      '@min-[880px]:flex',
+      '@min-[880px]:flex-wrap',
+      '@min-[880px]:[&>*]:flex-[1_0_auto]',
+    );
+    expect(tiles.className).toContain('minmax(min(100%,130px),1fr)');
+    // The hairline rules still hold in either layout.
+    expect(tiles).toHaveClass('-mb-px', '-mr-px', '[&>*:last-child]:border-r-0');
+    for (const variant of ['overview', 'detail'] as const) {
+      rerender(<StatStrip variant={variant} />);
+      expect(root()).not.toHaveClass('@container');
+      expect(root().firstElementChild!.className).not.toContain('flex');
+    }
+  });
+
   it('as a nav of stage links: named, aria-current on the current stage, hrefs kept, counts only where given', () => {
     render(
       <StatStrip as="nav" variant="stages" aria-label="Status">

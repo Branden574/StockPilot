@@ -38,9 +38,7 @@ describe('OrgSwitcher', () => {
   it('renders a static label and no dropdown for a single org', () => {
     render(<OrgSwitcher orgs={[baseOrgs[0]!]} activeId="o1" />);
     expect(screen.getByText('Acme Co')).toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: /Switch organization/i }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Switch organization/i })).not.toBeInTheDocument();
   });
 
   it('renders an img when single org has a logoUrl', () => {
@@ -57,10 +55,7 @@ describe('OrgSwitcher', () => {
 
   it('falls back to a colored dot when single org has no logo', () => {
     const { container } = render(
-      <OrgSwitcher
-        orgs={[{ id: 'x', name: 'X', logoUrl: null, role: 'owner' }]}
-        activeId="x"
-      />,
+      <OrgSwitcher orgs={[{ id: 'x', name: 'X', logoUrl: null, role: 'owner' }]} activeId="x" />,
     );
     expect(container.querySelector('img')).toBeNull();
     expect(container.querySelector('span[aria-hidden]')).not.toBeNull();
@@ -68,9 +63,7 @@ describe('OrgSwitcher', () => {
 
   it('renders a dropdown trigger when there are multiple orgs', () => {
     render(<OrgSwitcher orgs={baseOrgs} activeId="o1" />);
-    expect(
-      screen.getByRole('button', { name: /Switch organization/i }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Switch organization/i })).toBeInTheDocument();
   });
 
   it('opens the menu and lists each org with the active one checked', async () => {
@@ -129,5 +122,26 @@ describe('OrgSwitcher role words', () => {
     expect(membershipRoleLabel('manager')).toBe('Manager');
     expect(membershipRoleLabel('contractor')).toBe('contractor');
     expect(membershipRoleLabel('toString')).toBe('toString');
+  });
+});
+
+// FX12 (DESIGN-SPEC 5.1, the org switcher; the reference draws the name in
+// --ink): the name was drawn in ink 2 on both the static row and the switch
+// button. Only the name moves to the ink: the static row's chevron keeps its
+// faint ink 2, and the button's chevron stays ink 3.
+describe('OrgSwitcher name colour', () => {
+  it('draws the name in ink on the single-organization row, its chevron still faint ink 2', () => {
+    render(<OrgSwitcher orgs={[baseOrgs[0]!]} activeId="o1" />);
+    expect(screen.getByText('Acme Co')).toHaveClass('text-foreground');
+    const row = screen.getByRole('presentation');
+    expect(row).toHaveClass('text-[var(--ed-ink-2)]');
+    expect(row.querySelector('svg')).toHaveClass('opacity-30');
+  });
+
+  it('draws the name in ink on the switch button, its chevron in ink 3', () => {
+    render(<OrgSwitcher orgs={baseOrgs} activeId="o1" />);
+    const button = screen.getByRole('button', { name: /Switch organization/i });
+    expect(within(button).getByText('Acme Co')).toHaveClass('text-foreground');
+    expect(button.querySelector('svg')).toHaveClass('text-muted-foreground');
   });
 });
