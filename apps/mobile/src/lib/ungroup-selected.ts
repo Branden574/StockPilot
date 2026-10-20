@@ -11,7 +11,12 @@ import {
 } from '@stockpilot/core';
 
 import { api } from './api';
-import type { GroupingIdentity, PhoneGroupingReview } from './display-groups';
+import {
+  reviewRecordDetail,
+  type GroupingIdentity,
+  type PhoneGroupingRecord,
+  type PhoneGroupingReview,
+} from './display-groups';
 import type { CountPick } from './use-count-selection';
 
 /**
@@ -95,17 +100,20 @@ export function ungroupSelectedHref(args: {
 
 const one = (v: string | string[] | undefined): string | undefined => (Array.isArray(v) ? v[0] : v);
 
+/** A selection the Ungroup review can review, read from its route. */
+export interface UngroupSelectedParams {
+  itemIds: string[];
+  view: 'items' | 'books';
+  shownUnder: Map<string, UngroupKind>;
+}
+
 /** The review screen's params, or null when they are not a selection it can
  *  review (the screen then says so instead of guessing). */
 export function readUngroupSelectedParams(p: {
   ids?: string | string[];
   view?: string | string[];
   under?: string | string[];
-}): {
-  itemIds: string[];
-  view: 'items' | 'books';
-  shownUnder: Map<string, UngroupKind>;
-} | null {
+}): UngroupSelectedParams | null {
   const ids = (one(p.ids) ?? '')
     .split(',')
     .map((s) => s.trim())
@@ -127,6 +135,29 @@ export function readUngroupSelectedParams(p: {
     if (k) shownUnder.set(id, k);
   });
   return { itemIds: ids, view, shownUnder };
+}
+
+/**
+ * Which review the route asks for (redesign Stage 6, F8), the Group review's
+ * rule (groupSelectedReviewKey): expo-router REUSES this screen when a link
+ * to /ungroup-selected arrives while it is on top, swapping only the params.
+ * The screen mounts its review under this key, so other records, another
+ * list or another grouping a record is shown under start a fresh review (a
+ * refused Save's error stayed over the new records before), and params that
+ * name the same selection keep the person's choices (the review holds the
+ * params it was mounted with, so they never run its reload again). Ids
+ * compare as records do: in any order and any case.
+ */
+export function ungroupSelectedReviewKey(params: UngroupSelectedParams | null): string {
+  if (!params) return 'invalid';
+  return JSON.stringify([
+    params.view,
+    [
+      ...new Set(
+        params.itemIds.map((id) => `${id.toLowerCase()}:${params.shownUnder.get(id) ?? '-'}`),
+      ),
+    ].sort(),
+  ]);
 }
 
 // ── The review and the Save ────────────────────────────────────────────────
@@ -215,6 +246,55 @@ export async function postUngroupSelected(
   const outcome = parseUngroupSelectedOutcome(raw.result);
   if (!outcome) throw new Error(UNREADABLE);
   return outcome;
+}
+
+// ── The "keeps the SKU" radios' names (redesign Stage 6, F9) ──────────────
+// When every record of a SKU the person can see is ticked, each of its rows
+// carries a radio for the one that keeps the SKU. Each radio was named "Keeps
+// SKU <sku>: <name>" and nothing more, so three Wireless Mouse records were
+// three radios VoiceOver could not tell apart, and the outcome beside each
+// ("Gets its own SKU") was never heard: the radio's name replaced its words.
+
+/** How a record's line joins its parts (core groupingRecordLine). */
+const RECORD_LINE_SEPARATOR = ' · ';
+
+/**
+ * The spoken names of one SKU's "keeps the SKU" radios, by record id. Each
+ * is the choice and the record's name, then what tells the record apart from
+ * the SKU's other records, in the words its line shows (reviewRecordDetail):
+ * every part of its line that is not on all of theirs, such as its rack or
+ * placement, warehouse, charter, on hand, size or ISBN. Records whose names
+ * and lines read the same are told apart by where they are listed ("record 2
+ * of 3"). The outcome beside a radio is its value, never part of its name.
+ *
+ * `rows` are the review's records in the order listed, and `skuRecords` the
+ * SKU's records that each carry a radio (core's group.selected); only those
+ * are named. Every name comes from one pass that builds each record's line
+ * once (F9 review: naming one radio at a time rebuilt every other record's
+ * line twice, 2n² lines per render for a SKU of n records).
+ */
+export function keepsSkuRadioLabels(
+  choice: string,
+  rows: readonly PhoneGroupingRecord[],
+  skuRecords: readonly { id: string }[],
+  view: 'items' | 'books',
+): Map<string, string> {
+  const withRadio = new Set(skuRecords.map((s) => s.id));
+  const peers = rows.filter((r) => withRadio.has(r.id));
+  const lines = peers.map((r) => reviewRecordDetail(r, view).split(RECORD_LINE_SEPARATOR));
+  const onEvery = new Set((lines[0] ?? []).filter((p) => lines.every((l) => l.includes(p))));
+  const labels = peers.map((r, i) =>
+    [`${choice}: ${r.name}`, ...lines[i]!.filter((p) => !onEvery.has(p))].join(', '),
+  );
+  const timesSaid = new Map<string, number>();
+  for (const label of labels) timesSaid.set(label, (timesSaid.get(label) ?? 0) + 1);
+  return new Map(
+    peers.map((r, i): [string, string] => {
+      const label = labels[i]!;
+      const readsTheSame = (timesSaid.get(label) ?? 0) > 1;
+      return [r.id, readsTheSame ? `${label}, record ${i + 1} of ${peers.length}` : label];
+    }),
+  );
 }
 
 // ── A change elsewhere ─────────────────────────────────────────────────────

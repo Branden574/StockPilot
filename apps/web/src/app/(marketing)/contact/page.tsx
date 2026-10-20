@@ -5,7 +5,8 @@ import Link from 'next/link';
 import { COMPANY_NAME, PRIVACY_EMAIL, SALES_EMAIL, SUPPORT_EMAIL } from '@/lib/site';
 
 export const metadata: Metadata = {
-  title: 'Contact · StockPilot',
+  // The root layout's title template adds " · StockPilot" (CONFLICTS D15).
+  title: 'Contact',
   description: `Get in touch with the ${COMPANY_NAME} team — support, sales, and privacy requests.`,
 };
 
@@ -32,8 +33,10 @@ const CARDS = [
 
 export default function ContactPage() {
   return (
-    <div className="mx-auto max-w-3xl px-6 py-16 sm:px-8">
-      <h1 className="text-4xl font-semibold tracking-tight">Contact us</h1>
+    <div className="mx-auto max-w-3xl px-4 py-16 sm:px-8">
+      <h1 className="font-display text-[34px] font-medium leading-[1.15] tracking-[-0.025em] sm:text-[40px]">
+        Contact us
+      </h1>
       <p className="text-muted-foreground mt-3 max-w-xl text-[15px] leading-relaxed">
         We&apos;re a small team and we read everything. Pick the channel that fits — for anything
         that&apos;s actually broken, a support ticket gets you a tracked response fastest.
@@ -45,10 +48,10 @@ export default function ContactPage() {
           return (
             <div
               key={c.title}
-              className="border-border bg-card flex flex-col rounded-xl border p-5"
+              className="border-border bg-card flex flex-col rounded-lg border p-5"
             >
               <Icon className="text-foreground h-5 w-5" strokeWidth={1.7} />
-              <h2 className="mt-3 text-sm font-semibold">{c.title}</h2>
+              <h2 className="mt-3 text-[13.5px] font-medium">{c.title}</h2>
               <p className="text-muted-foreground mt-1.5 flex-1 text-[13px] leading-relaxed">
                 {c.body}
               </p>
@@ -72,7 +75,7 @@ export default function ContactPage() {
         })}
       </div>
 
-      <div className="border-border text-muted-foreground mt-10 rounded-xl border border-dashed p-5 text-[13px] leading-relaxed">
+      <div className="border-border text-muted-foreground mt-10 rounded-lg border border-dashed p-5 text-[13px] leading-relaxed">
         <p>
           <span className="text-foreground font-medium">General support:</span>{' '}
           <a href={`mailto:${SUPPORT_EMAIL}`} className="underline-offset-4 hover:underline">

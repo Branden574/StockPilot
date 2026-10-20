@@ -1,6 +1,6 @@
 'use client';
 
-import { ChevronDown, Search, X } from 'lucide-react';
+import { Check, ChevronDown, Search, X } from 'lucide-react';
 import * as React from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -94,7 +94,7 @@ export function Toolbar({
           value={localSearch}
           onChange={handleSearchChange}
           placeholder="Search by name or SKU…"
-          className="pl-8 h-8 text-sm"
+          className="h-8 pl-8 text-[13px]"
           aria-label="Search catalog"
         />
       </div>
@@ -105,26 +105,28 @@ export function Toolbar({
           <Button
             variant={availabilityFilter !== 'any' ? 'default' : 'outline'}
             size="sm"
-            className="h-8 gap-1 text-xs"
+            className="h-8 gap-1.5 px-2.5 text-[13px] font-normal max-sm:h-11"
           >
             {availLabel}
             <ChevronDown className="h-3 w-3" />
           </Button>
         </PopoverTrigger>
-        <PopoverContent className="w-44 p-1" align="start">
+        <PopoverContent className="w-48 p-1" align="start">
           {availabilityOptions.map((opt) => (
             <button
               key={opt.value}
               type="button"
               onClick={() => onAvailabilityChange(opt.value)}
+              aria-pressed={availabilityFilter === opt.value}
               className={cn(
-                'w-full text-left px-3 py-1.5 text-xs rounded-sm transition-colors',
-                availabilityFilter === opt.value
-                  ? 'bg-foreground text-background'
-                  : 'hover:bg-muted',
+                'hover:bg-muted flex min-h-8 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors max-sm:min-h-11',
+                availabilityFilter === opt.value && 'text-foreground font-medium',
               )}
             >
               {opt.label}
+              {availabilityFilter === opt.value ? (
+                <Check className="ml-auto h-3.5 w-3.5" aria-hidden />
+              ) : null}
             </button>
           ))}
         </PopoverContent>
@@ -136,28 +138,30 @@ export function Toolbar({
           <Button
             variant={sortKey !== 'name' ? 'default' : 'outline'}
             size="sm"
-            className="h-8 gap-1 text-xs"
+            className="h-8 gap-1.5 px-2.5 text-[13px] font-normal max-sm:h-11"
           >
             {sortLabel}
             <ChevronDown className="h-3 w-3" />
           </Button>
         </PopoverTrigger>
-        <PopoverContent className="w-44 p-1" align="start">
+        <PopoverContent className="w-48 p-1" align="start">
           {sortOptions.map((opt) => (
             <button
               key={opt.value}
               type="button"
               onClick={() => onSortChange(opt.value)}
+              aria-pressed={sortKey === opt.value}
               className={cn(
-                'w-full text-left px-3 py-1.5 text-xs rounded-sm transition-colors',
-                sortKey === opt.value
-                  ? 'bg-foreground text-background'
-                  : 'hover:bg-muted',
+                'hover:bg-muted flex min-h-8 w-full items-center gap-1 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors max-sm:min-h-11',
+                sortKey === opt.value && 'text-foreground font-medium',
               )}
             >
               {opt.label}
               {opt.value === 'most-ordered' ? (
-                <span className="ml-1 text-muted-foreground font-normal">(freq)</span>
+                <span className="text-muted-foreground font-normal">(freq)</span>
+              ) : null}
+              {sortKey === opt.value ? (
+                <Check className="ml-auto h-3.5 w-3.5" aria-hidden />
               ) : null}
             </button>
           ))}
@@ -170,7 +174,7 @@ export function Toolbar({
           variant="ghost"
           size="sm"
           onClick={onClear}
-          className="h-8 gap-1 text-xs text-muted-foreground ml-auto"
+          className="text-muted-foreground ml-auto h-8 gap-1 text-[13px] font-normal max-sm:h-11"
         >
           <X className="h-3 w-3" />
           Clear

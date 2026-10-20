@@ -56,7 +56,7 @@ function ResolvedCover({ cover, title }: { cover: Promise<BookCoverSource>; titl
         role="img"
         aria-label={alt}
         tabIndex={0}
-        className="border-border bg-muted/40 focus-visible:ring-ring relative block h-14 w-10 overflow-hidden rounded-[3px] border focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
+        className="border-border focus-visible:ring-ring relative block h-14 w-10 overflow-hidden rounded-[3px] border bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
       >
         <Image
           src={src}
@@ -85,7 +85,7 @@ export function CoverBox({
   return (
     <span
       className={cn(
-        'border-border bg-muted/50 text-muted-foreground flex h-14 w-10 items-center justify-center rounded-[3px] border',
+        'border-border bg-sunk text-muted-foreground flex h-14 w-10 items-center justify-center rounded-[3px] border',
         loading && 'animate-pulse',
       )}
       aria-hidden={loading ? true : undefined}

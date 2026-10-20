@@ -110,14 +110,18 @@ export function SeverityChip({ rule }: { rule: ExceptionRule }) {
   );
 }
 
+/** The notices below on the status tones (DESIGN-SPEC 6.10): a warning on the
+ *  warning wash, the neutral one on the inset (sunk) surface; full-strength
+ *  tokens, so the text keeps its contrast in both themes. */
+const NOTICE = 'flex items-start gap-2 rounded-md border px-3 py-2 text-sm';
+const WARNING_NOTICE = `${NOTICE} border-warning/30 bg-warning-wash`;
+const NEUTRAL_NOTICE = `${NOTICE} border-border bg-sunk`;
+
 /** A failed read. Never an empty list: an empty Exceptions list reads as
  *  "nothing is wrong". */
 export function ExceptionsUnavailable() {
   return (
-    <div
-      role="alert"
-      className="border-warning/40 bg-warning/5 flex items-start gap-2 rounded-md border px-3 py-2 text-sm"
-    >
+    <div role="alert" className={WARNING_NOTICE}>
       <AlertTriangle className="text-warning mt-0.5 size-4 shrink-0" aria-hidden />
       <p>{EXCEPTION_LIST_UNAVAILABLE_COPY} Reload the page to try again.</p>
     </div>
@@ -127,7 +131,7 @@ export function ExceptionsUnavailable() {
 /** Before the org's first check: says so, and is never the all-clear state. */
 export function FirstCheckPending() {
   return (
-    <div role="status" className="bg-muted/40 flex items-start gap-2 rounded-md border px-3 py-2 text-sm">
+    <div role="status" className={NEUTRAL_NOTICE}>
       <Clock className="text-muted-foreground mt-0.5 size-4 shrink-0" aria-hidden />
       <p>{EXCEPTION_FIRST_CHECK_PENDING_COPY}</p>
     </div>
@@ -152,10 +156,7 @@ export function uncheckedRulesMessage(syncState: ExceptionSyncState): string | n
 export function UncheckedRulesBanner({ message }: { message: string | null }) {
   if (!message) return null;
   return (
-    <div
-      role="alert"
-      className="border-warning/40 bg-warning/5 flex items-start gap-2 rounded-md border px-3 py-2 text-sm"
-    >
+    <div role="alert" className={WARNING_NOTICE}>
       <AlertTriangle className="text-warning mt-0.5 size-4 shrink-0" aria-hidden />
       <p>{message}</p>
     </div>
@@ -168,11 +169,7 @@ export function UnrecognizedNotice({ count }: { count: number }) {
   const text = exceptionUnrecognizedCopy(count);
   if (!text) return null;
   return (
-    <div
-      role="status"
-      data-testid="exceptions-unrecognized"
-      className="border-warning/40 bg-warning/5 flex items-start gap-2 rounded-md border px-3 py-2 text-sm"
-    >
+    <div role="status" data-testid="exceptions-unrecognized" className={WARNING_NOTICE}>
       <AlertTriangle className="text-warning mt-0.5 size-4 shrink-0" aria-hidden />
       <p>{text}</p>
     </div>

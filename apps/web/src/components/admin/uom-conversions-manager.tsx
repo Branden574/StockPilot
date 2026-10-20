@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { STICKY_ACTIONS } from '@/components/admin/sticky-actions';
+import { DetailSection } from '@/components/patterns/detail-section';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { Input } from '@/components/ui/input';
@@ -24,6 +26,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { cn } from '@/lib/utils';
 import {
   deleteUomConversionAction,
   upsertUomConversionAction,
@@ -66,6 +69,9 @@ export function UomConversionsManager({
   const [busy, setBusy] = React.useState(false);
   const [deleteTargetId, setDeleteTargetId] = React.useState<string | null>(null);
   const [deleteBusy, setDeleteBusy] = React.useState(false);
+  // Why the last delete was refused, shown inside the confirm (a toast
+  // alone sits behind the open dialog). Cleared on open and on each try.
+  const [deleteError, setDeleteError] = React.useState<string | null>(null);
 
   const itemMap = React.useMemo(
     () => new Map(items.map((i) => [i.id, `${i.sku} — ${i.name}`])),
@@ -107,15 +113,18 @@ export function UomConversionsManager({
     router.refresh();
   }
   function remove(id: string) {
+    setDeleteError(null);
     setDeleteTargetId(id);
   }
 
   async function confirmDelete() {
     if (!deleteTargetId) return;
     setDeleteBusy(true);
+    setDeleteError(null);
     const r = await deleteUomConversionAction(deleteTargetId);
     setDeleteBusy(false);
     if (!r.ok) {
+      setDeleteError(r.error.message);
       toast.error(r.error.message);
       return;
     }
@@ -124,17 +133,16 @@ export function UomConversionsManager({
   }
 
   return (
-    <div className="space-y-6">
-      <div className="rounded-xl border bg-card p-4">
-        <h2 className="text-sm font-semibold">Add conversion</h2>
-        <p className="mt-1 text-xs text-muted-foreground">
+    <div className="flex flex-col gap-4">
+      <DetailSection title="Add conversion">
+        <p className="text-muted-foreground -mt-1 mb-3 text-[12.5px]">
           Example: 1 PK of AA batteries equals 24 EA. Numerator=24, denominator=1.
         </p>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
-            <Label>Item</Label>
+            <Label htmlFor="uom-item">Item</Label>
             <Select value={itemId} onValueChange={setItemId}>
-              <SelectTrigger>
+              <SelectTrigger id="uom-item">
                 <SelectValue placeholder="Pick item" />
               </SelectTrigger>
               <SelectContent>
@@ -147,9 +155,9 @@ export function UomConversionsManager({
             </Select>
           </div>
           <div className="space-y-1.5">
-            <Label>Rounding rule</Label>
+            <Label htmlFor="uom-rounding">Rounding rule</Label>
             <Select value={rounding} onValueChange={(v) => setRounding(v as RoundingRule)}>
-              <SelectTrigger>
+              <SelectTrigger id="uom-rounding">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -161,8 +169,9 @@ export function UomConversionsManager({
             </Select>
           </div>
           <div className="space-y-1.5">
-            <Label>From UoM</Label>
+            <Label htmlFor="uom-from">From UoM</Label>
             <Input
+              id="uom-from"
               list="uom-suggestions"
               value={fromUom}
               onChange={(e) => setFromUom(e.target.value)}
@@ -170,8 +179,9 @@ export function UomConversionsManager({
             />
           </div>
           <div className="space-y-1.5">
-            <Label>To UoM (base)</Label>
+            <Label htmlFor="uom-to">To UoM (base)</Label>
             <Input
+              id="uom-to"
               list="uom-suggestions"
               value={toUom}
               onChange={(e) => setToUom(e.target.value)}
@@ -184,8 +194,9 @@ export function UomConversionsManager({
             ))}
           </datalist>
           <div className="space-y-1.5">
-            <Label>Numerator (e.g. 24 in &quot;1 PK = 24 EA&quot;)</Label>
+            <Label htmlFor="uom-numerator">Numerator (e.g. 24 in &quot;1 PK = 24 EA&quot;)</Label>
             <Input
+              id="uom-numerator"
               type="number"
               min="1"
               step="1"
@@ -194,8 +205,9 @@ export function UomConversionsManager({
             />
           </div>
           <div className="space-y-1.5">
-            <Label>Denominator</Label>
+            <Label htmlFor="uom-denominator">Denominator</Label>
             <Input
+              id="uom-denominator"
               type="number"
               min="1"
               step="1"
@@ -204,47 +216,50 @@ export function UomConversionsManager({
             />
           </div>
         </div>
-        <div className="mt-3 flex justify-end">
-          <Button onClick={add} disabled={busy} variant="gradient">
+        <div className="mt-4 flex justify-end">
+          <Button onClick={add} disabled={busy} variant="gradient" aria-busy={busy}>
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
             Save conversion
           </Button>
         </div>
-      </div>
+      </DetailSection>
 
-      <div className="overflow-x-auto rounded-xl border bg-card">
-        <Table>
+      {/* From sm up the table keeps a 600 px minimum and scrolls sideways inside
+          its card; a phone keeps the auto layout it had, so To, Ratio and
+          Rounding stay in view, and Delete is pinned to the card's right edge
+          below md. */}
+      <div className="border-border bg-card overflow-hidden rounded-lg border">
+        {/* Named by the page title (titleId="uom-conversions-title" on the page). */}
+        <Table scrollLabelledBy="uom-conversions-title" className="sm:min-w-[600px]">
           <TableHeader>
-            <TableRow>
+            <TableRow className="hover:bg-transparent">
               <TableHead>Item</TableHead>
               <TableHead>From</TableHead>
               <TableHead>To</TableHead>
               <TableHead className="text-right">Ratio</TableHead>
               <TableHead>Rounding</TableHead>
-              <TableHead className="w-12 text-right" />
+              <TableHead className={cn('w-12 text-right', STICKY_ACTIONS)} />
             </TableRow>
           </TableHeader>
           <TableBody>
             {conversions.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={6} className="text-muted-foreground text-center text-xs">
+              <TableRow className="hover:bg-transparent">
+                <TableCell colSpan={6} className="text-muted-foreground py-6 text-center">
                   No conversions yet. Add one above.
                 </TableCell>
               </TableRow>
             ) : (
               conversions.map((c) => (
                 <TableRow key={c.id}>
-                  <TableCell className="text-sm">
-                    {itemMap.get(c.item_id) ?? c.item_id}
-                  </TableCell>
-                  <TableCell className="font-mono">{c.from_uom}</TableCell>
-                  <TableCell className="font-mono">{c.to_uom}</TableCell>
-                  <TableCell className="text-right tabular-nums">
+                  <TableCell>{itemMap.get(c.item_id) ?? c.item_id}</TableCell>
+                  <TableCell className="font-mono text-[12.5px]">{c.from_uom}</TableCell>
+                  <TableCell className="font-mono text-[12.5px]">{c.to_uom}</TableCell>
+                  <TableCell className="text-right font-mono tabular-nums">
                     {c.numerator}
                     {c.denominator !== 1 && ` / ${c.denominator}`}
                   </TableCell>
-                  <TableCell className="text-xs">{c.rounding_rule}</TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className="text-ink-2">{c.rounding_rule}</TableCell>
+                  <TableCell className={cn('text-right', STICKY_ACTIONS)}>
                     <Button
                       variant="ghost"
                       size="icon"
@@ -270,6 +285,7 @@ export function UomConversionsManager({
         description="Future receipts that rely on this conversion will fail until you re-add it. Past movements that used this conversion are unaffected."
         confirmLabel="Delete"
         pending={deleteBusy}
+        error={deleteError}
         onConfirm={confirmDelete}
       />
     </div>

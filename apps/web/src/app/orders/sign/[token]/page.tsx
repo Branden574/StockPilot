@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation';
 
 import { formatOrderNumber } from '@stockpilot/core';
 
+import { ExternalHeader, ExternalStatusCard } from '@/components/auth/external-shell';
 import { SignatureCollector } from '@/components/orders/signature-collector';
 import { alreadySignedMessage } from '@/lib/orders/sign-outcome';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -14,8 +15,9 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+// The root layout's title template adds " · StockPilot" (CONFLICTS D15).
 export const metadata = {
-  title: 'Sign for order · StockPilot',
+  title: 'Sign for order',
   robots: { index: false, follow: false },
 };
 
@@ -175,17 +177,7 @@ export default async function OrderSignPage({
 
   return (
     <div className="space-y-6">
-      <header className="text-center">
-        <p className="text-muted-foreground text-[11px] font-medium uppercase tracking-[0.12em]">
-          StockPilot
-        </p>
-        <h1 className="font-display mt-1 text-[26px] font-medium leading-tight tracking-[-0.025em]">
-          Sign for your order
-        </h1>
-        <p className="text-muted-foreground mt-2 text-sm">
-          {orderLabel}
-        </p>
-      </header>
+      <ExternalHeader eyebrow="StockPilot" title="Sign for your order" description={orderLabel} />
       <SignatureCollector token={token} summary={summary} />
     </div>
   );
@@ -201,20 +193,14 @@ export default async function OrderSignPage({
  */
 function InvalidPanel({ reason, status }: { reason: 'invalid' | 'already'; status: string }) {
   return (
-    <div className="text-center">
-      <header className="space-y-2">
-        <p className="text-muted-foreground text-[11px] font-medium uppercase tracking-[0.12em]">
-          StockPilot
-        </p>
-        <h1 className="font-display text-[26px] font-medium leading-tight tracking-[-0.025em]">
-          {reason === 'already' ? 'This order is already signed' : "We can't sign this order"}
-        </h1>
-        <p className="text-muted-foreground mt-3 text-sm">
-          {reason === 'already'
-            ? alreadySignedMessage(status)
-            : "This link is invalid, expired, or the order is no longer awaiting a signature. If you think this is wrong, get in touch with the warehouse."}
-        </p>
-      </header>
-    </div>
+    <ExternalStatusCard
+      eyebrow="StockPilot"
+      title={reason === 'already' ? 'This order is already signed' : "We can't sign this order"}
+      body={
+        reason === 'already'
+          ? alreadySignedMessage(status)
+          : "This link is invalid, expired, or the order is no longer awaiting a signature. If you think this is wrong, get in touch with the warehouse."
+      }
+    />
   );
 }

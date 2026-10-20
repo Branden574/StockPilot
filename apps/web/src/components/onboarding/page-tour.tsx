@@ -34,6 +34,7 @@ function useReducedMotion(): boolean {
   const [reduced, setReduced] = React.useState(false);
   React.useEffect(() => {
     const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reads an external system (the media query) once on mount
     setReduced(mq.matches);
     const fn = (e: MediaQueryListEvent) => setReduced(e.matches);
     mq.addEventListener('change', fn);
@@ -50,10 +51,7 @@ function useReducedMotion(): boolean {
  * dashboard tour step 2 highlighted the sidebar with no card in sight).
  * Every branch clamps into the viewport.
  */
-function cardPosition(
-  rect: Rect | null,
-  placement?: 'top' | 'bottom',
-): React.CSSProperties {
+function cardPosition(rect: Rect | null, placement?: 'top' | 'bottom'): React.CSSProperties {
   if (!rect) return { left: '50%', top: '40%', transform: 'translate(-50%, -50%)' };
   const W = window.innerWidth;
   const H = window.innerHeight;
@@ -78,6 +76,20 @@ function cardPosition(
 }
 
 /**
+ * A step's target: its first match inside the page (`main`), else its first
+ * match anywhere. A tour explains the page it runs on, but the shell's sidebar
+ * and top bar come before `main` in the document, so the first match alone
+ * can be a shell control: the Navigation tour's "eye toggle" step
+ * (`button[aria-label^="Hide "]`) used to spotlight the top bar's "Hide
+ * sidebar" instead of the editor's eye toggles. A selector that matches only
+ * outside the page (`#dashboard-sidebar …`) still finds its one match.
+ */
+function findTarget(selector: string): Element | null {
+  const all = document.querySelectorAll(selector);
+  return Array.from(all).find((el) => el.closest('main') !== null) ?? all[0] ?? null;
+}
+
+/**
  * Wait briefly for a step's target (streamed/dynamic content). Kept SHORT
  * on purpose: a permanently-absent optional target (e.g. the dismissed
  * Getting-started panel) is skipped in under a second — the owner hit a
@@ -85,11 +97,11 @@ function cardPosition(
  */
 async function waitForTarget(selector: string): Promise<Element | null> {
   for (let i = 0; i < 3; i++) {
-    const el = document.querySelector(selector);
+    const el = findTarget(selector);
     if (el) return el;
     await new Promise((r) => setTimeout(r, 250));
   }
-  return document.querySelector(selector);
+  return findTarget(selector);
 }
 
 export function PageTour({ tour }: { tour: TourDefinition }) {
@@ -104,6 +116,7 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
   const goToSeq = React.useRef(0);
   const userId = useSessionUserId();
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- the portals need document: mounted after hydration
   React.useEffect(() => setMounted(true), []);
 
   // Offer once per version: neither completed nor dismissed at >= version.
@@ -117,8 +130,7 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
       const done = state.completed[tour.id];
       const waved = state.dismissed[tour.id];
       const seen =
-        (done && (done.v ?? 0) >= tour.version) ||
-        (waved && (waved.v ?? 0) >= tour.version);
+        (done && (done.v ?? 0) >= tour.version) || (waved && (waved.v ?? 0) >= tour.version);
       // Never downgrade a deep-link-started tour back to an offer prompt.
       if (!seen) setPhase((p) => (p === 'idle' ? 'offer' : p));
     });
@@ -132,7 +144,11 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
       setPhase('idle');
       setStepIndex(0);
       setRect(null);
-      capture(`tour_${outcome}`, { tourId: tour.id, version: tour.version, exitStep: stepIndexRef.current });
+      capture(`tour_${outcome}`, {
+        tourId: tour.id,
+        version: tour.version,
+        exitStep: stepIndexRef.current,
+      });
       void recordTourOutcome({ tourId: tour.id, version: tour.version, outcome });
     },
     [tour.id, tour.version],
@@ -176,6 +192,7 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
   React.useEffect(() => {
     const want = new URLSearchParams(window.location.search).get('tour');
     if (want === tour.id) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reads an external system (the URL) once on mount
       setPhase('running');
       capture('tour_started', { tourId: tour.id, via: 'deep_link' });
       void goTo(0);
@@ -214,6 +231,7 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
   // edited between renders, bad persisted index) must never strand the
   // user under a dimmer with no card.
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- a recovery path that ends the tour once
     if (phase === 'running' && !tour.steps[stepIndex]) finish('completed');
   }, [phase, stepIndex, tour.steps, finish]);
 
@@ -236,19 +254,25 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
 
   return (
     <>
-      {/* Replay affordance — always available (PRD §10/§15). */}
-      <button
+      {/* Replay affordance — always available (PRD §10/§15). The ghost
+          "Tour" of DESIGN-SPEC 6.21: the shared small ghost Button, so below
+          sm and on coarse pointers it gets the Button's 44 px touch target
+          beside the page header's 32 px actions. The quiet muted words at
+          400 and the 14 px glyph are the ones the tour slot already drew. */}
+      <Button
         type="button"
+        variant="ghost"
+        size="sm"
         onClick={() => {
           setPhase('running');
           capture('tour_started', { tourId: tour.id, via: 'pill' });
           void goTo(0);
         }}
-        className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition-colors"
+        className="text-muted-foreground shrink-0 font-normal [&_svg]:size-3.5"
         aria-label={`Start the ${tour.name} tour`}
       >
-        <Sparkles className="size-3" /> Tour
-      </button>
+        <Sparkles strokeWidth={1.6} aria-hidden /> Tour
+      </Button>
 
       {/* First-visit offer (never auto-launch a long tour). */}
       {phase === 'offer' &&
@@ -257,13 +281,17 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
             role="dialog"
             data-tour-open
             aria-label={`${tour.name} tour offer`}
-            className="bg-card animate-in fade-in slide-in-from-bottom-2 fixed right-4 bottom-4 z-50 w-80 rounded-xl border p-4 shadow-lg"
+            className="bg-card border-line-strong fixed bottom-4 right-4 z-50 w-80 max-w-[calc(100vw-32px)] rounded-lg border p-4 shadow-[0_10px_30px_rgba(0,0,0,0.25)] animate-in fade-in slide-in-from-bottom-2"
           >
             <div className="flex items-start gap-2">
-              <Sparkles className="text-primary mt-0.5 size-4 shrink-0" />
-              <div className="text-sm">
+              <Sparkles
+                className="text-accent mt-0.5 size-4 shrink-0"
+                strokeWidth={1.6}
+                aria-hidden
+              />
+              <div className="text-[13.5px]">
                 <p className="font-medium">New here? Take a quick tour.</p>
-                <p className="text-muted-foreground mt-0.5 text-xs">
+                <p className="text-muted-foreground mt-0.5 text-[12.5px]">
                   {tour.steps.length} short steps — learn what everything on this page does.
                 </p>
               </div>
@@ -313,11 +341,11 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
               aria-modal="true"
               aria-label={step.title}
               tabIndex={-1}
-              className="bg-card fixed z-[71] w-[min(360px,calc(100vw-32px))] rounded-xl border p-4 shadow-xl outline-none"
+              className="bg-card border-line-strong fixed z-[71] w-[min(360px,calc(100vw-32px))] rounded-lg border p-4 shadow-[0_10px_30px_rgba(0,0,0,0.25)] outline-none"
               style={{ transition, ...cardPosition(rect, step.placement) }}
             >
               <div className="flex items-start justify-between gap-3">
-                <p className="text-sm font-semibold">{step.title}</p>
+                <p className="text-[14px] font-medium">{step.title}</p>
                 <button
                   type="button"
                   aria-label="Exit tour"
@@ -327,7 +355,9 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
                   <X className="size-4" />
                 </button>
               </div>
-              <p className="text-muted-foreground mt-1.5 text-sm leading-relaxed">{step.body}</p>
+              <p className="text-muted-foreground mt-1.5 text-[13.5px] leading-relaxed">
+                {step.body}
+              </p>
               <div className="mt-3 flex items-center gap-2">
                 {/* Progress dots (PRD §12). */}
                 <div className="flex flex-1 items-center gap-1" aria-hidden>
@@ -336,7 +366,7 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
                       key={i}
                       className={
                         'h-1.5 rounded-full transition-all ' +
-                        (i === stepIndex ? 'bg-primary w-4' : 'bg-muted w-1.5')
+                        (i === stepIndex ? 'bg-primary w-4' : 'w-1.5 bg-[var(--ed-line-strong)]')
                       }
                     />
                   ))}

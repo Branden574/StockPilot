@@ -37,34 +37,38 @@ import {
  */
 
 /** Tailwind classes per core ReadinessTone: the strip's band, its words, and
- *  a line's chip. Light and dark. */
+ *  a line's chip. The redesign's tones (DESIGN-SPEC 6.10), which follow the
+ *  theme on their own: success is the accent on its wash, warning and danger
+ *  their own washes, info the neutral pill (ink 2 on the sunk fill with the
+ *  stronger hairline: the palette has no blue), neutral the quiet outline.
+ *  Every tone still comes with an icon and words. */
 export const READINESS_TONE_STYLES: Readonly<
   Record<ReadinessTone, { band: string; text: string; chip: string }>
 > = {
   success: {
-    band: 'bg-emerald-50 dark:bg-emerald-950/30',
-    text: 'text-emerald-800 dark:text-emerald-300',
-    chip: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
+    band: 'bg-success-wash',
+    text: 'text-accent',
+    chip: 'border-accent/30 bg-success-wash text-accent',
   },
   warning: {
-    band: 'bg-amber-50 dark:bg-amber-950/30',
-    text: 'text-amber-800 dark:text-amber-300',
-    chip: 'border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-300',
+    band: 'bg-warning-wash',
+    text: 'text-warning',
+    chip: 'border-warning/30 bg-warning-wash text-warning',
   },
   info: {
-    band: 'bg-sky-50 dark:bg-sky-950/30',
-    text: 'text-sky-800 dark:text-sky-300',
-    chip: 'border-sky-500/30 bg-sky-500/10 text-sky-800 dark:text-sky-300',
+    band: 'bg-sunk',
+    text: 'text-ink-2',
+    chip: 'border-line-strong bg-sunk text-ink-2',
   },
   danger: {
-    band: 'bg-red-50 dark:bg-red-950/30',
-    text: 'text-red-800 dark:text-red-300',
-    chip: 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300',
+    band: 'bg-destructive-wash',
+    text: 'text-destructive',
+    chip: 'border-destructive/30 bg-destructive-wash text-destructive',
   },
   neutral: {
-    band: 'bg-muted/40',
+    band: 'bg-sunk',
     text: 'text-foreground',
-    chip: 'border-border bg-muted/60 text-foreground',
+    chip: 'border-line-strong bg-card text-ink-2',
   },
 };
 

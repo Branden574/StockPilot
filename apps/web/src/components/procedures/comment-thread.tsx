@@ -107,21 +107,19 @@ function CommentRow({
   }
 
   return (
-    <div className="flex gap-3">
+    <div data-slot="procedure-comment" className="flex gap-3">
       <Avatar className="h-8 w-8 flex-none">
-        {comment.author.avatar_url ? (
-          <AvatarImage src={comment.author.avatar_url} alt="" />
-        ) : null}
+        {comment.author.avatar_url ? <AvatarImage src={comment.author.avatar_url} alt="" /> : null}
         <AvatarFallback>{initials(comment.author.full_name)}</AvatarFallback>
       </Avatar>
       <div className="min-w-0 flex-1 space-y-1">
         <div className="flex flex-wrap items-baseline gap-x-2">
-          <p className="text-sm font-medium">
+          <p className="text-foreground text-[13.5px] font-medium">
             {comment.author.full_name ?? 'Unknown user'}
           </p>
           <time
             dateTime={comment.created_at}
-            className="text-xs text-muted-foreground tabular-nums"
+            className="text-muted-foreground text-[12px] tabular-nums"
             title={new Date(comment.created_at).toLocaleString()}
             // clock drifts between SSR + hydration; tolerate it instead
             // of unmounting the comment thread with React error #418.
@@ -130,11 +128,11 @@ function CommentRow({
             {formatRelative(comment.created_at)}
           </time>
           {comment.edited_at && !isDeleted && (
-            <span className="text-xs text-muted-foreground">(edited)</span>
+            <span className="text-muted-foreground text-[12px]">(edited)</span>
           )}
         </div>
         {isDeleted ? (
-          <p className="text-sm italic text-muted-foreground">(deleted)</p>
+          <p className="text-muted-foreground text-[13.5px] italic">(deleted)</p>
         ) : editing ? (
           <div className="space-y-2">
             <Textarea
@@ -163,16 +161,20 @@ function CommentRow({
             </div>
           </div>
         ) : (
-          <p className="whitespace-pre-wrap text-sm leading-relaxed">{comment.body}</p>
+          <p className="text-foreground whitespace-pre-wrap text-[13.5px] leading-[1.6] [overflow-wrap:anywhere]">
+            {comment.body}
+          </p>
         )}
         {!editing && !isDeleted && (
-          <div className="flex flex-wrap items-center gap-1">
+          // 28 px buttons sit 8 px apart, so each one's 44 px touch target
+          // on a phone never covers its neighbour (Button touch rule).
+          <div className="-ml-2 flex flex-wrap items-center gap-2">
             {allowReply && (
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="h-7 px-2 text-xs"
+                className="text-muted-foreground px-2"
                 onClick={() => setReplyOpen((o) => !o)}
               >
                 <MessageSquareReply className="mr-1 h-3 w-3" /> Reply
@@ -183,7 +185,7 @@ function CommentRow({
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="h-7 px-2 text-xs"
+                className="text-muted-foreground px-2"
                 onClick={() => setEditing(true)}
               >
                 <Pencil className="mr-1 h-3 w-3" /> Edit
@@ -194,7 +196,7 @@ function CommentRow({
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="h-7 px-2 text-xs text-destructive hover:text-destructive"
+                className="text-destructive hover:text-destructive px-2"
                 onClick={() => setDeleteOpen(true)}
               >
                 <Trash2 className="mr-1 h-3 w-3" /> Delete
@@ -214,7 +216,7 @@ function CommentRow({
           </div>
         )}
         {comment.replies.length > 0 && (
-          <ul className="mt-3 space-y-4 border-l border-border pl-4">
+          <ul className="border-border mt-3 space-y-4 border-l pl-4">
             {comment.replies.map((r) => (
               <li key={r.id}>
                 <CommentRow
@@ -243,22 +245,13 @@ function CommentRow({
 
 export function CommentThread({ procedureId, comments, canModerate }: CommentThreadProps) {
   if (comments.length === 0) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        No comments yet. Start the discussion.
-      </p>
-    );
+    return <p className="text-muted-foreground text-sm">No comments yet. Start the discussion.</p>;
   }
   return (
     <ul className="space-y-6">
       {comments.map((c) => (
         <li key={c.id}>
-          <CommentRow
-            procedureId={procedureId}
-            comment={c}
-            canModerate={canModerate}
-            allowReply
-          />
+          <CommentRow procedureId={procedureId} comment={c} canModerate={canModerate} allowReply />
         </li>
       ))}
     </ul>

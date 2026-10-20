@@ -1,6 +1,7 @@
 import { headers } from 'next/headers';
 import { notFound } from 'next/navigation';
 
+import { ExternalCard, ExternalEyebrow, ExternalShell } from '@/components/auth/external-shell';
 import { clientIpFromHeaders } from '@/lib/client-ip';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { hashShareToken, resolveMaintenanceShareToken } from '@/server/services/maintenance-share-links';
@@ -54,31 +55,45 @@ function PhotoGrid({
 }) {
   if (items.length === 0) return null;
   return (
-    <section>
-      <h2 className="text-sm font-medium">
-        {heading} ({items.length})
-      </h2>
-      <ul className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-3">
+    <ExternalCard
+      title={
+        <>
+          {heading} ({items.length})
+        </>
+      }
+    >
+      <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         {items.map(({ photo, index }) => {
           // The ONLY photo URL this page ever renders: a same-origin proxy
           // path indexed by position in the COMBINED list, never a signed
           // storage URL (fix wave C1 — see the route's own doc comment).
+          // The same URL is the preview and the open target, so a viewer
+          // spends one request of the link's shared budget per photo.
           const src = `/m/${token}/photo/${index}`;
           return (
             <li key={`${photo.filename}-${index}`}>
-              <a href={src} target="_blank" rel="noopener noreferrer">
+              <a
+                href={src}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="focus-visible:ring-ring block rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
+              >
                 {/* The proxy sets Cache-Control: private, no-store; plain
                     img is correct here (no cross-origin optimizer to hand
                     this off to). */}
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={src} alt={photo.filename} className="h-32 w-full rounded-lg border object-cover" />
+                <img
+                  src={src}
+                  alt={photo.filename}
+                  className="border-border h-32 w-full rounded-md border bg-white object-cover"
+                />
               </a>
             </li>
           );
         })}
       </ul>
-      {caption ? <p className="text-muted-foreground mt-2 text-xs">{caption}</p> : null}
-    </section>
+      {caption ? <p className="text-muted-foreground mt-3 text-xs">{caption}</p> : null}
+    </ExternalCard>
   );
 }
 
@@ -151,24 +166,26 @@ export default async function MaintenanceSharePage({
   const resolutionPhotos = indexedPhotos.filter(({ photo }) => photo.kind === 'resolution');
 
   return (
-    <main className="mx-auto max-w-2xl space-y-6 p-6">
-      <header>
-        <p className="text-sm text-muted-foreground">StockPilot maintenance request</p>
-        <h1 className="text-xl font-semibold">{shared.requestNumber}</h1>
-        <p className="mt-1">{shared.subject}</p>
-        {shared.siteName ? <p className="text-sm text-muted-foreground">Site: {shared.siteName}</p> : null}
-        <p className="text-sm text-muted-foreground">Submitted: {formatSubmittedDate(shared.createdAt)}</p>
+    <ExternalShell width="xl" className="space-y-4">
+      <header className="pb-2">
+        <ExternalEyebrow>StockPilot maintenance request</ExternalEyebrow>
+        <h1 className="font-display text-foreground mt-1.5 text-[26px] font-medium leading-[1.2] tracking-[-0.025em] [overflow-wrap:anywhere]">
+          {shared.requestNumber}
+        </h1>
+        <p className="text-foreground mt-1 text-[15px] leading-[22px]">{shared.subject}</p>
+        <div className="text-muted-foreground mt-2 flex flex-wrap gap-x-4 gap-y-0.5 text-[13.5px]">
+          {shared.siteName ? <p>Site: {shared.siteName}</p> : null}
+          <p>Submitted: {formatSubmittedDate(shared.createdAt)}</p>
+        </div>
       </header>
-      <section>
-        <h2 className="text-sm font-medium">Issue description</h2>
-        <p className="mt-1 whitespace-pre-line text-sm">{shared.description}</p>
-      </section>
+      <ExternalCard title="Issue description">
+        <p className="whitespace-pre-line text-[13.5px] leading-[20.25px]">{shared.description}</p>
+      </ExternalCard>
       {shared.resolution ? (
-        <section>
-          <h2 className="text-sm font-medium">Resolution</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Marked resolved · {shared.resolution.resolvedAtDisplay}</p>
-          <p className="mt-1 whitespace-pre-line text-sm">{shared.resolution.note}</p>
-        </section>
+        <ExternalCard title="Resolution">
+          <p className="text-muted-foreground text-[13.5px]">Marked resolved · {shared.resolution.resolvedAtDisplay}</p>
+          <p className="mt-1 whitespace-pre-line text-[13.5px] leading-[20.25px]">{shared.resolution.note}</p>
+        </ExternalCard>
       ) : null}
       <PhotoGrid token={token} heading="Photos" items={requesterPhotos} />
       {/* Fix wave I1 — the third instance of this program's honesty bug: this
@@ -195,9 +212,9 @@ export default async function MaintenanceSharePage({
             : 'Staged by the team while preparing to mark this request resolved.'
         }
       />
-      <footer className="border-t pt-4 text-xs text-muted-foreground">
+      <footer className="border-border text-muted-foreground border-t pt-4 text-xs">
         This page shows one maintenance request shared from StockPilot. Internal notes are never shown here.
       </footer>
-    </main>
+    </ExternalShell>
   );
 }

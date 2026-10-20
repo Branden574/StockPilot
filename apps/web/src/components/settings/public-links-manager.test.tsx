@@ -5,7 +5,7 @@
  * evening in Los Angeles is the next day in UTC, so React threw error #418.
  * The days are printed once the page has hydrated.
  */
-import { within } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import type * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -54,6 +54,31 @@ const LINK: PublicLinkRow = {
   updated_at: CREATED_AT,
   entry_count: 3,
 };
+
+describe('PublicLinksManager table', () => {
+  it('lists the card title once: the card is the region, and the table scrolls inside it unnamed', () => {
+    render(<PublicLinksManager appUrl="https://stockpilotusa.com" links={[LINK]} />);
+    const regions = screen.getAllByRole('region', { name: 'Public request links' });
+    expect(regions).toHaveLength(1);
+    expect(regions[0]!.tagName).toBe('SECTION');
+    const table = screen.getByRole('table');
+    expect(regions[0]).toContainElement(table);
+    // Every row holds its name link and Edit, so the scroll area never
+    // becomes a Tab stop and takes no name of its own.
+    const scroll = table.parentElement;
+    expect(scroll).not.toHaveAttribute('role');
+    expect(scroll).not.toHaveAttribute('aria-labelledby');
+    const [, row] = within(table).getAllByRole('row');
+    expect(within(row!).getByRole('link', { name: 'Fall supplies' })).toHaveAttribute(
+      'href',
+      '/dashboard/settings/public-requests/l1',
+    );
+    expect(within(row!).getByRole('link', { name: 'Edit' })).toHaveAttribute(
+      'href',
+      '/dashboard/settings/public-requests/l1',
+    );
+  });
+});
 
 describe('PublicLinksManager hydrates with the server in UTC and the browser in Los Angeles', () => {
   it("prints the viewer's expiry and creation days once hydrated, never the server's, with no hydration error", async () => {

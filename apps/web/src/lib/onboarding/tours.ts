@@ -31,7 +31,9 @@ export const ITEMS_PAGE_TOUR: TourDefinition = {
       body: 'Import a spreadsheet or a purchase order to create lots of records in one pass — the usual path when a shipment arrives.',
     },
     {
-      target: 'table tbody tr',
+      // The first row in Table view, or the first card in Grid view (the
+      // redesign's Grid draws no table).
+      target: 'table tbody tr, [data-slot="grid-card"]',
       title: 'Dig into any item',
       body: 'Click a row for full detail: quantities on hand vs reserved, rack placement, source purchase orders, and complete movement history.',
       optional: true,
@@ -149,7 +151,7 @@ export const DASHBOARD_TOUR: TourDefinition = {
     {
       target: '#dashboard-sidebar',
       title: 'Everything lives here',
-      body: 'The sidebar is grouped into Inventory, Workspace, Tools, and Admin. You only see what your role can access — and admins can rename labels, so your words may differ from ours.',
+      body: 'The sidebar is grouped into Inventory, Fulfillment, Purchasing, Insights, Workspace, and Admin. You only see what your role can access — and admins can rename labels, so your words may differ from ours.',
     },
     {
       target: '#dashboard-sidebar nav a[href="/dashboard/inventory"]',

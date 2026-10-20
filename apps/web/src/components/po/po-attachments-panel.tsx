@@ -5,12 +5,10 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { DetailSection } from '@/components/patterns/detail-section';
 import { Button } from '@/components/ui/button';
 import { createClient } from '@/lib/supabase/client';
-import {
-  addPoAttachmentAction,
-  deletePoAttachmentAction,
-} from '@/server/actions/po-attachments';
+import { addPoAttachmentAction, deletePoAttachmentAction } from '@/server/actions/po-attachments';
 import type { PoAttachment } from '@/server/services/po-attachments';
 
 const BUCKET = 'po-attachments';
@@ -141,55 +139,65 @@ export function PoAttachmentsList({
 
   if (attachments.length === 0) return null;
 
+  // A card on the PO's page (DESIGN-SPEC 6.7): the title in its header, the
+  // sentence under it, then one hairline row per file with the open link and
+  // two 32 px icon buttons (each with the 44 px touch area, 6 px apart). The
+  // file name wraps rather than being cut with an ellipsis: in the right column
+  // at 1280 (358 px) a cut name lost its end, the slip number and ".pdf"
+  // (P68-2). A name with no spaces breaks anywhere, so it never runs wider.
   return (
-    <section className="bg-card mt-6 rounded-xl border p-4">
-      <h2 className="text-sm font-medium">Attachments</h2>
-      <p className="text-muted-foreground mt-0.5 text-xs">
+    <DetailSection title="Attachments" flush>
+      <p className="text-muted-foreground px-[18px] py-3 text-[12.5px] leading-[18.75px]">
         Packing slips, receipts, and other files for this purchase order.
       </p>
-      <ul className="divide-border mt-3 divide-y rounded-md border">
+      <ul className="divide-border border-border divide-y border-t">
         {attachments.map((a) => (
-          <li key={a.id} className="flex items-center gap-3 px-3 py-2.5">
-            <Paperclip className="text-muted-foreground h-4 w-4 shrink-0" />
+          <li key={a.id} className="flex min-w-0 items-center gap-2.5 py-1.5 pl-[18px] pr-3">
+            <Paperclip aria-hidden className="text-muted-foreground h-4 w-4 shrink-0" />
             <a
               href={a.url ?? '#'}
               target="_blank"
               rel="noopener noreferrer"
-              className="min-w-0 flex-1 truncate text-[13px] hover:underline"
+              className="text-foreground min-w-0 flex-1 text-[13.5px] [overflow-wrap:anywhere] hover:underline"
               title={a.fileName ?? 'File'}
             >
               {a.fileName ?? 'File'}
             </a>
-            {a.url && (
-              <a
-                href={a.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-muted-foreground hover:text-foreground shrink-0"
-                aria-label={`Download ${a.fileName ?? 'file'}`}
-                download
-              >
-                <Download className="h-4 w-4" />
-              </a>
-            )}
-            {canManage && (
-              <button
-                type="button"
-                onClick={() => onDelete(a.id)}
-                disabled={deletingId === a.id}
-                className="text-muted-foreground hover:text-destructive shrink-0"
-                aria-label={`Delete ${a.fileName ?? 'file'}`}
-              >
-                {deletingId === a.id ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Trash2 className="h-3.5 w-3.5" />
-                )}
-              </button>
-            )}
+            <div className="flex shrink-0 items-center gap-1.5">
+              {a.url && (
+                <Button asChild variant="ghost" size="icon" className="text-muted-foreground">
+                  <a
+                    href={a.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={`Download ${a.fileName ?? 'file'}`}
+                    download
+                  >
+                    <Download className="h-4 w-4" />
+                  </a>
+                </Button>
+              )}
+              {canManage && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => onDelete(a.id)}
+                  disabled={deletingId === a.id}
+                  className="text-muted-foreground hover:text-destructive"
+                  aria-label={`Delete ${a.fileName ?? 'file'}`}
+                >
+                  {deletingId === a.id ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-3.5 w-3.5" />
+                  )}
+                </Button>
+              )}
+            </div>
           </li>
         ))}
       </ul>
-    </section>
+    </DetailSection>
   );
 }

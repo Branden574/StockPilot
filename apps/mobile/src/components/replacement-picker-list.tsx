@@ -11,10 +11,10 @@ import {
 } from '@stockpilot/core';
 
 import { MIN_TAP } from '@/components/item-verification-card';
-import { Body, FieldLabel } from '@/components/ui/text';
+import { Body, FieldLabel, Mono } from '@/components/ui/text';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { describeReturnError } from '@/lib/returns-api';
-import { ACCENT, capTo, TYPE_CEILING } from '@/lib/theme';
+import { capTo, FONT, TYPE_CEILING } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 const INPUT_CAP = capTo(15, TYPE_CEILING.input);
@@ -32,6 +32,11 @@ const INPUT_CAP = capTo(15, TYPE_CEILING.input);
  * full width and the availability goes under it. The name is never cut: its
  * size is what tells the rows apart (RX-2 simulator finding SIM-3, where
  * every row read "Walk Exc…" on an iPhone at AX5).
+ *
+ * The look (redesign P5.7b): each row a control with the stronger border,
+ * the chosen one the ink edge on the recessed fill; the SKU in mono; a short
+ * row's availability and a refusal in the mode's refusal ink; the search box
+ * on the shared Field's recipe, its typed words in the body face, at 44pt.
  */
 export function ReplacementPickerList({
   load,
@@ -112,8 +117,8 @@ export function ReplacementPickerList({
           {
             flexDirection: stacked ? 'column' : 'row',
             alignItems: stacked ? 'stretch' : 'center',
-            borderColor: checked ? c.ink : c.hair,
-            backgroundColor: checked ? c.paper2 : 'transparent',
+            borderColor: checked ? c.ink : c.hair2,
+            backgroundColor: checked ? c.sunk : 'transparent',
             minHeight: MIN_TAP,
           },
         ]}
@@ -124,12 +129,12 @@ export function ReplacementPickerList({
             {same}
           </Body>
           {row.sku ? (
-            <Body size={12} muted>
+            <Mono size={11.5} color={c.ink3}>
               {row.sku}
-            </Body>
+            </Mono>
           ) : null}
         </View>
-        <Body size={12.5} color={row.short ? ACCENT.crit : c.ink3}>
+        <Body size={12.5} color={row.short ? c.critText : c.ink3}>
           {row.availability}
         </Body>
       </Pressable>
@@ -155,12 +160,12 @@ export function ReplacementPickerList({
         editable={!off}
         maxLength={80}
         placeholder={RETURNS_COPY.replacementSearchPlaceholder}
-        placeholderTextColor={c.ink4}
+        placeholderTextColor={c.ink3}
         accessibilityLabel={`${RETURNS_COPY.replacementSearchPlaceholder} for ${label}`}
         maxFontSizeMultiplier={INPUT_CAP}
         autoCorrect={false}
         autoCapitalize="none"
-        style={[styles.input, { borderColor: c.hair, backgroundColor: c.paper2, color: c.ink }]}
+        style={[styles.input, { borderColor: c.hair2, backgroundColor: c.card, color: c.ink }]}
       />
       {q.trim().length > 0 && q.trim().length < 2 ? (
         <Body size={12.5} muted>
@@ -178,14 +183,14 @@ export function ReplacementPickerList({
         </View>
       ) : null}
 
-      {loading ? <ActivityIndicator color={c.ink4} /> : null}
+      {loading ? <ActivityIndicator color={c.ink} /> : null}
       {!online ? (
         <Body size={12.5} muted>
           {READINESS_NEEDS_CONNECTION_COPY}
         </Body>
       ) : null}
       {error ? (
-        <Body size={12.5} color={ACCENT.crit} accessibilityRole="alert">
+        <Body size={12.5} color={c.critText} accessibilityRole="alert">
           {error}
         </Body>
       ) : null}
@@ -195,5 +200,15 @@ export function ReplacementPickerList({
 
 const styles = StyleSheet.create({
   row: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, gap: 10 },
-  input: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 15 },
+  // The search box: the shared text box's recipe, in the body face, and a
+  // 44pt target (its padding and one line of words made it about 40pt).
+  input: {
+    minHeight: MIN_TAP,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontFamily: FONT.displayRegular,
+    fontSize: 15,
+  },
 });

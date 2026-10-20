@@ -1,10 +1,13 @@
 import { Boxes } from 'lucide-react';
+import { cookies } from 'next/headers';
 import Link from 'next/link';
 
+import { PageHeader } from '@/components/patterns/page-header';
 import { RentalsTabs } from '@/components/rentals/rentals-tabs';
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
 import { InventoryTable } from '@/components/inventory/inventory-table';
+import { INVENTORY_VIEW_COOKIES, parseInventoryView } from '@/components/inventory/inventory-grid';
 import { ElsewhereUnavailableNotice } from '@/components/inventory/elsewhere-unavailable-notice';
 import { Button } from '@/components/ui/button';
 import { can, isRentalItemRow } from '@stockpilot/core';
@@ -69,16 +72,32 @@ export default async function RentalItemsPage({
   const params = await searchParams;
   const page = Math.max(1, Number(params.page) || 1);
 
-  const [inventorySvc, categoriesSvc, locationsSvc, suppliersSvc, tagsSvc, imagesSvc, sessionCtx] =
-    await Promise.all([
-      InventoryService.forCurrentUser(),
-      CategoriesService.forCurrentUser(),
-      LocationsService.forCurrentUser(),
-      SuppliersService.forCurrentUser(),
-      TagsService.forCurrentUser(),
-      ItemImagesService.forCurrentUser(),
-      requireOrgContext(),
-    ]);
+  const [
+    inventorySvc,
+    categoriesSvc,
+    locationsSvc,
+    suppliersSvc,
+    tagsSvc,
+    imagesSvc,
+    sessionCtx,
+    cookieStore,
+  ] = await Promise.all([
+    InventoryService.forCurrentUser(),
+    CategoriesService.forCurrentUser(),
+    LocationsService.forCurrentUser(),
+    SuppliersService.forCurrentUser(),
+    TagsService.forCurrentUser(),
+    ItemImagesService.forCurrentUser(),
+    requireOrgContext(),
+    cookies(),
+  ]);
+  // The viewer's Table / Grid choice for this list (its own cookie, a
+  // presentation preference: no database read). The table renders it in the
+  // first paint, so a Grid viewer never sees the table first (P3.2
+  // "Preference storage").
+  const initialView = parseInventoryView(
+    cookieStore.get(INVENTORY_VIEW_COOKIES.rentalItems)?.value,
+  );
 
   const lifecycleStatus =
     params.status === 'archived' ||
@@ -117,8 +136,8 @@ export default async function RentalItemsPage({
 
   // Belt and braces: the query already guarantees this, and a row that is
   // not a rental must never render on the rentals page.
-  const rentalItems = inventory.items.filter(
-    (i) => isRentalItemRow(i as { is_rental?: boolean | null }),
+  const rentalItems = inventory.items.filter((i) =>
+    isRentalItemRow(i as { is_rental?: boolean | null }),
   );
   const rentalTotal = inventory.total;
 
@@ -131,9 +150,7 @@ export default async function RentalItemsPage({
 
   const itemIdList = rentalItems.map((i) => i.id);
   const [trends, imagesById, reservedByItem] = await Promise.all([
-    getItemTrends(
-      rentalItems.map((i) => ({ id: i.id, quantityOnHand: i.quantity_on_hand })),
-    ),
+    getItemTrends(rentalItems.map((i) => ({ id: i.id, quantityOnHand: i.quantity_on_hand }))),
     imagesSvc.primaryImagesWithThumbsForItems(itemIdList),
     // Rentals reserve stock instead of decrementing on-hand — surface
     // available + out-on-rental per row. Same active-reservation sum the
@@ -169,35 +186,35 @@ export default async function RentalItemsPage({
   const canCreate = can(sessionCtx, 'items:create');
 
   return (
-    <div className="container mx-auto max-w-7xl px-4 py-8 sm:px-6">
-      <div className="flex flex-wrap items-end justify-between gap-3 sm:gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Rentals</h1>
-          <p className="text-muted-foreground mt-1 text-sm">
-            {lifecycleStatus === 'archived'
-              ? 'Archived rental items.'
-              : 'Items available for rental — canopies, supplies, equipment.'}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
+    // The page box every redesigned dashboard page shares (max 1320, 16 px
+    // gutters on a phone).
+    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <PageHeader
+        title="Rentals"
+        subline={
+          lifecycleStatus === 'archived'
+            ? 'Archived rental items.'
+            : 'Items available for rental — canopies, supplies, equipment.'
+        }
+        actions={
           <ArchiveViewToggle
             paramName="status"
             view={lifecycleStatus === 'archived' ? 'archived' : 'active'}
           />
-          {canCreate && lifecycleStatus !== 'archived' && (
+        }
+        primaryAction={
+          canCreate && lifecycleStatus !== 'archived' ? (
             <Button asChild variant="gradient">
               <Link href="/dashboard/rentals/items/new">+ New item</Link>
             </Button>
-          )}
-        </div>
-      </div>
+          ) : undefined
+        }
+      />
 
       {/* Section tabs */}
-      <div className="mt-6">
-        <RentalsTabs activeTab="items" />
-      </div>
+      <RentalsTabs activeTab="items" />
 
-      <div className="mt-8">
+      <div className="min-w-0">
         {rentalTotal === 0 && lifecycleStatus === 'archived' && !params.q && !params.stock ? (
           <EmptyState
             icon={Boxes}
@@ -256,6 +273,10 @@ export default async function RentalItemsPage({
               activeWarehouseId={null}
               currentUserId={sessionCtx.userId}
               reservedByItem={reservedByItem}
+              // The search box asks for this page's own set: rentals of
+              // every type (the list above passes rentalsOnly too).
+              rentalsOnly
+              initialView={initialView}
             />
           </ElsewhereUnavailableNotice>
         )}

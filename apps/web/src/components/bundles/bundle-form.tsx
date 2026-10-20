@@ -9,16 +9,23 @@ import {
   BundleComponentPicker,
   type ComponentSearchItem,
 } from '@/components/bundles/bundle-component-picker';
+import { DetailSection } from '@/components/patterns/detail-section';
 import { BlankZeroNumberInput } from '@/components/ui/blank-zero-number-input';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { generateSku } from '@/lib/utils';
-import {
-  createBundleAction,
-  updateBundleAction,
-} from '@/server/actions/bundles';
+import { createBundleAction, updateBundleAction } from '@/server/actions/bundles';
 
 interface ComponentRow {
   itemId: string;
@@ -42,18 +49,11 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
   const [name, setName] = React.useState(initial?.name ?? '');
   const [sku, setSku] = React.useState(initial?.sku ?? '');
   const [description, setDescription] = React.useState(initial?.description ?? '');
-  const [preassembly, setPreassembly] = React.useState(
-    initial?.preassemblyEnabled ?? false,
-  );
-  const [components, setComponents] = React.useState<ComponentRow[]>(
-    initial?.components ?? [],
-  );
+  const [preassembly, setPreassembly] = React.useState(initial?.preassemblyEnabled ?? false);
+  const [components, setComponents] = React.useState<ComponentRow[]>(initial?.components ?? []);
   const [submitting, setSubmitting] = React.useState(false);
   const isEdit = Boolean(initial);
-  const addedIds = React.useMemo(
-    () => new Set(components.map((c) => c.itemId)),
-    [components],
-  );
+  const addedIds = React.useMemo(() => new Set(components.map((c) => c.itemId)), [components]);
 
   function addComponent(item: ComponentSearchItem) {
     setComponents((cur) => {
@@ -140,8 +140,9 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
   }
 
   return (
-    <form onSubmit={onSubmit} className="space-y-6">
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+    <form onSubmit={onSubmit} className="flex flex-col gap-4">
+      {/* The kit itself: name, SKU, pre-assembly and description, in one card. */}
+      <section className="border-border bg-card grid grid-cols-1 gap-4 rounded-lg border p-[18px] sm:grid-cols-2">
         <div className="space-y-1.5 sm:col-span-2">
           <Label htmlFor="bundle-name">Name</Label>
           <Input
@@ -156,7 +157,7 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
         <div className="space-y-1.5">
           <Label htmlFor="bundle-sku">
             SKU
-            <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+            <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
           </Label>
           <div className="flex gap-2">
             <Input
@@ -165,6 +166,7 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
               onChange={(e) => setSku(e.target.value)}
               placeholder="KIT-READ-3"
               maxLength={64}
+              className="font-mono"
             />
             {/* Same generator and button word as the item form's SKU; the KIT
                 prefix matches the placeholder. Unique per organization is
@@ -172,8 +174,7 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
             <Button
               type="button"
               variant="outline"
-              size="sm"
-              className="h-9"
+              className="max-sm:h-11"
               title="Generate a SKU"
               onClick={() => setSku(generateSku('KIT'))}
             >
@@ -183,121 +184,118 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
         </div>
         <div className="space-y-1.5">
           <Label className="block">Pre-assembly</Label>
-          <label className="flex h-9 items-center gap-2 rounded-md border border-border bg-card px-3 text-sm">
-            <input
-              type="checkbox"
-              checked={preassembly}
-              onChange={(e) => setPreassembly(e.target.checked)}
-              className="h-3.5 w-3.5"
-            />
+          {/* The whole bordered box is the one checkbox (the label used to
+              wrap a native box the same way), so a click anywhere in it
+              toggles, once. */}
+          <Checkbox
+            checked={preassembly}
+            onCheckedChange={setPreassembly}
+            aria-describedby="bundle-preassembly-help"
+            className="border-border bg-card h-8 w-full rounded-md border px-2.5 max-sm:h-11"
+          >
             <span>Enable pre-boxing</span>
-          </label>
-          <p className="text-xs text-muted-foreground">
-            Lets you decrement components ahead of time and hold the kits as
-            phantom inventory until distribution.
+          </Checkbox>
+          <p id="bundle-preassembly-help" className="text-muted-foreground text-[12px]">
+            Lets you decrement components ahead of time and hold the kits as phantom inventory until
+            distribution.
           </p>
         </div>
-      </div>
 
-      <div className="space-y-1.5">
-        <Label htmlFor="bundle-desc">
-          Description
-          <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
-        </Label>
-        <Textarea
-          id="bundle-desc"
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder="What this kit is for, who it's distributed to, etc."
-          rows={2}
-          maxLength={2000}
-        />
-      </div>
-
-      <div className="space-y-3">
-        <div>
-          <Label>Components</Label>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Items + per-kit quantities. Optional items don't block distribution
-            when stock is short.
-          </p>
+        <div className="space-y-1.5 sm:col-span-2">
+          <Label htmlFor="bundle-desc">
+            Description
+            <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
+          </Label>
+          <Textarea
+            id="bundle-desc"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="What this kit is for, who it's distributed to, etc."
+            rows={2}
+            maxLength={2000}
+          />
         </div>
+      </section>
+
+      {/* The recipe: the component search, then one line per component (the
+          purchase order line-entry card). */}
+      <DetailSection title="Components" bodyClassName="flex flex-col gap-3">
+        <p className="text-muted-foreground -mt-1 text-[12px]">
+          Items + per-kit quantities. Optional items don't block distribution when stock is short.
+        </p>
 
         <BundleComponentPicker addedIds={addedIds} onAdd={addComponent} />
 
         {components.length === 0 ? (
-          <p className="text-muted-foreground rounded-md border border-dashed border-border p-4 text-center text-xs">
-            No components yet. Search for items above, then click one or press
-            Enter to add it.
+          <p className="text-muted-foreground border-border rounded-md border border-dashed p-4 text-center text-[12px]">
+            No components yet. Search for items above, then click one or press Enter to add it.
           </p>
         ) : (
-          <div className="bg-card overflow-hidden rounded-lg border">
-            <table className="w-full text-sm">
-              <thead className="bg-muted/50 text-muted-foreground text-[11.5px] uppercase tracking-wide">
-                <tr>
-                  <th className="px-3 py-2 text-left font-medium">Item</th>
-                  <th className="px-3 py-2 text-right font-medium">Qty / kit</th>
-                  <th className="px-3 py-2 text-center font-medium">Optional</th>
-                  <th className="w-10" />
-                </tr>
-              </thead>
-              <tbody>
+          // On a phone the lines run edge to edge in the card, with tighter
+          // cells and a narrower Qty / kit box, so Optional and Remove stay
+          // on screen; a name wraps at word breaks, never letter by letter.
+          <div className="border-border min-w-0 overflow-hidden rounded-md border max-sm:-mx-[18px] max-sm:rounded-none max-sm:border-x-0">
+            <Table className="[&_td]:max-sm:px-2 [&_td]:max-sm:first:pl-4 [&_td]:max-sm:last:pr-4 [&_th]:max-sm:px-2 [&_th]:max-sm:first:pl-4 [&_th]:max-sm:last:pr-4">
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead>Item</TableHead>
+                  <TableHead className="text-right">Qty / kit</TableHead>
+                  <TableHead className="text-center">Optional</TableHead>
+                  <TableHead className="w-10" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {components.map((c) => (
-                  <tr key={c.itemId} className="border-t border-border">
-                    <td className="px-3 py-2">
-                      <div className="font-medium">{c.itemName}</div>
-                      <div className="text-muted-foreground font-mono text-[11px]">
+                  <TableRow key={c.itemId}>
+                    <TableCell className="min-w-24">
+                      <div className="text-foreground break-words font-medium">{c.itemName}</div>
+                      <div className="text-muted-foreground break-all font-mono text-[11.5px]">
                         {c.itemSku}
                       </div>
-                    </td>
-                    <td className="px-3 py-2 text-right">
+                    </TableCell>
+                    <TableCell className="text-right">
                       <BlankZeroNumberInput
                         min={0.0001}
                         step="any"
                         value={c.quantity}
-                        onValueChange={(n) =>
-                          updateComponent(c.itemId, { quantity: n })
-                        }
+                        onValueChange={(n) => updateComponent(c.itemId, { quantity: n })}
                         placeholder="1"
-                        className="ml-auto h-8 w-24 text-right tabular-nums"
+                        className="ml-auto w-16 text-right font-mono tabular-nums sm:w-24"
                       />
-                    </td>
-                    <td className="px-3 py-2 text-center">
-                      <input
-                        type="checkbox"
+                    </TableCell>
+                    {/* The table drops a checkbox cell's right padding; this
+                        one is centred under its header, so it keeps it. */}
+                    <TableCell className="text-center [&:has([role=checkbox])]:pr-3 max-sm:[&:has([role=checkbox])]:pr-2">
+                      <Checkbox
                         checked={c.isOptional}
-                        onChange={(e) =>
-                          updateComponent(c.itemId, { isOptional: e.target.checked })
+                        onCheckedChange={(checked) =>
+                          updateComponent(c.itemId, { isOptional: checked })
                         }
-                        className="h-3.5 w-3.5"
-                        aria-label="Mark component as optional"
+                        label="Mark component as optional"
                       />
-                    </td>
-                    <td className="px-3 py-2">
-                      <button
+                    </TableCell>
+                    <TableCell>
+                      <Button
                         type="button"
+                        variant="ghost"
+                        size="icon"
                         onClick={() => removeComponent(c.itemId)}
-                        className="text-muted-foreground hover:text-destructive"
+                        className="text-muted-foreground hover:text-destructive h-7 w-7"
                         aria-label={`Remove ${c.itemName}`}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </td>
-                  </tr>
+                      </Button>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </div>
         )}
-      </div>
+      </DetailSection>
 
       <div className="flex flex-wrap justify-end gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => router.back()}
-          disabled={submitting}
-        >
+        <Button type="button" variant="outline" onClick={() => router.back()} disabled={submitting}>
           Cancel
         </Button>
         <Button type="submit" variant="gradient" disabled={submitting}>

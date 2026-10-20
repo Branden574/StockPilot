@@ -12,7 +12,9 @@ import { inviteExpiredDescription } from './invite-copy';
  */
 describe('inviteExpiredDescription', () => {
   it('asks someone at the organization when its name is known', () => {
-    expect(inviteExpiredDescription('Learn4Life')).toBe('Ask someone at Learn4Life to invite you again.');
+    expect(inviteExpiredDescription('Learn4Life')).toBe(
+      'Ask someone at Learn4Life to invite you again.',
+    );
   });
 
   it('keeps the old sentence when the organization is unknown', () => {
@@ -22,7 +24,9 @@ describe('inviteExpiredDescription', () => {
 
   it('is what the invite page shows for an expired invite', () => {
     const page = readFileSync(join(__dirname, 'page.tsx'), 'utf8');
-    expect(page).toContain('<CardDescription>{inviteExpiredDescription(orgKnown ? orgName : null)}</CardDescription>');
-    expect(page).not.toContain('<CardDescription>Ask the inviter to send a new one.</CardDescription>');
+    // P5.1: the page draws the auth card, whose description takes this call
+    // (page.test.tsx renders the sentence for an expired invite too).
+    expect(page).toContain('inviteExpiredDescription(orgKnown ? orgName : null)');
+    expect(page).not.toContain('Ask the inviter to send a new one.');
   });
 });

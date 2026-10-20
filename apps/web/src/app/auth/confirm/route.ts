@@ -67,6 +67,32 @@ const PAGE_HEADERS = {
   'referrer-policy': 'no-referrer',
 } as const;
 
+/**
+ * The page's own palette (redesign P5.1): the app's light ground, card and
+ * hairline, the flat accent button (the old blue-to-indigo gradient predated
+ * the brand), and a dark scheme for devices set to dark. It is a style element
+ * in the page itself: no app CSS, font or script loads here (CSP allows inline
+ * styles), so the page stays zero JS.
+ */
+const PAGE_STYLE = `
+:root{color-scheme:light dark}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#fafaf7;color:#0e0f0d;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+main{max-width:400px;width:100%;margin:16px;box-sizing:border-box;background:#ffffff;border:1px solid #e7e5dd;border-radius:8px;padding:32px 28px;text-align:center}
+.brand{font-weight:600;font-size:15px;letter-spacing:-0.02em;margin-bottom:20px}
+h1{font-size:22px;font-weight:500;letter-spacing:-0.02em;line-height:1.25;margin:0 0 10px}
+p{color:#5a5d56;font-size:14px;line-height:1.6;margin:0 0 24px}
+.btn{display:inline-flex;align-items:center;justify-content:center;width:100%;min-height:44px;box-sizing:border-box;padding:10px 20px;border:1px solid transparent;border-radius:6px;background:#2f7463;color:#ffffff;font:inherit;font-weight:500;font-size:15px;text-decoration:none;cursor:pointer}
+.btn:hover{background:#28695a}
+.btn:focus-visible{outline:2px solid #0e0f0d;outline-offset:2px}
+@media (prefers-color-scheme:dark){
+body{background:#0c0d0a;color:#f0efe8}
+main{background:#131410;border-color:#1f201b}
+p{color:#9a9b91}
+.btn{background:#7acdb8;color:#07120e}
+.btn:hover{background:#8dd5c2}
+.btn:focus-visible{outline-color:#f0efe8}
+}`;
+
 function shell(title: string, inner: string): string {
   // Plain server-rendered HTML on purpose: zero JS, works in every client,
   // and the token is only ever consumed by the human pressing the button.
@@ -76,24 +102,22 @@ function shell(title: string, inner: string): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <title>${escapeHtml(title)} · StockPilot</title>
+<style>${PAGE_STYLE}</style>
 </head>
-<body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f4f4f5;font-family:-apple-system,Segoe UI,sans-serif;">
-  <main style="max-width:400px;width:100%;margin:16px;background:white;border-radius:12px;padding:40px;box-shadow:0 1px 3px rgba(0,0,0,0.08);text-align:center;">
-    <div style="font-weight:600;font-size:18px;margin-bottom:20px;">StockPilot</div>
+<body>
+  <main>
+    <div class="brand">StockPilot</div>
     ${inner}
   </main>
 </body></html>`;
 }
 
-const BUTTON_STYLE =
-  'display:inline-block;width:100%;background:linear-gradient(135deg,#3b82f6,#6366f1);color:white;border:0;cursor:pointer;padding:12px 24px;border-radius:8px;font-weight:600;font-size:15px;text-decoration:none;box-sizing:border-box;';
-
 function statusPage(args: { title: string; heading: string; body: string; linkLabel: string; linkHref: string }) {
   const html = shell(
     args.title,
-    `<h1 style="font-size:22px;margin:0 0 10px;">${escapeHtml(args.heading)}</h1>
-    <p style="color:#52525b;font-size:14px;line-height:1.6;margin:0 0 24px;">${escapeHtml(args.body)}</p>
-    <a href="${escapeHtml(args.linkHref)}" style="${BUTTON_STYLE}">${escapeHtml(args.linkLabel)}</a>`,
+    `<h1>${escapeHtml(args.heading)}</h1>
+    <p>${escapeHtml(args.body)}</p>
+    <a href="${escapeHtml(args.linkHref)}" class="btn">${escapeHtml(args.linkLabel)}</a>`,
   );
   return new NextResponse(html, { status: 200, headers: PAGE_HEADERS });
 }
@@ -124,15 +148,15 @@ export async function GET(request: NextRequest) {
         : 'Continue to StockPilot';
   const html = shell(
     heading,
-    `<h1 style="font-size:22px;margin:0 0 10px;">${heading}</h1>
-    <p style="color:#52525b;font-size:14px;line-height:1.6;margin:0 0 24px;">
+    `<h1>${heading}</h1>
+    <p>
       This link works once. Press the button to continue.
     </p>
     <form method="post" action="/auth/confirm">
       <input type="hidden" name="token_hash" value="${escapeHtml(tokenHash)}">
       <input type="hidden" name="type" value="${escapeHtml(type)}">
       <input type="hidden" name="next" value="${escapeHtml(next)}">
-      <button type="submit" style="${BUTTON_STYLE}">
+      <button type="submit" class="btn">
         ${button}
       </button>
     </form>`,

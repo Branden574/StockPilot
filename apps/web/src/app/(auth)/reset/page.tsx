@@ -29,7 +29,7 @@ export default async function ResetPage({
       }
     >
       {error === 'link_expired' && (
-        <p className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+        <p className="bg-destructive-wash text-destructive mb-4 rounded-md px-3 py-2 text-[13px] leading-[19.5px]">
           That reset link has expired or was already used. Enter your email
           below and we&apos;ll send a fresh one.
         </p>

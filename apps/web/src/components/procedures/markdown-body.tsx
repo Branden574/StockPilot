@@ -34,35 +34,40 @@ export function MarkdownBody({ body, className }: MarkdownBodyProps) {
   const trimmed = body?.trim() ?? '';
   if (!trimmed) {
     return (
-      <p className={cn('text-sm italic text-muted-foreground', className)}>
+      <p className={cn('text-muted-foreground text-[13.5px] italic', className)}>
         No written instructions yet.
       </p>
     );
   }
   return (
     <div
+      data-slot="procedure-markdown"
       className={cn(
         // Hand-rolled prose to avoid depending on @tailwindcss/typography
         // (we don't have it installed). Keeps procedures readable on
-        // narrow screens while still feeling like an article.
-        'max-w-[680px] text-[15px] leading-7 text-foreground',
+        // narrow screens while still feeling like an article. Every rule is
+        // scoped to this element ([&_x]), so global changes never restyle
+        // it, and every colour is a theme token, so both modes read.
+        'text-foreground max-w-[680px] text-[15px] leading-7 [overflow-wrap:anywhere]',
         '[&_p]:my-3 [&_p]:leading-7',
-        '[&_h1]:mt-6 [&_h1]:mb-3 [&_h1]:text-2xl [&_h1]:font-semibold',
-        '[&_h2]:mt-5 [&_h2]:mb-2 [&_h2]:text-xl [&_h2]:font-semibold',
-        '[&_h3]:mt-4 [&_h3]:mb-2 [&_h3]:text-lg [&_h3]:font-semibold',
-        '[&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-6 [&_ul]:space-y-1',
-        '[&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-6 [&_ol]:space-y-1',
+        '[&_h1]:mb-3 [&_h1]:mt-7 [&_h1]:font-display [&_h1]:text-[24px] [&_h1]:font-medium [&_h1]:leading-[1.3] [&_h1]:tracking-[-0.02em]',
+        '[&_h2]:mb-2 [&_h2]:mt-6 [&_h2]:font-display [&_h2]:text-[20px] [&_h2]:font-medium [&_h2]:leading-[1.35] [&_h2]:tracking-[-0.015em]',
+        '[&_h3]:mb-2 [&_h3]:mt-5 [&_h3]:font-display [&_h3]:text-[17px] [&_h3]:font-medium [&_h3]:leading-[1.4]',
+        '[&_h1:first-child]:mt-0 [&_h2:first-child]:mt-0 [&_h3:first-child]:mt-0',
+        '[&_ul]:my-3 [&_ul]:list-disc [&_ul]:space-y-1 [&_ul]:pl-6',
+        '[&_ol]:my-3 [&_ol]:list-decimal [&_ol]:space-y-1 [&_ol]:pl-6',
         '[&_li]:marker:text-muted-foreground',
-        '[&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2',
-        '[&_code]:rounded [&_code]:bg-muted [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-[13px]',
-        '[&_pre]:my-4 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-muted [&_pre]:p-4 [&_pre]:text-[13px]',
-        '[&_pre_code]:bg-transparent [&_pre_code]:p-0',
-        '[&_blockquote]:my-3 [&_blockquote]:border-l-4 [&_blockquote]:border-border [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:text-muted-foreground',
-        '[&_table]:my-4 [&_table]:w-full [&_table]:border-collapse [&_table]:text-sm',
-        '[&_th]:border [&_th]:border-border [&_th]:bg-muted [&_th]:px-3 [&_th]:py-2 [&_th]:text-left [&_th]:font-medium',
-        '[&_td]:border [&_td]:border-border [&_td]:px-3 [&_td]:py-2',
-        '[&_hr]:my-6 [&_hr]:border-border',
-        '[&_input[type=checkbox]]:mr-2',
+        '[&_strong]:text-foreground [&_strong]:font-semibold',
+        '[&_a]:text-accent [&_a:hover]:text-foreground [&_a]:underline [&_a]:underline-offset-2',
+        '[&_code]:bg-sunk [&_code]:border-border [&_code]:rounded [&_code]:border [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[13px]',
+        '[&_pre]:bg-sunk [&_pre]:border-border [&_pre]:my-4 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:p-4 [&_pre]:text-[13px] [&_pre]:[overflow-wrap:normal]',
+        '[&_pre_code]:border-0 [&_pre_code]:bg-transparent [&_pre_code]:p-0',
+        '[&_blockquote]:border-line-strong [&_blockquote]:text-ink-2 [&_blockquote]:my-3 [&_blockquote]:border-l-2 [&_blockquote]:pl-4 [&_blockquote]:italic',
+        '[&_table]:my-4 [&_table]:block [&_table]:w-full [&_table]:border-collapse [&_table]:overflow-x-auto [&_table]:text-[13.5px] [&_table]:[overflow-wrap:normal]',
+        '[&_th]:border-border [&_th]:bg-sunk [&_th]:text-muted-foreground [&_th]:border [&_th]:px-3 [&_th]:py-2 [&_th]:text-left [&_th]:text-[12px] [&_th]:font-medium',
+        '[&_td]:border-border [&_td]:border [&_td]:px-3 [&_td]:py-2',
+        '[&_hr]:border-border [&_hr]:my-6',
+        '[&_input[type=checkbox]]:accent-foreground [&_input[type=checkbox]]:mr-2',
         className,
       )}
     >

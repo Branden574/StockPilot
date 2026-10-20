@@ -20,7 +20,11 @@ import { useTheme } from '@/lib/use-theme';
  * Zendesk — mobile surface for the support-tickets module. Mirrors the
  * settings.tsx shell (topbar + editorial head + sectioned cards). Shows
  * connection status, lets admins (canManage) connect/disconnect via the
- * Bearer endpoints, and stubs the agent console that ships next.
+ * Bearer endpoints, and opens the agent console in the app (zendesk/web).
+ *
+ * The head said the console would come "(soon)" while the AGENT CONSOLE card
+ * below already opens it; the clause now says it is here (the redesign rules
+ * allow no "coming soon" words; CONFLICTS D23 is the web page's twin).
  *
  * Navigation here is cosmetic; the actual module gate + connect perms are
  * enforced server-side (assertModuleEnabled + RLS), so the permissive
@@ -149,7 +153,7 @@ export default function ZendeskScreen() {
             Support<Em>.</Em>
           </Display>
           <Body muted size={14} style={{ marginTop: 8 }}>
-            Support tickets + (soon) an in-app agent console.
+            Support tickets + an in-app agent console.
           </Body>
         </View>
       </SafeAreaView>
@@ -169,12 +173,14 @@ export default function ZendeskScreen() {
           </Section>
         ) : loading ? (
           <View style={{ paddingTop: 48, alignItems: 'center' }}>
-            <ActivityIndicator color={c.ink4} />
+            <ActivityIndicator color={c.ink} />
           </View>
         ) : loadError ? (
           <Section label="CONNECTION">
             <Card padding={16}>
-              <Body size={14.5}>{loadError}</Body>
+              <Body size={14.5} accessibilityRole="alert">
+                {loadError}
+              </Body>
               <View style={{ marginTop: 14, alignSelf: 'flex-start' }}>
                 <Button variant="outline" size="sm" onPress={() => void load()}>
                   Try again
@@ -264,8 +270,11 @@ export default function ZendeskScreen() {
                       Open your Zendesk agent interface directly in the app. Sign in with your
                       normal Zendesk credentials — your session is saved between visits.
                     </Body>
+                    {/* One ink button a screen: while the Connect form shows its
+                        own (a manager, not connected), this one is the outline. */}
                     <Button
                       block
+                      variant={canManage && !connected ? 'outline' : 'primary'}
                       onPress={() =>
                         router.push({
                           pathname: '/zendesk/web',

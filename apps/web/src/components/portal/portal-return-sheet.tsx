@@ -3,10 +3,17 @@
 import { Loader2 } from 'lucide-react';
 import * as React from 'react';
 
-import { RequesterReturnSheetForm, type RequesterSubmitted } from '@/components/returns/requester-return-sheet';
+import {
+  RequesterReturnSheetForm,
+  type RequesterSubmitted,
+} from '@/components/returns/requester-return-sheet';
 import { Button } from '@/components/ui/button';
 import { readActionOptions, readActionSubmit } from '@/lib/returns/requester-sheet';
-import { portalReturnOptionsAction, portalReturnSheetAction, requestPortalReturnAction } from '@/server/actions/portal';
+import {
+  portalReturnOptionsAction,
+  portalReturnSheetAction,
+  requestPortalReturnAction,
+} from '@/server/actions/portal';
 
 import { requesterEntryLabel, RETURNS_COPY, type RequesterReturnSheet } from '@stockpilot/core';
 
@@ -67,7 +74,9 @@ export function PortalReturnSheet({
       let next: SheetState;
       try {
         const res = await portalReturnSheetAction(orderId);
-        next = res.ok ? { status: 'ready', sheet: res.data } : { status: 'failed', message: res.error.message || SHEET_FAILED };
+        next = res.ok
+          ? { status: 'ready', sheet: res.data }
+          : { status: 'failed', message: res.error.message || SHEET_FAILED };
       } catch {
         next = { status: 'failed', message: SHEET_FAILED };
       }
@@ -78,12 +87,18 @@ export function PortalReturnSheet({
     };
   }, [orderId, attempt]);
 
-  const shell = 'bg-muted/40 mt-3 space-y-3 rounded-lg border p-3';
+  // The sheet sits inside the order's row: the sunk fill and the card's
+  // hairline set it apart from the row (redesign P5.1 step B).
+  const shell = 'border-border bg-sunk mt-3 space-y-3 rounded-lg border p-4';
 
   if (state.status === 'loading') {
     return (
       <div id={id} className={shell}>
-        <p className="text-muted-foreground flex items-center gap-2 text-sm" role="status" aria-live="polite">
+        <p
+          className="text-muted-foreground flex items-center gap-2 text-[13.5px]"
+          role="status"
+          aria-live="polite"
+        >
           <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
           {RETURNS_COPY.requesterLoadingForm}
         </p>
@@ -94,7 +109,7 @@ export function PortalReturnSheet({
   if (state.status === 'failed') {
     return (
       <div id={id} className={shell}>
-        <p role="alert" className="text-destructive text-sm">
+        <p role="alert" className="text-destructive text-[13.5px]">
           {state.message}
         </p>
         <div className="flex items-center gap-2">
@@ -121,12 +136,12 @@ export function PortalReturnSheet({
   const headingId = `${id ?? `portal-return-${orderId}`}-heading`;
   return (
     <section id={id} className={shell} aria-labelledby={headingId}>
-      <h3 id={headingId} className="text-sm font-medium">
+      <h3 id={headingId} className="text-foreground text-[13.5px] font-medium leading-5">
         {heading}
       </h3>
       {sheet.lines.length === 0 ? (
         <>
-          <p className="text-muted-foreground text-sm">{RETURNS_COPY.requesterNothingLeft}</p>
+          <p className="text-muted-foreground text-[13.5px]">{RETURNS_COPY.requesterNothingLeft}</p>
           <Button size="sm" variant="ghost" onClick={onCancel}>
             Close
           </Button>
@@ -138,7 +153,9 @@ export function PortalReturnSheet({
           idPrefix={`ret-${orderId}`}
           density="inline"
           loadOptions={async () => readActionOptions(await portalReturnOptionsAction(orderId))}
-          submit={async (body) => readActionSubmit(await requestPortalReturnAction({ orderId, ...body }))}
+          submit={async (body) =>
+            readActionSubmit(await requestPortalReturnAction({ orderId, ...body }))
+          }
           onSubmitted={onDone}
           onStale={() => void readAgain()}
           onCancel={onCancel}

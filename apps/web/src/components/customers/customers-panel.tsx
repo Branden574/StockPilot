@@ -2,9 +2,11 @@
 
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
-import { ChevronDown, ChevronRight, Loader2, Mail, Plus, Tag, Trash2, X } from 'lucide-react';
+import { ChevronRight, Loader2, Mail, Plus, Tag, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 
+import { StatePanel } from '@/components/patterns/state-panel';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -16,6 +18,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { cn } from '@/lib/utils';
 import {
   addCatalogItemAction,
   createCustomerAction,
@@ -65,6 +68,37 @@ interface Props {
   catalogByCustomer: Record<string, CatalogRow[]>;
   pricesByList: Record<string, PriceRow[]>;
   entitled: boolean;
+}
+
+/** A section's heading row: the h2 on the left, its controls on the right. */
+const SECTION_HEAD = 'mb-3 flex flex-wrap items-center justify-between gap-3';
+const SECTION_TITLE = 'text-foreground text-[13.5px] font-medium leading-5';
+/** An expandable card (DESIGN-SPEC 6.7): radius 8, hairline, the card colour. */
+const CARD = 'border-border bg-card overflow-hidden rounded-lg border';
+/** The card's toggle row: the whole header is one button. */
+const CARD_TOGGLE =
+  'hover:bg-muted focus-visible:ring-ring flex w-full items-center gap-3 px-[18px] py-3.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset';
+/** A list row inside an open card, 8 x 0 with a hairline between rows. */
+const LIST = 'divide-border border-border divide-y rounded-lg border';
+const LIST_ROW = 'flex min-h-10 items-center gap-2 px-3 py-1.5 text-[13.5px]';
+/** The native select's look: the Input's box (32 px, 44 px with 16 px text on
+ *  a phone) on its own line under the label, with the control border (the
+ *  stronger hairline the shared Input and Select draw; the plain hairline
+ *  nearly vanished on the dark card) and the focus ring. Native, so the
+ *  browser's picker stays. */
+const NATIVE_SELECT =
+  'border-line-strong bg-card text-foreground focus-visible:ring-ring block h-8 w-full max-w-sm rounded-md border px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:h-11 max-sm:text-base';
+
+function Chevron({ open }: { open: boolean }) {
+  return (
+    <ChevronRight
+      aria-hidden
+      className={cn(
+        'text-muted-foreground h-4 w-4 shrink-0 transition-transform motion-reduce:transition-none',
+        open && 'rotate-90',
+      )}
+    />
+  );
 }
 
 /**
@@ -118,20 +152,23 @@ export function CustomersPanel({
   return (
     <div className="space-y-8">
       <section>
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-medium tracking-wide uppercase text-muted-foreground">
-            Customers · {customers.length}
-          </h2>
-          <Button size="sm" onClick={() => setCreateOpen(true)} disabled={!entitled}>
+        <div className={SECTION_HEAD}>
+          <h2 className={SECTION_TITLE}>Customers · {customers.length}</h2>
+          <Button variant="gradient" onClick={() => setCreateOpen(true)} disabled={!entitled}>
             <Plus className="h-3.5 w-3.5" /> New customer
           </Button>
         </div>
 
         {customers.length === 0 ? (
-          <div className="text-muted-foreground rounded-xl border border-dashed p-8 text-center text-sm">
-            No customers yet. Create one, assign a price list, and invite their
-            first portal user.
-          </div>
+          <StatePanel
+            kind="empty"
+            size="sm"
+            headingLevel={3}
+            title="No customers yet."
+            description={
+              <p>Create one, assign a price list, and invite their first portal user.</p>
+            }
+          />
         ) : (
           <div className="space-y-2">
             {customers.map((c) => (
@@ -173,8 +210,8 @@ export function CustomersPanel({
           <DialogHeader>
             <DialogTitle>New customer</DialogTitle>
             <DialogDescription>
-              A B2B account that orders through your portal. You can assign a
-              price list and invite users after creating it.
+              A B2B account that orders through your portal. You can assign a price list and invite
+              users after creating it.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -206,7 +243,11 @@ export function CustomersPanel({
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={busy === 'create'}>
+            <Button
+              variant="outline"
+              onClick={() => setCreateOpen(false)}
+              disabled={busy === 'create'}
+            >
               Cancel
             </Button>
             <Button onClick={createCustomer} disabled={busy === 'create' || !newName.trim()}>
@@ -314,27 +355,23 @@ function CustomerCard({
   }
 
   return (
-    <div className="bg-card rounded-xl border">
+    <div className={CARD}>
       <button
         type="button"
         onClick={onToggle}
-        className="flex w-full items-center gap-3 p-4 text-left"
+        aria-expanded={expanded}
+        aria-controls={`customer-${customer.id}-detail`}
+        className={CARD_TOGGLE}
       >
-        {expanded ? (
-          <ChevronDown className="text-muted-foreground h-4 w-4 shrink-0" />
-        ) : (
-          <ChevronRight className="text-muted-foreground h-4 w-4 shrink-0" />
-        )}
+        <Chevron open={expanded} />
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="font-medium">{customer.name}</span>
-            {customer.status === 'archived' && (
-              <span className="text-muted-foreground rounded-full border px-2 py-0.5 text-[11px]">
-                archived
-              </span>
-            )}
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="text-foreground truncate text-[13.5px] font-medium">
+              {customer.name}
+            </span>
+            {customer.status === 'archived' && <Badge variant="outline">archived</Badge>}
           </div>
-          <p className="text-muted-foreground mt-0.5 text-xs">
+          <p className="text-muted-foreground mt-0.5 text-[12.5px]">
             {customer.price_list_name ?? 'No price list'} · {customer.user_count} user
             {customer.user_count === 1 ? '' : 's'} · {customer.catalog_count} catalog item
             {customer.catalog_count === 1 ? '' : 's'}
@@ -343,12 +380,16 @@ function CustomerCard({
       </button>
 
       {expanded && (
-        <div className="space-y-5 border-t px-4 pt-4 pb-5">
+        <div
+          id={`customer-${customer.id}-detail`}
+          className="border-border space-y-5 border-t px-[18px] pb-5 pt-4"
+        >
           {/* Price list assignment */}
           <div className="space-y-1.5">
-            <Label>Price list</Label>
+            <Label htmlFor={`customer-${customer.id}-price-list`}>Price list</Label>
             <select
-              className="border-input bg-background w-full max-w-sm rounded-md border px-3 py-2 text-sm"
+              id={`customer-${customer.id}-price-list`}
+              className={NATIVE_SELECT}
               value={customer.price_list_id ?? ''}
               disabled={busy === `pl-${customer.id}`}
               onChange={(e) => void setPriceList(e.target.value || null)}
@@ -360,9 +401,8 @@ function CustomerCard({
                 </option>
               ))}
             </select>
-            <p className="text-muted-foreground text-xs">
-              Portal customers only see items priced on their list AND in their
-              catalog below.
+            <p className="text-muted-foreground text-[12px]">
+              Portal customers only see items priced on their list AND in their catalog below.
             </p>
           </div>
 
@@ -370,19 +410,21 @@ function CustomerCard({
           <div className="space-y-2">
             <Label>Portal users</Label>
             {users.length > 0 && (
-              <ul className="space-y-1">
+              <ul className={cn(LIST, 'max-w-xl')}>
                 {users.map((u) => (
-                  <li key={u.user_id} className="flex items-center gap-2 text-sm">
-                    <Mail className="text-muted-foreground h-3.5 w-3.5" />
+                  <li key={u.user_id} className={LIST_ROW}>
+                    <Mail aria-hidden className="text-muted-foreground h-3.5 w-3.5 shrink-0" />
                     <span className="min-w-0 flex-1 truncate">{u.email}</span>
-                    <span className="text-muted-foreground text-xs">
+                    <Badge variant={u.accepted_at ? 'success' : 'secondary'}>
                       {u.accepted_at ? 'active' : 'invited'}
-                    </span>
+                    </Badge>
                     <Button
                       variant="ghost"
                       size="sm"
+                      className="text-muted-foreground"
                       onClick={() => void removeUser(u.user_id)}
                       disabled={busy === `rmuser-${u.user_id}`}
+                      aria-label={`Remove ${u.email}`}
                     >
                       <X className="h-3.5 w-3.5" />
                     </Button>
@@ -390,8 +432,9 @@ function CustomerCard({
                 ))}
               </ul>
             )}
-            <div className="flex max-w-sm gap-2">
+            <div className="flex max-w-xl flex-wrap gap-2">
               <Input
+                className="min-w-0 flex-1 basis-56"
                 value={inviteEmail}
                 onChange={(e) => setInviteEmail(e.target.value)}
                 placeholder="buyer@customer.com"
@@ -408,7 +451,7 @@ function CustomerCard({
               </Button>
             </div>
             {inviteError && (
-              <p role="alert" className="text-destructive text-sm">
+              <p role="alert" className="text-destructive text-[13px]">
                 {inviteError}
               </p>
             )}
@@ -418,19 +461,26 @@ function CustomerCard({
           <div className="space-y-2">
             <Label>Catalog ({catalog.length})</Label>
             {catalog.length > 0 && (
-              <ul className="space-y-1">
+              <ul className={cn(LIST, 'max-w-xl')}>
                 {catalog.map((r) => (
-                  <li key={r.item_id} className="flex items-center gap-2 text-sm">
-                    <Tag className="text-muted-foreground h-3.5 w-3.5" />
+                  <li key={r.item_id} className={LIST_ROW}>
+                    <Tag aria-hidden className="text-muted-foreground h-3.5 w-3.5 shrink-0" />
                     <span className="min-w-0 flex-1 truncate">
                       {r.name ?? r.item_id}
-                      {r.sku ? <span className="text-muted-foreground"> · {r.sku}</span> : null}
+                      {r.sku ? (
+                        <span className="text-muted-foreground font-mono text-[12px]">
+                          {' '}
+                          · {r.sku}
+                        </span>
+                      ) : null}
                     </span>
                     <Button
                       variant="ghost"
                       size="sm"
+                      className="text-muted-foreground"
                       onClick={() => void removeFromCatalog(r.item_id)}
                       disabled={busy === `rmcat-${r.item_id}`}
+                      aria-label={`Remove ${r.name ?? r.item_id} from the catalog`}
                     >
                       <X className="h-3.5 w-3.5" />
                     </Button>
@@ -486,29 +536,40 @@ function PriceListsSection({
 
   return (
     <section>
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <h2 className="text-sm font-medium tracking-wide uppercase text-muted-foreground">
-          Price lists · {priceLists.length}
-        </h2>
-        <div className="flex gap-2">
+      <div className={SECTION_HEAD}>
+        <h2 className={SECTION_TITLE}>Price lists · {priceLists.length}</h2>
+        <div className="flex w-full gap-2 sm:w-auto">
           <Input
             value={newListName}
             onChange={(e) => setNewListName(e.target.value)}
             placeholder="New price list name"
-            className="w-56"
+            aria-label="New price list name"
+            className="min-w-0 flex-1 sm:w-56 sm:flex-none"
             maxLength={200}
           />
-          <Button size="sm" onClick={() => void createList()} disabled={busy === 'newlist' || !newListName.trim()}>
+          <Button
+            variant="outline"
+            onClick={() => void createList()}
+            disabled={busy === 'newlist' || !newListName.trim()}
+          >
             <Plus className="h-3.5 w-3.5" /> Add
           </Button>
         </div>
       </div>
 
       {priceLists.length === 0 ? (
-        <div className="text-muted-foreground rounded-xl border border-dashed p-6 text-center text-sm">
-          No price lists yet. Prices are explicit-only: an item with no price on
-          a customer&apos;s list never appears in their portal.
-        </div>
+        <StatePanel
+          kind="empty"
+          size="sm"
+          headingLevel={3}
+          title="No price lists yet."
+          description={
+            <p>
+              Prices are explicit-only: an item with no price on a customer&apos;s list never
+              appears in their portal.
+            </p>
+          }
+        />
       ) : (
         <div className="space-y-2">
           {priceLists.map((pl) => (
@@ -593,35 +654,51 @@ function PriceListCard({
   }
 
   return (
-    <div className="bg-card rounded-xl border">
-      <button type="button" onClick={onToggle} className="flex w-full items-center gap-3 p-4 text-left">
-        {expanded ? (
-          <ChevronDown className="text-muted-foreground h-4 w-4 shrink-0" />
-        ) : (
-          <ChevronRight className="text-muted-foreground h-4 w-4 shrink-0" />
-        )}
+    <div className={CARD}>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        aria-controls={`price-list-${list.id}-detail`}
+        className={CARD_TOGGLE}
+      >
+        <Chevron open={expanded} />
         <div className="min-w-0 flex-1">
-          <span className="font-medium">{list.name}</span>
-          <span className="text-muted-foreground ml-2 text-xs">{prices.length} priced items</span>
+          <span className="text-foreground text-[13.5px] font-medium">{list.name}</span>
+          <span className="text-muted-foreground ml-2 text-[12.5px]">
+            {prices.length} priced items
+          </span>
         </div>
       </button>
 
       {expanded && (
-        <div className="space-y-3 border-t px-4 pt-4 pb-5">
+        <div
+          id={`price-list-${list.id}-detail`}
+          className="border-border space-y-3 border-t px-[18px] pb-5 pt-4"
+        >
           {prices.length > 0 && (
-            <ul className="space-y-1">
+            <ul className={cn(LIST, 'max-w-xl')}>
               {prices.map((p) => (
-                <li key={p.item_id} className="flex items-center gap-2 text-sm">
+                <li key={p.item_id} className={LIST_ROW}>
                   <span className="min-w-0 flex-1 truncate">
                     {p.name ?? p.item_id}
-                    {p.sku ? <span className="text-muted-foreground"> · {p.sku}</span> : null}
+                    {p.sku ? (
+                      <span className="text-muted-foreground font-mono text-[12px]">
+                        {' '}
+                        · {p.sku}
+                      </span>
+                    ) : null}
                   </span>
-                  <span className="font-mono text-sm">${p.unit_price.toFixed(2)}</span>
+                  <span className="font-mono text-[13px] tabular-nums">
+                    ${p.unit_price.toFixed(2)}
+                  </span>
                   <Button
                     variant="ghost"
                     size="sm"
+                    className="text-muted-foreground"
                     onClick={() => void remove(p.item_id)}
                     disabled={busy === `rmprice-${p.item_id}`}
+                    aria-label={`Remove the price for ${p.name ?? p.item_id}`}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
@@ -631,20 +708,33 @@ function PriceListCard({
           )}
 
           {pendingItem ? (
-            <div className="flex max-w-md items-center gap-2">
-              <span className="min-w-0 flex-1 truncate text-sm">{pendingItem.name}</span>
+            <div className="flex max-w-xl flex-wrap items-center gap-2">
+              <span className="min-w-0 flex-1 basis-40 truncate text-[13.5px]">
+                {pendingItem.name}
+              </span>
               <Input
                 value={priceInput}
                 onChange={(e) => setPriceInput(e.target.value)}
                 placeholder="0.00"
                 inputMode="decimal"
-                className="w-28"
+                aria-label={`Price for ${pendingItem.name}`}
+                className="w-28 font-mono tabular-nums"
                 autoFocus
               />
-              <Button size="sm" onClick={() => void savePrice()} disabled={busy === `price-${list.id}`}>
+              <Button
+                size="sm"
+                onClick={() => void savePrice()}
+                disabled={busy === `price-${list.id}`}
+              >
                 Save
               </Button>
-              <Button variant="ghost" size="sm" onClick={() => setPendingItem(null)}>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground"
+                onClick={() => setPendingItem(null)}
+                aria-label="Cancel"
+              >
                 <X className="h-3.5 w-3.5" />
               </Button>
             </div>
@@ -664,6 +754,17 @@ function PriceListCard({
 }
 
 // ── Shared: type-to-search item picker ───────────────────────────────────────
+
+/**
+ * A match row in the item picker. The hover is the neutral fill with ink text
+ * (DESIGN-SPEC 2.3): the accent fill it used read 3.48:1 for the name and
+ * 1.21:1 for the SKU on the light teal (1.62 and 1.51 in dark). The keyboard
+ * focus ring is drawn inside the row: the list clips its rows to its rounded
+ * corners, which cut the global ring (drawn 2 px outside) down to one edge.
+ * Exported for the test that pins it.
+ */
+export const ITEM_MATCH_ROW =
+  'hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:ring-ring flex min-h-10 w-full items-center gap-2 px-3 py-2 text-left text-[13.5px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-offset-0';
 
 function ItemSearchAdd({
   items,
@@ -691,20 +792,21 @@ function ItemSearchAdd({
   }, [query, items, excludeIds]);
 
   return (
-    <div className="max-w-md">
+    <div className="max-w-xl">
       <Input
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder={placeholder}
+        aria-label={placeholder}
         disabled={disabled}
       />
       {matches.length > 0 && (
-        <ul className="bg-popover mt-1 rounded-md border shadow-sm">
+        <ul className="border-border bg-popover divide-border mt-1 divide-y overflow-hidden rounded-lg border">
           {matches.map((m) => (
             <li key={m.id}>
               <button
                 type="button"
-                className="hover:bg-accent flex w-full items-center gap-2 px-3 py-2 text-left text-sm"
+                className={ITEM_MATCH_ROW}
                 onClick={() => {
                   setQuery('');
                   if (onPickItem) onPickItem(m);
@@ -712,7 +814,9 @@ function ItemSearchAdd({
                 }}
               >
                 <span className="min-w-0 flex-1 truncate">{m.name}</span>
-                {m.sku && <span className="text-muted-foreground text-xs">{m.sku}</span>}
+                {m.sku && (
+                  <span className="text-muted-foreground font-mono text-[12px]">{m.sku}</span>
+                )}
               </button>
             </li>
           ))}

@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { AuthStage } from '@/components/auth/auth-stage';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
 import { IconMark } from '@/components/ui/icon-mark';
+import './auth.css';
 
 /**
  * The authentication shell — shared by /signin, /signin/mfa, /signup, /reset,
@@ -11,10 +12,11 @@ import { IconMark } from '@/components/ui/icon-mark';
  * composition, so there is no point in the flow where a user drops from a
  * premium screen onto a bare one.
  *
- * DESKTOP is a cinematic split: a live StockPilot operation on the left, the
- * form on the right. TABLET narrows the visual side. MOBILE drops the split
- * entirely — a squeezed split-screen at 390px serves nobody, so the phone gets
- * a compact branded header and then the form, immediately.
+ * DESKTOP is a split: a live StockPilot operation on a flat inset surface on
+ * the left (the redesign draws no gradient ground), the form on the right.
+ * TABLET narrows the visual side. MOBILE drops the split entirely — a
+ * squeezed split-screen at 390px serves nobody, so the phone gets a compact
+ * branded header and then the form, immediately.
  *
  * THE FORM IS NEVER BLOCKED BY THE DECORATION. The visual column is `aria-hidden`
  * and renders independently; nothing in the form waits on it. It also loads no
@@ -29,7 +31,6 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
     <div className="auth-shell">
       {/* Visual column — desktop and tablet only. */}
       <aside className="auth-visual">
-        <div aria-hidden className="auth-visual-ground" />
         <div className="auth-visual-inner">
           <Link href="/" aria-label="StockPilot home" className="auth-visual-brand">
             <IconMark />

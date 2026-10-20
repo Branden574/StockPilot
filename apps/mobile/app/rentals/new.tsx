@@ -78,7 +78,7 @@ import {
 import { useOrg } from '@/lib/use-org';
 import { retryWorkspace } from '@/lib/use-workspace';
 import { supabase } from '@/lib/supabase';
-import { ACCENT, FONT, RADIUS } from '@/lib/theme';
+import { FONT, RADIUS } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 interface WarehouseRow {
@@ -152,6 +152,9 @@ export default function NewRental() {
   const [stockError, setStockError] = React.useState<string | null>(null);
   const [itemsNonce, setItemsNonce] = React.useState(0);
   const [search, setSearch] = React.useState('');
+  // The item search's border deepens to ink while it is typed in, as the
+  // shared Field's does (DESIGN-SPEC 6.3: never a search with no visible focus).
+  const [searchFocused, setSearchFocused] = React.useState(false);
   /** itemId → quantity. The cart; each entry becomes one `lines[]` element. */
   const [cart, setCart] = React.useState<Record<string, number>>({});
   // The borrower: a picked team member, or anyone else by typed name and
@@ -511,17 +514,17 @@ export default function NewRental() {
                       accessibilityLabel={w.name}
                       accessibilityState={{ selected: active }}
                       style={({ pressed }) => [
-                        styles.chip,
+                        styles.option,
                         {
-                          borderColor: active ? c.ink : c.hair,
-                          backgroundColor: active ? c.ink : c.card,
+                          borderColor: active ? c.ink : c.hair2,
+                          backgroundColor: active ? c.ink : c.sunk,
                           opacity: pressed ? 0.85 : 1,
                         },
                       ]}
                     >
                       <Body
                         size={13}
-                        color={active ? c.paper : c.ink2}
+                        color={active ? c.paper : c.ink}
                         style={{ fontFamily: FONT.display }}
                       >
                         {w.name}
@@ -534,19 +537,28 @@ export default function NewRental() {
           </FormSection>
 
           <FormSection icon={PackageOpen} label={`ITEMS${lines.length > 0 ? ` · ${lines.length}` : ''}`}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <Search size={14} color={c.ink4} strokeWidth={1.5} />
+            <View
+              style={[
+                styles.search,
+                { borderColor: searchFocused ? c.ink : c.hair2, backgroundColor: c.card },
+              ]}
+            >
+              <Search size={14} color={c.ink3} strokeWidth={1.5} />
               <TextInput
                 value={search}
                 onChangeText={setSearch}
+                onFocus={() => setSearchFocused(true)}
+                onBlur={() => setSearchFocused(false)}
                 placeholder="Search rental items"
-                placeholderTextColor={c.ink5}
+                placeholderTextColor={c.ink3}
                 autoCapitalize="none"
+                accessibilityLabel="Search rental items"
                 style={{
                   flex: 1,
                   fontFamily: FONT.displayRegular,
                   fontSize: 15,
-                  height: 40,
+                  minHeight: 42,
+                  paddingVertical: 8,
                   color: c.ink,
                 }}
               />
@@ -593,7 +605,7 @@ export default function NewRental() {
                         <Body size={14} style={{ fontFamily: FONT.display }}>
                           {itemName}
                         </Body>
-                        <Mono size={10} tracking={0.1} upper color={c.ink4} style={{ marginTop: 2 }}>
+                        <Mono size={10.5} tracking={0.1} upper color={c.ink3} style={{ marginTop: 2 }}>
                           {it.sku ? `${it.sku} · ` : ''}
                           {avail} AVAILABLE
                         </Mono>
@@ -606,10 +618,16 @@ export default function NewRental() {
                         accessibilityRole="button"
                         accessibilityLabel={`Remove one ${itemName}`}
                         accessibilityState={{ disabled: qty === 0 }}
-                        hitSlop={8}
-                        style={[styles.step, { borderColor: c.hair, opacity: qty === 0 ? 0.35 : 1 }]}
+                        style={[
+                          styles.step,
+                          {
+                            borderColor: c.hair2,
+                            backgroundColor: c.card,
+                            opacity: qty === 0 ? 0.35 : 1,
+                          },
+                        ]}
                       >
-                        <Minus size={14} color={c.ink} strokeWidth={2} />
+                        <Minus size={16} color={c.ink} strokeWidth={2} />
                       </Pressable>
                       <Mono size={14} color={c.ink} style={{ minWidth: 22, textAlign: 'center' }}>
                         {qty}
@@ -620,13 +638,16 @@ export default function NewRental() {
                         accessibilityRole="button"
                         accessibilityLabel={`Add one ${itemName}`}
                         accessibilityState={{ disabled: qty >= avail }}
-                        hitSlop={8}
                         style={[
                           styles.step,
-                          { borderColor: c.hair, opacity: qty >= avail ? 0.35 : 1 },
+                          {
+                            borderColor: c.hair2,
+                            backgroundColor: c.card,
+                            opacity: qty >= avail ? 0.35 : 1,
+                          },
                         ]}
                       >
-                        <Plus size={14} color={c.ink} strokeWidth={2} />
+                        <Plus size={16} color={c.ink} strokeWidth={2} />
                       </Pressable>
                     </View>
                   );
@@ -708,7 +729,7 @@ export default function NewRental() {
                   autoCorrect={false}
                 />
                 {borrowerEmailErrorShown(borrower, emailTouched) ? (
-                  <Body size={12} color={ACCENT.warn}>
+                  <Body size={12} color={c.warnText}>
                     {BORROWER_EMAIL_FORMAT_ERROR}
                   </Body>
                 ) : null}
@@ -733,7 +754,7 @@ export default function NewRental() {
                 />
               </View>
               <View style={{ alignItems: 'flex-end' }}>
-                <Mono size={9.5} tracking={0.18} upper color={c.ink4}>
+                <Mono size={10.5} tracking={0.18} upper color={c.ink3}>
                   RETURN BY
                 </Mono>
                 <Mono
@@ -826,8 +847,13 @@ function BorrowerSuggestions({
           accessibilityRole="button"
           accessibilityLabel="Try loading team members again"
           style={({ pressed }) => [
-            styles.chip,
-            { alignSelf: 'flex-start', borderColor: c.hair, backgroundColor: c.card, opacity: pressed ? 0.85 : 1 },
+            styles.action,
+            {
+              alignSelf: 'flex-start',
+              borderColor: c.hair2,
+              backgroundColor: c.card,
+              opacity: pressed ? 0.85 : 1,
+            },
           ]}
         >
           <Body size={13} color={c.ink2} style={{ fontFamily: FONT.display }}>
@@ -864,7 +890,7 @@ function BorrowerSuggestions({
           accessibilityHint={BORROWER_SUGGESTION_A11Y_HINT}
           style={({ pressed }) => [
             styles.suggestion,
-            { borderColor: c.hair, backgroundColor: pressed ? c.paper2 : c.card },
+            { borderColor: c.hair2, backgroundColor: pressed ? c.sunk : c.card },
           ]}
         >
           <UserCheck size={14} color={c.ink3} strokeWidth={1.5} />
@@ -901,11 +927,10 @@ function ChangeBorrowerChip({ onPress, stacked = false }: { onPress: () => void;
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel="Change borrower"
-      hitSlop={8}
       style={({ pressed }) => [
-        styles.chip,
+        styles.action,
         {
-          borderColor: c.hair,
+          borderColor: c.hair2,
           backgroundColor: c.card,
           opacity: pressed ? 0.85 : 1,
           alignSelf: stacked ? 'flex-start' : 'auto',
@@ -933,7 +958,7 @@ function FormSection({
     <Card padding={14}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 14 }}>
         <Icon size={14} color={c.ink} strokeWidth={1.5} />
-        <Mono size={10.5} tracking={0.12} upper color={c.ink4}>
+        <Mono size={10.5} tracking={0.12} upper color={c.ink3}>
           {label}
         </Mono>
       </View>
@@ -961,7 +986,7 @@ function ReadFailure({
   const { c } = useTheme();
   return (
     <View style={{ gap: 8 }}>
-      <Body size={13} color={ACCENT.warn}>
+      <Body size={13} color={c.warnText}>
         {message}
       </Body>
       {detail ? (
@@ -975,10 +1000,10 @@ function ReadFailure({
         accessibilityRole="button"
         accessibilityState={{ disabled: retrying }}
         style={({ pressed }) => [
-          styles.chip,
+          styles.action,
           {
             alignSelf: 'flex-start',
-            borderColor: c.hair,
+            borderColor: c.hair2,
             backgroundColor: c.card,
             opacity: retrying ? 0.5 : pressed ? 0.85 : 1,
           },
@@ -995,18 +1020,30 @@ function ReadFailure({
 function Field({
   label,
   multiline = false,
+  onFocus,
+  onBlur,
   ...rest
 }: React.ComponentProps<typeof TextInput> & { label: string; multiline?: boolean }) {
   const { c } = useTheme();
+  const [focused, setFocused] = React.useState(false);
   return (
     <View style={{ gap: 6 }}>
-      <Mono size={10} tracking={0.12} upper color={c.ink4}>
+      <Mono size={10} tracking={0.12} upper color={c.ink3}>
         {label}
       </Mono>
       <TextInput
+        accessibilityLabel={label}
         {...rest}
+        onFocus={(e) => {
+          setFocused(true);
+          onFocus?.(e);
+        }}
+        onBlur={(e) => {
+          setFocused(false);
+          onBlur?.(e);
+        }}
         multiline={multiline}
-        placeholderTextColor={c.ink5}
+        placeholderTextColor={c.ink3}
         style={{
           fontFamily: FONT.displayRegular,
           fontSize: 15,
@@ -1014,10 +1051,10 @@ function Field({
           paddingHorizontal: 14,
           paddingVertical: multiline ? 10 : 0,
           borderWidth: 1,
-          borderColor: c.hair,
+          borderColor: focused ? c.ink : c.hair2,
           borderRadius: RADIUS.tile,
           color: c.ink,
-          backgroundColor: c.paper2,
+          backgroundColor: c.card,
           textAlignVertical: multiline ? 'top' : 'center',
         }}
       />
@@ -1036,11 +1073,34 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
   },
   head: { paddingHorizontal: 20, paddingTop: 9, paddingBottom: 12 },
-  chip: {
+  // A warehouse choice: the reference's chip (radius 8), at least the 44pt
+  // iOS minimum and growing with its words (minHeight, never height).
+  option: {
+    minHeight: 44,
     paddingHorizontal: 14,
     paddingVertical: 8,
-    borderRadius: 999,
+    borderRadius: 8,
     borderWidth: 1,
+    justifyContent: 'center',
+  },
+  // Try again and Change: small secondary actions (radius 10, the shared small
+  // button's), 44pt targets without hitSlop.
+  action: {
+    minHeight: 44,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    justifyContent: 'center',
+  },
+  search: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    minHeight: 44,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderRadius: RADIUS.tile,
   },
   suggestion: {
     flexDirection: 'row',
@@ -1052,10 +1112,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: RADIUS.tile,
   },
+  // The quantity steppers: 44pt squares (the reference stepper's radius,
+  // scaled), a real target in place of the old 32pt circle plus hitSlop.
   step: {
-    width: 32,
-    height: 32,
-    borderRadius: 999,
+    width: 44,
+    height: 44,
+    borderRadius: 12,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',

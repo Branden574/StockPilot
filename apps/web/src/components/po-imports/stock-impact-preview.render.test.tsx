@@ -53,6 +53,17 @@ describe('StockImpactPreview — honest display (no guessed placement)', () => {
     // Honest SKU total before → after.
     expect(screen.getByText(/281/)).toBeTruthy();
     expect(screen.getByText(/381/)).toBeTruthy();
+    // The section heading names the table's scroll region, and only that
+    // region: the section around it is not a second one with the same name.
+    const table = screen.getByRole('table');
+    expect(table.parentElement).toHaveAttribute('role', 'region');
+    expect(table.parentElement).toHaveAccessibleName('Stock impact preview');
+    const regions = screen.getAllByRole('region', { name: 'Stock impact preview' });
+    expect(regions).toHaveLength(1);
+    expect(regions[0]).toBe(table.parentElement);
+    expect(
+      screen.getByRole('heading', { level: 2, name: 'Stock impact preview' }).closest('section'),
+    ).not.toHaveAttribute('aria-labelledby');
   });
 
   it('does NOT render the guessed placement columns or the raw Δ symbol', () => {

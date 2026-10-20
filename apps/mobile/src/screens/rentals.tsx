@@ -1,11 +1,10 @@
 import { inventoryDefaultLifecycle, rentalItemsPredicate } from '@stockpilot/core';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { Boxes, PackageOpen, Plus } from 'lucide-react-native';
+import { Boxes, PackageOpen, Plus, TriangleAlert } from 'lucide-react-native';
 import * as React from 'react';
-import { Pressable, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 
 import { Card } from '@/components/ui/card';
-import { Chip } from '@/components/ui/chip';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
@@ -37,7 +36,7 @@ import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { retryWorkspace } from '@/lib/use-workspace';
 import { supabase } from '@/lib/supabase';
-import { FONT } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 interface RentalRow {
@@ -79,6 +78,7 @@ interface RentalItemsState {
 }
 
 export default function RentalsScreen() {
+  const { c } = useTheme();
   const router = useRouter();
   // New-rental is a WRITE — hidden for rentals:read-only viewers (cosmetic;
   // the server enforces). Loading fallback shows, matching other screens.
@@ -246,12 +246,7 @@ export default function RentalsScreen() {
     }
   }
 
-  const viewSwitch = (
-    <View style={{ flexDirection: 'row', gap: 8 }}>
-      <Chip label="Checkouts" active={view === 'checkouts'} onPress={() => setView('checkouts')} />
-      <Chip label="Items" active={view === 'items'} onPress={() => setView('items')} />
-    </View>
-  );
+  const viewSwitch = <ViewSwitch view={view} onChange={setView} />;
 
   if (view === 'items') {
     return (
@@ -260,19 +255,22 @@ export default function RentalsScreen() {
         title="Rental"
         italic="items."
         header={viewSwitch}
-        emptyTitle={
-          noWorkspace
-            ? RENTAL_LIST_NO_WORKSPACE_TITLE
-            : current?.failed
-              ? 'Could not load rental items.'
-              : 'No rental items yet.'
-        }
-        emptyBody={
-          noWorkspace || current?.failed
-            ? 'Check your connection and pull down to try again.'
-            : 'Rental items are the canopies, supplies and equipment staff check out. Add them on the web under Rentals.'
-        }
+        emptyTitle="No rental items yet."
+        emptyBody="Rental items are the canopies, supplies and equipment staff check out. Add them on the web under Rentals."
         emptyIcon={Boxes}
+        // A read that failed, or no workspace, is said in its own words
+        // (DataListScreen's failed panel, redesign defect D25), never "No
+        // rental items yet.".
+        failed={
+          noWorkspace || current?.failed
+            ? {
+                title: noWorkspace
+                  ? RENTAL_LIST_NO_WORKSPACE_TITLE
+                  : 'Could not load rental items.',
+                body: 'Check your connection and pull down to try again.',
+              }
+            : null
+        }
         data={current?.rows ?? []}
         loading={current === null && !noWorkspace}
         refreshing={refreshing}
@@ -311,25 +309,38 @@ export default function RentalsScreen() {
         shown?.staleReason ? (
           <View style={{ gap: 12 }}>
             {viewSwitch}
-            <Card padding={12}>
-              <Body size={13.5} accessibilityRole="alert">
+            {/* The rows below are from before a reload that failed: said on
+                the warning wash, with the warning glyph beside the words. */}
+            <View style={[styles.stale, { backgroundColor: c.warnWash }]}>
+              <TriangleAlert
+                size={16}
+                color={c.warnText}
+                strokeWidth={1.75}
+                style={{ marginTop: 2 }}
+              />
+              <Body size={13.5} color={c.warnText} accessibilityRole="alert" style={{ flex: 1 }}>
                 {rentalListStaleCopy(shown.staleReason)}
               </Body>
-            </Card>
+            </View>
           </View>
         ) : (
           viewSwitch
         )
       }
-      emptyTitle={
-        noWorkspace ? RENTAL_LIST_NO_WORKSPACE_TITLE : checkoutsFailed ? 'Could not load rentals.' : 'No rentals yet.'
-      }
-      emptyBody={
-        noWorkspace || checkoutsFailed
-          ? 'Check your connection and pull down to try again.'
-          : 'Check out reusable assets (canopies, supplies, equipment) on the web. Track returns and overdue items here.'
-      }
+      emptyTitle="No rentals yet."
+      emptyBody="Check out reusable assets (canopies, supplies, equipment) on the web. Track returns and overdue items here."
       emptyIcon={PackageOpen}
+      // A read that failed, or no workspace, is said in its own words
+      // (DataListScreen's failed panel, redesign defect D25), never "No
+      // rentals yet.". A failed RELOAD keeps its rows under the banner above.
+      failed={
+        noWorkspace || checkoutsFailed
+          ? {
+              title: noWorkspace ? RENTAL_LIST_NO_WORKSPACE_TITLE : 'Could not load rentals.',
+              body: 'Check your connection and pull down to try again.',
+            }
+          : null
+      }
       data={rows}
       loading={shown === null && !noWorkspace}
       refreshing={refreshing}
@@ -393,14 +404,14 @@ function RentalCard({
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
           <View style={{ flex: 1, minWidth: 0 }}>
             {rental.warehouse?.name ? (
-              <Mono size={9.5} tracking={0.2} upper color={c.ink4}>
+              <Mono size={10.5} tracking={0.18} upper color={c.ink3}>
                 — {rental.warehouse.name}
               </Mono>
             ) : null}
             <Body size={15} color={c.ink} style={{ marginTop: 6, fontFamily: FONT.display }}>
               {rental.borrower_name}
             </Body>
-            <Mono size={11} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
+            <Mono size={11.5} tracking={0.04} color={c.ink3} style={{ marginTop: 4 }}>
               out {rentalDayLabel(rental.checked_out_at, timeZone)}
               {' · due '}
               {rentalDayLabel(rental.expected_return_at, timeZone)}
@@ -450,7 +461,13 @@ function RentalItemCard({
             <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
               {item.name}
             </Body>
-            <Mono size={11} tracking={0.04} color={c.ink4} numberOfLines={1} style={{ marginTop: 4 }}>
+            <Mono
+              size={11.5}
+              tracking={0.04}
+              color={c.ink3}
+              numberOfLines={1}
+              style={{ marginTop: 4 }}
+            >
               {item.sku ?? 'No SKU'}
               {' · '}
               {item.onHand} on hand
@@ -464,3 +481,84 @@ function RentalItemCard({
   );
 }
 
+/** The view switch's labels are control chrome (the shared Button's ceiling);
+ *  each segment grows with its label (minHeight, never height). */
+const SEGMENT_CAP = capTo(13, TYPE_CEILING.control);
+
+/**
+ * Checkouts / Items, web's Rentals tabs, as the reference's segmented switch:
+ * a recessed track (sunk) with the chosen view on the card colour, its words
+ * in ink and semibold, ringed in muted ink3 (3:1 or more against the track in
+ * both modes; the reference's hairline ring is 1.4:1, so the choice never
+ * rests on a faint fill or a colour alone). Each segment is a button that
+ * says whether it is the one shown (the shared chips' semantics, kept) and a
+ * 44pt target.
+ */
+function ViewSwitch({ view, onChange }: { view: RentalsView; onChange: (v: RentalsView) => void }) {
+  const { c } = useTheme();
+  const segment = (value: RentalsView, label: string) => {
+    const active = view === value;
+    return (
+      <Pressable
+        onPress={() => onChange(value)}
+        accessibilityRole="button"
+        accessibilityState={{ selected: active }}
+        style={({ pressed }) => [
+          styles.segment,
+          {
+            borderColor: active ? c.ink3 : 'transparent',
+            backgroundColor: active ? c.card : 'transparent',
+            opacity: pressed ? 0.7 : 1,
+          },
+        ]}
+      >
+        <Body
+          size={13}
+          color={active ? c.ink : c.ink3}
+          maxFontSizeMultiplier={SEGMENT_CAP}
+          style={[styles.segmentLabel, active && styles.segmentLabelOn]}
+        >
+          {label}
+        </Body>
+      </Pressable>
+    );
+  };
+  return (
+    <View style={[styles.track, { backgroundColor: c.sunk }]}>
+      {segment('checkouts', 'Checkouts')}
+      {segment('items', 'Items')}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  // The segmented track: padding 3, radius 10 (DESIGN-SPEC 6.5, the phone's
+  // action segments), the two segments sharing its width.
+  track: {
+    flexDirection: 'row',
+    gap: 4,
+    padding: 3,
+    borderRadius: 10,
+  },
+  segment: {
+    flex: 1,
+    minHeight: 44,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  segmentLabel: {
+    fontFamily: FONT.display,
+    textAlign: 'center',
+  },
+  segmentLabelOn: { fontFamily: FONT.displaySemi },
+  stale: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    padding: 12,
+    borderRadius: 10,
+  },
+});

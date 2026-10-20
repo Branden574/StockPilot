@@ -3,7 +3,9 @@
 import { AlertTriangle, Download, Loader2, Printer, QrCode } from 'lucide-react';
 import * as React from 'react';
 
+import { SegmentedTabs } from '@/components/patterns/segmented-tabs';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
@@ -13,11 +15,13 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { TEMPLATES, type Template } from '@/components/inventory/label-templates';
-import {
-  buildPhomemoFilename,
-  computeLabelPx,
-  formatLabelPx,
-} from '@/lib/labels/phomemo-png';
+import { cn } from '@/lib/utils';
+import { buildPhomemoFilename, computeLabelPx, formatLabelPx } from '@/lib/labels/phomemo-png';
+
+/** The custom label width and height fields: the redesign's 32 px field (44 px
+ *  with 16 px text on a phone, so iOS does not zoom), on the stronger border. */
+const MM_INPUT =
+  'bg-card text-foreground focus-visible:ring-ring focus-visible:ring-offset-background h-8 w-20 rounded-md border border-[var(--ed-line-strong)] px-2 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 max-sm:h-11 max-sm:text-base';
 
 interface BarcodeDisplayProps {
   itemId: string;
@@ -37,6 +41,8 @@ interface BarcodeDisplayProps {
  *     fetch and no caching surprises
  */
 export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDisplayProps) {
+  // The label-size select and the custom size fields are named by their labels.
+  const fieldId = React.useId();
   const [open, setOpen] = React.useState(false);
   const [type, setType] = React.useState<'code128' | 'qr'>(barcode ? 'code128' : 'qr');
   // Label stock. 'auto' fits whatever the printer's paper is set to (one
@@ -192,8 +198,13 @@ export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDispla
       : `width:100%;height:100%;`;
     const innerTransform = `translate(-50%,-50%)${rotate && known ? ' rotate(90deg)' : ''}`;
     const isSmall = known ? Math.min(widthIn!, heightIn!) < 1.4 : false;
+    // The viewport meta lays the window out at the width of the screen it
+    // opens on: without it a phone laid the 420 x 600 window out 980 css px
+    // wide and showed the label zoomed out before the print dialog. Printing
+    // does not read it; the @page size and the label box below decide what
+    // prints.
     const html = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Label</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Label</title>
 <style>
   @page { size: ${pageSize}; margin: 0; }
   html,body{margin:0;padding:0;background:#fff;}
@@ -363,29 +374,27 @@ export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDispla
         </DialogHeader>
         <div className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="inline-flex items-center rounded-full border bg-muted/40 p-1 text-sm">
-              {(['code128', 'qr'] as const).map((opt) => (
-                <button
-                  type="button"
-                  key={opt}
-                  onClick={() => setType(opt)}
-                  className={
-                    'rounded-full px-4 py-1.5 transition-colors ' +
-                    (type === opt
-                      ? 'bg-background text-foreground shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground')
-                  }
-                >
-                  {opt === 'code128' ? 'Barcode' : 'QR code'}
-                </button>
-              ))}
-            </div>
-            <label className="flex items-center gap-2 text-sm">
-              <span className="text-muted-foreground text-xs">Label size</span>
+            {/* Barcode or QR code: the shared segmented control, its two
+                buttons pressed or not (the choice is held here, not in the
+                URL, so they are toggles in a named group). */}
+            <SegmentedTabs
+              aria-label="Label code"
+              semantics="nav"
+              size="sm"
+              activeId={type}
+              items={[
+                { id: 'code128', label: 'Barcode' },
+                { id: 'qr', label: 'QR code' },
+              ]}
+              onSelect={(id) => setType(id as 'code128' | 'qr')}
+            />
+            <label className="flex items-center gap-2" htmlFor={`${fieldId}-size`}>
+              <span className="text-muted-foreground text-[12.5px]">Label size</span>
               <select
+                id={`${fieldId}-size`}
                 value={size}
                 onChange={(e) => setSize(e.target.value as Template | 'auto' | 'custom')}
-                className="border-input bg-background h-9 rounded-md border px-2.5 text-sm"
+                className="bg-card text-foreground focus-visible:ring-ring focus-visible:ring-offset-background h-8 rounded-md border border-[var(--ed-line-strong)] px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 max-sm:h-11 max-sm:text-base"
               >
                 <option value="auto">Fit to printer (auto)</option>
                 {(Object.keys(TEMPLATES) as Template[]).map((t) => (
@@ -399,9 +408,9 @@ export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDispla
           </div>
 
           {size === 'custom' && (
-            <div className="flex flex-wrap items-center gap-3 rounded-md border bg-muted/30 p-3">
-              <label className="flex items-center gap-1.5 text-sm">
-                <span className="text-muted-foreground text-xs">Width</span>
+            <div className="bg-sunk border-border flex flex-wrap items-center gap-3 rounded-md border p-3">
+              <label className="flex items-center gap-1.5 text-[13px]">
+                <span className="text-muted-foreground text-[12.5px]">Width</span>
                 <input
                   type="number"
                   inputMode="decimal"
@@ -410,13 +419,15 @@ export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDispla
                   value={customW}
                   onChange={(e) => setCustomW(e.target.value)}
                   onBlur={() => setCustomW(String(clampMm(customW, 50)))}
-                  className="border-input bg-background h-9 w-20 rounded-md border px-2 text-sm"
+                  className={MM_INPUT}
                 />
-                <span className="text-muted-foreground text-xs">mm</span>
+                <span className="text-muted-foreground text-[12.5px]">mm</span>
               </label>
-              <span className="text-muted-foreground">×</span>
-              <label className="flex items-center gap-1.5 text-sm">
-                <span className="text-muted-foreground text-xs">Height</span>
+              <span aria-hidden className="text-muted-foreground">
+                ×
+              </span>
+              <label className="flex items-center gap-1.5 text-[13px]">
+                <span className="text-muted-foreground text-[12.5px]">Height</span>
                 <input
                   type="number"
                   inputMode="decimal"
@@ -425,29 +436,35 @@ export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDispla
                   value={customH}
                   onChange={(e) => setCustomH(e.target.value)}
                   onBlur={() => setCustomH(String(clampMm(customH, 30)))}
-                  className="border-input bg-background h-9 w-20 rounded-md border px-2 text-sm"
+                  className={MM_INPUT}
                 />
-                <span className="text-muted-foreground text-xs">mm</span>
+                <span className="text-muted-foreground text-[12.5px]">mm</span>
               </label>
-              <p className="text-muted-foreground w-full text-[11px] leading-snug">
+              <p className="text-muted-foreground w-full text-[12px] leading-snug">
                 Measure your loaded label exactly (width across the roll × height along the feed).
               </p>
             </div>
           )}
 
           {size !== 'auto' && (
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={rotate}
-                onChange={(e) => setRotate(e.target.checked)}
-                className="h-4 w-4"
-              />
+            // The shared checkbox, its words part of the one control.
+            <Checkbox checked={rotate} onCheckedChange={setRotate}>
               <span>Rotate 90°</span>
-              <span className="text-muted-foreground text-xs">— if the barcode prints sideways</span>
-            </label>
+              <span className="text-muted-foreground text-[12.5px]">
+                — if the barcode prints sideways
+              </span>
+            </Checkbox>
           )}
-          <div className="relative grid min-h-[180px] place-items-center rounded-lg border bg-white p-6">
+          {/* The label preview is white in both themes (it is what prints);
+              while it loads or when it failed the box is the card colour, so
+              the spinner and the error words keep their contrast in dark mode
+              (they were light grey and light red on white there). */}
+          <div
+            className={cn(
+              'border-border relative grid min-h-[180px] place-items-center rounded-lg border p-6',
+              state.status === 'ready' ? 'bg-white' : 'bg-card',
+            )}
+          >
             {state.status === 'loading' && (
               <Loader2 className="text-muted-foreground h-5 w-5 animate-spin" />
             )}
@@ -458,37 +475,35 @@ export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDispla
             {state.status === 'error' && (
               <div className="flex flex-col items-center gap-2 px-3 py-4 text-center">
                 <AlertTriangle className="text-destructive h-5 w-5" />
-                <p className="text-destructive text-xs font-medium">
+                <p className="text-destructive text-[12.5px] font-medium">
                   Couldn't generate the label
                 </p>
-                <p className="text-muted-foreground break-all text-[11px]">
-                  {state.message}
-                </p>
-                <p className="text-muted-foreground text-[10.5px]">
-                  Try Reload — if the prompt to update appeared after a deploy,
-                  pick it up and try again.
+                <p className="text-muted-foreground break-all text-[12px]">{state.message}</p>
+                <p className="text-muted-foreground text-[12px]">
+                  Try Reload — if the prompt to update appeared after a deploy, pick it up and try
+                  again.
                 </p>
               </div>
             )}
           </div>
           {size !== 'auto' && (
-            <p className="text-muted-foreground rounded-md bg-muted/30 px-3 py-2 text-[11px] leading-snug">
+            <p className="text-muted-foreground bg-sunk rounded-md px-3 py-2 text-[12px] leading-snug">
               In the print dialog, set <strong>Scale 100%</strong> (not &ldquo;Fit&rdquo;),{' '}
               <strong>Margins: None</strong>, and leave orientation as-is — use the Rotate 90°
               toggle above instead of the dialog&rsquo;s Landscape option.
             </p>
           )}
           {size !== 'auto' && labelPx && (
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-muted/30 p-3">
+            <div className="bg-sunk border-border flex flex-wrap items-center justify-between gap-2 rounded-md border p-3">
               <div>
-                <p className="text-sm font-medium">Phomemo printer app</p>
-                <p className="text-muted-foreground text-[11px] leading-snug">
+                <p className="text-[13px] font-medium">Phomemo printer app</p>
+                <p className="text-muted-foreground text-[12px] leading-snug">
                   If the M120&rsquo;s macOS driver misrotates this label, download it as a PNG at
                   the printer&rsquo;s exact size and print it from the Phomemo app instead —{' '}
                   {formatLabelPx(labelPx)}.
                 </p>
                 {phomemoError && (
-                  <p role="alert" className="text-destructive mt-1 text-[11px] font-medium">
+                  <p role="alert" className="text-destructive mt-1 text-[12px] font-medium">
                     {phomemoError}
                   </p>
                 )}
@@ -525,11 +540,8 @@ export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDispla
                 <Download className="h-4 w-4" /> Download
               </a>
             </Button>
-            <Button
-              variant="gradient"
-              onClick={printIt}
-              disabled={state.status !== 'ready'}
-            >
+            {/* The commit in front of you: the ink primary (DESIGN-SPEC 6.2). */}
+            <Button variant="default" onClick={printIt} disabled={state.status !== 'ready'}>
               <Printer className="h-4 w-4" /> Print
             </Button>
           </div>

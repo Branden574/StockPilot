@@ -129,12 +129,14 @@ export function ResolveRequestDialog({
               disabled={pending}
               aria-required="true"
             />
-            <p className="text-muted-foreground text-xs">Required. {MAINTENANCE_RESOLUTION_NOTE_MAX} characters max.</p>
+            <p className="text-muted-foreground text-[12px]">
+              Required. {MAINTENANCE_RESOLUTION_NOTE_MAX} characters max.
+            </p>
           </div>
 
           <div className="space-y-1.5">
-            <p className="text-sm font-medium">Proof photos (optional)</p>
-            <p className="text-muted-foreground text-xs">
+            <p className="text-[13px] font-medium">Proof photos (optional)</p>
+            <p className="text-muted-foreground text-[12px] leading-[18px]">
               Proof photos upload immediately and stay attached to this request even if you close this dialog
               without confirming. Remove any you do not want to keep before confirming.
             </p>

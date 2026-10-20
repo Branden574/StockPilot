@@ -5,8 +5,9 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 
+import { DetailSection, DetailSectionMeta } from '@/components/patterns/detail-section';
+import { StatePanel } from '@/components/patterns/state-panel';
 import { Button } from '@/components/ui/button';
-import { EmptyState } from '@/components/ui/empty-state';
 import { formatRelative, cn } from '@/lib/utils';
 import {
   markAllNotificationsReadAction,
@@ -27,18 +28,13 @@ interface NotificationsListProps {
   notifications: Notification[];
 }
 
+/** The link guard below, also used to decide whether a title is a link. */
+function isInternalPath(link: string | null): link is string {
+  return Boolean(link && link.startsWith('/') && !link.startsWith('//'));
+}
+
 export function NotificationsList({ notifications }: NotificationsListProps) {
   const router = useRouter();
-
-  if (notifications.length === 0) {
-    return (
-      <EmptyState
-        icon={Bell}
-        title="All caught up"
-        description="Low-stock alerts, team activity, and PO updates show up here as they happen."
-      />
-    );
-  }
 
   const unread = notifications.filter((n) => !n.readAt);
 
@@ -58,65 +54,98 @@ export function NotificationsList({ notifications }: NotificationsListProps) {
   }
 
   return (
-    <div className="space-y-3">
-      {unread.length > 0 && (
-        <div className="flex items-center justify-between text-sm">
-          <p className="text-muted-foreground">
-            {unread.length} unread notification{unread.length === 1 ? '' : 's'}
-          </p>
-          <Button variant="outline" size="sm" onClick={markAll}>
-            <Check className="h-3.5 w-3.5" /> Mark all read
-          </Button>
-        </div>
-      )}
-      <ul className="overflow-x-auto rounded-xl border bg-card divide-y">
-        {notifications.map((n) => {
-          const isUnread = !n.readAt;
-          return (
-            <li
-              key={n.id}
-              className={cn(
-                'flex items-start gap-3 px-4 py-3 transition-colors',
-                isUnread && 'bg-primary/5',
-              )}
-            >
-              <span
-                aria-hidden
+    <DetailSection
+      title="Notification history"
+      flush
+      aside={
+        unread.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <DetailSectionMeta>
+              {unread.length} unread notification{unread.length === 1 ? '' : 's'}
+            </DetailSectionMeta>
+            <Button variant="outline" size="sm" onClick={markAll}>
+              <Check className="h-3.5 w-3.5" /> Mark all read
+            </Button>
+          </div>
+        ) : undefined
+      }
+    >
+      {notifications.length === 0 ? (
+        <StatePanel
+          kind="empty"
+          surface="plain"
+          icon={Bell}
+          headingLevel={3}
+          title="All caught up"
+          description="Low-stock alerts, team activity, and PO updates show up here as they happen."
+        />
+      ) : (
+        <ul>
+          {notifications.map((n) => {
+            const isUnread = !n.readAt;
+            return (
+              <li
+                key={n.id}
+                data-unread={isUnread ? 'true' : undefined}
                 className={cn(
-                  'mt-1.5 h-2 w-2 shrink-0 rounded-full',
-                  isUnread ? 'bg-primary' : 'bg-transparent',
+                  'border-border flex items-start gap-3 border-b px-[18px] py-3 transition-colors last:border-b-0',
+                  isUnread && 'bg-success-wash/60',
                 )}
-              />
-              <div className="min-w-0 flex-1">
-                {/* Defense-in-depth: notifications.link is server-written
-                    today (writer triggers + service code), but if a
-                    poisoned row ever gets in we don't want
-                    `javascript:alert(...)` to render as a clickable
-                    link. Restrict to internal relative paths. */}
-                {n.link && n.link.startsWith('/') && !n.link.startsWith('//') ? (
-                  <Link href={n.link} className="block hover:underline">
-                    <p className="text-sm font-medium">{n.title}</p>
-                  </Link>
-                ) : (
-                  <p className="text-sm font-medium">{n.title}</p>
+              >
+                <span
+                  aria-hidden
+                  className={cn(
+                    'mt-[7px] h-2 w-2 shrink-0 rounded-full',
+                    isUnread ? 'bg-accent' : 'bg-transparent',
+                  )}
+                />
+                <div className="min-w-0 flex-1">
+                  {/* Defense-in-depth: notifications.link is server-written
+                      today (writer triggers + service code), but if a
+                      poisoned row ever gets in we don't want
+                      `javascript:alert(...)` to render as a clickable
+                      link. Restrict to internal relative paths. */}
+                  {isInternalPath(n.link) ? (
+                    <Link
+                      href={n.link}
+                      className="hover:text-foreground block rounded-sm underline-offset-2 hover:underline"
+                    >
+                      <p className="text-foreground text-[13.5px] font-medium leading-5 [overflow-wrap:anywhere]">
+                        {n.title}
+                      </p>
+                    </Link>
+                  ) : (
+                    <p className="text-foreground text-[13.5px] font-medium leading-5 [overflow-wrap:anywhere]">
+                      {n.title}
+                    </p>
+                  )}
+                  {n.body && (
+                    <p className="text-muted-foreground mt-0.5 text-[13px] leading-[19.5px] [overflow-wrap:anywhere]">
+                      {n.body}
+                    </p>
+                  )}
+                  <p
+                    className="text-muted-foreground mt-1 text-[11px] uppercase leading-4 tracking-[0.06em]"
+                    suppressHydrationWarning
+                  >
+                    {n.type.replace('_', ' ')} · {formatRelative(n.createdAt)}
+                  </p>
+                </div>
+                {isUnread && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-ink-2 shrink-0"
+                    onClick={() => markRead(n.id)}
+                  >
+                    Mark read
+                  </Button>
                 )}
-                {n.body && <p className="mt-0.5 text-sm text-muted-foreground">{n.body}</p>}
-                <p
-                  className="mt-1 text-xs uppercase tracking-wider text-muted-foreground"
-                  suppressHydrationWarning
-                >
-                  {n.type.replace('_', ' ')} · {formatRelative(n.createdAt)}
-                </p>
-              </div>
-              {isUnread && (
-                <Button variant="ghost" size="sm" onClick={() => markRead(n.id)}>
-                  Mark read
-                </Button>
-              )}
-            </li>
-          );
-        })}
-      </ul>
-    </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </DetailSection>
   );
 }

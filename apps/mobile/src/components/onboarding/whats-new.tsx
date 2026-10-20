@@ -15,6 +15,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Body } from '@/components/ui/text';
+import { BUTTON_RADIUS, buttonTone } from '@/components/ui/tones';
 import { useAuth } from '@/lib/auth-context';
 import {
   getUnseenAnnouncements,
@@ -42,6 +43,11 @@ import { rewriteWebPath } from '@/lib/web-path-rewrite';
  * sheet with a dot carousel; EVERY close path (X, backdrop, Done, CTA) stamps
  * the WHOLE registry seen (all:true), exactly like web. One interruption at a
  * time: it defers while any tour Modal (offer or running) is on screen.
+ *
+ * Drawn on the per-mode palette: the card over the app's sheet scrim, Next /
+ * Done as the shared ink button and the CTA as the outline one, each a 44pt
+ * target at radius 10 (they were 33pt pills), the X in the muted ink and the
+ * carousel's resting dots in ink4 (the hairline dots were 1.3:1 on the card).
  */
 
 // Show at most once per launch PER USER. Keyed to the user id (not a bare
@@ -53,7 +59,7 @@ import { rewriteWebPath } from '@/lib/web-path-rewrite';
 let shownForUserId: string | null = null;
 
 export function WhatsNew() {
-  const { c } = useTheme();
+  const { c, mode } = useTheme();
   const insets = useSafeAreaInsets();
   const { height: winH, fontScale } = useWindowDimensions();
   // The CTA pill and Done/Next are chrome and capped, but even capped they
@@ -150,6 +156,9 @@ export function WhatsNew() {
     if (native !== '/') router.push(native as Href);
   };
 
+  const primary = buttonTone('primary', c);
+  const outline = buttonTone('outline', c);
+
   return (
     <Modal
       visible={open}
@@ -167,16 +176,22 @@ export function WhatsNew() {
           style={StyleSheet.absoluteFill}
           onPress={() => close('dismissed')}
         />
+        {/* The app's sheet scrim, darker in dark mode as every sheet's is. */}
         <View
           pointerEvents="none"
-          style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.45)' }]}
+          style={[
+            StyleSheet.absoluteFill,
+            { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+          ]}
         />
         <Animated.View
           pointerEvents="box-none"
           style={[styles.cardSlot, { opacity: fade }]}
         >
+          {/* The escape scrub dismisses, as the X and Android's back do. */}
           <View
             accessibilityViewIsModal
+            onAccessibilityEscape={() => close('dismissed')}
             style={[
               styles.sheet,
               {
@@ -208,7 +223,7 @@ export function WhatsNew() {
                 onPress={() => close('dismissed')}
                 style={styles.closeFrame}
               >
-                <X size={15} color={c.ink4} />
+                <X size={15} color={c.ink3} />
               </Pressable>
             </View>
 
@@ -229,7 +244,10 @@ export function WhatsNew() {
                       key={i}
                       style={[
                         styles.dot,
-                        { backgroundColor: i === index ? c.ink : c.hair, width: i === index ? 14 : 5 },
+                        {
+                          backgroundColor: i === index ? c.ink : c.ink4,
+                          width: i === index ? 14 : 5,
+                        },
                       ]}
                     />
                   ))}
@@ -241,9 +259,17 @@ export function WhatsNew() {
                 <Pressable
                   accessibilityRole="button"
                   onPress={() => handleCta(cta.href)}
-                  style={[styles.cta, { borderColor: c.hair }]}
+                  style={[
+                    styles.action,
+                    { backgroundColor: outline.bg, borderColor: outline.border },
+                  ]}
                 >
-                  <Body size={12.5} color={c.ink3} maxFontSizeMultiplier={ACTION_CAP}>
+                  <Body
+                    size={ACTION_SIZE}
+                    color={outline.fg}
+                    style={styles.actionLabel}
+                    maxFontSizeMultiplier={ACTION_CAP}
+                  >
                     {cta.label}
                   </Body>
                 </Pressable>
@@ -251,12 +277,15 @@ export function WhatsNew() {
               <Pressable
                 accessibilityRole="button"
                 onPress={() => (isLast ? close('seen') : setIndex(index + 1))}
-                style={[styles.btn, { backgroundColor: c.ink }]}
+                style={[
+                  styles.action,
+                  { backgroundColor: primary.bg, borderColor: primary.border },
+                ]}
               >
                 <Body
-                  size={12.5}
-                  color={c.card}
-                  style={{ fontFamily: FONT.displaySemi }}
+                  size={ACTION_SIZE}
+                  color={primary.fg}
+                  style={styles.actionLabel}
                   maxFontSizeMultiplier={ACTION_CAP}
                 >
                   {isLast ? 'Done' : 'Next'}
@@ -270,8 +299,10 @@ export function WhatsNew() {
   );
 }
 
-/** Done / Next / the CTA are chrome, and the only deliberate way out. */
-const ACTION_CAP = capTo(12.5, TYPE_CEILING.control);
+/** Done / Next / the CTA are chrome, and the only deliberate way out: the
+ *  shared small button's 13pt label, capped at the control ceiling. */
+const ACTION_SIZE = 13;
+const ACTION_CAP = capTo(ACTION_SIZE, TYPE_CEILING.control);
 
 const styles = StyleSheet.create({
   fill: { flex: 1 },
@@ -343,6 +374,17 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   dot: { height: 5, borderRadius: 999 },
-  cta: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7 },
-  btn: { borderRadius: 999, paddingHorizontal: 14, paddingVertical: 7 },
+  // The shared button's look (tones.ts buttonTone, radius 10) at the iOS
+  // minimum target: minHeight, not a fixed height, so a capped label that
+  // still grows past one line is never clipped.
+  action: {
+    minHeight: 44,
+    borderWidth: 1,
+    borderRadius: BUTTON_RADIUS.sm,
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionLabel: { fontFamily: FONT.display },
 });

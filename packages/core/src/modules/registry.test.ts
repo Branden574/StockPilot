@@ -15,7 +15,8 @@ describe('MODULE_REGISTRY', () => {
       if (seenGlobal.has(id)) return;
       stack.add(id);
       for (const d of MODULE_REGISTRY[id as ModuleId].dependsOn) visit(d, stack);
-      stack.delete(id); seenGlobal.add(id);
+      stack.delete(id);
+      seenGlobal.add(id);
     };
     expect(() => Object.keys(MODULE_REGISTRY).forEach((id) => visit(id, new Set()))).not.toThrow();
   });
@@ -24,11 +25,14 @@ describe('MODULE_REGISTRY', () => {
     for (const def of Object.values(MODULE_REGISTRY))
       for (const p of def.placements) {
         const k = `${p.surface}:${p.href}`;
-        expect(seen.has(k)).toBe(false); seen.add(k);
+        expect(seen.has(k)).toBe(false);
+        seen.add(k);
       }
   });
   it('DEFAULT_MODULE_IDS = the charter pack set and includes every core module', () => {
-    const core = Object.values(MODULE_REGISTRY).filter((m) => m.tier === 'core').map((m) => m.id);
+    const core = Object.values(MODULE_REGISTRY)
+      .filter((m) => m.tier === 'core')
+      .map((m) => m.id);
     for (const id of core) expect(DEFAULT_MODULE_IDS).toContain(id);
     expect(modulesForPack('charter_school').sort()).toEqual([...DEFAULT_MODULE_IDS].sort());
   });
@@ -99,31 +103,84 @@ describe('MODULE_REGISTRY', () => {
     expect(placement?.requires).toBe('purchase_orders:manage');
   });
   it('covers the current web sidebar hrefs', () => {
-    const webHrefs = Object.values(MODULE_REGISTRY).flatMap((m) => m.placements)
-      .filter((p) => p.surface === 'web_sidebar').map((p) => p.href);
+    const webHrefs = Object.values(MODULE_REGISTRY)
+      .flatMap((m) => m.placements)
+      .filter((p) => p.surface === 'web_sidebar')
+      .map((p) => p.href);
     for (const href of [
-      '/dashboard','/dashboard/inventory','/dashboard/books','/dashboard/categories',
-      '/dashboard/tags','/dashboard/movements','/dashboard/rentals','/dashboard/bundles',
-      '/dashboard/orders','/dashboard/cycle-counts','/dashboard/procedures',
-      '/dashboard/purchase-orders','/dashboard/purchase-orders/imports','/dashboard/locations',
-      '/dashboard/suppliers','/dashboard/reports','/dashboard/ai','/dashboard/schedule',
-      '/dashboard/notifications','/dashboard/team','/dashboard/support','/dashboard/settings',
-      '/dashboard/admin','/dashboard/admin/charters','/dashboard/admin/warehouses',
-      '/dashboard/admin/bins','/dashboard/admin/users','/dashboard/admin/vendor-mappings',
-      '/dashboard/admin/uom-conversions','/dashboard/admin/reconciliation','/dashboard/audit',
-    ]) expect(webHrefs).toContain(href);
+      '/dashboard',
+      '/dashboard/inventory',
+      '/dashboard/books',
+      '/dashboard/categories',
+      '/dashboard/tags',
+      '/dashboard/movements',
+      '/dashboard/rentals',
+      '/dashboard/bundles',
+      '/dashboard/orders',
+      '/dashboard/cycle-counts',
+      '/dashboard/procedures',
+      '/dashboard/purchase-orders',
+      '/dashboard/purchase-orders/imports',
+      '/dashboard/locations',
+      '/dashboard/suppliers',
+      '/dashboard/reports',
+      '/dashboard/ai',
+      '/dashboard/schedule',
+      '/dashboard/notifications',
+      '/dashboard/team',
+      '/dashboard/support',
+      '/dashboard/settings',
+      '/dashboard/admin',
+      '/dashboard/admin/charters',
+      '/dashboard/admin/warehouses',
+      '/dashboard/admin/bins',
+      '/dashboard/admin/users',
+      '/dashboard/admin/vendor-mappings',
+      '/dashboard/admin/uom-conversions',
+      '/dashboard/admin/reconciliation',
+      '/dashboard/audit',
+    ])
+      expect(webHrefs).toContain(href);
   });
   it('covers the current mobile drawer hrefs', () => {
-    const drawerHrefs = Object.values(MODULE_REGISTRY).flatMap((m) => m.placements)
-      .filter((p) => p.surface === 'mobile_drawer').map((p) => p.href);
+    const drawerHrefs = Object.values(MODULE_REGISTRY)
+      .flatMap((m) => m.placements)
+      .filter((p) => p.surface === 'mobile_drawer')
+      .map((p) => p.href);
     for (const href of [
-      '/','/inventory','/tags','/movements','/categories','/locations','/reports',
-      '/notifications','/team','/settings','/admin','/admin/charters','/admin/warehouses',
-      '/admin/bins','/admin/users','/admin/vendor-mappings','/admin/uom-conversions',
-      '/admin/audit','/scan','/books','/rentals','/bundles',
-      '/orders','/cycle-counts','/procedures','/purchase-orders','/receive','/po-imports',
-      '/suppliers','/ai','/schedule',
-    ]) expect(drawerHrefs).toContain(href);
+      '/',
+      '/inventory',
+      '/tags',
+      '/movements',
+      '/categories',
+      '/locations',
+      '/reports',
+      '/notifications',
+      '/team',
+      '/settings',
+      '/admin',
+      '/admin/charters',
+      '/admin/warehouses',
+      '/admin/bins',
+      '/admin/users',
+      '/admin/vendor-mappings',
+      '/admin/uom-conversions',
+      '/admin/audit',
+      '/scan',
+      '/books',
+      '/rentals',
+      '/bundles',
+      '/orders',
+      '/cycle-counts',
+      '/procedures',
+      '/purchase-orders',
+      '/receive',
+      '/po-imports',
+      '/suppliers',
+      '/ai',
+      '/schedule',
+    ])
+      expect(drawerHrefs).toContain(href);
   });
   // The inverse of the test above, and the one that actually catches a dead
   // link: the containment check only proves the KNOWN routes are placed, so a
@@ -138,14 +195,18 @@ describe('MODULE_REGISTRY', () => {
   // drawer href against the real app/ tree too.)
   it('the mobile drawer has no Reconciliation entry (the web page stays)', () => {
     const placements = Object.values(MODULE_REGISTRY).flatMap((m) => m.placements);
-    expect(placements.filter((p) => p.surface === 'mobile_drawer').map((p) => p.href))
-      .not.toContain('/admin/reconciliation');
-    expect(placements.filter((p) => p.surface === 'web_sidebar').map((p) => p.href))
-      .toContain('/dashboard/admin/reconciliation');
+    expect(
+      placements.filter((p) => p.surface === 'mobile_drawer').map((p) => p.href),
+    ).not.toContain('/admin/reconciliation');
+    expect(placements.filter((p) => p.surface === 'web_sidebar').map((p) => p.href)).toContain(
+      '/dashboard/admin/reconciliation',
+    );
   });
   it('Exceptions has a mobile drawer twin that mirrors its web sidebar entry (F1-1)', () => {
     const placements = MODULE_REGISTRY.inventory.placements;
-    const web = placements.find((p) => p.surface === 'web_sidebar' && p.href === '/dashboard/exceptions');
+    const web = placements.find(
+      (p) => p.surface === 'web_sidebar' && p.href === '/dashboard/exceptions',
+    );
     const mob = placements.find((p) => p.surface === 'mobile_drawer' && p.href === '/exceptions');
     expect(mob).toBeDefined();
     for (const key of ['section', 'label', 'iconName', 'defaultSortOrder', 'requires'] as const) {
@@ -154,16 +215,125 @@ describe('MODULE_REGISTRY', () => {
     expect(mob?.requires).toBe('items:read');
     expect(mob?.iconName).toBe('AlertTriangle');
   });
+
+  // OWNER DECISION 2026-10-19 (sidebar sub-categories): which links sit in the
+  // three sections the regroup created, on each surface, and the rule that a
+  // module's web link and its phone twin always move together.
+  describe('the 2026-10-19 regroup', () => {
+    const placementsIn = (surface: 'web_sidebar' | 'mobile_drawer', section: string) =>
+      Object.values(MODULE_REGISTRY)
+        .flatMap((m) => m.placements)
+        .filter((p) => p.surface === surface && p.section === section)
+        .map((p) => p.label)
+        .sort();
+
+    it.each([
+      [
+        'fulfillment',
+        ['Bundles', 'Orders', 'Rentals', 'Returns'],
+        ['Bundles', 'Orders', 'Rentals', 'Returns'],
+      ],
+      [
+        'purchasing',
+        ['PO imports', 'Purchase orders', 'Recurring POs', 'Reorder Planning', 'Suppliers'],
+        // The phone has no Reorder Planning screen; Receive POs is phone only.
+        ['PO imports', 'Purchase orders', 'Receive POs', 'Recurring POs', 'Suppliers'],
+      ],
+      ['insights', ['AI Assistant', 'Briefing', 'Reports'], ['AI Assistant', 'Reports']],
+    ])('%s holds exactly these links (web, then phone)', (section, web, phone) => {
+      expect(placementsIn('web_sidebar', section)).toEqual(web);
+      expect(placementsIn('mobile_drawer', section)).toEqual(phone);
+    });
+
+    it('a module with a link on both surfaces puts both in the same section', () => {
+      const apart: string[] = [];
+      for (const def of Object.values(MODULE_REGISTRY)) {
+        const web = def.placements.filter((p) => p.surface === 'web_sidebar');
+        const phone = def.placements.filter((p) => p.surface === 'mobile_drawer');
+        for (const p of phone) {
+          // The twin is the web link with the same label (Items and Items,
+          // Audit log and Audit log), when the module has one.
+          const twin = web.find((w) => w.label === p.label);
+          if (twin && twin.section !== p.section) {
+            apart.push(`${def.id}: ${p.label} web ${twin.section}, phone ${p.section}`);
+          }
+        }
+      }
+      expect(apart).toEqual([]);
+    });
+
+    it('every moved twin keeps its sort order, gate and icon', () => {
+      for (const id of [
+        'rentals',
+        'bundles',
+        'orders',
+        'returns',
+        'purchase_orders',
+        'po_imports',
+        'suppliers',
+        'reports',
+        'ai',
+      ] as const) {
+        const { placements } = MODULE_REGISTRY[id];
+        for (const p of placements.filter((x) => x.surface === 'mobile_drawer')) {
+          const twin = placements.find((w) => w.surface === 'web_sidebar' && w.label === p.label);
+          expect(twin, `${id}: ${p.label}`).toBeDefined();
+          for (const key of [
+            'section',
+            'defaultSortOrder',
+            'requires',
+            'requiresAnyOf',
+            'iconName',
+          ] as const) {
+            expect(p[key], `${id}: ${p.label} ${key}`).toEqual(twin?.[key]);
+          }
+        }
+      }
+    });
+  });
+
   it('every mobile drawer href resolves to a real Expo route', () => {
     const EXPO_ROUTES = new Set([
-      '/', '/inventory', '/staging', '/exceptions', '/books', '/categories', '/tags', '/movements',
-      '/rentals', '/bundles', '/orders', '/customers', '/cycle-counts', '/procedures',
-      '/receive', '/purchase-orders', '/recurring-pos', '/po-imports', '/locations',
-      '/suppliers', '/reports', '/ai', '/schedule', '/notifications', '/team',
-      '/settings', '/support', '/scan', '/zendesk', '/size-count/new',
-      '/admin', '/admin/charters', '/admin/warehouses', '/admin/bins', '/admin/users',
-      '/admin/vendor-mappings', '/admin/uom-conversions',
-      '/admin/audit', '/maintenance', '/returns',
+      '/',
+      '/inventory',
+      '/staging',
+      '/exceptions',
+      '/books',
+      '/categories',
+      '/tags',
+      '/movements',
+      '/rentals',
+      '/bundles',
+      '/orders',
+      '/customers',
+      '/cycle-counts',
+      '/procedures',
+      '/receive',
+      '/purchase-orders',
+      '/recurring-pos',
+      '/po-imports',
+      '/locations',
+      '/suppliers',
+      '/reports',
+      '/ai',
+      '/schedule',
+      '/notifications',
+      '/team',
+      '/settings',
+      '/support',
+      '/scan',
+      '/zendesk',
+      '/size-count/new',
+      '/admin',
+      '/admin/charters',
+      '/admin/warehouses',
+      '/admin/bins',
+      '/admin/users',
+      '/admin/vendor-mappings',
+      '/admin/uom-conversions',
+      '/admin/audit',
+      '/maintenance',
+      '/returns',
     ]);
     for (const def of Object.values(MODULE_REGISTRY)) {
       for (const p of def.placements) {
@@ -181,7 +351,10 @@ describe('MODULE_REGISTRY', () => {
       const perms = new Set(def.permissions);
       const used = new Set(def.placements.flatMap((p) => (p.requires ? [p.requires] : [])));
       for (const r of used)
-        expect(perms.has(r), `module "${def.id}" uses requires "${r}" not in its permissions array`).toBe(true);
+        expect(
+          perms.has(r),
+          `module "${def.id}" uses requires "${r}" not in its permissions array`,
+        ).toBe(true);
     }
   });
 

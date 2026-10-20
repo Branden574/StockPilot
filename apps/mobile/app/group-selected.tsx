@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { ArrowLeft, BookMarked, CheckCircle2, Circle, CircleDot } from 'lucide-react-native';
+import { ArrowLeft, BookMarked, Circle, CircleDot } from 'lucide-react-native';
 import * as React from 'react';
 import {
   AccessibilityInfo,
@@ -8,7 +8,6 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -30,12 +29,15 @@ import {
 
 import { Button } from '@/components/ui/button';
 import { Card, Hair } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Field } from '@/components/ui/field';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
 import { Thumb } from '@/components/ui/thumb';
 import { useAuth } from '@/lib/auth-context';
 import {
   describeGroupingError,
+  groupSelectedReviewKey,
   keyedGroupingBody,
   notifyDisplayGroupsChanged,
   postGrouping,
@@ -44,11 +46,13 @@ import {
   reviewAnnouncement,
   reviewIdsForRetry,
   reviewRecordDetail,
+  type GroupSelectedParams,
   type GroupingIdentity,
   type PendingGroupingBody,
   type PhoneGroupingReview,
   type ReviewLoadState,
 } from '@/lib/display-groups';
+import { footerReservation } from '@/lib/dynamic-type-layout';
 import { isOnline } from '@/lib/sync';
 import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { countSelection } from '@/lib/use-count-selection';
@@ -89,10 +93,6 @@ function announce(message: string) {
 }
 
 export default function GroupSelectedScreen() {
-  const router = useRouter();
-  const { c } = useTheme();
-  const { user } = useAuth();
-  const { activeOrgId } = useWorkspace();
   const {
     ids: idsParam,
     view: viewParam,
@@ -102,6 +102,28 @@ export default function GroupSelectedScreen() {
     () => readGroupSelectedParams({ ids: idsParam, view: viewParam, groupId: groupParam }),
     [idsParam, viewParam, groupParam],
   );
+  // A fresh review whenever the route names other records, another list or
+  // another target group (groupSelectedReviewKey, redesign Stage 6 F8):
+  // expo-router REUSES this screen when a link to it arrives while it is on
+  // top, swapping only the params, and the review kept the records it first
+  // opened with (BOOKS · GROUP over the items link's records). The same
+  // selection, in any order or case, keeps its review, and what the person
+  // chose or typed in it: the review holds the params it was mounted with.
+  return <GroupSelectedReview key={groupSelectedReviewKey(params)} params={params} />;
+}
+
+/** The review itself. Every piece of its state belongs to the selection it
+ *  was mounted for: the route mounts a new one for another selection. */
+function GroupSelectedReview({ params: routeParams }: { params: GroupSelectedParams | null }) {
+  // The selection the review was mounted for, kept for its whole life. The
+  // route mounts a new review for any other selection, so later params can
+  // only name this one in another order or case. Reading them previewed the
+  // same records again, with a loading flash (redesign Stage 6, F8 review).
+  const [params] = React.useState(routeParams);
+  const router = useRouter();
+  const { c } = useTheme();
+  const { user } = useAuth();
+  const { activeOrgId } = useWorkspace();
   const view = params?.view ?? 'items';
 
   // The records under review: the selection, plus same-SKU records the person
@@ -131,6 +153,11 @@ export default function GroupSelectedScreen() {
   );
   const pending = React.useRef<PendingGroupingBody | null>(null);
   const seq = React.useRef(0);
+  // The pinned footer's measured height. The list reserves what the footer
+  // really takes, however many buttons it holds and whatever the device's
+  // bottom inset (the 170 it always reserved stays the floor), so the last
+  // line can always scroll clear of it. Ungroup's twin needed it first.
+  const [footerHeight, setFooterHeight] = React.useState<number | null>(null);
 
   const targetGroupId = mode === 'existing' ? groupId : null;
   const idsKey = itemIds.join(',');
@@ -319,7 +346,11 @@ export default function GroupSelectedScreen() {
       </SafeAreaView>
 
       <ScrollView
-        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 170, gap: 16 }}
+        contentContainerStyle={{
+          paddingHorizontal: 20,
+          paddingBottom: footerReservation(footerHeight, 170),
+          gap: 16,
+        }}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
       >
@@ -355,6 +386,7 @@ export default function GroupSelectedScreen() {
             <Button
               variant="outline"
               size="sm"
+              style={styles.smallButton}
               onPress={() => {
                 // Never the same request when it could only fail again: more
                 // records than one request takes fall back to the ones the
@@ -389,7 +421,10 @@ export default function GroupSelectedScreen() {
                         <Body size={14.5} color={c.ink} style={{ fontFamily: FONT.display }}>
                           {r.name}
                         </Body>
-                        <Mono size={11} color={c.ink4} tracking={0.02}>
+                        {/* SKU or ISBN, size, charter, rack, warehouse and on
+                            hand: information, so the muted ink (the faint
+                            ink4 held it under AA). */}
+                        <Mono size={11.5} color={c.ink3} tracking={0.02}>
                           {reviewRecordDetail(r, view)}
                         </Mono>
                         {reason && reason !== 'chosen' ? (
@@ -461,22 +496,16 @@ export default function GroupSelectedScreen() {
             ) : null}
 
             {(plan?.conflicts.family.length ?? 0) > 0 ? (
-              <Pressable
-                onPress={() => setAckFamily((v) => !v)}
+              // The shared Checkbox (P2.5b): nothing around it is pressable,
+              // so it is the whole control. Same role, state, words and
+              // toggle (the updater, so `next` is not needed); the label is
+              // now its spoken name, the words VoiceOver read before.
+              <Checkbox
+                checked={ackFamily}
+                onChange={() => setAckFamily((v) => !v)}
                 disabled={busy}
-                accessibilityRole="checkbox"
-                accessibilityState={{ checked: ackFamily, disabled: busy }}
-                style={styles.choiceRow}
-              >
-                {ackFamily ? (
-                  <CheckCircle2 size={20} color={c.ink} strokeWidth={2} />
-                ) : (
-                  <Circle size={20} color={c.ink4} strokeWidth={1.6} />
-                )}
-                <Body size={13} color={c.ink} style={{ flex: 1 }}>
-                  {GROUP_COPY.acknowledgeFamily}
-                </Body>
-              </Pressable>
+                label={GROUP_COPY.acknowledgeFamily}
+              />
             ) : null}
 
             {siblings.length > 0 ? (
@@ -489,6 +518,7 @@ export default function GroupSelectedScreen() {
                 <Button
                   variant="outline"
                   size="sm"
+                  style={styles.smallButton}
                   // One request reviews at most 100 records: past that the
                   // review could only fail, so the button is off and says why
                   // (recheck R2-4).
@@ -518,7 +548,9 @@ export default function GroupSelectedScreen() {
             ) : null}
 
             <View style={{ gap: 10 }}>
-              <Mono size={11} tracking={0.14} upper color={c.ink4}>
+              {/* A section heading: the muted ink (ink4 held it under AA),
+                  and a header for VoiceOver's rotor. */}
+              <Mono size={11} tracking={0.14} upper color={c.ink3} accessibilityRole="header">
                 Where they go
               </Mono>
               <Card padding={0}>
@@ -539,11 +571,12 @@ export default function GroupSelectedScreen() {
                   </Body>
                 </Pressable>
                 {mode === 'new' ? (
-                  <View style={{ paddingHorizontal: 16, paddingBottom: 14, gap: 6 }}>
-                    <Mono size={11} color={c.ink4} tracking={0.04}>
-                      {GROUP_COPY.nameLabel}
-                    </Mono>
-                    <TextInput
+                  // The shared Field: its label above (muted ink, where the
+                  // faint ink4 held it under AA), the stronger border that
+                  // turns ink while typing, and the 24pt input ceiling.
+                  <View style={{ paddingHorizontal: 16, paddingBottom: 14 }}>
+                    <Field
+                      label={GROUP_COPY.nameLabel}
                       value={nameValue}
                       onChangeText={(t) => {
                         setNameTouched(true);
@@ -552,16 +585,7 @@ export default function GroupSelectedScreen() {
                       editable={!busy}
                       maxLength={GROUP_NAME_MAX_LENGTH}
                       accessibilityLabel={GROUP_COPY.nameLabel}
-                      maxFontSizeMultiplier={capTo(15, TYPE_CEILING.input)}
-                      style={[
-                        styles.input,
-                        {
-                          backgroundColor: c.card,
-                          borderColor: c.hair,
-                          color: c.ink,
-                          fontFamily: FONT.displayRegular,
-                        },
-                      ]}
+                      maxFontSizeMultiplier={capTo(16, TYPE_CEILING.input)}
                     />
                   </View>
                 ) : null}
@@ -626,11 +650,13 @@ export default function GroupSelectedScreen() {
 
             {plan?.previewHeader ? (
               <View style={{ gap: 6 }}>
-                <Mono size={11} tracking={0.14} upper color={c.ink4}>
+                <Mono size={11} tracking={0.14} upper color={c.ink3} accessibilityRole="header">
                   {GROUP_COPY.previewLabel}
                 </Mono>
+                {/* The list's group-header recipe, the recessed fill (sunk):
+                    this is how the header will show on the list. */}
                 <View
-                  style={[styles.previewHeader, { backgroundColor: c.paper2, borderColor: c.hair }]}
+                  style={[styles.previewHeader, { backgroundColor: c.sunk, borderColor: c.hair }]}
                 >
                   <Body size={14} color={c.ink} style={{ fontFamily: FONT.display }}>
                     {plan.previewHeader}
@@ -682,7 +708,11 @@ export default function GroupSelectedScreen() {
         )}
       </ScrollView>
 
-      <SafeAreaView edges={['bottom']} style={[styles.footer, { backgroundColor: c.paper }]}>
+      <SafeAreaView
+        edges={['bottom']}
+        onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
+        style={[styles.footer, { backgroundColor: c.paper, borderTopColor: c.hair }]}
+      >
         {phase === 'done' ? (
           <Button block onPress={close}>
             Done
@@ -751,20 +781,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 8,
   },
-  input: {
-    minHeight: 44,
-    borderRadius: 10,
-    borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    fontSize: 15,
-  },
   previewHeader: {
     borderRadius: 10,
     borderWidth: 1,
     paddingHorizontal: 12,
     paddingVertical: 10,
   },
+  // Try again and Add them to the selection: the small button's look in a
+  // 44pt target (the small size is 36pt). minHeight, so it still grows.
+  smallButton: {
+    minHeight: 44,
+  },
+  // Pinned over the scrolling review, so a hairline marks its top edge.
   footer: {
     position: 'absolute',
     left: 0,
@@ -772,5 +800,6 @@ const styles = StyleSheet.create({
     bottom: 0,
     paddingHorizontal: 20,
     paddingTop: 10,
+    borderTopWidth: 1,
   },
 });

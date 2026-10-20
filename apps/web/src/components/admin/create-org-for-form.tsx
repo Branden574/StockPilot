@@ -48,9 +48,7 @@ export function CreateOrgForForm() {
         toast.error(res.error.message);
         return;
       }
-      toast.success(
-        `Created "${form.name}". Magic-link invite sent to ${form.email}.`,
-      );
+      toast.success(`Created "${form.name}". Magic-link invite sent to ${form.email}.`);
       router.push('/dashboard/admin');
     });
   };
@@ -69,7 +67,7 @@ export function CreateOrgForForm() {
           value={form.email}
           onChange={(e) => setForm((s) => ({ ...s, email: e.target.value }))}
         />
-        <p className="text-muted-foreground text-xs">
+        <p className="text-muted-foreground text-[12px]">
           Supabase will send them a magic-link invite to this address.
         </p>
       </div>
@@ -108,7 +106,7 @@ export function CreateOrgForForm() {
           <select
             id="timezone"
             name="timezone"
-            className="border-input bg-background focus-visible:ring-ring h-10 w-full rounded-md border px-3 text-sm focus-visible:outline-none focus-visible:ring-2"
+            className="bg-card text-foreground focus-visible:ring-ring focus-visible:ring-offset-background border-line-strong h-8 w-full rounded-md border px-2.5 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 max-sm:h-11 max-sm:text-base"
             value={form.timezone}
             onChange={(e) => setForm((s) => ({ ...s, timezone: e.target.value }))}
           >
@@ -146,10 +144,11 @@ export function CreateOrgForForm() {
       </div>
 
       <div className="flex justify-end pt-2">
-        <Button type="submit" disabled={pending}>
+        {/* Committing the work in front of you: the ink primary. */}
+        <Button type="submit" disabled={pending} aria-busy={pending}>
           {pending ? (
             <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
               Provisioning…
             </>
           ) : (

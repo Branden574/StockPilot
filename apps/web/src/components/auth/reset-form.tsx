@@ -35,7 +35,7 @@ export function ResetForm() {
 
   if (submitted) {
     return (
-      <p className="text-center text-sm text-muted-foreground">
+      <p className="bg-sunk text-ink-2 rounded-md px-3 py-3 text-center text-[13.5px]">
         Check your inbox for a password reset link.
       </p>
     );
@@ -49,12 +49,19 @@ export function ResetForm() {
           id="email"
           type="email"
           autoComplete="email"
+          className="sm:h-10"
           {...register('email')}
           aria-invalid={!!errors.email}
         />
         {errors.email && <p className="text-xs text-destructive">{errors.email.message}</p>}
       </div>
-      <Button type="submit" className="w-full" variant="gradient" size="lg" disabled={isSubmitting}>
+      <Button
+        type="submit"
+        className="h-11 w-full text-[14px]"
+        variant="gradient"
+        size="lg"
+        disabled={isSubmitting}
+      >
         {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Send reset link'}
       </Button>
     </form>

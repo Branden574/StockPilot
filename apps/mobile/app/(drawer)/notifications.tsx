@@ -13,7 +13,7 @@ import { ensureRealtimeAuth } from '@/lib/realtime-auth';
 import { supabase } from '@/lib/supabase';
 import { rewriteWebPath } from '@/lib/web-path-rewrite';
 import { useWorkspace } from '@/lib/use-workspace';
-import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 interface NotificationRow {
@@ -27,6 +27,18 @@ interface NotificationRow {
 }
 
 /**
+ * The inbox's failed read, in its own words (redesign defect D25: a failed
+ * read used to say "All caught up."). Notifications an earlier read left on
+ * screen stay, with the reload note above them.
+ */
+const NOTIFICATIONS_LOAD_FAILED = {
+  title: 'Could not load notifications.',
+  body: 'Check your connection and pull down to try again.',
+  reloadNote:
+    'Could not load notifications again, so these may be out of date. Pull down to try again.',
+};
+
+/**
  * Notifications inbox — reads `public.notifications` for the current user
  * and subscribes to inserts/updates via Supabase Realtime so new
  * notifications appear live without pull-to-refresh. Tap to mark read
@@ -37,6 +49,8 @@ export default function NotificationsScreen() {
   const { activeOrgId } = useWorkspace();
   const router = useRouter();
   const [rows, setRows] = React.useState<NotificationRow[]>([]);
+  // The last read failed (set by every read that answers).
+  const [loadFailed, setLoadFailed] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   // Web-only notifications (briefing, digests) open the detail sheet —
@@ -45,7 +59,7 @@ export default function NotificationsScreen() {
 
   const load = React.useCallback(async () => {
     if (!user || !activeOrgId) return;
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('notifications')
       .select('id, type, title, body, link, read_at, created_at')
       .eq('user_id', user.id)
@@ -55,7 +69,13 @@ export default function NotificationsScreen() {
       .eq('organization_id', activeOrgId)
       .order('created_at', { ascending: false })
       .limit(100);
-    setRows((data ?? []) as NotificationRow[]);
+    if (error) {
+      // Said, never "All caught up."; earlier rows stay.
+      setLoadFailed(true);
+    } else {
+      setLoadFailed(false);
+      setRows((data ?? []) as NotificationRow[]);
+    }
     setLoading(false);
   }, [user, activeOrgId]);
 
@@ -154,35 +174,41 @@ export default function NotificationsScreen() {
 
   return (
     <>
-    <DataListScreen
-      eyebrow={`INBOX · ${rows.filter((r) => !r.read_at).length} UNREAD`}
-      title="Notifications"
-      italic="."
-      emptyTitle="All caught up."
-      emptyBody="When stock hits reorder, a PO is overdue, or an order needs your approval, it shows up here."
-      emptyIcon={BellOff}
-      data={rows}
-      loading={loading}
-      refreshing={refreshing}
-      onRefresh={refresh}
-      trailing={
-        rows.some((r) => !r.read_at) ? (
-          // marginRight -3: the chip's 44pt frame is 3pt wider each side, so
-          // the chip stays at the bar's right padding.
-          <View style={{ marginRight: -3 }}>
-            <IconChip
-              icon={CheckCheck}
-              onPress={() => void markAllRead()}
-              accessibilityLabel="Mark all as read"
-              minTap
-            />
-          </View>
-        ) : null
-      }
-      keyExtractor={(n) => n.id}
-      renderItem={(n) => <NotifRow row={n} onPress={() => open(n)} />}
-    />
-    {detail && <NotifDetailSheet row={detail} onClose={() => setDetail(null)} />}
+      <DataListScreen
+        // A read that failed with nothing on screen quotes no count.
+        eyebrow={
+          loadFailed && rows.length === 0
+            ? 'INBOX'
+            : `INBOX · ${rows.filter((r) => !r.read_at).length} UNREAD`
+        }
+        title="Notifications"
+        italic="."
+        emptyTitle="All caught up."
+        emptyBody="When stock hits reorder, a PO is overdue, or an order needs your approval, it shows up here."
+        emptyIcon={BellOff}
+        failed={loadFailed ? NOTIFICATIONS_LOAD_FAILED : null}
+        data={rows}
+        loading={loading}
+        refreshing={refreshing}
+        onRefresh={refresh}
+        trailing={
+          rows.some((r) => !r.read_at) ? (
+            // marginRight -3: the chip's 44pt frame is 3pt wider each side, so
+            // the chip stays at the bar's right padding.
+            <View style={{ marginRight: -3 }}>
+              <IconChip
+                icon={CheckCheck}
+                onPress={() => void markAllRead()}
+                accessibilityLabel="Mark all as read"
+                minTap
+              />
+            </View>
+          ) : null
+        }
+        keyExtractor={(n) => n.id}
+        renderItem={(n) => <NotifRow row={n} onPress={() => open(n)} />}
+      />
+      {detail && <NotifDetailSheet row={detail} onClose={() => setDetail(null)} />}
     </>
   );
 }
@@ -193,7 +219,7 @@ export default function NotificationsScreen() {
  * content in-place instead.
  */
 function NotifDetailSheet({ row, onClose }: { row: NotificationRow; onClose: () => void }) {
-  const { c } = useTheme();
+  const { c, mode } = useTheme();
   return (
     <Modal transparent animationType="fade" onRequestClose={onClose}>
       {/*
@@ -213,11 +239,23 @@ function NotifDetailSheet({ row, onClose }: { row: NotificationRow; onClose: () 
        * that layer is not itself a touch target, so taps beside the card fall
        * through to the scrim and close, while the card's own subtree keeps its
        * touches. See add-order-items-sheet.tsx for the measured detail.
+       *
+       * VoiceOver (the app's sheet rule, sheet-a11y-structure.test.ts): the
+       * container keeps it inside the open sheet and a two-finger scrub
+       * closes; the scrim is a "Close" button whose double-tap closes even
+       * where the card covers its centre. The scrim darkens per mode as the
+       * app's other sheets do.
        */}
-      <View style={{ flex: 1 }}>
+      <View style={{ flex: 1 }} accessibilityViewIsModal onAccessibilityEscape={onClose}>
         <Pressable
-          style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.55)' }]}
+          style={[
+            StyleSheet.absoluteFill,
+            { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+          ]}
           onPress={onClose}
+          onAccessibilityTap={onClose}
+          accessibilityRole="button"
+          accessibilityLabel="Close"
         />
         <View
           style={{ flex: 1, justifyContent: 'center', padding: 24 }}
@@ -229,7 +267,7 @@ function NotifDetailSheet({ row, onClose }: { row: NotificationRow; onClose: () 
                 <Body size={16} color={c.ink} style={{ fontFamily: FONT.display }}>
                   {row.title}
                 </Body>
-                <Mono size={10.5} color={c.ink4} style={{ marginTop: 4 }}>
+                <Mono size={10.5} color={c.ink3} style={{ marginTop: 4 }}>
                   {new Date(row.created_at).toLocaleString('en-US', {
                     weekday: 'short',
                     month: 'short',
@@ -239,8 +277,15 @@ function NotifDetailSheet({ row, onClose }: { row: NotificationRow; onClose: () 
                   })}
                 </Mono>
               </View>
-              <Pressable onPress={onClose} hitSlop={10}>
-                <X size={18} color={c.ink4} />
+              {/* A 44pt frame around the same 18pt X, its margin giving the
+                  space back; it was a nameless glyph with hitSlop. */}
+              <Pressable
+                onPress={onClose}
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+                style={styles.closeFrame}
+              >
+                <X size={18} color={c.ink3} />
               </Pressable>
             </View>
             {row.body ? (
@@ -263,10 +308,16 @@ function NotifRow({ row, onPress }: { row: NotificationRow; onPress: () => void 
   const when = new Date(row.created_at);
   const ago = relativeTime(when);
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}>
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
+    >
+      {/* Unread: the accent wash with an accent edge, per mode (the NEW pill
+          and the dot say it in words and shape too). */}
       <Card
         padding={14}
-        style={unread ? { backgroundColor: ACCENT.mintSoft, borderColor: ACCENT.mint } : undefined}
+        style={unread ? { backgroundColor: c.accentWash, borderColor: c.accent } : undefined}
       >
         <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
           <View
@@ -275,7 +326,7 @@ function NotifRow({ row, onPress }: { row: NotificationRow; onPress: () => void 
               height: 6,
               borderRadius: 3,
               marginTop: 8,
-              backgroundColor: unread ? ACCENT.mint : 'transparent',
+              backgroundColor: unread ? c.accent : 'transparent',
             }}
           />
           <View style={{ flex: 1, minWidth: 0 }}>
@@ -300,7 +351,7 @@ function NotifRow({ row, onPress }: { row: NotificationRow; onPress: () => void 
               <Mono
                 size={10.5}
                 tracking={0.04}
-                color={c.ink4}
+                color={c.ink3}
                 numberOfLines={1}
                 maxFontSizeMultiplier={capTo(10.5, TYPE_CEILING.chrome)}
                 style={{ flexShrink: 0 }}
@@ -324,6 +375,17 @@ function NotifRow({ row, onPress }: { row: NotificationRow; onPress: () => void 
     </Pressable>
   );
 }
+
+const styles = StyleSheet.create({
+  // (44 - 18) / 2: the frame takes up the X's 18pt, as before.
+  closeFrame: {
+    minWidth: 44,
+    minHeight: 44,
+    margin: -13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+});
 
 function relativeTime(d: Date): string {
   const secs = Math.floor((Date.now() - d.getTime()) / 1000);

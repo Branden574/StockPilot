@@ -39,6 +39,34 @@ function escapeHtml(s: string): string {
 }
 
 /**
+ * The page's own palette (redesign P5.1, as /auth/confirm): the app's light
+ * ground, card and hairline, the ink button for committing the opt-out, and a
+ * dark scheme for devices set to dark. A style element in the page itself: no
+ * app CSS, font or script loads here (CSP allows inline styles).
+ */
+const PAGE_STYLE = `
+:root{color-scheme:light dark}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#fafaf7;color:#0e0f0d;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+main{max-width:400px;width:100%;margin:16px;box-sizing:border-box;background:#ffffff;border:1px solid #e7e5dd;border-radius:8px;padding:32px 28px;text-align:center}
+.brand{font-weight:600;font-size:15px;letter-spacing:-0.02em;margin-bottom:20px}
+h1{font-size:22px;font-weight:500;letter-spacing:-0.02em;line-height:1.25;margin:0 0 10px}
+p{color:#5a5d56;font-size:14px;line-height:1.6;margin:0}
+p.lead{margin:0 0 24px}
+strong{color:#0e0f0d;font-weight:600}
+.btn{display:inline-flex;align-items:center;justify-content:center;width:100%;min-height:44px;box-sizing:border-box;padding:10px 20px;border:1px solid transparent;border-radius:6px;background:#0e0f0d;color:#fafaf7;font:inherit;font-weight:500;font-size:15px;cursor:pointer}
+.btn:hover{background:#2a2c28}
+.btn:focus-visible{outline:2px solid #2f7463;outline-offset:2px}
+@media (prefers-color-scheme:dark){
+body{background:#0c0d0a;color:#f0efe8}
+main{background:#131410;border-color:#1f201b}
+p{color:#9a9b91}
+strong{color:#f0efe8}
+.btn{background:#f0efe8;color:#0c0d0a}
+.btn:hover{background:#d8d6cc}
+.btn:focus-visible{outline-color:#7acdb8}
+}`;
+
+/**
  * Plain server-rendered HTML on purpose (mirrors /auth/confirm): zero
  * JS, renders in every mail-client browser, nothing to hydrate.
  */
@@ -49,11 +77,12 @@ function htmlPage(heading: string, bodyHtml: string, status: number): NextRespon
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <title>${escapeHtml(heading)} · StockPilot</title>
+<style>${PAGE_STYLE}</style>
 </head>
-<body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f4f4f5;font-family:-apple-system,Segoe UI,sans-serif;">
-  <main style="max-width:400px;width:100%;margin:16px;background:white;border-radius:12px;padding:40px;box-shadow:0 1px 3px rgba(0,0,0,0.08);text-align:center;">
-    <div style="font-weight:600;font-size:18px;margin-bottom:20px;">StockPilot</div>
-    <h1 style="font-size:22px;margin:0 0 10px;">${escapeHtml(heading)}</h1>
+<body>
+  <main>
+    <div class="brand">StockPilot</div>
+    <h1>${escapeHtml(heading)}</h1>
     ${bodyHtml}
   </main>
 </body></html>`;
@@ -72,7 +101,7 @@ function htmlPage(heading: string, bodyHtml: string, status: number): NextRespon
 function invalidPage(): NextResponse {
   return htmlPage(
     'This link is invalid',
-    `<p style="color:#52525b;font-size:14px;line-height:1.6;margin:0;">
+    `<p>
       This unsubscribe link is invalid or was altered. Use the link from
       the bottom of a StockPilot order email.
     </p>`,
@@ -93,7 +122,7 @@ export async function GET(request: NextRequest) {
   const normalized = normalizeUnsubscribeEmail(email);
   return htmlPage(
     'Unsubscribe from order notifications?',
-    `<p style="color:#52525b;font-size:14px;line-height:1.6;margin:0 0 24px;">
+    `<p class="lead">
       Stop sending order updates to
       <strong>${escapeHtml(normalized)}</strong>? You'll no longer get
       emails when your order requests change status.
@@ -101,7 +130,7 @@ export async function GET(request: NextRequest) {
     <form method="post" action="/unsubscribe">
       <input type="hidden" name="e" value="${escapeHtml(normalized)}">
       <input type="hidden" name="t" value="${escapeHtml(token)}">
-      <button type="submit" style="display:inline-block;width:100%;background:#0c0c0e;color:white;border:0;cursor:pointer;padding:12px 24px;border-radius:8px;font-weight:600;font-size:15px;">
+      <button type="submit" class="btn">
         Unsubscribe
       </button>
     </form>`,
@@ -143,7 +172,7 @@ export async function POST(request: NextRequest) {
     // success while the address keeps receiving email.
     return htmlPage(
       'Something went wrong',
-      `<p style="color:#52525b;font-size:14px;line-height:1.6;margin:0;">
+      `<p>
         We couldn't record your preference. Please try the link again in
         a few minutes.
       </p>`,
@@ -153,7 +182,7 @@ export async function POST(request: NextRequest) {
 
   return htmlPage(
     "You're unsubscribed",
-    `<p style="color:#52525b;font-size:14px;line-height:1.6;margin:0;">
+    `<p>
       <strong>${escapeHtml(normalized)}</strong> won't receive order
       notification emails anymore. Confirmation emails for requests you
       submit yourself may still be sent.

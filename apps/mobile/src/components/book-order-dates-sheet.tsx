@@ -37,7 +37,7 @@ import {
   bookReportDraftProblems,
   bookReportPresetQuery,
 } from '@/lib/book-order-totals-view';
-import { ACCENT, FONT, SHADOW, TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT, SHADOW, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -57,7 +57,10 @@ import { useTheme } from '@/lib/use-theme';
  *     days from the answer on screen), else on the organization's today.
  *
  * Built the sibling-backdrop way (sheet-backdrop-guard.test.ts), like the
- * other two report sheets.
+ * other two report sheets. The tiles and the typed dates are input wells on
+ * the sheet's card (the recessed fill with the control border; the tile
+ * being edited takes the ink edge), an unchosen tile reads in the muted ink,
+ * and the refusal and an invalid date take the per-mode refusal red.
  */
 export function BookOrderDatesSheet(props: {
   visible: boolean;
@@ -233,9 +236,9 @@ function DatesContent({
                       style={({ pressed }) => [
                         styles.tile,
                         {
-                          borderColor: editing === which ? c.ink : c.hair,
+                          borderColor: editing === which ? c.ink : c.hair2,
                           borderWidth: editing === which ? 1.5 : 1,
-                          backgroundColor: c.paper,
+                          backgroundColor: c.sunk,
                           opacity: pressed ? 0.7 : 1,
                         },
                       ]}
@@ -243,7 +246,7 @@ function DatesContent({
                       <FieldLabel>{tile.title.toUpperCase()}</FieldLabel>
                       <Body
                         size={15}
-                        color={tile.chosen ? c.ink : c.ink4}
+                        color={tile.chosen ? c.ink : c.ink3}
                         style={{ fontFamily: FONT.display, marginTop: 4 }}
                       >
                         {tile.value}
@@ -296,7 +299,7 @@ function DatesContent({
                     </View>
                     {/* One sentence for the range, core's (the web page's words). */}
                     {touchedDates && problems.dates ? (
-                      <Body size={12.5} color={ACCENT.crit} accessibilityRole="alert">
+                      <Body size={12.5} color={c.critText} accessibilityRole="alert">
                         {problems.dates}
                       </Body>
                     ) : null}
@@ -357,7 +360,7 @@ function DateField({
         onChangeText={onChange}
         onBlur={onBlur}
         placeholder="YYYY-MM-DD"
-        placeholderTextColor={c.ink4}
+        placeholderTextColor={c.ink3}
         accessibilityLabel={`${title}, written year, month, day`}
         autoCapitalize="none"
         autoCorrect={false}
@@ -368,8 +371,8 @@ function DateField({
           styles.input,
           {
             color: c.ink,
-            borderColor: invalid ? ACCENT.crit : c.hair,
-            backgroundColor: c.paper,
+            borderColor: invalid ? c.critText : c.hair2,
+            backgroundColor: c.sunk,
             fontFamily: FONT.mono,
           },
         ]}

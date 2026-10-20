@@ -52,16 +52,23 @@ export function MaintenanceSearch({
         e.preventDefault();
         submit(q);
       }}
-      className="relative min-w-[200px] max-w-xs flex-1 sm:flex-none"
+      className="relative w-full min-w-0 sm:w-[360px]"
     >
-      <Search className="text-muted-foreground pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2" />
+      {/* The toolbar search (DESIGN-SPEC 6.3): a 14 px glyph inside a 32 px
+          field (44 px below sm, the Input's phone rule), keeping the app's
+          focus ring. Wide enough for the whole placeholder at 13 px. */}
+      <Search
+        aria-hidden="true"
+        className="text-muted-foreground pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+        strokeWidth={1.8}
+      />
       <Input
         type="search"
         value={q}
         onChange={(e) => setQ(e.target.value)}
         placeholder="Search request #, subject, description, requester…"
         aria-label="Search maintenance requests"
-        className="h-9 pl-8 text-[13px]"
+        className="h-8 pl-8 text-[13px]"
       />
     </form>
   );

@@ -1,17 +1,12 @@
 import { ShieldCheck } from 'lucide-react-native';
 import * as React from 'react';
-import {
-  ActivityIndicator,
-  Pressable,
-  StyleSheet,
-  TextInput,
-  View,
-} from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, StyleSheet, TextInput, View } from 'react-native';
 
 import { AuthShell } from '@/components/auth/auth-shell';
-import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { Button } from '@/components/ui/button';
+import { Body, Display, Em, Eyebrow } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
-import { ACCENT, FONT } from '@/lib/theme';
+import { FONT, RADIUS, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -23,6 +18,12 @@ import { useTheme } from '@/lib/use-theme';
  * "Use a different account" calls signOutToFallback so a user who lost
  * their authenticator can drop back to the sign-in screen (and recover
  * via the web app's recovery-code flow).
+ *
+ * Drawn on the per-mode palette: the code box with the stronger control
+ * border (the refusal colour after a wrong code), Verify as the shared ink
+ * button (it keeps its word beside the spinner, so VoiceOver still hears it)
+ * and "Use a different account" as the shared borderless button, both 52pt
+ * targets announced as buttons.
  */
 export function MfaChallengeScreen() {
   const { verifyMfa, signOutToFallback } = useAuth();
@@ -30,6 +31,12 @@ export function MfaChallengeScreen() {
   const [code, setCode] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+
+  // iOS ignores accessibilityLiveRegion, so a refused code is said aloud
+  // (the box clears itself, and VoiceOver said nothing about why).
+  React.useEffect(() => {
+    if (error) AccessibilityInfo.announceForAccessibility(error);
+  }, [error]);
 
   async function submit(value: string) {
     if (busy) return;
@@ -57,7 +64,7 @@ export function MfaChallengeScreen() {
   return (
     <AuthShell>
       <View style={styles.iconWrap}>
-        <View style={[styles.iconRing, { borderColor: c.hair }]}>
+        <View style={[styles.iconRing, { borderColor: c.hair2 }]}>
           <ShieldCheck size={30} color={c.ink} strokeWidth={1.5} />
         </View>
       </View>
@@ -75,57 +82,53 @@ export function MfaChallengeScreen() {
         value={code}
         onChangeText={onChange}
         placeholder="123456"
-        placeholderTextColor={c.ink4}
+        placeholderTextColor={c.ink3}
+        // Its spoken name: without one VoiceOver read the placeholder digits.
+        accessibilityLabel="6-digit code"
         keyboardType="number-pad"
         textContentType="oneTimeCode"
         autoComplete="one-time-code"
         autoFocus
         editable={!busy}
         maxLength={6}
+        // The input ceiling (lib/theme.ts TYPE_CEILING.input): six 26pt
+        // digits with wide tracking already fill the box, and uncapped they
+        // ran past its edge at the accessibility sizes.
+        maxFontSizeMultiplier={CODE_CAP}
         style={[
           styles.codeInput,
-          { color: c.ink, borderColor: error ? ACCENT.crit : c.hair, backgroundColor: c.card },
+          { color: c.ink, borderColor: error ? c.critText : c.hair2, backgroundColor: c.card },
         ]}
       />
 
       {error ? (
-        <Mono size={12} tracking={0.02} color={ACCENT.crit} style={{ marginTop: 10 }}>
+        <Body size={13} color={c.critText} style={{ marginTop: 10 }}>
           {error}
-        </Mono>
+        </Body>
       ) : null}
 
-      <Pressable
-        onPress={() => void submit(code)}
-        disabled={busy || code.length !== 6}
-        style={({ pressed }) => [
-          styles.verifyBtn,
-          {
-            backgroundColor: c.ink,
-            opacity: busy || code.length !== 6 ? 0.5 : pressed ? 0.8 : 1,
-          },
-        ]}
-      >
-        {busy ? (
-          <ActivityIndicator color={c.paper} />
-        ) : (
-          <Body size={15} color={c.paper} style={{ fontFamily: FONT.display }}>
-            Verify
-          </Body>
-        )}
-      </Pressable>
+      <View style={styles.verify}>
+        <Button
+          block
+          onPress={() => void submit(code)}
+          disabled={busy || code.length !== 6}
+          trailing={busy ? <ActivityIndicator color={c.paper} /> : undefined}
+        >
+          Verify
+        </Button>
+      </View>
 
-      <Pressable
-        onPress={() => void signOutToFallback()}
-        disabled={busy}
-        style={({ pressed }) => [styles.fallback, { opacity: pressed ? 0.6 : 1 }]}
-      >
-        <Mono size={12} tracking={0.04} color={c.ink3} style={{ fontFamily: FONT.display }}>
+      <View style={styles.fallback}>
+        <Button block variant="ghost" onPress={() => void signOutToFallback()} disabled={busy}>
           Use a different account
-        </Mono>
-      </Pressable>
+        </Button>
+      </View>
     </AuthShell>
   );
 }
+
+/** The code is 26pt, past the 24pt input ceiling: it does not grow. */
+const CODE_CAP = capTo(26, TYPE_CEILING.input);
 
 const styles = StyleSheet.create({
   iconWrap: {
@@ -142,7 +145,7 @@ const styles = StyleSheet.create({
   },
   codeInput: {
     borderWidth: 1,
-    borderRadius: 12,
+    borderRadius: RADIUS.card,
     paddingVertical: 16,
     paddingHorizontal: 18,
     fontSize: 26,
@@ -150,15 +153,10 @@ const styles = StyleSheet.create({
     fontFamily: FONT.mono,
     textAlign: 'center',
   },
-  verifyBtn: {
+  verify: {
     marginTop: 18,
-    borderRadius: 14,
-    paddingVertical: 16,
-    alignItems: 'center',
   },
   fallback: {
-    marginTop: 18,
-    alignSelf: 'center',
-    padding: 8,
+    marginTop: 8,
   },
 });

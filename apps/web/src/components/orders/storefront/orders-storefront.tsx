@@ -27,7 +27,6 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -134,6 +133,8 @@ import { toFreqEntries, useStreamed } from './frequently-ordered';
 
 import './storefront.css';
 import { PageTour } from '@/components/onboarding/page-tour';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
+import { CheckboxGlyph } from '@/components/ui/checkbox';
 import { ORDER_CREATE_TOUR } from '@/lib/onboarding/tours';
 
 const GRID_PREVIEW = 4;
@@ -372,21 +373,19 @@ function StorefrontShell({
   return (
     <div className="sp-storefront">
       <div className="sf-page">
-        {/* ---------- Page head ---------- */}
-        <div className="sf-head">
-          <div>
-            <Link href="/dashboard/orders" className="sf-back">
+        {/* ---------- Page head (the shared page header, DESIGN-SPEC 6.1) ---------- */}
+        <PageHeader
+          className="sf-page-head"
+          back={
+            <PageHeaderBackLink href="/dashboard/orders">
               <ChevronLeft size={12} /> Back to orders
-            </Link>
-            <h1 className="sf-title">{STOREFRONT_TITLE_COPY}</h1>
-            <div className="sf-sub">
-              Browse available inventory, add items to your cart, and submit for
-              approval.
-            </div>
-            <div className="mt-2"><PageTour tour={ORDER_CREATE_TOUR} /></div>
-          </div>
-          <FlowIndicator stage={flowStage} />
-        </div>
+            </PageHeaderBackLink>
+          }
+          title={STOREFRONT_TITLE_COPY}
+          subline="Browse available inventory, add items to your cart, and submit for approval."
+          tour={<PageTour tour={ORDER_CREATE_TOUR} />}
+          actions={<FlowIndicator stage={flowStage} />}
+        />
 
         {/* ---------- Order setup bar ---------- */}
         <div className="sf-setup">
@@ -427,6 +426,7 @@ function StorefrontShell({
                   type="button"
                   className="sf-opt"
                   data-on={w.id === warehouseId}
+                  aria-pressed={w.id === warehouseId}
                   onClick={(e) => {
                     e.stopPropagation();
                     setOpenPop(null);
@@ -493,6 +493,7 @@ function StorefrontShell({
                 type="button"
                 className="sf-opt"
                 data-on={state.onBehalfOf === null}
+                aria-pressed={state.onBehalfOf === null}
                 onClick={(e) => {
                   e.stopPropagation();
                   dispatch({ type: 'set-setup', patch: { onBehalfOf: null } });
@@ -663,6 +664,7 @@ function StorefrontShell({
                     type="button"
                     className="sf-opt"
                     data-on={c.id === state.charterId}
+                    aria-pressed={c.id === state.charterId}
                     onClick={(e) => {
                       e.stopPropagation();
                       dispatch({ type: 'set-setup', patch: { charterId: c.id } });
@@ -1344,9 +1346,10 @@ function StorefrontCatalog({
                       type="button"
                       className="sf-opt"
                       data-on={availability.has(id)}
+                      aria-pressed={availability.has(id)}
                       onClick={() => toggleAvailability(id)}
                     >
-                      <span className="sf-cb" data-checked={availability.has(id)} />
+                      <CheckboxGlyph checked={availability.has(id)} className="sf-cb" />
                       <span className="nm" style={{ fontWeight: 400 }}>
                         {AVAILABILITY_LABELS[id]}
                       </span>
@@ -1380,6 +1383,7 @@ function StorefrontCatalog({
                       type="button"
                       className="sf-opt"
                       data-on={s.id === sort}
+                      aria-pressed={s.id === sort}
                       onClick={() => {
                         setSort(s.id);
                         setToolPop(null);
@@ -1400,6 +1404,7 @@ function StorefrontCatalog({
                 <button
                   type="button"
                   data-active={view === 'grid'}
+                  aria-pressed={view === 'grid'}
                   title="Grid view"
                   aria-label="Grid view"
                   onClick={() => setView('grid')}
@@ -1409,6 +1414,7 @@ function StorefrontCatalog({
                 <button
                   type="button"
                   data-active={view === 'compact'}
+                  aria-pressed={view === 'compact'}
                   title="Compact view"
                   aria-label="Compact view"
                   onClick={() => setView('compact')}
@@ -1424,6 +1430,7 @@ function StorefrontCatalog({
                 type="button"
                 className="sf-pill"
                 data-active={category === 'all'}
+                aria-pressed={category === 'all'}
                 onClick={() => setCategory('all')}
               >
                 All <span className="ct">{items.length}</span>
@@ -1436,6 +1443,7 @@ function StorefrontCatalog({
                     type="button"
                     className="sf-pill"
                     data-active={category === key}
+                    aria-pressed={category === key}
                     onClick={() => setCategory(category === key ? 'all' : key)}
                   >
                     <span className="icon">

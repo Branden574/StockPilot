@@ -129,8 +129,15 @@ describe('order/[id].tsx wiring (L93)', () => {
     expect(addBtn).not.toMatch(/[^A-Za-z]height: 44/);
     const helper = screen.slice(screen.indexOf('const actionBtn = ('), screen.indexOf('async function uploadOne('));
     expect(helper).toContain('styles.addBtn');
+    // Re-pinned by the redesign (P5.7a, look only): the label is the shared
+    // Button's display face (styles.actionLabel) in place of mono; it is
+    // still uncapped and still wraps (flexShrink, centred).
     expect(helper).toMatch(
-      /<Mono size=\{13\} color=\{fg\} style=\{\{ flexShrink: 1, textAlign: 'center' \}\}>\s*\{label\}\s*<\/Mono>/,
+      /<Text style=\{\[styles\.actionLabel, \{ color: fg \}\]\}>\{label\}<\/Text>/,
     );
+    const label = screen.match(/\n {2}actionLabel: \{[^}]*\}/)?.[0] ?? '';
+    expect(label).toMatch(/flexShrink: 1/);
+    expect(label).toMatch(/textAlign: 'center'/);
+    expect(label).not.toMatch(/numberOfLines|height:/);
   });
 });

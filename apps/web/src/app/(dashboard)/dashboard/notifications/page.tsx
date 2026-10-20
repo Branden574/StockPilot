@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  CheckCircle2,
   ChevronRight,
   ClipboardCheck,
   ClipboardList,
@@ -8,12 +9,11 @@ import {
 import Link from 'next/link';
 
 import { NotificationsList } from '@/components/notifications/notifications-list';
-import {
-  getDashboardActions,
-  getDashboardSummary,
-} from '@/server/services/movements';
+import { DetailSection } from '@/components/patterns/detail-section';
+import { PageHeader } from '@/components/patterns/page-header';
+import { getDashboardActions, getDashboardSummary } from '@/server/services/movements';
 import { NotificationsService } from '@/server/services/notifications';
-import { formatNumber } from '@/lib/utils';
+import { cn, formatNumber } from '@/lib/utils';
 
 export const metadata = {
   title: 'Notifications',
@@ -83,66 +83,71 @@ export default async function NotificationsPage() {
   }
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Notifications</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Live alerts on top — what needs your attention right now. Below, the
-          history of recorded low-stock and PO events.
-        </p>
-      </div>
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <PageHeader
+        title="Notifications"
+        subline="Live alerts on top — what needs your attention right now. Below, the history of recorded low-stock and PO events."
+      />
 
-      {liveAlerts.length > 0 ? (
-        <section className="mb-8">
-          <h2 className="text-muted-foreground mb-3 text-[10.5px] font-semibold uppercase tracking-wider">
-            Live alerts
-          </h2>
-          <div className="space-y-2">
+      <DetailSection title="Live alerts" flush>
+        {liveAlerts.length > 0 ? (
+          <ul>
             {liveAlerts.map((a) => (
-              <Link
-                key={a.key}
-                href={a.href}
-                className={
-                  'group bg-card hover:border-foreground/30 flex items-start gap-3 rounded-lg border p-4 transition-colors ' +
-                  (a.tone === 'warn' ? 'border-warning/40' : 'border-border')
-                }
-              >
-                <div
-                  className={
-                    'rounded-md p-2 ' +
-                    (a.tone === 'warn'
-                      ? 'bg-warning/10 text-warning'
-                      : 'bg-muted text-foreground')
-                  }
+              <li key={a.key} className="border-border border-b last:border-b-0">
+                <Link
+                  href={a.href}
+                  data-tone={a.tone}
+                  className="hover:bg-muted group flex items-start gap-3.5 px-[18px] py-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0"
                 >
-                  <a.icon className="h-4 w-4" strokeWidth={1.75} />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium">{a.title}</p>
-                  <p className="text-muted-foreground mt-0.5 text-xs">
-                    {a.description}
-                  </p>
-                </div>
-                <ChevronRight className="text-muted-foreground mt-1 h-4 w-4 shrink-0 transition-transform group-hover:translate-x-0.5" />
-              </Link>
+                  <span
+                    aria-hidden
+                    className={cn(
+                      'grid size-8 shrink-0 place-items-center rounded-full',
+                      a.tone === 'warn'
+                        ? 'bg-warning-wash text-warning'
+                        : 'bg-sunk text-foreground border-line-strong border',
+                    )}
+                  >
+                    <a.icon className="h-4 w-4" strokeWidth={1.75} />
+                  </span>
+                  <span className="min-w-0 flex-1 pt-0.5">
+                    <span className="text-foreground block text-[13.5px] font-medium leading-5">
+                      {a.title}
+                    </span>
+                    <span className="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18.75px]">
+                      {a.description}
+                    </span>
+                  </span>
+                  <ChevronRight
+                    aria-hidden
+                    className="text-muted-foreground mt-2 h-4 w-4 shrink-0 transition-transform group-hover:translate-x-0.5"
+                    strokeWidth={1.8}
+                  />
+                </Link>
+              </li>
             ))}
+          </ul>
+        ) : (
+          <div className="flex items-start gap-3.5 px-[18px] py-3.5">
+            <span
+              aria-hidden
+              className="bg-success-wash text-accent grid size-8 shrink-0 place-items-center rounded-full"
+            >
+              <CheckCircle2 className="h-4 w-4" strokeWidth={1.75} />
+            </span>
+            <div className="min-w-0 pt-0.5">
+              <p className="text-foreground text-[13.5px] font-medium leading-5">
+                All clear right now
+              </p>
+              <p className="text-muted-foreground mt-0.5 text-[12.5px] leading-[18.75px]">
+                No low-stock items, no open POs, no in-progress counts.
+              </p>
+            </div>
           </div>
-        </section>
-      ) : (
-        <section className="border-success/30 bg-success/5 mb-8 rounded-lg border px-4 py-3 text-sm">
-          <p className="font-medium">All clear right now</p>
-          <p className="text-muted-foreground mt-0.5 text-xs">
-            No low-stock items, no open POs, no in-progress counts.
-          </p>
-        </section>
-      )}
+        )}
+      </DetailSection>
 
-      <section>
-        <h2 className="text-muted-foreground mb-3 text-[10.5px] font-semibold uppercase tracking-wider">
-          Notification history
-        </h2>
-        <NotificationsList notifications={notifications} />
-      </section>
+      <NotificationsList notifications={notifications} />
     </div>
   );
 }

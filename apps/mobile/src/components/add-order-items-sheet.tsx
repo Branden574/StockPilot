@@ -9,6 +9,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Text,
   TextInput,
   useWindowDimensions,
   View,
@@ -20,7 +21,7 @@ import { Body, Eyebrow, Mono } from '@/components/ui/text';
 import { api } from '@/lib/api';
 import { parseHoldOutcome } from '@/lib/order-hold';
 import { supabase } from '@/lib/supabase';
-import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 import {
@@ -51,6 +52,15 @@ import {
  * The picker's predicates are chosen to pre-empt each addLines rejection: it
  * offers only active, non-deleted, already-received items IN THE ORDER'S OWN
  * warehouse. Anything else is a guaranteed 400.
+ *
+ * VoiceOver and the redesign look: the sheet is the shared sibling-backdrop
+ * shape (a "Close" scrim behind a plain card, VoiceOver kept inside, Escape
+ * and a double-tap on the scrim close it), its title a header; Close, Clear
+ * search, the steppers and Load more are named 44pt buttons with no hitSlop;
+ * the search box and Add to order grow with the text (minHeight, never a
+ * fixed height); sentences are muted ink (ink3, AA) in the body face, the
+ * refusal the per-mode refusal ink; Add to order is the ink button and keeps
+ * its words beside the spinner.
  */
 
 interface PickerRow {
@@ -301,7 +311,7 @@ export function AddOrderItemsSheet({
           height: 32,
           borderRadius: 8,
           borderWidth: 1,
-          borderColor: c.hair,
+          borderColor: c.hair2,
           alignItems: 'center',
           justifyContent: 'center',
         }}
@@ -346,9 +356,16 @@ export function AddOrderItemsSheet({
          * leaving the content free of any responder above it. Do NOT re-nest the
          * card inside the scrim to "simplify" this.
          */}
-        <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+        <View
+          accessibilityViewIsModal
+          onAccessibilityEscape={requestClose}
+          style={{ flex: 1, justifyContent: 'flex-end' }}
+        >
           <Pressable
             onPress={requestClose}
+            onAccessibilityTap={requestClose}
+            accessibilityRole="button"
+            accessibilityLabel="Close"
             style={[
               StyleSheet.absoluteFill,
               {
@@ -372,35 +389,48 @@ export function AddOrderItemsSheet({
                 alignItems: 'center',
               }}
             >
-              <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
+              <Body
+                size={15}
+                color={c.ink}
+                accessibilityRole="header"
+                maxFontSizeMultiplier={TITLE_CAP}
+                style={{ flex: 1, fontFamily: FONT.display }}
+              >
                 Add items
               </Body>
-              <Pressable onPress={requestClose} hitSlop={8} accessibilityLabel="Close">
-                <X size={18} color={c.ink4} />
+              <Pressable
+                onPress={requestClose}
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+                style={styles.close}
+              >
+                <X size={18} color={c.ink2} />
               </Pressable>
             </View>
 
             {warehouseId === null ? (
-              <Mono size={11.5} color={c.ink4}>
+              <Body size={12.5} color={c.ink3}>
                 This order has no warehouse set, so items cannot be added from the app. Open it on
                 the web dashboard instead.
-              </Mono>
+              </Body>
             ) : (
               <>
-                <Mono size={11} color={c.ink4}>
+                <Body size={12.5} color={c.ink3}>
                   Only items stocked at this order&rsquo;s warehouse can be added. An item already
                   on the order is topped up rather than listed twice.
-                </Mono>
+                </Body>
 
-                <View
-                  style={[styles.searchBox, { backgroundColor: c.paper2, borderColor: c.hair }]}
-                >
-                  <Search size={16} color={c.ink4} strokeWidth={1.8} />
+                {/* The shared text box's recipe: the card fill in the stronger
+                    border. A minimum height, never a fixed one: the typed words
+                    grow with the text size (content, never capped) and the box
+                    grows with them. */}
+                <View style={[styles.searchBox, { backgroundColor: c.card, borderColor: c.hair2 }]}>
+                  <Search size={16} color={c.ink3} strokeWidth={1.8} />
                   <TextInput
                     value={q}
                     onChangeText={setQ}
                     placeholder="Search by name, SKU, barcode"
-                    placeholderTextColor={c.ink4}
+                    placeholderTextColor={c.ink3}
                     autoCapitalize="none"
                     autoCorrect={false}
                     returnKeyType="search"
@@ -411,10 +441,11 @@ export function AddOrderItemsSheet({
                   {q.length > 0 ? (
                     <Pressable
                       onPress={() => setQ('')}
-                      hitSlop={8}
+                      accessibilityRole="button"
                       accessibilityLabel="Clear search"
+                      style={styles.clearSearch}
                     >
-                      <X size={16} color={c.ink4} />
+                      <X size={16} color={c.ink2} />
                     </Pressable>
                   ) : null}
                 </View>
@@ -470,13 +501,13 @@ export function AddOrderItemsSheet({
                                 <Body size={14} color={c.ink} numberOfLines={2}>
                                   {row.name}
                                 </Body>
-                                <Mono size={10.5} color={c.ink4} style={{ marginTop: 2 }}>
+                                <Mono size={11.5} color={c.ink3} style={{ marginTop: 2 }}>
                                   {`${row.sku ? `${row.sku} · ` : ''}${row.quantityOnHand} on hand`}
                                 </Mono>
                                 {onOrder.has(row.id) ? (
-                                  <Mono size={10.5} color={c.ink4} style={{ marginTop: 2 }}>
+                                  <Body size={12} color={c.ink3} style={{ marginTop: 2 }}>
                                     Already on this order — adding tops it up
-                                  </Mono>
+                                  </Body>
                                 ) : null}
                               </View>
                               {/* The steppers' 44pt frames are 6pt wider than
@@ -488,7 +519,7 @@ export function AddOrderItemsSheet({
                                 {stepBtn('−', row.id, row.name, -1, qty <= 0 || submitting)}
                                 <Mono
                                   size={15}
-                                  color={qty > 0 ? c.ink : c.ink4}
+                                  color={qty > 0 ? c.ink : c.ink3}
                                   style={{ minWidth: 24, textAlign: 'center' }}
                                 >
                                   {qty}
@@ -504,8 +535,12 @@ export function AddOrderItemsSheet({
                             <Pressable
                               onPress={() => void loadMore()}
                               disabled={loadingMore}
+                              accessibilityRole="button"
+                              accessibilityState={{ disabled: loadingMore, busy: loadingMore }}
                               style={({ pressed }) => ({
+                                minHeight: MIN_TAP,
                                 alignItems: 'center',
+                                justifyContent: 'center',
                                 paddingVertical: 13,
                                 opacity: loadingMore ? 0.5 : pressed ? 0.7 : 1,
                               })}
@@ -528,24 +563,25 @@ export function AddOrderItemsSheet({
                 <Eyebrow>{`${selectedCount} ITEM${selectedCount === 1 ? '' : 'S'} SELECTED`}</Eyebrow>
 
                 {error ? (
-                  <Mono size={11} color={ACCENT.crit}>
+                  <Body size={13} color={c.critText} accessibilityRole="alert">
                     {error}
-                  </Mono>
+                  </Body>
                 ) : null}
 
                 <Pressable
                   onPress={() => void submit()}
                   disabled={submitting}
                   accessibilityRole="button"
+                  accessibilityState={{ disabled: submitting, busy: submitting }}
                   style={[styles.submit, { backgroundColor: c.ink, opacity: submitting ? 0.6 : 1 }]}
                 >
-                  {submitting ? (
-                    <ActivityIndicator color={c.paper} />
-                  ) : (
-                    <Mono size={13} color={c.paper}>
-                      Add to order
-                    </Mono>
-                  )}
+                  {submitting ? <ActivityIndicator color={c.paper} /> : null}
+                  <Text
+                    style={[styles.submitLabel, { color: c.paper }]}
+                    maxFontSizeMultiplier={ACTION_CAP}
+                  >
+                    Add to order
+                  </Text>
                 </Pressable>
               </>
             )}
@@ -556,7 +592,18 @@ export function AddOrderItemsSheet({
   );
 }
 
+/** The title stops at the display ceiling, like every sheet's title. */
+const TITLE_CAP = capTo(15, TYPE_CEILING.display);
+/** Add to order's words are chrome: the control ceiling, the button grows. */
+const ACTION_CAP = capTo(13, TYPE_CEILING.control);
+
 const styles = StyleSheet.create({
+  close: {
+    minWidth: MIN_TAP,
+    minHeight: MIN_TAP,
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+  },
   searchBox: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -564,9 +611,19 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 10,
     paddingHorizontal: 12,
-    height: 44,
+    minHeight: MIN_TAP,
   },
-  searchInput: { flex: 1, fontSize: 14, padding: 0 },
+  searchInput: { flex: 1, fontSize: 14, paddingVertical: 8, paddingHorizontal: 0 },
+  // The X in a 44pt frame that reaches the box's right edge; it gives back
+  // the box's border top and bottom, so the box does not grow when it shows.
+  clearSearch: {
+    minWidth: MIN_TAP,
+    minHeight: MIN_TAP,
+    marginVertical: -1,
+    marginRight: -12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   listNotice: { paddingHorizontal: 16, paddingVertical: 22 },
   submit: {
     flexDirection: 'row',
@@ -574,7 +631,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
     paddingHorizontal: 16,
-    height: 44,
+    paddingVertical: 10,
+    minHeight: MIN_TAP,
     borderRadius: 10,
   },
+  submitLabel: { fontFamily: FONT.display, fontSize: 13, textAlign: 'center', flexShrink: 1 },
 });

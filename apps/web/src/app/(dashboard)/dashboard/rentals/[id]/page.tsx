@@ -1,10 +1,21 @@
 import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 
+import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { DetailSection } from '@/components/patterns/detail-section';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { RentalActionsPanel } from '@/components/rentals/rental-actions-panel';
 import { RentalDetailHeader } from '@/components/rentals/rental-detail-header';
 import { RentalEmailsCard } from '@/components/rentals/rental-emails-card';
 import { ReportProblemButton } from '@/components/maintenance/report-problem-button';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 import { reportError } from '@/lib/error-reporter';
@@ -15,11 +26,7 @@ import { WarehousesService } from '@/server/services/warehouses';
 import { can, resolveOrgTimezone } from '@stockpilot/core';
 import { formatNumber } from '@/lib/utils';
 
-export default async function RentalDetailPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
+export default async function RentalDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const ctx = await requireOrgContext();
   // Same visibility gate as the rentals list page (rentals RLS additionally
@@ -27,6 +34,16 @@ export default async function RentalDetailPage({
   // viewers reaching a rental by direct URL).
   if (!can(ctx, 'rentals:read') && !can(ctx, 'rentals:create') && !can(ctx, 'rentals:manage')) {
     redirect('/dashboard');
+  }
+  // With the Rentals module off, the rentals service refuses the read below,
+  // and this page (rental emails, maintenance request emails and bookmarks
+  // still link here) fell to the error screen ("Something broke loading this
+  // page") instead of saying the module is off. It now shows the checkouts
+  // list's module-off panel. The module set came with the request's
+  // membership, so this costs no extra round trip.
+  const rentalsModule = await checkModuleAccess('rentals');
+  if (!rentalsModule.enabled) {
+    return <ModuleNotEnabled moduleId="rentals" canManage={rentalsModule.canManage} />;
   }
 
   const [rentalsSvc, inventorySvc, warehousesSvc] = await Promise.all([
@@ -76,100 +93,115 @@ export default async function RentalDetailPage({
     : { enabled: false };
 
   return (
-    <div className="container mx-auto max-w-4xl px-4 py-8 sm:px-6">
-      {/* Back link */}
-      <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <Link href="/dashboard/rentals" className="text-muted-foreground hover:text-foreground text-sm">
-            ← Back to rentals
-          </Link>
-          <h1 className="mt-2 text-2xl font-semibold tracking-tight">Rental detail</h1>
-        </div>
-        <ReportProblemButton
-          moduleEnabled={maintenanceModuleEnabled}
-          canSubmit={canReportProblem}
-          prefill={{ rentalId: id }}
-        />
-      </div>
-
-      <div className="space-y-6">
-        {/* Header card */}
-        <RentalDetailHeader
-          rental={rental}
-          warehouseName={warehouse?.name ?? rental.warehouse_id}
-          timeZone={timeZone}
-          nowMs={nowMs}
-        />
-
-        {/* Which emails the borrower gets, and the overdue reminder's real state */}
-        <RentalEmailsCard
-          rental={rental}
-          remindersOn={remindersOn}
-          nowMs={nowMs}
-          timeZone={timeZone}
-        />
-
-        {/* Actions panel — only shown when rental is out and user has permission */}
-        {canCreate && (
-          <RentalActionsPanel
-            rentalId={rental.id}
-            status={rental.status}
-            canManage={canManage}
+    // The page box every redesigned dashboard page shares. On a wide screen
+    // the record's own cards (borrower, items) take the left column and the
+    // work on it (actions, emails) the right, as the item and bundle pages lay
+    // out; on a narrow one everything stacks in today's order: borrower,
+    // emails, actions, items.
+    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <PageHeader
+        back={<PageHeaderBackLink href="/dashboard/rentals">← Back to rentals</PageHeaderBackLink>}
+        title="Rental detail"
+        actions={
+          <ReportProblemButton
+            moduleEnabled={maintenanceModuleEnabled}
+            canSubmit={canReportProblem}
+            prefill={{ rentalId: id }}
           />
-        )}
+        }
+      />
 
-        {/* Lines table */}
-        <div className="rounded-xl border bg-card overflow-hidden">
-          <div className="px-4 py-3 border-b">
-            <h2 className="text-sm font-semibold">Items ({rental.lines.length})</h2>
-          </div>
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1.7fr)_minmax(280px,1fr)] lg:grid-rows-[auto_1fr]">
+        {/* Header card */}
+        <div className="min-w-0 lg:col-start-1 lg:row-start-1">
+          <RentalDetailHeader
+            rental={rental}
+            warehouseName={warehouse?.name ?? rental.warehouse_id}
+            timeZone={timeZone}
+            nowMs={nowMs}
+          />
+        </div>
+
+        <aside className="flex min-w-0 flex-col gap-4 lg:col-start-2 lg:row-span-2 lg:row-start-1">
+          {/* Which emails the borrower gets, and the overdue reminder's real state */}
+          <RentalEmailsCard
+            rental={rental}
+            remindersOn={remindersOn}
+            nowMs={nowMs}
+            timeZone={timeZone}
+          />
+
+          {/* Actions panel — only shown when rental is out and user has permission */}
+          {canCreate && (
+            <RentalActionsPanel rentalId={rental.id} status={rental.status} canManage={canManage} />
+          )}
+        </aside>
+
+        {/* Lines table. Notes hides below sm, as before; there it rides as a
+            quiet line under the item's name instead. */}
+        <DetailSection
+          headingId="rental-items-heading"
+          title={`Items (${rental.lines.length})`}
+          flush
+          className="lg:col-start-1 lg:row-start-2"
+        >
           {rental.lines.length === 0 ? (
-            <p className="px-4 py-6 text-sm text-muted-foreground">No items on this rental.</p>
+            <p className="text-muted-foreground px-[18px] py-6 text-[13.5px]">
+              No items on this rental.
+            </p>
           ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b bg-muted/50">
-                  <th className="px-4 py-2.5 text-left font-medium text-muted-foreground">Item</th>
-                  <th className="px-4 py-2.5 text-left font-medium text-muted-foreground">SKU</th>
-                  <th className="px-4 py-2.5 text-right font-medium text-muted-foreground">Qty</th>
-                  <th className="px-4 py-2.5 text-left font-medium text-muted-foreground hidden sm:table-cell">
-                    Notes
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
+            <Table scrollLabelledBy="rental-items-heading">
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead>Item</TableHead>
+                  <TableHead>SKU</TableHead>
+                  <TableHead className="text-right">Qty</TableHead>
+                  <TableHead className="hidden sm:table-cell">Notes</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {rental.lines.map((line) => {
                   const item = itemMap.get(line.item_id);
                   return (
-                    <tr key={line.id} className="hover:bg-muted/30">
-                      <td className="px-4 py-3">
+                    <TableRow key={line.id}>
+                      <TableCell className="min-w-0">
                         {item ? (
                           <Link
                             href={`/dashboard/rentals/items/${line.item_id}`}
-                            className="font-medium hover:underline"
+                            className="text-foreground font-medium [overflow-wrap:anywhere] hover:underline"
                           >
                             {item.name}
                           </Link>
                         ) : (
-                          <span className="text-muted-foreground">{line.item_id}</span>
+                          <span className="text-muted-foreground [overflow-wrap:anywhere]">
+                            {line.item_id}
+                          </span>
                         )}
-                      </td>
-                      <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
+                        {line.notes ? (
+                          <span className="text-muted-foreground mt-0.5 block text-[12px] leading-[18px] [overflow-wrap:anywhere] sm:hidden">
+                            Notes: {line.notes}
+                          </span>
+                        ) : null}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground font-mono text-[12px]">
                         {item?.sku ?? '—'}
-                      </td>
-                      <td className="px-4 py-3 text-right tabular-nums">
+                      </TableCell>
+                      <TableCell className="text-right font-mono tabular-nums">
                         {formatNumber(line.quantity)}
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground hidden sm:table-cell">
+                      </TableCell>
+                      {/* Wraps anywhere, like the phone line under the item:
+                          a long unbroken link in the notes would otherwise
+                          widen the table and squeeze the Item column. */}
+                      <TableCell className="text-muted-foreground hidden [overflow-wrap:anywhere] sm:table-cell">
                         {line.notes ?? '—'}
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   );
                 })}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           )}
-        </div>
+        </DetailSection>
       </div>
     </div>
   );

@@ -17,6 +17,7 @@ import {
   SheetFooter,
   SheetTitle,
 } from '@/components/ui/sheet';
+import { useWarmRoute } from '@/lib/hooks/use-warm-route';
 import type { ReleaseLoad } from '@/lib/updates/update-store';
 import { utcDateLabel } from '@/lib/utc-date-label';
 import { cn } from '@/lib/utils';
@@ -25,6 +26,9 @@ import { TOUCH_TARGET, TOUCH_TARGET_ICON } from './constants';
 import { ReleaseEntryCard } from './release-entry-card';
 
 const LABEL = 'text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--ed-ink-3)]';
+
+/** The permanent release history, linked from the drawer's footer. */
+const HISTORY_PAGE = '/dashboard/whats-new';
 
 export interface ReleaseDrawerProps {
   open: boolean;
@@ -77,6 +81,9 @@ export function ReleaseDrawer({
   const refreshRef = React.useRef<HTMLButtonElement>(null);
   const handBackFocus = React.useRef(false);
   const confirming = blockedBy.length > 0;
+  // The history link never prefetches on sight (PLAN 0.6): it warms its page
+  // when a person comes to it, as the top bar's links do.
+  const warmRoute = useWarmRoute();
 
   // "Keep working" removes the button that had focus. Put focus back on the
   // control the person came from, and only after THAT button: the confirmation
@@ -134,14 +141,14 @@ export function ReleaseDrawer({
             <div role="status" aria-label="Loading release details" className="space-y-4">
               <div className="bg-muted h-6 w-2/3 animate-pulse rounded" />
               <div className="bg-muted h-4 w-1/3 animate-pulse rounded" />
-              <div className="bg-muted h-24 w-full animate-pulse rounded-xl" />
-              <div className="bg-muted h-40 w-full animate-pulse rounded-xl" />
-              <div className="bg-muted h-40 w-full animate-pulse rounded-xl" />
+              <div className="bg-muted h-24 w-full animate-pulse rounded-lg" />
+              <div className="bg-muted h-40 w-full animate-pulse rounded-lg" />
+              <div className="bg-muted h-40 w-full animate-pulse rounded-lg" />
             </div>
           ) : null}
 
           {detail.phase === 'error' ? (
-            <div role="alert" className="rounded-xl border p-5">
+            <div role="alert" className="rounded-lg border p-5">
               <div className="flex items-start gap-3">
                 {detail.offline ? (
                   <WifiOff className="text-muted-foreground mt-0.5 size-4 shrink-0" aria-hidden />
@@ -193,14 +200,16 @@ export function ReleaseDrawer({
                   />
                 </p>
                 <p className="mt-3">
+                  {/* A status pill in the redesign's tones (DESIGN-SPEC 6.10):
+                      the words carry the meaning, the tint only repeats it. */}
                   <span
                     className={
-                      'inline-flex rounded-full border px-2.5 py-0.5 text-[11.5px] font-medium ' +
+                      'inline-flex whitespace-nowrap rounded-full px-2 py-px text-[12px] font-medium ' +
                       (withdrawn
-                        ? 'border-border text-[var(--ed-ink-3)]'
+                        ? 'bg-sunk text-[var(--ed-ink-2)]'
                         : refreshRequired && !rolledBack
-                          ? 'border-amber-600/40 text-amber-700 dark:text-amber-400'
-                          : 'border-emerald-600/30 text-emerald-700 dark:text-emerald-400')
+                          ? 'bg-warning-wash text-warning'
+                          : 'bg-success-wash text-success')
                     }
                   >
                     {withdrawn
@@ -215,14 +224,14 @@ export function ReleaseDrawer({
               {saveFailed ? (
                 <p
                   role="status"
-                  className="rounded-lg border border-amber-600/40 px-3 py-2 text-[12.5px] text-amber-700 dark:text-amber-400"
+                  className="border-warning/30 bg-warning-wash text-warning rounded-md border px-3 py-2 text-[12.5px]"
                 >
                   We could not save that you read this, so it may show as unread again.
                 </p>
               ) : null}
 
               {withdrawn ? (
-                <div className="rounded-xl border p-4">
+                <div className="rounded-lg border p-4">
                   <p className={LABEL}>This release was withdrawn</p>
                   <p className="mt-1.5 text-sm leading-relaxed">
                     {release.withdrawnNote ?? 'These changes are not available at the moment.'}
@@ -289,7 +298,11 @@ export function ReleaseDrawer({
           ) : (
             <>
               <Link
-                href="/dashboard/whats-new"
+                href={HISTORY_PAGE}
+                prefetch={false}
+                onFocus={() => warmRoute(HISTORY_PAGE)}
+                onPointerEnter={() => warmRoute(HISTORY_PAGE)}
+                onPointerDown={() => warmRoute(HISTORY_PAGE)}
                 onClick={onClose}
                 className={cn(
                   TOUCH_TARGET,

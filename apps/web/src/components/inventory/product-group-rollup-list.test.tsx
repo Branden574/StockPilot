@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,16 +10,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 //   • Unlink is wired into the linked-items view (the brief requires unlink
 //     support in the tool, not only on the API).
 
-const { routerMock, loadVariantsMock, unlinkMock, archiveMock, restoreMock, toastMock } = vi.hoisted(
-  () => ({
+const { routerMock, loadVariantsMock, unlinkMock, archiveMock, restoreMock, toastMock } =
+  vi.hoisted(() => ({
     routerMock: { refresh: vi.fn(), push: vi.fn(), replace: vi.fn(), prefetch: vi.fn() },
     loadVariantsMock: vi.fn(),
     unlinkMock: vi.fn(),
     archiveMock: vi.fn(),
     restoreMock: vi.fn(),
     toastMock: { error: vi.fn(), success: vi.fn() },
-  }),
-);
+  }));
 
 vi.mock('next/navigation', () => ({ useRouter: () => routerMock }));
 vi.mock('sonner', () => ({ toast: toastMock }));
@@ -48,7 +47,11 @@ vi.mock('@/server/actions/product-group-linking', () => ({
   unlinkItemsAction: unlinkMock,
 }));
 
-import { ProductGroupRollupList, type RollupGroup, type RollupVariant } from './product-group-rollup-list';
+import {
+  ProductGroupRollupList,
+  type RollupGroup,
+  type RollupVariant,
+} from './product-group-rollup-list';
 
 function group(over: Partial<RollupGroup> = {}): RollupGroup {
   return {
@@ -89,7 +92,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   loadVariantsMock.mockResolvedValue({
     ok: true,
-    data: { variants: [variant(), variant({ id: 'itm-10', sku: 'PEG-10', variantSize: '10', quantity: 20 })] },
+    data: {
+      variants: [
+        variant(),
+        variant({ id: 'itm-10', sku: 'PEG-10', variantSize: '10', quantity: 20 }),
+      ],
+    },
   });
   unlinkMock.mockResolvedValue({ ok: true, data: { unlinked: 1, skuSiblingIds: [] } });
   archiveMock.mockResolvedValue({ ok: true, data: { id: 'grp-1' } });
@@ -129,6 +137,26 @@ describe('ProductGroupRollupList — on-demand expansion', () => {
 
     expect(await screen.findByText('Could not load variants.')).toBeInTheDocument();
     expect(screen.queryByText('No items are linked to this group yet.')).not.toBeInTheDocument();
+  });
+
+  // Redesign (P4.A1): the two states the open group shows while it has no rows
+  // are announced, so a screen reader hears the wait and the failure.
+  it('announces the wait as a status and a failed read as an alert, with Try again', async () => {
+    const user = userEvent.setup();
+    let settle: (value: unknown) => void = () => {};
+    loadVariantsMock.mockReturnValueOnce(new Promise((resolve) => (settle = resolve)));
+    render(<ProductGroupRollupList groups={[group()]} />);
+    await user.click(screen.getByRole('button', { name: /expand/i }));
+
+    expect(screen.getByRole('status')).toHaveTextContent('Loading variants…');
+    settle({ ok: false, error: { code: 'internal_error', message: 'Could not load variants.' } });
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Could not load variants.');
+    loadVariantsMock.mockClear();
+    await user.click(within(alert).getByRole('button', { name: 'Try again' }));
+    expect(loadVariantsMock).toHaveBeenCalledWith('grp-1');
+    expect(await screen.findByText('PEG-9')).toBeInTheDocument();
   });
 });
 
@@ -206,7 +234,10 @@ describe('ProductGroupRollupList — unlink', () => {
 
   it('keeps the row when the server refuses the unlink', async () => {
     const user = userEvent.setup();
-    unlinkMock.mockResolvedValue({ ok: false, error: { code: 'forbidden', message: 'Not allowed.' } });
+    unlinkMock.mockResolvedValue({
+      ok: false,
+      error: { code: 'forbidden', message: 'Not allowed.' },
+    });
     render(<ProductGroupRollupList groups={[group()]} />);
     await user.click(screen.getByRole('button', { name: /expand/i }));
     await screen.findByText('PEG-9');
@@ -302,5 +333,30 @@ describe('ProductGroupRollupList — archive', () => {
     render(<ProductGroupRollupList groups={[group()]} />);
     expect(screen.getByRole('button', { name: /^archive nike pegasus 41$/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^restore/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('ProductGroupRollupList — layout follows the card, not the window', () => {
+  // Redesign (P4.A1): beside the sidebar on a 768 px tablet the card is about
+  // 476 px wide. A window breakpoint kept the roll-up and the action on the
+  // name's line there and squeezed the name to a few letters; the row now
+  // splits on the card's own width (the `groups` size container).
+  it('makes the card the size container its rows and open groups measure', async () => {
+    const user = userEvent.setup();
+    const { container } = render(<ProductGroupRollupList groups={[group()]} />);
+    const card = container.querySelector('[data-slot="product-group-list"]')!;
+    expect(card).toHaveClass('@container/groups');
+    const row = container.querySelector('[data-slot="product-group-row"]')!;
+    expect(row).toHaveClass('flex-wrap', '@min-[560px]/groups:flex-nowrap');
+    expect(row.className).not.toMatch(/(^|\s)sm:/);
+    // On a phone the name holds its own line beside the chevron, so the roll-up
+    // wraps under it instead of crushing the name to "Lab ..." (it shrank to
+    // nothing while the roll-up sat beside it, and the mode chip ran under it).
+    const name = row.querySelector('[data-slot="product-group-name"]')!;
+    expect(name).toHaveClass('flex-1', 'basis-[calc(100%-36px)]', '@min-[560px]/groups:basis-0');
+
+    await user.click(screen.getByRole('button', { name: /expand nike pegasus 41/i }));
+    const variantHeader = await screen.findByRole('columnheader', { name: 'Variant' });
+    expect(variantHeader).toHaveClass('pl-4', '@min-[560px]/groups:pl-[52px]');
   });
 });

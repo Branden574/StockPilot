@@ -26,7 +26,12 @@ export function AcceptInviteButton({ token }: { token: string }) {
   }
 
   return (
-    <Button variant="gradient" className="w-full" onClick={accept} disabled={submitting}>
+    <Button
+      variant="gradient"
+      className="h-11 w-full text-[14px]"
+      onClick={accept}
+      disabled={submitting}
+    >
       {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Accept invite'}
     </Button>
   );

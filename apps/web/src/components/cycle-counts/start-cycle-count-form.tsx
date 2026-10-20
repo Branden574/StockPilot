@@ -19,6 +19,11 @@ import { startCycleCountAction } from '@/server/actions/cycle-counts';
 
 const ALL = '__all';
 
+/**
+ * The "Whole warehouse" scope: snapshot one warehouse, or every active item in
+ * the org, with optional notes. The footer matches the selection scope's (a
+ * hairline bar across the form card's 18 px padding, Start count on the right).
+ */
 export function StartCycleCountForm({
   warehouses,
 }: {
@@ -28,6 +33,8 @@ export function StartCycleCountForm({
   const [warehouseId, setWarehouseId] = React.useState<string>(ALL);
   const [notes, setNotes] = React.useState('');
   const [busy, setBusy] = React.useState(false);
+  const warehouseFieldId = React.useId();
+  const notesId = React.useId();
 
   async function start() {
     setBusy(true);
@@ -47,11 +54,11 @@ export function StartCycleCountForm({
   }
 
   return (
-    <div className="space-y-4">
-      <div className="space-y-1.5">
-        <Label>Warehouse</Label>
+    <div className="flex flex-col gap-5">
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor={warehouseFieldId}>Warehouse</Label>
         <Select value={warehouseId} onValueChange={setWarehouseId}>
-          <SelectTrigger>
+          <SelectTrigger id={warehouseFieldId} className="sm:max-w-[320px]">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -63,17 +70,18 @@ export function StartCycleCountForm({
             ))}
           </SelectContent>
         </Select>
-        <p className="text-xs text-muted-foreground">
-          Restrict the count to one warehouse, or leave at "All warehouses" to
-          recount every active item in the org.
+        <p className="text-muted-foreground text-[12px]">
+          Restrict the count to one warehouse, or leave at &quot;All warehouses&quot; to recount
+          every active item in the org.
         </p>
       </div>
-      <div className="space-y-1.5">
-        <Label>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor={notesId}>
           Notes
-          <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+          <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
         </Label>
         <Textarea
+          id={notesId}
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
           rows={3}
@@ -81,10 +89,13 @@ export function StartCycleCountForm({
           maxLength={2000}
         />
       </div>
-      <div className="flex justify-end">
+      <div className="border-border -mx-[18px] -mb-[18px] flex justify-end rounded-b-lg border-t px-[18px] py-3">
         <Button onClick={start} disabled={busy} variant="gradient">
           {busy ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <>
+              <Loader2 aria-hidden className="h-4 w-4 animate-spin" />
+              <span className="sr-only">Start count</span>
+            </>
           ) : (
             'Start count'
           )}

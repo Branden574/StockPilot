@@ -14,6 +14,7 @@ import {
 } from '@stockpilot/core';
 
 import { FefoLotHint } from '@/components/orders/fefo-lot-hint';
+import { StatePanel } from '@/components/patterns/state-panel';
 import { BlankZeroNumberInput } from '@/components/ui/blank-zero-number-input';
 import { Button } from '@/components/ui/button';
 import {
@@ -24,10 +25,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import {
-  completePickingAction,
-  recordPickedLineAction,
-} from '@/server/actions/order-requests';
+import { completePickingAction, recordPickedLineAction } from '@/server/actions/order-requests';
 import type { OrderRequestLineWithItem } from '@/server/services/order-requests';
 import type { FefoSuggestion } from '@/server/services/lots';
 
@@ -171,109 +169,126 @@ export function DigitalPick({
   // The server rejects the write either way; this just avoids showing
   // editable inputs the viewer can't submit. Hooks above run unconditionally.
   if (!canPick) {
+    // The shared forbidden state (StatePanel), with the page's own words.
     return (
-      <div className="border-border bg-card rounded-xl border p-6 text-center">
-        <Lock className="text-muted-foreground mx-auto h-6 w-6" />
-        <p className="mt-3 text-sm font-medium">
-          {assignedPickerName
+      <StatePanel
+        kind="forbidden"
+        icon={Lock}
+        size="sm"
+        data-testid="digital-pick-locked"
+        title={
+          assignedPickerName
             ? `This order is being picked by ${assignedPickerName}.`
-            : 'This order needs to be claimed before you can pick it.'}
-        </p>
-        <p className="text-muted-foreground mt-1 text-sm">
-          {assignedPickerName
+            : 'This order needs to be claimed before you can pick it.'
+        }
+        description={
+          assignedPickerName
             ? 'Ask a manager to reassign it if you need to take over.'
-            : 'Go back to the order and tap “Claim picking” to start.'}
-        </p>
-        <div className="mt-4">
+            : 'Go back to the order and tap “Claim picking” to start.'
+        }
+        action={
           <Button variant="outline" asChild>
             <Link href={`/dashboard/orders/${orderId}`}>Back to order</Link>
           </Button>
-        </div>
-      </div>
+        }
+      />
     );
   }
 
+  // The count workbench's card (DESIGN-SPEC 7.7, M6): one row per line with
+  // the item on the left and the entry on the right (the field right-aligned
+  // in mono on the sunk fill, "of N", Save), the lot hint under its line, and
+  // the commit in the card's footer. On a phone the entry wraps under the
+  // item. "of N" holds six characters and Save its own width while it
+  // spins, so the fields line up down the card whatever each line asks
+  // for; on a phone Save takes the field's 44 px height. Every word, id,
+  // clamp and button is the one the page had.
   return (
-    <div className="space-y-3">
-      {initialLines.map((line) => {
-        const requested = Number(line.quantity_requested);
-        const current = picked[line.id] ?? 0;
-        const isSaving = savingLine === line.id;
-        return (
-          <div
-            key={line.id}
-            className="border-border bg-card rounded-xl border p-4"
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <div className="truncate font-medium">{line.item?.name ?? '—'}</div>
-                <div className="text-muted-foreground font-mono text-xs">
-                  {line.item?.sku ?? '—'}
+    <div
+      className="border-border bg-card overflow-hidden rounded-lg border"
+      data-testid="digital-pick"
+    >
+      <ul className="divide-border divide-y">
+        {initialLines.map((line) => {
+          const requested = Number(line.quantity_requested);
+          const current = picked[line.id] ?? 0;
+          const isSaving = savingLine === line.id;
+          return (
+            <li key={line.id} className="px-[18px] py-3" data-testid="digital-pick-line">
+              <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                <div className="min-w-0 flex-1 basis-56">
+                  <div className="text-[13.5px] font-medium leading-5 [overflow-wrap:anywhere]">
+                    {line.item?.name ?? '—'}
+                  </div>
+                  <div className="text-muted-foreground mt-0.5 flex flex-wrap gap-x-2 font-mono text-[11.5px] leading-[18px]">
+                    <span>{line.item?.sku ?? '—'}</span>
+                    <span className="font-sans text-[12px]">requested {requested}</span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <BlankZeroNumberInput
+                    id={pickLineInputId(line.id)}
+                    aria-label={`Picked quantity for ${orderLineItemName(line.item)}`}
+                    min={0}
+                    max={requested}
+                    value={current}
+                    onValueChange={(n) =>
+                      setPicked((p) => ({
+                        ...p,
+                        [line.id]: Math.max(0, Math.min(requested, n)),
+                      }))
+                    }
+                    // A word, never a number: the requested quantity as a grey
+                    // placeholder made a line with nothing entered look filled
+                    // (F2-2 walk). What is asked for sits beside the field, as
+                    // on the phone.
+                    placeholder="Qty"
+                    className="bg-sunk h-8 w-[72px] text-right font-mono tabular-nums"
+                  />
+                  <span className="text-muted-foreground min-w-[6ch] font-mono text-[12.5px] tabular-nums">
+                    of {requested}
+                  </span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={current === requested ? 'default' : 'outline'}
+                    className="min-w-[72px] max-sm:h-11 max-sm:px-4"
+                    disabled={isSaving}
+                    onClick={async () => {
+                      const ok = await save(line.id, current);
+                      if (ok) toast.success(`Saved ${current} / ${requested}`);
+                    }}
+                  >
+                    {isSaving ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <>
+                        <Check className="h-4 w-4" />
+                        Save
+                      </>
+                    )}
+                  </Button>
                 </div>
               </div>
-              <div className="text-muted-foreground shrink-0 text-xs">
-                requested {requested}
-              </div>
-            </div>
-            <div className="mt-3 flex items-center gap-2">
-              <BlankZeroNumberInput
-                id={pickLineInputId(line.id)}
-                aria-label={`Picked quantity for ${orderLineItemName(line.item)}`}
-                min={0}
-                max={requested}
-                value={current}
-                onValueChange={(n) =>
-                  setPicked((p) => ({
-                    ...p,
-                    [line.id]: Math.max(0, Math.min(requested, n)),
-                  }))
-                }
-                // A word, never a number: the requested quantity as a grey
-                // placeholder made a line with nothing entered look filled
-                // (F2-2 walk). What is asked for sits beside the field, as
-                // on the phone.
-                placeholder="Qty"
-                className="w-24"
-              />
-              <span className="text-muted-foreground text-xs tabular-nums">of {requested}</span>
-              <Button
-                type="button"
-                size="sm"
-                variant={current === requested ? 'default' : 'outline'}
-                disabled={isSaving}
-                onClick={async () => {
-                  const ok = await save(line.id, current);
-                  if (ok) toast.success(`Saved ${current} / ${requested}`);
-                }}
-              >
-                {isSaving ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <>
-                    <Check className="mr-1 h-4 w-4" />
-                    Save
-                  </>
-                )}
-              </Button>
-            </div>
-            {lotSerial?.enabled && line.item?.tracking_type === 'lot' && (
-              <FefoLotHint
-                orderId={orderId}
-                orderLineId={line.id}
-                itemId={line.item.id}
-                suggestions={lotSerial.fefoByItemId[line.item.id] ?? []}
-              />
-            )}
-          </div>
-        );
-      })}
+              {lotSerial?.enabled && line.item?.tracking_type === 'lot' && (
+                <FefoLotHint
+                  orderId={orderId}
+                  orderLineId={line.id}
+                  itemId={line.item.id}
+                  suggestions={lotSerial.fefoByItemId[line.item.id] ?? []}
+                />
+              )}
+            </li>
+          );
+        })}
+      </ul>
 
-      <div className="flex justify-end pt-2">
+      <div className="border-border flex justify-end border-t px-[18px] py-3.5">
         <Button
           onClick={onCompleteClick}
           disabled={completing || !anyLinePicked}
-          variant="gradient"
-          size="lg"
+          variant="default"
+          className="max-sm:h-11 max-sm:px-5"
         >
           {completing ? (
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -330,7 +345,7 @@ export function DigitalPick({
               {completionConfirm?.reviewLabel}
             </Button>
             <Button
-              variant="gradient"
+              variant="default"
               onClick={() => {
                 setConfirmOpen(false);
                 void complete();

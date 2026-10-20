@@ -19,6 +19,10 @@ import { LocationsService } from '@/server/services/locations';
 import { OrderRequestsService } from '@/server/services/order-requests';
 import { WarehousesService } from '@/server/services/warehouses';
 
+/** The chip's two links: the accent text link of a card header (DESIGN-SPEC 6.7). */
+const CHIP_LINK =
+  'text-accent hover:text-foreground text-[12.5px] font-medium underline-offset-2 transition-colors hover:underline';
+
 type OrderLink = Awaited<ReturnType<OrderRequestsService['orderLinkLabel']>>;
 
 /**
@@ -151,39 +155,47 @@ export async function StagingTableSection({
   const backHref = hasOrder && orderId ? `/dashboard/orders/${orderId}` : null;
 
   return (
-    <>
+    <div className="flex min-w-0 flex-col gap-3">
       {filter.state === 'invalid' && (
         <p
           role="status"
-          className="border-border bg-muted/40 text-muted-foreground mb-3 rounded-[10px] border px-3 py-2 text-[13px]"
+          className="border-border bg-sunk text-muted-foreground rounded-lg border px-4 py-2.5 text-[13px]"
           data-testid="staging-item-filter-invalid"
         >
           {stagingFilterInvalidCopy(filter.reason)}
         </p>
       )}
       {chip && (
+        // The put-away-from-an-order notice: a quiet card above the toolbar.
         <div
-          className="border-border bg-muted/40 mb-3 rounded-[10px] border px-3 py-2 text-[13px]"
+          className="border-border bg-card rounded-lg border px-4 py-3 text-[13px]"
           data-testid="staging-item-filter"
         >
-          <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
-            <span className="font-medium" data-testid="staging-item-filter-headline">
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span
+              className="text-foreground text-[13.5px] font-medium"
+              data-testid="staging-item-filter-headline"
+            >
               {chip.headline}
             </span>
-            <span aria-hidden>·</span>
+            <span aria-hidden className="text-ink-4">
+              ·
+            </span>
             <IntentLink
               href={showAllHref}
-              className="font-medium underline-offset-2 hover:underline"
+              className={CHIP_LINK}
               data-testid="staging-item-filter-show-all"
             >
               {chip.showAllLabel}
             </IntentLink>
             {backHref && chip.backLabel && (
               <>
-                <span aria-hidden>·</span>
+                <span aria-hidden className="text-ink-4">
+                  ·
+                </span>
                 <IntentLink
                   href={backHref}
-                  className="font-medium underline-offset-2 hover:underline"
+                  className={CHIP_LINK}
                   data-testid="staging-item-filter-back"
                 >
                   {chip.backLabel}
@@ -191,16 +203,26 @@ export async function StagingTableSection({
               </>
             )}
           </p>
-          <p className="text-muted-foreground mt-1 text-xs" data-testid="staging-item-filter-note">
+          <p
+            className="text-muted-foreground mt-1 text-[12px] leading-[18px]"
+            data-testid="staging-item-filter-note"
+          >
             {chip.note}
           </p>
           {chip.elsewhereNote && (
-            <p className="text-muted-foreground mt-1 text-xs" data-testid="staging-item-filter-elsewhere">
+            <p
+              className="text-muted-foreground mt-1 text-[12px] leading-[18px]"
+              data-testid="staging-item-filter-elsewhere"
+            >
               {chip.elsewhereNote}
             </p>
           )}
           {rows.length === 0 && (
-            <p className="mt-1 text-xs" role="status" data-testid="staging-item-filter-empty">
+            <p
+              className="text-foreground mt-2 text-[12.5px]"
+              role="status"
+              data-testid="staging-item-filter-empty"
+            >
               {STAGING_FILTER_EMPTY_COPY}
             </p>
           )}
@@ -216,6 +238,6 @@ export async function StagingTableSection({
         // A filtered list says it is empty once, in the chip above.
         hideEmptyState={chip !== null}
       />
-    </>
+    </div>
   );
 }

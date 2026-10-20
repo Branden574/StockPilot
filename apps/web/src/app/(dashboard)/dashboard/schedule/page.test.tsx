@@ -182,3 +182,43 @@ describe('the team calendar opens on the organization’s current month', () => 
     );
   });
 });
+
+// PLAN rule 10: a renamed sidebar destination shows its name in the page's
+// eyebrow. The name comes from the same request-cached org row the page
+// already reads for its time zone, so the rename adds no request.
+describe('the eyebrow follows a Settings > Navigation rename', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listInRange.mockResolvedValue([]);
+  });
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it('prints the org’s label for Schedule, from the one org-row read', async () => {
+    getOrgRowForRequest.mockResolvedValue({
+      timezone: 'America/Los_Angeles',
+      nav_overrides: { v: 1, labels: { '/dashboard/schedule': 'Dispatch' } },
+    });
+    const run = await openCalendar(Date.parse('2026-10-15T18:00:00.000Z'));
+    try {
+      expect(run.container).toHaveTextContent('Workspace · Dispatch');
+      expect(within(run.container).getByRole('heading', { level: 1 })).toHaveTextContent(
+        'Team calendar',
+      );
+    } finally {
+      run.unmount();
+    }
+    expect(getOrgRowForRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps "Schedule" without a rename, and when the org row cannot be read', async () => {
+    getOrgRowForRequest.mockRejectedValue(new Error('getOrgRowForRequest: boom'));
+    const run = await openCalendar(Date.parse('2026-10-15T18:00:00.000Z'));
+    try {
+      expect(run.container).toHaveTextContent('Workspace · Schedule');
+    } finally {
+      run.unmount();
+    }
+  });
+});

@@ -40,7 +40,6 @@ import {
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { Chip } from '@/components/ui/chip';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { StockBar } from '@/components/ui/stock-bar';
@@ -67,11 +66,14 @@ import { createDebouncedScheduler, createSequenceGuard } from '@/lib/debounced-l
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
-import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT, RADIUS, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /** Typing settles for this long before the list is asked for again. */
 const SEARCH_DEBOUNCE_MS = 250;
+
+/** The iOS minimum tap target, in points. */
+const MIN_TAP = 44;
 
 const NOUN = { one: 'cycle count', other: 'cycle counts' };
 
@@ -169,7 +171,11 @@ export default function CycleCounts() {
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [refreshing, setRefreshing] = React.useState(false);
-  const [pendingByCount, setPendingByCount] = React.useState<Map<string, number>>(new Map());
+  // This phone's unsynced count lines per count. Null when the phone's store
+  // could not be read: then nothing claims "0 to sync" or SYNCED.
+  const [pendingByCount, setPendingByCount] = React.useState<Map<string, number> | null>(
+    () => new Map(),
+  );
 
   const guard = React.useRef(createSequenceGuard());
   const debounce = React.useRef(createDebouncedScheduler(SEARCH_DEBOUNCE_MS));
@@ -205,9 +211,14 @@ export default function CycleCounts() {
       }
       if (!guard.current.isCurrent(token)) return;
       setOffline(!online);
-      void dirtyLineCounts().then((dirty) => {
-        if (guard.current.isCurrent(token)) setPendingByCount(dirty);
-      });
+      void dirtyLineCounts().then(
+        (dirty) => {
+          if (guard.current.isCurrent(token)) setPendingByCount(dirty);
+        },
+        () => {
+          if (guard.current.isCurrent(token)) setPendingByCount(null);
+        },
+      );
 
       if (!activeOrg) return; // the workspace is still resolving; its switch loads
       if (!online) {
@@ -319,8 +330,13 @@ export default function CycleCounts() {
 
   React.useEffect(() => {
     void (async () => {
-      const dirty = await dirtyLineCounts();
-      setPendingByCount(dirty);
+      try {
+        const dirty = await dirtyLineCounts();
+        setPendingByCount(dirty);
+      } catch {
+        // Unknown, never a count of 0: the PENDING tile shows a dash.
+        setPendingByCount(null);
+      }
     })();
   }, [sync.pendingCount, sync.status]);
 
@@ -354,7 +370,9 @@ export default function CycleCounts() {
     ? searchDownloadedCounts(downloaded ?? [], view).map(fromDownload)
     : (page?.items ?? []).map(fromServer);
   const searching = view.q !== '' || view.status !== null;
-  const pendingTotal = Array.from(pendingByCount.values()).reduce((a, b) => a + b, 0);
+  const pendingTotal = pendingByCount
+    ? Array.from(pendingByCount.values()).reduce((a, b) => a + b, 0)
+    : null;
   const tz = summary?.timezone;
   const inProgressText = offline || !summary ? '—' : String(summary.inProgress);
   const todayText = offline || !summary ? '—' : String(summary.startedToday);
@@ -372,7 +390,9 @@ export default function CycleCounts() {
   const header = (
     <View>
       {offline ? (
-        <View style={[styles.offlineBanner, { backgroundColor: c.paper2 }]}>
+        // A recessed panel: paper2 is the card colour in dark mode, so the
+        // banner's fill showed nothing there.
+        <View style={[styles.offlineBanner, { backgroundColor: c.sunk, borderColor: c.hair }]}>
           <WifiOff size={14} color={c.ink3} strokeWidth={1.5} />
           <Mono size={11.5} tracking={0.04} color={c.ink3} style={{ flexShrink: 1 }}>
             Offline · searching downloaded counts only
@@ -393,7 +413,7 @@ export default function CycleCounts() {
         <SummaryTile label="ACTIVE" value={inProgressText} sub="in progress" stacked={stackedSummary} />
         <SummaryTile
           label="PENDING"
-          value={String(pendingTotal)}
+          value={pendingTotal === null ? '—' : String(pendingTotal)}
           sub="to sync"
           kind="warn"
           stacked={stackedSummary}
@@ -401,14 +421,16 @@ export default function CycleCounts() {
       </View>
 
       <View style={styles.searchWrap}>
-        <View style={[styles.searchBox, { backgroundColor: c.card, borderColor: c.hair }]}>
-          <Search size={16} color={c.ink4} strokeWidth={1.4} />
+        {/* The shared input look: the card fill and the stronger border, the
+            muted-ink icon and placeholder (ink4 held the placeholder under AA). */}
+        <View style={[styles.searchBox, { backgroundColor: c.card, borderColor: c.hair2 }]}>
+          <Search size={16} color={c.ink3} strokeWidth={1.4} />
           <TextInput
             value={draftQ}
             onChangeText={setDraftQ}
             onSubmitEditing={searchNow}
             placeholder="Search count #, warehouse, or notes…"
-            placeholderTextColor={c.ink4}
+            placeholderTextColor={c.ink3}
             accessibilityLabel="Search cycle counts"
             autoCapitalize="none"
             autoCorrect={false}
@@ -416,14 +438,14 @@ export default function CycleCounts() {
             maxLength={CYCLE_COUNT_SEARCH_MAX_LENGTH}
             style={[styles.searchInput, { color: c.ink, fontFamily: FONT.displayRegular }]}
           />
-          {busy && !refreshing ? <ActivityIndicator size="small" color={c.ink4} /> : null}
+          {busy && !refreshing ? <ActivityIndicator size="small" color={c.ink3} /> : null}
           {draftQ ? (
+            // A real 44pt frame (it was a 24pt X with hitSlop).
             <Pressable
               onPress={clearSearch}
-              hitSlop={10}
               accessibilityRole="button"
               accessibilityLabel="Clear search"
-              style={({ pressed }) => ({ opacity: pressed ? 0.5 : 1, padding: 4 })}
+              style={({ pressed }) => [styles.clearFrame, { opacity: pressed ? 0.5 : 1 }]}
             >
               <X size={16} color={c.ink3} strokeWidth={1.6} />
             </Pressable>
@@ -431,7 +453,7 @@ export default function CycleCounts() {
         </View>
         <View style={styles.chips}>
           {[null, ...CYCLE_COUNT_STATUSES].map((s) => (
-            <Chip
+            <FilterChip
               key={s ?? 'all'}
               label={s ? CYCLE_COUNT_STATUS_LABELS[s] : 'All'}
               active={view.status === s}
@@ -451,6 +473,7 @@ export default function CycleCounts() {
                 variant="outline"
                 disabled={busy}
                 onPress={() => void load(view, { withSummary: !summary })}
+                style={TAP}
               >
                 {busy ? 'Trying again…' : 'Try again'}
               </Button>
@@ -513,7 +536,7 @@ export default function CycleCounts() {
         <Mono
           size={11}
           tracking={0.04}
-          color={c.ink4}
+          color={c.ink3}
           maxFontSizeMultiplier={capTo(11, TYPE_CEILING.chrome)}
           accessibilityLiveRegion="polite"
         >
@@ -598,7 +621,7 @@ export default function CycleCounts() {
           renderItem={({ item }) => (
             <CountCard
               row={item}
-              pending={pendingByCount.get(item.id) ?? 0}
+              pending={pendingByCount ? (pendingByCount.get(item.id) ?? 0) : null}
               timeZone={tz}
               onPress={() => router.push(`/cycle-count/${item.id}`)}
             />
@@ -611,6 +634,54 @@ export default function CycleCounts() {
 
 /** 9pt tracked uppercase micro-marker against the chrome ceiling. */
 const TILE_LABEL_CAP = capTo(9, TYPE_CEILING.chrome);
+
+/** The error card's full-width Try again is drawn at 44pt (the shared small
+ *  Button draws 36pt inside its own 44pt frame). */
+const TAP = { minHeight: MIN_TAP };
+
+/**
+ * One status filter: the reference's filter chip (DESIGN-SPEC 6.6) at the
+ * phone's 44pt. Idle, the stronger border with secondary-ink words on the
+ * page; chosen, the ink fill with the words in the page colour. The same
+ * button role, selected state and words as the shared Chip, which now has a
+ * 44pt frame too but draws the picker chip (mono words, radius 8, the sunk
+ * fill), not this filter chip; the words are content and grow with the text
+ * size, as they did.
+ */
+function FilterChip({
+  label,
+  active,
+  onPress,
+}: {
+  label: string;
+  active: boolean;
+  onPress: () => void;
+}) {
+  const { c } = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+      style={({ pressed }) => [
+        styles.filterChip,
+        {
+          backgroundColor: active ? c.ink : 'transparent',
+          borderColor: active ? c.ink : c.hair2,
+          opacity: pressed ? 0.7 : 1,
+        },
+      ]}
+    >
+      <Body
+        size={13}
+        color={active ? c.paper : c.ink2}
+        style={{ fontFamily: active ? FONT.display : FONT.displayRegular }}
+      >
+        {label}
+      </Body>
+    </Pressable>
+  );
+}
 
 function SummaryTile({
   label,
@@ -625,34 +696,24 @@ function SummaryTile({
   kind?: 'ink' | 'mint' | 'warn';
   stacked?: boolean;
 }) {
-  const { c, mode } = useTheme();
-  const valueColor =
-    kind === 'mint'
-      ? mode === 'dark'
-        ? ACCENT.mintInkDark
-        : ACCENT.mintInk
-      : kind === 'warn'
-        ? ACCENT.warn
-        : c.ink;
+  const { c } = useTheme();
+  // The per-mode accent and warning words (the single-mode ACCENT.warn was
+  // 3.4:1 on the light card).
+  const valueColor = kind === 'mint' ? c.accent : kind === 'warn' ? c.warnText : c.ink;
   return (
     // `flex: 1` means "share this ROW's width". Once the strip stacks it would
     // instead be dividing an auto-height column, so it is dropped.
     <Card padding={12} style={{ flex: stacked ? undefined : 1, gap: 6 }}>
-      <Mono size={9} tracking={0.18} upper color={c.ink4} maxFontSizeMultiplier={TILE_LABEL_CAP}>
+      <Mono size={9} tracking={0.18} upper color={c.ink3} maxFontSizeMultiplier={TILE_LABEL_CAP}>
         {label}
       </Mono>
       {/* The count itself is content and stays uncapped; wrap + shrink are
           what stop its unit from running past the card edge. */}
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', gap: 3 }}>
-        <Mono
-          size={22}
-          tracking={-0.022}
-          color={valueColor}
-          style={{ fontFamily: FONT.display }}
-        >
+        <Mono size={22} tracking={-0.022} color={valueColor} style={{ fontFamily: FONT.display }}>
           {value}
         </Mono>
-        <Mono size={11} color={c.ink4} tracking={0} style={{ flexShrink: 1 }}>
+        <Mono size={11} color={c.ink3} tracking={0} style={{ flexShrink: 1 }}>
           {sub}
         </Mono>
       </View>
@@ -679,10 +740,15 @@ function PagerButton({
       accessibilityRole="button"
       accessibilityLabel={`${label} page`}
       accessibilityState={{ disabled }}
-      hitSlop={6}
+      // The reference's pager (DESIGN-SPEC 6.2): the card fill and the
+      // stronger border, a real 44pt target (the hitSlop was redundant).
       style={({ pressed }) => [
         styles.pagerButton,
-        { borderColor: c.hair, opacity: disabled ? 0.35 : pressed ? 0.7 : 1 },
+        {
+          backgroundColor: c.card,
+          borderColor: c.hair2,
+          opacity: disabled ? 0.35 : pressed ? 0.7 : 1,
+        },
       ]}
     >
       {direction === 'prev' ? <Icon size={16} color={c.ink} strokeWidth={1.6} /> : null}
@@ -708,7 +774,9 @@ function CountCard({
   onPress,
 }: {
   row: ListRow;
-  pending: number;
+  /** This phone's unsynced lines for the count; null when they could not be
+   *  read, so the card makes no sync claim. */
+  pending: number | null;
   timeZone: string | undefined;
   onPress: () => void;
 }) {
@@ -717,17 +785,19 @@ function CountCard({
   const progress = row.lineTotal > 0 ? Math.round((row.lineCounted / row.lineTotal) * 100) : 0;
   const isCompleted = row.status === 'completed';
   const isCanceled = row.status === 'canceled';
+  // The phone's unsynced lines could not be read: SYNCED would be a guess,
+  // so an open count shows no sync pill.
+  const syncUnknown = pending === null;
   // A downloaded row is the device's copy (offline, or under a failed read).
-  const syncStatus = row.source === 'downloaded' ? 'DOWNLOADED' : pending > 0 ? 'PENDING' : 'SYNCED';
   const statusPill = isCompleted ? (
     <Pill status="ok">POSTED</Pill>
   ) : isCanceled ? (
     <Pill>CANCELED</Pill>
-  ) : pending > 0 ? (
+  ) : !syncUnknown && pending > 0 ? (
     <Pill status="warn">PENDING</Pill>
-  ) : syncStatus === 'DOWNLOADED' ? (
+  ) : row.source === 'downloaded' ? (
     <Pill>DOWNLOADED</Pill>
-  ) : (
+  ) : syncUnknown ? null : (
     <Pill status="ok">SYNCED</Pill>
   );
   const progressLabel = isCompleted
@@ -753,19 +823,20 @@ function CountCard({
       <Card padding={16}>
         <View style={countStyles.headerRow}>
           <View style={{ flex: 1 }}>
+            {/* The reference is a code, so mono, as the reference prints CC- ids. */}
             {reference ? (
-              <Mono size={15.5} tracking={0.01} color={c.ink} style={{ fontFamily: FONT.display }}>
+              <Mono size={15.5} tracking={0.01} color={c.ink}>
                 {reference}
               </Mono>
             ) : (
-              <Mono size={12} tracking={0.02} color={c.ink4}>
+              <Mono size={12} tracking={0.02} color={c.ink3}>
                 {CYCLE_COUNT_REFERENCE_UNAVAILABLE}
               </Mono>
             )}
             <Mono size={11.5} tracking={0.02} color={c.ink2} style={{ marginTop: 4 }}>
               {row.scopeLabel}
             </Mono>
-            <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
+            <Mono size={10.5} tracking={0.04} color={c.ink3} style={{ marginTop: 4 }}>
               {[row.who, started].filter(Boolean).join(' · ')}
             </Mono>
             {row.notes?.trim() ? (
@@ -780,14 +851,14 @@ function CountCard({
           <View style={countStyles.progressRow}>
             <Mono size={22} tracking={-0.022} color={c.ink} style={{ fontFamily: FONT.display }}>
               {row.lineCounted}
-              <Mono size={13} color={c.ink4} style={{ fontFamily: FONT.displayRegular }}>
+              <Mono size={13} color={c.ink3} style={{ fontFamily: FONT.displayRegular }}>
                 {' / '}
                 {row.lineTotal}
               </Mono>
             </Mono>
             <View style={{ flex: 1, gap: 6 }}>
               <StockBar value={progress} max={100} kind={barKind} height={4} />
-              <Mono size={10} tracking={0.04} color={c.ink4}>
+              <Mono size={10} tracking={0.04} color={c.ink3}>
                 {progressLabel}
               </Mono>
             </View>
@@ -820,6 +891,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: 8,
+    borderWidth: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
@@ -842,9 +914,11 @@ const styles = StyleSheet.create({
   },
   searchBox: {
     minHeight: 44,
-    paddingHorizontal: 14,
+    paddingLeft: 14,
+    paddingRight: 4,
     paddingVertical: 4,
-    borderRadius: 10,
+    // The shared Field's corner (RADIUS.tile), so the phone's inputs match.
+    borderRadius: RADIUS.tile,
     borderWidth: 1,
     flexDirection: 'row',
     alignItems: 'center',
@@ -857,10 +931,28 @@ const styles = StyleSheet.create({
     minHeight: 36,
     letterSpacing: -0.17,
   },
+  // The clear X's 44pt frame reaches into the box's 4pt padding, so the box
+  // keeps its 44pt height.
+  clearFrame: {
+    minWidth: MIN_TAP,
+    minHeight: MIN_TAP,
+    marginVertical: -4,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   chips: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
+  },
+  filterChip: {
+    minHeight: MIN_TAP,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   footer: {
     paddingTop: 12,

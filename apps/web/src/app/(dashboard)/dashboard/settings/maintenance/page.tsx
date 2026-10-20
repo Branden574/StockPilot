@@ -2,6 +2,8 @@ import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 
 import { MaintenanceSettingsPanel } from '@/components/maintenance/maintenance-settings-panel';
+import { PageHeader } from '@/components/patterns/page-header';
+import { SettingsPage } from '@/components/settings/settings-nav';
 import { withContext } from '@/server/services/context';
 
 import { can, MAINTENANCE_CATEGORIES } from '@stockpilot/core';
@@ -87,19 +89,17 @@ export default async function MaintenanceSettingsPage() {
   }));
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Maintenance requests</h1>
-      <p className="mt-1 text-sm text-muted-foreground">
-        Categories, notification audiences, and photo link settings.
-      </p>
-      <div className="mt-8">
-        <MaintenanceSettingsPanel
-          initialCategories={initialCategories}
-          initialIncludeShareLinksInEmail={initialIncludeShareLinksInEmail}
-          initialNotifyAudience={initialNotifyAudience}
-          members={members}
-        />
-      </div>
-    </div>
+    <SettingsPage>
+      <PageHeader
+        title="Maintenance requests"
+        subline="Categories, notification audiences, and photo link settings."
+      />
+      <MaintenanceSettingsPanel
+        initialCategories={initialCategories}
+        initialIncludeShareLinksInEmail={initialIncludeShareLinksInEmail}
+        initialNotifyAudience={initialNotifyAudience}
+        members={members}
+      />
+    </SettingsPage>
   );
 }

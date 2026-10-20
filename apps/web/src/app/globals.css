@@ -6,7 +6,8 @@
 /* ─────────────────────────────────────────────────────────────────────
    StockPilot — quiet editorial system
    Adapted from the Claude Design hand-off.
-   Warm off-white, ink black, hairline borders, mint accent.
+   Warm off-white, ink black, hairline borders, a teal accent (deep in
+   light, mint in dark).
    ───────────────────────────────────────────────────────────────────── */
 
 @theme {
@@ -37,31 +38,57 @@
 
   --color-accent: hsl(var(--accent));
   --color-accent-foreground: hsl(var(--accent-foreground));
+  /* Text and icons ON an accent fill (`bg-accent text-accent-ink`). A different
+     job from accent-foreground, which stays accent-coloured text on the page. */
+  --color-accent-ink: hsl(var(--accent-ink));
 
   --color-destructive: hsl(var(--destructive));
   --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-destructive-wash: hsl(var(--destructive-wash));
 
   --color-success: hsl(var(--success));
   --color-success-foreground: hsl(var(--success-foreground));
+  --color-success-wash: hsl(var(--success-wash));
 
   --color-warning: hsl(var(--warning));
   --color-warning-foreground: hsl(var(--warning-foreground));
+  --color-warning-wash: hsl(var(--warning-wash));
 
   --color-border: hsl(var(--border));
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
 
+  /* The inset surface (segmented tracks, count inputs, neutral chips): `bg-sunk`.
+     Never an alias of muted: in dark, sunk sits below the page while the hover
+     fill (muted) sits above it. */
+  --color-sunk: var(--ed-bg-sunk);
+
+  /* Editorial inks and the stronger hairline as Tailwind colours: `text-ink-2`
+     (secondary text) and `border-line-strong` (control borders, badges, the
+     active segment ring), in place of text-[var(--ed-ink-2)] and
+     border-[var(--ed-line-strong)]. */
+  --color-ink-2: var(--ed-ink-2);
+  --color-line-strong: var(--ed-line-strong);
+  /* ink-4 is for glyphs and dividers only (crumb separators, arrows, the grid
+     card's hover border, disabled controls), never for text that needs 4.5:1;
+     such text takes ink 3, `text-muted-foreground`. It holds 3:1 on the page
+     (3.18 light, 3.61 dark) and on cards (3.33, 3.43). In light it falls just
+     under 3:1 on the hover and inset fills: 2.97 on bg-muted, 2.998 on
+     bg-sunk. */
+  --color-ink-4: var(--ed-ink-4);
+
   /* Recharts/shadcn chart series palette. Referenced by the chart
      primitive (components/ui/chart.tsx) as var(--chart-N) and by Tailwind
      consumers via `bg-chart-1` etc. Hues drawn from the editorial system:
-     mint accent → warm amber → terracotta → muted olive → slate ink. */
+     accent → warm amber → terracotta → muted olive → slate ink. */
   --color-chart-1: hsl(var(--chart-1));
   --color-chart-2: hsl(var(--chart-2));
   --color-chart-3: hsl(var(--chart-3));
   --color-chart-4: hsl(var(--chart-4));
   --color-chart-5: hsl(var(--chart-5));
 
-  /* Editorial-only tokens (use directly via CSS, not Tailwind classes). */
+  /* Editorial-only tokens (use directly via CSS, not Tailwind classes; ink-2,
+     ink-4 and line-strong also have the Tailwind colours above). */
   --ink: var(--ed-ink);
   --ink-2: var(--ed-ink-2);
   --ink-3: var(--ed-ink-3);
@@ -87,54 +114,83 @@
     --ed-line: #e7e5dd;
     --ed-line-strong: #d4d2c8;
 
-    --ed-accent: 165 38% 56%;     /* mint, expressed as HSL of oklch(0.74 0.12 165) */
+    /* The accent is a deep teal in light (the redesign reference, DESIGN-SPEC
+       2.2): accent text now reads on the page at 5.53:1 on white, where the
+       old mid mint was 2.33:1. Dark keeps its mint (redefined in .dark). */
+    --ed-accent: 165 42% 32%;
+    /* Accent-coloured text on the page; it feeds --accent-foreground. Not text
+       on an accent fill: that is --accent-ink below. */
     --ed-accent-ink: 165 22% 24%;
-    --ed-accent-wash: 165 35% 94%;
+    --ed-accent-wash: 165 35% 93%;
 
-    /* shadcn-compatible HSL components */
-    --background: 60 17% 97%;
-    --foreground: 80 7% 5%;
+    /* shadcn-compatible HSL components. Each triplet reproduces the reference
+       hex exactly (DESIGN-SPEC 2.2 and PLAN P2.1). */
+    --background: 60 23.1% 97.5%;
+    --foreground: 90 7.1% 5.5%;
 
     --card: 0 0% 100%;
-    --card-foreground: 80 7% 5%;
+    --card-foreground: 90 7.1% 5.5%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 80 7% 5%;
+    --popover-foreground: 90 7.1% 5.5%;
 
-    --primary: 80 7% 5%;          /* "primary" = ink black (the design's heavy-weight buttons) */
-    --primary-foreground: 60 17% 97%;
+    /* "primary" = ink black (the design's heavy-weight buttons and the toast) */
+    --primary: 90 7.1% 5.5%;
+    --primary-foreground: 60 23.1% 97.5%;
 
     --secondary: 60 13% 95%;
-    --secondary-foreground: 80 7% 5%;
+    --secondary-foreground: 90 7.1% 5.5%;
 
-    --muted: 60 13% 95%;
+    /* The reference hover fill: rows, nav and buttons on hover, and the
+       selected nav item. Use it at full strength (bg-muted), not /40 or /60. */
+    --muted: 51 23% 94%;
     --muted-foreground: 80 4% 35%;
 
     --accent: var(--ed-accent);
     --accent-foreground: var(--ed-accent-ink);
+    --accent-ink: 0 0% 100%;
 
-    --destructive: 18 65% 47%;
+    --destructive: 12 68% 44%;
     --destructive-foreground: 60 17% 97%;
+    --destructive-wash: 12 70% 95%;
 
     --success: var(--ed-accent);
-    --success-foreground: var(--ed-accent-ink);
+    /* Its only use is text on the solid success fill, so it is the on-fill
+       ink: white on the deep teal (5.53:1; the old dark teal read 1.71:1 there). */
+    --success-foreground: var(--accent-ink);
+    --success-wash: var(--ed-accent-wash);
 
-    --warning: 38 60% 52%;
+    /* 33% lightness, not the reference's 34%: 4.70:1 on its own wash where 34%
+       gave 4.47:1 (DESIGN-SPEC 2.4). */
+    --warning: 34 80% 33%;
+    /* Ink: it is also the text colour on light warning tints (dashboard widgets,
+       the public item page), so it is not switched to white. Those tint uses
+       fail in dark (ink on a dark tint reads 1.06-1.48:1, and did before
+       P2.1); their owners, P3.1 and P5.1, move them to bg-warning-wash
+       text-warning. */
     --warning-foreground: 80 7% 5%;
+    --warning-wash: 38 70% 92%;
 
-    --border: 56 19% 89%;
-    --input: 56 19% 89%;
+    --border: 48 17.2% 88.6%;
+    --input: 48 17.2% 88.6%;
     --ring: 80 7% 5%;
 
     /* Chart series palette (light) — saturated enough to read against the
-       white card surface while staying within the warm editorial register. */
-    --chart-1: 165 38% 48%; /* mint accent (darkened for fill contrast) */
-    --chart-2: 38 60% 52%;  /* warning amber */
-    --chart-3: 18 65% 47%;  /* terracotta (matches destructive hue) */
+       white card surface while staying within the warm editorial register.
+       Only chart-1 follows the redesign accent; the other series keep their
+       palette (DESIGN-SPEC 6.17), so 2 and 3 no longer equal --warning and
+       --destructive. */
+    --chart-1: var(--ed-accent); /* the accent */
+    --chart-2: 38 60% 52%;  /* amber */
+    --chart-3: 18 65% 47%;  /* terracotta */
     --chart-4: 95 22% 45%;  /* muted olive */
     --chart-5: 80 7% 35%;   /* slate ink */
 
     --radius: 0.4rem;
+
+    /* Table body cell padding (DESIGN-SPEC 9). Comfortable unless a
+       [data-density] wrapper below says otherwise. */
+    --row-py: 11px;
   }
 
   .dark {
@@ -149,43 +205,54 @@
     --ed-line: #1f201b;
     --ed-line-strong: #2a2b25;
 
-    --background: 80 7% 5%;
-    --foreground: 56 17% 92%;
+    /* Defined here too, so nothing in dark falls back to the light deep teal
+       or the light wash. */
+    --ed-accent: 165 45% 64%;
+    --ed-accent-wash: 165 28% 13%;
 
-    --card: 75 8% 7%;
-    --card-foreground: 56 17% 92%;
+    --background: 80 13% 4.5%;
+    --foreground: 52.5 21.1% 92.5%;
 
-    --popover: 75 8% 7%;
-    --popover-foreground: 56 17% 92%;
+    --card: 75 11% 7%;
+    --card-foreground: 52.5 21.1% 92.5%;
 
-    --primary: 56 17% 92%;
-    --primary-foreground: 80 7% 5%;
+    --popover: 75 11% 7%;
+    --popover-foreground: 52.5 21.1% 92.5%;
+
+    --primary: 52.5 21.1% 92.5%;
+    --primary-foreground: 80 13% 4.5%;
 
     --secondary: 75 8% 12%;
-    --secondary-foreground: 56 17% 92%;
+    --secondary-foreground: 52.5 21.1% 92.5%;
 
-    --muted: 75 8% 10%;
-    --muted-foreground: 60 4% 60%;
+    --muted: 72 10.2% 9.6%;
+    --muted-foreground: 66 4.8% 58.8%;
 
-    --accent: 165 45% 64%;
+    --accent: var(--ed-accent);
     --accent-foreground: 165 60% 92%;
+    --accent-ink: 158 44% 5%;
 
-    --destructive: 12 70% 55%;
-    --destructive-foreground: 56 17% 92%;
+    --destructive: 12 75% 64%;
+    /* Near-black on the lighter dark-theme fill (6.85:1). Light text there
+       read 2.44:1 (and 3.18:1 on the old fill). */
+    --destructive-foreground: 80 13% 4.5%;
+    --destructive-wash: 12 35% 13%;
 
-    --success: 165 45% 64%;
-    --success-foreground: 165 60% 92%;
+    --success: var(--ed-accent);
+    --success-foreground: var(--accent-ink);
+    --success-wash: var(--ed-accent-wash);
 
-    --warning: 38 70% 60%;
+    --warning: 38 70% 62%;
     --warning-foreground: 80 7% 5%;
+    --warning-wash: 38 35% 12%;
 
-    --border: 75 8% 14%;
-    --input: 75 8% 14%;
+    --border: 72 8.5% 11.6%;
+    --input: 72 8.5% 11.6%;
     --ring: 56 17% 92%;
 
     /* Chart series palette (dark) — lifted lightness so each hue reads on
        the near-black card surface. */
-    --chart-1: 165 45% 60%; /* mint accent */
+    --chart-1: var(--ed-accent); /* the accent */
     --chart-2: 38 70% 62%;  /* amber */
     --chart-3: 12 70% 60%;  /* terracotta */
     --chart-4: 95 28% 58%;  /* olive */
@@ -214,6 +281,38 @@
     letter-spacing: -0.005em;
   }
 
+  /* Dashboard chrome type (DESIGN-SPEC 3): Inter 13.5 / 1.5 with the reference
+     tracking. Only the DashboardShell root carries .sp-shell, so marketing,
+     auth, public, portal and platform pages keep body's 14px (the storefront
+     sets its own sizes). Screen only: a printed dashboard page keeps today's
+     paper sizes. It lives in the base layer, so a control that sets its own
+     size with a utility still wins: Input, Textarea and Select keep text-base
+     (16px, no iOS zoom on focus) below sm. 'ss01' stays beside the reference's
+     'cv11' and 'tnum' until the owner decides (DESIGN-SPEC U4). */
+  @media screen {
+    .sp-shell {
+      font-size: 13.5px;
+      line-height: 1.5;
+      letter-spacing: -0.005em;
+      font-feature-settings: 'ss01', 'cv11', 'tnum';
+    }
+  }
+
+  /* Table row density (DESIGN-SPEC 9). The shell root carries data-density;
+     the table body cells pad by var(--row-py). Nothing else changes with it:
+     text, checkbox and touch-target sizes stay, and phones stay comfortable. */
+  [data-density='comfortable'] {
+    --row-py: 11px;
+  }
+  [data-density='compact'] {
+    --row-py: 6px;
+  }
+  @media (width < 48rem) {
+    [data-density='compact'] {
+      --row-py: 11px;
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     *,
     *::before,
@@ -234,12 +333,20 @@
   }
 }
 
+/* The display face. As an @utility it joins the family utility that
+   --font-display already creates and is sorted with Tailwind's own utilities
+   (font-family before letter-spacing), so a tracking-* utility on the same
+   element wins, at every breakpoint and state. As a plain class in the
+   @layer utilities block below it came after every generated utility and
+   silently beat tracking-[...]. On its own it still sets the display family
+   and -0.022em. */
+@utility font-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.022em;
+}
+
 @layer utilities {
-  /* Display + serif emphasis utilities */
-  .font-display {
-    font-family: var(--font-display);
-    letter-spacing: -0.022em;
-  }
+  /* Serif emphasis and figure utilities */
   .font-serif-italic {
     font-family: var(--font-serif);
     font-style: italic;
@@ -459,10 +566,13 @@
 }
 
 /* ── Authentication ground ────────────────────────────────────────────────────
- * `bg-mesh` was referenced by three surfaces — (auth)/layout.tsx, invite/[token]
- * and onboarding — but was never defined anywhere in the stylesheet or the
- * Tailwind config, so all three rendered a flat `--background`. This authors the
- * utility those files have always asked for.
+ * `bg-mesh` is the ground of two screens outside the (auth) group:
+ * app/invite/[token]/page.tsx and app/onboarding/page.tsx, which is why it lives
+ * here and not in app/(auth)/auth.css. It was referenced by three surfaces,
+ * those two and (auth)/layout.tsx, but was never defined anywhere in the
+ * stylesheet or the Tailwind config, so all three rendered a flat
+ * `--background`. #151 authored it, and in the same change the (auth) layout
+ * moved to its own shell, so the auth pages have not used it since.
  *
  * Design constraint: the decoration must cost the FORM nothing. The washes are
  * anchored to opposite corners and fall to zero well before the central band
@@ -510,314 +620,6 @@
   );
 }
 
-/* ── Authentication shell ─────────────────────────────────────────────────────
- * A cinematic split on desktop, a form-first stack on mobile.
- *
- * Governing rule: the decoration never delays or obstructs the form. The visual
- * column is aria-hidden, loads no media, and its animation is purely decorative.
- * The form column is usable from first paint.
- */
-.auth-shell {
-  display: grid;
-  grid-template-columns: 55fr 45fr;
-  min-height: 100svh;
-  background: hsl(var(--background));
-}
-
-/* ── visual column ── */
-.auth-visual {
-  position: relative;
-  overflow: hidden;
-  border-right: 1px solid hsl(var(--border));
-  background: hsl(var(--card));
-}
-.auth-visual-ground {
-  position: absolute;
-  inset: 0;
-  background-image:
-    radial-gradient(60rem 44rem at 88% -12%, hsl(var(--accent) / 0.26), transparent 60%),
-    radial-gradient(48rem 38rem at -6% 108%, hsl(var(--accent) / 0.14), transparent 58%),
-    repeating-linear-gradient(90deg, hsl(var(--border) / 0.35) 0 1px, transparent 1px 9rem);
-}
-.auth-visual-inner {
-  position: relative;
-  display: grid;
-  grid-template-rows: auto 1fr auto;
-  height: 100%;
-  padding: clamp(1.75rem, 3vw, 3rem);
-}
-/* The operation sits on the optical centre line, not the floor of the panel. */
-.auth-visual-inner .auth-stage {
-  align-self: center;
-  width: 100%;
-  max-width: 34rem;
-}
-.auth-visual-brand {
-  display: inline-flex;
-  width: fit-content;
-  opacity: 0;
-  animation: auth-in 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) 0.05s forwards;
-}
-
-/* ── the looping operation ── */
-.auth-stage {
-  opacity: 0;
-  animation: auth-in 0.6s cubic-bezier(0.2, 0.7, 0.2, 1) 0.16s forwards;
-}
-.auth-stage-head {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  color: hsl(var(--muted-foreground));
-  padding-bottom: 1rem;
-  border-bottom: 1px solid hsl(var(--border));
-}
-.auth-live {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: hsl(var(--accent));
-  box-shadow: 0 0 0 3px hsl(var(--accent) / 0.2);
-}
-.auth-stage-sep { opacity: 0.4; }
-
-.auth-flow { list-style: none; margin: 0; padding: 0; }
-.auth-flow li {
-  position: relative;
-  display: grid;
-  grid-template-columns: 2px 1fr auto;
-  grid-template-areas: 'rail k v' 'rail meta meta';
-  gap: 0 0.9rem;
-  padding: 0.95rem 0 0.95rem 0;
-  border-bottom: 1px solid hsl(var(--border) / 0.7);
-  /* Each row settles at readable weight, then takes its turn in the loop. */
-  animation: auth-step 11s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-  animation-delay: calc(var(--i) * 1.35s);
-}
-.af-rail {
-  grid-area: rail;
-  background: hsl(var(--border));
-  border-radius: 1px;
-  animation: auth-rail 11s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-  animation-delay: calc(var(--i) * 1.35s);
-}
-.af-k {
-  grid-area: k;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: hsl(var(--muted-foreground));
-  align-self: center;
-}
-.af-v {
-  grid-area: v;
-  font-family: var(--font-display);
-  font-size: 0.95rem;
-  letter-spacing: -0.015em;
-  color: hsl(var(--foreground));
-  align-self: center;
-}
-.af-meta {
-  grid-area: meta;
-  font-size: 11px;
-  color: hsl(var(--muted-foreground));
-  padding-top: 0.3rem;
-}
-.auth-stage-foot {
-  align-self: end;
-  margin-top: 1.5rem;
-  max-width: 34ch;
-  font-size: 12px;
-  line-height: 1.55;
-  color: hsl(var(--muted-foreground));
-}
-
-@keyframes auth-step {
-  0%, 6%    { opacity: 0.5; }
-  10%, 20%  { opacity: 1; }
-  26%, 100% { opacity: 0.5; }
-}
-@keyframes auth-rail {
-  0%, 6%    { background: hsl(var(--border)); }
-  10%, 20%  { background: hsl(var(--accent)); }
-  26%, 100% { background: hsl(var(--border)); }
-}
-@keyframes auth-in {
-  from { opacity: 0; transform: translateY(8px); }
-  to   { opacity: 1; transform: none; }
-}
-
-/* ── form column ── */
-.auth-panel { display: flex; flex-direction: column; min-width: 0; }
-.auth-panel-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: 4rem;
-  padding: 0 clamp(1.25rem, 3vw, 2.5rem);
-}
-/* The brand lives in the visual column on desktop; the form column carries it
-   only when that column is gone. */
-.auth-panel-brand { display: none; }
-.auth-panel-main {
-  flex: 1;
-  display: flex;
-  justify-content: center;
-  padding: 0 clamp(1.25rem, 3vw, 2.5rem) 3rem;
-}
-/* Top-weighted, NOT vertically centred. These screens inject content mid-stack
-   constantly — a TOTP step, an error banner, an invite's org block — and a
-   centred wrapper re-centres on every one, sliding the password field out from
-   under a cursor that was already moving toward it. */
-.auth-panel-col {
-  width: 100%;
-  max-width: 25rem;
-  padding-top: clamp(1.5rem, 9vh, 4.5rem);
-  opacity: 0;
-  animation: auth-in 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) 0.1s forwards;
-}
-.auth-panel-foot {
-  padding: 0 clamp(1.25rem, 3vw, 2.5rem) 2rem;
-  text-align: center;
-}
-.auth-panel-foot p { font-size: 12px; color: hsl(var(--muted-foreground)); }
-.auth-panel-foot nav {
-  display: flex;
-  justify-content: center;
-  gap: 1.25rem;
-  margin: 0.75rem auto 0;
-  max-width: 25rem;
-  padding-top: 0.75rem;
-  border-top: 1px solid hsl(var(--border) / 0.6);
-  font-size: 12px;
-}
-.auth-panel-foot nav a { color: hsl(var(--muted-foreground)); }
-.auth-panel-foot nav a:hover { color: hsl(var(--foreground)); }
-
-/* ── tablet: narrow the cinema, widen the work ── */
-@media (max-width: 1100px) {
-  .auth-shell { grid-template-columns: 40fr 60fr; }
-  .auth-stage-foot { display: none; }
-}
-
-/* ── mobile: the split is REMOVED, not squeezed ── */
-@media (max-width: 780px) {
-  .auth-shell { grid-template-columns: 1fr; }
-  .auth-visual { display: none; }
-  .auth-panel-brand { display: inline-flex; }
-  .auth-panel-col { padding-top: clamp(1rem, 4vh, 2rem); }
-}
-
-/* ── reduced motion: same composition, nothing moving ── */
-@media (prefers-reduced-motion: reduce) {
-  .auth-visual-brand,
-  .auth-stage,
-  .auth-panel-col {
-    opacity: 1;
-    animation: none;
-    transform: none;
-  }
-  /* Every row at its settled, readable state rather than mid-cycle. */
-  .auth-flow li { animation: none; opacity: 1; }
-  .af-rail { animation: none; background: hsl(var(--border)); }
-}
-
-/* ── Auth: input microinteractions ────────────────────────────────────────────
- * Focus is signalled three ways at once — the label takes the accent, the field
- * takes an accent border, and a soft accent ring appears. All three are cheap,
- * none of them move anything, and none of them change the field's box, so
- * nothing reflows when focus moves between fields.
- */
-.auth-field:focus-within > label,
-.auth-field:focus-within > div > label {
-  color: hsl(var(--accent-foreground));
-  transition: color 0.16s ease;
-}
-.auth-field input:focus-visible {
-  border-color: hsl(var(--accent));
-  box-shadow: 0 0 0 3px hsl(var(--accent) / 0.16);
-  outline: none;
-}
-.auth-field input {
-  transition:
-    border-color 0.16s ease,
-    box-shadow 0.16s ease,
-    background-color 0.16s ease;
-}
-.auth-field:focus-within input:not(:focus-visible) { background: hsl(var(--muted) / 0.35); }
-
-/* Errors appear beneath the field WITHOUT moving anything.
- *
- * This has to be enforced, not assumed. Rendering the message conditionally
- * pushed the submit button down 24px the moment a field went invalid — measured,
- * not theorised — which is the jump that lands a click on the wrong target when
- * someone is tabbing quickly through a login they have done a thousand times.
- *
- * Reserving space around a conditional node was not enough either: it still
- * moved 8px, because Tailwind's `space-y-*` sibling selector outranks a plain
- * child rule. So the message element is ALWAYS in the DOM, empty when there is
- * nothing to say, holding a fixed height either way. Appearing and disappearing
- * both cost exactly zero layout. Verified by measuring the submit button's box
- * before and after invalidation.
- *
- * role="alert" on the always-present node also means the message is announced
- * when it arrives, which a conditionally-mounted node does less reliably.
- */
-.auth-msg {
-  min-height: 1rem;
-  line-height: 1rem;
-  margin-top: 0.25rem !important;
-}
-.auth-msg:not(:empty) { animation: auth-err 0.18s ease-out; }
-
-.auth-submit-done {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  animation: auth-in 0.22s cubic-bezier(0.2, 0.7, 0.2, 1);
-}
-
-/* ── Auth: the panel answers the form ─────────────────────────────────────────
- * Strictly decorative. If any of this is ignored the sign-in flow is identical.
- */
-/* Any deliberate state stops the ambient loop, so the panel is answering the
-   user rather than talking over them. */
-.auth-stage:not([data-phase='idle']) .auth-flow li,
-.auth-stage:not([data-phase='idle']) .af-rail {
-  animation-play-state: paused;
-}
-.auth-stage:not([data-phase='idle']) .auth-flow li { opacity: 0.42; }
-
-.auth-flow li[data-lit] { opacity: 1; }
-.auth-flow li[data-lit] .af-rail { background: hsl(var(--accent)); }
-
-/* In flight: the whole ledger breathes once per second — the system is working. */
-.auth-stage[data-phase='submitting'] .auth-flow li { opacity: 0.55; }
-.auth-stage[data-phase='submitting'] .af-rail {
-  background: hsl(var(--accent) / 0.55);
-  animation: auth-pulse 1s ease-in-out infinite !important;
-  animation-play-state: running !important;
-}
-@keyframes auth-pulse {
-  0%, 100% { opacity: 0.45; }
-  50%      { opacity: 1; }
-}
-
-/* Resolved: every stage accounted for, settled, nothing moving. */
-.auth-stage[data-phase='success'] .auth-flow li { opacity: 1; }
-.auth-stage[data-phase='success'] .af-rail { background: hsl(var(--accent)); }
-.auth-stage[data-phase='success'] .auth-live { box-shadow: 0 0 0 5px hsl(var(--accent) / 0.24); }
-
-@media (prefers-reduced-motion: reduce) {
-  .auth-field p,
-  .auth-submit-done { animation: none; }
-  .auth-stage[data-phase='submitting'] .af-rail { animation: none !important; opacity: 1; }
-}
-
 /* ── Product-update notice vs transient toasts ────────────────────────────────
    Both live bottom-right, and sonner paints at z-index 999999999. While the
    update notice is up, UpdateCenter sets data-sp-update-card on <html> and its
@@ -838,4 +640,27 @@ html[data-sp-update-card] ol[data-sonner-toaster][data-y-position='bottom'] {
    it (L63a, L100, L136). */
 html[data-sp-update-card] #main-content {
   padding-bottom: var(--sp-update-card-offset, 0px);
+}
+
+/* ── Keyboard focus clears the item page's sticky header (P68-KBD-01) ─────────
+   The item page's header (back link, title, actions and tab strip) sticks to
+   the top of the dashboard's scroller, 200 to 410 px tall, and its tab strip
+   keeps the header's measured height in --item-detail-header-h on the page
+   column that holds the header and the tab panels (item-detail-tabs.tsx).
+   Browsers scroll a newly focused control only until it is inside the
+   scroller, so Tab could stop on a control under the header (Market price's
+   Refresh, reached from the right column's last link at 1280). A focused
+   control below the header (in a tab panel, the header's sibling) takes a
+   scroll margin of the header's height plus 12 px, which it inherits from
+   that column, so the browser scrolls it into view below the header with its
+   whole focus ring (Firefox does not apply it when focus lands on an SVG
+   element, the cost chart, and leaves that where it was, as it always has).
+   Only the focused control carries it: the header's own controls, the skip
+   link, Page Down, the #physical-count card's own margin and every other
+   page scroll as before. No rule here matches the scroller: a :has() on it
+   ran on every dashboard page, re-matching the whole page on each focus
+   change (and, in Chromium, each DOM change). */
+[data-item-detail-header] ~ :focus,
+[data-item-detail-header] ~ * :focus {
+  scroll-margin-top: calc(var(--item-detail-header-h, 0px) + 0.75rem);
 }

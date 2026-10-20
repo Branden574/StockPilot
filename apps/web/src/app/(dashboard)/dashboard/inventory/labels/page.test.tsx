@@ -35,7 +35,7 @@ vi.mock('@/components/inventory/labels-from-selection', () => ({
 
 import { ServiceError } from '@/server/services/context';
 
-import LabelsPage from './page';
+import LabelsPage, { metadata } from './page';
 
 const uuid = (i: number) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
 const ids = Array.from({ length: 250 }, (_, i) => uuid(i));
@@ -43,6 +43,10 @@ const ids = Array.from({ length: 250 }, (_, i) => uuid(i));
 beforeEach(() => vi.clearAllMocks());
 
 describe('labels page', () => {
+  it('has a tab title of its own (CONFLICTS D16)', () => {
+    expect(metadata.title).toBe('Print labels');
+  });
+
   it('asks byIds for every well-formed id and drops a malformed one', async () => {
     byIds.mockResolvedValue(ids.map((id) => ({ id, name: id, sku: id, barcode: null })));
     render(

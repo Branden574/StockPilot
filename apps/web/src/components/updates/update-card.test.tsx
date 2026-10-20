@@ -179,3 +179,20 @@ describe('updateAnnouncement', () => {
     );
   });
 });
+
+/**
+ * The notice floats over main, which is on the card colour, and in dark the
+ * structural hairline is about 1.13:1 against a card while the shadow does not
+ * show, so its edge all but vanished. Floating surfaces take the stronger
+ * hairline, as P2.2's menus and popovers do. Mutation caught: the notice back
+ * on border-border.
+ */
+describe('the notice is a floating surface', () => {
+  it('draws the stronger hairline', () => {
+    setup();
+    const card = screen.getByRole('region', { name: 'Product update' });
+    const classes = (card.getAttribute('class') ?? '').split(/\s+/);
+    expect(classes).toEqual(expect.arrayContaining(['border', 'border-line-strong']));
+    expect(classes).not.toContain('border-border');
+  });
+});

@@ -1,13 +1,7 @@
-import {
-  ArrowRight,
-  Check,
-  Eye,
-  EyeOff,
-  Mail,
-  ScanFace,
-} from 'lucide-react-native';
+import { ArrowRight, Eye, EyeOff, Mail, ScanFace } from 'lucide-react-native';
 import * as React from 'react';
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
@@ -22,6 +16,7 @@ import { AuthShell } from '@/components/auth/auth-shell';
 import { BiometricOptInSheet } from '@/components/biometric-optin-sheet';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Field } from '@/components/ui/field';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
@@ -46,6 +41,12 @@ export default function SignIn() {
   const [showOptIn, setShowOptIn] = React.useState(false);
   const [bioCapable, setBioCapable] = React.useState(false);
   const [bioLabel, setBioLabel] = React.useState<'Face ID' | 'Touch ID' | 'Fingerprint' | 'Biometric'>('Face ID');
+
+  // iOS ignores accessibilityLiveRegion, so a new error is said aloud: before,
+  // VoiceOver stayed silent when a sign-in or a reset request failed.
+  React.useEffect(() => {
+    if (error) AccessibilityInfo.announceForAccessibility(error);
+  }, [error]);
 
   // Probe biometric capability once on mount so we know whether to
   // show the Face ID / Fingerprint quick-sign-in card. If the device
@@ -198,9 +199,16 @@ export default function SignIn() {
               value={password}
               onChangeText={setPassword}
               trailing={
+                // A named button in a real 44pt frame (the field's slot holds
+                // only the 18pt icon, and hitSlop never reached past it). The
+                // frame covers the 44pt the field keeps free past the typed
+                // text and the icon keeps its place (styles.eyeFrame); the
+                // names are the web password field's.
                 <Pressable
-                  hitSlop={10}
                   onPress={() => setShowPw((p) => !p)}
+                  accessibilityRole="button"
+                  accessibilityLabel={showPw ? 'Hide password' : 'Show password'}
+                  style={styles.eyeFrame}
                 >
                   {showPw ? (
                     <EyeOff size={18} color={c.ink4} strokeWidth={1.4} />
@@ -212,33 +220,25 @@ export default function SignIn() {
             />
 
             <View style={styles.metaRow}>
+              {/* The shared checkbox: VoiceOver hears a checkbox and whether it
+                  is ticked. Same words, same toggle, same state as before (it
+                  is still never passed to signIn: an owner decision, CONFLICTS
+                  section B). */}
+              <Checkbox
+                checked={keepIn}
+                onChange={() => setKeepIn((v) => !v)}
+                label="Keep me signed in"
+                style={styles.keepIn}
+              />
               <Pressable
-                onPress={() => setKeepIn((v) => !v)}
-                style={styles.keepInRow}
-                hitSlop={10}
+                onPress={forgotPassword}
+                accessibilityRole="button"
+                style={styles.forgotFrame}
               >
-                <View
-                  style={[
-                    styles.checkbox,
-                    {
-                      borderColor: c.ink3,
-                      backgroundColor: keepIn ? c.ink : 'transparent',
-                    },
-                  ]}
-                >
-                  {keepIn ? (
-                    <Check size={12} color={c.paper} strokeWidth={2.2} />
-                  ) : null}
-                </View>
-                <Body size={13} color={c.ink2} style={{ flexShrink: 1 }}>
-                  Keep me signed in
-                </Body>
-              </Pressable>
-              <Pressable hitSlop={10} onPress={forgotPassword}>
                 <Body
                   size={13}
                   color={c.ink2}
-                  style={{ borderBottomWidth: 1, borderBottomColor: c.hair }}
+                  style={{ borderBottomWidth: 1, borderBottomColor: c.hair2 }}
                 >
                   Forgot?
                 </Body>
@@ -246,7 +246,7 @@ export default function SignIn() {
             </View>
 
             {error ? (
-              <Body size={13} color={c.ink} style={{ color: '#b03a3a' }}>
+              <Body size={13} color={c.critText}>
                 {error}
               </Body>
             ) : null}
@@ -269,7 +269,7 @@ export default function SignIn() {
 
           <View style={styles.divider}>
             <View style={[styles.line, { backgroundColor: c.hair }]} />
-            <Mono size={10.5} tracking={0.18} upper color={c.ink4}>
+            <Mono size={10.5} tracking={0.18} upper color={c.ink3}>
               or
             </Mono>
             <View style={[styles.line, { backgroundColor: c.hair }]} />
@@ -289,7 +289,7 @@ export default function SignIn() {
           ) : null}
 
           <View style={styles.footer}>
-            <Body size={13} color={c.ink4} style={{ textAlign: 'center' }}>
+            <Body size={13} color={c.ink3} style={{ textAlign: 'center' }}>
               New to StockPilot? Your organization admin can invite you.
             </Body>
           </View>
@@ -310,18 +310,31 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 10,
   },
-  keepInRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  // The checkbox's label may wrap, so it yields width to Forgot?.
+  keepIn: {
     flexShrink: 1,
   },
-  checkbox: {
-    width: 18,
-    height: 18,
-    borderRadius: 4,
-    borderWidth: 1.4,
-    alignItems: 'center',
+  // 44pt targets, as real frames (never hitSlop): see the trailing note.
+  // The field holds its trailing slot 12pt in from the box's right edge and
+  // ends the typed text 44pt in, so the frame reaches 12pt past the slot
+  // (marginRight -12) to cover exactly those 44pt: a tap on the password's
+  // last letters still puts the caret there instead of showing it. The
+  // paddingRight hands the 12pt back, so the icon stays where it was.
+  eyeFrame: {
+    width: 44,
+    height: 44,
+    marginRight: -12,
+    paddingRight: 12,
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+  },
+  // At least 44pt each way (the word alone is about 42pt wide, 34pt at the
+  // smallest text size), the word at the frame's right edge, so it stays at
+  // the row's end and its underline stays under the word.
+  forgotFrame: {
+    minHeight: 44,
+    minWidth: 44,
+    alignItems: 'flex-end',
     justifyContent: 'center',
   },
   divider: {

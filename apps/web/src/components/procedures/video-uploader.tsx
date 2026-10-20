@@ -1,13 +1,6 @@
 'use client';
 
-import {
-  ArrowDown,
-  ArrowUp,
-  Film,
-  Loader2,
-  Trash2,
-  Upload,
-} from 'lucide-react';
+import { ArrowDown, ArrowUp, Film, Loader2, Trash2, Upload } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -94,9 +87,7 @@ export function extensionFromMime(mime: string): string {
   return 'mp4';
 }
 
-export async function probeVideoMetadata(
-  file: File,
-): Promise<{ duration: number | null }> {
+export async function probeVideoMetadata(file: File): Promise<{ duration: number | null }> {
   return new Promise((resolve) => {
     try {
       const url = URL.createObjectURL(file);
@@ -206,18 +197,22 @@ interface VideoRowProps {
 
 function VideoRow({ icon, title, meta, status, actions }: VideoRowProps) {
   return (
-    <li className="flex items-center justify-between gap-3 rounded-lg border bg-card px-3 py-2">
+    <li
+      data-slot="procedure-video-row"
+      className="border-border bg-card flex items-center justify-between gap-3 rounded-lg border px-3 py-2"
+    >
       <div className="flex min-w-0 flex-1 items-center gap-3">
-        <div className="grid h-9 w-12 flex-none place-items-center rounded bg-muted text-muted-foreground">
+        <div className="bg-sunk text-muted-foreground grid h-9 w-12 flex-none place-items-center rounded-md">
           {icon ?? <Film className="h-4 w-4" aria-hidden />}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-medium">{title}</div>
-          <p className="text-xs text-muted-foreground">{meta}</p>
-          {status && <div className="mt-0.5 text-xs">{status}</div>}
+          <div className="text-foreground truncate text-[13.5px] font-medium">{title}</div>
+          <p className="text-muted-foreground text-[12px] tabular-nums">{meta}</p>
+          {status && <div className="mt-0.5 text-[12px]">{status}</div>}
         </div>
       </div>
-      {actions && <div className="flex flex-none items-center gap-1">{actions}</div>}
+      {/* 28 px buttons sit 8 px apart (Button touch rule). */}
+      {actions && <div className="flex flex-none items-center gap-2">{actions}</div>}
     </li>
   );
 }
@@ -307,9 +302,7 @@ function ImmediateUploader({ procedureId, initialVideos }: ImmediateProps) {
           presign.data.posterPath,
         );
 
-        setPending((p) =>
-          p.map((x) => (x.key === key ? { ...x, status: 'recording' } : x)),
-        );
+        setPending((p) => p.map((x) => (x.key === key ? { ...x, status: 'recording' } : x)));
 
         const record = await recordProcedureVideoAction({
           procedureId,
@@ -345,9 +338,7 @@ function ImmediateUploader({ procedureId, initialVideos }: ImmediateProps) {
     }
 
     if (successCount > 0) {
-      toast.success(
-        successCount === 1 ? 'Video uploaded.' : `${successCount} videos uploaded.`,
-      );
+      toast.success(successCount === 1 ? 'Video uploaded.' : `${successCount} videos uploaded.`);
     }
     router.refresh();
     // Clear successful pending rows after a short delay so the user sees
@@ -391,6 +382,7 @@ function ImmediateUploader({ procedureId, initialVideos }: ImmediateProps) {
                   type="button"
                   variant="ghost"
                   size="sm"
+                  className="w-7 px-0"
                   onClick={() => setDeleteTarget(v)}
                   aria-label={`Delete ${v.title ?? 'video'}`}
                 >
@@ -407,14 +399,15 @@ function ImmediateUploader({ procedureId, initialVideos }: ImmediateProps) {
           {pending.map((p) => (
             <li
               key={p.key}
-              className="flex items-center gap-2 rounded-md bg-muted/40 px-3 py-1.5 text-xs"
+              data-slot="procedure-upload-pending"
+              className="bg-sunk flex items-center gap-2 rounded-md px-3 py-1.5 text-[12px] tabular-nums"
             >
               {p.status === 'error' ? (
                 <span className="text-destructive">Failed: {p.error ?? 'unknown'}</span>
               ) : p.status === 'done' ? (
                 <span className="text-success">Uploaded</span>
               ) : (
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                <Loader2 className="text-muted-foreground h-3.5 w-3.5 animate-spin" />
               )}
               <span className="truncate">{p.name}</span>
               {p.status === 'uploading' && (
@@ -457,11 +450,7 @@ function ImmediateUploader({ procedureId, initialVideos }: ImmediateProps) {
 // Staged mode — used on the create page. Parent owns the array.
 // ---------------------------------------------------------------------------
 
-function StagedUploader({
-  staged,
-  onStagedChange,
-  uploading = false,
-}: StagedProps) {
+function StagedUploader({ staged, onStagedChange, uploading = false }: StagedProps) {
   const inputRef = React.useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = React.useState(false);
 
@@ -536,6 +525,7 @@ function StagedUploader({
                     type="button"
                     variant="ghost"
                     size="sm"
+                    className="w-7 px-0"
                     onClick={() => move(s.tempId, -1)}
                     disabled={uploading || idx === 0}
                     aria-label={`Move ${s.file.name} up`}
@@ -546,6 +536,7 @@ function StagedUploader({
                     type="button"
                     variant="ghost"
                     size="sm"
+                    className="w-7 px-0"
                     onClick={() => move(s.tempId, 1)}
                     disabled={uploading || idx === staged.length - 1}
                     aria-label={`Move ${s.file.name} down`}
@@ -556,6 +547,7 @@ function StagedUploader({
                     type="button"
                     variant="ghost"
                     size="sm"
+                    className="w-7 px-0"
                     onClick={() => remove(s.tempId)}
                     disabled={uploading}
                     aria-label={`Remove ${s.file.name}`}
@@ -586,7 +578,7 @@ function StagedStatus({ video }: { video: StagedVideo }) {
   }
   if (video.status === 'uploading') {
     return (
-      <span className="inline-flex items-center gap-1 text-muted-foreground">
+      <span className="text-muted-foreground inline-flex items-center gap-1">
         <Loader2 className="h-3 w-3 animate-spin" /> Uploading…
       </span>
     );
@@ -594,11 +586,7 @@ function StagedStatus({ video }: { video: StagedVideo }) {
   if (video.status === 'recorded') {
     return <span className="text-success">Uploaded</span>;
   }
-  return (
-    <span className="text-destructive">
-      Failed{video.error ? `: ${video.error}` : ''}
-    </span>
-  );
+  return <span className="text-destructive">Failed{video.error ? `: ${video.error}` : ''}</span>;
 }
 
 // ---------------------------------------------------------------------------
@@ -613,13 +601,7 @@ interface DropZoneProps {
   disabled: boolean;
 }
 
-function DropZone({
-  dragOver,
-  setDragOver,
-  inputRef,
-  onFiles,
-  disabled,
-}: DropZoneProps) {
+function DropZone({ dragOver, setDragOver, inputRef, onFiles, disabled }: DropZoneProps) {
   return (
     <label
       htmlFor="video-upload"
@@ -636,18 +618,16 @@ function DropZone({
         if (e.dataTransfer.files) void onFiles(e.dataTransfer.files);
       }}
       className={cn(
-        'flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-border bg-muted/20 px-6 py-8 transition-colors',
+        'bg-sunk border-line-strong flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed px-6 py-8 text-center transition-colors',
         disabled
           ? 'cursor-not-allowed opacity-60'
-          : 'cursor-pointer hover:border-primary/40 hover:bg-muted/40',
-        !disabled && dragOver && 'border-primary bg-primary/5',
+          : 'hover:bg-muted hover:border-foreground/40 cursor-pointer',
+        !disabled && dragOver && 'border-accent bg-accent/5',
       )}
     >
-      <Film className="h-5 w-5 text-muted-foreground" aria-hidden />
-      <p className="text-sm font-medium">Drop videos, or click to browse</p>
-      <p className="text-xs text-muted-foreground">
-        MP4, MOV, WEBM · up to 1 GB each
-      </p>
+      <Film className="text-muted-foreground h-5 w-5" aria-hidden />
+      <p className="text-foreground text-[13.5px] font-medium">Drop videos, or click to browse</p>
+      <p className="text-muted-foreground text-[12px]">MP4, MOV, WEBM · up to 1 GB each</p>
       <input
         id="video-upload"
         ref={inputRef}

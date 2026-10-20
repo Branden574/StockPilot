@@ -267,8 +267,8 @@ export default function AIChat() {
         <View style={styles.topbar}>
           <IconChip icon={ChevronLeft} onPress={() => router.back()} accessibilityLabel="Back" minTap />
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <Sparkles size={14} color={c.ink4} strokeWidth={1.4} />
-            <Mono size={11} tracking={0.12} upper color={c.ink4}>
+            <Sparkles size={14} color={c.ink3} strokeWidth={1.4} />
+            <Mono size={11} tracking={0.12} upper color={c.ink3}>
               AI · BETA
             </Mono>
           </View>
@@ -316,6 +316,7 @@ export default function AIChat() {
                   <Pressable
                     key={ex}
                     onPress={() => setInput(ex)}
+                    accessibilityRole="button"
                     style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
                   >
                     <Card padding={12}>
@@ -336,17 +337,18 @@ export default function AIChat() {
         </ScrollView>
 
         <View style={[styles.inputBar, { backgroundColor: c.paper, borderTopColor: c.hair }]}>
-          <View style={[styles.inputBox, { backgroundColor: c.card, borderColor: c.hair }]}>
+          {/* The composer is a control: the stronger border, as the shared Field. */}
+          <View style={[styles.inputBox, { backgroundColor: c.card, borderColor: c.hair2 }]}>
             <Pressable
               onPress={attachPhoto}
               disabled={uploading || busy}
-              hitSlop={8}
               style={({ pressed }) => [
-                styles.attachBtn,
+                styles.tapFrame,
                 { opacity: uploading || busy ? 0.4 : pressed ? 0.6 : 1 },
               ]}
               accessibilityRole="button"
               accessibilityLabel="Attach a book-list photo"
+              accessibilityState={{ disabled: uploading || busy, busy: uploading }}
             >
               {uploading ? (
                 <ActivityIndicator size="small" color={c.ink3} />
@@ -358,26 +360,41 @@ export default function AIChat() {
               value={input}
               onChangeText={setInput}
               placeholder="Message StockPilot…"
-              placeholderTextColor={c.ink4}
+              placeholderTextColor={c.ink3}
+              accessibilityLabel="Message StockPilot"
               multiline
               style={[styles.input, { color: c.ink }]}
             />
+            {/* A 44pt frame around the same 36pt circle; it was a nameless
+                icon with no role, so VoiceOver could not find Send. */}
             <Pressable
               onPress={() => void send()}
               disabled={!input.trim() || busy}
-              style={({ pressed }) => [
-                styles.sendBtn,
-                {
-                  backgroundColor: input.trim() && !busy ? c.ink : c.paper2,
-                  opacity: pressed ? 0.85 : 1,
-                },
-              ]}
+              accessibilityRole="button"
+              accessibilityLabel="Send"
+              accessibilityState={{ disabled: !input.trim() || busy, busy }}
+              style={({ pressed }) => [styles.tapFrame, { opacity: pressed ? 0.85 : 1 }]}
             >
-              {busy ? (
-                <ActivityIndicator size="small" color={c.paper} />
-              ) : (
-                <Send size={16} color={input.trim() ? c.paper : c.ink4} strokeWidth={1.6} />
-              )}
+              <View
+                style={[
+                  styles.sendBtn,
+                  {
+                    // Recessed (sunk) while there is nothing to send: paper2
+                    // is the card colour itself in dark, so the circle
+                    // vanished on the composer there.
+                    backgroundColor: input.trim() && !busy ? c.ink : c.sunk,
+                  },
+                ]}
+              >
+                {/* While it sends, the box is cleared and the circle is the
+                    recessed one: the spinner is ink so it shows there (paper
+                    on paper2 drew it invisible in both modes). */}
+                {busy ? (
+                  <ActivityIndicator size="small" color={c.ink} />
+                ) : (
+                  <Send size={16} color={input.trim() ? c.paper : c.ink4} strokeWidth={1.6} />
+                )}
+              </View>
             </Pressable>
           </View>
         </View>
@@ -418,7 +435,7 @@ function Bubble({ turn }: { turn: Turn }) {
         ) : turn.streaming ? (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             <ActivityIndicator size="small" color={isUser ? c.paper : c.ink} />
-            <Mono size={11} tracking={0.04} color={c.ink4}>
+            <Mono size={11} tracking={0.04} color={c.ink3}>
               thinking…
             </Mono>
           </View>
@@ -448,24 +465,31 @@ const styles = StyleSheet.create({
     paddingBottom: Platform.OS === 'ios' ? 28 : 12,
     borderTopWidth: 1,
   },
+  // The two buttons' 44pt frames are 4pt wider than their 36pt circles on
+  // every side, so the box takes 4pt off its padding (6 -> 2) and the gap
+  // between a frame and the text box 4pt (8 -> 4): the circles, the text and
+  // the box sit where they did.
   inputBox: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    gap: 8,
+    gap: 4,
     borderWidth: 1,
     borderRadius: 16,
-    paddingLeft: 6,
-    paddingRight: 6,
-    paddingVertical: 6,
+    paddingLeft: 2,
+    paddingRight: 2,
+    paddingVertical: 2,
     minHeight: 48,
   },
-  attachBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+  // A real 44pt frame, not hitSlop, so the target VoiceOver outlines is the
+  // one a finger can hit (the IconChip minTap rule).
+  tapFrame: {
+    width: 44,
+    height: 44,
     alignItems: 'center',
     justifyContent: 'center',
   },
+  // marginVertical gives back the 4pt the box's padding gave up, so a long
+  // message keeps its old space above and below.
   input: {
     flex: 1,
     fontFamily: FONT.displayRegular,
@@ -473,6 +497,7 @@ const styles = StyleSheet.create({
     maxHeight: 120,
     paddingTop: 8,
     paddingBottom: 8,
+    marginVertical: 4,
   },
   sendBtn: {
     width: 36,

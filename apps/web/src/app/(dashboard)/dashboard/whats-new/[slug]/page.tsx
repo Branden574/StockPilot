@@ -1,8 +1,8 @@
 import type { Metadata } from 'next';
 import { ArrowLeft } from 'lucide-react';
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { LocalDate } from '@/components/ui/local-date';
 import { ReleaseEntryCard } from '@/components/updates/release-entry-card';
 import { MarkReleaseRead } from '@/components/updates/release-history-actions';
@@ -12,7 +12,7 @@ import { getReleaseFor } from '@/server/services/releases';
 
 export const dynamic = 'force-dynamic';
 
-const LABEL = 'text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--ed-ink-3)]';
+const LABEL = 'text-muted-foreground text-[11px] font-medium uppercase leading-4 tracking-[0.08em]';
 
 type Params = { params: Promise<{ slug: string }> };
 
@@ -39,40 +39,45 @@ export default async function WhatsNewReleasePage({ params }: Params) {
   const withdrawn = release.status === 'withdrawn';
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <Link
-        href="/dashboard/whats-new"
-        className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 text-[13px]"
-      >
-        <ArrowLeft className="size-3.5" aria-hidden /> Release history
-      </Link>
-
-      <h1 className="mt-3 font-display text-[28px] font-medium leading-tight tracking-[-0.02em]">
-        {release.title}
-      </h1>
-      <p className="mt-2 text-[12.5px] text-[var(--ed-ink-3)]">
-        {release.version ? `${release.version} · ` : ''}
-        <LocalDate iso={release.publishedAt} fallback={utcDateLabel(release.publishedAt)} />
-      </p>
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <PageHeader
+        back={
+          <PageHeaderBackLink href="/dashboard/whats-new">
+            <ArrowLeft className="size-3.5" aria-hidden /> Release history
+          </PageHeaderBackLink>
+        }
+        // A release title often runs to two lines: a tighter line than the
+        // header's one-line default keeps it reading as one heading.
+        title={<span className="block leading-[1.2]">{release.title}</span>}
+        subline={
+          <span className="text-[12.5px]">
+            {release.version ? `${release.version} · ` : ''}
+            <LocalDate iso={release.publishedAt} fallback={utcDateLabel(release.publishedAt)} />
+          </span>
+        }
+      />
 
       <MarkReleaseRead releaseId={release.id} alreadyRead={release.state.read || withdrawn} />
 
       {withdrawn ? (
-        <div className="mt-6 rounded-xl border p-4">
+        <div className="border-border bg-card rounded-lg border px-[18px] py-4">
           <p className={LABEL}>This release was withdrawn</p>
-          <p className="mt-1.5 text-sm leading-relaxed">
+          <p className="mt-1.5 text-[13.5px] leading-relaxed">
             {release.withdrawnNote ?? 'These changes are not available at the moment.'}
           </p>
         </div>
       ) : (
         <>
-          <section aria-labelledby="release-highlights" className="mt-6">
+          <section
+            aria-labelledby="release-highlights"
+            className="border-border bg-card rounded-lg border px-[18px] py-4"
+          >
             <h2 id="release-highlights" className={LABEL}>
               Highlights
             </h2>
-            <p className="mt-1.5 text-sm leading-relaxed">{release.summary}</p>
+            <p className="mt-1.5 text-[13.5px] leading-relaxed">{release.summary}</p>
           </section>
-          <section aria-label="Changes in this release" className="mt-6 space-y-3">
+          <section aria-label="Changes in this release" className="space-y-3">
             {release.entries.map((entry) => (
               <ReleaseEntryCard key={entry.id} entry={entry} />
             ))}

@@ -514,10 +514,14 @@ export function MaintenancePhotosPanel(props: Props) {
         e.preventDefault();
         void handleFiles(e.dataTransfer.files);
       }}
-      className={card ? 'space-y-3' : 'space-y-3 rounded-xl border border-dashed p-4'}
+      className={
+        card ? 'space-y-3' : 'border-line-strong space-y-3 rounded-lg border border-dashed p-4'
+      }
     >
       <div className="flex items-center justify-between gap-2">
-        <p className={card ? 'text-base font-semibold' : 'text-sm font-medium'}>{countLabel}</p>
+        <p className={cn('text-foreground font-medium', card ? 'text-[13.5px]' : 'text-[13px]')}>
+          {countLabel}
+        </p>
         {readOnly ? null : (
           <Button
             type="button"
@@ -531,13 +535,13 @@ export function MaintenancePhotosPanel(props: Props) {
         )}
       </div>
       {addDisabledReason ? (
-        <p className="text-muted-foreground text-sm" data-testid="photos-add-unavailable">
+        <p className="text-muted-foreground text-[13px]" data-testid="photos-add-unavailable">
           {addDisabledReason}
         </p>
       ) : null}
       {noteField && !readOnly ? (
         <div className="space-y-1">
-          <label htmlFor="photo-note" className="text-sm font-medium">
+          <label htmlFor="photo-note" className="text-[13px] font-medium">
             {noteField.label}
           </label>
           <Textarea
@@ -548,8 +552,13 @@ export function MaintenancePhotosPanel(props: Props) {
             placeholder={noteField.placeholder}
             disabled={addBlocked}
           />
-          <p className={noteTooLong ? 'text-destructive text-xs' : 'text-muted-foreground text-xs'}>
-            {Array.from(trimmedNote).length.toLocaleString('en-US')} / {noteField.max.toLocaleString('en-US')}
+          <p
+            className={
+              noteTooLong ? 'text-destructive text-[12px]' : 'text-muted-foreground text-[12px]'
+            }
+          >
+            {Array.from(trimmedNote).length.toLocaleString('en-US')} /{' '}
+            {noteField.max.toLocaleString('en-US')}
           </p>
         </div>
       ) : null}
@@ -577,11 +586,11 @@ export function MaintenancePhotosPanel(props: Props) {
                     role="group"
                     aria-label={p.originalFilename}
                     className={cn(
-                      'flex w-full flex-col items-start justify-center gap-1 rounded-lg border p-2',
+                      'border-border bg-sunk flex w-full flex-col items-start justify-center gap-1 rounded-md border p-2',
                       card ? 'h-32' : 'h-24',
                     )}
                   >
-                    <p className="text-muted-foreground text-xs">{photoLoadFailure.message}</p>
+                    <p className="text-muted-foreground text-[12px]">{photoLoadFailure.message}</p>
                     <Button
                       type="button"
                       variant="outline"
@@ -596,7 +605,7 @@ export function MaintenancePhotosPanel(props: Props) {
                   <button
                     type="button"
                     aria-label={`View ${p.originalFilename}`}
-                    className="block w-full cursor-zoom-in rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="focus-visible:ring-ring block w-full cursor-zoom-in rounded-md focus-visible:outline-none focus-visible:ring-2"
                     onClick={() => setLightboxIndex(photos.findIndex((x) => x.id === p.id))}
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -615,7 +624,10 @@ export function MaintenancePhotosPanel(props: Props) {
                             }
                           : undefined
                       }
-                      className={cn('w-full rounded-lg border object-cover', card ? 'h-32' : 'h-24')}
+                      className={cn(
+                        'border-border w-full rounded-md border bg-white object-cover',
+                        card ? 'h-32' : 'h-24',
+                      )}
                     />
                   </button>
                 )}
@@ -624,7 +636,7 @@ export function MaintenancePhotosPanel(props: Props) {
                     type="button"
                     aria-label={`Remove ${p.originalFilename}`}
                     // At least 24px tall (WCAG 2.5.8).
-                    className="absolute right-1 top-1 min-h-6 rounded bg-background/80 px-2 text-xs disabled:opacity-60"
+                    className="border-border bg-card/90 text-foreground hover:bg-muted absolute right-1 top-1 min-h-6 rounded-md border px-2 text-[12px] transition-colors disabled:opacity-60"
                     disabled={removeDisabledReason !== null}
                     aria-describedby={removeDisabledReason !== null ? removeReasonId : undefined}
                     onClick={() => (removal ? askRemove(p) : void removePhoto(p.id))}
@@ -645,10 +657,12 @@ export function MaintenancePhotosPanel(props: Props) {
               <li key={p.id} className="min-w-0 space-y-1">
                 <div className="group relative">{tile}</div>
                 {p.caption?.note ? (
-                  <p className="line-clamp-3 text-sm break-words whitespace-pre-wrap">{p.caption.note}</p>
+                  <p className="line-clamp-3 whitespace-pre-wrap break-words text-[13px]">
+                    {p.caption.note}
+                  </p>
                 ) : null}
                 {p.caption?.lines?.map((line) => (
-                  <p key={line} className="text-muted-foreground text-xs break-words">
+                  <p key={line} className="text-muted-foreground break-words text-[12px]">
                     {line}
                   </p>
                 ))}
@@ -657,17 +671,24 @@ export function MaintenancePhotosPanel(props: Props) {
           })}
         </ul>
       ) : uploads.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{emptyText}</p>
+        <p className="text-muted-foreground text-[13px]">{emptyText}</p>
       ) : null}
       {removeDisabledReason !== null && photos.some((p) => p.canRemove !== false) ? (
-        <p id={removeReasonId} className="text-muted-foreground text-xs" data-testid="photos-remove-unavailable">
+        <p
+          id={removeReasonId}
+          className="text-muted-foreground text-[12px]"
+          data-testid="photos-remove-unavailable"
+        >
           {removeDisabledReason}
         </p>
       ) : null}
       {uploads.length > 0 ? (
         <ul className="space-y-1">
           {uploads.map((u) => (
-            <li key={u.key} className="flex items-center justify-between gap-2 rounded-md bg-muted/40 px-3 py-1.5 text-xs">
+            <li
+              key={u.key}
+              className="bg-sunk flex items-center justify-between gap-2 rounded-md px-3 py-1.5 text-[12px]"
+            >
               <span className="min-w-0 truncate">
                 {u.name}
                 {u.note ? <span className="text-muted-foreground"> (note: {u.note})</span> : null}
@@ -706,7 +727,7 @@ export function MaintenancePhotosPanel(props: Props) {
       {props.footnote?.length ? (
         <div className="space-y-0.5">
           {props.footnote.map((line) => (
-            <p key={line} className="text-muted-foreground text-xs">
+            <p key={line} className="text-muted-foreground text-[12px]">
               {line}
             </p>
           ))}
@@ -736,7 +757,7 @@ export function MaintenancePhotosPanel(props: Props) {
               <DialogDescription>{removal.description}</DialogDescription>
             </DialogHeader>
             <div className="space-y-1">
-              <label htmlFor="photo-remove-reason" className="text-sm font-medium">
+              <label htmlFor="photo-remove-reason" className="text-[13px] font-medium">
                 {removal.reasonLabel}
               </label>
               <Textarea
@@ -749,13 +770,19 @@ export function MaintenancePhotosPanel(props: Props) {
                 rows={2}
                 disabled={removePending}
               />
-              <p className={reasonTooLong ? 'text-destructive text-xs' : 'text-muted-foreground text-xs'}>
+              <p
+                className={
+                  reasonTooLong
+                    ? 'text-destructive text-[12px]'
+                    : 'text-muted-foreground text-[12px]'
+                }
+              >
                 {Array.from(trimmedReason).length.toLocaleString('en-US')} /{' '}
                 {removal.reasonMax.toLocaleString('en-US')}
               </p>
             </div>
             {removeError ? (
-              <p role="alert" className="text-destructive text-sm">
+              <p role="alert" className="text-destructive text-[13px]">
                 {removeError}
               </p>
             ) : null}

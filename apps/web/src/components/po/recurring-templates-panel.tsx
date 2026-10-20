@@ -4,9 +4,12 @@ import { Loader2, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { DetailSection } from '@/components/patterns/detail-section';
+import { StatePanel } from '@/components/patterns/state-panel';
 import { BlankZeroNumberInput } from '@/components/ui/blank-zero-number-input';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
+import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -24,7 +27,8 @@ import {
   updateRecurringTemplateAction,
 } from '@/server/actions/recurring-pos';
 import type { RecurringPoSeed } from '@/lib/purchase-orders/recurring-seed';
-import { formatCurrency, formatRelative } from '@/lib/utils';
+import { useUnsavedWork } from '@/lib/unsaved-work';
+import { cn, formatCurrency, formatRelative } from '@/lib/utils';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -252,15 +256,30 @@ export function RecurringTemplatesPanel({
     [lineLabels],
   );
   // null = list view; 'new' = new form; '<id>' = editing that template
-  const [formMode, setFormMode] = React.useState<null | 'new' | string>(
-    seed ? 'new' : null,
-  );
+  const [formMode, setFormMode] = React.useState<null | 'new' | string>(seed ? 'new' : null);
   const [form, setForm] = React.useState<FormState>(() =>
     seed ? seededForm(seed, locations, seedDestination) : defaultForm(),
   );
   const [submitting, setSubmitting] = React.useState(false);
   const [toggling, setToggling] = React.useState<string | null>(null);
   const [deleting, setDeleting] = React.useState<string | null>(null);
+  // The template the delete confirmation is open for (it replaced the
+  // browser's own confirm, with the same words).
+  const [deleteTarget, setDeleteTarget] = React.useState<RecurringTemplateRow | null>(null);
+  // Why the last delete was refused, shown inside the confirmation (a toast
+  // alone sits behind an open dialog).
+  const [deleteError, setDeleteError] = React.useState<string | null>(null);
+  // The form as it opened. A form that differs from it holds typed work that
+  // "Refresh to update" would discard, so it registers as unsaved work
+  // (CONFLICTS D30). A form Make recurring filled in counts as changed from
+  // the start: the seed is taken from the browser's storage once, so a
+  // reload would lose it.
+  const openedAs = React.useRef<string | null>(seed ? JSON.stringify(defaultForm()) : null);
+  useUnsavedWork(
+    'recurring-template-form',
+    formMode === 'new' ? 'New recurring template' : 'Edit template',
+    () => formMode !== null && openedAs.current !== JSON.stringify(form),
+  );
 
   // Sync external initial list if the server re-renders the page.
   React.useEffect(() => {
@@ -272,23 +291,15 @@ export function RecurringTemplatesPanel({
 
   if (!entitled) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <RefreshCw className="h-4 w-4" /> Recurring purchase orders
-          </CardTitle>
-          <CardDescription>
-            Auto-create purchase orders on a schedule — weekly, monthly, quarterly, or custom.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <p className="rounded-md border bg-muted/30 p-4 text-sm text-muted-foreground">
-            Recurring purchase orders is a{' '}
-            <span className="font-medium text-foreground">Pro</span> feature. Upgrade to Pro or
-            above to use it.
-          </p>
-        </CardContent>
-      </Card>
+      <DetailSection title="Recurring purchase orders">
+        <p className="text-muted-foreground mb-4 text-[13.5px] leading-[20.25px]">
+          Auto-create purchase orders on a schedule — weekly, monthly, quarterly, or custom.
+        </p>
+        <p className="border-border bg-sunk text-muted-foreground rounded-md border p-4 text-[13.5px] leading-[20.25px]">
+          Recurring purchase orders is a <span className="text-foreground font-medium">Pro</span>{' '}
+          feature. Upgrade to Pro or above to use it.
+        </p>
+      </DetailSection>
     );
   }
 
@@ -313,12 +324,16 @@ export function RecurringTemplatesPanel({
   }
 
   function openNew() {
-    setForm(defaultForm());
+    const next = defaultForm();
+    openedAs.current = JSON.stringify(next);
+    setForm(next);
     setFormMode('new');
   }
 
   function openEdit(tpl: RecurringTemplateRow) {
-    setForm(defaultForm(templates, tpl.id));
+    const next = defaultForm(templates, tpl.id);
+    openedAs.current = JSON.stringify(next);
+    setForm(next);
     setFormMode(tpl.id);
   }
 
@@ -337,23 +352,22 @@ export function RecurringTemplatesPanel({
       toast.error(res.error.message);
       return;
     }
-    setTemplates((prev) =>
-      prev.map((t) => (t.id === tpl.id ? { ...t, enabled: next } : t)),
-    );
+    setTemplates((prev) => prev.map((t) => (t.id === tpl.id ? { ...t, enabled: next } : t)));
     toast.success(next ? 'Template enabled.' : 'Template disabled.');
   }
 
   // ── delete ────────────────────────────────────────────────────────────────
 
   async function deleteTemplate(id: string) {
-    if (!confirm('Delete this recurring template? This cannot be undone.')) return;
     setDeleting(id);
     const res = await deleteRecurringTemplateAction(id);
     setDeleting(null);
     if (!res.ok) {
+      setDeleteError(res.error.message);
       toast.error(res.error.message);
       return;
     }
+    setDeleteTarget(null);
     setTemplates((prev) => prev.filter((t) => t.id !== id));
     toast.success('Template deleted.');
   }
@@ -467,124 +481,145 @@ export function RecurringTemplatesPanel({
 
   // ── render ────────────────────────────────────────────────────────────────
 
+  /** A field's help line under it. */
+  const help = 'text-muted-foreground text-[12px] leading-[18px]';
+  /** "(optional)" after a label. */
+  const optional = <span className="text-muted-foreground ml-1 font-normal">(optional)</span>;
+
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <div>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <RefreshCw className="h-4 w-4" /> Recurring purchase orders
-            </CardTitle>
-            <CardDescription className="mt-1">
-              Templates that create a PO automatically on a cadence. Draft by default; opt-in
-              auto-send requires a $ cap and stays within your PO approval threshold.
-            </CardDescription>
-          </div>
-          {!isFormOpen && (
-            <Button size="sm" variant="outline" onClick={openNew}>
+    <>
+      <DetailSection
+        data-slot="recurring-templates"
+        title="Recurring purchase orders"
+        flush
+        aside={
+          !isFormOpen ? (
+            <Button size="sm" variant="gradient" onClick={openNew}>
               <Plus className="h-4 w-4" /> New template
             </Button>
-          )}
-        </div>
-      </CardHeader>
+          ) : null
+        }
+      >
+        <p className="text-muted-foreground px-[18px] pb-3 pt-3.5 text-[13.5px] leading-[20.25px]">
+          Templates that create a PO automatically on a cadence. Draft by default; opt-in auto-send
+          requires a $ cap and stays within your PO approval threshold.
+        </p>
 
-      <CardContent className="space-y-4">
         {/* ── Template list ── */}
-        {!isFormOpen && (
-          <>
-            {templates.length === 0 ? (
-              <div className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
-                No recurring templates yet. Create one to start auto-generating purchase orders
-                on a schedule.
-              </div>
-            ) : (
-              <div className="divide-y rounded-md border">
-                {templates.map((tpl) => {
-                  const supplier = suppliers.find((s) => s.id === tpl.supplier_id);
-                  const isBusy = toggling === tpl.id || deleting === tpl.id;
-                  const rawLines = Array.isArray(tpl.line_items)
-                    ? (tpl.line_items as Array<{ itemId: string; quantityOrdered: number; unitCost: number }>)
-                    : [];
-                  const tplTotal = rawLines.reduce(
-                    (s, l) => s + l.quantityOrdered * l.unitCost,
-                    0,
-                  );
-                  return (
-                    <div
-                      key={tpl.id}
-                      className="flex items-start justify-between gap-3 p-3"
-                    >
-                      <div className="flex items-start gap-3 min-w-0">
-                        <input
-                          type="checkbox"
-                          aria-label={tpl.enabled ? 'Disable template' : 'Enable template'}
-                          checked={tpl.enabled}
-                          disabled={isBusy}
-                          onChange={() => toggleEnabled(tpl)}
-                          className="mt-1 h-4 w-4 shrink-0 cursor-pointer"
-                          data-testid={`toggle-${tpl.id}`}
-                        />
-                        <div className="min-w-0">
-                          <p className="truncate font-medium text-sm">{tpl.name}</p>
-                          <p className="text-muted-foreground text-xs">
-                            {supplier?.name ?? 'No supplier'} ·{' '}
-                            {CADENCE_LABELS[tpl.cadence as Cadence] ?? tpl.cadence}
-                            {tpl.cadence === 'custom' && tpl.custom_days
-                              ? ` (${tpl.custom_days}d)`
-                              : ''}
-                            {' · '}
-                            {tpl.send_mode === 'send' ? 'Auto-send' : 'Draft'}{' '}
-                            {tpl.max_auto_send_cents != null
-                              ? `(cap ${formatCurrency(tpl.max_auto_send_cents / 100)})`
-                              : ''}
-                          </p>
-                          {/* The server renders "next ..." and "last ran ..."
-                              before the browser hydrates them; a minute
-                              between the two changes the words. Tolerate it
-                              instead of React error #418. */}
-                          <p className="text-muted-foreground text-xs" suppressHydrationWarning>
-                            {rawLines.length} line{rawLines.length !== 1 ? 's' : ''} ·{' '}
-                            {formatCurrency(tplTotal)} · next{' '}
-                            {formatRelative(tpl.next_run_at)}
-                            {tpl.last_run_at ? ` · last ran ${formatRelative(tpl.last_run_at)}` : ''}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => openEdit(tpl)}
-                          disabled={isBusy}
-                        >
-                          Edit
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => deleteTemplate(tpl.id)}
-                          disabled={isBusy}
-                          aria-label="Delete template"
-                        >
-                          {deleting === tpl.id ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <Trash2 className="h-4 w-4 text-destructive" />
-                          )}
-                        </Button>
-                      </div>
+        {!isFormOpen &&
+          (templates.length === 0 ? (
+            <div className="border-border border-t">
+              <StatePanel
+                kind="empty"
+                surface="plain"
+                headingLevel={null}
+                icon={RefreshCw}
+                title="No recurring templates yet. Create one to start auto-generating purchase orders on a schedule."
+              />
+            </div>
+          ) : (
+            <ul className="border-border divide-border divide-y border-t">
+              {templates.map((tpl) => {
+                const supplier = suppliers.find((s) => s.id === tpl.supplier_id);
+                const isBusy = toggling === tpl.id || deleting === tpl.id;
+                const rawLines = Array.isArray(tpl.line_items)
+                  ? (tpl.line_items as Array<{
+                      itemId: string;
+                      quantityOrdered: number;
+                      unitCost: number;
+                    }>)
+                  : [];
+                const tplTotal = rawLines.reduce((s, l) => s + l.quantityOrdered * l.unitCost, 0);
+                return (
+                  <li
+                    key={tpl.id}
+                    data-slot="recurring-template-row"
+                    className="flex items-start gap-3 px-[18px] py-3"
+                  >
+                    {/* Saved at once on the server, as before: the shared
+                        checkbox (a role="checkbox" button) keeps the test
+                        hook, the words and the disabled-while-busy rule. */}
+                    <Checkbox
+                      checked={tpl.enabled}
+                      label={tpl.enabled ? 'Disable template' : 'Enable template'}
+                      disabled={isBusy}
+                      onCheckedChange={() => toggleEnabled(tpl)}
+                      className="mt-px"
+                      data-testid={`toggle-${tpl.id}`}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p
+                        className={cn(
+                          'truncate text-[13.5px] font-medium leading-5',
+                          tpl.enabled ? 'text-foreground' : 'text-ink-2',
+                        )}
+                      >
+                        {tpl.name}
+                      </p>
+                      <p className="text-muted-foreground mt-0.5 text-[12.5px] leading-[18px]">
+                        {supplier?.name ?? 'No supplier'} ·{' '}
+                        {CADENCE_LABELS[tpl.cadence as Cadence] ?? tpl.cadence}
+                        {tpl.cadence === 'custom' && tpl.custom_days
+                          ? ` (${tpl.custom_days}d)`
+                          : ''}
+                        {' · '}
+                        {tpl.send_mode === 'send' ? 'Auto-send' : 'Draft'}{' '}
+                        {tpl.max_auto_send_cents != null
+                          ? `(cap ${formatCurrency(tpl.max_auto_send_cents / 100)})`
+                          : ''}
+                      </p>
+                      {/* The server renders "next ..." and "last ran ..."
+                          before the browser hydrates them; a minute
+                          between the two changes the words. Tolerate it
+                          instead of React error #418. */}
+                      <p
+                        className="text-muted-foreground text-[12.5px] tabular-nums leading-[18px]"
+                        suppressHydrationWarning
+                      >
+                        {rawLines.length} line{rawLines.length !== 1 ? 's' : ''} ·{' '}
+                        {formatCurrency(tplTotal)} · next {formatRelative(tpl.next_run_at)}
+                        {tpl.last_run_at ? ` · last ran ${formatRelative(tpl.last_run_at)}` : ''}
+                      </p>
                     </div>
-                  );
-                })}
-              </div>
-            )}
-          </>
-        )}
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => openEdit(tpl)}
+                        disabled={isBusy}
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => {
+                          setDeleteError(null);
+                          setDeleteTarget(tpl);
+                        }}
+                        disabled={isBusy}
+                        aria-label="Delete template"
+                      >
+                        {deleting === tpl.id ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="text-destructive h-4 w-4" />
+                        )}
+                      </Button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          ))}
 
         {/* ── Create / edit form ── */}
         {isFormOpen && (
-          <div className="space-y-5 rounded-md border p-4">
-            <h3 className="font-medium text-sm">
+          <div
+            data-slot="recurring-template-form"
+            className="border-border space-y-5 border-t px-[18px] py-[18px]"
+          >
+            <h3 className="text-foreground text-[13.5px] font-medium leading-5">
               {formMode === 'new' ? 'New recurring template' : 'Edit template'}
             </h3>
 
@@ -603,16 +638,16 @@ export function RecurringTemplatesPanel({
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               {/* Supplier */}
               <div className="space-y-1.5">
-                <Label>
+                <Label htmlFor="rpt-supplier">
                   Supplier
-                  <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+                  {optional}
                 </Label>
                 <Select
                   value={form.supplierId || '__none'}
                   onValueChange={(v) => patchForm({ supplierId: v === '__none' ? '' : v })}
                   disabled={submitting}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger id="rpt-supplier">
                     <SelectValue placeholder="No supplier" />
                   </SelectTrigger>
                   <SelectContent>
@@ -630,7 +665,7 @@ export function RecurringTemplatesPanel({
               <div className="space-y-1.5">
                 <Label htmlFor="rpt-destination">
                   Destination location
-                  <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+                  {optional}
                 </Label>
                 <Select
                   value={form.locationId || '__none'}
@@ -655,7 +690,10 @@ export function RecurringTemplatesPanel({
                   </SelectContent>
                 </Select>
                 {form.destinationNote ? (
-                  <p id="rpt-destination-note" className="text-xs text-amber-700 dark:text-amber-300">
+                  <p
+                    id="rpt-destination-note"
+                    className="text-warning text-[12px] font-medium leading-[18px]"
+                  >
                     {form.destinationNote}
                   </p>
                 ) : null}
@@ -719,7 +757,7 @@ export function RecurringTemplatesPanel({
                     <SelectItem value="send">Auto-send to supplier</SelectItem>
                   </SelectContent>
                 </Select>
-                <p className="text-muted-foreground text-xs">
+                <p className={help}>
                   Auto-send respects your PO approval threshold. Without a cap, it falls back to
                   draft.
                 </p>
@@ -738,7 +776,7 @@ export function RecurringTemplatesPanel({
                     onChange={(e) => patchForm({ capDollars: e.target.value })}
                     disabled={submitting}
                   />
-                  <p className="text-muted-foreground text-xs">
+                  <p className={help}>
                     POs above this cap are drafted for review instead of auto-sent.
                   </p>
                 </div>
@@ -747,7 +785,7 @@ export function RecurringTemplatesPanel({
 
             {/* Line items (reuses same pattern as PoForm) */}
             <div className="space-y-3">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-3">
                 <Label>Line items</Label>
                 <Button
                   type="button"
@@ -760,18 +798,29 @@ export function RecurringTemplatesPanel({
                 </Button>
               </div>
               {form.lines.length === 0 ? (
-                <div className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
-                  No lines yet. Click &quot;Add line&quot; to start.
-                </div>
+                <StatePanel
+                  kind="empty"
+                  surface="plain"
+                  headingLevel={null}
+                  icon={null}
+                  className="border-line-strong rounded-lg border border-dashed p-6"
+                  title={<>No lines yet. Click &quot;Add line&quot; to start.</>}
+                />
               ) : (
                 <div className="space-y-2">
                   {form.lines.map((line, idx) => (
                     <div
                       key={idx}
-                      className="grid grid-cols-12 gap-2 rounded-md border bg-card p-3"
+                      data-slot="recurring-template-line"
+                      className="border-border bg-sunk grid grid-cols-2 gap-2 rounded-lg border p-3 sm:grid-cols-12"
                     >
-                      <div className="col-span-5 space-y-1">
-                        <Label className="text-[11px] text-muted-foreground">Item</Label>
+                      <div className="col-span-2 min-w-0 space-y-1 sm:col-span-5">
+                        <Label
+                          htmlFor={`rpt-line-${idx}-item`}
+                          className="text-muted-foreground text-[11px]"
+                        >
+                          Item
+                        </Label>
                         <Select
                           value={line.itemId || '__pick'}
                           onValueChange={(v) => {
@@ -783,7 +832,7 @@ export function RecurringTemplatesPanel({
                           }}
                           disabled={submitting}
                         >
-                          <SelectTrigger>
+                          <SelectTrigger id={`rpt-line-${idx}-item`}>
                             <SelectValue placeholder="Pick an item" />
                           </SelectTrigger>
                           <SelectContent>
@@ -800,16 +849,21 @@ export function RecurringTemplatesPanel({
                             ) : null}
                             {items.map((i) => (
                               <SelectItem key={i.id} value={i.id}>
-                                {i.name} —{' '}
-                                <span className="font-mono text-xs">{i.sku}</span>
+                                {i.name} — <span className="font-mono text-xs">{i.sku}</span>
                               </SelectItem>
                             ))}
                           </SelectContent>
                         </Select>
                       </div>
-                      <div className="col-span-2 space-y-1">
-                        <Label className="text-[11px] text-muted-foreground">Qty</Label>
+                      <div className="space-y-1 sm:col-span-2">
+                        <Label
+                          htmlFor={`rpt-line-${idx}-qty`}
+                          className="text-muted-foreground text-[11px]"
+                        >
+                          Qty
+                        </Label>
                         <BlankZeroNumberInput
+                          id={`rpt-line-${idx}-qty`}
                           min={1}
                           step={1}
                           value={line.quantityOrdered}
@@ -818,9 +872,15 @@ export function RecurringTemplatesPanel({
                           disabled={submitting}
                         />
                       </div>
-                      <div className="col-span-2 space-y-1">
-                        <Label className="text-[11px] text-muted-foreground">Unit cost</Label>
+                      <div className="space-y-1 sm:col-span-2">
+                        <Label
+                          htmlFor={`rpt-line-${idx}-cost`}
+                          className="text-muted-foreground text-[11px]"
+                        >
+                          Unit cost
+                        </Label>
                         <BlankZeroNumberInput
+                          id={`rpt-line-${idx}-cost`}
                           min={0}
                           step={0.01}
                           value={line.unitCost}
@@ -829,19 +889,22 @@ export function RecurringTemplatesPanel({
                           disabled={submitting}
                         />
                       </div>
-                      <div className="col-span-2 space-y-1">
-                        <Label className="text-[11px] text-muted-foreground">Subtotal</Label>
-                        <p className="px-2 py-2 text-sm tabular-nums">
+                      <div className="space-y-1 sm:col-span-2">
+                        <span className="text-muted-foreground block text-[11px] leading-none">
+                          Subtotal
+                        </span>
+                        <p className="text-foreground py-2 font-mono text-[13px] tabular-nums">
                           {formatCurrency(line.quantityOrdered * line.unitCost)}
                         </p>
                       </div>
-                      <div className="col-span-1 flex items-end">
+                      <div className="flex items-end justify-end sm:col-span-1">
                         <Button
                           type="button"
                           variant="ghost"
                           size="icon"
                           onClick={() => removeLine(idx)}
                           disabled={submitting}
+                          aria-label={`Remove line ${idx + 1}`}
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
@@ -849,9 +912,9 @@ export function RecurringTemplatesPanel({
                     </div>
                   ))}
                   {form.lines.length > 0 && (
-                    <div className="flex justify-end pt-2 text-sm">
+                    <div className="flex justify-end pt-2 text-[13.5px]">
                       <span className="text-muted-foreground">Total: </span>
-                      <span className="ml-2 font-semibold tabular-nums">
+                      <span className="text-foreground ml-2 font-mono font-medium tabular-nums">
                         {formatCurrency(total)}
                       </span>
                     </div>
@@ -862,11 +925,12 @@ export function RecurringTemplatesPanel({
 
             {/* Notes */}
             <div className="space-y-1.5">
-              <Label>
+              <Label htmlFor="rpt-notes">
                 Notes
-                <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+                {optional}
               </Label>
               <Textarea
+                id="rpt-notes"
                 rows={2}
                 value={form.notes}
                 onChange={(e) => patchForm({ notes: e.target.value })}
@@ -875,12 +939,12 @@ export function RecurringTemplatesPanel({
             </div>
 
             {/* Actions */}
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-wrap justify-end gap-2">
               <Button variant="outline" onClick={cancelForm} disabled={submitting}>
                 Cancel
               </Button>
               <Button
-                variant="gradient"
+                variant={formMode === 'new' ? 'gradient' : 'default'}
                 onClick={saveForm}
                 disabled={submitting || form.lines.length === 0}
               >
@@ -895,7 +959,25 @@ export function RecurringTemplatesPanel({
             </div>
           </div>
         )}
-      </CardContent>
-    </Card>
+      </DetailSection>
+
+      {/* The confirmation the browser's own confirm() gave, with its words. */}
+      <DestructiveConfirm
+        open={deleteTarget !== null}
+        onOpenChange={(v) => {
+          if (!v && deleting === null) setDeleteTarget(null);
+        }}
+        title="Delete this recurring template?"
+        description="This cannot be undone."
+        confirmLabel="Delete"
+        pending={deleteTarget !== null && deleting === deleteTarget.id}
+        error={deleteError}
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          setDeleteError(null);
+          return deleteTemplate(deleteTarget.id);
+        }}
+      />
+    </>
   );
 }

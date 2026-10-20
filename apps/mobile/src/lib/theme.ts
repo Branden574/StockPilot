@@ -1,65 +1,125 @@
 /**
  * StockPilot Mobile — Design Tokens
  *
- * Warm-paper editorial palette, ported from the Claude Design handoff
- * (see /tmp/sp-design — mobile-tokens.css). Matches the web app's
- * design language: warm off-white, ink-black CTAs, mint accent only,
- * hairline borders, near-zero shadows. Dark mode mirrors the light
- * palette with the same hue logic inverted.
+ * Warm-paper editorial palette, mapped per mode onto the 2026-10 redesign
+ * reference (the web's tokens, DESIGN-SPEC 2.1 / 2.5): warm off-white or
+ * near-black paper, ink CTAs, a teal accent tuned per mode, hairline
+ * borders, flat surfaces. Light and dark are two complete palettes with one
+ * structure: only values change between modes, never layout or weight.
+ *
+ * The mode follows the device (use-theme.ts); there is no in-app override.
  *
  * Type pairing is loaded at runtime via expo-font in app/_layout.tsx:
- *   - Inter Tight (display)
+ *   - Inter Tight (display and body)
  *   - Instrument Serif Italic (emphasis spans)
  *   - JetBrains Mono (eyebrows, SKUs, numerics)
  */
 
 export type ThemeMode = 'light' | 'dark';
 
-interface Palette {
+/**
+ * One mode's colours. Every text token (ink, ink2, ink3, accent, warnText,
+ * critText) is measured on every surface (paper, paper2, card, sunk) and each
+ * tone on its own wash in theme.test.ts (WCAG AA, 4.5:1); the recipes the
+ * shared primitives draw with are measured in components/ui/tones.test.ts.
+ * The reference name each token maps to is in brackets.
+ */
+export interface Palette {
+  /** Page background [--bg]. */
   paper: string;
+  /** Quiet inset fill the screens use for panels and wells [light --sunk;
+   *  dark keeps the elevated tone the phone has always used here, which is
+   *  the card colour, so it does not show on a card in dark]. The shared
+   *  primitives take `sunk` for recessed fills instead. */
   paper2: string;
+  /** Elevated surface: cards, sheets, inputs [--elev]. */
   card: string;
+  /** Recessed fill: segmented tracks, count inputs, neutral chips, the
+   *  avatar [--sunk]. In dark it is darker than the page, in light a step
+   *  below it, so it reads as "pressed in" in both modes. */
+  sunk: string;
+  /** Primary text, ink buttons [--ink]. */
   ink: string;
+  /** Secondary text [--ink2]. */
   ink2: string;
+  /** Muted text: sublines, meta, labels, eyebrows [--ink3]. */
   ink3: string;
+  /** Disabled or decorative only: arrows, separators, glyphs [--ink4].
+   *  3.0-3.7:1, so never informational text. */
   ink4: string;
+  /** Faintest decoration (no reference twin; the web's --ed-ink-5). */
   ink5: string;
+  /** Hairlines: card borders, row separators [--line]. */
   hair: string;
-  /** Warning words (PO-4 review): ACCENT.warn is 3.2-3.6:1 on the light
-   *  surfaces, below WCAG AA's 4.5:1 for small text. */
+  /** Stronger border for interactive emphasis: secondary buttons, inputs,
+   *  badges, chips, page buttons, meter tracks [--line2]. */
+  hair2: string;
+  /** Accent for fills AND text [--acc]: deep teal in light, mint in dark. */
+  accent: string;
+  /** Text and icons on an accent fill [--accInk]. */
+  accentInk: string;
+  /** Accent-tinted fill: ok pills, a selected range or row [--accWash]. */
+  accentWash: string;
+  /** Warning words and marks [--warn, light at 33% L for AA on its wash]. */
   warnText: string;
-  /** Refusal words: ACCENT.crit is 3.0-3.3:1 on the dark surfaces. */
+  /** Warning fill [--warnWash]. */
+  warnWash: string;
+  /** Refusal and error words and marks [--dan]. */
   critText: string;
+  /** Refusal fill [--danWash]. */
+  critWash: string;
 }
 
 const LIGHT: Palette = {
   paper: '#fafaf7',
-  paper2: '#f3f1ea',
+  paper2: '#f4f3ee',
   card: '#ffffff',
+  sunk: '#f4f3ee',
   ink: '#0e0f0d',
-  ink2: '#2a2c27',
-  ink3: '#5d5e57',
-  ink4: '#8b8c83',
+  ink2: '#2a2c28',
+  ink3: '#5a5d56',
+  ink4: '#8b8e85',
   ink5: '#b5b5ac',
   hair: '#e7e5dd',
-  warnText: '#8a5a12',
-  critText: '#b03a3a',
+  hair2: '#d4d2c8',
+  accent: '#2f7463', // hsl(165 42% 32%)
+  accentInk: '#ffffff',
+  accentWash: '#e7f3f0', // hsl(165 35% 93%)
+  warnText: '#975d11', // hsl(34 80% 33%)
+  warnWash: '#f9eedc', // hsl(38 70% 92%)
+  critText: '#bc4224', // hsl(12 68% 44%)
+  critWash: '#fbede9', // hsl(12 70% 95%)
 };
 
 const DARK: Palette = {
   paper: '#0c0d0a',
   paper2: '#131410',
-  card: '#15160f',
-  ink: '#fafaf7',
-  ink2: '#d9d8d2',
-  ink3: '#9a988f',
-  ink4: '#6b6a63',
+  card: '#131410',
+  sunk: '#08090a',
+  ink: '#f0efe8',
+  ink2: '#d8d6cc',
+  ink3: '#9a9b91',
+  ink4: '#6a6b62',
   ink5: '#42423d',
   hair: '#1f201b',
-  warnText: '#d29a3c',
-  critText: '#e06c6c',
+  hair2: '#2a2b25',
+  accent: '#7acdb8', // hsl(165 45% 64%)
+  accentInk: '#07120e',
+  accentWash: '#182a26', // hsl(165 28% 13%)
+  warnText: '#e2b05a', // hsl(38 70% 62%)
+  warnWash: '#292114', // hsl(38 35% 12%)
+  critText: '#e87a5e', // hsl(12 75% 64%)
+  critWash: '#2d1a16', // hsl(12 35% 13%)
 };
 
+/**
+ * Mode-independent accents, kept exactly as they were for the screens that
+ * still read them (lib/serials.ts pins `crit`). New code takes the per-mode
+ * palette instead: `c.accent` for `mint`, `c.accentWash` for `mintSoft`,
+ * `c.warnText` / `c.critText` for `warn` / `crit` (the single values here
+ * fall under 4.5:1 as text in one mode or the other). `mintInk` and
+ * `mintInkDark` stay the AA text twins for mint words on each mode's paper.
+ */
 export const ACCENT = {
   mint: 'hsl(165, 38%, 56%)',
   mintSoft: 'hsla(165, 38%, 56%, 0.14)',
@@ -199,26 +259,6 @@ export const SHADOW = {
     elevation: 6,
   },
 } as const;
-
-/**
- * Legacy alias kept so existing screens that haven't been migrated yet
- * still compile. New code should import `palette()` + `ACCENT` directly
- * and not reach into `theme.*`. Maps the warm-paper light palette into
- * the original prop names so the dark-navy palette is fully retired.
- */
-export const theme = {
-  bg: LIGHT.paper,
-  bgElevated: LIGHT.paper2,
-  border: LIGHT.hair,
-  text: LIGHT.ink,
-  textMuted: LIGHT.ink3,
-  primary: LIGHT.ink,
-  primaryDark: LIGHT.ink2,
-  success: ACCENT.mintInk,
-  warning: ACCENT.warn,
-  destructive: ACCENT.crit,
-  card: LIGHT.card,
-};
 
 export const radius = { sm: 6, md: RADIUS.card, lg: RADIUS.cardHero, xl: 20 };
 export const space = SPACE;

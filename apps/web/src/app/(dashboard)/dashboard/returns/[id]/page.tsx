@@ -48,7 +48,8 @@ export default async function ReturnDetailPage({ params }: { params: Promise<{ i
       : Promise.resolve(null),
   ]);
   if (!workbenchResult.ok) {
-    if (workbenchResult.e instanceof ServiceError && workbenchResult.e.code !== 'internal_error') notFound();
+    if (workbenchResult.e instanceof ServiceError && workbenchResult.e.code !== 'internal_error')
+      notFound();
     throw workbenchResult.e;
   }
 
@@ -65,9 +66,19 @@ export default async function ReturnDetailPage({ params }: { params: Promise<{ i
       }
     : null;
 
+  // The page box every redesigned page shares (DESIGN-SPEC 4 and 5.3), its
+  // left edge level with the other pages'; the workbench keeps one column at
+  // most 1040 px wide, so a returning card and its replacement sit side by
+  // side at a readable width.
   return (
-    <div className="container mx-auto max-w-4xl px-4 py-8 sm:px-6">
-      <ReturnWorkbench workbench={workbenchResult.w} canManageShipping={canManageShipping} returnLabel={label} />
+    <div className="mx-auto flex w-full max-w-[1320px] flex-col px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <div className="w-full max-w-[1040px]">
+        <ReturnWorkbench
+          workbench={workbenchResult.w}
+          canManageShipping={canManageShipping}
+          returnLabel={label}
+        />
+      </div>
     </div>
   );
 }

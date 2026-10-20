@@ -4,6 +4,7 @@ import { Loader2, Search } from 'lucide-react';
 import * as React from 'react';
 
 import { Badge } from '@/components/ui/badge';
+import { choiceRowClass, eyebrowClass, nativeRadioClass } from '@/components/returns/returns-ui';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 
@@ -84,11 +85,7 @@ export function ReplacementPicker({
     return (
       <label
         key={row.itemId}
-        className={cn(
-          'flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 text-sm',
-          checked ? 'border-foreground bg-muted' : 'border-border',
-          disabled && 'cursor-not-allowed opacity-60',
-        )}
+        className={cn(choiceRowClass({ checked, disabled }), 'flex items-start gap-2.5 px-3 py-2')}
       >
         <input
           type="radio"
@@ -97,20 +94,32 @@ export function ReplacementPicker({
           checked={checked}
           disabled={disabled}
           onChange={() => onSelect(row, rowLabel)}
-          className="mt-0.5 h-3.5 w-3.5"
+          className={cn(nativeRadioClass, 'mt-0.5')}
         />
         {/* Review fix P3: the whole name, wrapped, never cut (its size is in
             it); below sm the availability goes under the name. */}
-        <span data-replacement-row className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
+        <span
+          data-replacement-row
+          className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3"
+        >
           <span className="min-w-0">
             <span className="block break-words font-medium">{rowLabel}</span>
-            <span className="text-muted-foreground block text-xs">{row.sku ?? ''}</span>
+            <span className="text-muted-foreground block font-mono text-[11.5px]">
+              {row.sku ?? ''}
+            </span>
           </span>
           <span className="flex flex-col items-start gap-1 sm:shrink-0 sm:items-end sm:text-right">
-            <span className={cn('text-xs tabular-nums', row.short ? 'text-destructive' : 'text-muted-foreground')}>
+            <span
+              className={cn(
+                'text-[12px] tabular-nums',
+                row.short ? 'text-destructive' : 'text-muted-foreground',
+              )}
+            >
               {row.availability}
             </span>
-            {row.isReturnedItem ? <Badge variant="outline">{RETURNS_COPY.replacementSameAsReturned}</Badge> : null}
+            {row.isReturnedItem ? (
+              <Badge variant="outline">{RETURNS_COPY.replacementSameAsReturned}</Badge>
+            ) : null}
           </span>
         </span>
       </label>
@@ -120,24 +129,29 @@ export function ReplacementPicker({
   return (
     <div className="space-y-3" aria-busy={loading}>
       <fieldset disabled={disabled} className="space-y-1.5">
-        <legend className="text-muted-foreground font-mono text-[10.5px] uppercase tracking-[0.12em]">
+        <legend className={eyebrowClass}>
           {RETURNS_COPY.replacementSiblings}
           <span className="sr-only"> for {label}</span>
         </legend>
-        <div role="radiogroup" aria-label={`${RETURNS_COPY.replacementSiblings} for ${label}`} className="space-y-1.5">
+        <div
+          role="radiogroup"
+          aria-label={`${RETURNS_COPY.replacementSiblings} for ${label}`}
+          className="space-y-1.5"
+        >
           {rows.siblings.map(renderRow)}
           {!loading && rows.siblings.length === 0 ? (
-            <p className="text-muted-foreground text-xs">{RETURNS_COPY.replacementNoMatches}</p>
+            <p className="text-muted-foreground text-[12px]">{RETURNS_COPY.replacementNoMatches}</p>
           ) : null}
         </div>
       </fieldset>
 
       <fieldset disabled={disabled} className="space-y-1.5">
-        <legend className="text-muted-foreground font-mono text-[10.5px] uppercase tracking-[0.12em]">
-          {RETURNS_COPY.replacementOtherItems}
-        </legend>
+        <legend className={eyebrowClass}>{RETURNS_COPY.replacementOtherItems}</legend>
         <div className="relative">
-          <Search className="text-muted-foreground absolute left-2.5 top-2.5 h-3.5 w-3.5" aria-hidden />
+          <Search
+            className="text-muted-foreground pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+            aria-hidden
+          />
           <Input
             value={q}
             onChange={(e) => setQ(e.target.value)}
@@ -148,25 +162,31 @@ export function ReplacementPicker({
           />
         </div>
         {term.length > 0 && term.length < 2 ? (
-          <p className="text-muted-foreground text-xs">{RETURNS_COPY.replacementSearchHint}</p>
+          <p className="text-muted-foreground text-[12px]">{RETURNS_COPY.replacementSearchHint}</p>
         ) : null}
         {term.length >= 2 ? (
-          <div role="radiogroup" aria-label={`${RETURNS_COPY.replacementOtherItems} for ${label}`} className="space-y-1.5">
+          <div
+            role="radiogroup"
+            aria-label={`${RETURNS_COPY.replacementOtherItems} for ${label}`}
+            className="space-y-1.5"
+          >
             {rows.matches.map(renderRow)}
             {!loading && rows.matches.length === 0 ? (
-              <p className="text-muted-foreground text-xs">{RETURNS_COPY.replacementNoMatches}</p>
+              <p className="text-muted-foreground text-[12px]">
+                {RETURNS_COPY.replacementNoMatches}
+              </p>
             ) : null}
           </div>
         ) : null}
       </fieldset>
 
       {loading ? (
-        <p className="text-muted-foreground inline-flex items-center gap-1.5 text-xs">
+        <p className="text-muted-foreground inline-flex items-center gap-1.5 text-[12px]">
           <Loader2 className="h-3 w-3 animate-spin" /> Loading
         </p>
       ) : null}
       {error ? (
-        <p className="text-destructive text-xs" role="alert">
+        <p className="text-destructive text-[12px]" role="alert">
           {error}
         </p>
       ) : null}

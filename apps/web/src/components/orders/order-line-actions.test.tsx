@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
@@ -90,9 +90,7 @@ beforeEach(() => {
 
 describe('quantityBlockedReason', () => {
   it('allows RAISING past everything already handed over or staged', () => {
-    expect(
-      quantityBlockedReason({ quantity: 25, fulfilled: 6, picked: 8 }),
-    ).toBeNull();
+    expect(quantityBlockedReason({ quantity: 25, fulfilled: 6, picked: 8 })).toBeNull();
   });
 
   it('blocks a drop below what was handed over, naming the number', () => {
@@ -399,9 +397,7 @@ describe('OrderLineActions — removing a line', () => {
       id: '11111111-1111-4111-8111-111111111111',
       lineId: '22222222-2222-4222-8222-222222222222',
     });
-    expect(toastMock.success).toHaveBeenCalledWith(
-      expect.stringContaining('Blue widget'),
-    );
+    expect(toastMock.success).toHaveBeenCalledWith(expect.stringContaining('Blue widget'));
     expect(refreshSpy).toHaveBeenCalled();
   });
 
@@ -448,23 +444,22 @@ describe('OrderLineActions — removing a line', () => {
     ['already handed over', { quantityFulfilled: 3 }, /handed over/i],
     ['staged by a picker', { quantityPicked: 2 }, /unstage/i],
     ['the only line left', { isOnlyLine: true }, /cancel the order/i],
-  ])('disables Remove on a line that is %s, with the reason attached', async (
-    _label,
-    over,
-    expected,
-  ) => {
-    const user = renderRow(over);
-    const button = screen.getByRole('button', { name: /remove blue widget/i });
-    expect(button).toBeDisabled();
-    // The reason is readable by hover (wrapper title) and by screen reader
-    // (aria-describedby), and clicking opens nothing.
-    expect(screen.getByTitle(expected)).toBeInTheDocument();
-    const describedBy = button.getAttribute('aria-describedby');
-    expect(describedBy).toBeTruthy();
-    expect(document.getElementById(describedBy as string)?.textContent).toMatch(expected);
-    await user.click(button);
-    expect(screen.queryByRole('dialog')).toBeNull();
-  });
+  ])(
+    'disables Remove on a line that is %s, with the reason attached',
+    async (_label, over, expected) => {
+      const user = renderRow(over);
+      const button = screen.getByRole('button', { name: /remove blue widget/i });
+      expect(button).toBeDisabled();
+      // The reason is readable by hover (wrapper title) and by screen reader
+      // (aria-describedby), and clicking opens nothing.
+      expect(screen.getByTitle(expected)).toBeInTheDocument();
+      const describedBy = button.getAttribute('aria-describedby');
+      expect(describedBy).toBeTruthy();
+      expect(document.getElementById(describedBy as string)?.textContent).toMatch(expected);
+      await user.click(button);
+      expect(screen.queryByRole('dialog')).toBeNull();
+    },
+  );
 
   it('still lets a blocked line have its quantity changed', () => {
     renderRow({ quantityFulfilled: 3 });
@@ -500,7 +495,9 @@ describe('OrderLineActions — the hold after a raise (F2-2)', () => {
     } as Awaited<ReturnType<typeof updateOrderRequestLineQuantityAction>>);
     await raiseTo('9');
 
-    expect(toastMock.success).toHaveBeenCalledWith(expect.stringContaining('quantity changed to 9'));
+    expect(toastMock.success).toHaveBeenCalledWith(
+      expect.stringContaining('quantity changed to 9'),
+    );
     expect(toastMock.warning).toHaveBeenCalledWith(
       'Changed. Stock was not held for the extra units; use Hold available stock.',
       expect.objectContaining({
@@ -574,14 +571,21 @@ describe('ShortLineFixes (F2-2, decision D18)', () => {
     await user.click(lower);
 
     expect(updateLine).toHaveBeenCalledWith({ id: ORDER, lineId: LINE, quantity: 30 });
-    expect(toastMock.success).toHaveBeenCalledWith(expect.stringContaining('quantity changed to 9'));
+    expect(toastMock.success).toHaveBeenCalledWith(
+      expect.stringContaining('quantity changed to 9'),
+    );
     expect(refreshSpy).toHaveBeenCalled();
   });
 
   it('"Remove from order" asks by name first, then removes the line', async () => {
-    const { user } = renderFixes({ actions: [{ kind: 'remove', label: 'Remove from order' }], note: null });
+    const { user } = renderFixes({
+      actions: [{ kind: 'remove', label: 'Remove from order' }],
+      note: null,
+    });
 
-    await user.click(screen.getByRole('button', { name: 'Remove from order: L4L - Pen Black & Rose Gold' }));
+    await user.click(
+      screen.getByRole('button', { name: 'Remove from order: L4L - Pen Black & Rose Gold' }),
+    );
     const dialog = await screen.findByRole('dialog');
     expect(dialog).toHaveTextContent('L4L - Pen Black & Rose Gold');
     expect(removeLine).not.toHaveBeenCalled();
@@ -591,12 +595,15 @@ describe('ShortLineFixes (F2-2, decision D18)', () => {
     expect(refreshSpy).toHaveBeenCalled();
   });
 
-  it('a refused lower says the server\'s sentence and changes nothing on screen', async () => {
+  it("a refused lower says the server's sentence and changes nothing on screen", async () => {
     updateLine.mockResolvedValue({
       ok: false,
       error: { code: 'conflict', message: 'The order moved on.' },
     } as Awaited<ReturnType<typeof updateOrderRequestLineQuantityAction>>);
-    const { user } = renderFixes({ actions: [{ kind: 'lower', quantity: 30, label: 'Lower to 30' }], note: null });
+    const { user } = renderFixes({
+      actions: [{ kind: 'lower', quantity: 30, label: 'Lower to 30' }],
+      note: null,
+    });
 
     await user.click(screen.getByRole('button', { name: /Lower to 30/ }));
     expect(toastMock.error).toHaveBeenCalledWith('The order moved on.');
@@ -612,5 +619,67 @@ describe('ShortLineFixes (F2-2, decision D18)', () => {
   it('renders nothing when a line has no fix and nothing to say', () => {
     const { container } = renderFixes({ actions: [], note: null });
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+/**
+ * THE BUTTON TOUCH RULE (P2.2 hand-off). Below sm and on coarse pointers every
+ * Button grows an invisible 44 x 44 hit area, and a later sibling's area paints
+ * over an earlier one. Neighbouring buttons therefore need (44 - height) / 2 px
+ * between them: 6 px for the 32 px row controls, 8 px for the 28 px fixes.
+ * At 2 px, a tap on the right edge of "Change quantity" opened "Remove this
+ * item?". jsdom has no layout, so this reads the gap and the heights the
+ * classes give (Tailwind: gap-N is N x 4 px, h-8 32 px, h-7 28 px).
+ */
+describe('line controls keep their touch areas apart', () => {
+  const PX: Record<string, number> = { 'h-7': 28, 'h-8': 32 };
+  function gapPx(el: Element): number {
+    const m = el.className.match(/(?:^|\s)gap-(\d+(?:\.5)?)(?:\s|$)/);
+    return m ? Number(m[1]) * 4 : 0;
+  }
+  function heightPx(button: Element): number {
+    const cls = button.className.split(/\s+/).find((c) => c in PX);
+    if (!cls) throw new Error(`no height class on ${button.outerHTML}`);
+    return PX[cls]!;
+  }
+  function expectApart(row: Element) {
+    const buttons = Array.from(row.querySelectorAll('button'));
+    expect(buttons.length).toBeGreaterThanOrEqual(2);
+    const tallest = Math.min(...buttons.map(heightPx));
+    expect(gapPx(row)).toBeGreaterThanOrEqual((44 - tallest) / 2);
+  }
+
+  it('Change quantity and an enabled Remove sit at least 6 px apart', () => {
+    renderRow();
+    const row = screen.getByTestId('order-line-actions');
+    expect(within(row).getByRole('button', { name: /Remove Blue widget/ })).toBeEnabled();
+    expectApart(row);
+  });
+
+  it('the editor Save and Cancel sit at least 6 px apart', async () => {
+    const user = renderRow();
+    const field = await openEditor(user);
+    expectApart(field.parentElement!);
+  });
+
+  it('the short-line fixes sit at least 8 px apart', () => {
+    render(
+      <ShortLineFixes
+        orderId="11111111-1111-4111-8111-111111111111"
+        lineId="22222222-2222-4222-8222-222222222222"
+        itemName="Blue widget"
+        quantityRequested={4}
+        fixes={
+          {
+            actions: [
+              { kind: 'lower', quantity: 2, label: 'Lower to 2' },
+              { kind: 'remove', label: 'Remove line' },
+            ],
+            note: null,
+          } as ShortLineActions
+        }
+      />,
+    );
+    expectApart(screen.getByRole('button', { name: /Lower to 2/ }).parentElement!);
   });
 });

@@ -53,7 +53,9 @@ import { useTheme } from '@/lib/use-theme';
  * "filters were reset" notice.
  *
  * Built the sibling-backdrop way (sheet-backdrop-guard.test.ts), like the
- * other two report sheets.
+ * other two report sheets. The search box is an input well on the sheet's
+ * card: the recessed fill with the control border, its icon and its
+ * placeholder in the muted ink (AA on the well in both modes).
  */
 export function BookOrderCharterSheet(props: {
   visible: boolean;
@@ -153,13 +155,13 @@ function CharterContent({
             </Body>
 
             {searchable ? (
-              <View style={[styles.searchBox, { backgroundColor: c.paper, borderColor: c.hair }]}>
-                <Search size={16} color={c.ink4} strokeWidth={1.4} />
+              <View style={[styles.searchBox, { backgroundColor: c.sunk, borderColor: c.hair2 }]}>
+                <Search size={16} color={c.ink3} strokeWidth={1.4} />
                 <TextInput
                   value={text}
                   onChangeText={setText}
                   placeholder="Charter name or code"
-                  placeholderTextColor={c.ink4}
+                  placeholderTextColor={c.ink3}
                   accessibilityLabel="Search charters"
                   autoCapitalize="none"
                   autoCorrect={false}

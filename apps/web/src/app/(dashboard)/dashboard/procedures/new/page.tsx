@@ -1,8 +1,7 @@
 import { ArrowLeft } from 'lucide-react';
-import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 
-import { Button } from '@/components/ui/button';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { ProcedureForm } from '@/components/procedures/procedure-form';
 import { requireOrgContext } from '@/lib/auth/session';
 import { can } from '@stockpilot/core';
@@ -26,20 +25,17 @@ export default async function NewProcedurePage() {
   if (!ctx.organizationId) redirect('/dashboard');
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Button asChild variant="ghost" size="sm">
-          <Link href="/dashboard/procedures">
-            <ArrowLeft className="mr-1 h-3.5 w-3.5" /> Back to procedures
-          </Link>
-        </Button>
-      </div>
-      <h1 className="text-2xl font-semibold tracking-tight">New procedure</h1>
-      <p className="mt-1 text-sm text-muted-foreground">
-        Capture the steps. Drop videos in below — they&apos;ll upload after you
-        save.
-      </p>
-      <div className="mt-6">
+    <div className="mx-auto flex w-full max-w-[760px] flex-col gap-6 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <PageHeader
+        back={
+          <PageHeaderBackLink href="/dashboard/procedures">
+            <ArrowLeft className="h-3.5 w-3.5" aria-hidden /> Back to procedures
+          </PageHeaderBackLink>
+        }
+        title="New procedure"
+        subline="Capture the steps. Drop videos in below — they'll upload after you save."
+      />
+      <div>
         <ProcedureForm
           mode="create"
           categories={categories.map((c) => ({ id: c.id, name: c.name, color: c.color }))}

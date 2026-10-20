@@ -1,33 +1,59 @@
+import type { Metadata } from 'next';
 import { Suspense } from 'react';
 
+import { CategoriesGridSkeleton } from '@/components/categories/categories-grid-skeleton';
+import { CategoriesHeader } from '@/components/categories/categories-header';
 import { CategoriesManager } from '@/components/categories/categories-manager';
-import { TableBodySkeleton } from '@/components/dashboard/skeletons';
 import { requireOrgContext } from '@/lib/auth/session';
+import { isNextControlFlowError } from '@/lib/error-reporter';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { effectiveNavLabel } from '@/lib/nav-labels';
 import { CategoriesService } from '@/server/services/categories';
 
 import { can, type SubcategoryTrackingProfile, type TrackingMode } from '@stockpilot/core';
+
+// The tab names the page ("Categories · StockPilot"); before, it read the
+// group's "Dashboard" (CONFLICTS D16).
+export const metadata: Metadata = { title: 'Categories' };
+
+/** The page area (DESIGN-SPEC 4 and 5.3), the same box the other pages use. */
+const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
 
 interface CategoriesPageProps {
   searchParams: Promise<{ view?: string }>;
 }
 
 export default async function CategoriesPage({ searchParams }: CategoriesPageProps) {
-  const params = await searchParams;
+  // The heading follows a Settings > Navigation rename of this page's sidebar
+  // entry, as the sidebar and the crumb do (PLAN rule 10). The lookup reads
+  // the request-cached context and org row the dashboard layout already read,
+  // so nothing new is read and the header still paints at once; a failed
+  // lookup keeps the page's own word instead of failing the page.
+  const [params, title] = await Promise.all([
+    searchParams,
+    effectiveNavLabel('/dashboard/categories', 'Categories').catch((e: unknown) => {
+      if (isNextControlFlowError(e)) throw e;
+      return 'Categories';
+    }),
+  ]);
   const isArchivedView = params.view === 'archived';
 
+  const view = isArchivedView ? 'archived' : 'active';
+
   return (
-    <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Categories</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {isArchivedView
-            ? 'Categories you archived. Restore one to bring it back into filters and item forms.'
-            : 'Group items so filters and reports stay tidy.'}
-        </p>
-      </div>
-      <Suspense fallback={<TableBodySkeleton rows={6} />}>
-        <CategoriesSection isArchivedView={isArchivedView} />
+    <div className={PAGE}>
+      {/* The header paints at once: the fallback draws it with the toggle,
+          and the manager draws the same header with its buttons (they open
+          its dialogs) when the list arrives. Only the cards stream. */}
+      <Suspense
+        fallback={
+          <>
+            <CategoriesHeader view={view} title={title} />
+            <CategoriesGridSkeleton />
+          </>
+        }
+      >
+        <CategoriesSection isArchivedView={isArchivedView} title={title} />
       </Suspense>
     </div>
   );
@@ -35,11 +61,16 @@ export default async function CategoriesPage({ searchParams }: CategoriesPagePro
 
 /**
  * Inner async Server Component: the awaited category list fetch lives here so
- * the page heading/description above paint immediately and only the manager
- * table streams. Same component, same props as before — relocated behind
- * <Suspense>.
+ * the page heading and description paint immediately (the Suspense fallback
+ * draws them) and only the cards stream. Same component, same props as before.
  */
-async function CategoriesSection({ isArchivedView }: { isArchivedView: boolean }) {
+async function CategoriesSection({
+  isArchivedView,
+  title,
+}: {
+  isArchivedView: boolean;
+  title: string;
+}) {
   const [ctx, svc] = await Promise.all([
     requireOrgContext(),
     CategoriesService.forCurrentUser(),
@@ -60,6 +91,7 @@ async function CategoriesSection({ isArchivedView }: { isArchivedView: boolean }
   return (
     <CategoriesManager
       view={isArchivedView ? 'archived' : 'active'}
+      title={title}
       canManage={canManage}
       canManagePublicVisibility={canManagePublicVisibility}
       sportsEnabled={sportsEnabled}

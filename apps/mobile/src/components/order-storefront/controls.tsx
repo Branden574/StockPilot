@@ -3,6 +3,7 @@ import * as React from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 
 import { Body, Mono } from '@/components/ui/text';
+import { buttonTone } from '@/components/ui/tones';
 import { spokenValue } from '@/lib/order-storefront/a11y';
 import { MIN_TAP, stepperCountWidth } from '@/lib/order-storefront/layout';
 import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
@@ -13,6 +14,13 @@ import { useTheme } from '@/lib/use-theme';
  * VoiceOver element in a frame of at least 44 pt; their labels are chrome,
  * capped at the control ceiling with the frame growing (minHeight); a
  * disabled control says why in its hint.
+ *
+ * The redesign look (DESIGN-SPEC 6.2, 6.5): the shared button tones
+ * (tones.ts buttonTone: ink for committing, the card fill with the stronger
+ * border for the outline, words only for ghost, refusal-red words for
+ * destructive), labels in the display face at 13/500 (the reference's
+ * control label), and controls edged in the stronger border (hair2), never
+ * the card hairline alone.
  */
 
 /** A text action at least 44 pt tall: Add, Details, Clear all, Preview. */
@@ -35,8 +43,8 @@ export function SmallAction({
 }) {
   const { c } = useTheme();
   const off = disabled || busy;
-  const bg = variant === 'primary' ? c.ink : variant === 'outline' ? c.card : 'transparent';
-  const fg = variant === 'primary' ? c.paper : variant === 'destructive' ? c.critText : c.ink;
+  const tone = buttonTone(variant, c);
+  const fg = tone.fg;
   return (
     <Pressable
       onPress={off ? undefined : onPress}
@@ -48,16 +56,16 @@ export function SmallAction({
       style={({ pressed }) => [
         styles.small,
         {
-          backgroundColor: bg,
-          borderColor: variant === 'outline' ? c.hair : variant === 'primary' ? c.ink : 'transparent',
+          backgroundColor: tone.bg,
+          borderColor: tone.border,
           opacity: off ? 0.5 : pressed ? 0.8 : 1,
         },
       ]}
     >
       {busy ? <ActivityIndicator size="small" color={fg} /> : null}
-      <Mono size={13} color={fg} maxFontSizeMultiplier={ACTION_CAP} style={{ flexShrink: 1 }}>
+      <Body size={13} color={fg} maxFontSizeMultiplier={ACTION_CAP} style={styles.label}>
         {label}
-      </Mono>
+      </Body>
     </Pressable>
   );
 }
@@ -99,7 +107,7 @@ export function Stepper({
   const { c } = useTheme();
   const incOff = disabled || atMax;
   return (
-    <View style={[styles.stepper, { borderColor: c.hair, backgroundColor: c.card }]}>
+    <View style={[styles.stepper, { borderColor: c.hair2, backgroundColor: c.card }]}>
       <Pressable
         onPress={disabled ? undefined : onDec}
         disabled={disabled}
@@ -166,7 +174,7 @@ export function RadioRow({
       accessibilityState={{ checked, disabled }}
       style={({ pressed }) => [
         styles.radio,
-        { borderColor: checked ? c.ink : c.hair, opacity: disabled ? 0.5 : pressed ? 0.8 : 1 },
+        { borderColor: checked ? c.ink : c.hair2, opacity: disabled ? 0.5 : pressed ? 0.8 : 1 },
       ]}
     >
       <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
@@ -185,7 +193,11 @@ export function RadioRow({
 }
 
 /** Pickup or Delivery: a segmented control that VoiceOver reads as a radio
- *  group. */
+ *  group. The reference's segmented switch (DESIGN-SPEC 6.5): a recessed
+ *  track (sunk) with the chosen segment on the card colour, its words in ink
+ *  and semibold, ringed in muted ink (ink3, 3:1 or more on the track in both
+ *  modes, where the reference's hairline ring is 1.4:1), so the choice never
+ *  rests on a faint fill or a colour alone. */
 export function Segmented<T extends string>({
   label,
   options,
@@ -203,7 +215,11 @@ export function Segmented<T extends string>({
 }) {
   const { c } = useTheme();
   return (
-    <View accessibilityRole="radiogroup" accessibilityLabel={label} style={[styles.segmented, { borderColor: c.hair }]}>
+    <View
+      accessibilityRole="radiogroup"
+      accessibilityLabel={label}
+      style={[styles.segmented, { backgroundColor: c.sunk }]}
+    >
       {options.map((o) => {
         const checked = o.value === value;
         return (
@@ -217,12 +233,21 @@ export function Segmented<T extends string>({
             accessibilityState={{ checked, disabled }}
             style={[
               styles.segment,
-              { backgroundColor: checked ? c.ink : 'transparent', opacity: disabled ? 0.5 : 1 },
+              {
+                backgroundColor: checked ? c.card : 'transparent',
+                borderColor: checked ? c.ink3 : 'transparent',
+                opacity: disabled ? 0.5 : 1,
+              },
             ]}
           >
-            <Mono size={13} color={checked ? c.paper : c.ink} maxFontSizeMultiplier={ACTION_CAP}>
+            <Body
+              size={13}
+              color={checked ? c.ink : c.ink3}
+              maxFontSizeMultiplier={ACTION_CAP}
+              style={[styles.label, checked && styles.labelOn]}
+            >
               {o.label}
-            </Mono>
+            </Body>
           </Pressable>
         );
       })}
@@ -278,10 +303,12 @@ export function SetupRow({
       accessibilityLabel={`${label}: ${spokenValue(value)}${detail ? `, ${detail}` : ''}`}
       accessibilityHint={hint}
       accessibilityState={{ disabled }}
+      // A row that can be tapped is a control: the stronger border (the
+      // read-only row keeps the card hairline).
       style={({ pressed }) => [
         styles.setup,
         styles.setupTappable,
-        { borderColor: c.hair, backgroundColor: c.card, opacity: disabled ? 0.6 : pressed ? 0.85 : 1 },
+        { borderColor: c.hair2, backgroundColor: c.card, opacity: disabled ? 0.6 : pressed ? 0.85 : 1 },
       ]}
     >
       <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
@@ -321,6 +348,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 6,
   },
+  /** A control's words: the display face at 500 (the shared Button's), and
+   *  they wrap inside the frame instead of overflowing it. */
+  label: { fontFamily: FONT.display, flexShrink: 1, textAlign: 'center' },
+  labelOn: { fontFamily: FONT.displaySemi },
   stepper: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -350,11 +381,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 10,
   },
+  // The track: padding 3, radius 10, segments sharing its width (the phone's
+  // action segments, DESIGN-SPEC 6.5).
   segmented: {
     flexDirection: 'row',
-    borderWidth: 1,
+    gap: 4,
+    padding: 3,
     borderRadius: 10,
-    overflow: 'hidden',
   },
   segment: {
     flex: 1,
@@ -363,6 +396,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 8,
     paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
   },
   setup: {
     minHeight: MIN_TAP,

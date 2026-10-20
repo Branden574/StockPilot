@@ -222,11 +222,14 @@ const holding = (name: string, kind: string | null, quantity: number) => ({
   quantity,
 });
 
-/** The rendered value of a DetailRow, or null when the row is absent. The row
- *  is a LABEL paragraph followed by its value container — find the label, read
- *  its sibling, so a rack number appearing elsewhere on the page cannot pass. */
+/** The rendered value of a Details row, or null when the row is absent. The row
+ *  is a LABEL followed by its value — find the label, read its sibling, so a
+ *  rack number appearing elsewhere on the page cannot pass.
+ *  Locator-only update (redesign P3.3): the rows are key-value rows now, a
+ *  <dt> label beside its <dd> value (the label was a <p> before); the rule
+ *  pinned below is unchanged. */
 function detailRow(label: string): string | null {
-  const heading = screen.queryAllByText(label, { selector: 'p' })[0];
+  const heading = screen.queryAllByText(label, { selector: 'dt' })[0];
   return heading?.nextElementSibling?.textContent ?? null;
 }
 

@@ -315,6 +315,27 @@ describe('a requested exchange', () => {
     expect(screen.getByRole('button', { name: 'Approve return & exchange' })).toBeDisabled();
   });
 
+  // Redesign P4.B3 (axe aria-allowed-role + listitem on the base): the
+  // review's problems keep their status role and name on a wrapper, so the
+  // sentences stay a list.
+  it('what the exchange review still needs is a named status that keeps its list', () => {
+    const noteOnly = {
+      lines: [
+        exchangeLine({
+          requestedItemId: null,
+          requestedItem: null,
+          requestedFree: null,
+          requestNote: 'A bigger one',
+          requestedByKind: 'requester',
+        }),
+      ],
+    };
+    render(<ReturnWorkbench workbench={bench('requested', noteOnly)} />);
+    const status = screen.getByRole('status', { name: 'Before approving the exchange' });
+    const list = within(status).getByRole('list');
+    expect(within(list).getAllByRole('listitem')).toHaveLength(1);
+  });
+
   it('a return-only line can get "Add a replacement" while exchanges are on; not while the switch is off', () => {
     const plain = { kind: 'return', status: 'none', lines: [], rail: [] };
     const { unmount } = render(<ReturnWorkbench workbench={bench('requested', plain)} />);
@@ -970,6 +991,9 @@ describe('fix round 1: Change replacement short refusal', () => {
     const short = await within(change).findByRole('alert', { name: 'Not in stock' });
     expect(short).toHaveTextContent('Walk New Hire Shirt, 2XL: 0 available, 1 needed.');
     expect(short.textContent).not.toMatch(/^Item:/);
+    // Redesign P4.B3: the alert's role sits on a wrapper so the short lines
+    // stay a list (the base put role="alert" on the <ul> itself).
+    expect(within(within(short).getByRole('list')).getAllByRole('listitem')).toHaveLength(1);
     expect(within(change).getByRole('button', { name: 'Change, replacement on backorder' })).toBeInTheDocument();
     expect(within(change).queryByRole('button', { name: 'Approve, replacement on backorder' })).toBeNull();
     fireEvent.click(within(change).getByDisplayValue('item-s'));

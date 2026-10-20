@@ -1,10 +1,10 @@
-import { Check } from 'lucide-react-native';
 import * as React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { BOOK_REPORT_OPTIONS_ERROR, BOOK_REPORT_UI } from '@stockpilot/core';
 
 import { Button } from '@/components/ui/button';
+import { CheckboxMark } from '@/components/ui/checkbox';
 import { Body, Eyebrow } from '@/components/ui/text';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -31,8 +31,15 @@ export function Section({ label, children }: { label: string; children: React.Re
   );
 }
 
-/** One choice: a radio (one of a list) or a check (any of a list), 44 pt
- *  tall, announced with its role and state. */
+/**
+ * One choice: a radio (one of a list) or a check (any of a list), 44 pt
+ * tall, announced with its role and state. The row is the press target and
+ * carries the role and the state, so a check draws the shared CheckboxMark
+ * (the box alone) and a radio its own ring. Both marks are 22 pt and both
+ * clear edges are the ink4 mark edge, which stands out from the sheet's card
+ * and the page at 3:1 or more in both modes (the ink5 edge they had was
+ * 1.8-2.1:1); a chosen radio is the ink ring around an ink dot.
+ */
 export function OptionRow({
   kind,
   label,
@@ -55,22 +62,13 @@ export function OptionRow({
       accessibilityLabel={detail ? `${label}. ${detail}` : label}
       style={({ pressed }) => [styles.option, { opacity: pressed ? 0.7 : 1 }]}
     >
-      <View
-        style={[
-          kind === 'radio' ? styles.radio : styles.check,
-          {
-            borderColor: selected ? c.ink : c.ink5,
-            backgroundColor: kind === 'check' && selected ? c.ink : 'transparent',
-          },
-        ]}
-      >
-        {kind === 'radio' && selected ? (
-          <View style={[styles.radioFill, { backgroundColor: c.ink }]} />
-        ) : null}
-        {kind === 'check' && selected ? (
-          <Check size={13} color={c.paper} strokeWidth={2.2} />
-        ) : null}
-      </View>
+      {kind === 'check' ? (
+        <CheckboxMark checked={selected} />
+      ) : (
+        <View style={[styles.radio, { borderColor: selected ? c.ink : c.ink4 }]}>
+          {selected ? <View style={[styles.radioFill, { backgroundColor: c.ink }]} /> : null}
+        </View>
+      )}
       <View style={{ flex: 1, minWidth: 0 }}>
         <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
           {label}
@@ -145,21 +143,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
   },
+  // The same 22 pt as the CheckboxMark, so radio and check rows line up in
+  // the filters sheet. A fixed size: the ring holds no text.
   radio: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
     borderWidth: 1.5,
     alignItems: 'center',
     justifyContent: 'center',
   },
   radioFill: { width: 10, height: 10, borderRadius: 5 },
-  check: {
-    width: 20,
-    height: 20,
-    borderRadius: 5,
-    borderWidth: 1.5,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
 });

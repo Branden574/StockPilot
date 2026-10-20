@@ -56,7 +56,7 @@ export function BookReportShowingChips({
           <li
             key={chip.key}
             data-chip={chip.key}
-            className="border-border bg-muted/50 inline-flex min-w-0 max-w-full items-center gap-0.5 rounded-full border py-0.5 pl-3 pr-0.5 text-xs"
+            className="border-line-strong text-ink-2 inline-flex h-7 min-w-0 max-w-full items-center gap-0.5 rounded-full border pl-2.5 pr-0.5 text-[12.5px]"
           >
             <span className="min-w-0 truncate" title={chip.text}>
               {chip.text}
@@ -65,7 +65,7 @@ export function BookReportShowingChips({
               href={bookReportPageHref(chip.cleared)}
               query={chip.cleared}
               aria-label={chip.removeLabel}
-              className="text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-ring inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2"
+              className="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2"
             >
               <X aria-hidden className="h-3.5 w-3.5" />
             </BookReportLink>
@@ -75,7 +75,7 @@ export function BookReportShowingChips({
       <BookReportLink
         href={bookReportPageHref(cleared)}
         query={cleared}
-        className="text-foreground focus-visible:ring-ring rounded text-xs font-medium underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2"
+        className="text-muted-foreground hover:text-foreground focus-visible:ring-ring rounded text-[12.5px] font-medium underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2"
       >
         {BOOK_REPORT_UI.clearFilters}
       </BookReportLink>

@@ -24,8 +24,9 @@ const modules = [
   { id: 'price_tracking' as const, title: 'Price monitoring', tier: 'optional' as const },
 ];
 
-const rowFor = (title: string) =>
-  screen.getByText(title).closest('div.flex.items-center.justify-between') as HTMLElement;
+// One list row per module (the redesign draws the tiers as lists; the row was
+// a div with these layout classes before).
+const rowFor = (title: string) => screen.getByText(title).closest('li') as HTMLElement;
 
 beforeEach(() => {
   toast.success.mockClear();

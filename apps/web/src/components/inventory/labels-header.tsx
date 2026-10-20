@@ -1,6 +1,6 @@
-import Link from 'next/link';
 import type { ReactNode } from 'react';
 
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { LABELS_MAX_ITEMS } from '@/lib/inventory/labels-selection';
 
 /** "N items selected · C copies each = L labels." — the page's summary line. */
@@ -27,21 +27,24 @@ export function LabelsHeader({
   summary: ReactNode;
   selectedCount?: number;
 }) {
+  // The shared page header, on screen only: printing shows the labels alone.
   return (
-    <div className="mb-6 print:hidden">
-      <Link
-        href="/dashboard/inventory"
-        className="text-muted-foreground hover:text-foreground text-sm"
-      >
-        ← Back to inventory
-      </Link>
-      <h1 className="mt-2 text-2xl font-semibold tracking-tight">Print labels</h1>
-      <p className="text-muted-foreground mt-1 text-sm">{summary}</p>
+    <PageHeader
+      className="print:hidden"
+      back={
+        <PageHeaderBackLink href="/dashboard/inventory">← Back to inventory</PageHeaderBackLink>
+      }
+      title="Print labels"
+      subline={summary}
+    >
       {selectedCount > LABELS_MAX_ITEMS ? (
-        <p className="mt-1 text-sm text-amber-700 dark:text-amber-400" role="status">
+        <p
+          className="border-warning/40 bg-warning-wash text-foreground mt-3 rounded-md border px-3 py-2 text-[13px]"
+          role="status"
+        >
           {`${selectedCount} items were selected; one sheet prints at most ${LABELS_MAX_ITEMS}. These are the first ${LABELS_MAX_ITEMS}. Print them, then select the rest.`}
         </p>
       ) : null}
-    </div>
+    </PageHeader>
   );
 }

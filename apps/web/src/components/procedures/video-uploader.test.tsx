@@ -91,13 +91,7 @@ describe('VideoUploader — staged mode', () => {
 
   it('rejects files with a disallowed mime type via toast.error and does not stage them', async () => {
     const onStagedChange = vi.fn();
-    render(
-      <VideoUploader
-        mode="staged"
-        staged={[]}
-        onStagedChange={onStagedChange}
-      />,
-    );
+    render(<VideoUploader mode="staged" staged={[]} onStagedChange={onStagedChange} />);
 
     const input = document.getElementById('video-upload') as HTMLInputElement;
     await dropFiles(input, [makeFile('x.txt', 'text/plain')]);
@@ -108,18 +102,10 @@ describe('VideoUploader — staged mode', () => {
 
   it('rejects files over 1 GB', async () => {
     const onStagedChange = vi.fn();
-    render(
-      <VideoUploader
-        mode="staged"
-        staged={[]}
-        onStagedChange={onStagedChange}
-      />,
-    );
+    render(<VideoUploader mode="staged" staged={[]} onStagedChange={onStagedChange} />);
 
     const input = document.getElementById('video-upload') as HTMLInputElement;
-    await dropFiles(input, [
-      makeFile('big.mp4', 'video/mp4', 1100 * 1024 * 1024),
-    ]);
+    await dropFiles(input, [makeFile('big.mp4', 'video/mp4', 1100 * 1024 * 1024)]);
 
     expect(toastErrorMock).toHaveBeenCalled();
     expect(onStagedChange).toHaveBeenCalledWith([]);
@@ -127,13 +113,7 @@ describe('VideoUploader — staged mode', () => {
 
   it('stages a valid video file with default title = filename minus extension', async () => {
     const onStagedChange = vi.fn();
-    render(
-      <VideoUploader
-        mode="staged"
-        staged={[]}
-        onStagedChange={onStagedChange}
-      />,
-    );
+    render(<VideoUploader mode="staged" staged={[]} onStagedChange={onStagedChange} />);
 
     const input = document.getElementById('video-upload') as HTMLInputElement;
     await dropFiles(input, [makeFile('how-to-fix-it.mp4', 'video/mp4', 1024)]);
@@ -168,13 +148,7 @@ describe('VideoUploader — staged mode', () => {
         status: 'pending',
       },
     ];
-    render(
-      <VideoUploader
-        mode="staged"
-        staged={staged}
-        onStagedChange={vi.fn()}
-      />,
-    );
+    render(<VideoUploader mode="staged" staged={staged} onStagedChange={vi.fn()} />);
 
     expect(screen.getByDisplayValue('First')).toBeInTheDocument();
     expect(screen.getByDisplayValue('Second')).toBeInTheDocument();
@@ -205,13 +179,7 @@ describe('VideoUploader — staged mode', () => {
         status: 'pending',
       },
     ];
-    render(
-      <VideoUploader
-        mode="staged"
-        staged={staged}
-        onStagedChange={onStagedChange}
-      />,
-    );
+    render(<VideoUploader mode="staged" staged={staged} onStagedChange={onStagedChange} />);
 
     const upButtons = screen.getAllByRole('button', { name: /Move .* up/i });
     // The first item's up button is disabled; click the second's.
@@ -235,13 +203,7 @@ describe('VideoUploader — staged mode', () => {
         status: 'pending',
       },
     ];
-    render(
-      <VideoUploader
-        mode="staged"
-        staged={staged}
-        onStagedChange={onStagedChange}
-      />,
-    );
+    render(<VideoUploader mode="staged" staged={staged} onStagedChange={onStagedChange} />);
 
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: /Remove /i }));
@@ -260,14 +222,7 @@ describe('VideoUploader — staged mode', () => {
         status: 'uploading',
       },
     ];
-    render(
-      <VideoUploader
-        mode="staged"
-        staged={staged}
-        onStagedChange={vi.fn()}
-        uploading
-      />,
-    );
+    render(<VideoUploader mode="staged" staged={staged} onStagedChange={vi.fn()} uploading />);
     expect(screen.getByRole('button', { name: /Remove /i })).toBeDisabled();
     expect(screen.getByRole('button', { name: /Move .* up/i })).toBeDisabled();
     expect(screen.getByRole('button', { name: /Move .* down/i })).toBeDisabled();

@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import * as React from 'react';
 
+import { StatePanel } from '@/components/patterns/state-panel';
 import { Button } from '@/components/ui/button';
 import {
   Sheet,
@@ -120,8 +121,10 @@ export function bookOrdersErrorFor(
   const reason = (body as ErrorBody | null)?.details?.reason;
   if (status === 404) return { message: BOOK_REPORT_NOT_IN_SCOPE, retry: false };
   if (status === 503) return { message: BOOK_REPORT_TIMEOUT, retry: true };
-  if (status === 403 && reason === 'mfa_required') return { message: BOOK_REPORT_MFA_ENROLL, retry: false };
-  if (status === 403 && reason === 'aal2_required') return { message: BOOK_REPORT_MFA_VERIFY, retry: false };
+  if (status === 403 && reason === 'mfa_required')
+    return { message: BOOK_REPORT_MFA_ENROLL, retry: false };
+  if (status === 403 && reason === 'aal2_required')
+    return { message: BOOK_REPORT_MFA_VERIFY, retry: false };
   return { message: BOOK_REPORT_ORDERS_LOAD_ERROR, retry: true };
 }
 
@@ -263,7 +266,13 @@ export function BookOrdersDrawer({
         if (!next) close();
       }}
     >
-      <SheetContent side="right" className="flex flex-col gap-0 p-0 sm:max-w-xl md:max-w-2xl">
+      {/* 672 px from md up: lg:max-w-2xl too, or the base sheet's lg:max-w-xl
+          caps the drawer at 576 px from 1024 px up and the copies column sits
+          outside the view (P68-03). */}
+      <SheetContent
+        side="right"
+        className="flex flex-col gap-0 p-0 sm:max-w-xl md:max-w-2xl lg:max-w-2xl"
+      >
         <SheetHeader className="pr-12">
           <SheetTitle>{title}</SheetTitle>
           <SheetDescription>
@@ -285,19 +294,33 @@ export function BookOrdersDrawer({
               onPage={goToPage}
             />
           ) : current?.kind === 'error' ? (
-            <div role="alert" className="space-y-3">
-              <p className="text-sm">{current.message}</p>
-              {current.retry ? (
-                <Button type="button" variant="outline" size="sm" onClick={() => setNonce((n) => n + 1)}>
-                  {BOOK_REPORT_UI.tryAgain}
-                </Button>
-              ) : null}
-            </div>
+            // The shared state panel: a failure that can be retried is a
+            // failed read; a refusal (not in scope, MFA) is not.
+            <StatePanel
+              kind={current.retry ? 'failed' : 'forbidden'}
+              live="assertive"
+              headingLevel={null}
+              size="sm"
+              surface="plain"
+              title={current.message}
+              action={
+                current.retry ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setNonce((n) => n + 1)}
+                  >
+                    {BOOK_REPORT_UI.tryAgain}
+                  </Button>
+                ) : undefined
+              }
+            />
           ) : (
             <div aria-busy="true" className="space-y-3">
               <span className="sr-only">{BOOK_REPORT_UI.loadingOrders}</span>
               {Array.from({ length: 6 }).map((_, i) => (
-                <Skeleton key={i} className="h-6 w-full" />
+                <Skeleton key={i} className="h-8 w-full" />
               ))}
             </div>
           )}
@@ -349,18 +372,21 @@ function OrdersBody({
     <div className="space-y-4">
       <dl
         data-drawer-scope
-        className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-sm"
+        className="border-border grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 rounded-lg border px-4 py-3 text-[13px] leading-5"
       >
         <dt className="text-muted-foreground">{BOOK_REPORT_DRAWER_TERMS.book}</dt>
         <dd className="min-w-0">
           <span className="block font-medium [overflow-wrap:anywhere]">{book.name}</span>
-          <BookIdentityLine row={book} className="text-muted-foreground block text-xs" />
+          <BookIdentityLine
+            row={book}
+            className="text-muted-foreground mt-0.5 block text-[12px] leading-[18px]"
+          />
         </dd>
         <dt className="text-muted-foreground">{BOOK_REPORT_DRAWER_TERMS.charter}</dt>
         <dd className="min-w-0 [overflow-wrap:anywhere]">
           {bookReportCharterLabel(answer.filters.charter, answer.filters.noCharter, charterLabels)}
           {noCharter ? (
-            <span className="text-muted-foreground block text-xs">
+            <span className="text-muted-foreground block text-[12px] leading-[18px]">
               {BOOK_REPORT_NO_CHARTER_HINT}
             </span>
           ) : null}
@@ -370,44 +396,46 @@ function OrdersBody({
         <dt className="text-muted-foreground">{BOOK_REPORT_DRAWER_TERMS.totalRequested}</dt>
         <dd className="min-w-0 font-medium">{bookReportDrawerHeader(book, answer.totals)}</dd>
       </dl>
-      <div className="text-muted-foreground space-y-1 text-xs">
+      <div className="text-muted-foreground space-y-1 text-[12.5px] leading-[18px]">
         <p>{bookReportStatusLine(query.statusGroups, statusLabels)}</p>
         <p>{bookReportWarehouseLine(answer.filters.warehouse, answer.warehouse.source)}</p>
       </div>
       {fulfilled ? (
-        <div className="space-y-1 text-xs">
+        <div className="space-y-1 text-[12.5px] leading-[18px]">
           <p className="font-medium">{fulfilled}</p>
           <p className="text-muted-foreground">{BOOK_REPORT_FULFILLED_NOTE}</p>
         </div>
       ) : null}
-      <p className="text-muted-foreground text-xs">{bookReportAsOfNote(answer.generatedAtLocal)}</p>
+      <p className="text-muted-foreground text-[12.5px] leading-[18px]">
+        {bookReportAsOfNote(answer.generatedAtLocal)}
+      </p>
 
       {answer.rows.length === 0 ? (
-        <p className="text-sm">{BOOK_REPORT_EMPTY}</p>
+        <p className="text-muted-foreground text-[13.5px]">{BOOK_REPORT_EMPTY}</p>
       ) : (
-        <div className="overflow-x-auto rounded-md border">
-          <table className="w-full text-sm">
+        <div className="border-border overflow-x-auto rounded-lg border">
+          <table className="w-full text-[13px]">
             <caption className="sr-only">{bookReportDrawerHeader(book, answer.totals)}</caption>
-            <thead className="bg-muted/40 text-muted-foreground text-[11px] uppercase tracking-wider">
+            <thead className="bg-sunk text-muted-foreground border-border border-b text-[11px] uppercase leading-[16.5px] tracking-[0.06em]">
               <tr>
-                <th scope="col" className="whitespace-nowrap px-3 py-2 text-left font-semibold">
+                <th scope="col" className="whitespace-nowrap px-3 py-2.5 text-left font-medium">
                   {BOOK_REPORT_ORDER_COLUMNS.orderNumber}
                 </th>
-                <th scope="col" className="whitespace-nowrap px-3 py-2 text-left font-semibold">
+                <th scope="col" className="whitespace-nowrap px-3 py-2.5 text-left font-medium">
                   {BOOK_REPORT_ORDER_COLUMNS.orderDate}
                 </th>
                 {charterColumn ? (
-                  <th scope="col" className="px-3 py-2 text-left font-semibold">
+                  <th scope="col" className="px-3 py-2.5 text-left font-medium">
                     {BOOK_REPORT_ORDER_COLUMNS.charter}
                   </th>
                 ) : null}
-                <th scope="col" className="px-3 py-2 text-left font-semibold">
+                <th scope="col" className="px-3 py-2.5 text-left font-medium">
                   {BOOK_REPORT_ORDER_COLUMNS.warehouse}
                 </th>
-                <th scope="col" className="px-3 py-2 text-left font-semibold">
+                <th scope="col" className="px-3 py-2.5 text-left font-medium">
                   {BOOK_REPORT_ORDER_COLUMNS.status}
                 </th>
-                <th scope="col" className="px-3 py-2 text-right font-semibold">
+                <th scope="col" className="px-3 py-2.5 text-right font-medium">
                   {wording.column}
                 </th>
               </tr>
@@ -418,7 +446,10 @@ function OrdersBody({
                 const href = bookReportOrderLink(row, 'web', returnTo);
                 const combined = combinedLinesText(row.lines);
                 return (
-                  <tr key={row.orderId} className="border-t">
+                  <tr
+                    key={row.orderId}
+                    className="border-border hover:bg-muted border-t transition-colors"
+                  >
                     {/* An order number is one unit: 'SO-' never sits over
                         '001494' (a browser breaks after the hyphen). A
                         narrow sheet scrolls the table inside its border. */}
@@ -427,7 +458,11 @@ function OrdersBody({
                       className="whitespace-nowrap px-3 py-2 text-left font-mono text-xs font-medium tabular-nums"
                     >
                       {href ? (
-                        <Link href={href} prefetch={false} className="text-primary underline-offset-2 hover:underline">
+                        <Link
+                          href={href}
+                          prefetch={false}
+                          className="text-accent hover:text-foreground underline-offset-2 hover:underline"
+                        >
                           {number}
                         </Link>
                       ) : (
@@ -437,19 +472,23 @@ function OrdersBody({
                         </span>
                       )}
                     </th>
-                    <td className="whitespace-nowrap px-3 py-2">{formatReportDate(row.orderDate)}</td>
+                    <td className="whitespace-nowrap px-3 py-2">
+                      {formatReportDate(row.orderDate)}
+                    </td>
                     {charterColumn ? (
-                      <td className="px-3 py-2 [overflow-wrap:anywhere]">
+                      <td className="min-w-32 px-3 py-2 [overflow-wrap:break-word]">
                         {bookReportOrderCharterText(row, charterLabels) ?? ''}
                       </td>
                     ) : null}
                     <td className="px-3 py-2">{row.warehouseName ?? ''}</td>
-                    <td className="px-3 py-2">{statusLabels[row.status as OrderStatusKey] ?? row.status}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">
+                    <td className="px-3 py-2">
+                      {statusLabels[row.status as OrderStatusKey] ?? row.status}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono tabular-nums">
                       {formatReportQuantity(row.copies)}
                       {combined ? (
                         <span
-                          className="text-muted-foreground ml-1 text-xs"
+                          className="text-muted-foreground ml-1 font-sans text-[12px]"
                           title={row.lineIds.join(', ')}
                           data-line-ids={row.lineIds.join(',')}
                         >
@@ -469,7 +508,7 @@ function OrdersBody({
         aria-label={BOOK_REPORT_UI.ordersPagesNav}
         className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
       >
-        <p className="text-muted-foreground text-xs tabular-nums" aria-live="polite">
+        <p className="text-muted-foreground text-[12.5px] tabular-nums" aria-live="polite">
           {footer}
         </p>
         <div className="flex gap-2">

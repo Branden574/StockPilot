@@ -34,7 +34,9 @@ vi.mock('@/lib/use-catalog-thumbnails', () => ({
     return url ? thumbs.answer : {};
   },
 }));
-const gridItems = vi.hoisted(() => ({ current: [] as Array<{ id: string; imageUrl: string | null }> }));
+const gridItems = vi.hoisted(() => ({
+  current: [] as Array<{ id: string; imageUrl: string | null }>,
+}));
 vi.mock('@/components/orders/v2/aisle-bar', () => ({ AisleBar: () => null }));
 vi.mock('@/components/orders/v2/toolbar', () => ({ Toolbar: () => null }));
 vi.mock('@/components/orders/v2/catalog-grid', () => ({
@@ -219,7 +221,9 @@ describe('RentalCreateForm — the cart checks out only what it shows', () => {
       await act(async () => {
         fireEvent.click(checkOut());
       });
-      expect(createRentalAction.mock.calls[0]![0]).toMatchObject({ lines: [{ itemId: 'tent', quantity: 2 }] });
+      expect(createRentalAction.mock.calls[0]![0]).toMatchObject({
+        lines: [{ itemId: 'tent', quantity: 2 }],
+      });
       expect(push).toHaveBeenCalledWith('/dashboard/rentals/rental-1');
       await act(async () => {
         vi.advanceTimersByTime(1000);
@@ -269,13 +273,17 @@ describe('RentalCreateForm — photos', () => {
 
   it('asks for rental items only', () => {
     renderForm([CANOPY, TENT]);
-    expect(thumbs.urls.at(-1)).toBe('/api/orders/catalog-thumbnails?warehouseId=wh-1&rentalsOnly=1');
+    expect(thumbs.urls.at(-1)).toBe(
+      '/api/orders/catalog-thumbnails?warehouseId=wh-1&rentalsOnly=1',
+    );
     expect(thumbs.urls.some((u) => u?.includes('includeRentals'))).toBe(false);
   });
 
   it('asks even when every card already has a photo (the map can be hours old)', () => {
     renderForm([CANOPY]);
-    expect(thumbs.urls.at(-1)).toBe('/api/orders/catalog-thumbnails?warehouseId=wh-1&rentalsOnly=1');
+    expect(thumbs.urls.at(-1)).toBe(
+      '/api/orders/catalog-thumbnails?warehouseId=wh-1&rentalsOnly=1',
+    );
   });
 
   it('makes no photo request when there are no rental items', () => {
@@ -318,5 +326,47 @@ describe('RentalCreateForm — photos', () => {
     renderForm([BOOK, CANOPY]);
     expect(imageById().get('book')).toBe(cover);
     expect(imageById().get('canopy')).toBe(`${SIGNED}/canopy/a.webp?token=page`);
+  });
+});
+
+// Redesign P4.D1: the checkout rail in the redesign's look. The cart's small
+// controls keep their words and become 44 px targets on a phone or a touch
+// screen (they are plain buttons, so they have no Button hit area of their
+// own); the expected return is the shared text field with its id and limit.
+describe('RentalCreateForm: the redesigned rail and setup', () => {
+  beforeEach(() => localStorage.clear());
+  afterEach(() => localStorage.clear());
+
+  it('the cart controls are 44 px on a phone and on coarse pointers', () => {
+    savedCart('rental-draft:wh-1', [{ itemId: 'tent', quantity: 1 }]);
+    renderForm();
+    for (const name of ['Decrease quantity', 'Increase quantity']) {
+      const button = screen.getByRole('button', { name });
+      expect(button.className, name).toMatch(/(^|\s)max-sm:w-11(\s|$)/);
+      expect(button.className, name).toMatch(/(^|\s)pointer-coarse:w-11(\s|$)/);
+      expect(button.parentElement!.className, `${name} group`).toMatch(/(^|\s)max-sm:h-11(\s|$)/);
+    }
+    const remove = screen.getByRole('button', { name: 'Remove' });
+    expect(remove.className).toMatch(/(^|\s)max-sm:size-11(\s|$)/);
+    expect(remove.className).toMatch(/(^|\s)pointer-coarse:size-11(\s|$)/);
+  });
+
+  it('the unavailable line keeps its words, its remove button and the touch size', () => {
+    savedCart('rental-draft:wh-1', [{ itemId: 'gone', quantity: 2 }]);
+    renderForm();
+    expect(
+      screen.getByText('An item saved in this cart is no longer available to rent here (2).'),
+    ).toBeTruthy();
+    const remove = screen.getByRole('button', { name: 'Remove unavailable item' });
+    expect(remove.className).toMatch(/(^|\s)max-sm:size-11(\s|$)/);
+  });
+
+  it('the expected return field keeps its label, type and lower bound', () => {
+    renderForm();
+    const field = screen.getByLabelText('Expected return') as HTMLInputElement;
+    expect(field.type).toBe('datetime-local');
+    expect(field.id).toBe('rental-return-date');
+    expect(field.min).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
+    expect(field.value).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
   });
 });

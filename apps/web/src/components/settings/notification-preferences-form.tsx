@@ -9,7 +9,7 @@ import {
   type NotificationPrefKey,
   type NotificationPreferences,
 } from '@/lib/notification-prefs';
-import { cn } from '@/lib/utils';
+import { Switch } from '@/components/ui/switch';
 import { updateNotificationPreferencesAction } from '@/server/actions/notification-preferences';
 
 interface ToggleDef {
@@ -76,13 +76,13 @@ const TOGGLE_DEFS: ToggleDef[] = [
   {
     key: 'push_order_assigned_to_me',
     label: 'Order assigned to me',
-    hint: 'In-app notification when you\'re assigned as picker or driver.',
+    hint: "In-app notification when you're assigned as picker or driver.",
     group: 'push',
   },
   {
     key: 'push_order_request_created',
     label: 'New order requests',
-    hint: 'In-app/push alert when anyone submits a new order request (managers and above). Turn off to stop being notified about the whole team\'s order queue.',
+    hint: "In-app/push alert when anyone submits a new order request (managers and above). Turn off to stop being notified about the whole team's order queue.",
     group: 'push',
   },
   {
@@ -145,12 +145,14 @@ interface NotificationPreferencesFormProps {
   initial: NotificationPreferences;
 }
 
-export function NotificationPreferencesForm({
-  initial,
-}: NotificationPreferencesFormProps) {
+export function NotificationPreferencesForm({ initial }: NotificationPreferencesFormProps) {
   const router = useRouter();
   const [prefs, setPrefs] = React.useState<NotificationPreferences>(initial);
-  const [savingKey, setSavingKey] = React.useState<NotificationPrefKey | null>(null);
+  // Every switch whose save is out: each is busy on its own, so a second
+  // switch flipped meanwhile is not released when the first save returns.
+  const [savingKeys, setSavingKeys] = React.useState<ReadonlySet<NotificationPrefKey>>(
+    () => new Set(),
+  );
 
   // Keep local state aligned with refreshed server props so a stale
   // optimistic value can't survive across a revalidatePath cycle.
@@ -159,11 +161,20 @@ export function NotificationPreferencesForm({
     setPrefs(initial);
   }, [initial]);
 
+  function markSaving(key: NotificationPrefKey, on: boolean) {
+    setSavingKeys((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  }
+
   async function toggle(key: NotificationPrefKey, next: boolean) {
-    setSavingKey(key);
+    markSaving(key, true);
     setPrefs((p) => ({ ...p, [key]: next })); // optimistic
     const res = await updateNotificationPreferencesAction({ [key]: next });
-    setSavingKey(null);
+    markSaving(key, false);
     if (!res.ok) {
       setPrefs((p) => ({ ...p, [key]: !next })); // revert
       toast.error(res.error.message);
@@ -182,7 +193,7 @@ export function NotificationPreferencesForm({
         subtitle="Sent to the address on your account."
         defs={emailDefs}
         prefs={prefs}
-        savingKey={savingKey}
+        savingKeys={savingKeys}
         onToggle={toggle}
       />
       <Group
@@ -190,7 +201,7 @@ export function NotificationPreferencesForm({
         subtitle="Shown in the bell menu on the dashboard."
         defs={pushDefs}
         prefs={prefs}
-        savingKey={savingKey}
+        savingKeys={savingKeys}
         onToggle={toggle}
       />
     </div>
@@ -202,58 +213,38 @@ interface GroupProps {
   subtitle: string;
   defs: ToggleDef[];
   prefs: NotificationPreferences;
-  savingKey: NotificationPrefKey | null;
+  savingKeys: ReadonlySet<NotificationPrefKey>;
   onToggle: (key: NotificationPrefKey, next: boolean) => void;
 }
 
-function Group({ title, subtitle, defs, prefs, savingKey, onToggle }: GroupProps) {
+function Group({ title, subtitle, defs, prefs, savingKeys, onToggle }: GroupProps) {
   return (
-    <section className="space-y-3">
+    <section className="space-y-2.5">
       <div>
-        <h3 className="text-sm font-semibold">{title}</h3>
-        <p className="text-muted-foreground text-xs">{subtitle}</p>
+        <h3 className="text-[13px] font-medium">{title}</h3>
+        <p className="text-muted-foreground text-[12.5px]">{subtitle}</p>
       </div>
-      <div className="divide-border divide-y rounded-md border">
+      <ul className="divide-border divide-y rounded-lg border">
         {defs.map(({ key, label, hint }) => {
           const checked = prefs[key];
-          const busy = savingKey === key;
+          const busy = savingKeys.has(key);
           return (
-            <div
-              key={key}
-              className={cn(
-                'flex items-start justify-between gap-6 px-4 py-3',
-                busy && 'opacity-60',
-              )}
-            >
-              <div className="flex-1">
-                <div className="text-sm font-medium">{label}</div>
-                <div className="text-muted-foreground text-xs">{hint}</div>
+            <li key={key} className="flex items-start justify-between gap-6 px-4 py-3">
+              <div className="min-w-0 flex-1">
+                <div className="text-[13.5px] font-medium">{label}</div>
+                <div className="text-muted-foreground mt-0.5 text-[12.5px]">{hint}</div>
               </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={checked}
-                aria-label={`Toggle ${label}`}
-                onClick={() => !busy && onToggle(key, !checked)}
-                disabled={busy}
-                className={cn(
-                  'relative mt-0.5 inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors',
-                  checked ? 'bg-primary' : 'bg-muted',
-                  busy && 'cursor-not-allowed',
-                )}
-              >
-                <span
-                  aria-hidden
-                  className={cn(
-                    'bg-background inline-block h-5 w-5 rounded-full shadow-sm transition-transform',
-                    checked ? 'translate-x-[22px]' : 'translate-x-[2px]',
-                  )}
-                />
-              </button>
-            </div>
+              <Switch
+                checked={checked}
+                label={`Toggle ${label}`}
+                pending={busy}
+                onCheckedChange={(next) => onToggle(key, next)}
+                className="mt-0.5"
+              />
+            </li>
           );
         })}
-      </div>
+      </ul>
     </section>
   );
 }

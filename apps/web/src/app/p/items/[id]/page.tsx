@@ -2,6 +2,9 @@ import { Sparkles } from 'lucide-react';
 import Image from 'next/image';
 import { notFound } from 'next/navigation';
 
+import { ExternalEyebrow, ExternalShell } from '@/components/auth/external-shell';
+import { KeyValueList, KeyValueRow } from '@/components/patterns/key-value-row';
+import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { getPublicItem } from '@/server/services/public-items';
 
@@ -33,15 +36,16 @@ export async function generateMetadata({
   // leaking into Google's index would broaden the threat model beyond
   // the labeled-item-in-the-building case we accept. Matches /r, /s,
   // /invite.
+  // Titles get " · StockPilot" from the root layout's template (CONFLICTS D15).
   if (!item) {
     return {
-      title: 'Item not found · StockPilot',
+      title: 'Item not found',
       robots: { index: false, follow: false },
     };
   }
   const subtitle = item.bookAuthor ?? item.category ?? 'Inventory item';
   return {
-    title: `${item.name} · StockPilot`,
+    title: item.name,
     description: subtitle,
     robots: { index: false, follow: false },
     openGraph: {
@@ -68,127 +72,117 @@ export default async function PublicItemPage({
     consumable: 'Consumable',
   };
 
+  const book =
+    item.itemType === 'book' &&
+    (item.bookAuthor || item.bookPublisher || item.bookPublishedDate || item.bookGrade);
+
   return (
-    <div className="bg-background text-foreground min-h-screen px-4 py-10 sm:px-6 sm:py-16">
-      <div className="mx-auto max-w-md">
-        {/* Header */}
-        <header className="mb-6 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--ed-ink-4)]">
-          <Sparkles className="h-3 w-3" />
-          StockPilot · Item details
-        </header>
+    <ExternalShell width="md">
+      {/* Header */}
+      <ExternalEyebrow className="mb-6 flex items-center gap-2">
+        <Sparkles className="h-3 w-3" aria-hidden />
+        StockPilot · Item details
+      </ExternalEyebrow>
 
-        {/* Image — LCP element on this page; priority + AVIF/WebP via */}
-        {/* next/image. width/height are required, but the actual layout */}
-        {/* is fluid via the `h-auto w-full` className so they only act as */}
-        {/* an aspect-ratio hint to reserve space and avoid CLS. */}
-        {item.imageUrl ? (
-          <div className="border-border bg-card mb-6 overflow-hidden rounded-2xl border">
-            <Image
-              src={item.imageUrl}
-              alt={item.name}
-              width={800}
-              height={800}
-              priority
-              sizes="(max-width: 640px) 100vw, 600px"
-              className="h-auto w-full object-cover"
-            />
-          </div>
+      {/* Image — LCP element on this page; priority + AVIF/WebP via */}
+      {/* next/image. width/height are required, but the actual layout */}
+      {/* is fluid via the `h-auto w-full` className so they only act as */}
+      {/* an aspect-ratio hint to reserve space and avoid CLS. The frame is */}
+      {/* white in both themes, like every product photo in the app. */}
+      {item.imageUrl ? (
+        <div className="border-border mb-6 overflow-hidden rounded-lg border bg-white">
+          <Image
+            src={item.imageUrl}
+            alt={item.name}
+            width={800}
+            height={800}
+            priority
+            sizes="(max-width: 640px) 100vw, 600px"
+            className="h-auto w-full object-cover"
+          />
+        </div>
+      ) : null}
+
+      {/* Title + type */}
+      <h1 className="font-display text-foreground text-[26px] font-medium leading-[1.2] tracking-[-0.025em] [overflow-wrap:anywhere]">
+        {item.name}
+      </h1>
+
+      {/* A category name can run to 120 characters: its pill may wrap inside
+          the column (the Badge never wraps by default), so a long one cannot
+          push the public page wider than a phone. The type labels are short.
+          An 11 px radius is half the one-line pill's 22 px height, so one line
+          is the same pill, and wrapped lines keep their ends off the curve. */}
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Badge variant="outline">{typeLabel[item.itemType]}</Badge>
+        {item.category ? (
+          <Badge
+            variant="outline"
+            data-slot="public-category"
+            className="max-w-full whitespace-normal rounded-[11px] text-left [overflow-wrap:anywhere]"
+          >
+            {item.category}
+          </Badge>
         ) : null}
+      </div>
 
-        {/* Title + type */}
-        <h1 className="font-display text-[28px] font-medium leading-tight tracking-[-0.025em]">
-          {item.name}
-        </h1>
-
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <span className="border-border text-muted-foreground inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px]">
-            {typeLabel[item.itemType]}
-          </span>
-          {item.category ? (
-            <span className="border-border text-muted-foreground inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px]">
-              {item.category}
-            </span>
-          ) : null}
-        </div>
-
-        {/* On-hand quantity — the main reason a warehouse staffer
-            scans a label. Color-coded so "out of stock" reads at a
-            glance: green = in stock, amber = 1, red = 0. */}
-        <div
-          className={cn(
-            'mt-5 flex items-baseline justify-between rounded-2xl border px-5 py-4',
-            item.quantityOnHand <= 0
-              ? 'border-destructive/40 bg-destructive/5 text-destructive'
-              : item.quantityOnHand === 1
-                ? 'border-warning/40 bg-warning/5 text-warning-foreground'
-                : 'border-success/40 bg-success/5',
-          )}
-        >
-          <div>
-            <div className="text-[10px] font-medium uppercase tracking-[0.12em] opacity-70">
-              On hand
-            </div>
-            <div className="font-display mt-0.5 text-[32px] font-medium tabular-nums leading-none tracking-[-0.02em]">
-              {item.quantityOnHand}
-            </div>
-          </div>
-          <div className="text-[11px] font-medium uppercase tracking-[0.08em]">
-            {item.quantityOnHand <= 0
-              ? 'Out of stock'
-              : item.quantityOnHand === 1
-                ? 'Last one'
-                : 'In stock'}
+      {/* On-hand quantity — the main reason a warehouse staffer
+          scans a label. The word says the state (Out of stock / Last one /
+          In stock) and the wash colours it: red = 0, amber = 1, green = in
+          stock. Each tone pairs its own ink with its own wash, which reads in
+          both themes (the amber pair was 1.06:1 in dark). */}
+      <div
+        data-slot="public-on-hand"
+        data-stock={item.quantityOnHand <= 0 ? 'out' : item.quantityOnHand === 1 ? 'last' : 'in'}
+        className={cn(
+          'mt-5 flex items-baseline justify-between rounded-lg px-5 py-4',
+          item.quantityOnHand <= 0
+            ? 'bg-destructive-wash text-destructive'
+            : item.quantityOnHand === 1
+              ? 'bg-warning-wash text-warning'
+              : 'bg-success-wash text-success',
+        )}
+      >
+        <div>
+          <div className="text-[11px] font-medium uppercase tracking-[0.1em]">On hand</div>
+          <div className="font-display mt-0.5 text-[32px] font-medium tabular-nums leading-none tracking-[-0.02em]">
+            {item.quantityOnHand}
           </div>
         </div>
+        <div className="text-[11px] font-medium uppercase tracking-[0.08em]">
+          {item.quantityOnHand <= 0
+            ? 'Out of stock'
+            : item.quantityOnHand === 1
+              ? 'Last one'
+              : 'In stock'}
+        </div>
+      </div>
 
-        {/* Book metadata */}
-        {item.itemType === 'book' && (item.bookAuthor || item.bookPublisher || item.bookPublishedDate || item.bookGrade) ? (
-          <dl className="border-border mt-6 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 rounded-2xl border p-4 text-sm">
-            {item.bookAuthor ? (
-              <>
-                <dt className="text-muted-foreground text-[11px] uppercase tracking-wider">
-                  Author
-                </dt>
-                <dd>{item.bookAuthor}</dd>
-              </>
-            ) : null}
+      {/* Book metadata */}
+      {book ? (
+        <div className="border-border bg-card mt-6 overflow-hidden rounded-lg border">
+          <KeyValueList>
+            {item.bookAuthor ? <KeyValueRow label="Author">{item.bookAuthor}</KeyValueRow> : null}
             {item.bookPublisher ? (
-              <>
-                <dt className="text-muted-foreground text-[11px] uppercase tracking-wider">
-                  Publisher
-                </dt>
-                <dd>{item.bookPublisher}</dd>
-              </>
+              <KeyValueRow label="Publisher">{item.bookPublisher}</KeyValueRow>
             ) : null}
             {item.bookPublishedDate ? (
-              <>
-                <dt className="text-muted-foreground text-[11px] uppercase tracking-wider">
-                  Published
-                </dt>
-                <dd>{item.bookPublishedDate}</dd>
-              </>
+              <KeyValueRow label="Published">{item.bookPublishedDate}</KeyValueRow>
             ) : null}
-            {item.bookGrade ? (
-              <>
-                <dt className="text-muted-foreground text-[11px] uppercase tracking-wider">
-                  Grade
-                </dt>
-                <dd>{item.bookGrade}</dd>
-              </>
-            ) : null}
-          </dl>
-        ) : null}
+            {item.bookGrade ? <KeyValueRow label="Grade">{item.bookGrade}</KeyValueRow> : null}
+          </KeyValueList>
+        </div>
+      ) : null}
 
-        {/* Footer note */}
-        <p className="text-muted-foreground mt-8 text-[12px] leading-relaxed">
-          This is a public preview. Prices, suppliers, locations, and
-          internal notes aren&apos;t shown. If you&apos;re part of the team,{' '}
-          <a className="underline" href="/signin">
-            sign in
-          </a>{' '}
-          to see full details and edit.
-        </p>
-      </div>
-    </div>
+      {/* Footer note */}
+      <p className="text-muted-foreground mt-8 text-[12.5px] leading-relaxed">
+        This is a public preview. Prices, suppliers, locations, and
+        internal notes aren&apos;t shown. If you&apos;re part of the team,{' '}
+        <a className="text-foreground underline underline-offset-2" href="/signin">
+          sign in
+        </a>{' '}
+        to see full details and edit.
+      </p>
+    </ExternalShell>
   );
 }

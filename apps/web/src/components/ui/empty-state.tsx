@@ -1,8 +1,8 @@
 import type { LucideIcon } from 'lucide-react';
 import Link from 'next/link';
 
+import { StatePanel } from '@/components/patterns/state-panel';
 import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
 
 export interface EmptyStateProps {
   /**
@@ -33,15 +33,36 @@ export interface EmptyStateProps {
   action?: React.ReactNode;
   /**
    * `sm` is for empty states tucked inside a smaller card (~200px tall),
-   * `md` is for full-page empty states (~360px tall). Defaults to `md`.
+   * `md` is for a list's or a page's empty state (~320px tall). Defaults to `md`.
    */
   size?: 'sm' | 'md';
   /** Optional extra classes if a caller needs to tweak spacing. */
   className?: string;
 }
 
+/**
+ * The words that say a list is filtered: a title or sentence about what did
+ * not match ("No items match your search", "No matches", "Nothing matched"),
+ * or one that names the filter ("This view is filtered to North", "Clear the
+ * filter to see all books", "Nothing found for the current filters"). A
+ * passing mention ("reports, filters, and dashboards") is not one.
+ */
+const NO_MATCH_WORDS =
+  /\bmatch(?:es|ed|ing)?\b|\bfiltered\b|\b(?:clear(?:ing)?(?: the)?|current|these) filters?\b/i;
+
+/**
+ * Every call site's own empty state, drawn as P2.6's StatePanel (the one look
+ * for an empty or no-match list, PLAN P2.2 "One look per pattern").
+ *
+ * The props, the words, the h3 title, the description paragraph, the CTA
+ * link and the `action` slot are unchanged, so no call site changes. The
+ * panel's kind is `no-match` only where the call site's own title or
+ * description says the list is filtered, and `empty` everywhere else; the
+ * call site's icon is always the one shown, so the kind is the
+ * `data-state-kind` hook and never adds or changes a word.
+ */
 export function EmptyState({
-  icon: Icon,
+  icon,
   title,
   description,
   action,
@@ -51,33 +72,24 @@ export function EmptyState({
 }: EmptyStateProps) {
   const isSm = size === 'sm';
   return (
-    <div
-      className={cn(
-        'bg-card/40 flex w-full flex-col items-center justify-center rounded-xl border border-dashed text-center',
-        isSm ? 'min-h-[200px] gap-2 px-4 py-8' : 'min-h-[360px] gap-3 px-6 py-16',
-        className,
-      )}
-    >
-      <div
-        className={cn(
-          'bg-muted/50 text-muted-foreground flex items-center justify-center rounded-full',
-          isSm ? 'p-2' : 'p-3',
-        )}
-        aria-hidden="true"
-      >
-        <Icon className={isSm ? 'h-4 w-4' : 'h-5 w-5'} />
-      </div>
-      <h3 className={cn('text-foreground font-medium', isSm ? 'text-sm' : 'text-base')}>{title}</h3>
-      <p className="text-muted-foreground max-w-md text-sm">{description}</p>
-      {action ? (
-        <div className={isSm ? 'mt-1' : 'mt-3'}>{action}</div>
-      ) : cta ? (
-        <div className={isSm ? 'mt-1' : 'mt-3'}>
+    <StatePanel
+      kind={NO_MATCH_WORDS.test(`${title}\n${description}`) ? 'no-match' : 'empty'}
+      icon={icon}
+      headingLevel={3}
+      size={size}
+      title={title}
+      description={<p>{description}</p>}
+      action={
+        action ? (
+          action
+        ) : cta ? (
+          // The flat accent primary (the `gradient` variant's name is kept).
           <Button asChild variant="gradient" size={isSm ? 'sm' : 'default'}>
             <Link href={cta.href}>{cta.label}</Link>
           </Button>
-        </div>
-      ) : null}
-    </div>
+        ) : null
+      }
+      className={className}
+    />
   );
 }

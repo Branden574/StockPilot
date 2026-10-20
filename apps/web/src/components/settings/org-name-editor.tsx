@@ -40,14 +40,14 @@ export function OrgNameEditor({ current }: { current: string }) {
           maxLength={80}
           placeholder="Your organization"
         />
-        <p className="text-muted-foreground text-[11px]">
-          Shown in the sidebar header and on every email sent from your
-          workspace.
+        <p className="text-muted-foreground text-[12px]">
+          Shown in the sidebar header and on every email sent from your workspace.
         </p>
       </div>
       <div className="flex justify-end">
         <Button onClick={save} disabled={!dirty || busy} variant="gradient">
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save name'}
+          {busy ? <Loader2 aria-hidden className="animate-spin" /> : null}
+          Save name
         </Button>
       </div>
     </div>

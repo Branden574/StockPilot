@@ -55,6 +55,10 @@ vi.mock('@/components/customers/portal-pricing-mode-panel', () => ({
   PortalPricingModePanel: () => null,
 }));
 vi.mock('@/components/dashboard/module-not-enabled', () => ({ ModuleNotEnabled: () => null }));
+// The heading's nav label reads the request-cached org row; not under test here.
+vi.mock('@/lib/nav-labels', () => ({
+  effectiveNavLabel: vi.fn(async (_href: string, fallback: string) => fallback),
+}));
 
 import { CustomersPanel } from '@/components/customers/customers-panel';
 

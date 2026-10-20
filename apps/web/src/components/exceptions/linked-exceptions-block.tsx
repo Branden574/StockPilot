@@ -1,4 +1,4 @@
-import { AlertTriangle, Link2 } from 'lucide-react';
+import { Link2, TriangleAlert } from 'lucide-react';
 import Link from 'next/link';
 
 import { StateChip, stateOf } from '@/components/exceptions/occurrence-display';
@@ -41,7 +41,8 @@ export async function LinkedExceptionsBlock({ cycleCountId }: { cycleCountId: st
   } catch (e) {
     // Not permitted to read exceptions (or the count is gone): nothing to
     // show this reader. Anything else is a failure the reader is told about.
-    if (e instanceof ServiceError && (e.code === 'forbidden' || e.code === 'not_found')) return null;
+    if (e instanceof ServiceError && (e.code === 'forbidden' || e.code === 'not_found'))
+      return null;
     void reportError(e, { tag: 'cycle_counts.linked_exceptions' });
     linked = null;
   }
@@ -49,16 +50,19 @@ export async function LinkedExceptionsBlock({ cycleCountId }: { cycleCountId: st
 }
 
 /** The block itself, from an answer (null = the read failed). Exported for
- *  tests. */
+ *  tests. Drawn as a card in the count page's side rail (DESIGN-SPEC 6.7): the
+ *  title and its one-line explanation in the header, one row per exception
+ *  (its link, where the difference lands or what it came to, its state), and a
+ *  failed read as the caution wash, never as nothing. */
 export function LinkedExceptionsView({ linked }: { linked: CountLinkedExceptions | null }) {
   if (linked === null) {
     return (
       <div
         role="alert"
-        className="border-warning/40 bg-warning/5 flex items-start gap-2 rounded-md border px-3 py-2 text-sm"
+        className="bg-warning-wash text-warning flex items-start gap-2.5 rounded-lg px-[18px] py-3 text-[13px] leading-5"
         data-testid="linked-exceptions-unavailable"
       >
-        <AlertTriangle className="text-warning mt-0.5 size-4 shrink-0" aria-hidden />
+        <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
         <p>{COUNT_LINKED_EXCEPTIONS_UNAVAILABLE_COPY} Reload the page to try again.</p>
       </div>
     );
@@ -69,22 +73,36 @@ export function LinkedExceptionsView({ linked }: { linked: CountLinkedExceptions
   return (
     <section
       aria-label="Linked exceptions"
-      className="border-border bg-card rounded-xl border px-4 py-3"
+      className="border-border bg-card text-card-foreground min-w-0 overflow-hidden rounded-lg border"
       data-testid="linked-exceptions"
     >
-      <h2 className="flex items-center gap-1.5 text-sm font-semibold">
-        <Link2 className="text-muted-foreground size-4" aria-hidden />
-        Linked exceptions
-      </h2>
-      <p className="text-muted-foreground mt-0.5 text-xs">
-        This count was started to recheck these. The system checks them again after it is posted.
-      </p>
-      <ul className="divide-border mt-2 divide-y">
-        {linked.exceptions.map((x) => (
-          <LinkedRow key={x.occurrence.id} x={x} linked={linked} />
-        ))}
-      </ul>
-      {unrecognized ? <p className="text-muted-foreground mt-2 text-xs">{unrecognized}</p> : null}
+      <div className="border-border border-b px-[18px] py-3.5">
+        <h2 className="flex items-center gap-1.5 text-[13.5px] font-medium leading-5">
+          <Link2 className="text-muted-foreground size-4 shrink-0" aria-hidden />
+          Linked exceptions
+        </h2>
+        <p className="text-muted-foreground mt-1 text-[12px] leading-[18px]">
+          This count was started to recheck these. The system checks them again after it is posted.
+        </p>
+      </div>
+      {linked.exceptions.length > 0 ? (
+        <ul className="divide-border divide-y">
+          {linked.exceptions.map((x) => (
+            <LinkedRow key={x.occurrence.id} x={x} linked={linked} />
+          ))}
+        </ul>
+      ) : null}
+      {unrecognized ? (
+        <p
+          className={
+            linked.exceptions.length > 0
+              ? 'border-border text-muted-foreground border-t px-[18px] py-3 text-[12px]'
+              : 'text-muted-foreground px-[18px] py-3 text-[12px]'
+          }
+        >
+          {unrecognized}
+        </p>
+      ) : null}
     </section>
   );
 }
@@ -100,22 +118,29 @@ function LinkedRow({ x, linked }: { x: CountLinkedException; linked: CountLinked
   // closed: what it came to.
   const result =
     linked.status === 'in_progress'
-      ? (x.reviewLine ?? (x.line ? 'Not counted yet' : 'This item’s line could not be found in the count'))
+      ? (x.reviewLine ??
+        (x.line ? 'Not counted yet' : 'This item’s line could not be found in the count'))
       : recountOutcomeCopy(x.outcome);
   return (
-    <li className="flex flex-col gap-1 py-2 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
-      <div className="min-w-0 space-y-0.5">
-        <Link href={`/dashboard/exceptions/${o.id}`} className="text-sm font-medium break-words hover:underline">
-          {o.reference ? <span className="text-muted-foreground mr-2 font-mono text-xs">{o.reference}</span> : null}
-          {d.title}
-        </Link>
-        <p className="text-xs break-words" data-testid="linked-exception-result">
-          {result}
-        </p>
-      </div>
-      <div className="shrink-0">
-        <StateChip state={stateOf(o, linked.syncState)} />
-      </div>
+    <li className="flex min-w-0 flex-col items-start gap-1.5 px-[18px] py-3">
+      <Link
+        href={`/dashboard/exceptions/${o.id}`}
+        className="text-[13.5px] font-medium leading-5 [overflow-wrap:anywhere] hover:underline"
+      >
+        {o.reference ? (
+          <span className="text-muted-foreground mr-2 font-mono text-[11.5px] font-normal">
+            {o.reference}
+          </span>
+        ) : null}
+        {d.title}
+      </Link>
+      <p
+        className="text-ink-2 text-[12.5px] leading-[18px] [overflow-wrap:anywhere]"
+        data-testid="linked-exception-result"
+      >
+        {result}
+      </p>
+      <StateChip state={stateOf(o, linked.syncState)} />
     </li>
   );
 }

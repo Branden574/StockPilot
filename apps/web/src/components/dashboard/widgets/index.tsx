@@ -1,5 +1,7 @@
 import * as React from 'react';
 
+import { cn } from '@/lib/utils';
+
 import { AnalyticsWidget } from './analytics';
 import { GetStartedWidget } from './get-started';
 import { MovementsBreakdownWidget } from './movements-breakdown';
@@ -38,23 +40,32 @@ export const WIDGET_COMPONENTS: Record<
 };
 
 /**
- * value-chart + movements-breakdown share one `grid lg:grid-cols-12` row in
- * the default layout (9/12 + 3/12, side-by-side on lg). Both widgets render a
- * BARE Card with their col-span class; the renderer below wraps them so the
- * default order paints pixel-identically to the pre-refactor page. If only one
- * of them survives a per-org layout (the other hidden), or they end up
- * non-adjacent, each still gets its own single-column grid and renders
- * correctly on its own.
+ * value-chart + movements-breakdown share one row when they are adjacent in
+ * the resolved order (the default layout): the value card takes 9 of 12
+ * columns and the breakdown 3, side by side once the row is wide enough for
+ * both (936 px of its own width, the reference's two-column threshold; the
+ * row is its own size container, so the sidebar's width counts), stacked
+ * before. If only one of them survives a per-org layout (the other hidden), or
+ * they end up non-adjacent, each gets a row to itself at full width.
+ *
+ * The spans live here, not in the widgets: a lone value card used to keep its
+ * 9-column span inside the 12-column grid and left a quarter of the row empty.
  */
 const CHART_ROW_IDS: ReadonlySet<string> = new Set(['value-chart', 'movements-breakdown']);
+
+const PAIRED_SPAN: Readonly<Record<string, string>> = {
+  'value-chart': '@min-[936px]:col-span-9',
+  'movements-breakdown': '@min-[936px]:col-span-3',
+};
 
 /**
  * Render the resolved, ordered widget ids into the dashboard body. Unknown ids
  * (not in WIDGET_COMPONENTS) are skipped defensively — resolveDashboardWidgets
  * already drops ids absent from the catalog, this is belt-and-suspenders.
  *
- * Consecutive chart-row members are grouped into one 12-col grid so the
- * default layout is unchanged; everything else renders standalone in order.
+ * Consecutive chart-row members are grouped into one shared row so the
+ * default layout keeps them side by side; everything else renders standalone
+ * in order. The page stacks what this returns 16 px apart.
  */
 export function renderDashboardWidgets(
   widgetIds: string[],
@@ -67,7 +78,7 @@ export function renderDashboardWidgets(
     const Comp = WIDGET_COMPONENTS[id];
     if (!Comp) continue;
 
-    // Group a run of consecutive chart-row members into a single shared grid.
+    // Group a run of consecutive chart-row members into a single shared row.
     if (CHART_ROW_IDS.has(id)) {
       const members: string[] = [id];
       while (
@@ -78,15 +89,28 @@ export function renderDashboardWidgets(
         members.push(widgetIds[i + 1]!);
         i++;
       }
+      const paired = members.length > 1;
       out.push(
         <div
           key={`chart-row-${members.join('-')}`}
-          className="mb-4 grid grid-cols-1 gap-3.5 lg:grid-cols-12"
+          data-slot="chart-row"
+          data-paired={paired ? 'true' : 'false'}
+          className="@container min-w-0"
         >
-          {members.map((mid) => {
-            const M = WIDGET_COMPONENTS[mid]!;
-            return <M key={mid} {...props} />;
-          })}
+          <div className={cn('grid grid-cols-1 gap-4', paired && '@min-[936px]:grid-cols-12')}>
+            {members.map((mid) => {
+              const M = WIDGET_COMPONENTS[mid]!;
+              return (
+                <div
+                  key={mid}
+                  data-widget={mid}
+                  className={cn('flex min-w-0 flex-col', paired && PAIRED_SPAN[mid])}
+                >
+                  <M {...props} />
+                </div>
+              );
+            })}
+          </div>
         </div>,
       );
       continue;

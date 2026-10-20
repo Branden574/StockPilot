@@ -1,6 +1,6 @@
 'use client';
 
-import { Command } from 'cmdk';
+import { Command, defaultFilter } from 'cmdk';
 import { Check, ChevronsUpDown, Search } from 'lucide-react';
 import * as React from 'react';
 
@@ -40,6 +40,20 @@ interface ItemComboboxProps {
  * number must match SKUs/names, never incidental metadata like an on-hand
  * count). Designed to drop into table rows where 100s of items would
  * otherwise blow out a plain <select>.
+ *
+ * Each row's cmdk value is the item id, so two records that share a SKU and a
+ * name (a SKU family across warehouses) stay two rows: before, they shared one
+ * value, lit up together and the keyboard could only ever pick the first. The
+ * filter still scores the `sku name` haystack alone (the row's keyword).
+ *
+ * Look: a form field, so the trigger is the restyled Select trigger's recipe
+ * (DESIGN-SPEC 2.4 item 3: a form control does not rely on the faint
+ * hairline; it takes the stronger --line2 border on the card fill and a
+ * visible focus ring), not the hairline of a toolbar filter (6.4). It picks a
+ * PO import line's item beside Select fields and the outline Create button,
+ * which already draw that border. 32px on a mouse and 44px where a finger is
+ * the pointer; the search box keeps 16px text below sm so iOS does not zoom
+ * on focus.
  */
 export function ItemCombobox({
   items,
@@ -53,9 +67,7 @@ export function ItemCombobox({
   const [open, setOpen] = React.useState(false);
   const sorted = React.useMemo(
     () =>
-      [...items].sort((a, b) =>
-        a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }),
-      ),
+      [...items].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })),
     [items],
   );
   const selected = items.find((i) => i.id === value) ?? null;
@@ -71,8 +83,12 @@ export function ItemCombobox({
         type="button"
         disabled={disabled}
         className={cn(
-          'border-border bg-background flex h-8 w-full items-center gap-2 rounded-md border px-2.5 text-left text-xs outline-none transition-colors',
-          'hover:border-[var(--ed-line-strong)] focus-visible:ring-2 focus-visible:ring-ring',
+          'bg-card flex w-full items-center gap-1.5 rounded-md border border-[var(--ed-line-strong)] px-2.5 text-left text-[13px] text-[var(--ed-ink-2)] outline-none transition-colors',
+          TOUCH_HEIGHT,
+          'focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:ring-2 focus-visible:ring-offset-2',
+          // A disabled picker is how an approved or canceled import shows its
+          // final mapping, so it fades to 60% as before (the Select's 50%
+          // would take the item name under 4.5:1).
           'disabled:cursor-not-allowed disabled:opacity-60',
           className,
         )}
@@ -80,29 +96,25 @@ export function ItemCombobox({
         <span className="flex-1 truncate">
           {selected ? (
             <>
-              <span className="text-muted-foreground font-mono">{selected.sku}</span>
-              <span className="mx-1.5 text-muted-foreground">·</span>
-              <span>{selected.name}</span>
+              <span className="text-muted-foreground font-mono text-[11.5px]">{selected.sku}</span>
+              <span className="text-muted-foreground mx-1.5">·</span>
+              <span className="text-foreground">{selected.name}</span>
             </>
           ) : (
             <span className="text-muted-foreground">{placeholder}</span>
           )}
         </span>
-        <ChevronsUpDown className="text-muted-foreground h-3 w-3 shrink-0 opacity-60" />
+        <ChevronsUpDown aria-hidden className="text-muted-foreground size-3 shrink-0" />
       </PopoverTrigger>
 
-      <PopoverContent
-        className="w-[min(560px,calc(100vw-1rem))] p-0"
-        align="start"
-        sideOffset={4}
-      >
-        <Command className="bg-popover overflow-hidden rounded-md">
+      <PopoverContent className="w-[min(560px,calc(100vw-1rem))] p-0" align="start" sideOffset={4}>
+        <Command className="bg-popover overflow-hidden rounded-[inherit]" filter={scoreHaystack}>
           <div className="border-border flex items-center gap-2 border-b px-3 py-2">
-            <Search className="text-muted-foreground h-3.5 w-3.5" />
+            <Search aria-hidden className="text-muted-foreground size-3.5 shrink-0" />
             <Command.Input
               autoFocus
               placeholder="Search by SKU or name…"
-              className="placeholder:text-muted-foreground flex-1 bg-transparent text-sm outline-none"
+              className="placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent text-base outline-none sm:text-sm"
             />
           </div>
           <Command.List className="max-h-[280px] overflow-y-auto p-1.5">
@@ -128,23 +140,22 @@ export function ItemCombobox({
               return (
                 <Command.Item
                   key={i.id}
-                  value={haystack}
+                  value={i.id}
+                  keywords={[haystack]}
                   onSelect={() => pick(i.id)}
                   className={ROW}
                 >
                   {isActive ? (
-                    <Check className="mr-2 h-3.5 w-3.5" />
+                    <Check aria-hidden className="mr-2 size-3.5 shrink-0" />
                   ) : (
-                    <span className="mr-2 inline-block h-3.5 w-3.5" />
+                    <span className="mr-2 inline-block size-3.5 shrink-0" />
                   )}
-                  <span className="text-muted-foreground mr-2 font-mono text-[11px]">
+                  <span className="text-muted-foreground mr-2 font-mono text-[11.5px]">
                     {i.sku}
                   </span>
                   <span className="flex-1 truncate">{i.name}</span>
                   {i.detail && (
-                    <span className="text-muted-foreground ml-2 text-[11px]">
-                      {i.detail}
-                    </span>
+                    <span className="text-muted-foreground ml-2 text-xs">{i.detail}</span>
                   )}
                 </Command.Item>
               );
@@ -156,7 +167,22 @@ export function ItemCombobox({
   );
 }
 
+/** 32px on a mouse, 44px wherever a finger is the pointer (below sm, or any
+ *  coarse pointer). The coarse rule is an arbitrary variant so it is emitted
+ *  after `sm:` and wins when both match. */
+const TOUCH_HEIGHT = 'h-11 sm:h-8 [@media(pointer:coarse)]:h-11';
+
 const ROW = cn(
-  'flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 text-sm outline-none',
+  'flex min-h-8 cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 text-[13px] outline-none',
+  '[@media(pointer:coarse)]:min-h-11',
   'data-[selected=true]:bg-muted data-[selected=true]:text-foreground',
 );
+
+/**
+ * cmdk's own scoring over a row's `sku name` haystack (its keyword), never the
+ * value (an item id) and never the detail text. A row without a keyword (the
+ * Clear selection row) is scored on its value, as before.
+ */
+function scoreHaystack(value: string, search: string, keywords?: string[]): number {
+  return defaultFilter(keywords && keywords.length > 0 ? keywords.join(' ') : value, search);
+}

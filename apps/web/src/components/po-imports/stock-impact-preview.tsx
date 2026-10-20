@@ -1,8 +1,9 @@
 'use client';
 
-import { AlertTriangle, ArrowRight, CheckCircle2, MinusCircle, Package } from 'lucide-react';
+import { AlertTriangle, MinusCircle } from 'lucide-react';
 import * as React from 'react';
 
+import { StatStrip, StatStripItem } from '@/components/patterns/stat-strip';
 import {
   Table,
   TableBody,
@@ -196,7 +197,7 @@ export function buildPreview(
     const totalDelta = aggregateDelta.get(r.itemId) ?? 0;
     const projectedQty = (r.currentQty ?? 0) + totalDelta;
     const skuBaseline = r.itemSku
-      ? (skuTotalBySku.get(r.itemSku) ?? (r.currentQty ?? 0))
+      ? (skuTotalBySku.get(r.itemSku) ?? r.currentQty ?? 0)
       : (r.currentQty ?? 0);
     const skuDelta = r.itemSku ? (skuAggregateDelta.get(r.itemSku) ?? 0) : totalDelta;
     return {
@@ -212,9 +213,7 @@ export function buildPreview(
   // which internal item each one maps to. Skipped + non-inventory lines
   // are excluded since they won't post to stock or count toward the
   // inventory portion of the PO.
-  const inventoryRows = rows.filter(
-    (r) => r.status === 'mapped' || r.status === 'unmapped',
-  );
+  const inventoryRows = rows.filter((r) => r.status === 'mapped' || r.status === 'unmapped');
   const summary: PreviewSummary = {
     mappedCount: rows.filter((r) => r.status === 'mapped').length,
     unmappedCount: rows.filter((r) => r.status === 'unmapped').length,
@@ -238,60 +237,63 @@ export function StockImpactPreview({
     [lines, overrides, items, skuTotalBySku],
   );
 
+  const headingId = React.useId();
   const mapped = rows.filter((r) => r.status === 'mapped');
   const unmapped = rows.filter((r) => r.status === 'unmapped');
   const skipped = rows.filter((r) => r.status === 'skipped' || r.status === 'non-inventory');
 
+  // The heading names the table's scroll region, not this section: the rows
+  // hold no control, so on a phone that region is the Tab stop and needs the
+  // name, and naming the section too would list Stock impact preview twice.
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <Package className="text-muted-foreground h-4 w-4" />
-        <h2 className="text-sm font-semibold">Stock impact preview</h2>
-        <span className="text-muted-foreground text-xs">
+    <section className="flex min-w-0 flex-col gap-3">
+      <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
+        <h2
+          id={headingId}
+          className="text-foreground font-display text-[15px] font-medium tracking-[-0.01em]"
+        >
+          Stock impact preview
+        </h2>
+        <span className="text-muted-foreground text-[12.5px]">
           What will be added when this PO is received. Adjust above before approving.
         </span>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <SummaryStat
+      {/* The four figures as one stat strip (DESIGN-SPEC 6.8), two by two
+          until there is room for one row. Unmapped turns red above zero. */}
+      <StatStrip variant="detail" className="[&>div]:grid-cols-2 lg:[&>div]:grid-cols-4">
+        <StatStripItem
+          size="detail"
           label="Items affected"
           value={formatNumber(summary.mappedCount)}
-          tone="default"
-          icon={CheckCircle2}
         />
-        <SummaryStat
+        <StatStripItem
+          size="detail"
           label="Units inbound"
           value={formatNumber(summary.totalUnits)}
-          tone="default"
-          icon={ArrowRight}
         />
-        <SummaryStat
+        <StatStripItem
+          size="detail"
           label="Unmapped"
           value={formatNumber(summary.unmappedCount)}
-          tone={summary.unmappedCount > 0 ? 'warn' : 'default'}
-          icon={AlertTriangle}
+          valueTone={summary.unmappedCount > 0 ? 'destructive' : 'default'}
         />
-        <SummaryStat
-          label="Total cost"
-          value={formatCurrency(summary.totalCost)}
-          tone="default"
-          icon={Package}
-        />
-      </div>
+        <StatStripItem size="detail" label="Total cost" value={formatCurrency(summary.totalCost)} />
+      </StatStrip>
 
       {unmapped.length > 0 && (
-        <div className="border-destructive/40 bg-destructive/5 text-destructive rounded-md border p-3 text-xs">
-          <div className="flex items-center gap-1.5 font-semibold">
-            <AlertTriangle className="h-3.5 w-3.5" />
-            {unmapped.length} line{unmapped.length === 1 ? '' : 's'} not mapped to an
-            internal item — approve will block until you map or skip these.
+        <div className="bg-destructive-wash text-foreground rounded-lg px-4 py-3 text-[12.5px]">
+          <div className="text-destructive flex items-center gap-2 font-medium">
+            <AlertTriangle aria-hidden className="h-4 w-4 shrink-0" />
+            {unmapped.length} line{unmapped.length === 1 ? '' : 's'} not mapped to an internal item
+            — approve will block until you map or skip these.
           </div>
-          <ul className="mt-1 ml-5 list-disc">
+          <ul className="ml-6 mt-1 list-disc">
             {unmapped.map((r) => (
               <li key={r.lineId}>
                 Line {r.lineNumber}: {r.description} ({formatNumber(r.qty)} units)
                 {r.projectedQty != null && (
-                  <span className="opacity-80">
+                  <span className="text-muted-foreground">
                     {' '}
                     — will create a new item
                     {r.skuTotalCurrentQty != null && r.skuTotalProjectedQty != null && (
@@ -309,10 +311,14 @@ export function StockImpactPreview({
         </div>
       )}
 
-      <div className="overflow-x-auto rounded-xl border bg-card">
-        <Table>
+      {/* Natural column widths, as before the redesign: the table scrolls
+          sideways inside its card only when its rows need more room, and the
+          empty message wraps inside a phone's width instead of running off
+          the card's edge. */}
+      <div className="border-border bg-card min-w-0 overflow-hidden rounded-lg border">
+        <Table scrollLabelledBy={headingId}>
           <TableHeader>
-            <TableRow>
+            <TableRow className="hover:bg-transparent">
               <TableHead className="w-12">#</TableHead>
               <TableHead>Internal item</TableHead>
               <TableHead>From PO</TableHead>
@@ -332,36 +338,37 @@ export function StockImpactPreview({
           </TableHeader>
           <TableBody>
             {mapped.length === 0 && (
-              <TableRow>
+              <TableRow className="hover:bg-transparent">
                 <TableCell
                   colSpan={5}
-                  className="text-muted-foreground py-8 text-center text-xs"
+                  className="text-muted-foreground py-10 text-center text-[13px]"
                 >
-                  No inventory lines mapped yet. Pick an internal item for each
-                  inventory line above to see the stock impact here.
+                  No inventory lines mapped yet. Pick an internal item for each inventory line above
+                  to see the stock impact here.
                 </TableCell>
               </TableRow>
             )}
             {mapped.map((r) => (
               <TableRow key={r.lineId}>
-                <TableCell className="tabular-nums">{r.lineNumber}</TableCell>
+                <TableCell className="font-mono text-[12.5px] tabular-nums">
+                  {r.lineNumber}
+                </TableCell>
                 <TableCell>
-                  <div className="font-medium">{r.itemName ?? '—'}</div>
-                  <div className="text-muted-foreground font-mono text-[11px]">
+                  <div className="text-foreground font-medium">{r.itemName ?? '—'}</div>
+                  <div className="text-muted-foreground font-mono text-[11.5px]">
                     {r.itemSku ?? '—'}
                   </div>
                 </TableCell>
-                <TableCell className="text-muted-foreground max-w-[260px] truncate text-xs">
+                <TableCell className="text-ink-2 max-w-[260px] truncate text-[12.5px]">
                   {r.description}
                 </TableCell>
-                <TableCell className="text-success text-right tabular-nums whitespace-nowrap">
+                <TableCell className="text-success whitespace-nowrap text-right tabular-nums">
                   +{formatNumber(r.qty)} unit{r.qty === 1 ? '' : 's'}
                 </TableCell>
-                <TableCell className="text-right font-semibold tabular-nums whitespace-nowrap">
+                <TableCell className="whitespace-nowrap text-right font-mono font-medium tabular-nums">
                   {r.skuTotalCurrentQty != null && r.skuTotalProjectedQty != null ? (
                     <>
-                      {formatNumber(r.skuTotalCurrentQty)} →{' '}
-                      {formatNumber(r.skuTotalProjectedQty)}
+                      {formatNumber(r.skuTotalCurrentQty)} → {formatNumber(r.skuTotalProjectedQty)}
                     </>
                   ) : (
                     <span className="text-muted-foreground font-normal">—</span>
@@ -374,56 +381,21 @@ export function StockImpactPreview({
       </div>
 
       {skipped.length > 0 && (
-        <details className="border-border rounded-md border bg-card px-3 py-2 text-xs">
-          <summary className="text-muted-foreground cursor-pointer">
-            <MinusCircle className="mr-1 inline h-3 w-3" />
-            {skipped.length} line{skipped.length === 1 ? '' : 's'} won't affect stock
-            (skipped or non-inventory)
+        <details className="border-border bg-card rounded-lg border px-4 py-2.5 text-[12.5px]">
+          <summary className="text-muted-foreground hover:text-foreground cursor-pointer">
+            <MinusCircle aria-hidden className="mr-1.5 inline h-3.5 w-3.5 align-[-2px]" />
+            {skipped.length} line{skipped.length === 1 ? '' : 's'} won't affect stock (skipped or
+            non-inventory)
           </summary>
           <ul className="mt-2 space-y-1">
             {skipped.map((r) => (
               <li key={r.lineId} className="text-muted-foreground">
-                Line {r.lineNumber} — {r.description}{' '}
-                <span className="opacity-60">({r.status})</span>
+                Line {r.lineNumber} — {r.description} <span>({r.status})</span>
               </li>
             ))}
           </ul>
         </details>
       )}
-    </div>
-  );
-}
-
-function SummaryStat({
-  label,
-  value,
-  tone,
-  icon: Icon,
-}: {
-  label: string;
-  value: string;
-  tone: 'default' | 'warn';
-  icon: React.ComponentType<{ className?: string }>;
-}) {
-  return (
-    <div
-      className={
-        'rounded-md border bg-card px-3 py-2 ' +
-        (tone === 'warn' ? 'border-destructive/40' : 'border-border')
-      }
-    >
-      <div className="text-muted-foreground flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-wider">
-        <Icon className="h-3 w-3" />
-        {label}
-      </div>
-      <div
-        className={
-          'mt-1 text-lg font-semibold tabular-nums ' +
-          (tone === 'warn' ? 'text-destructive' : '')
-        }
-      >
-        {value}
-      </div>
-    </div>
+    </section>
   );
 }

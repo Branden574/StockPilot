@@ -53,10 +53,11 @@ const VALID_SORTS = new Set<ItemListSort>([
  *
  * Also the shared search behind the cycle-count picker (`?browse=1`), the
  * order add-items picker (repeated `?type=`) and the PO line-item picker
- * (`?slim=1&isbn=1&expected=any`, plus `?ids=` for label resolution), and the
- * bundle component picker (`?rank=relevance`, best match first). Every
- * flag added for one of those is opt-in: with none of them present the
- * request behaves exactly as it always has.
+ * (`?slim=1&isbn=1&expected=any`, plus `?ids=` for label resolution), the
+ * bundle component picker (`?rank=relevance`, best match first), and the
+ * Rentals items list's search box (`?rentalsOnly=1&type=all`). Every flag
+ * added for one of those is opt-in: with none of them present the request
+ * behaves exactly as it always has.
  */
 export async function GET(req: Request): Promise<Response> {
   const ctx = await withApiContext(req);
@@ -115,6 +116,19 @@ export async function GET(req: Request): Promise<Response> {
     itemTypes === undefined && rawType
       ? (rawType as 'product' | 'book' | 'asset' | 'consumable' | 'all')
       : undefined;
+
+  // Rentals only (`?rentalsOnly=1`), for the Rentals items list's search box:
+  // the search lists the same set that page lists (InventoryService.list's
+  // `rentalsOnly`, a query filter on `is_rental = true`), scoped exactly like
+  // every other search here (org, RLS, warehouses, viewer grants), so it shows
+  // nothing the page does not. Without the flag the listing keeps
+  // `is_rental = false`, so a rental never reaches the Items or Books tables or
+  // a picker. With it and no `type`, every type is searched: a rental can be a
+  // product or a book (the shared rentalItemsPredicate), and the listing's
+  // default type, 'product', would hide a book. It applies to the search
+  // listing below only (not to `ids` label lookups or the ranked picker
+  // search). Opt-in: without it nothing changes.
+  const rentalsOnly = params.get('rentalsOnly') === '1';
 
   // `bundles=exclude` drops kit/bundle SKUs, matching what the order-creation
   // catalog (loadCatalogItems) does. Opt-in: the inventory table still shows
@@ -233,7 +247,7 @@ export async function GET(req: Request): Promise<Response> {
 
   const result = await inventorySvc.list({
     q: raw,
-    itemType,
+    itemType: rentalsOnly && itemType === undefined && itemTypes === undefined ? 'all' : itemType,
     itemTypes,
     excludeBundles,
     // The Expected view spans lifecycles (mobile's listStatusPredicate
@@ -247,6 +261,7 @@ export async function GET(req: Request): Promise<Response> {
     outOfStock,
     expected,
     ...(isbnMatches.length > 0 ? { isbnVariants: isbnMatches } : {}),
+    ...(rentalsOnly ? { rentalsOnly: true } : {}),
     sort,
     categoryIds,
     locationIds,

@@ -3,6 +3,8 @@
 import { ChevronDown, ChevronsDown, ChevronsUp, ChevronUp } from 'lucide-react';
 import * as React from 'react';
 
+import { CheckboxGlyph } from '@/components/ui/checkbox';
+
 import { INVENTORY_EXPORT_MAX_FIELDS } from '@/lib/exports/export-request';
 import {
   fieldHeading,
@@ -40,6 +42,12 @@ import { availableFieldsFor, type ExportBuilderState } from './export-builder-st
  *     section 26. The row's ref map + a post-move effect below re-targets
  *     focus at whichever control in the same row is still enabled.
  */
+
+/** A move button (top / up / down / bottom): a 24 px outline icon button, a
+ *  full 44 px touch target below sm and on coarse pointers so the four in a
+ *  row never take each other's taps. */
+const MOVE_BUTTON =
+  'grid size-6 shrink-0 place-items-center rounded-md border border-[var(--ed-line-strong)] bg-card text-[var(--ed-ink-2)] transition-colors hover:bg-muted disabled:opacity-40 max-sm:size-11 pointer-coarse:size-11';
 
 const GROUP_LABELS: Record<InventoryExportFieldGroup, string> = {
   common: 'Common fields',
@@ -152,7 +160,7 @@ export function ExportBuilderFields({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search fields"
-          className="h-8 flex-1 rounded-md border border-border bg-background px-2 text-[13.5px]"
+          className="h-8 min-w-0 flex-1 rounded-md border border-[var(--ed-line-strong)] bg-card px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-sm:h-11 max-sm:text-base"
         />
         <button
           type="button"
@@ -166,7 +174,7 @@ export function ExportBuilderFields({
               }
             }
           }}
-          className="text-[13px] text-[var(--ed-ink-3)] underline-offset-2 hover:underline"
+          className="text-muted-foreground hover:text-foreground text-[13px] underline-offset-2 hover:underline"
         >
           Select all
         </button>
@@ -181,25 +189,25 @@ export function ExportBuilderFields({
               if (key !== keep) onToggle(key);
             }
           }}
-          className="text-[13px] text-[var(--ed-ink-3)] underline-offset-2 hover:underline"
+          className="text-muted-foreground hover:text-foreground text-[13px] underline-offset-2 hover:underline"
         >
           Clear optional
         </button>
       </div>
 
       {warnings.length > 0 ? (
-        <p role="alert" className="text-[13px] text-[var(--ed-warn,#8a6d00)]">
+        <p role="alert" className="text-warning text-[13px]">
           {warnings[0]}
         </p>
       ) : null}
 
-      <div className="max-h-[240px] overflow-y-auto rounded-md border border-border p-2">
+      <div className="border-border max-h-[240px] overflow-y-auto rounded-lg border p-1.5">
         {visibleGroups.length === 0 ? (
-          <p className="p-2 text-[13px] text-[var(--ed-ink-4)]">No fields match that search.</p>
+          <p className="text-muted-foreground p-2 text-[13px]">No fields match that search.</p>
         ) : (
           visibleGroups.map(({ group, fields }) => (
             <div key={group} role="group" aria-label={GROUP_LABELS[group]} className="mb-2">
-              <p className="px-1 py-1 text-[12px] uppercase tracking-wide text-[var(--ed-ink-4)]">
+              <p className="text-muted-foreground px-1.5 py-1 text-[11px] font-medium uppercase tracking-[0.06em]">
                 {GROUP_LABELS[group]}
               </p>
               {fields.map((field) => {
@@ -215,18 +223,9 @@ export function ExportBuilderFields({
                     aria-label={headingFor(field)}
                     disabled={disabledByCap}
                     onClick={() => onToggle(field.key)}
-                    className="flex w-full items-center gap-2 rounded-sm px-1 py-1 text-left text-[13.5px] hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+                    className="hover:bg-muted flex min-h-8 w-full items-center gap-2 rounded-md px-1.5 text-left text-[13px] disabled:cursor-not-allowed disabled:opacity-40 max-sm:min-h-11"
                   >
-                    <span
-                      aria-hidden
-                      className={`inline-grid h-4 w-4 place-items-center rounded-[4px] border ${
-                        checked ? 'border-foreground bg-foreground' : 'border-border bg-background'
-                      }`}
-                    >
-                      {checked ? (
-                        <span className="h-[9px] w-[5px] -translate-y-px rotate-45 border-b-2 border-r-2 border-background" />
-                      ) : null}
-                    </span>
+                    <CheckboxGlyph checked={checked} />
                     {headingFor(field)}
                   </button>
                 );
@@ -237,12 +236,12 @@ export function ExportBuilderFields({
       </div>
 
       <div>
-        <p className="mb-1 text-[12px] uppercase tracking-wide text-[var(--ed-ink-4)]">
+        <p className="text-muted-foreground mb-1 text-[11px] font-medium uppercase tracking-[0.06em]">
           Column order
         </p>
         <ol
           aria-label="Selected fields, in export order"
-          className="flex flex-col gap-1 rounded-md border border-border p-2"
+          className="border-border flex flex-col gap-1 rounded-lg border p-2"
         >
           {selected.map((field, index) => (
             <li
@@ -252,9 +251,9 @@ export function ExportBuilderFields({
                 else rowRefs.current.delete(field.key);
               }}
               tabIndex={-1}
-              className="flex items-center gap-2 text-[13.5px]"
+              className="flex items-center gap-2 text-[13px]"
             >
-              <span className="w-5 text-right font-mono text-[12px] text-[var(--ed-ink-4)]">
+              <span className="text-muted-foreground w-5 text-right font-mono text-[12px]">
                 {index + 1}
               </span>
               <span className="flex-1">{headingFor(field)}</span>
@@ -263,36 +262,36 @@ export function ExportBuilderFields({
                 aria-label={`Move ${headingFor(field)} to top`}
                 disabled={index === 0}
                 onClick={() => move(field, 'top')}
-                className="rounded-sm border border-border p-1 disabled:opacity-40"
+                className={MOVE_BUTTON}
               >
-                <ChevronsUp className="h-3 w-3" />
+                <ChevronsUp aria-hidden className="h-3.5 w-3.5" />
               </button>
               <button
                 type="button"
                 aria-label={`Move ${headingFor(field)} up`}
                 disabled={index === 0}
                 onClick={() => move(field, 'up')}
-                className="rounded-sm border border-border p-1 disabled:opacity-40"
+                className={MOVE_BUTTON}
               >
-                <ChevronUp className="h-3 w-3" />
+                <ChevronUp aria-hidden className="h-3.5 w-3.5" />
               </button>
               <button
                 type="button"
                 aria-label={`Move ${headingFor(field)} down`}
                 disabled={index === selected.length - 1}
                 onClick={() => move(field, 'down')}
-                className="rounded-sm border border-border p-1 disabled:opacity-40"
+                className={MOVE_BUTTON}
               >
-                <ChevronDown className="h-3 w-3" />
+                <ChevronDown aria-hidden className="h-3.5 w-3.5" />
               </button>
               <button
                 type="button"
                 aria-label={`Move ${headingFor(field)} to bottom`}
                 disabled={index === selected.length - 1}
                 onClick={() => move(field, 'bottom')}
-                className="rounded-sm border border-border p-1 disabled:opacity-40"
+                className={MOVE_BUTTON}
               >
-                <ChevronsDown className="h-3 w-3" />
+                <ChevronsDown aria-hidden className="h-3.5 w-3.5" />
               </button>
             </li>
           ))}

@@ -3,9 +3,10 @@ import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
-import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { Card } from './card';
+import { sparkStroke, type MeterKind } from './tones';
 
 /**
  * Whether the card header has to become a column. Reads the LIVE scale off
@@ -17,11 +18,12 @@ function useStackedHeader(): boolean {
   return shouldStackRow(fontScale);
 }
 
-type SparkKind = 'ok' | 'warn' | 'crit' | 'ink';
+type SparkKind = MeterKind;
 
 /**
  * Sparkline — mini line chart, 84×26, mono-stroke 1.4. Last point gets
- * a 2px mint dot. Used right-aligned inside StatCard.
+ * a 2px accent dot. Used right-aligned inside StatCard. Strokes are the
+ * per-mode tones (tones.ts `sparkStroke`); 'ink' is the muted ink line.
  */
 export function Sparkline({
   data,
@@ -51,14 +53,7 @@ export function Sparkline({
     .map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)} ${p[1].toFixed(1)}`)
     .join(' ');
 
-  const stroke =
-    kind === 'warn'
-      ? ACCENT.warn
-      : kind === 'crit'
-        ? ACCENT.crit
-        : kind === 'ink'
-          ? c.ink3
-          : ACCENT.mint;
+  const stroke = sparkStroke(kind, c);
 
   const last = pts[pts.length - 1];
 
@@ -72,15 +67,17 @@ export function Sparkline({
         strokeLinecap="round"
         strokeLinejoin="round"
       />
-      <Circle cx={last[0]} cy={last[1]} r={2} fill={ACCENT.mint} />
+      <Circle cx={last[0]} cy={last[1]} r={2} fill={c.accent} />
     </Svg>
   );
 }
 
 /**
  * StatCard — label eyebrow, big tabular number, optional unit suffix,
- * mono delta (mint for positive, crit for negative). Optional sparkline
- * right-aligned. Used on Home + Cycle counts.
+ * mono delta (accent for positive, crit for negative, both per mode and AA
+ * on the card). Optional sparkline right-aligned. Used on Home + Cycle
+ * counts. The label and unit are muted ink (ink3): information, not
+ * decoration.
  */
 export function StatCard({
   label,
@@ -97,7 +94,7 @@ export function StatCard({
   spark?: number[];
   sparkKind?: SparkKind;
 }) {
-  const { c, mode } = useTheme();
+  const { c } = useTheme();
   // Paired with LABEL_CAP, and the half that actually stops "IT/EM/S". A 2-up
   // card is ~143pt of interior; the sparkline is a fixed 84pt, so the label is
   // left ~51pt — which even a capped 20pt "ITEMS" (~68pt) overruns, and iOS
@@ -106,11 +103,7 @@ export function StatCard({
   // non-accessibility size) the label needs ~47pt and nothing moves.
   const stacked = useStackedHeader();
   const deltaColor =
-    delta && (delta.startsWith('-') || delta.startsWith('↓'))
-      ? ACCENT.crit
-      : mode === 'dark'
-        ? ACCENT.mintInkDark
-        : ACCENT.mintInk;
+    delta && (delta.startsWith('-') || delta.startsWith('↓')) ? c.critText : c.accent;
 
   return (
     <Card padding={16} style={styles.wrap}>
@@ -118,7 +111,7 @@ export function StatCard({
         <Text
           style={[
             styles.label,
-            { color: c.ink4 },
+            { color: c.ink3 },
           ]}
           maxFontSizeMultiplier={LABEL_CAP}
         >
@@ -136,7 +129,7 @@ export function StatCard({
           {value}
         </Text>
         {unit ? (
-          <Text style={[styles.unit, { color: c.ink4 }]}>{unit}</Text>
+          <Text style={[styles.unit, { color: c.ink3 }]}>{unit}</Text>
         ) : null}
       </View>
       {delta ? (

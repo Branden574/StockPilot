@@ -17,16 +17,19 @@ export const SelectTrigger = React.forwardRef<
   <SelectPrimitive.Trigger
     ref={ref}
     className={cn(
-      'flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-base shadow-sm sm:text-sm',
-      'placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+      // The Input recipe (32 px, 13 px, stronger hairline, focus ring), and on
+      // phones 44 px with 16 px text even when the caller sizes it for desktop.
+      'flex h-8 w-full items-center justify-between gap-2 rounded-md border border-[var(--ed-line-strong)] bg-card px-2.5 py-1 text-left text-[13px] transition-colors',
+      'data-[placeholder]:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
       'disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1',
+      'max-sm:h-11 max-sm:text-base',
       className,
     )}
     {...props}
   >
     {children}
     <SelectPrimitive.Icon asChild>
-      <ChevronDown className="h-4 w-4 opacity-50" />
+      <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
     </SelectPrimitive.Icon>
   </SelectPrimitive.Trigger>
 ));
@@ -72,7 +75,7 @@ export const SelectContent = React.forwardRef<
         // Hard cap of ~9 rows so long lists (Grade level, Category, etc.)
         // become scrollable instead of running off-screen. min() with the
         // radix-provided available-height keeps it safe on short viewports.
-        'relative z-50 min-w-[8rem] overflow-y-auto overflow-x-hidden rounded-md border bg-popover text-popover-foreground shadow-md',
+        'relative z-50 min-w-[8rem] overflow-y-auto overflow-x-hidden rounded-lg border border-[var(--ed-line-strong)] bg-popover text-popover-foreground shadow-md focus-visible:ring-0 focus-visible:ring-offset-0',
         'data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95',
         position === 'popper' &&
           'data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1',
@@ -106,7 +109,10 @@ export const SelectLabel = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <SelectPrimitive.Label
     ref={ref}
-    className={cn('px-2 py-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground', className)}
+    className={cn(
+      'px-2 py-1.5 text-[11px] font-medium uppercase tracking-[0.06em] text-muted-foreground',
+      className,
+    )}
     {...props}
   />
 ));
@@ -119,8 +125,8 @@ export const SelectItem = React.forwardRef<
   <SelectPrimitive.Item
     ref={ref}
     className={cn(
-      'relative flex w-full cursor-pointer select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-none transition-colors',
-      'focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
+      'relative flex w-full cursor-pointer select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-[13px] outline-none transition-colors',
+      'focus:bg-muted focus:text-foreground data-[highlighted]:bg-muted data-[highlighted]:text-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
       className,
     )}
     {...props}

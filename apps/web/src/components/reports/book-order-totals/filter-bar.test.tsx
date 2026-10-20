@@ -249,6 +249,29 @@ describe('Book Order Totals filter bar', () => {
     expect(row.className).not.toMatch(/(^|\s)sm:flex-row/);
     expect(within(pair).getAllByRole('button')).toHaveLength(2);
   });
+
+  // Redesign (P4.E2): every control is the shared form field, 32 px on
+  // desktop and 44 px with 16 px text below sm (no iOS zoom), and the
+  // selects stay native (one request per choice, use-committed-select.ts).
+  it('every select and date button is the redesign field, 44 px below sm; the selects stay native', async () => {
+    render(bar());
+    for (const name of ['Charter', 'Orders placed', 'Warehouse', 'Category', 'Sort']) {
+      const el = screen.getByLabelText(name);
+      expect(el.tagName).toBe('SELECT');
+      expect(el).toHaveClass('h-8', 'max-sm:h-11', 'max-sm:text-base', 'border-line-strong');
+    }
+    const pair = document.querySelector('[data-date-pair]') as HTMLElement;
+    for (const b of within(pair).getAllByRole('button')) expect(b).toHaveClass('max-sm:h-11');
+    // The Status trigger keeps its name (label + chosen groups); its chevron
+    // is decoration only.
+    const status = screen.getByRole('button', { name: /^Status/ });
+    expect(status).toHaveClass('max-sm:h-11');
+    expect(status.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
+    await userEvent.click(status);
+    const boxes = within(screen.getByRole('group', { name: 'Status' })).getAllByRole('checkbox');
+    expect(boxes).toHaveLength(6);
+    for (const box of boxes) expect(box.tagName).toBe('INPUT');
+  });
 });
 
 describe('Charter', () => {

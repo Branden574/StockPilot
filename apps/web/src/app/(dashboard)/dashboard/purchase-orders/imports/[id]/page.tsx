@@ -1,6 +1,7 @@
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
+import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { PoImportDetail } from '@/components/po-imports/po-import-detail';
 import { PoImportLineageNotice } from '@/components/po-imports/po-import-lineage-notice';
 import { PoImportRenameButton } from '@/components/po-imports/po-import-rename-button';
@@ -12,14 +13,24 @@ import { LocationsService } from '@/server/services/locations';
 import { PoImportsService } from '@/server/services/po-imports';
 import { SuppliersService } from '@/server/services/suppliers';
 import { WarehousesService } from '@/server/services/warehouses';
+import { checkModuleAccess } from '@/lib/modules/module-gate';
 
 import { poImportUploaderLabel } from '@stockpilot/core';
 
-export default async function PoImportDetailPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
+/** The page area (DESIGN-SPEC 4 and 5.3), the same box the imports list draws. */
+const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
+
+export default async function PoImportDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  // The imports list's own module gate. With PO imports switched off the
+  // service refuses every read (assertModuleEnabled), which used to take this
+  // page to the error screen; an old link or notification now lands on the
+  // module-off panel, as the list does. The module set is the request-cached
+  // read the dashboard layout already made, so this adds no query.
+  const moduleAccess = await checkModuleAccess('po_imports');
+  if (!moduleAccess.enabled) {
+    return <ModuleNotEnabled moduleId="po_imports" canManage={moduleAccess.canManage} />;
+  }
+
   const { id } = await params;
   const svc = await PoImportsService.forCurrentUser();
 
@@ -53,7 +64,9 @@ export default async function PoImportDetailPage({
   // date stored in parsed_json (scan imports only). Only a clean YYYY-MM-DD is
   // accepted — `<input type="date">` rejects anything else.
   const rawExpected =
-    (header as { parsed_json?: { expectedDate?: string } | null }).parsed_json?.expectedDate?.trim() ?? '';
+    (
+      header as { parsed_json?: { expectedDate?: string } | null }
+    ).parsed_json?.expectedDate?.trim() ?? '';
   const defaultExpectedAt = /^\d{4}-\d{2}-\d{2}$/.test(rawExpected) ? rawExpected : null;
 
   // A line's suggested_item_id (barcode/ISBN/vendor-mapping match — Tasks
@@ -72,45 +85,45 @@ export default async function PoImportDetailPage({
   });
 
   return (
-    <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href="/dashboard/purchase-orders/imports"
-          className="text-muted-foreground hover:text-foreground text-sm"
-        >
-          ← Back to imports
-        </Link>
-        {/* The human name is the H1 (mig 0333); an import nobody named still
-            titles itself with its filename, exactly as before. The REAL
-            uploaded filename always stays on the page as metadata below —
-            it is what troubleshooting ("which document was this?") needs. */}
-        <div className="mt-2 flex flex-wrap items-center gap-1">
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {header.display_name ?? header.file_name}
-          </h1>
+    <div className={PAGE}>
+      {/* The human name is the H1 (mig 0333); an import nobody named still
+          titles itself with its filename, exactly as before. The REAL
+          uploaded filename always stays on the page as metadata below — it
+          is what troubleshooting ("which document was this?") needs. */}
+      <PageHeader
+        back={
+          <PageHeaderBackLink href="/dashboard/purchase-orders/imports">
+            ← Back to imports
+          </PageHeaderBackLink>
+        }
+        title={header.display_name ?? header.file_name}
+        titleId="po-import-title"
+        titleAside={
           <PoImportRenameButton
             poImportId={header.id}
             currentName={header.display_name}
             fileName={header.file_name}
           />
-        </div>
-        <p className="text-muted-foreground mt-1 text-xs">
-          Source file: {header.file_name} · Uploaded by{' '}
-          {poImportUploaderLabel(uploaders, header.uploaded_by, header.deleted_users)}
-        </p>
-        {/* Lineage sits ABOVE the review UI on purpose: on a superseded import
-            it changes how everything below it should be read, so it must not
-            be reachable only after scrolling past the line table. */}
-        <PoImportLineageNotice lineage={lineage} className="mt-4" />
-        {header.superseded_at && lineage.successors.length === 0 && (
-          // superseded_at is stamped, but the successor row is gone (deleted,
-          // or invisible under RLS). Say so plainly rather than offering a
-          // link that would 404.
-          <p className="text-muted-foreground mt-3 text-xs">
-            This file was imported again later, so this is no longer the live import for it.
+        }
+        subline={
+          <p className="[overflow-wrap:anywhere]">
+            Source file: {header.file_name} · Uploaded by{' '}
+            {poImportUploaderLabel(uploaders, header.uploaded_by, header.deleted_users)}
           </p>
-        )}
-      </div>
+        }
+      />
+      {/* Lineage sits ABOVE the review UI on purpose: on a superseded import
+          it changes how everything below it should be read, so it must not
+          be reachable only after scrolling past the line table. */}
+      <PoImportLineageNotice lineage={lineage} />
+      {header.superseded_at && lineage.successors.length === 0 && (
+        // superseded_at is stamped, but the successor row is gone (deleted,
+        // or invisible under RLS). Say so plainly rather than offering a
+        // link that would 404.
+        <p className="text-muted-foreground text-[12.5px]">
+          This file was imported again later, so this is no longer the live import for it.
+        </p>
+      )}
       <PoImportDetail
         header={header}
         lines={linesWithSuggestions}

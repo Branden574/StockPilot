@@ -22,18 +22,29 @@ export interface NavItem {
 }
 
 export interface NavSection {
+  /**
+   * The registry section key. It is the section's identity (labels can be
+   * renamed, keys never change), so the sidebar remembers a collapsed section
+   * by it. Presentation only: it changes nothing about which items appear.
+   */
+  key: NavSectionKey;
   label?: string;
   items: NavItem[];
 }
 
 /**
  * Maps the registry's section keys to the human-readable section headers
- * the sidebar renders. The `overview` section has no header (it's the
- * bare top group), matching the original static nav.
+ * the sidebar renders (in capitals, by CSS). The `overview` section has no
+ * header (it's the bare top group), matching the original static nav.
+ * Fulfillment, Purchasing and Insights are the owner's regroup of 2026-10-19.
+ * The breadcrumb's section crumbs (topbar-crumbs.ts) use these same words.
  */
 const SECTION_LABEL: Record<NavSectionKey, string | undefined> = {
   overview: undefined,
   inventory: 'Inventory',
+  fulfillment: 'Fulfillment',
+  purchasing: 'Purchasing',
+  insights: 'Insights',
   workspace: 'Workspace',
   tools: 'Tools',
   admin: 'Admin',
@@ -62,6 +73,7 @@ export function navForRole(
 ): NavSection[] {
   const resolved = resolveSurface('web_sidebar', { role, enabledModules, permissions });
   return applyNavOverrides(resolved, overrides ?? null).map((sec) => ({
+    key: sec.section,
     label: SECTION_LABEL[sec.section],
     items: sec.items.map((it) => ({
       href: it.href,

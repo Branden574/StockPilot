@@ -178,3 +178,177 @@ describe('PageTour tour-state reads', () => {
     expect(h.getTourState).toHaveBeenCalledTimes(2);
   });
 });
+
+/**
+ * A step spotlights its target in the PAGE when the shell has a match too.
+ * The sidebar and the top bar come before `main` in the document, so the first
+ * match alone could be a shell control. Review of 2026-10-18: the Navigation
+ * tour's "Hide what you do not use" step (`button[aria-label^="Hide "], …`,
+ * lib/onboarding/tours.ts) spotlit the top bar's "Hide sidebar" instead of
+ * the editor's eye toggles.
+ */
+describe('PageTour step targets', () => {
+  /** Starts a one-step tour from its pill and returns where the spotlight was cut out. */
+  async function spotlight(target: string, shell: React.ReactNode, page: React.ReactNode) {
+    const tour: TourDefinition = {
+      id: 'nav-settings',
+      version: 1,
+      name: 'Navigation & labels',
+      steps: [{ target, title: 'Hide what you do not use', body: 'The eye toggle.' }],
+    };
+    render(
+      <SessionUserProvider userId="user-a">
+        {shell}
+        <main>{page}</main>
+        <PageTour tour={tour} />
+      </SessionUserProvider>,
+    );
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Start the Navigation & labels tour' }));
+    await act(async () => {});
+    const hole = document.querySelector<HTMLElement>(
+      '[data-tour-open][aria-live] > div[aria-hidden]',
+    );
+    if (!hole) throw new Error('no spotlight');
+    return hole;
+  }
+
+  /** Gives an element a box, so the spotlight's position says which one it is. */
+  function placed(el: HTMLElement | null, top: number) {
+    if (!el) return;
+    el.getBoundingClientRect = () =>
+      ({
+        top,
+        left: 40,
+        width: 32,
+        height: 32,
+        bottom: top + 32,
+        right: 72,
+        x: 40,
+        y: top,
+      }) as DOMRect;
+    el.scrollIntoView = vi.fn();
+  }
+
+  it("prefers the page's match over the top bar's (the Navigation tour's eye toggle)", async () => {
+    let bar: HTMLElement | null = null;
+    let eye: HTMLElement | null = null;
+    const hole = await spotlight(
+      'button[aria-label^="Hide "], button[aria-label^="Show "]',
+      <header>
+        <button
+          type="button"
+          aria-label="Hide sidebar"
+          ref={(el) => {
+            bar = el;
+            placed(el, 10);
+          }}
+        />
+      </header>,
+      <button
+        type="button"
+        aria-label="Hide Items"
+        ref={(el) => {
+          eye = el;
+          placed(el, 300);
+        }}
+      />,
+    );
+    expect(hole.style.top).toBe('294px'); // the eye toggle's top, less the 6px margin
+    expect(eye!.scrollIntoView).toHaveBeenCalled();
+    expect(bar!.scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it("a target only the shell has is still found (the Overview tour's sidebar steps)", async () => {
+    let items: HTMLElement | null = null;
+    const hole = await spotlight(
+      '#dashboard-sidebar nav a[href="/dashboard/inventory"]',
+      <aside id="dashboard-sidebar">
+        <nav>
+          {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- a fixture the tour selector matches; nothing follows it */}
+          <a
+            href="/dashboard/inventory"
+            ref={(el) => {
+              items = el;
+              placed(el, 120);
+            }}
+          >
+            Items
+          </a>
+        </nav>
+      </aside>,
+      <h1>Overview</h1>,
+    );
+    expect(hole.style.top).toBe('114px');
+    expect(items!.scrollIntoView).toHaveBeenCalled();
+  });
+});
+
+/**
+ * THE TOUR TRIGGER IS THE SHARED GHOST BUTTON (DESIGN-SPEC 6.21 draws "Tour"
+ * as a ghost button; P2.6 review). It sits in the page header's tour slot
+ * beside 32 px actions, and as a hand-drawn 28 px button it had no 44 px
+ * target where a finger is the pointer. As the small ghost Button it gets the
+ * Button's invisible 44 x 44 hit area below sm and on coarse pointers, and it
+ * keeps its words, its name and what it does.
+ */
+describe('the Tour trigger', () => {
+  async function mountTour() {
+    render(
+      <SessionUserProvider userId="user-a">
+        <PageTour tour={TOUR} />
+      </SessionUserProvider>,
+    );
+    await act(async () => {});
+    return screen.getByRole('button', { name: 'Start the Items tour' });
+  }
+  const classesOf = (el: Element) => (el.getAttribute('class') ?? '').split(/\s+/);
+
+  // Mutation caught: the trigger drawn by hand again (no touch target), or a
+  // different Button size or variant.
+  it('is the small ghost Button, with the 44 px touch target below sm and on coarse pointers', async () => {
+    const trigger = await mountTour();
+    expect(trigger.tagName).toBe('BUTTON');
+    expect(trigger).toHaveAttribute('type', 'button');
+    expect(trigger).toHaveTextContent(/^Tour$/);
+    expect(classesOf(trigger)).toEqual(
+      expect.arrayContaining([
+        // size sm and the ghost variant's hover
+        'h-7',
+        'px-2.5',
+        'hover:bg-muted',
+        // the Button's hit area: 44 x 44, present below sm and on coarse pointers
+        'before:min-h-11',
+        'before:min-w-11',
+        "max-sm:before:content-['']",
+        "pointer-coarse:before:content-['']",
+        // the quiet look the tour slot drew: muted words at 400, a 14 px glyph
+        'text-muted-foreground',
+        'font-normal',
+        '[&_svg]:size-3.5',
+      ]),
+    );
+    expect(classesOf(trigger)).not.toContain('font-medium');
+    expect(classesOf(trigger)).not.toContain('[&_svg]:size-4');
+  });
+
+  it('still starts the tour from its first step', async () => {
+    const trigger = await mountTour();
+    fireEvent.click(trigger);
+    await act(async () => {});
+    expect(screen.getByRole('dialog', { name: 'Welcome' })).toBeInTheDocument();
+  });
+
+  // The offer and the step card float over the page; P2.2's floating surfaces
+  // draw the stronger hairline (in dark the structural one is about 1.13:1
+  // against a card). Mutation caught: either card back on the plain border.
+  it('the offer and the step card draw the stronger hairline of a floating surface', async () => {
+    const trigger = await mountTour();
+    const offer = screen.getByRole('dialog', { name: 'Items tour offer' });
+    expect(classesOf(offer)).toEqual(expect.arrayContaining(['border', 'border-line-strong']));
+    fireEvent.click(trigger);
+    await act(async () => {});
+    const card = screen.getByRole('dialog', { name: 'Welcome' });
+    expect(classesOf(card)).toEqual(expect.arrayContaining(['border', 'border-line-strong']));
+  });
+});

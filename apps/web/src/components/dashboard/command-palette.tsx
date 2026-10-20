@@ -22,6 +22,7 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 
 import { ItemThumb } from '@/components/items/item-thumb';
+import { PoStatusBadge } from '@/components/po/po-status-badge';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 
@@ -149,7 +150,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="overflow-hidden p-0 sm:max-w-[640px]"
+        className="gap-0 overflow-hidden p-0 sm:max-w-[640px] sm:p-0"
         aria-describedby={undefined}
       >
         <DialogTitle className="sr-only">Search</DialogTitle>
@@ -157,22 +158,25 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           shouldFilter={value.trim().length < 2}
           className="flex h-full flex-col"
         >
-          <div className="border-border flex items-center gap-2 border-b px-4">
-            <Search className="text-muted-foreground h-4 w-4" />
+          {/* The focus mark is the row's 2px ink underline, not a ring offset
+              around the bare input. pr-12 leaves the dialog's close button
+              its own corner. */}
+          <div className="border-border flex items-center gap-2.5 border-b pl-4 pr-12 focus-within:shadow-[inset_0_-2px_0_hsl(var(--ring))]">
+            <Search aria-hidden strokeWidth={1.8} className="text-muted-foreground size-4 shrink-0" />
             <Command.Input
               data-cmdk="true"
               placeholder="Search items, POs, suppliers, or jump to…"
               value={value}
               onValueChange={setValue}
-              className="placeholder:text-muted-foreground flex h-12 w-full bg-transparent text-sm outline-none"
+              className="placeholder:text-muted-foreground flex h-12 w-full bg-transparent text-base outline-none focus-visible:ring-0 focus-visible:ring-offset-0 sm:text-[14px]"
             />
             {loading && (
               <Loader2 className="text-muted-foreground h-3.5 w-3.5 animate-spin" />
             )}
           </div>
 
-          <Command.List className="max-h-[60vh] overflow-y-auto p-2">
-            <Command.Empty className="text-muted-foreground py-8 text-center text-sm">
+          <Command.List className="max-h-[60vh] overflow-y-auto p-1.5">
+            <Command.Empty className="text-muted-foreground py-10 text-center text-[13.5px]">
               No matches.
             </Command.Empty>
 
@@ -214,10 +218,10 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                     className={ROW}
                   >
                     <ClipboardList className="text-muted-foreground h-3.5 w-3.5" />
-                    <span className="flex-1 truncate">{p.poNumber}</span>
-                    <span className="text-muted-foreground text-[11px] capitalize">
-                      {p.status}
-                    </span>
+                    <span className="flex-1 truncate font-mono text-[12.5px]">{p.poNumber}</span>
+                    {/* The status in the words the PO list uses ("Expected",
+                        "Partial"), never the raw key ("Expected_inbound"). */}
+                    <PoStatusBadge status={p.status} />
                   </Command.Item>
                 ))}
               </Command.Group>
@@ -284,7 +288,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             </Command.Group>
           </Command.List>
 
-          <div className="border-border bg-muted/40 text-muted-foreground flex items-center justify-between border-t px-4 py-2 text-[11px]">
+          <div className="border-border bg-sunk text-muted-foreground flex items-center justify-between border-t px-4 py-2 text-[12px]">
             <span>
               <kbd className={KBD}>↑</kbd> <kbd className={KBD}>↓</kbd> navigate
             </span>
@@ -298,15 +302,17 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   );
 }
 
+/** Group headings: the table-header voice (11px, uppercase, +0.06em, ink-3). */
 const GROUP = cn(
-  '[&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider',
+  '[&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:pt-2.5 [&_[cmdk-group-heading]]:text-[11px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.06em]',
 );
 
+/** 32px rows; the highlighted one takes the neutral hover fill. */
 const ROW = cn(
-  'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none',
+  'flex min-h-8 cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13.5px] outline-none',
   'data-[selected=true]:bg-muted data-[selected=true]:text-foreground',
 );
 
 const KBD = cn(
-  'border-border bg-card rounded border px-1.5 py-px font-mono text-[10px]',
+  'bg-card rounded border border-[var(--ed-line-strong)] px-[5px] py-px font-mono text-[11px] leading-4',
 );

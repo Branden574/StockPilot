@@ -1,10 +1,12 @@
+import { ExternalHeader, ExternalShell } from '@/components/auth/external-shell';
 import { TrackForm } from '@/components/orders/track-form';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+// The root layout's title template adds " · StockPilot" (CONFLICTS D15).
 export const metadata = {
-  title: 'Track your order · StockPilot',
+  title: 'Track your order',
   robots: { index: false, follow: false },
 };
 
@@ -34,24 +36,19 @@ export default async function PublicOrderTrackPage({
   const initialEmail = stringParam(sp.email) ?? '';
 
   return (
-    <div className="mx-auto max-w-md py-6">
-      <header className="mb-6 text-center">
-        <p className="text-muted-foreground text-[11px] font-medium uppercase tracking-[0.12em]">
-          StockPilot
-        </p>
-        <h1 className="font-display mt-1 text-[26px] font-medium leading-tight tracking-[-0.025em]">
-          Track your order
-        </h1>
-        <p className="text-muted-foreground mt-2 text-sm">
-          Enter the email and request ID from your confirmation email.
-        </p>
-      </header>
+    <ExternalShell frame="column" as="div" width="md">
+      <ExternalHeader
+        eyebrow="StockPilot"
+        title="Track your order"
+        description="Enter the email and request ID from your confirmation email."
+        className="mb-6"
+      />
       <TrackForm
         initialToken={initialToken}
         initialId={initialId}
         initialEmail={initialEmail}
       />
-    </div>
+    </ExternalShell>
   );
 }
 

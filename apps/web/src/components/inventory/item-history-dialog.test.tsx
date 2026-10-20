@@ -526,3 +526,42 @@ describe('ItemHistoryDialog', () => {
     ).toBeInTheDocument();
   });
 });
+
+// The redesign (P4.A2, matrix W-BK-06c): the ledger is the shared rail
+// timeline inside the dialog. These pin the structure the restyle chose, not
+// its classes: one ordered list, one entry per movement, the marker's tone
+// following the formatter's tone, and the empty state as the state panel.
+describe('ItemHistoryDialog as a timeline (redesign)', () => {
+  it('renders the movements as one ordered timeline, newest first, one entry each', async () => {
+    const user = userEvent.setup();
+    soleRecord();
+    okOnce(page([MANUAL_REMOVE, MANUAL_ADD, POSTED_RECEIPT]));
+    renderDialog();
+    await open(user);
+
+    const first = await screen.findByTestId('history-row-mv-manual-remove');
+    const list = first.closest('ol');
+    expect(list).toHaveAttribute('data-slot', 'timeline');
+    const entries = within(list as HTMLElement).getAllByRole('listitem');
+    expect(entries.map((e) => e.getAttribute('data-testid'))).toEqual([
+      'history-row-mv-manual-remove',
+      'history-row-mv-manual-add',
+      'history-row-mv-posted',
+    ]);
+    for (const e of entries) expect(e).toHaveAttribute('data-slot', 'timeline-entry');
+    // The signed figures keep their sign and their tone.
+    expect(within(entries[0]!).getByText('-10')).toHaveAttribute('data-slot', 'delta');
+    expect(within(entries[1]!).getByText('+10')).toHaveAttribute('data-slot', 'delta');
+  });
+
+  it('the empty history is the state panel with its words, not a heading', async () => {
+    const user = userEvent.setup();
+    okOnce(page([]));
+    renderDialog();
+    await open(user);
+
+    const line = await screen.findByText('No stock movements recorded for this item yet.');
+    expect(line.closest('[data-slot="state-panel"]')).toHaveAttribute('data-state-kind', 'empty');
+    expect(line.tagName).toBe('P');
+  });
+});

@@ -183,10 +183,14 @@ describe('the draft sheet', () => {
   // OTA-safe (JS only) and nothing that sends or composes mail.
   it('imports only JS modules, and nothing that opens mail', () => {
     const imports = [...sheetSrc.matchAll(/^import[\s\S]*?from '([^']+)';/gm)].map((m) => m[1]);
+    // The redesign (P5.7a) added the shared checkbox mark (P2.5b) and the
+    // shared button tones, both JS modules: still nothing that opens mail.
     expect(imports.sort()).toEqual(
       [
         '@/components/item-verification-card',
+        '@/components/ui/checkbox',
         '@/components/ui/text',
+        '@/components/ui/tones',
         '@/lib/exception-sheet-layout',
         '@/lib/order-readiness',
         '@/lib/order-shortfall-po',
@@ -220,7 +224,8 @@ describe('the draft sheet', () => {
     expect(sheetCode).toContain(
       'const [selection, setSelection] = React.useState<ShortfallSelection>(() => defaultShortfallSelection(startView));',
     );
-    expect(sheetCode).toMatch(/<Body size=\{13\} color=\{ACCENT\.crit\} accessibilityRole="alert">\s*\{error\}/);
+    // Re-pinned by the redesign (P5.7a, look only): the per-mode refusal ink.
+    expect(sheetCode).toMatch(/<Body size=\{13\} color=\{c\.critText\} accessibilityRole="alert">\s*\{error\}/);
   });
 
   // Plan vitest: "The phone sheet is disabled offline". Mutation caught:
@@ -285,7 +290,8 @@ describe('the draft sheet', () => {
     expect(sheetCode).toMatch(
       /React\.useEffect\(\(\) => \{\s*if \(startNotice\) AccessibilityInfo\.announceForAccessibility\(startNotice\);\s*\}, \[startNotice\]\);/,
     );
-    expect(sheetCode).toMatch(/\{notice && !error && !created \? \(\s*<Body size=\{13\} color=\{ACCENT\.warn\}>\s*\{notice\}/);
+    // Re-pinned by the redesign (P5.7a, look only): the per-mode warning ink.
+    expect(sheetCode).toMatch(/\{notice && !error && !created \? \(\s*<Body size=\{13\} color=\{c\.warnText\}>\s*\{notice\}/);
   });
 
   describe('structure (sibling backdrop, VoiceOver, 44 pt, Dynamic Type, the keyboard)', () => {
@@ -507,7 +513,11 @@ describe('the PO screen opens a draft read-only', () => {
   // "Could not load this PO" had no way out); a Back under 44 pt or unnamed;
   // no way home when the screen was opened with nothing to go back to.
   it('a Back chip, 44 pt and named, sits above every state of the screen', () => {
-    expect(po).toContain("import { ArrowLeft } from 'lucide-react-native';");
+    // Re-pinned by the redesign (P5.8, 2026-10-18; was the exact line
+    // `import { ArrowLeft } from 'lucide-react-native';`): the screen now
+    // imports its Scan and check-mark icons from the same module, which the
+    // linter keeps on one import line. Same pin: Back is the ArrowLeft chip.
+    expect(po).toMatch(/import \{[^}]*\bArrowLeft\b[^}]*\} from 'lucide-react-native';/);
     expect(po).toContain("import { IconChip } from '@/components/ui/row';");
     expect(count(po, '<IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />')).toBe(1);
     expect(po).toMatch(

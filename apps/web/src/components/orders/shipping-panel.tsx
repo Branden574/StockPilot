@@ -4,7 +4,9 @@ import { ExternalLink, FileDown, Loader2, PackagePlus, Truck } from 'lucide-reac
 import * as React from 'react';
 import { toast } from 'sonner';
 
-import { Badge } from '@/components/ui/badge';
+import { DetailSection, DetailSectionMeta } from '@/components/patterns/detail-section';
+import { KeyValueList, KeyValueRow } from '@/components/patterns/key-value-row';
+import { Badge, type BadgeProps } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -39,14 +41,7 @@ interface CarrierShipment {
   tracking_status: string | null;
   tracking_url: string | null;
   label_url: string | null;
-  status:
-    | 'draft'
-    | 'purchased'
-    | 'in_transit'
-    | 'delivered'
-    | 'returned'
-    | 'failure'
-    | 'cancelled';
+  status: 'draft' | 'purchased' | 'in_transit' | 'delivered' | 'returned' | 'failure' | 'cancelled';
 }
 
 interface RatesResponse {
@@ -68,14 +63,16 @@ interface Props {
   charterSettingsHref: string;
 }
 
-const TRACKING_BADGE: Record<CarrierShipment['status'], string> = {
-  draft: 'bg-muted text-muted-foreground',
-  purchased: 'bg-blue-500/15 text-blue-600 dark:text-blue-400',
-  in_transit: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
-  delivered: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
-  returned: 'bg-orange-500/15 text-orange-600 dark:text-orange-400',
-  failure: 'bg-destructive/15 text-destructive',
-  cancelled: 'bg-muted text-muted-foreground',
+/** The label's state on the six badge tones (DESIGN-SPEC 6.10); the words
+ *  stay the status itself. */
+const TRACKING_BADGE: Record<CarrierShipment['status'], NonNullable<BadgeProps['variant']>> = {
+  draft: 'outline',
+  purchased: 'secondary',
+  in_transit: 'warning',
+  delivered: 'success',
+  returned: 'warning',
+  failure: 'destructive',
+  cancelled: 'outline',
 };
 
 function statusLabel(s: CarrierShipment['status']): string {
@@ -119,6 +116,7 @@ export function ShippingPanel({ orderId, canBuyLabel, charterSettingsHref }: Pro
   }, [orderId]);
 
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle: the state is set after the GET answers, never synchronously
     void loadShipment();
   }, [loadShipment]);
 
@@ -162,16 +160,12 @@ export function ShippingPanel({ orderId, canBuyLabel, charterSettingsHref }: Pro
         body: JSON.stringify({ parcel }),
       });
       const data = (await res.json().catch(() => null)) as
-        | (RatesResponse & { error?: string; message?: string })
-        | null;
+        (RatesResponse & { error?: string; message?: string }) | null;
       if (!res.ok) {
         const message = data?.message ?? 'Could not fetch rates.';
         // The service raises validation_error with this exact message when the
         // destination charter has no mailing address — show the fix-it link.
-        if (
-          res.status === 400 &&
-          /charter has no mailing address/i.test(message)
-        ) {
+        if (res.status === 400 && /charter has no mailing address/i.test(message)) {
           setNeedsAddress(true);
         } else {
           toast.error(message);
@@ -202,9 +196,11 @@ export function ShippingPanel({ orderId, canBuyLabel, charterSettingsHref }: Pro
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rateId: selectedRateId }),
       });
-      const data = (await res.json().catch(() => null)) as
-        | { shipment?: CarrierShipment; error?: string; message?: string }
-        | null;
+      const data = (await res.json().catch(() => null)) as {
+        shipment?: CarrierShipment;
+        error?: string;
+        message?: string;
+      } | null;
       if (!res.ok || !data?.shipment) {
         toast.error(data?.message ?? 'Could not buy the label.');
         return;
@@ -221,8 +217,7 @@ export function ShippingPanel({ orderId, canBuyLabel, charterSettingsHref }: Pro
   }
 
   // A purchased/tracked shipment to display read-only.
-  const purchased =
-    shipment && shipment.status !== 'draft' ? shipment : null;
+  const purchased = shipment && shipment.status !== 'draft' ? shipment : null;
 
   // Nothing to show: no buy affordance and no shipment. Avoid rendering an
   // empty card (also covers the module-off / forbidden cases where the GET
@@ -231,17 +226,15 @@ export function ShippingPanel({ orderId, canBuyLabel, charterSettingsHref }: Pro
   if (!canBuyLabel && !purchased) return null;
 
   return (
-    <section className="bg-card rounded-xl border">
-      <div className="border-border flex items-center justify-between border-b px-4 py-3">
-        <div>
-          <h2 className="text-sm font-medium">Shipping</h2>
-          <p className="text-muted-foreground mt-0.5 text-[11.5px]">
-            Carrier label &amp; tracking for this delivery.
-          </p>
-        </div>
-        {canBuyLabel && !purchased && (
+    <DetailSection
+      title="Shipping"
+      aside={<DetailSectionMeta>Carrier label &amp; tracking for this delivery.</DetailSectionMeta>}
+      flush
+    >
+      {canBuyLabel && !purchased && (
+        <div className="border-border flex justify-end border-b px-[18px] py-2.5">
           <Button
-            variant="gradient"
+            variant="outline"
             size="sm"
             onClick={() => {
               resetDialog();
@@ -251,86 +244,63 @@ export function ShippingPanel({ orderId, canBuyLabel, charterSettingsHref }: Pro
             <PackagePlus className="h-3.5 w-3.5" />
             Buy shipping label
           </Button>
-        )}
-      </div>
+        </div>
+      )}
 
-      <div className="space-y-2 p-4">
+      <div>
         {purchased ? (
-          <dl className="space-y-2 text-[12px]">
-            <div className="flex items-center justify-between gap-3">
-              <dt className="text-muted-foreground">Status</dt>
-              <dd>
-                <Badge
-                  variant="outline"
-                  className={cn('border-transparent', TRACKING_BADGE[purchased.status])}
+          <KeyValueList>
+            <KeyValueRow label="Status">
+              <Badge variant={TRACKING_BADGE[purchased.status]}>
+                {statusLabel(purchased.status)}
+              </Badge>
+            </KeyValueRow>
+            <KeyValueRow label="Carrier">
+              {purchased.carrier ?? '—'}
+              {purchased.service ? (
+                <span className="text-muted-foreground"> · {purchased.service}</span>
+              ) : null}
+            </KeyValueRow>
+            <KeyValueRow label="Tracking #" valueClassName="font-mono text-[12.5px]">
+              {purchased.tracking_url && purchased.tracking_code ? (
+                <a
+                  href={purchased.tracking_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 hover:underline"
                 >
-                  {statusLabel(purchased.status)}
-                </Badge>
-              </dd>
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <dt className="text-muted-foreground">Carrier</dt>
-              <dd className="text-right">
-                {purchased.carrier ?? '—'}
-                {purchased.service ? (
-                  <span className="text-muted-foreground"> · {purchased.service}</span>
-                ) : null}
-              </dd>
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <dt className="text-muted-foreground">Tracking #</dt>
-              <dd className="text-right font-mono">
-                {purchased.tracking_url && purchased.tracking_code ? (
-                  <a
-                    href={purchased.tracking_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 hover:underline"
-                  >
-                    {purchased.tracking_code}
-                    <ExternalLink className="h-3 w-3" />
-                  </a>
-                ) : (
-                  purchased.tracking_code ?? '—'
-                )}
-              </dd>
-            </div>
+                  {purchased.tracking_code}
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              ) : (
+                (purchased.tracking_code ?? '—')
+              )}
+            </KeyValueRow>
             {purchased.tracking_status && (
-              <div className="flex items-center justify-between gap-3">
-                <dt className="text-muted-foreground">Carrier status</dt>
-                <dd className="text-right capitalize">
-                  {purchased.tracking_status.replace(/_/g, ' ')}
-                </dd>
-              </div>
+              <KeyValueRow label="Carrier status" valueClassName="capitalize">
+                {purchased.tracking_status.replace(/_/g, ' ')}
+              </KeyValueRow>
             )}
             {purchased.rate_cents != null && (
-              <div className="flex items-center justify-between gap-3">
-                <dt className="text-muted-foreground">Cost</dt>
-                <dd className="text-right tabular-nums">
-                  {formatCurrency(purchased.rate_cents / 100, purchased.currency ?? 'USD')}
-                </dd>
-              </div>
+              <KeyValueRow label="Cost">
+                {formatCurrency(purchased.rate_cents / 100, purchased.currency ?? 'USD')}
+              </KeyValueRow>
             )}
-            {purchased.label_url && (
-              <div className="pt-1">
-                <Button variant="outline" size="sm" asChild>
-                  <a
-                    href={purchased.label_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    <FileDown className="h-3.5 w-3.5" />
-                    Download label
-                  </a>
-                </Button>
-              </div>
-            )}
-          </dl>
+          </KeyValueList>
         ) : (
-          <p className="text-muted-foreground text-[12px]">
-            No shipping label yet. Buy a label to generate tracking for this
-            delivery.
+          <p className="text-muted-foreground px-[18px] py-3.5 text-[13px]">
+            No shipping label yet. Buy a label to generate tracking for this delivery.
           </p>
+        )}
+        {purchased?.label_url && (
+          <div className="border-border border-t px-[18px] py-3">
+            <Button variant="outline" size="sm" asChild>
+              <a href={purchased.label_url} target="_blank" rel="noopener noreferrer">
+                <FileDown className="h-3.5 w-3.5" />
+                Download label
+              </a>
+            </Button>
+          </div>
         )}
       </div>
 
@@ -347,17 +317,15 @@ export function ShippingPanel({ orderId, canBuyLabel, charterSettingsHref }: Pro
           <DialogHeader>
             <DialogTitle>Buy shipping label</DialogTitle>
             <DialogDescription>
-              Enter the parcel size, fetch carrier rates, then confirm a rate to
-              buy a label. Buying postage charges your EasyPost account.
+              Enter the parcel size, fetch carrier rates, then confirm a rate to buy a label. Buying
+              postage charges your EasyPost account.
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <div className="space-y-1.5">
-                <Label htmlFor="ship-weight" className="text-xs">
-                  Weight (oz)
-                </Label>
+                <Label htmlFor="ship-weight">Weight (oz)</Label>
                 <Input
                   id="ship-weight"
                   type="number"
@@ -370,9 +338,7 @@ export function ShippingPanel({ orderId, canBuyLabel, charterSettingsHref }: Pro
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="ship-length" className="text-xs">
-                  Length (in)
-                </Label>
+                <Label htmlFor="ship-length">Length (in)</Label>
                 <Input
                   id="ship-length"
                   type="number"
@@ -385,9 +351,7 @@ export function ShippingPanel({ orderId, canBuyLabel, charterSettingsHref }: Pro
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="ship-width" className="text-xs">
-                  Width (in)
-                </Label>
+                <Label htmlFor="ship-width">Width (in)</Label>
                 <Input
                   id="ship-width"
                   type="number"
@@ -400,9 +364,7 @@ export function ShippingPanel({ orderId, canBuyLabel, charterSettingsHref }: Pro
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="ship-height" className="text-xs">
-                  Height (in)
-                </Label>
+                <Label htmlFor="ship-height">Height (in)</Label>
                 <Input
                   id="ship-height"
                   type="number"
@@ -433,16 +395,14 @@ export function ShippingPanel({ orderId, canBuyLabel, charterSettingsHref }: Pro
             </div>
 
             {needsAddress && (
-              <div className="border-destructive/40 bg-destructive/5 rounded-md border p-3 text-[12px]">
-                <p className="text-destructive font-medium">
-                  This charter has no mailing address.
-                </p>
+              <div
+                className="border-destructive/30 bg-destructive-wash rounded-lg border p-3 text-[12.5px]"
+                role="alert"
+              >
+                <p className="text-destructive font-medium">This charter has no mailing address.</p>
                 <p className="text-muted-foreground mt-1">
                   Add a mailing address to this charter first.{' '}
-                  <a
-                    href={charterSettingsHref}
-                    className="text-foreground underline"
-                  >
+                  <a href={charterSettingsHref} className="text-foreground underline">
                     Open charter settings
                   </a>
                 </p>
@@ -451,9 +411,7 @@ export function ShippingPanel({ orderId, canBuyLabel, charterSettingsHref }: Pro
 
             {rates && rates.length > 0 && (
               <div className="space-y-1.5">
-                <p className="text-muted-foreground text-xs">
-                  Select a rate to buy:
-                </p>
+                <p className="text-muted-foreground text-[12.5px]">Select a rate to buy:</p>
                 <ul className="max-h-64 space-y-1.5 overflow-y-auto">
                   {rates.map((r) => {
                     const selected = selectedRateId === r.id;
@@ -464,24 +422,25 @@ export function ShippingPanel({ orderId, canBuyLabel, charterSettingsHref }: Pro
                           type="button"
                           onClick={() => setSelectedRateId(r.id)}
                           disabled={buying}
+                          aria-pressed={selected}
                           className={cn(
-                            'flex w-full items-center justify-between gap-3 rounded-md border px-3 py-2 text-left text-[12px] transition-colors',
+                            'flex w-full items-center justify-between gap-3 rounded-md border px-3 py-2 text-left text-[13px] transition-colors',
                             selected
-                              ? 'border-primary bg-primary/5'
-                              : 'border-border hover:bg-muted/50',
+                              ? 'border-accent bg-success-wash ring-accent ring-1'
+                              : 'border-border hover:bg-muted',
                           )}
                         >
                           <span>
                             <span className="font-medium">{r.carrier}</span>
                             <span className="text-muted-foreground"> · {r.service}</span>
                             {r.delivery_days != null && (
-                              <span className="text-muted-foreground block text-[11px]">
+                              <span className="text-muted-foreground block text-[12px]">
                                 {r.delivery_days} day
                                 {r.delivery_days === 1 ? '' : 's'} in transit
                               </span>
                             )}
                           </span>
-                          <span className="tabular-nums font-medium">
+                          <span className="font-medium tabular-nums">
                             {Number.isFinite(price)
                               ? formatCurrency(price, r.currency || 'USD')
                               : `${r.rate} ${r.currency}`}
@@ -507,7 +466,7 @@ export function ShippingPanel({ orderId, canBuyLabel, charterSettingsHref }: Pro
               Cancel
             </Button>
             <Button
-              variant="gradient"
+              variant="default"
               onClick={buyLabel}
               disabled={!selectedRateId || fetchingRates || buying}
             >
@@ -517,6 +476,6 @@ export function ShippingPanel({ orderId, canBuyLabel, charterSettingsHref }: Pro
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </section>
+    </DetailSection>
   );
 }

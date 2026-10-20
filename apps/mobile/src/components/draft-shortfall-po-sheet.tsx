@@ -1,4 +1,4 @@
-import { CheckCircle2, ChevronRight, Circle, X } from 'lucide-react-native';
+import { ChevronRight, X } from 'lucide-react-native';
 import * as React from 'react';
 import {
   AccessibilityInfo,
@@ -9,6 +9,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Text,
   TextInput,
   useWindowDimensions,
   View,
@@ -32,7 +33,9 @@ import {
 } from '@stockpilot/core';
 
 import { MIN_TAP } from '@/components/item-verification-card';
+import { CheckboxMark } from '@/components/ui/checkbox';
 import { Body, FieldLabel, Mono } from '@/components/ui/text';
+import { buttonTone } from '@/components/ui/tones';
 import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';
 import { readOrderReadiness } from '@/lib/order-readiness';
 import {
@@ -49,7 +52,7 @@ import {
 } from '@/lib/order-shortfall-po';
 import { draftOrderShortfallPos } from '@/lib/orders-api';
 import { supabase } from '@/lib/supabase';
-import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useSheetKeyboardFields } from '@/lib/use-sheet-keyboard-fields';
 import { useTheme } from '@/lib/use-theme';
 
@@ -91,6 +94,14 @@ import { useTheme } from '@/lib/use-theme';
  * field and button is its own VoiceOver element of at least 44 pt, labels
  * capped at their ceilings; the sentences are content and grow with Dynamic
  * Type.
+ *
+ * The redesign look: each line's box is the shared CheckboxMark (P2.5b),
+ * drawn inside the row Pressable that VoiceOver reads as the checkbox; a line
+ * that cannot be drafted shows the greyed box. Draft is the ink button,
+ * Cancel or Close the outline (labels in the display face); quantities sit in
+ * the reference's count input (the recessed fill in the stronger border, the
+ * warning ink while the quantity has a problem); refusals, notices and
+ * problems take the per-mode refusal and warning inks (critText / warnText).
  */
 export function DraftShortfallPoSheet({
   visible,
@@ -132,6 +143,11 @@ export function DraftShortfallPoSheet({
   onRefresh: () => void;
 }) {
   const { c, mode } = useTheme();
+  // Draft commits (the ink button); Cancel or Close is the outline.
+  const ink = buttonTone('primary', c);
+  const outline = buttonTone('outline', c);
+  const inkText = [styles.actionLabel, { color: ink.fg }];
+  const outlineText = [styles.actionLabel, { color: outline.fg }];
   const { height } = useWindowDimensions();
   const [view, setView] = React.useState<ShortfallPoView>(startView);
   const [selection, setSelection] = React.useState<ShortfallSelection>(() => defaultShortfallSelection(startView));
@@ -290,7 +306,7 @@ export function DraftShortfallPoSheet({
                   {SHORTFALL_PO_TITLE}
                 </Body>
                 {orderLabel ? (
-                  <Mono size={11} color={c.ink4}>
+                  <Mono size={11.5} color={c.ink3}>
                     {orderLabel}
                   </Mono>
                 ) : null}
@@ -308,7 +324,7 @@ export function DraftShortfallPoSheet({
                   justifyContent: 'center',
                 }}
               >
-                <X size={18} color={c.ink4} />
+                <X size={18} color={c.ink2} />
               </Pressable>
             </View>
 
@@ -335,12 +351,12 @@ export function DraftShortfallPoSheet({
               {/* A refusal first, where the body is scrolled to when it
                   appears (announced too: iOS gives the alert role no trait). */}
               {error ? (
-                <Body size={13} color={ACCENT.crit} accessibilityRole="alert">
+                <Body size={13} color={c.critText} accessibilityRole="alert">
                   {error}
                 </Body>
               ) : null}
               {notice && !error && !created ? (
-                <Body size={13} color={ACCENT.warn}>
+                <Body size={13} color={c.warnText}>
                   {notice}
                 </Body>
               ) : null}
@@ -357,7 +373,7 @@ export function DraftShortfallPoSheet({
                       accessibilityRole="button"
                       accessibilityLabel={r.accessibilityLabel}
                       accessibilityHint={SHORTFALL_PO_OPEN_DRAFT_HINT}
-                      style={[styles.createdRow, { borderColor: c.hair }]}
+                      style={[styles.createdRow, { borderColor: c.hair2 }]}
                     >
                       <View style={{ flex: 1, gap: 2 }}>
                         <Mono size={13} color={c.ink}>
@@ -377,7 +393,7 @@ export function DraftShortfallPoSheet({
               ) : (
                 <>
                   {sheet.unavailable && sheet.unavailable !== error ? (
-                    <Body size={13.5} color={ACCENT.warn}>
+                    <Body size={13.5} color={c.warnText}>
                       {sheet.unavailable}
                     </Body>
                   ) : null}
@@ -399,19 +415,19 @@ export function DraftShortfallPoSheet({
                         accessibilityState={{ checked: row.checked, disabled: !row.draftable || locked }}
                         style={styles.check}
                       >
+                        {/* The shared box alone (P2.5b): this Pressable is the
+                            checkbox to VoiceOver, with its state; the mark
+                            draws the box, greyed while the line cannot be
+                            drafted, and takes no touch of its own. */}
                         <View style={{ paddingTop: 2 }}>
-                          {row.checked ? (
-                            <CheckCircle2 size={22} color={c.ink} strokeWidth={2} />
-                          ) : (
-                            <Circle size={22} color={c.ink4} strokeWidth={1.6} />
-                          )}
+                          <CheckboxMark checked={row.checked} disabled={!row.draftable || locked} />
                         </View>
                         <View style={{ flex: 1, gap: 2 }}>
                           <Body size={14.5} color={c.ink}>
                             {row.name}
                           </Body>
                           {row.sku ? (
-                            <Mono size={11} color={c.ink4}>
+                            <Mono size={11.5} color={c.ink3}>
                               {row.sku}
                             </Mono>
                           ) : null}
@@ -444,8 +460,8 @@ export function DraftShortfallPoSheet({
                           style={[
                             styles.input,
                             {
-                              borderColor: row.problem ? ACCENT.warn : c.hair,
-                              backgroundColor: c.paper2,
+                              borderColor: row.problem ? c.warnText : c.hair2,
+                              backgroundColor: c.sunk,
                               color: c.ink,
                               opacity: row.checked ? 1 : 0.5,
                             },
@@ -453,7 +469,7 @@ export function DraftShortfallPoSheet({
                         />
                       ) : null}
                       {row.problem ? (
-                        <Body size={12.5} color={ACCENT.warn}>
+                        <Body size={12.5} color={c.warnText}>
                           {row.problem}
                         </Body>
                       ) : null}
@@ -493,15 +509,19 @@ export function DraftShortfallPoSheet({
                 accessibilityHint={sheet.draftBlockedBy ?? undefined}
                 style={[
                   styles.action,
-                  { backgroundColor: c.ink, opacity: sheet.canDraft || busy ? 1 : 0.5 },
+                  {
+                    backgroundColor: ink.bg,
+                    borderColor: ink.border,
+                    opacity: sheet.canDraft || busy ? 1 : 0.5,
+                  },
                 ]}
               >
                 {busy ? (
-                  <ActivityIndicator color={c.paper} />
+                  <ActivityIndicator color={ink.fg} />
                 ) : (
-                  <Mono size={13} color={c.paper} maxFontSizeMultiplier={ACTION_CAP}>
+                  <Text style={inkText} maxFontSizeMultiplier={ACTION_CAP}>
                     {SHORTFALL_PO_SUBMIT_LABEL}
-                  </Mono>
+                  </Text>
                 )}
               </Pressable>
             )}
@@ -511,11 +531,18 @@ export function DraftShortfallPoSheet({
               accessibilityRole="button"
               accessibilityLabel={finished ? SHORTFALL_PO_CLOSE_LABEL : SHORTFALL_PO_CANCEL_LABEL}
               accessibilityState={{ disabled: busy }}
-              style={[styles.action, { borderWidth: 1, borderColor: c.hair, opacity: busy ? 0.5 : 1 }]}
+              style={[
+                styles.action,
+                {
+                  backgroundColor: outline.bg,
+                  borderColor: outline.border,
+                  opacity: busy ? 0.5 : 1,
+                },
+              ]}
             >
-              <Mono size={13} color={c.ink} maxFontSizeMultiplier={ACTION_CAP}>
+              <Text style={outlineText} maxFontSizeMultiplier={ACTION_CAP}>
                 {finished ? SHORTFALL_PO_CLOSE_LABEL : SHORTFALL_PO_CANCEL_LABEL}
-              </Mono>
+              </Text>
             </Pressable>
           </View>
         </View>
@@ -572,5 +599,8 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     minHeight: MIN_TAP,
     borderRadius: 10,
+    borderWidth: 1,
   },
+  /** The shared Button's label: the display face at 500; it wraps. */
+  actionLabel: { fontFamily: FONT.display, fontSize: 13, textAlign: 'center', flexShrink: 1 },
 });

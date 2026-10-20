@@ -100,14 +100,8 @@ describe('Pagination adjacent-page prefetch', () => {
     );
     // Adjacent links: full RSC prefetch so the page-turn click swaps in
     // already-fetched data instead of a server round trip.
-    expect(screen.getByRole('link', { name: /prev/i })).toHaveAttribute(
-      'data-prefetch',
-      'true',
-    );
-    expect(screen.getByRole('link', { name: /next/i })).toHaveAttribute(
-      'data-prefetch',
-      'true',
-    );
+    expect(screen.getByRole('link', { name: /prev/i })).toHaveAttribute('data-prefetch', 'true');
+    expect(screen.getByRole('link', { name: /next/i })).toHaveAttribute('data-prefetch', 'true');
     // The numbered popover grid must NEVER join in (no link herd —
     // intent-scoped warming only).
     await user.click(screen.getByRole('button', { name: /jump to page/i }));
@@ -132,14 +126,8 @@ describe('Pagination adjacent-page prefetch', () => {
         pendingInstant
       />,
     );
-    expect(screen.getByRole('link', { name: /prev/i })).toHaveAttribute(
-      'data-prefetch',
-      'false',
-    );
-    expect(screen.getByRole('link', { name: /next/i })).toHaveAttribute(
-      'data-prefetch',
-      'false',
-    );
+    expect(screen.getByRole('link', { name: /prev/i })).toHaveAttribute('data-prefetch', 'false');
+    expect(screen.getByRole('link', { name: /next/i })).toHaveAttribute('data-prefetch', 'false');
   });
 
   it('INSTANT mode (onNavigate set): no prefetch anywhere — pagination is a shallow push, not a navigation', () => {
@@ -152,14 +140,8 @@ describe('Pagination adjacent-page prefetch', () => {
         onNavigate={vi.fn()}
       />,
     );
-    expect(screen.getByRole('link', { name: /prev/i })).toHaveAttribute(
-      'data-prefetch',
-      'false',
-    );
-    expect(screen.getByRole('link', { name: /next/i })).toHaveAttribute(
-      'data-prefetch',
-      'false',
-    );
+    expect(screen.getByRole('link', { name: /prev/i })).toHaveAttribute('data-prefetch', 'false');
+    expect(screen.getByRole('link', { name: /next/i })).toHaveAttribute('data-prefetch', 'false');
   });
 
   it('does not render a prefetching link for a disabled edge (page 1 has no Prev anchor)', () => {
@@ -173,9 +155,36 @@ describe('Pagination adjacent-page prefetch', () => {
     );
     // Prev is a disabled <span>, not a link — nothing to prefetch.
     expect(screen.queryByRole('link', { name: /prev/i })).toBeNull();
-    expect(screen.getByRole('link', { name: /next/i })).toHaveAttribute(
-      'data-prefetch',
-      'true',
+    expect(screen.getByRole('link', { name: /next/i })).toHaveAttribute('data-prefetch', 'true');
+  });
+});
+
+// FX8 (DESIGN-SPEC 6.9 pagination footer, 6.2 pager rows): Items and Books
+// draw this pager, not components/ui/pagination.tsx. The reference pager is
+// 12.5/400 with the range figures in --ink at 400; here the figures carried
+// font-medium and Prev / Next took the Button's weight 500.
+describe('Pagination weight', () => {
+  it('prints the range figures in ink at weight 400, and Prev and Next at 400, enabled or not', () => {
+    render(
+      <Pagination
+        page={1}
+        pageSize={30}
+        total={216}
+        buildHref={(p) => `/dashboard/inventory?page=${p}`}
+      />,
     );
+    for (const figure of ['1', '30', '216']) {
+      const el = screen.getByText(figure);
+      expect(el).toHaveClass('text-foreground');
+      expect(el).not.toHaveClass('font-medium');
+    }
+    // Page 1: Prev is the disabled span, Next a link.
+    const prev = screen.getByText('← Prev');
+    expect(prev).toHaveAttribute('aria-disabled');
+    expect(prev).toHaveClass('font-normal');
+    expect(prev).not.toHaveClass('font-medium');
+    const next = screen.getByRole('link', { name: /next/i });
+    expect(next).toHaveClass('font-normal');
+    expect(next).not.toHaveClass('font-medium');
   });
 });

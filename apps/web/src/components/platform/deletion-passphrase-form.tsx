@@ -4,6 +4,7 @@ import { KeyRound, Loader2 } from 'lucide-react';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { DetailSection } from '@/components/patterns/detail-section';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { PasswordInput } from '@/components/ui/password-input';
@@ -65,12 +66,16 @@ export function DeletionPassphraseForm({ isConfigured }: { isConfigured: boolean
   return (
     <>
       {stepUp.modal}
-      <div className="border-destructive/40 bg-card rounded-[10px] border p-4 sm:p-5">
-        <div className="flex items-center gap-2">
-          <KeyRound className="text-destructive h-4 w-4" strokeWidth={1.75} />
-          <h2 className="font-display text-[15px] font-medium">Org-deletion passphrase</h2>
-        </div>
-        <p className="mt-1.5 max-w-2xl text-[12.5px] text-[var(--ed-ink-3)]">
+      <DetailSection
+        className="border-destructive/40"
+        title={
+          <span className="inline-flex items-center gap-2">
+            <KeyRound className="text-destructive h-4 w-4" strokeWidth={1.75} aria-hidden />
+            Org-deletion passphrase
+          </span>
+        }
+      >
+        <p className="text-muted-foreground max-w-2xl text-[13px]">
           A second factor required to hard-delete <span className="font-medium">any</span>{' '}
           organization — on top of the platform-admin allowlist and a fresh MFA step-up. It is
           stored hashed (scrypt) and is <span className="font-medium">never retrievable</span>; if
@@ -78,7 +83,7 @@ export function DeletionPassphraseForm({ isConfigured }: { isConfigured: boolean
           platform audit log.
         </p>
 
-        <form onSubmit={onSubmit} className="mt-4 max-w-md space-y-4">
+        <form onSubmit={onSubmit} className="mt-4 flex max-w-md flex-col gap-4">
           {isConfigured ? (
             <div className="space-y-1.5">
               <Label htmlFor="deletion-passphrase-current">Current passphrase</Label>
@@ -103,7 +108,7 @@ export function DeletionPassphraseForm({ isConfigured }: { isConfigured: boolean
               onChange={(e) => setPassphrase(e.target.value)}
             />
             {tooShort ? (
-              <p className="text-destructive text-[11.5px]">Must be at least 12 characters.</p>
+              <p className="text-destructive text-[12px]">Must be at least 12 characters.</p>
             ) : null}
           </div>
 
@@ -117,11 +122,16 @@ export function DeletionPassphraseForm({ isConfigured }: { isConfigured: boolean
               onChange={(e) => setConfirm(e.target.value)}
             />
             {mismatch ? (
-              <p className="text-destructive text-[11.5px]">Passphrases don&apos;t match.</p>
+              <p className="text-destructive text-[12px]">Passphrases don&apos;t match.</p>
             ) : null}
           </div>
 
-          <Button type="submit" variant="destructive" disabled={!canSave}>
+          <Button
+            type="submit"
+            variant="destructive"
+            disabled={!canSave}
+            className="self-start max-sm:h-11"
+          >
             {pending ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -132,7 +142,7 @@ export function DeletionPassphraseForm({ isConfigured }: { isConfigured: boolean
             )}
           </Button>
         </form>
-      </div>
+      </DetailSection>
     </>
   );
 }

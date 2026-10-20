@@ -62,6 +62,10 @@ describe('RentalsListTable reminder marks', () => {
   it('renders as before when no marks are given', () => {
     render(<RentalsListTable rentals={[rental('a')]} viewerRole="staff" timeZone={PT} />);
     expect(screen.queryByTestId('reminder-mark')).toBeNull();
+    // The Rentals page title (titleId="rentals-title") names the scroll
+    // region; the table keeps its own name.
+    const table = screen.getByRole('table', { name: 'Rentals' });
+    expect(table.parentElement).toHaveAttribute('aria-labelledby', 'rentals-title');
   });
 });
 
@@ -86,7 +90,9 @@ describe('RentalsListTable due label agrees with the pill', () => {
       <RentalsListTable
         rentals={[
           rental('five', { expected_return_at: new Date(Date.now() - 5 * HOUR).toISOString() }),
-          rental('one', { expected_return_at: new Date(Date.now() - 1 * HOUR - 60_000).toISOString() }),
+          rental('one', {
+            expected_return_at: new Date(Date.now() - 1 * HOUR - 60_000).toISOString(),
+          }),
           rental('just', { expected_return_at: new Date(Date.now() - 10 * 60_000).toISOString() }),
         ]}
         viewerRole="staff"
@@ -131,7 +137,9 @@ describe('RentalsListTable due label agrees with the pill', () => {
         <RentalsListTable
           rentals={[
             rental('soon', { expected_return_at: new Date(Date.now() + 2 * HOUR).toISOString() }),
-            rental('later', { expected_return_at: new Date(Date.now() + 3 * 24 * HOUR).toISOString() }),
+            rental('later', {
+              expected_return_at: new Date(Date.now() + 3 * 24 * HOUR).toISOString(),
+            }),
           ]}
           viewerRole="staff"
           timeZone={PT}
@@ -173,7 +181,9 @@ describe("RentalsListTable due label counts calendar days in the organization's 
 
   it('9 PM, due 8 AM tomorrow: due in 1 day, not today', () => {
     // Thu Sep 24 9:00 PM PDT; due Fri Sep 25 8:00 AM PDT (11 hours ahead).
-    expect(labelAt('2026-09-25T04:00:00.000Z', '2026-09-25T15:00:00.000Z', PT)).toBe('Due in 1 day');
+    expect(labelAt('2026-09-25T04:00:00.000Z', '2026-09-25T15:00:00.000Z', PT)).toBe(
+      'Due in 1 day',
+    );
   });
 
   it('8 AM, due 11 PM the same day: due today', () => {
@@ -184,17 +194,25 @@ describe("RentalsListTable due label counts calendar days in the organization's 
   it("the day is the organization's, not the server's or the browser's", () => {
     // The same two instants are one calendar day apart in Los Angeles and the
     // same day in UTC.
-    expect(labelAt('2026-09-25T04:00:00.000Z', '2026-09-25T15:00:00.000Z', 'UTC')).toBe('Due today');
+    expect(labelAt('2026-09-25T04:00:00.000Z', '2026-09-25T15:00:00.000Z', 'UTC')).toBe(
+      'Due today',
+    );
     // Due just after midnight PDT tomorrow, 1 hour ahead: tomorrow.
-    expect(labelAt('2026-09-25T06:30:00.000Z', '2026-09-25T07:30:00.000Z', PT)).toBe('Due in 1 day');
+    expect(labelAt('2026-09-25T06:30:00.000Z', '2026-09-25T07:30:00.000Z', PT)).toBe(
+      'Due in 1 day',
+    );
   });
 
   it('counts calendar days across a clock change', () => {
     // Sat Mar 7 2026 noon PST to Mon Mar 9 noon PDT: 47 hours (the clocks go
     // forward on Mar 8), two days.
-    expect(labelAt('2026-03-07T20:00:00.000Z', '2026-03-09T19:00:00.000Z', PT)).toBe('Due in 2 days');
+    expect(labelAt('2026-03-07T20:00:00.000Z', '2026-03-09T19:00:00.000Z', PT)).toBe(
+      'Due in 2 days',
+    );
     // Sat Oct 31 noon PDT to Mon Nov 2 noon PST: 49 hours, two days.
-    expect(labelAt('2026-10-31T19:00:00.000Z', '2026-11-02T20:00:00.000Z', PT)).toBe('Due in 2 days');
+    expect(labelAt('2026-10-31T19:00:00.000Z', '2026-11-02T20:00:00.000Z', PT)).toBe(
+      'Due in 2 days',
+    );
   });
 });
 
@@ -264,5 +282,104 @@ describe('RentalsListTable borrower tag', () => {
     expect(RENTAL_BORROWER_TEAM_MEMBER).toBe('Team member');
     expect(screen.queryByText('(member)')).toBeNull();
     expect(screen.getByText('Borrower m').closest('td')!.textContent).toContain('Team member');
+  });
+});
+
+// Redesign P4.D1: the table in the redesign's look. The Items and Checked out
+// columns still hide at narrow widths (below sm and md); their facts now ride
+// as lines under the borrower's name at exactly those widths, so nothing is
+// lost on a phone (brief section 10) and nothing is read twice on a desktop.
+describe('RentalsListTable at narrow widths and empty', () => {
+  it('the hidden columns have a stacked line under the borrower, hidden where the column shows', () => {
+    render(
+      <RentalsListTable
+        rentals={[
+          rental('two', {
+            lines: [
+              { id: 'l1', rental_id: 'two', item_id: 'i1', quantity: 2, notes: null },
+              { id: 'l2', rental_id: 'two', item_id: 'i2', quantity: 1, notes: null },
+            ],
+          }),
+        ]}
+        viewerRole="staff"
+        timeZone={PT}
+        itemNames={new Map([['i1', 'Event tent']])}
+      />,
+    );
+    const borrowerCell = screen.getByText('Borrower two').closest('td')!;
+    const items = within(borrowerCell).getByTestId('rental-items-narrow');
+    expect(items.textContent).toBe('Event tent + 1 more');
+    expect(items.className).toMatch(/(^|\s)sm:hidden(\s|$)/);
+    const checkedOut = within(borrowerCell).getByTestId('rental-checked-out-narrow');
+    expect(checkedOut.className).toMatch(/(^|\s)md:hidden(\s|$)/);
+
+    // The columns themselves are unchanged: same order, same breakpoints.
+    const headers = screen.getAllByRole('columnheader').map((h) => h.textContent);
+    expect(headers).toEqual(['Borrower', 'Items', 'Checked out', 'Return', 'Status', 'Actions']);
+    const row = borrowerCell.closest('tr')!;
+    const cells = row.querySelectorAll('td');
+    expect(cells[1]!.className).toMatch(/hidden sm:table-cell/);
+    expect(cells[2]!.className).toMatch(/md:table-cell/);
+    expect(cells[1]!.textContent).toBe('Event tent + 1 more');
+    // The same relative time the Checked out column prints.
+    expect(cells[2]!.textContent).not.toBe('');
+    expect(checkedOut.textContent).toBe(`Checked out ${cells[2]!.textContent}`);
+  });
+
+  it('row actions keep their gates and words, 8 px apart for the touch rule', () => {
+    render(<RentalsListTable rentals={[rental('a')]} viewerRole="manager" timeZone={PT} />);
+    const view = screen.getByRole('link', { name: 'View' });
+    expect(view.getAttribute('href')).toBe('/dashboard/rentals/a');
+    expect(screen.getByRole('button', { name: 'Mark returned' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Cancel…' })).toBeTruthy();
+    expect(view.parentElement!.className).toMatch(/(^|\s)gap-2(\s|$)/);
+  });
+
+  // Review finding (P4.D1, MEDIUM): with the reading widths below sm the
+  // table scrolls inside its card, and the Actions column used to start past
+  // the card's right edge on a 390 px phone. It is pinned to that edge below
+  // sm (header and every cell), on the card's fill with a divider, and follows
+  // the row hover; from sm up nothing is pinned.
+  it('below sm the Actions header and cells stay pinned to the right edge', () => {
+    render(<RentalsListTable rentals={[rental('a')]} viewerRole="manager" timeZone={PT} />);
+    const pinned = [
+      'max-sm:sticky',
+      'max-sm:right-0',
+      'max-sm:bg-card',
+      'max-sm:shadow-[inset_1px_0_0_var(--color-border)]',
+    ];
+    const header = screen.getByRole('columnheader', { name: 'Actions' });
+    const cell = screen.getByRole('link', { name: 'View' }).closest('td')!;
+    for (const el of [header, cell]) {
+      const classes = el.className.split(/\s+/);
+      for (const c of pinned) expect(classes).toContain(c);
+      // Never pinned from sm up.
+      expect(classes.some((c) => /^(sm:|md:|lg:)?sticky$/.test(c))).toBe(false);
+    }
+    expect(cell.className.split(/\s+/)).toContain('max-sm:group-hover:bg-muted');
+    expect(cell.closest('tr')!.className.split(/\s+/)).toContain('group');
+    // Every control stays inside the pinned cell.
+    expect(within(cell).getByRole('button', { name: 'Mark returned' })).toBeTruthy();
+    expect(within(cell).getByRole('button', { name: 'Cancel…' })).toBeTruthy();
+    // The other columns are not pinned.
+    for (const name of ['Borrower', 'Return', 'Status']) {
+      expect(screen.getByRole('columnheader', { name }).className).not.toMatch(/sticky/);
+    }
+  });
+
+  it('a viewer sees View only (static role defaults, unchanged)', () => {
+    render(<RentalsListTable rentals={[rental('a')]} viewerRole="viewer" timeZone={PT} />);
+    expect(screen.getByRole('link', { name: 'View' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Mark returned' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Cancel…' })).toBeNull();
+  });
+
+  it('no rows: the one message for every tab, in the shared state panel', () => {
+    render(<RentalsListTable rentals={[]} viewerRole="staff" timeZone={PT} />);
+    const message = screen.getByText('No rentals found for this filter.');
+    expect(message.closest('[data-slot="state-panel"]')?.getAttribute('data-state-kind')).toBe(
+      'empty',
+    );
+    expect(screen.queryByRole('table')).toBeNull();
   });
 });

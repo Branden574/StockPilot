@@ -1,20 +1,48 @@
-import { Boxes, ChevronRight } from 'lucide-react';
+import { Boxes } from 'lucide-react';
 import Link from 'next/link';
 
-import { EmptyState } from '@/components/ui/empty-state';
-import { movementActorLabel } from '@/lib/movements/actor-label';
+import {
+  DetailSection,
+  DetailSectionLink,
+  DetailSectionMeta,
+} from '@/components/patterns/detail-section';
+import { StatePanel } from '@/components/patterns/state-panel';
+import { Thumb } from '@/components/patterns/thumb';
+import { DeltaText, Timeline, TimelineLabel, TimelineRow } from '@/components/patterns/timeline';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Sparkline } from '@/components/ui/sparkline';
 import { StockBar } from '@/components/ui/stock-bar';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { movementActorLabel } from '@/lib/movements/actor-label';
+import { movementTypeLabel, movementTypeTone } from '@/lib/movements/movement-type';
 import { cn, formatNumber, formatRelative } from '@/lib/utils';
 
-import { Card, CardHead } from './shared';
+import { WidgetHeading } from './shared';
 import type { DashboardWidgetProps } from './types';
 
+/** The low-stock table's columns, as before ('' is the status column). */
+const LOW_STOCK_COLUMNS = ['Item', 'On hand', 'Reorder', 'Coverage', '14-day', ''] as const;
+/** On hand, Reorder and 14-day read right-aligned. */
+const RIGHT_ALIGNED = new Set([1, 2, 4]);
+
 /**
- * Recent activity — context, not lead. Low-stock detail table (left 7/12) +
- * today's live movement feed (right 5/12). The hero already surfaced the
- * "act now" version of the low-stock signal; this gives the operator the full
- * table to drill into individual SKUs.
+ * Recent activity — context, not lead. The reference's bottom row (DESIGN-SPEC
+ * 6.16, 7.1): the low-stock detail table beside today's live movement feed.
+ * The hero already surfaced the "act now" version of the low-stock signal;
+ * this gives the operator the full table to drill into individual SKUs.
+ *
+ * The table keeps its real columns (no photos are read, no days-left figure:
+ * the swatch is the shared missing-photo hatch), and the two cards sit side by
+ * side once the widget is wide enough for both (its own width, beside the
+ * sidebar), stacked before.
  */
 export function RecentActivityWidget({
   lowStock,
@@ -23,216 +51,216 @@ export function RecentActivityWidget({
   itemCount,
 }: DashboardWidgetProps) {
   return (
-    <>
-      <div className="mt-2 mb-4 flex items-end justify-between gap-3 border-b border-border pb-2">
-        <div>
-          <h2 className="font-display text-[18px] font-medium tracking-[-0.015em]">
-            Recent activity
-          </h2>
-          <p className="text-[12px] text-[var(--ed-ink-3)]">
-            Low-stock detail and the live movement feed.
-          </p>
-        </div>
-      </div>
-      <div className="grid grid-cols-1 gap-3.5 lg:grid-cols-12">
-        <Card className="lg:col-span-7">
-          <CardHead
+    <div className="flex min-w-0 flex-col gap-3">
+      <WidgetHeading
+        title="Recent activity"
+        description="Low-stock detail and the live movement feed."
+      />
+      <div className="@container min-w-0">
+        <div className="@min-[936px]:grid-cols-12 grid grid-cols-1 gap-4">
+          <DetailSection
+            headingLevel={3}
             title="Low-stock detail"
-            subtitle="Items below reorder point"
-            action={
-              <Link
-                href="/dashboard/inventory?stock=low&type=all"
-                className="border-border bg-card inline-flex h-6 items-center gap-1 rounded-md border px-2.5 text-[12px] hover:border-[var(--ed-line-strong)]"
-              >
-                View all <ChevronRight className="h-3 w-3" />
-              </Link>
+            headingId="low-stock-detail-heading"
+            className="@min-[936px]:col-span-7"
+            aside={
+              <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <DetailSectionMeta>Items below reorder point</DetailSectionMeta>
+                <DetailSectionLink href="/dashboard/inventory?stock=low&type=all">
+                  View all
+                </DetailSectionLink>
+              </span>
             }
-          />
-          {lowStock.length === 0 && itemCount === 0 ? (
-            <div className="px-5 pb-6">
-              <EmptyState
+            flush
+          >
+            {lowStock.length === 0 && itemCount === 0 ? (
+              <StatePanel
+                kind="empty"
+                surface="plain"
+                size="sm"
+                headingLevel={3}
                 icon={Boxes}
                 title="No inventory yet"
                 description="Add your first item to start tracking stock, locations, and movements."
-                cta={{ label: 'Add your first item', href: '/dashboard/inventory/new' }}
-                size="sm"
+                action={
+                  <Button asChild variant="gradient" size="sm">
+                    <Link href="/dashboard/inventory/new">Add your first item</Link>
+                  </Button>
+                }
               />
-            </div>
-          ) : lowStock.length === 0 ? (
-            <p className="px-5 pb-5 text-[12.5px] text-[var(--ed-ink-3)]">
-              Nothing below reorder point. Quiet shift.
-            </p>
-          ) : (
-            <table className="w-full text-[12.5px]">
-              <thead>
-                <tr className="border-border border-b">
-                  {['Item', 'On hand', 'Reorder', 'Coverage', '14-day', ''].map((h, i) => (
-                    <th
-                      key={h || i}
-                      className={cn(
-                        'h-9 px-3 text-[10.5px] font-medium uppercase tracking-[0.06em] text-[var(--ed-ink-4)]',
-                        (i === 1 || i === 2 || i === 4) && 'text-right',
-                      )}
-                    >
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {lowStock.map((row) => {
-                  const par = Math.max(row.reorder_point * 4, row.quantity_on_hand * 1.5, 10);
-                  const status: 'ok' | 'warn' | 'crit' =
-                    row.quantity_on_hand <= 0 ? 'crit' : 'warn';
-                  return (
-                    <tr
-                      key={row.id}
-                      className="border-border hover:bg-muted/50 border-b last:border-0"
-                    >
-                      <td className="py-2.5 pl-3 pr-3">
-                        <div className="flex items-center gap-2.5">
-                          <span
-                            aria-hidden
-                            className="border-border h-7 w-7 shrink-0 rounded-[5px] border"
-                            style={{
-                              background:
-                                'repeating-linear-gradient(45deg, hsl(var(--border)) 0 1px, transparent 1px 6px), hsl(var(--muted))',
-                            }}
-                          />
-                          <div>
-                            <Link
-                              href={`/dashboard/inventory/${row.id}`}
-                              className="font-medium hover:underline"
-                            >
-                              {row.name}
-                            </Link>
-                            <div className="font-mono text-[10.5px] text-[var(--ed-ink-3)]">
-                              {row.sku}
+            ) : lowStock.length === 0 ? (
+              <StatePanel
+                kind="empty"
+                surface="plain"
+                headingLevel={null}
+                icon={null}
+                title="Nothing below reorder point. Quiet shift."
+              />
+            ) : (
+              <Table scrollLabelledBy="low-stock-detail-heading" className="min-w-[480px]">
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    {LOW_STOCK_COLUMNS.map((h, i) => (
+                      <TableHead
+                        key={h || i}
+                        className={cn('whitespace-nowrap', RIGHT_ALIGNED.has(i) && 'text-right')}
+                      >
+                        {h}
+                      </TableHead>
+                    ))}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {lowStock.map((row) => {
+                    const par = Math.max(row.reorder_point * 4, row.quantity_on_hand * 1.5, 10);
+                    const status: 'ok' | 'warn' | 'crit' =
+                      row.quantity_on_hand <= 0 ? 'crit' : 'warn';
+                    return (
+                      <TableRow key={row.id}>
+                        <TableCell className="min-w-[150px]">
+                          <div className="flex min-w-0 items-center gap-3">
+                            <Thumb size={32} />
+                            <div className="min-w-0">
+                              <Link
+                                href={`/dashboard/inventory/${row.id}`}
+                                className="text-foreground font-medium hover:underline"
+                              >
+                                {row.name}
+                              </Link>
+                              <div className="text-muted-foreground whitespace-nowrap font-mono text-[11.5px]">
+                                {row.sku}
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      </td>
-                      <td className="px-3 text-right font-mono tabular-nums">
-                        {formatNumber(row.quantity_on_hand)}
-                      </td>
-                      <td className="px-3 text-right font-mono tabular-nums text-[var(--ed-ink-3)]">
-                        {formatNumber(row.reorder_point)}
-                      </td>
-                      <td className="px-3">
-                        <StockBar stock={row.quantity_on_hand} par={par} status={status} />
-                      </td>
-                      <td className="px-3 text-right">
-                        <Sparkline
-                          data={
-                            lowStockTrends.get(row.id)?.qtySeries ??
-                            new Array<number>(14).fill(row.quantity_on_hand)
-                          }
-                          width={70}
-                          height={20}
-                        />
-                      </td>
-                      <td className="px-3 text-right">
-                        <span
-                          className={cn(
-                            'inline-flex h-5 items-center gap-1 rounded-[4px] px-1.5 text-[11px] font-medium',
-                            status === 'crit'
-                              ? 'bg-[hsl(var(--destructive)/0.16)] text-[hsl(var(--destructive))]'
-                              : 'bg-[hsl(var(--warning)/0.18)] text-[hsl(var(--warning-foreground))]',
+                        </TableCell>
+                        <TableCell className="text-right font-mono tabular-nums">
+                          {formatNumber(row.quantity_on_hand)}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground text-right font-mono tabular-nums">
+                          {formatNumber(row.reorder_point)}
+                        </TableCell>
+                        <TableCell>
+                          <StockBar
+                            stock={row.quantity_on_hand}
+                            par={par}
+                            status={status}
+                            width={56}
+                          />
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Sparkline
+                            data={
+                              lowStockTrends.get(row.id)?.qtySeries ??
+                              new Array<number>(14).fill(row.quantity_on_hand)
+                            }
+                            width={56}
+                            height={20}
+                          />
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap text-right">
+                          {/* The tone recipes (DESIGN-SPEC 6.10): danger and
+                              caution text on their own washes. The old Low
+                              pill put the on-fill --warning-foreground on a
+                              warning tint (1.48:1 in dark). */}
+                          <Badge dot variant={status === 'crit' ? 'destructive' : 'warning'}>
+                            {status === 'crit' ? 'Out' : 'Low'}
+                          </Badge>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            )}
+          </DetailSection>
+
+          <DetailSection
+            headingLevel={3}
+            title="Today's activity"
+            className="@min-[936px]:col-span-5"
+            aside={<DetailSectionMeta>Live · across all locations</DetailSectionMeta>}
+            flush
+          >
+            {recentMovements.length === 0 ? (
+              <StatePanel
+                kind="empty"
+                surface="plain"
+                headingLevel={null}
+                icon={null}
+                title="No movements yet. Adjust stock from any item to see entries here."
+              />
+            ) : (
+              <Timeline variant="rows">
+                {recentMovements.map((m) => {
+                  const item = m.item;
+                  const change = Number(m.quantity_change);
+                  // Transfers are net-zero (quantity_change always 0); show the
+                  // physical qty moved (moved_quantity, mig 0231) neutrally.
+                  // Pre-0231 transfer rows have none → no number, never "0".
+                  const isTransfer = m.movement_type === 'transfer';
+                  const moved = m.moved_quantity == null ? null : Number(m.moved_quantity);
+                  // Units shorten as whole words only ("2 days" reads "2 d"):
+                  // a bare /days?/ also matched inside "yesterday" and printed
+                  // "yesterd" (FX1). "yesterday", "last week" and "now" print
+                  // in full.
+                  const when = formatRelative(m.created_at)
+                    .replace(' ago', '')
+                    .replace(/\bseconds?\b/, 's')
+                    .replace(/\bminutes?\b/, 'm')
+                    .replace(/\bhours?\b/, 'h')
+                    .replace(/\bdays?\b/, 'd');
+                  return (
+                    <TimelineRow
+                      key={m.id}
+                      data-movement-type={m.movement_type}
+                      title={
+                        <>
+                          {/* The type in the Movements page's words and tone
+                              (DESIGN-SPEC 6.16 and 6.10): Receive PO, not
+                              "Receive po", and its colour from the type, not
+                              the sign of the change (FX5). */}
+                          <TimelineLabel tone={movementTypeTone(m.movement_type)}>
+                            {movementTypeLabel(m.movement_type)}
+                          </TimelineLabel>
+                          {' · '}
+                          {item?.name ?? 'Unknown'}
+                        </>
+                      }
+                      meta={
+                        <>
+                          {movementActorLabel(m)}
+                          {(m.reason ?? null) && (
+                            <>
+                              {' · '}
+                              {m.reason}
+                            </>
                           )}
-                        >
-                          <span className="h-1 w-1 rounded-full bg-current" />
-                          {status === 'crit' ? 'Out' : 'Low'}
-                        </span>
-                      </td>
-                    </tr>
+                          {' · '}
+                          <span>{when}</span>
+                        </>
+                      }
+                      aside={
+                        isTransfer ? (
+                          moved != null ? (
+                            <span className="text-muted-foreground font-mono text-[13px] tabular-nums">
+                              {formatNumber(moved)}
+                            </span>
+                          ) : null
+                        ) : (
+                          <DeltaText value={change}>
+                            {change > 0 ? '+' : ''}
+                            {formatNumber(change)}
+                          </DeltaText>
+                        )
+                      }
+                    />
                   );
                 })}
-              </tbody>
-            </table>
-          )}
-        </Card>
-
-        <Card className="lg:col-span-5">
-          <CardHead title="Today's activity" subtitle="Live · across all locations" />
-          {recentMovements.length === 0 ? (
-            <p className="px-5 pb-5 text-[12.5px] text-[var(--ed-ink-3)]">
-              No movements yet. Adjust stock from any item to see entries here.
-            </p>
-          ) : (
-            <ul>
-              {recentMovements.map((m, i) => {
-                const item = m.item;
-                const change = Number(m.quantity_change);
-                // Transfers are net-zero (quantity_change always 0); show the
-                // physical qty moved (moved_quantity, mig 0231) neutrally.
-                // Pre-0231 transfer rows have none → no number, never "0".
-                const isTransfer = m.movement_type === 'transfer';
-                const moved = m.moved_quantity == null ? null : Number(m.moved_quantity);
-                return (
-                  <li
-                    key={m.id}
-                    className={cn(
-                      'grid items-center gap-3 px-5 py-2.5',
-                      i < recentMovements.length - 1 && 'border-border border-b',
-                    )}
-                    style={{ gridTemplateColumns: '60px 1fr auto' }}
-                  >
-                    <div className="font-mono text-[10.5px] text-[var(--ed-ink-3)]">
-                      {formatRelative(m.created_at)
-                        .replace(' ago', '')
-                        .replace(/seconds?/, 's')
-                        .replace(/minutes?/, 'm')
-                        .replace(/hours?/, 'h')
-                        .replace(/days?/, 'd')}
-                    </div>
-                    <div>
-                      <div className="text-[12.5px]">
-                        <span
-                          className={cn(
-                            'mr-1.5 inline-flex h-[18px] items-center rounded-[4px] px-1.5 text-[10px] font-medium',
-                            change > 0
-                              ? 'bg-[hsl(var(--accent)/0.18)] text-[hsl(var(--accent-foreground))]'
-                              : 'bg-muted text-[var(--ed-ink-3)]',
-                          )}
-                        >
-                          {m.movement_type.replace('_', ' ')}
-                        </span>
-                        {item?.name ?? 'Unknown'}
-                      </div>
-                      <div className="mt-0.5 font-mono text-[10.5px] text-[var(--ed-ink-3)]">
-                        {movementActorLabel(m)}
-                        {(m.reason ?? null) && (
-                          <>
-                            {' · '}
-                            {m.reason}
-                          </>
-                        )}
-                      </div>
-                    </div>
-                    <div
-                      className={cn(
-                        'font-mono text-[13px] font-medium tabular-nums',
-                        !isTransfer && change > 0
-                          ? 'text-[hsl(var(--accent-foreground))]'
-                          : 'text-[var(--ed-ink-3)]',
-                      )}
-                    >
-                      {isTransfer ? (
-                        moved != null ? formatNumber(moved) : ''
-                      ) : (
-                        <>
-                          {change > 0 ? '+' : ''}
-                          {formatNumber(change)}
-                        </>
-                      )}
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </Card>
+              </Timeline>
+            )}
+          </DetailSection>
+        </div>
       </div>
-    </>
+    </div>
   );
 }

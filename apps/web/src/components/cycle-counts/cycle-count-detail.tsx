@@ -1,6 +1,6 @@
 'use client';
 
-import { Loader2, Search, UserCircle2, X } from 'lucide-react';
+import { Loader2, Search, TriangleAlert, UserCircle2, X } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import * as React from 'react';
@@ -14,13 +14,18 @@ import {
   type Role,
 } from '@stockpilot/core';
 
+import { CountProgressBar } from '@/components/cycle-counts/count-progress-bar';
+import { CycleCountStatusBadge } from '@/components/cycle-counts/cycle-count-status-badge';
 import { HelpTip } from '@/components/onboarding/help-tip';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+import { SegmentedTabs } from '@/components/patterns/segmented-tabs';
+import { StatePanel } from '@/components/patterns/state-panel';
+import { StatStrip, StatStripItem } from '@/components/patterns/stat-strip';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -41,7 +46,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { formatNumber } from '@/lib/utils';
+import { cn, formatNumber } from '@/lib/utils';
 import {
   assignCycleCountAction,
   cancelCycleCountAction,
@@ -112,8 +117,35 @@ interface Props {
       cycle_counts:assign), the rule ledger.post_cycle_count and the
       cycle_counts UPDATE policy apply. Defaults to viewer (fail closed). */
   role?: Role;
+  /** The exceptions a recount linked to this count: the server page streams
+      its LinkedExceptionsBlock here (inside its own Suspense), so the count
+      never waits for it. Shown in the side rail beside the count. */
+  linkedExceptions?: React.ReactNode;
+  /** The id of the page's h1 (the count's reference), which names the count
+      table's scroll region. */
+  titleId?: string;
 }
 
+/** The count tables' edge cells pad 18 (DESIGN-SPEC 6.9). */
+const EDGE = 'first:pl-[18px] last:pr-[18px]';
+
+/** The line filters, in the order they always had. */
+const LINE_FILTERS: Array<{ id: CycleCountLineFilter; label: string }> = [
+  { id: 'all', label: 'All' },
+  { id: 'uncounted', label: 'Uncounted' },
+  { id: 'variance', label: 'Variance' },
+];
+
+/**
+ * One cycle count (DESIGN-SPEC 7.7, the reference's count card), laid out as
+ * the four whole-count figures, then the count itself beside a rail for who it
+ * is assigned to and the exceptions a recount linked to it.
+ *
+ * ENTRY and POSTING stay two separate steps with different people and gates:
+ * a counter records lines here (each one saves on its own), and a manager
+ * reviews the variances and posts them, or cancels, only through the
+ * confirmations below. Nothing on this page posts stock directly.
+ */
 export function CycleCountDetail({
   header,
   lines,
@@ -130,6 +162,8 @@ export function CycleCountDetail({
   itemsInScopeCount,
   timeZone,
   role = 'viewer',
+  linkedExceptions,
+  titleId,
 }: Props) {
   const router = useRouter();
   const pathname = usePathname();
@@ -139,13 +173,17 @@ export function CycleCountDetail({
   // failure (recurring pattern #20): it renders bottom-right, auto-dismisses
   // in ~4s, and a counter working down 200 rows never sees it — so the row
   // itself has to say so, inline, until the next attempt.
-  const [lineError, setLineError] = React.useState<
-    { id: string; message: string } | null
-  >(null);
+  const [lineError, setLineError] = React.useState<{ id: string; message: string } | null>(null);
   const [postBusy, setPostBusy] = React.useState(false);
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const [cancelOpen, setCancelOpen] = React.useState(false);
   const [cancelBusy, setCancelBusy] = React.useState(false);
+  // Why the last post or cancel was refused, said INSIDE the open dialog as
+  // well as in the toast: the dialog stays open on a refusal, and a toast is
+  // gone in seconds (the post refusals carry the instruction to act on, such
+  // as "Clear and recount that line"). Cleared on each open and each try.
+  const [postError, setPostError] = React.useState<string | null>(null);
+  const [cancelError, setCancelError] = React.useState<string | null>(null);
 
   const completed = header.status === 'completed';
   const canceled = header.status === 'canceled';
@@ -204,6 +242,7 @@ export function CycleCountDetail({
   // Whole-count summary (server-computed set-based).
   const uncounted = summary.total - summary.counted;
   const totalDelta = summary.netDelta;
+  const signedDelta = `${totalDelta > 0 ? '+' : ''}${formatNumber(totalDelta)}`;
 
   // New-items-added warning. If the snapshot has fewer lines than the
   // current items-in-scope count, someone added items to inventory
@@ -246,10 +285,7 @@ export function CycleCountDetail({
   // prop never changes, so the row must be told to put the server's value
   // back — otherwise the box keeps an unsaved number and renders a variance
   // that looks exactly like a saved line while the DB still says uncounted.
-  async function saveCount(
-    line: CycleCountLineWithItem,
-    raw: string,
-  ): Promise<boolean> {
+  async function saveCount(line: CycleCountLineWithItem, raw: string): Promise<boolean> {
     const value = Number(raw);
     if (!Number.isFinite(value) || value < 0) {
       const message = 'Enter a non-negative number.';
@@ -299,10 +335,12 @@ export function CycleCountDetail({
 
   async function confirmCancel() {
     setCancelBusy(true);
+    setCancelError(null);
     const r = await cancelCycleCountAction(header.id);
     setCancelBusy(false);
     if (!r.ok) {
       toast.error(r.error.message);
+      setCancelError(r.error.message);
       return;
     }
     setCancelOpen(false);
@@ -312,10 +350,12 @@ export function CycleCountDetail({
 
   async function post() {
     setPostBusy(true);
+    setPostError(null);
     const r = await postCycleCountAction(header.id);
     setPostBusy(false);
     if (!r.ok) {
       toast.error(r.error.message);
+      setPostError(r.error.message);
       return;
     }
     setConfirmOpen(false);
@@ -328,248 +368,351 @@ export function CycleCountDetail({
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center gap-3">
-        <StatusBadge status={header.status} />
-        <span className="text-muted-foreground text-xs">
-          {formatNumber(summary.counted)} of {formatNumber(summary.total)} counted ·{' '}
-          {formatNumber(summary.varianceCount)} with variance
-        </span>
-        {open && (canPost || canCancel) && (
-          <div className="ml-auto flex gap-2">
-            {canCancel && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setCancelOpen(true)}
-                disabled={postBusy}
-              >
-                Cancel count
-              </Button>
-            )}
-            {canPost && (
-              <Button
-                variant="gradient"
-                size="sm"
-                onClick={() => setConfirmOpen(true)}
-                disabled={postBusy || summary.counted === 0}
-              >
-                Review & post
-              </Button>
-            )}
-          </div>
-        )}
-        {open && canAdjust && !canPost && (
-          <span className="text-muted-foreground ml-auto text-xs" data-testid="manager-posts">
-            {CYCLE_COUNT_MANAGER_POSTS_COPY}
-          </span>
-        )}
-      </div>
-
-      <AssigneePicker
-        cycleCountId={header.id}
-        currentAssignedTo={header.assigned_to}
-        currentAssigneeName={assigneeName}
-        canAssign={canAssign && open}
-        members={members}
-      />
-
-      {newItemsCount > 0 && (
-        <div className="border-warning/40 bg-warning/5 text-warning rounded-md border px-3 py-2 text-[12.5px]">
-          {newItemsCount} new item{newItemsCount === 1 ? '' : 's'} were added to
-          this scope after the count started. They are not in this snapshot and
-          will not be adjusted by posting. Cancel and restart the count if
-          you'd like to include them.
-        </div>
-      )}
-
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat label="Items in scope" value={formatNumber(summary.total)} />
-        <Stat label="Counted" value={formatNumber(summary.counted)} />
-        <Stat label="Uncounted" value={formatNumber(uncounted)} tone={uncounted > 0 ? 'warn' : 'default'} />
-        <Stat
-          label="Net variance"
-          value={`${totalDelta > 0 ? '+' : ''}${formatNumber(totalDelta)}`}
-          tone={totalDelta !== 0 ? 'warn' : 'default'}
+    <div className="@container flex min-w-0 flex-col gap-4">
+      {/* The four whole-count figures (never the page's), the reference's
+          count progress drawn under Counted. */}
+      <StatStrip variant="detail">
+        <StatStripItem
+          size="detail"
+          label="Items in scope"
+          value={formatNumber(summary.total)}
+          data-testid="count-stat-in-scope"
         />
-      </div>
+        <StatStripItem
+          size="detail"
+          label="Counted"
+          value={formatNumber(summary.counted)}
+          sub={
+            <CountProgressBar
+              counted={summary.counted}
+              total={summary.total}
+              className="mb-1 mt-2 max-w-[180px]"
+            />
+          }
+          data-testid="count-stat-counted"
+        />
+        <StatStripItem
+          size="detail"
+          label="Uncounted"
+          value={formatNumber(uncounted)}
+          valueTone={uncounted > 0 ? 'warning' : 'default'}
+          data-testid="count-stat-uncounted"
+        />
+        <StatStripItem
+          size="detail"
+          label="Net variance"
+          value={signedDelta}
+          valueTone={totalDelta !== 0 ? 'warning' : 'default'}
+          data-testid="count-stat-net-variance"
+        />
+      </StatStrip>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative max-w-md flex-1">
-          <Search className="text-muted-foreground pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2" />
-          <Input
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="Search by name, SKU, barcode…"
-            className="h-8 pl-8 text-[12.5px]"
+      {/* The count beside its rail (DESIGN-SPEC 7.7). The count table holds 50
+          lines of six columns, so the rail (300 px) sits beside it only when
+          the page area has room for both (1100 px: a 1440 window); below that
+          the rail's cards come first, side by side from 640 px, and the count
+          takes the full width. The rail comes first in reading order, as the
+          assignee and the linked exceptions always came before the lines. */}
+      <div className="@min-[1100px]:grid-cols-[minmax(0,1fr)_300px] grid min-w-0 grid-cols-1 items-start gap-4">
+        <div className="@min-[640px]:grid-cols-2 @min-[1100px]:col-start-2 @min-[1100px]:row-start-1 @min-[1100px]:grid-cols-1 grid min-w-0 grid-cols-1 items-start gap-4">
+          <AssigneePicker
+            cycleCountId={header.id}
+            currentAssignedTo={header.assigned_to}
+            currentAssigneeName={assigneeName}
+            canAssign={canAssign && open}
+            members={members}
           />
+          {linkedExceptions}
         </div>
-        <FilterChips value={filter} onChange={changeFilter} />
-      </div>
 
-      <div className="bg-card overflow-x-auto rounded-xl border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Item</TableHead>
-              <TableHead>SKU</TableHead>
-              <TableHead className="text-right">
-                <span className="inline-flex items-center gap-1.5">
-                  Expected
-                  <HelpTip label="the Expected quantity">
-                    <p>
-                      The system quantity when the line was counted (the quantity at
-                      session start until then). Variance is counted minus expected, and
-                      posting applies that variance on top of the current stock — stock
-                      that moved after a line was counted is kept, never counted twice.
-                    </p>
-                  </HelpTip>
+        <div className="@min-[1100px]:col-start-1 @min-[1100px]:row-start-1 flex min-w-0 flex-col gap-4">
+          {newItemsCount > 0 && (
+            <div className="bg-warning-wash text-warning flex items-start gap-2.5 rounded-lg px-[18px] py-3 text-[13px] leading-5">
+              <TriangleAlert aria-hidden className="mt-0.5 h-4 w-4 shrink-0" />
+              <p>
+                {newItemsCount} new item{newItemsCount === 1 ? '' : 's'} were added to this scope
+                after the count started. They are not in this snapshot and will not be adjusted by
+                posting. Cancel and restart the count if you&apos;d like to include them.
+              </p>
+            </div>
+          )}
+
+          <div className="border-border bg-card min-w-0 overflow-hidden rounded-lg border">
+            {/* Status and who acts next: Cancel and Review & post for a
+                manager, the sentence for staff who count but do not post. */}
+            <div className="border-border flex min-h-[49px] flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b px-[18px] py-2.5">
+              <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
+                <CycleCountStatusBadge status={header.status} />
+                <span className="text-muted-foreground text-[12.5px] tabular-nums">
+                  {formatNumber(summary.counted)} of {formatNumber(summary.total)} counted ·{' '}
+                  {formatNumber(summary.varianceCount)} with variance
                 </span>
-              </TableHead>
-              <TableHead className="text-right">Counted</TableHead>
-              <TableHead className="text-right">Variance</TableHead>
-              <TableHead className="w-12" />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {lines.length === 0 && (
-              <TableRow>
-                <TableCell
-                  colSpan={6}
-                  className="text-muted-foreground py-8 text-center text-xs"
-                >
-                  {summary.total === 0
-                    ? 'No items in this count.'
-                    : 'No items match the current search or filter.'}
-                </TableCell>
-              </TableRow>
-            )}
-            {lines.map((l) => (
-              <CountRow
-                key={l.id}
-                line={l}
-                disabled={!open || !canAdjust}
-                readOnly={!canAdjust}
-                busy={busyLine === l.id}
-                error={lineError?.id === l.id ? lineError.message : null}
-                onSave={(value) => saveCount(l, value)}
-                onClear={() => clearLine(l)}
-                timeZone={timeZone}
+              </div>
+              {open && (canPost || canCancel) && (
+                <div className="flex flex-wrap items-center gap-2">
+                  {canCancel && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setCancelError(null);
+                        setCancelOpen(true);
+                      }}
+                      disabled={postBusy}
+                    >
+                      Cancel count
+                    </Button>
+                  )}
+                  {canPost && (
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        setPostError(null);
+                        setConfirmOpen(true);
+                      }}
+                      disabled={postBusy || summary.counted === 0}
+                    >
+                      Review & post
+                    </Button>
+                  )}
+                </div>
+              )}
+              {open && canAdjust && !canPost && (
+                <span className="text-muted-foreground text-[12.5px]" data-testid="manager-posts">
+                  {CYCLE_COUNT_MANAGER_POSTS_COPY}
+                </span>
+              )}
+            </div>
+
+            {/* Line search and the All / Uncounted / Variance views: both
+                server-side, in the URL (?q, ?filter), back to page 1. */}
+            <div className="border-border flex flex-wrap items-center justify-between gap-2 border-b px-[18px] py-2.5">
+              <div className="relative w-full sm:w-[280px]">
+                <Search
+                  aria-hidden
+                  className="text-muted-foreground pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+                  strokeWidth={1.8}
+                />
+                <Input
+                  value={searchInput}
+                  onChange={(e) => setSearchInput(e.target.value)}
+                  placeholder="Search by name, SKU, barcode…"
+                  className="pl-8"
+                />
+              </div>
+              <SegmentedTabs
+                semantics="nav"
+                size="sm"
+                aria-label="Filter lines"
+                activeId={filter}
+                items={LINE_FILTERS}
+                onSelect={(id) => {
+                  const next = LINE_FILTERS.find((f) => f.id === id);
+                  if (next) changeFilter(next.id);
+                }}
               />
-            ))}
-          </TableBody>
-        </Table>
-      </div>
+            </div>
 
-      {totalPages > 1 && (
-        <div className="text-muted-foreground flex flex-wrap items-center justify-between gap-3 text-[12px]">
-          <span>
-            Showing{' '}
-            <span className="text-foreground font-medium">
-              {formatNumber((safePage - 1) * pageSize + 1)}
-            </span>
-            –
-            <span className="text-foreground font-medium">
-              {formatNumber(Math.min(safePage * pageSize, total))}
-            </span>{' '}
-            of <span className="text-foreground font-medium">{formatNumber(total)}</span>
-          </span>
-          <div className="flex items-center gap-1">
-            <Button asChild variant="outline" size="sm" disabled={safePage <= 1}>
-              {safePage <= 1 ? (
-                <span aria-disabled className="pointer-events-none opacity-50">
-                  ← Prev
+            <Table scrollLabelledBy={titleId} className="min-w-[600px]">
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className={EDGE}>Item</TableHead>
+                  <TableHead>SKU</TableHead>
+                  <TableHead className="text-right">
+                    <span className="inline-flex items-center gap-1.5">
+                      Expected
+                      <HelpTip label="the Expected quantity">
+                        <p>
+                          The system quantity when the line was counted (the quantity at session
+                          start until then). Variance is counted minus expected, and posting applies
+                          that variance on top of the current stock — stock that moved after a line
+                          was counted is kept, never counted twice.
+                        </p>
+                      </HelpTip>
+                    </span>
+                  </TableHead>
+                  <TableHead className="text-right">Counted</TableHead>
+                  <TableHead className="text-right">Variance</TableHead>
+                  <TableHead className={cn(EDGE, 'w-12')} />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {lines.length === 0 && (
+                  <TableRow className="hover:bg-transparent">
+                    <TableCell colSpan={6} className="p-0">
+                      <StatePanel
+                        kind={summary.total === 0 ? 'empty' : 'no-match'}
+                        surface="plain"
+                        icon={null}
+                        headingLevel={null}
+                        title={
+                          summary.total === 0
+                            ? 'No items in this count.'
+                            : 'No items match the current search or filter.'
+                        }
+                      />
+                    </TableCell>
+                  </TableRow>
+                )}
+                {lines.map((l) => (
+                  <CountRow
+                    key={l.id}
+                    line={l}
+                    disabled={!open || !canAdjust}
+                    readOnly={!canAdjust}
+                    busy={busyLine === l.id}
+                    error={lineError?.id === l.id ? lineError.message : null}
+                    onSave={(value) => saveCount(l, value)}
+                    onClear={() => clearLine(l)}
+                    timeZone={timeZone}
+                  />
+                ))}
+              </TableBody>
+            </Table>
+
+            {totalPages > 1 && (
+              <div className="border-border text-muted-foreground flex flex-wrap items-center justify-between gap-3 border-t px-[18px] py-2.5 text-[12.5px]">
+                <span className="tabular-nums">
+                  Showing{' '}
+                  <span className="text-foreground font-medium">
+                    {formatNumber((safePage - 1) * pageSize + 1)}
+                  </span>
+                  –
+                  <span className="text-foreground font-medium">
+                    {formatNumber(Math.min(safePage * pageSize, total))}
+                  </span>{' '}
+                  of <span className="text-foreground font-medium">{formatNumber(total)}</span>
                 </span>
-              ) : (
-                <Link href={buildHref({ page: safePage - 1 })} prefetch={false}>
-                  ← Prev
-                </Link>
-              )}
-            </Button>
-            <span className="px-2 text-[11.5px]">
-              Page {safePage} of {totalPages}
-            </span>
-            <Button asChild variant="outline" size="sm" disabled={safePage >= totalPages}>
-              {safePage >= totalPages ? (
-                <span aria-disabled className="pointer-events-none opacity-50">
-                  Next →
-                </span>
-              ) : (
-                <Link href={buildHref({ page: safePage + 1 })} prefetch={false}>
-                  Next →
-                </Link>
-              )}
-            </Button>
+                <div className="flex items-center gap-2">
+                  {safePage <= 1 ? (
+                    <span
+                      aria-disabled
+                      className={buttonVariants({
+                        variant: 'outline',
+                        size: 'sm',
+                        className: 'pointer-events-none opacity-50',
+                      })}
+                    >
+                      ← Prev
+                    </span>
+                  ) : (
+                    <Button asChild variant="outline" size="sm">
+                      <Link href={buildHref({ page: safePage - 1 })} prefetch={false}>
+                        ← Prev
+                      </Link>
+                    </Button>
+                  )}
+                  <span className="px-1 text-[12px] tabular-nums">
+                    Page {safePage} of {totalPages}
+                  </span>
+                  {safePage >= totalPages ? (
+                    <span
+                      aria-disabled
+                      className={buttonVariants({
+                        variant: 'outline',
+                        size: 'sm',
+                        className: 'pointer-events-none opacity-50',
+                      })}
+                    >
+                      Next →
+                    </span>
+                  ) : (
+                    <Button asChild variant="outline" size="sm">
+                      <Link href={buildHref({ page: safePage + 1 })} prefetch={false}>
+                        Next →
+                      </Link>
+                    </Button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {(completed || canceled) && (
+              <p className="border-border text-muted-foreground border-t px-[18px] py-3 text-[12.5px]">
+                This count is {completed ? 'completed' : 'canceled'}. Lines are read-only.
+              </p>
+            )}
+            {open && !canAdjust && (
+              <p className="border-border text-muted-foreground border-t px-[18px] py-3 text-[12.5px]">
+                You have view-only access to this count. Entering quantities and posting adjustments
+                require the stock adjustment permission.
+              </p>
+            )}
           </div>
         </div>
-      )}
+      </div>
 
       {canCancel && (
-      <DestructiveConfirm
-        open={cancelOpen}
-        onOpenChange={setCancelOpen}
-        title="Cancel this cycle count?"
-        description="No adjustments will be posted. Any quantities you've entered are kept on the canceled count for the audit trail but stock levels are unchanged."
-        confirmLabel="Cancel count"
-        cancelLabel="Keep counting"
-        pending={cancelBusy}
-        onConfirm={confirmCancel}
-      />
+        <DestructiveConfirm
+          open={cancelOpen}
+          onOpenChange={setCancelOpen}
+          title="Cancel this cycle count?"
+          description="No adjustments will be posted. Any quantities you've entered are kept on the canceled count for the audit trail but stock levels are unchanged."
+          confirmLabel="Cancel count"
+          cancelLabel="Keep counting"
+          pending={cancelBusy}
+          error={cancelError}
+          onConfirm={confirmCancel}
+        />
       )}
 
       {canPost && (
-      <Dialog open={confirmOpen} onOpenChange={(o) => !postBusy && setConfirmOpen(o)}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Post this count?</DialogTitle>
-          </DialogHeader>
-          <div className="text-muted-foreground space-y-2 text-sm">
-            <p>
-              This will post{' '}
-              <strong className="text-foreground">{formatNumber(summary.varianceCount)}</strong>{' '}
-              adjustment{summary.varianceCount === 1 ? '' : 's'} (net{' '}
-              <strong className="text-foreground">
-                {totalDelta > 0 ? '+' : ''}
-                {formatNumber(totalDelta)}
-              </strong>{' '}
-              units). Each line moves stock by counted minus the system quantity at the
-              time it was counted; stock that moved after a line was counted is kept.
-            </p>
-            {uncounted > 0 && (
-              <p className="text-warning">
-                {formatNumber(uncounted)} item{uncounted === 1 ? '' : 's'} weren't counted —
-                they'll be left unchanged.
+        <Dialog open={confirmOpen} onOpenChange={(o) => !postBusy && setConfirmOpen(o)}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Post this count?</DialogTitle>
+              <DialogDescription asChild>
+                <div className="text-muted-foreground space-y-3 pt-1 text-[13.5px] leading-[20.25px]">
+                  <p>
+                    This will post{' '}
+                    <strong className="text-foreground font-medium">
+                      {formatNumber(summary.varianceCount)}
+                    </strong>{' '}
+                    adjustment{summary.varianceCount === 1 ? '' : 's'} (net{' '}
+                    <strong className="text-foreground font-medium">
+                      {totalDelta > 0 ? '+' : ''}
+                      {formatNumber(totalDelta)}
+                    </strong>{' '}
+                    units). Each line moves stock by counted minus the system quantity at the time
+                    it was counted; stock that moved after a line was counted is kept.
+                  </p>
+                  {uncounted > 0 && (
+                    <p className="bg-warning-wash text-warning rounded-md px-3 py-2">
+                      {formatNumber(uncounted)} item{uncounted === 1 ? '' : 's'} weren&apos;t
+                      counted — they&apos;ll be left unchanged.
+                    </p>
+                  )}
+                  <p className="text-[12px] leading-[18px]">
+                    Stock movements are recorded as{' '}
+                    <code className="bg-sunk rounded px-1 font-mono text-[11.5px]">adjust</code>{' '}
+                    with reason &quot;Cycle count adjustment&quot;. This is irreversible — but you
+                    can create a corrective adjustment afterwards if needed.
+                  </p>
+                </div>
+              </DialogDescription>
+            </DialogHeader>
+            {postError ? (
+              <p role="alert" className="text-destructive text-[13px]">
+                {postError}
               </p>
-            )}
-            <p className="text-[11px]">
-              Stock movements are recorded as <code>adjust</code> with reason
-              "Cycle count adjustment". This is irreversible — but you can
-              create a corrective adjustment afterwards if needed.
-            </p>
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setConfirmOpen(false)} disabled={postBusy}>
-              Back
-            </Button>
-            <Button onClick={post} disabled={postBusy} variant="gradient">
-              {postBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Post adjustments'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-      )}
-
-      {(completed || canceled) && (
-        <p className="text-muted-foreground text-xs">
-          This count is {completed ? 'completed' : 'canceled'}. Lines are
-          read-only.
-        </p>
-      )}
-      {open && !canAdjust && (
-        <p className="text-muted-foreground text-xs">
-          You have view-only access to this count. Entering quantities and
-          posting adjustments require the stock adjustment permission.
-        </p>
+            ) : null}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setConfirmOpen(false)} disabled={postBusy}>
+                Back
+              </Button>
+              <Button onClick={post} disabled={postBusy}>
+                {postBusy ? (
+                  <>
+                    <Loader2 aria-hidden className="h-4 w-4 animate-spin" />
+                    <span className="sr-only">Post adjustments</span>
+                  </>
+                ) : (
+                  'Post adjustments'
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       )}
     </div>
   );
@@ -632,98 +775,96 @@ function CountRow({
   const trimmedDraft = draft.trim();
   const draftNum = trimmedDraft === '' ? NaN : Number(trimmedDraft);
   const effectiveCounted = Number.isFinite(draftNum) ? draftNum : null;
-  const variance =
-    effectiveCounted != null ? effectiveCounted - line.expected_quantity : null;
+  const variance = effectiveCounted != null ? effectiveCounted - line.expected_quantity : null;
   const variantText = variantLabel({
     jerseyNumber: line.item?.jersey_number ?? null,
     size: line.item?.variant_size ?? null,
   });
   // A count queued offline and synced later was measured against the book at
   // the moment it was taken (0369). Whoever reviews and posts sees when.
-  const capturedText =
-    line.counted_quantity != null ? offlineCaptureLabel(line, timeZone) : null;
+  const capturedText = line.counted_quantity != null ? offlineCaptureLabel(line, timeZone) : null;
 
   return (
     <TableRow>
-      <TableCell className="max-w-[280px]">
-        <div className="truncate font-medium">{line.item?.name ?? 'Unknown'}</div>
+      <TableCell className={cn(EDGE, 'min-w-[160px] max-w-[320px]')}>
+        <div className="font-medium [overflow-wrap:anywhere]">{line.item?.name ?? 'Unknown'}</div>
         {/* WHICH VARIANT this row is. Six sizes of one shoe otherwise differ
             only by SKU, and a counter matching hex strings to shoeboxes puts
             the 10s in the 10.5 row. Renders nothing for an ungrouped item, so
             a non-sports count looks exactly as it did before. */}
         {variantText && (
-          <div className="text-muted-foreground truncate text-xs">{variantText}</div>
+          <div className="text-muted-foreground truncate text-[12px]">{variantText}</div>
         )}
         {line.item?.barcode && (
-          <div className="text-muted-foreground truncate font-mono text-[10.5px]">
+          <div className="text-muted-foreground truncate font-mono text-[11.5px]">
             {line.item.barcode}
           </div>
         )}
         {capturedText && (
-          <div className="text-muted-foreground truncate text-xs">{capturedText}</div>
+          <div className="text-muted-foreground truncate text-[12px]">{capturedText}</div>
         )}
       </TableCell>
-      <TableCell className="text-muted-foreground font-mono text-xs">
+      <TableCell className="text-ink-2 whitespace-nowrap font-mono text-[12.5px]">
         {line.item?.sku ?? '—'}
       </TableCell>
-      <TableCell className="text-muted-foreground text-right tabular-nums">
+      <TableCell className="text-muted-foreground text-right font-mono text-[13.5px] tabular-nums">
         {formatNumber(line.expected_quantity)}
       </TableCell>
       <TableCell className="text-right">
         {readOnly ? (
-          <span className="text-right tabular-nums">
+          <span className="font-mono text-[13.5px] tabular-nums">
             {line.counted_quantity != null ? formatNumber(line.counted_quantity) : '—'}
           </span>
         ) : (
-        <>
-        <Input
-          ref={inputRef}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={async () => {
-            if (disabled) return;
-            const trimmed = draft.trim();
-            const current = line.counted_quantity;
-            if (trimmed === '') {
-              // Emptying the box uncounts the line (clears the variance too),
-              // but only when it actually had a saved value to clear.
-              if (current != null && !(await onClear())) revertDraftToServerValue();
-              return;
-            }
-            const next = Number(trimmed);
-            if (Number.isFinite(next) && next !== current) {
-              if (!(await onSave(trimmed))) revertDraftToServerValue();
-            }
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-          }}
-          placeholder="—"
-          inputMode="decimal"
-          disabled={disabled || busy}
-          className="ml-auto h-8 max-w-[110px] text-right text-[12.5px] tabular-nums"
-        />
-        {/* Persistent inline failure notice. The toast is bottom-right and
-            gone in 4s; the counter is looking at THIS row. */}
-        {error && (
-          <p role="alert" className="text-destructive mt-1 text-[11px]">
-            {error}
-          </p>
-        )}
-        </>
+          <>
+            <Input
+              ref={inputRef}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onBlur={async () => {
+                if (disabled) return;
+                const trimmed = draft.trim();
+                const current = line.counted_quantity;
+                if (trimmed === '') {
+                  // Emptying the box uncounts the line (clears the variance too),
+                  // but only when it actually had a saved value to clear.
+                  if (current != null && !(await onClear())) revertDraftToServerValue();
+                  return;
+                }
+                const next = Number(trimmed);
+                if (Number.isFinite(next) && next !== current) {
+                  if (!(await onSave(trimmed))) revertDraftToServerValue();
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+              }}
+              placeholder="—"
+              inputMode="decimal"
+              disabled={disabled || busy}
+              className="bg-sunk ml-auto w-[90px] px-2 text-right font-mono tabular-nums"
+            />
+            {/* Persistent inline failure notice. The toast is bottom-right and
+                gone in 4s; the counter is looking at THIS row. */}
+            {error && (
+              <p role="alert" className="text-destructive ml-auto mt-1 max-w-[220px] text-[12px]">
+                {error}
+              </p>
+            )}
+          </>
         )}
       </TableCell>
       <TableCell
-        className={
-          'text-right font-mono tabular-nums ' +
-          (variance == null
+        className={cn(
+          'text-right font-mono text-[13.5px] tabular-nums',
+          variance == null
             ? 'text-muted-foreground'
             : variance > 0
               ? 'text-success'
               : variance < 0
                 ? 'text-destructive'
-                : 'text-muted-foreground')
-        }
+                : 'text-muted-foreground',
+        )}
       >
         {variance == null
           ? '—'
@@ -731,16 +872,17 @@ function CountRow({
             ? '0'
             : `${variance > 0 ? '+' : ''}${formatNumber(variance)}`}
       </TableCell>
-      <TableCell>
+      <TableCell className={cn(EDGE, 'w-12')}>
         {!disabled && line.counted_quantity != null && (
           <Button
             type="button"
             variant="ghost"
-            size="sm"
-            className="h-7 w-7 p-0"
+            size="icon"
+            className="text-muted-foreground h-7 w-7"
             onClick={onClear}
             disabled={busy}
             title="Clear count"
+            aria-label="Clear count"
           >
             <X className="h-3.5 w-3.5" />
           </Button>
@@ -750,78 +892,11 @@ function CountRow({
   );
 }
 
-function FilterChips({
-  value,
-  onChange,
-}: {
-  value: 'all' | 'uncounted' | 'variance';
-  onChange: (v: 'all' | 'uncounted' | 'variance') => void;
-}) {
-  const opts: Array<{ key: typeof value; label: string }> = [
-    { key: 'all', label: 'All' },
-    { key: 'uncounted', label: 'Uncounted' },
-    { key: 'variance', label: 'Variance' },
-  ];
-  return (
-    <div className="flex gap-1">
-      {opts.map((o) => (
-        <Button
-          key={o.key}
-          type="button"
-          variant={value === o.key ? 'default' : 'outline'}
-          size="sm"
-          onClick={() => onChange(o.key)}
-        >
-          {o.label}
-        </Button>
-      ))}
-    </div>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  tone = 'default',
-}: {
-  label: string;
-  value: string;
-  tone?: 'default' | 'warn';
-}) {
-  return (
-    <div
-      className={
-        'rounded-md border bg-card px-3 py-2 ' +
-        (tone === 'warn' ? 'border-warning/40' : 'border-border')
-      }
-    >
-      <p className="text-muted-foreground text-[10.5px] font-semibold uppercase tracking-wider">
-        {label}
-      </p>
-      <p
-        className={
-          'mt-1 text-base font-semibold tabular-nums ' +
-          (tone === 'warn' ? 'text-warning' : '')
-        }
-      >
-        {value}
-      </p>
-    </div>
-  );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  if (status === 'in_progress') return <Badge variant="warning">In progress</Badge>;
-  if (status === 'completed') return <Badge variant="success">Completed</Badge>;
-  if (status === 'canceled') return <Badge variant="destructive">Canceled</Badge>;
-  return <Badge variant="outline">{status}</Badge>;
-}
-
 const UNASSIGNED = '__unassigned__';
 
 /**
- * Assignment row for the cycle count. Manager+ get a Select dropdown to
- * pick a member (or unassign); staff/viewers see a read-only badge with
+ * Who the count is assigned to. Manager+ get a Select to pick a member (or
+ * unassign) while the count is open; staff, viewers and a closed count show
  * the current assignee's name.
  */
 function AssigneePicker({
@@ -839,6 +914,7 @@ function AssigneePicker({
 }) {
   const router = useRouter();
   const [busy, setBusy] = React.useState(false);
+  const labelId = React.useId();
 
   async function setAssignee(next: string) {
     const nextId = next === UNASSIGNED ? null : next;
@@ -857,17 +933,15 @@ function AssigneePicker({
       toast.error(res.error.message);
       return;
     }
-    toast.success(
-      nextId ? 'Cycle count assigned.' : 'Cycle count unassigned.',
-    );
+    toast.success(nextId ? 'Cycle count assigned.' : 'Cycle count unassigned.');
     router.refresh();
   }
 
   // Read-only display for staff/viewers, or when the count is closed.
   if (!canAssign) {
     return (
-      <div className="border-border bg-card flex items-center gap-2 rounded-md border px-3 py-2 text-[12.5px]">
-        <UserCircle2 className="text-muted-foreground h-4 w-4" />
+      <div className="border-border bg-card flex flex-wrap items-center gap-2 rounded-lg border px-[18px] py-3 text-[13px]">
+        <UserCircle2 aria-hidden className="text-muted-foreground h-4 w-4" />
         <span className="text-muted-foreground">Assigned to:</span>
         <span className="font-medium">{currentAssigneeName ?? 'Unassigned'}</span>
       </div>
@@ -875,27 +949,27 @@ function AssigneePicker({
   }
 
   return (
-    <div className="border-border bg-card flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-[12.5px]">
-      <UserCircle2 className="text-muted-foreground h-4 w-4" />
-      <span className="text-muted-foreground">Assigned to:</span>
-      <Select
-        value={currentAssignedTo ?? UNASSIGNED}
-        onValueChange={setAssignee}
-        disabled={busy}
-      >
-        <SelectTrigger className="h-8 min-w-[200px] text-[12.5px]">
-          <SelectValue placeholder="Pick a member" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={UNASSIGNED}>Unassigned</SelectItem>
-          {members.map((m) => (
-            <SelectItem key={m.id} value={m.id}>
-              {m.name}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      {busy && <Loader2 className="text-muted-foreground h-3 w-3 animate-spin" />}
+    <div className="border-border bg-card flex flex-wrap items-center gap-2 rounded-lg border px-[18px] py-3 text-[13px]">
+      <UserCircle2 aria-hidden className="text-muted-foreground h-4 w-4" />
+      <span id={labelId} className="text-muted-foreground">
+        Assigned to:
+      </span>
+      <div className="flex min-w-[180px] flex-1 items-center gap-2">
+        <Select value={currentAssignedTo ?? UNASSIGNED} onValueChange={setAssignee} disabled={busy}>
+          <SelectTrigger aria-labelledby={labelId}>
+            <SelectValue placeholder="Pick a member" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={UNASSIGNED}>Unassigned</SelectItem>
+            {members.map((m) => (
+              <SelectItem key={m.id} value={m.id}>
+                {m.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {busy && <Loader2 aria-hidden className="text-muted-foreground h-3.5 w-3.5 animate-spin" />}
+      </div>
     </div>
   );
 }

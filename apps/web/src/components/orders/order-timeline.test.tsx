@@ -29,7 +29,10 @@ vi.mock('@/lib/supabase/server', () => ({
     };
   }),
 }));
-vi.mock('@/lib/auth/platform-admin', () => ({ isPlatformAdmin: () => false }));
+/** Whether the viewer is a platform admin (the raw metadata disclosure). A
+ *  plain flag, not a mock implementation, for the reason above. */
+const platformAdmin = vi.hoisted(() => ({ on: false }));
+vi.mock('@/lib/auth/platform-admin', () => ({ isPlatformAdmin: () => platformAdmin.on }));
 vi.mock('@/components/ui/local-datetime', () => ({ LocalDateTime: () => null }));
 
 import { OrderTimeline } from './order-timeline';
@@ -304,5 +307,56 @@ describe('OrderTimeline — an exchange replacement (returns RX-2)', () => {
     await renderTimeline([row('a', 'order.closed_partial', {})]);
     expect(screen.getByText('Closed partial')).toBeInTheDocument();
     expect(screen.queryByText('What was handed over stays. The rest will not be sent.')).toBeNull();
+  });
+});
+
+// Redesign P4.B1: the history sits on the shared rail (Timeline +
+// TimelineEntry): each event one entry with its label, who did it and its
+// detail lines, in the order the audit log returned them.
+describe('OrderTimeline — on the shared history rail (P4.B1)', () => {
+  it('draws one rail entry per event with the label, the actor and the detail lines', async () => {
+    await renderTimeline([
+      {
+        id: 'e1',
+        event: 'order_request.created',
+        created_at: '2026-09-28T17:00:00Z',
+        user_id: 'u1',
+        metadata: { entity_type: 'order_request', entity_id: 'order-1' },
+      },
+      stockHeld('e2', { trigger: 'manual', held: 4, requested: 4, items: 1 }),
+    ]);
+    const rail = document.querySelector('[data-slot="timeline"]');
+    expect(rail).not.toBeNull();
+    expect(rail!.tagName).toBe('OL');
+    const entries = rail!.querySelectorAll('[data-slot="timeline-entry"]');
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toHaveTextContent('Dana Diaz');
+    expect(entries[1]).toHaveTextContent('Dana Diaz');
+    // No raw metadata for anyone who is not a platform admin.
+    expect(screen.queryByText(/Raw event/)).toBeNull();
+  });
+
+  it('a viewer who cannot see activity still gets the sentence alone, outside any rail', async () => {
+    render(
+      await OrderTimeline({ orderId: 'order-1', organizationId: 'org-1', canReadActivity: false }),
+    );
+    expect(document.querySelector('[data-slot="timeline"]')).toBeNull();
+  });
+
+  it("a platform admin's raw event sits inside its entry, its summary in the muted ink at full strength", async () => {
+    platformAdmin.on = true;
+    try {
+      await renderTimeline([
+        stockHeld('e1', { trigger: 'manual', held: 4, requested: 4, items: 1 }),
+      ]);
+      const summary = screen.getByText('Raw event · platform admin');
+      expect(summary.tagName).toBe('SUMMARY');
+      expect(summary.closest('[data-slot="timeline-entry"]')).not.toBeNull();
+      // A 70 % opacity on the muted ink fell under the 4.5:1 text contrast.
+      expect(summary.className).not.toMatch(/(^|\s)opacity-/);
+      expect(summary.closest('details')!.className).toContain('text-muted-foreground');
+    } finally {
+      platformAdmin.on = false;
+    }
   });
 });

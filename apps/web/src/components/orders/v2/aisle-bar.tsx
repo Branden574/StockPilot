@@ -104,7 +104,7 @@ export function AisleBar({
   return (
     <nav
       aria-label="Aisles"
-      className="sticky top-0 z-10 -mx-4 border-b bg-card/95 backdrop-blur px-4 py-2"
+      className="bg-card sticky top-0 z-10 -mx-4 border-b px-4 py-2"
     >
       <div className="relative">
         {/* Left fade + scroll-left arrow — only when scrolled off the left edge. */}
@@ -115,7 +115,7 @@ export function AisleBar({
               type="button"
               aria-label="Scroll categories left"
               onClick={() => scrollByDir(-1)}
-              className="absolute left-0 top-1/2 z-20 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-full border bg-card text-muted-foreground shadow-sm transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="border-line-strong bg-card text-ink-2 hover:bg-muted hover:text-foreground focus-visible:ring-ring absolute left-0 top-1/2 z-20 grid h-7 w-7 -translate-y-1/2 place-items-center rounded-md border transition-colors focus-visible:outline-none focus-visible:ring-2"
             >
               <ChevronLeft className="h-3.5 w-3.5" />
             </button>
@@ -141,17 +141,17 @@ export function AisleBar({
                 onClick={() => onSelect(resolveActiveKey(pill.key))}
                 onKeyDown={(e) => handleKeyDown(e, idx)}
                 className={cn(
-                  'flex-none flex items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  'focus-visible:ring-ring flex h-[30px] flex-none items-center gap-1.5 whitespace-nowrap rounded-full border px-3 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-2 max-sm:h-11',
                   isActive
-                    ? 'bg-foreground text-background'
-                    : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                    ? 'border-foreground bg-foreground text-background'
+                    : 'border-line-strong text-ink-2 hover:bg-muted hover:text-foreground',
                 )}
               >
                 <span>{pill.label}</span>
                 <span
                   className={cn(
-                    'rounded-full px-1.5 py-0.5 text-[10px] font-semibold leading-none',
-                    isActive ? 'bg-background/20' : 'bg-muted text-muted-foreground',
+                    'font-mono text-[11px] leading-none',
+                    isActive ? 'opacity-75' : 'text-muted-foreground',
                   )}
                 >
                   {pill.count}
@@ -169,7 +169,7 @@ export function AisleBar({
               type="button"
               aria-label="Scroll categories right"
               onClick={() => scrollByDir(1)}
-              className="absolute right-0 top-1/2 z-20 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-full border bg-card text-muted-foreground shadow-sm transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="border-line-strong bg-card text-ink-2 hover:bg-muted hover:text-foreground focus-visible:ring-ring absolute right-0 top-1/2 z-20 grid h-7 w-7 -translate-y-1/2 place-items-center rounded-md border transition-colors focus-visible:outline-none focus-visible:ring-2"
             >
               <ChevronRight className="h-3.5 w-3.5" />
             </button>

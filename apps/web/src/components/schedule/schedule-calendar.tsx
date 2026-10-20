@@ -34,20 +34,25 @@ interface Props {
 }
 
 const WEEK_HEADERS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-// Explicit Tailwind palette tones with separate light/dark text
-// values so chips read cleanly in both themes. The semantic
-// --warning / --success / --destructive vars on this project map to
-// dark amber/green/red text — fine on light bg, but unreadable on
-// the dark-mode card surface.
+// Status tones from the redesign tokens (DESIGN-SPEC 6.10): scheduled is the
+// neutral pill on the card colour, in progress the warning wash, completed
+// the success wash and cancelled the destructive wash. Completed and
+// cancelled keep the strike-through, and every chip also carries its status
+// word for screen readers, so colour is never the only cue. The washes are
+// tuned per theme, so one class reads in light and dark.
 const STATUS_TONE: Record<CalendarEvent['status'], string> = {
-  scheduled:
-    'border-sky-500/50 bg-sky-500/15 text-sky-700 dark:text-sky-200',
-  in_progress:
-    'border-amber-500/60 bg-amber-500/20 text-amber-800 dark:text-amber-200',
-  completed:
-    'border-emerald-500/50 bg-emerald-500/15 text-emerald-700 dark:text-emerald-200 line-through opacity-80',
-  cancelled:
-    'border-rose-500/50 bg-rose-500/15 text-rose-700 dark:text-rose-200 line-through opacity-70',
+  scheduled: 'border-line-strong bg-card text-foreground',
+  in_progress: 'border-transparent bg-warning-wash text-warning',
+  completed: 'border-transparent bg-success-wash text-success line-through',
+  cancelled: 'border-transparent bg-destructive-wash text-destructive line-through',
+};
+
+/** The status words the event page prints, read after a chip's title. */
+const STATUS_LABEL: Record<CalendarEvent['status'], string> = {
+  scheduled: 'Scheduled',
+  in_progress: 'In progress',
+  completed: 'Completed',
+  cancelled: 'Cancelled',
 };
 
 function formatHeader(year: number, month: number): string {
@@ -130,13 +135,13 @@ export function ScheduleCalendar({ year, month, events, canManage = false }: Pro
   }
 
   return (
-    <div>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-1.5">
           <Button
             type="button"
             variant="outline"
-            size="sm"
+            size="icon"
             onClick={() => navMonth(-1)}
             aria-label="Previous month"
           >
@@ -145,118 +150,127 @@ export function ScheduleCalendar({ year, month, events, canManage = false }: Pro
           <Button
             type="button"
             variant="outline"
-            size="sm"
+            size="icon"
             onClick={() => navMonth(1)}
             aria-label="Next month"
           >
             <ChevronRight className="h-4 w-4" />
           </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={goToToday}
-            className="ml-1"
-          >
+          <Button type="button" variant="ghost" size="sm" onClick={goToToday} className="ml-1">
             Today
           </Button>
         </div>
-        <h2 className="font-display text-[20px] font-medium tracking-tight">
+        <h2 className="text-foreground font-display text-[20px] font-medium leading-[30px] tracking-[-0.02em]">
           {formatHeader(year, month)}
         </h2>
         {canManage && (
-          <Button asChild variant="gradient" size="sm">
+          <Button asChild variant="gradient">
             <Link href="/dashboard/schedule/new">+ New event</Link>
           </Button>
         )}
       </div>
 
-      <div className="border-border bg-card overflow-hidden rounded-xl border">
-        <div className="grid grid-cols-7 border-b border-border bg-muted/40">
-          {WEEK_HEADERS.map((h) => (
-            <div
-              key={h}
-              className="text-muted-foreground py-1.5 text-center text-[10.5px] font-medium uppercase tracking-[0.1em]"
-            >
-              {h}
+      {/* The month grid. Below about 640 px the seven columns scroll inside
+          the card (the page itself never scrolls sideways), so every day keeps
+          its chips, its "+ Add" link and its "+N more" link at phone width. */}
+      <div className="border-border bg-card overflow-hidden rounded-lg border">
+        <div className="overflow-x-auto">
+          <div className="min-w-[640px]">
+            <div className="border-border bg-sunk grid grid-cols-7 border-b">
+              {WEEK_HEADERS.map((h) => (
+                <div
+                  key={h}
+                  className="text-muted-foreground px-2 py-2.5 text-center text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em]"
+                >
+                  {h}
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-        <div className="grid grid-cols-7">
-          {cells.map((d, i) => {
-            const inMonth = d.getMonth() === month - 1;
-            const isToday = hydrated && isSameDay(d, today);
-            const dayEvents = hydrated ? (byDay.get(ymd(d)) ?? []) : [];
-            const visible = dayEvents.slice(0, 3);
-            const overflow = dayEvents.length - visible.length;
-            return (
-              <div
-                key={i}
-                className={cn(
-                  'group relative min-h-[110px] border-b border-r border-border p-1.5',
-                  i % 7 === 6 && 'border-r-0',
-                  i >= 35 && 'border-b-0',
-                  !inMonth && 'bg-muted/20',
-                )}
-              >
-                <div className="flex items-start justify-between">
-                  <span
+            <div className="grid grid-cols-7">
+              {cells.map((d, i) => {
+                const inMonth = d.getMonth() === month - 1;
+                const isToday = hydrated && isSameDay(d, today);
+                const dayEvents = hydrated ? (byDay.get(ymd(d)) ?? []) : [];
+                const visible = dayEvents.slice(0, 3);
+                const overflow = dayEvents.length - visible.length;
+                return (
+                  <div
+                    key={i}
                     className={cn(
-                      'inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[11px] tabular-nums',
-                      isToday
-                        ? 'bg-foreground text-background font-medium'
-                        : inMonth
-                          ? 'text-foreground'
-                          : 'text-muted-foreground',
+                      'border-border group relative min-h-[112px] min-w-0 border-b border-r p-1.5',
+                      i % 7 === 6 && 'border-r-0',
+                      i >= 35 && 'border-b-0',
+                      !inMonth && 'bg-sunk',
                     )}
                   >
-                    {d.getDate()}
-                  </span>
-                  {canManage && (
-                    <Link
-                      href={`/dashboard/schedule/new?date=${ymd(d)}`}
-                      className="text-muted-foreground hover:text-foreground text-[10px] opacity-0 transition group-hover:opacity-100"
-                      aria-label={`Add event on ${ymd(d)}`}
-                    >
-                      + Add
-                    </Link>
-                  )}
-                </div>
-                <div className="mt-1 space-y-1">
-                  {visible.map((ev) => {
-                    const time = ev.allDay
-                      ? null
-                      : formatOrgTime(new Date(ev.startsAt), {
-                          hour: 'numeric',
-                          minute: '2-digit',
-                        });
-                    return (
-                      <Link
-                        key={ev.id}
-                        href={`/dashboard/schedule/${ev.id}`}
+                    <div className="flex items-start justify-between gap-1">
+                      <span
                         className={cn(
-                          'block truncate rounded border px-1.5 py-0.5 text-[10.5px] leading-tight',
-                          STATUS_TONE[ev.status],
+                          'inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1.5 text-[12px] tabular-nums',
+                          isToday
+                            ? 'bg-foreground text-background font-medium'
+                            : inMonth
+                              ? 'text-foreground'
+                              : 'text-muted-foreground',
                         )}
-                        title={ev.title}
                       >
-                        {time ? <span className="opacity-70">{time} </span> : null}
-                        {ev.title}
-                      </Link>
-                    );
-                  })}
-                  {overflow > 0 ? (
-                    <Link
-                      href={`/dashboard/schedule?m=${year}-${String(month).padStart(2, '0')}&day=${ymd(d)}`}
-                      className="text-muted-foreground hover:text-foreground block px-1.5 text-[10px]"
-                    >
-                      +{overflow} more
-                    </Link>
-                  ) : null}
-                </div>
-              </div>
-            );
-          })}
+                        {d.getDate()}
+                      </span>
+                      {canManage && (
+                        // Revealed on hover, and always when it or anything in
+                        // its day holds the keyboard focus, and on touch
+                        // screens, where there is no hover (CONFLICTS D18).
+                        <Link
+                          href={`/dashboard/schedule/new?date=${ymd(d)}`}
+                          className="text-muted-foreground hover:text-foreground focus-visible:ring-ring rounded px-1 text-[11px] leading-6 opacity-0 transition-opacity focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 group-focus-within:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100"
+                          aria-label={`Add event on ${ymd(d)}`}
+                        >
+                          + Add
+                        </Link>
+                      )}
+                    </div>
+                    <div className="mt-1 space-y-1">
+                      {visible.map((ev) => {
+                        const time = ev.allDay
+                          ? null
+                          : formatOrgTime(new Date(ev.startsAt), {
+                              hour: 'numeric',
+                              minute: '2-digit',
+                            });
+                        return (
+                          <Link
+                            key={ev.id}
+                            href={`/dashboard/schedule/${ev.id}`}
+                            data-status={ev.status}
+                            className={cn(
+                              'focus-visible:ring-ring block truncate rounded-[4px] border px-1.5 py-0.5 text-[11px] leading-4 focus-visible:outline-none focus-visible:ring-2',
+                              STATUS_TONE[ev.status],
+                            )}
+                            title={ev.title}
+                          >
+                            {/* The time at the chip's full tone: on a status wash a
+                                faded time fell under 4.5:1. The title's weight sets
+                                it apart instead. */}
+                            {time ? <span className="tabular-nums">{time} </span> : null}
+                            <span className="font-medium">{ev.title}</span>
+                            <span className="sr-only">, {STATUS_LABEL[ev.status]}</span>
+                          </Link>
+                        );
+                      })}
+                      {overflow > 0 ? (
+                        <Link
+                          href={`/dashboard/schedule?m=${year}-${String(month).padStart(2, '0')}&day=${ymd(d)}`}
+                          className="text-muted-foreground hover:text-foreground block px-1.5 text-[11px] leading-4"
+                        >
+                          +{overflow} more
+                        </Link>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
       </div>
     </div>

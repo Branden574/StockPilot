@@ -1,41 +1,47 @@
+import { ChartCard } from '@/components/dashboard/charts/chart-card';
 import { MiniBarChart } from '@/components/dashboard/mini-bar-chart';
 
-import { Card, CardHead } from './shared';
 import type { DashboardWidgetProps } from './types';
 
 /**
- * 30-day movement mini-bar chart + the per-type share breakdown. Renders the
- * bare Card (right 3 of 12 cols on lg); the page composes it into the shared
- * chart-row grid next to the inventory-value chart so the default layout is
- * pixel-identical.
+ * 30-day movement mini-bar chart + the per-type share breakdown, in the value
+ * card's chart-card look. The widget renderer (index.tsx) sets it beside the
+ * inventory-value card when the two are adjacent, full width on its own.
  */
 export function MovementsBreakdownWidget({ barValues, breakdownRows }: DashboardWidgetProps) {
   return (
-    <Card className="lg:col-span-3">
-      <CardHead title="Movements · 30 days" subtitle="Receive · sale · transfer · adjust" />
-      <div className="px-5 pb-4">
+    <ChartCard
+      title="Movements · 30 days"
+      subtitle="Receive · sale · transfer · adjust"
+      className="flex-1"
+    >
+      <div className="px-[18px] pb-4 pt-4">
         <MiniBarChart values={barValues} height={120} />
         <hr className="border-border my-4" />
         <div className="flex flex-col gap-3">
           {breakdownRows.length === 0 && (
-            <p className="text-muted-foreground py-1 text-[12px]">
+            <p className="text-muted-foreground py-1 text-[12.5px]">
               No movements in the last 30 days.
             </p>
           )}
           {breakdownRows.map((r) => (
-            <div key={r.label} className="flex items-center justify-between">
-              <span className="text-[12.5px]">{r.label}</span>
-              <div className="flex items-center gap-2">
+            <div key={r.label} className="flex items-center justify-between gap-3">
+              {/* The type in the Movements page's words ("Bundle assembly",
+                  "Receive PO"; the page maps the codes, FX5), so a long one
+                  wraps between its words, never inside one. The raw codes
+                  this card printed needed a <wbr> after the underscore. */}
+              <span className="min-w-0 break-words text-[12.5px]">{r.label}</span>
+              <div className="flex shrink-0 items-center gap-2">
                 <span
-                  className="bg-muted block h-1.5 w-20 overflow-hidden rounded-full"
+                  className="bg-line-strong block h-1 w-12 overflow-hidden rounded-[2px]"
                   aria-hidden
                 >
                   <span
-                    className="block h-full rounded-full bg-[var(--ed-ink-2)]"
+                    className="bg-ink-2 block h-full rounded-[2px]"
                     style={{ width: `${r.share * 100}%` }}
                   />
                 </span>
-                <span className="w-6 text-right font-mono text-[11.5px] tabular-nums text-[var(--ed-ink-3)]">
+                <span className="text-muted-foreground w-8 text-right font-mono text-[11.5px] tabular-nums">
                   {r.val}
                 </span>
               </div>
@@ -43,6 +49,6 @@ export function MovementsBreakdownWidget({ barValues, breakdownRows }: Dashboard
           ))}
         </div>
       </div>
-    </Card>
+    </ChartCard>
   );
 }

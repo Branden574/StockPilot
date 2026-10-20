@@ -5,7 +5,14 @@ import type { ReactNode } from 'react';
 
 import { DashboardShell } from '@/components/dashboard/dashboard-shell';
 import { MfaRequiredBanner } from '@/components/dashboard/mfa-required-banner';
-import { SIDEBAR_HIDDEN_COOKIE, parseSidebarHidden } from '@/components/dashboard/sidebar-pref';
+import {
+  DENSITY_COOKIE,
+  NAV_COLLAPSED_COOKIE,
+  SIDEBAR_HIDDEN_COOKIE,
+  parseCollapsedSections,
+  parseDensity,
+  parseSidebarHidden,
+} from '@/components/dashboard/sidebar-pref';
 import { ImpersonationBanner } from '@/components/platform/impersonation-banner';
 import { currentUserIsPlatformAdminFromRequestHeader } from '@/lib/auth/platform-admin';
 import { InventoryRealtime } from '@/components/realtime/inventory-realtime';
@@ -72,8 +79,14 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   // currentUserIsPlatformAdminFromRequestHeader.
   const platformAdmin = await currentUserIsPlatformAdminFromRequestHeader();
 
+  // The shell's per-viewer preferences are cookies, read here so the first
+  // paint already has them: no flash, and no database read.
   const cookieStore = await cookies();
   const initialSidebarHidden = parseSidebarHidden(cookieStore.get(SIDEBAR_HIDDEN_COOKIE)?.value);
+  const initialDensity = parseDensity(cookieStore.get(DENSITY_COOKIE)?.value);
+  const initialCollapsedSections = parseCollapsedSections(
+    cookieStore.get(NAV_COLLAPSED_COOKIE)?.value,
+  );
 
   // Layout-blocking parallel fan-out. Org row, warehouses list, and MFA
   // factors go through request-cached helpers so the dashboard page (or
@@ -201,6 +214,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
         warehouses: warehousesList,
         activeId: activeWarehouseId,
         warehouseLabel: term.warehouse_singular,
+        warehousePluralLabel: term.warehouse_plural,
       }
     : undefined;
 
@@ -222,6 +236,8 @@ export default async function DashboardLayout({ children }: { children: ReactNod
         permissions={ctx.permissions ? [...ctx.permissions] : undefined}
         isPlatformAdmin={platformAdmin}
         initialSidebarHidden={initialSidebarHidden}
+        initialDensity={initialDensity}
+        initialCollapsedSections={initialCollapsedSections}
         enabledModules={enabledModules}
         navOverrides={orgRow?.nav_overrides ?? null}
         orderStatusConfig={orgRow?.order_status_config ?? null}

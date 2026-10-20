@@ -5,7 +5,7 @@ interface BarChartProps {
 }
 
 /**
- * Quiet stacked-bar visualization for the dashboard's 30-day movement
+ * Quiet bar visualization for the dashboard's 30-day movement
  * tile. Pure SVG-ish (just flexbox + div backgrounds) — no hooks, no
  * client APIs — so it stays a Server Component and doesn't drag itself
  * into a client bundle the way BigChart does (which legitimately needs
@@ -25,7 +25,10 @@ export function MiniBarChart({ values, height = 120, className }: BarChartProps)
           style={{
             flex: 1,
             height: `${(v / max) * 100}%`,
-            background: 'linear-gradient(180deg, hsl(var(--foreground)/0.85), hsl(var(--foreground)/0.4))',
+            // One flat muted-ink fill (the redesign has no gradients); the
+            // reference's charts draw in ink 3 when they are not the accent.
+            background: 'var(--ed-ink-3)',
+            opacity: 0.7,
             borderRadius: 2,
           }}
         />

@@ -105,13 +105,12 @@ export function MfaEnrollment({ verifiedFactors, policyRequired }: MfaEnrollment
   if (verifiedFactors.length > 0) {
     return (
       <div className="space-y-3">
-        <div className="flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm dark:border-emerald-900/50 dark:bg-emerald-950/30">
-          <ShieldCheck className="mt-0.5 h-5 w-5 text-emerald-700 dark:text-emerald-400" />
-          <div className="flex-1">
+        <div className="border-success/30 bg-success-wash flex items-start gap-3 rounded-lg border p-4 text-[13px]">
+          <ShieldCheck aria-hidden className="text-success mt-0.5 h-5 w-5 shrink-0" />
+          <div className="min-w-0 flex-1">
             <p className="font-medium">Two-factor authentication is on</p>
-            <p className="text-muted-foreground mt-1 text-xs">
-              You'll be asked for a 6-digit code from your authenticator app every time you
-              sign in.
+            <p className="text-ink-2 mt-1 text-[12.5px]">
+              You'll be asked for a 6-digit code from your authenticator app every time you sign in.
             </p>
           </div>
         </div>
@@ -119,10 +118,10 @@ export function MfaEnrollment({ verifiedFactors, policyRequired }: MfaEnrollment
           {verifiedFactors.map((f) => (
             <li
               key={f.id}
-              className="flex items-center justify-between rounded-lg border border-border bg-card px-3 py-2"
+              className="border-border bg-card flex min-h-11 items-center justify-between gap-3 rounded-lg border px-3 py-2"
             >
-              <div className="flex items-center gap-2 text-sm">
-                <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+              <div className="flex min-w-0 items-center gap-2 text-[13px]">
+                <ShieldCheck aria-hidden className="text-muted-foreground h-4 w-4 shrink-0" />
                 <span>{f.friendlyName ?? 'Authenticator app'}</span>
               </div>
               {!policyRequired && (
@@ -132,16 +131,16 @@ export function MfaEnrollment({ verifiedFactors, policyRequired }: MfaEnrollment
                   onClick={() => setDisableTarget(f.id)}
                   disabled={pending}
                 >
-                  <ShieldOff className="mr-1 h-3.5 w-3.5" /> Disable
+                  <ShieldOff aria-hidden className="h-3.5 w-3.5" /> Disable
                 </Button>
               )}
             </li>
           ))}
         </ul>
         {policyRequired && (
-          <p className="text-[11px] text-muted-foreground">
-            Your organization requires MFA. To disable your authenticator, an admin must
-            lower the policy first.
+          <p className="text-muted-foreground text-[12px]">
+            Your organization requires MFA. To disable your authenticator, an admin must lower the
+            policy first.
           </p>
         )}
         <DestructiveConfirm
@@ -162,9 +161,9 @@ export function MfaEnrollment({ verifiedFactors, policyRequired }: MfaEnrollment
   if (step === 'verify' && enrollment) {
     return (
       <div className="space-y-4">
-        <div className="rounded-lg border border-border bg-card p-4">
-          <p className="text-sm font-medium">Step 1 — scan with your authenticator app</p>
-          <p className="text-muted-foreground mt-1 text-xs">
+        <div className="border-border bg-sunk rounded-lg border p-4">
+          <p className="text-[13.5px] font-medium">Step 1 — scan with your authenticator app</p>
+          <p className="text-muted-foreground mt-1 text-[12.5px]">
             Open Google Authenticator, 1Password, Authy, or any TOTP app and scan this code.
           </p>
           <div className="mt-3 flex justify-center">
@@ -172,12 +171,14 @@ export function MfaEnrollment({ verifiedFactors, policyRequired }: MfaEnrollment
             <img
               src={enrollment.qrCode}
               alt="Scan with your authenticator app"
-              className="h-44 w-44 rounded-md border border-border bg-white p-2"
+              className="border-border h-44 w-44 rounded-md border bg-white p-2"
             />
           </div>
-          <details className="mt-3 text-xs text-muted-foreground">
-            <summary className="cursor-pointer">Can't scan? Show secret key</summary>
-            <p className="mt-2 break-all rounded bg-muted/40 px-2 py-1.5 font-mono text-[11px]">
+          <details className="text-muted-foreground mt-3 text-[12.5px]">
+            <summary className="hover:text-foreground focus-visible:ring-ring inline-flex min-h-8 cursor-pointer items-center rounded-sm focus-visible:outline-none focus-visible:ring-2">
+              Can't scan? Show secret key
+            </summary>
+            <p className="bg-card text-foreground mt-2 break-all rounded-md border px-2.5 py-1.5 font-mono text-[12px]">
               {enrollment.secret}
             </p>
           </details>
@@ -205,12 +206,12 @@ export function MfaEnrollment({ verifiedFactors, policyRequired }: MfaEnrollment
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
-          <p className="text-muted-foreground text-[11px]">
-            We re-check your password so a stolen session can't enroll an attacker's
-            authenticator app.
+          <p className="text-muted-foreground text-[12px]">
+            We re-check your password so a stolen session can't enroll an attacker's authenticator
+            app.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button
             variant="outline"
             onClick={() => {
@@ -223,11 +224,9 @@ export function MfaEnrollment({ verifiedFactors, policyRequired }: MfaEnrollment
           >
             Cancel
           </Button>
-          <Button
-            onClick={verifyCode}
-            disabled={pending || code.length !== 6 || !password}
-          >
-            {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Verify & enable'}
+          <Button onClick={verifyCode} disabled={pending || code.length !== 6 || !password}>
+            {pending ? <Loader2 aria-hidden className="animate-spin" /> : null}
+            Verify &amp; enable
           </Button>
         </div>
       </div>
@@ -236,11 +235,11 @@ export function MfaEnrollment({ verifiedFactors, policyRequired }: MfaEnrollment
 
   return (
     <div className="space-y-3">
-      <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm dark:border-amber-900/50 dark:bg-amber-950/30">
-        <ShieldOff className="mt-0.5 h-5 w-5 text-amber-700 dark:text-amber-400" />
-        <div className="flex-1">
+      <div className="border-warning/40 bg-warning-wash flex items-start gap-3 rounded-lg border p-4 text-[13px]">
+        <ShieldOff aria-hidden className="text-warning mt-0.5 h-5 w-5 shrink-0" />
+        <div className="min-w-0 flex-1">
           <p className="font-medium">Two-factor authentication is off</p>
-          <p className="text-muted-foreground mt-1 text-xs">
+          <p className="text-ink-2 mt-1 text-[12.5px]">
             Add an authenticator app for an extra layer of sign-in security.
             {policyRequired &&
               ' Your organization requires MFA — please enroll to keep using StockPilot.'}
@@ -248,7 +247,8 @@ export function MfaEnrollment({ verifiedFactors, policyRequired }: MfaEnrollment
         </div>
       </div>
       <Button onClick={startEnroll} disabled={pending}>
-        {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Set up authenticator app'}
+        {pending ? <Loader2 aria-hidden className="animate-spin" /> : null}
+        Set up authenticator app
       </Button>
     </div>
   );

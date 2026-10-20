@@ -57,8 +57,11 @@ export const Sparkline = memo(function Sparkline({
 
   const lineColor =
     inferred === 'up' ? 'hsl(var(--accent))' : inferred === 'down' ? 'hsl(var(--destructive))' : 'var(--ed-ink-3)';
+  // The direction tones stay (accent up, danger down, muted ink flat); the
+  // area under the line is a faint wash of the same tone (DESIGN-SPEC 6.12
+  // keeps the real sparkline's tones).
   const areaColor =
-    inferred === 'up' ? 'hsl(var(--accent) / 0.14)' : inferred === 'down' ? 'hsl(var(--destructive) / 0.10)' : 'transparent';
+    inferred === 'up' ? 'hsl(var(--accent) / 0.12)' : inferred === 'down' ? 'hsl(var(--destructive) / 0.10)' : 'transparent';
 
   return (
     <svg
@@ -69,8 +72,18 @@ export const Sparkline = memo(function Sparkline({
       preserveAspectRatio="none"
       aria-hidden
     >
+      {/* The area first and the line second: tests read the line as the
+          second path. The line keeps 1.25 px at any drawn size. */}
       <path d={area} fill={areaColor} />
-      <path d={path} fill="none" stroke={lineColor} strokeWidth={1.25} strokeLinecap="round" strokeLinejoin="round" />
+      <path
+        d={path}
+        fill="none"
+        stroke={lineColor}
+        strokeWidth={1.25}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        vectorEffect="non-scaling-stroke"
+      />
     </svg>
   );
 });

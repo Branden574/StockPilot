@@ -358,8 +358,18 @@ describe('screen pins', () => {
     expect(screen).toContain('ungroupResultLines(');
     expect(screen).toContain('notifyRecordsUngrouped()');
     expect(screen).not.toMatch(/enqueue\(/);
-    // Each "keeps the SKU" choice is a 44pt radio named for its record.
-    expect(screen).toContain(
+    // Each "keeps the SKU" choice is a 44pt radio named for its record (core's
+    // "Keeps SKU X" and the record, as before) and for what tells it apart
+    // from the SKU's other records, with the outcome beside it as its value.
+    // Redesign Stage 6, F9: the name alone read the same on three Wireless
+    // Mouse radios, and the outcome was never heard. F9 review: the names are
+    // worked out once per plan (radioNames), never by each radio as it renders.
+    expect(screen).toContain('accessibilityLabel={radioNames.get(rec.id)}');
+    expect(screen).toMatch(
+      /keepsSkuRadioLabels\(\s*UNGROUP_COPY\.keepsSku\(g\.sku\),\s*plan\.records,\s*g\.selected,\s*view,\s*\)/,
+    );
+    expect(screen).toContain('accessibilityValue={{ text: ungroupOutcomeWords(o) }}');
+    expect(screen).not.toContain(
       'accessibilityLabel={`${UNGROUP_COPY.keepsSku(group.sku)}: ${r.name}`}',
     );
   });
@@ -377,7 +387,9 @@ describe('screen pins', () => {
     // PR #358 review (2026-10-12): Review again sits beside Try again (never
     // only in the else branch), as on the web.
     expect(screen).toContain('{retryBody ? (');
-    expect(screen).not.toMatch(/\) : \(\s*<Button block variant="outline" onPress=\{reviewAgain\}>/);
+    expect(screen).not.toMatch(
+      /\) : \(\s*<Button block variant="outline" onPress=\{reviewAgain\}>/,
+    );
     // UNGROUP_COPY words exist for every left-out reason the plan names.
     expect(Object.keys(UNGROUP_COPY.selectedLeftOutReason).sort()).toEqual(
       ['family_permission', 'family_sku', 'kit', 'not_writable', 'nothing'].sort(),

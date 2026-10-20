@@ -153,6 +153,11 @@ describe('po/[id].tsx wiring', () => {
     expect(screen).toMatch(
       /<Metric\s+label="Variance"\s+value=\{variance\}\s+tone=\{variance < 0 \? 'danger' : 'primary'\}\s+caption=\{remaining > 0 \? varianceCaption\(variance\) : undefined\}\s*\/>/,
     );
-    expect(screen).toMatch(/tone === 'danger' && \{ color: theme\.destructive \}/);
+    // Re-pinned by the redesign (P5.8, 2026-10-18; was `{ color:
+    // theme.destructive }`, the light-only legacy alias): the over receipt is
+    // still the refusal red, now the per-mode one, so it stays red in dark
+    // mode. Same pin: 'danger' paints the number in the refusal tone.
+    expect(screen).toMatch(/tone === 'danger' && \{ color: c\.critText \}/);
+    expect(screen).not.toMatch(/\btheme\.destructive\b/);
   });
 });

@@ -61,14 +61,13 @@ export function ZendeskConnectCard({ status, subdomain }: Props) {
 
   if (connected) {
     return (
-      <div className="rounded-lg border p-4">
-        <p className="text-sm font-medium">
+      <div className="border-border bg-sunk rounded-lg border p-4">
+        <p className="text-foreground text-[13.5px] font-medium">
           Connected{subdomain ? ` to ${subdomain}.zendesk.com` : ''}
         </p>
         <Button
           type="button"
           variant="outline"
-          size="sm"
           className="mt-3"
           disabled={disconnecting}
           onClick={handleDisconnect}
@@ -80,7 +79,10 @@ export function ZendeskConnectCard({ status, subdomain }: Props) {
   }
 
   return (
-    <form onSubmit={handleConnect} className="space-y-3 rounded-lg border p-4">
+    <form
+      onSubmit={handleConnect}
+      className="border-border bg-sunk grid gap-3 rounded-lg border p-4 sm:grid-cols-2"
+    >
       <div className="space-y-1.5">
         <Label htmlFor="zd-subdomain">Zendesk subdomain</Label>
         <Input
@@ -106,7 +108,7 @@ export function ZendeskConnectCard({ status, subdomain }: Props) {
           required
         />
       </div>
-      <div className="space-y-1.5">
+      <div className="space-y-1.5 sm:col-span-2">
         <Label htmlFor="zd-token">API token</Label>
         <Input
           id="zd-token"
@@ -122,7 +124,7 @@ export function ZendeskConnectCard({ status, subdomain }: Props) {
       <Button
         type="submit"
         variant="gradient"
-        size="sm"
+        className="justify-self-start sm:col-span-2"
         disabled={connecting || subdomainInput.trim().length === 0 || apiToken.trim().length === 0}
       >
         {connecting ? 'Connecting…' : 'Connect Zendesk'}

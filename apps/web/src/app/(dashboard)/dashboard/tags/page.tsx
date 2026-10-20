@@ -1,10 +1,20 @@
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 
 import { TagsManager } from '@/components/tags/tags-manager';
 import { requireOrgContext } from '@/lib/auth/session';
+import { isNextControlFlowError } from '@/lib/error-reporter';
+import { effectiveNavLabel } from '@/lib/nav-labels';
 import { TagsService } from '@/server/services/tags';
 
 import { can } from '@stockpilot/core';
+
+// The tab names the page ("Tags · StockPilot"); before, it read the group's
+// "Dashboard" (CONFLICTS D16).
+export const metadata: Metadata = { title: 'Tags' };
+
+/** The page area (DESIGN-SPEC 4 and 5.3), the same box the other pages use. */
+const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
 
 export default async function TagsPage() {
   // Tags has no dedicated permission — ride on items:update as the
@@ -13,19 +23,24 @@ export default async function TagsPage() {
   if (!can(ctx, 'items:update')) {
     redirect('/dashboard');
   }
-  const svc = await TagsService.forCurrentUser();
-  const rows = await svc.listWithCounts();
+  // The heading follows a Settings > Navigation rename of this page's sidebar
+  // entry, as the sidebar and the crumb do (PLAN rule 10): a lookup of the
+  // request-cached org row the dashboard layout already read, so nothing new
+  // is read; a failed lookup keeps the page's own word.
+  const [rows, title] = await Promise.all([
+    TagsService.forCurrentUser().then((svc) => svc.listWithCounts()),
+    effectiveNavLabel('/dashboard/tags', 'Tags').catch((e: unknown) => {
+      if (isNextControlFlowError(e)) throw e;
+      return 'Tags';
+    }),
+  ]);
 
   return (
-    <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Tags</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Flexible labels you can apply to many items at once. Stack them
-          with categories for finer-grained filtering.
-        </p>
-      </div>
+    // The header (h1, subline, New tag) is drawn by TagsManager, which holds
+    // the dialog New tag opens.
+    <div className={PAGE}>
       <TagsManager
+        title={title}
         initial={rows.map((r) => ({
           id: r.id,
           name: r.name,

@@ -1,6 +1,4 @@
-import { Lock } from 'lucide-react';
-
-import { Card, CardContent } from '@/components/ui/card';
+import { StatePanel } from '@/components/patterns/state-panel';
 
 /**
  * Shown when a user lacks purchase_orders:read. Rendered by both the
@@ -10,29 +8,30 @@ import { Card, CardContent } from '@/components/ui/card';
  * the error boundary ("Something broke loading this page") BEFORE the layout's
  * gate could show this card. Gating in-page, before any throwing service call,
  * guarantees the clean denial.
+ *
+ * The look is P2.6's StatePanel (kind forbidden, page size, its title the
+ * page's only h1), inside the page's gutters, as ModuleNotEnabled draws it.
  */
 export function PoAccessDenied() {
   return (
-    <div className="container mx-auto flex max-w-2xl items-center justify-center px-4 py-20 sm:px-6">
-      <Card className="w-full">
-        <CardContent className="flex flex-col items-center gap-4 py-12 text-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted/50 text-muted-foreground">
-            <Lock className="h-5 w-5" aria-hidden="true" />
-          </div>
-          <div className="space-y-1.5">
-            <h1 className="text-xl font-semibold tracking-tight">
-              You don&apos;t have access to purchase orders
-            </h1>
-            <p className="max-w-sm text-sm text-muted-foreground">
-              Viewing purchase orders needs the &ldquo;View purchase orders&rdquo;
-              permission, which isn&apos;t enabled for your account.
-            </p>
-          </div>
-          <p className="mt-2 text-sm text-muted-foreground">
+    <div className="w-full px-4 py-16 sm:px-8 sm:py-24">
+      <StatePanel
+        kind="forbidden"
+        size="page"
+        headingLevel={1}
+        title={<>You don&apos;t have access to purchase orders</>}
+        description={
+          <>
+            Viewing purchase orders needs the &ldquo;View purchase orders&rdquo; permission, which
+            isn&apos;t enabled for your account.
+          </>
+        }
+        action={
+          <p className="text-muted-foreground text-[13.5px]">
             Ask an owner or admin to enable it from Settings → Roles &amp; permissions.
           </p>
-        </CardContent>
-      </Card>
+        }
+      />
     </div>
   );
 }

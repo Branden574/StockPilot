@@ -232,7 +232,10 @@ export function OrderLineActions({
   if (editing) {
     return (
       <div className="flex flex-col items-end gap-1">
-        <div className="flex items-center justify-end gap-1">
+        {/* 6 px between the 32 px field and buttons: below sm and on coarse
+            pointers each Button grows a 44 px hit area, and a later one
+            paints over an earlier neighbour closer than (44 - 32) / 2. */}
+        <div className="flex items-center justify-end gap-1.5">
           <BlankZeroNumberInput
             value={draft}
             onValueChange={setDraft}
@@ -281,7 +284,7 @@ export function OrderLineActions({
             same tone the order's partial-fulfilment and stale-slip banners use
             for "this needs attention but nothing is broken". */}
         {blocked == null && raiseWarning != null && (
-          <p className="max-w-[15rem] text-right text-[11px] leading-snug text-amber-700 dark:text-amber-400">
+          <p className="text-warning max-w-[15rem] text-right text-[11px] leading-snug">
             {raiseWarning}
           </p>
         )}
@@ -300,8 +303,11 @@ export function OrderLineActions({
     );
   }
 
+  // 6 px apart (was 2): while Remove is enabled its 44 px touch area (below
+  // sm and on coarse pointers) covered the right edge of Change quantity, so
+  // a tap there opened "Remove this item?" (P2.2 review hand-off).
   return (
-    <div className="flex items-center justify-end gap-0.5">
+    <div className="flex items-center justify-end gap-1.5" data-testid="order-line-actions">
       <Button
         type="button"
         size="icon"
@@ -427,7 +433,9 @@ export function ShortLineFixes({
   return (
     <div className="mt-1.5 space-y-1" data-testid="short-line-fixes">
       {fixes.actions.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5">
+        // 8 px between the 28 px buttons: their 44 px touch areas meet
+        // without overlapping (the Button touch rule).
+        <div className="flex flex-wrap items-center gap-2">
           {fixes.actions.map((a) =>
             a.kind === 'lower' ? (
               <Button
@@ -435,7 +443,6 @@ export function ShortLineFixes({
                 type="button"
                 size="sm"
                 variant="outline"
-                className="h-7 px-2 text-xs"
                 data-short-line-fix=""
                 aria-label={`${a.label}: ${itemName}`}
                 disabled={busy}
@@ -454,7 +461,7 @@ export function ShortLineFixes({
                 type="button"
                 size="sm"
                 variant="outline"
-                className="text-destructive hover:text-destructive h-7 px-2 text-xs"
+                className="text-destructive hover:text-destructive"
                 data-short-line-fix=""
                 aria-label={`${a.label}: ${itemName}`}
                 disabled={busy}
@@ -468,7 +475,10 @@ export function ShortLineFixes({
         </div>
       )}
       {fixes.note && (
-        <p className="text-muted-foreground text-[11px] leading-snug" data-testid="short-line-note">
+        <p
+          className="text-muted-foreground text-[12px] leading-[18px]"
+          data-testid="short-line-note"
+        >
           {fixes.note}
         </p>
       )}

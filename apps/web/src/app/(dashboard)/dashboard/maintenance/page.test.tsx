@@ -290,7 +290,9 @@ describe('status filter', () => {
     const table = screen.getByRole('table');
     const badge = within(table).getByText('Resolved');
     expect(badge).toBeInTheDocument();
-    expect(badge.className).toContain('emerald');
+    // Visual-only expectation updated by P2.4 (test owner P4.F3): the badge
+    // moved off the emerald palette classes onto the Badge's success tone.
+    expect(badge.className).toContain('success');
   });
 });
 
@@ -449,5 +451,169 @@ describe('within-row sanity (guards against a titular-only requester-column test
     render(await MaintenancePage(args({ scope: 'all' })));
     const table = screen.getByRole('table');
     expect(within(table).getByText('Distinctive Name Q7')).toBeInTheDocument();
+  });
+});
+
+/**
+ * Redesign (P4.F3): the filters are drawn as the shared segmented scope tabs
+ * and the Orders-style stage strip, the empty states as the shared state
+ * panel, and the pager as the table card's footer. These pin the structure
+ * the restyle relies on, while the URL, aria-current and gate rules above
+ * stay as they were.
+ */
+describe('redesign structure (P4.F3)', () => {
+  it('keeps every scope and status link inside the one "Filter maintenance requests" navigation, carrying scope, status and q', async () => {
+    setCtx('manager');
+    list.mockResolvedValueOnce([row()]);
+    render(await MaintenancePage(args({ scope: 'all', status: 'saved', q: 'light' })));
+    const nav = screen.getByRole('navigation', { name: 'Filter maintenance requests' });
+    expect(within(nav).getByRole('link', { name: 'My requests' })).toHaveAttribute(
+      'href',
+      '/dashboard/maintenance?status=saved&q=light',
+    );
+    expect(within(nav).getByRole('link', { name: 'All requests' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    expect(within(nav).getByRole('link', { name: 'All statuses' })).toHaveAttribute(
+      'href',
+      '/dashboard/maintenance?scope=all&q=light',
+    );
+    expect(within(nav).getByRole('link', { name: 'Active' })).toHaveAttribute(
+      'href',
+      '/dashboard/maintenance?scope=all&status=active&q=light',
+    );
+    expect(within(nav).getByRole('link', { name: 'Saved' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    expect(within(nav).getByRole('link', { name: 'All statuses' })).not.toHaveAttribute(
+      'aria-current',
+    );
+  });
+
+  it('draws the status links as a stage strip and the scope links as segmented tabs, with no figures', async () => {
+    setCtx('manager');
+    list.mockResolvedValueOnce([]);
+    const { container } = render(await MaintenancePage(args({ scope: 'all' })));
+    const nav = screen.getByRole('navigation', { name: 'Filter maintenance requests' });
+    const tiles = nav.querySelectorAll('[data-slot="stat-strip-link"]');
+    expect(Array.from(tiles).map((t) => t.textContent)).toEqual([
+      'All statuses',
+      'Active',
+      'Saved',
+      'Email draft opened',
+      'Resolved',
+      'Archived',
+      'Cancelled',
+    ]);
+    expect(within(nav).getByRole('navigation', { name: 'Request scope' })).toBeInTheDocument();
+    expect(within(nav).getByRole('link', { name: 'All statuses' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    expect(container.querySelector('[data-slot="segmented-tab-count"]')).toBeNull();
+  });
+
+  it('a submit-only member sees only the My requests scope tab', async () => {
+    setCtx('staff');
+    list.mockResolvedValueOnce([]);
+    render(await MaintenancePage(args()));
+    const scope = screen.getByRole('navigation', { name: 'Request scope' });
+    expect(
+      within(scope)
+        .getAllByRole('link')
+        .map((l) => l.textContent),
+    ).toEqual(['My requests']);
+  });
+
+  it('the page has exactly one h1, the header carries the tour and the create button', async () => {
+    setCtx('staff');
+    list.mockResolvedValueOnce([row()]);
+    render(await MaintenancePage(args()));
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    const header = document.querySelector('[data-slot="page-header"]') as HTMLElement;
+    expect(within(header).getByRole('link', { name: 'New maintenance request' })).toHaveAttribute(
+      'href',
+      '/dashboard/maintenance/new',
+    );
+    expect(within(header).getByText(NOTE)).toBeInTheDocument();
+  });
+
+  it('empty states use the shared state panel: no-match for filters, empty otherwise', async () => {
+    setCtx('manager');
+    list.mockResolvedValueOnce([]);
+    const { container, unmount } = render(
+      await MaintenancePage(args({ scope: 'all', status: 'saved' })),
+    );
+    expect(container.querySelector('[data-slot="state-panel"]')).toHaveAttribute(
+      'data-state-kind',
+      'no-match',
+    );
+    expect(screen.getByRole('link', { name: 'Clear filters' })).toHaveAttribute(
+      'href',
+      '/dashboard/maintenance?scope=all',
+    );
+    unmount();
+
+    list.mockResolvedValueOnce([]);
+    const second = render(await MaintenancePage(args({ scope: 'all', page: '3' })));
+    expect(second.container.querySelector('[data-slot="state-panel"]')).toHaveAttribute(
+      'data-state-kind',
+      'empty',
+    );
+    expect(screen.getByRole('link', { name: 'Back to page 1' })).toHaveAttribute(
+      'href',
+      '/dashboard/maintenance?scope=all',
+    );
+  });
+
+  it('a read_all-only member with no requests gets the empty panel without the create link', async () => {
+    setCtx('manager', ['maintenance_requests:read_all']);
+    list.mockResolvedValueOnce([]);
+    render(await MaintenancePage(args({ scope: 'all' })));
+    expect(screen.getByText('No maintenance requests')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('link', { name: 'Create your first maintenance request' }),
+    ).toBeNull();
+  });
+
+  it('the Photos cell sets only the figure in the mono face; an empty row keeps the plain dash like its other cells', async () => {
+    setCtx('staff');
+    list.mockResolvedValueOnce([
+      row({ id: 'r-1', requestNumber: 1, photoCount: 3 }),
+      row({ id: 'r-2', requestNumber: 2, photoCount: 0, siteName: null }),
+    ]);
+    render(await MaintenancePage(args()));
+    const table = screen.getByRole('table');
+    const headers = within(table)
+      .getAllByRole('columnheader')
+      .map((h) => h.textContent);
+    const photosIdx = headers.indexOf('Photos');
+    const siteIdx = headers.indexOf('Site');
+    const bodyRows = within(table).getAllByRole('row').slice(1);
+    expect(bodyRows).toHaveLength(2);
+    const [withPhotos, withoutPhotos] = bodyRows as [HTMLElement, HTMLElement];
+    const photoCell = within(withPhotos).getAllByRole('cell')[photosIdx] as HTMLElement;
+    expect(photoCell).toHaveTextContent('3');
+    expect(photoCell.querySelector('.font-mono')).toHaveTextContent('3');
+    const cells = within(withoutPhotos).getAllByRole('cell');
+    const emptyPhotoCell = cells[photosIdx] as HTMLElement;
+    expect(emptyPhotoCell).toHaveTextContent('—');
+    expect(emptyPhotoCell.querySelector('.font-mono')).toBeNull();
+    expect(emptyPhotoCell).not.toHaveClass('font-mono');
+    expect(cells[siteIdx]).toHaveTextContent('—');
+  });
+
+  it('the pager sits in the table card, after the table (its footer)', async () => {
+    setCtx('manager');
+    const rows = Array.from({ length: 26 }, (_, i) => row({ id: `r-${i}`, requestNumber: i + 1 }));
+    list.mockResolvedValueOnce(rows);
+    render(await MaintenancePage(args({ scope: 'all' })));
+    const table = screen.getByRole('table');
+    const next = screen.getByRole('link', { name: /Next/ });
+    const card = table.closest('.rounded-lg') as HTMLElement;
+    expect(card).toContainElement(next);
+    expect(table.compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

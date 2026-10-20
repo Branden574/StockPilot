@@ -51,8 +51,8 @@ export function AssignOwnerSelect({ requestId, currentOwnerUserId, members }: Pr
   }
 
   return (
-    <div className="space-y-1">
-      <Label htmlFor="maintenance-owner" className="text-muted-foreground text-[10.5px] uppercase tracking-[0.08em]">
+    <div className="space-y-1.5">
+      <Label htmlFor="maintenance-owner" className="text-muted-foreground">
         StockPilot owner
       </Label>
       <Select value={value} onValueChange={(v) => void handleChange(v)} disabled={pending}>
@@ -68,7 +68,7 @@ export function AssignOwnerSelect({ requestId, currentOwnerUserId, members }: Pr
           ))}
         </SelectContent>
       </Select>
-      <p className="text-[11px] text-muted-foreground">
+      <p className="text-muted-foreground text-[12px] leading-[18px]">
         Internal coordinator inside StockPilot. This is not a Zendesk assignment.
       </p>
     </div>

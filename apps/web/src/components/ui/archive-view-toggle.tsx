@@ -1,8 +1,8 @@
 'use client';
 
-import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 
+import { SegmentedTabs } from '@/components/patterns/segmented-tabs';
 import { cn } from '@/lib/utils';
 
 /**
@@ -20,6 +20,17 @@ import { cn } from '@/lib/utils';
  *
  * Brief calls for this convention across every manager so users learn it
  * once, in one shape.
+ *
+ * Drawn by P2.6's SegmentedTabs (the one segmented control, PLAN P2.2 "One
+ * look per pattern"): the view-toggle size, link mode and tablist semantics,
+ * so it is still a "View filter" tablist of two `role="tab"` links with
+ * `aria-selected`, the same hrefs and words, and Next's default prefetch and
+ * scroll (the toggle passes no link options, as before).
+ *
+ * The track is `shrink-0`: SegmentedTabs makes it a sideways-scrolling strip,
+ * which as a flex item could shrink until the Archived tab was hidden (the
+ * Categories header at 390 px squeezed it to 73 px). The two-tab toggle never
+ * shrinks below its content, as before the redesign.
  */
 export function ArchiveViewToggle({
   basePath,
@@ -83,40 +94,15 @@ export function ArchiveViewToggle({
   }
 
   return (
-    <div
-      className={cn(
-        'inline-flex items-center gap-1 rounded-md border border-border bg-background p-0.5 text-xs',
-        className,
-      )}
-      role="tablist"
+    <SegmentedTabs
       aria-label="View filter"
-    >
-      <Link
-        href={buildHref('active')}
-        role="tab"
-        aria-selected={current === 'active'}
-        className={cn(
-          'rounded-sm px-2.5 py-1 transition-colors',
-          current === 'active'
-            ? 'bg-foreground text-background'
-            : 'text-muted-foreground hover:bg-muted',
-        )}
-      >
-        {activeLabel}
-      </Link>
-      <Link
-        href={buildHref('archived')}
-        role="tab"
-        aria-selected={current === 'archived'}
-        className={cn(
-          'rounded-sm px-2.5 py-1 transition-colors',
-          current === 'archived'
-            ? 'bg-foreground text-background'
-            : 'text-muted-foreground hover:bg-muted',
-        )}
-      >
-        {archivedLabel}
-      </Link>
-    </div>
+      size="sm"
+      className={cn('shrink-0', className)}
+      activeId={current}
+      items={[
+        { id: 'active', label: activeLabel, href: buildHref('active') },
+        { id: 'archived', label: archivedLabel, href: buildHref('archived') },
+      ]}
+    />
   );
 }

@@ -45,14 +45,18 @@ import {
   reviewRecordDetail,
   type GroupingIdentity,
 } from '@/lib/display-groups';
+import { footerReservation } from '@/lib/dynamic-type-layout';
 import { isOnline } from '@/lib/sync';
 import { FONT } from '@/lib/theme';
 import {
+  keepsSkuRadioLabels,
   notifyRecordsUngrouped,
   postUngroupSelected,
   previewUngroupSelected,
   readUngroupSelectedParams,
+  ungroupSelectedReviewKey,
   type PhoneUngroupReview,
+  type UngroupSelectedParams,
 } from '@/lib/ungroup-selected';
 import { countSelection } from '@/lib/use-count-selection';
 import { useTheme } from '@/lib/use-theme';
@@ -81,10 +85,6 @@ function announce(message: string) {
 }
 
 export default function UngroupSelectedScreen() {
-  const router = useRouter();
-  const { c } = useTheme();
-  const { user } = useAuth();
-  const { activeOrgId } = useWorkspace();
   const {
     ids: idsParam,
     view: viewParam,
@@ -94,6 +94,31 @@ export default function UngroupSelectedScreen() {
     () => readUngroupSelectedParams({ ids: idsParam, view: viewParam, under: underParam }),
     [idsParam, viewParam, underParam],
   );
+  // A fresh review whenever the route names other records, another list or
+  // another grouping a record is shown under (ungroupSelectedReviewKey,
+  // redesign Stage 6 F8): expo-router REUSES this screen when a link to it
+  // arrives while it is on top, swapping only the params. The reload below
+  // reset most of the review, but a refused Save's error (and its Review
+  // again) stayed over the new records, and the old review or result showed
+  // under the new params until the reload ran. The same selection, in any
+  // order or case, keeps its review and the person's choices: the review
+  // holds the params it was mounted with.
+  return <UngroupSelectedReview key={ungroupSelectedReviewKey(params)} params={params} />;
+}
+
+/** The review itself. Every piece of its state belongs to the selection it
+ *  was mounted for: the route mounts a new one for another selection. */
+function UngroupSelectedReview({ params: routeParams }: { params: UngroupSelectedParams | null }) {
+  // The selection the review was mounted for, kept for its whole life. The
+  // route mounts a new review for any other selection, so later params can
+  // only name this one in another order or case. Reading them ran the reload
+  // below again, which cleared the person's keeps-the-SKU choice, any result
+  // shown and its Try again (redesign Stage 6, F8 review).
+  const [params] = React.useState(routeParams);
+  const router = useRouter();
+  const { c } = useTheme();
+  const { user } = useAuth();
+  const { activeOrgId } = useWorkspace();
   const view = params?.view ?? 'items';
   const idsKey = params?.itemIds.join(',') ?? '';
 
@@ -114,11 +139,21 @@ export default function UngroupSelectedScreen() {
   const [retryBody, setRetryBody] = React.useState<UngroupSelectedBody | null>(null);
   const pending = React.useRef<{ json: string; body: UngroupSelectedBody } | null>(null);
   const seq = React.useRef(0);
+  // The pinned footer's measured height. A result with Try again, Review
+  // again and Done is three buttons, about 220pt with the home indicator,
+  // which is more than the 170 the list reserved: the last lines of a long
+  // result sat under the footer. 170 stays the floor.
+  const [footerHeight, setFooterHeight] = React.useState<number | null>(null);
 
-  // The newest review for these records; an overtaken answer is dropped.
+  // The newest review for these records. An answer is dropped once the
+  // effect runs again (seq) or the review unmounts (live, cleared by the
+  // cleanup): a link for other records mounts a new review, and the old one
+  // must not tell VoiceOver "2 records to review." for records no longer on
+  // screen (redesign Stage 6, F8 review).
   React.useEffect(() => {
     if (!params || !activeOrgId || !user?.id) return;
     const mine = ++seq.current;
+    let live = true;
     pending.current = null;
     /* eslint-disable react-hooks/set-state-in-effect -- a new look at the records: reset, then post-await sets */
     setLoadState({ kind: 'loading' });
@@ -130,7 +165,7 @@ export default function UngroupSelectedScreen() {
     const ids = idsKey ? idsKey.split(',') : [];
     void (async () => {
       if (!(await isOnline())) {
-        if (mine === seq.current) setLoadState({ kind: 'offline' });
+        if (live && mine === seq.current) setLoadState({ kind: 'offline' });
         return;
       }
       try {
@@ -139,16 +174,19 @@ export default function UngroupSelectedScreen() {
           organizationId: activeOrgId,
           actorUserId: user.id,
         });
-        if (mine !== seq.current) return;
+        if (!live || mine !== seq.current) return;
         setLoadState({ kind: 'ready', data: r, identity: r.identity });
         announce(GROUP_COPY.reviewReady(r.review.records.length));
       } catch (e) {
-        if (mine !== seq.current) return;
+        if (!live || mine !== seq.current) return;
         const { message } = describeGroupingError(e);
         setLoadState({ kind: 'failed', message });
         announce(message);
       }
     })();
+    return () => {
+      live = false;
+    };
   }, [params, activeOrgId, user?.id, idsKey, nonce]);
 
   const data = loadState.kind === 'ready' ? loadState.data : null;
@@ -162,6 +200,28 @@ export default function UngroupSelectedScreen() {
           })
         : null,
     [data, params],
+  );
+  // Every "keeps the SKU" radio's name, by record, worked out once per plan
+  // (redesign Stage 6, F9 review): naming each radio as it rendered rebuilt
+  // every other record's line twice, 20,000 lines on every tap for a SKU of
+  // 100 ticked records.
+  const radioNames = React.useMemo(
+    () =>
+      new Map(
+        plan
+          ? plan.split.groups
+              .filter((g) => g.allSelected)
+              .flatMap((g) => [
+                ...keepsSkuRadioLabels(
+                  UNGROUP_COPY.keepsSku(g.sku),
+                  plan.records,
+                  g.selected,
+                  view,
+                ),
+              ])
+          : [],
+      ),
+    [plan, view],
   );
   const changing = plan ? ungroupChangeCount(plan, anchorBySku) : 0;
   const reviewById = new Map((data?.review.records ?? []).map((r) => [r.id, r]));
@@ -249,7 +309,13 @@ export default function UngroupSelectedScreen() {
         </View>
       </SafeAreaView>
 
-      <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 170, gap: 16 }}>
+      <ScrollView
+        contentContainerStyle={{
+          paddingHorizontal: 20,
+          paddingBottom: footerReservation(footerHeight, 170),
+          gap: 16,
+        }}
+      >
         {!params ? (
           <Body muted size={13.5}>
             {GROUPING_ERROR_WORDS.invalid}
@@ -293,7 +359,12 @@ export default function UngroupSelectedScreen() {
             <Body size={14} color={c.ink}>
               {loadState.kind === 'offline' ? UNGROUP_COPY.selectedOffline : loadState.message}
             </Body>
-            <Button variant="outline" size="sm" onPress={() => setNonce((n) => n + 1)}>
+            <Button
+              variant="outline"
+              size="sm"
+              style={styles.smallButton}
+              onPress={() => setNonce((n) => n + 1)}
+            >
               Try again
             </Button>
           </View>
@@ -322,7 +393,9 @@ export default function UngroupSelectedScreen() {
                         <Body size={14.5} color={c.ink} style={{ fontFamily: FONT.display }}>
                           {r.name}
                         </Body>
-                        <Mono size={11} color={c.ink4} tracking={0.02}>
+                        {/* The record's line: information, so the muted ink
+                            (the faint ink4 held it under AA). */}
+                        <Mono size={11.5} color={c.ink3} tracking={0.02}>
                           {reviewRecordDetail(r, view)}
                         </Mono>
                         {group?.allSelected && firstOfSku.has(rec.id) ? (
@@ -331,11 +404,17 @@ export default function UngroupSelectedScreen() {
                           </Body>
                         ) : null}
                         {group?.allSelected ? (
+                          // Named for its record and for what tells it apart
+                          // from the SKU's other records, with the outcome
+                          // beside it as its value: three Wireless Mouse
+                          // radios read the same, and the outcome was never
+                          // heard (redesign Stage 6, F9).
                           <Pressable
                             onPress={() => setAnchorBySku((m) => ({ ...m, [group.sku]: rec.id }))}
                             disabled={busy}
                             accessibilityRole="radio"
-                            accessibilityLabel={`${UNGROUP_COPY.keepsSku(group.sku)}: ${r.name}`}
+                            accessibilityLabel={radioNames.get(rec.id)}
+                            accessibilityValue={{ text: ungroupOutcomeWords(o) }}
                             accessibilityState={{ checked: keeps, disabled: busy }}
                             style={styles.choiceRow}
                           >
@@ -434,7 +513,11 @@ export default function UngroupSelectedScreen() {
         ) : null}
       </ScrollView>
 
-      <SafeAreaView edges={['bottom']} style={[styles.footer, { backgroundColor: c.paper }]}>
+      <SafeAreaView
+        edges={['bottom']}
+        onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
+        style={[styles.footer, { backgroundColor: c.paper, borderTopColor: c.hair }]}
+      >
         {phase === 'done' ? (
           <View style={{ gap: 10 }}>
             {outcome && !outcome.complete ? (
@@ -503,6 +586,12 @@ const styles = StyleSheet.create({
     gap: 10,
     minHeight: 44,
   },
+  // Try again: the small button's look in a 44pt target (the small size is
+  // 36pt). minHeight, so it still grows.
+  smallButton: {
+    minHeight: 44,
+  },
+  // Pinned over the scrolling review, so a hairline marks its top edge.
   footer: {
     position: 'absolute',
     left: 0,
@@ -510,5 +599,6 @@ const styles = StyleSheet.create({
     bottom: 0,
     paddingHorizontal: 20,
     paddingTop: 10,
+    borderTopWidth: 1,
   },
 });

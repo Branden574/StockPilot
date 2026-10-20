@@ -1,8 +1,14 @@
 'use client';
 
-import { ArrowRight, ImageOff, Loader2, Minus, Plus, Undo2 } from 'lucide-react';
+import { ArrowRight, Loader2, Minus, Plus, Undo2 } from 'lucide-react';
 import * as React from 'react';
 
+import { MissingPhoto } from '@/components/patterns/missing-photo';
+import {
+  eyebrowClass,
+  nativeCheckboxClass,
+  nativeRadioClass,
+} from '@/components/returns/returns-ui';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -76,6 +82,15 @@ export interface RequesterReturnSheetFormProps {
 const LOADING_SIZES = RETURNS_COPY.requesterLoadingSizes;
 const NETWORK_FAILED = 'Could not submit your request. Check your connection and try again.';
 
+/** A choice tile holding a native radio: the ink edge when chosen (never colour
+ *  alone: the radio's dot fills too) and the radio's focus ring on the tile. */
+const CHOICE_TILE =
+  'has-[:checked]:border-foreground has-[:checked]:shadow-[0_0_0_1px_hsl(var(--foreground))] has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-offset-2 has-[:focus-visible]:ring-offset-background';
+
+/** The native select and number fields in the shared Input's look (DESIGN-SPEC 6.3). */
+const FIELD =
+  'bg-card rounded-md border border-line-strong text-[13px] transition-colors focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:text-base';
+
 /**
  * The requester's "Return or exchange" form (returns RX-3, plan RX-3 Web UI):
  * one implementation for the token page and the B2B portal. Per line: the
@@ -107,7 +122,9 @@ export function RequesterReturnSheetForm({
   submitLabel = RETURNS_COPY.requesterSubmit,
 }: RequesterReturnSheetFormProps) {
   const p = idPrefix;
-  const [drafts, setDrafts] = React.useState<Record<string, RequesterLineDraft>>(() => initialRequesterDrafts(lines));
+  const [drafts, setDrafts] = React.useState<Record<string, RequesterLineDraft>>(() =>
+    initialRequesterDrafts(lines),
+  );
   // Lines read again (after a refusal, or a refresh): the drafts are checked
   // against them during render, never in an effect (RX-3 fix round 1, M4).
   const linesKey = lines.map((l) => `${l.orderRequestLineId}:${l.quantityRemaining}`).join('|');
@@ -122,7 +139,9 @@ export function RequesterReturnSheetForm({
   const [reasonCode, setReasonCode] = React.useState<ReturnReasonCodeValue | ''>('');
   const [notes, setNotes] = React.useState('');
   const [busy, setBusy] = React.useState(false);
-  const [problem, setProblem] = React.useState<{ message: string; lineId: string | null } | null>(null);
+  const [problem, setProblem] = React.useState<{ message: string; lineId: string | null } | null>(
+    null,
+  );
   const loadingRef = React.useRef(false);
   // Minted when the form opens (plan RX-3), never per press.
   const keyRef = React.useRef<string | null>(null);
@@ -131,7 +150,9 @@ export function RequesterReturnSheetForm({
   }, []);
 
   const exchangesOn =
-    exchangesEnabled && !switchedOff && !(options.status === 'loaded' && !options.answer.exchangesEnabled);
+    exchangesEnabled &&
+    !switchedOff &&
+    !(options.status === 'loaded' && !options.answer.exchangesEnabled);
   const errorId = `${p}-error`;
 
   async function ensureOptions(force = false) {
@@ -146,7 +167,11 @@ export function RequesterReturnSheetForm({
       outcome = { ok: false, message: RETURNS_COPY.requesterOptionsUnavailable };
     }
     loadingRef.current = false;
-    setOptions(outcome.ok ? { status: 'loaded', answer: outcome.answer } : { status: 'failed', message: outcome.message });
+    setOptions(
+      outcome.ok
+        ? { status: 'loaded', answer: outcome.answer }
+        : { status: 'failed', message: outcome.message },
+    );
     // A size no longer offered is unchosen (the person picks again).
     if (outcome.ok) {
       const answer = outcome.answer;
@@ -182,7 +207,10 @@ export function RequesterReturnSheetForm({
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (busy) return;
-    const built = requesterLinesFromDrafts(lines, drafts, { exchangesEnabled: exchangesOn, options });
+    const built = requesterLinesFromDrafts(lines, drafts, {
+      exchangesEnabled: exchangesOn,
+      options,
+    });
     if (!built.ok) {
       setProblem({ message: built.message, lineId: built.lineId });
       const target = targetIdFor(built.lineId);
@@ -229,18 +257,39 @@ export function RequesterReturnSheetForm({
       }
       return;
     }
-    onSubmitted({ returnNumber: outcome.returnNumber, replay: outcome.replay, hasExchange: built.hasExchange });
+    onSubmitted({
+      returnNumber: outcome.returnNumber,
+      replay: outcome.replay,
+      hasExchange: built.hasExchange,
+    });
   }
 
   const page = density === 'page';
-  const card = page ? 'bg-card rounded-2xl border p-4 sm:p-5' : 'bg-background rounded-xl border p-3';
+  const card = page
+    ? 'bg-card rounded-lg border p-4 sm:p-5'
+    : 'bg-background rounded-lg border p-3';
 
   return (
-    <form onSubmit={onSubmit} className={page ? 'space-y-6' : 'space-y-3'} noValidate aria-describedby={problem ? errorId : undefined}>
+    <form
+      onSubmit={onSubmit}
+      className={page ? 'space-y-6' : 'space-y-3'}
+      noValidate
+      aria-describedby={problem ? errorId : undefined}
+    >
       {honeypot ? (
         // Off-screen; real people never see or fill it (a filled one is answered
         // with a fake success and writes nothing).
-        <div aria-hidden="true" style={{ position: 'absolute', left: '-10000px', top: 'auto', width: 1, height: 1, overflow: 'hidden' }}>
+        <div
+          aria-hidden="true"
+          style={{
+            position: 'absolute',
+            left: '-10000px',
+            top: 'auto',
+            width: 1,
+            height: 1,
+            overflow: 'hidden',
+          }}
+        >
           <label htmlFor={`${p}-hp`}>Website</label>
           <input
             type="text"
@@ -265,11 +314,14 @@ export function RequesterReturnSheetForm({
           return (
             <li key={id}>
               <div className={cn('grid gap-3', showReplacement && 'md:grid-cols-2')}>
-                <article className={cn(card, 'space-y-3')} aria-label={d.selected ? `${RETURNS_COPY.returning}: ${label}` : label}>
+                <article
+                  className={cn(card, 'space-y-3')}
+                  aria-label={d.selected ? `${RETURNS_COPY.returning}: ${label}` : label}
+                >
                   {d.selected ? (
-                    <p className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
+                    <p className="text-muted-foreground flex items-center gap-1.5">
                       <Undo2 className="h-3.5 w-3.5" aria-hidden />
-                      <span className="font-mono uppercase tracking-[0.12em]">{RETURNS_COPY.returning}</span>
+                      <span className={eyebrowClass}>{RETURNS_COPY.returning}</span>
                     </p>
                   ) : null}
                   <div className="flex items-start gap-3">
@@ -279,14 +331,22 @@ export function RequesterReturnSheetForm({
                       checked={d.selected}
                       disabled={busy || l.quantityRemaining < 1}
                       onChange={(e) => update(id, { selected: e.target.checked })}
-                      className="mt-1 h-4 w-4 shrink-0"
+                      className={cn(nativeCheckboxClass, 'mt-1')}
                     />
-                    <label htmlFor={`${p}-sel-${id}`} className="flex min-w-0 flex-1 cursor-pointer items-start gap-3">
-                      <PhotoBox photo={l.photo} className={page ? 'h-16 w-16 sm:h-20 sm:w-20' : 'h-12 w-12'} />
+                    <label
+                      htmlFor={`${p}-sel-${id}`}
+                      className="flex min-w-0 flex-1 cursor-pointer items-start gap-3"
+                    >
+                      <PhotoBox
+                        photo={l.photo}
+                        className={page ? 'h-16 w-16 sm:h-20 sm:w-20' : 'h-12 w-12'}
+                      />
                       <span className="min-w-0">
-                        <span className="block font-medium leading-snug">{l.name}</span>
-                        {l.sizeLabel ? <span className="text-muted-foreground block text-sm">{l.sizeLabel}</span> : null}
-                        <span className="text-muted-foreground block text-xs tabular-nums">
+                        <span className="block text-[14px] font-medium leading-snug">{l.name}</span>
+                        {l.sizeLabel ? (
+                          <span className="text-ink-2 block text-[13px]">{l.sizeLabel}</span>
+                        ) : null}
+                        <span className="text-muted-foreground block text-[12px] tabular-nums">
                           {l.quantityRemaining} of {l.quantityFulfilled} returnable
                         </span>
                       </span>
@@ -308,7 +368,7 @@ export function RequesterReturnSheetForm({
                   ) : null}
                   {d.selected && exchangesEnabled ? (
                     <fieldset className="space-y-2" disabled={busy}>
-                      <legend className="text-sm font-medium">
+                      <legend className="text-[13px] font-medium">
                         {RETURNS_COPY.whatWouldYouLikeToDo}
                         <span className="sr-only"> ({label})</span>
                       </legend>
@@ -323,9 +383,11 @@ export function RequesterReturnSheetForm({
                             key={mode}
                             htmlFor={`${p}-mode-${id}-${mode}`}
                             className={cn(
-                              'inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm',
-                              'has-[:checked]:border-primary has-[:checked]:bg-primary/5 has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-2',
-                              mode === 'exchange' && !exchangesOn && 'cursor-not-allowed opacity-60',
+                              'bg-card hover:border-line-strong inline-flex min-h-10 cursor-pointer items-center gap-2.5 rounded-md border px-3 py-2 text-[13px] transition-colors',
+                              CHOICE_TILE,
+                              mode === 'exchange' &&
+                                !exchangesOn &&
+                                'cursor-not-allowed opacity-60',
                             )}
                           >
                             <input
@@ -334,11 +396,21 @@ export function RequesterReturnSheetForm({
                               name={`${p}-mode-${id}`}
                               value={mode}
                               checked={d.mode === mode}
-                              disabled={mode === 'exchange' && !exchangesOn && d.mode !== 'exchange'}
+                              disabled={
+                                mode === 'exchange' && !exchangesOn && d.mode !== 'exchange'
+                              }
                               onChange={() => setMode(id, mode)}
-                              aria-invalid={mode === 'exchange' && problemHere && targetIdFor(id) === `${p}-mode-${id}-exchange` ? true : undefined}
-                              aria-describedby={mode === 'exchange' && problemHere ? errorId : undefined}
-                              className="h-4 w-4"
+                              aria-invalid={
+                                mode === 'exchange' &&
+                                problemHere &&
+                                targetIdFor(id) === `${p}-mode-${id}-exchange`
+                                  ? true
+                                  : undefined
+                              }
+                              aria-describedby={
+                                mode === 'exchange' && problemHere ? errorId : undefined
+                              }
+                              className={nativeRadioClass}
                             />
                             {words}
                           </label>
@@ -362,7 +434,9 @@ export function RequesterReturnSheetForm({
                     errorId={errorId}
                     onRetry={() => void ensureOptions(true)}
                     onChoose={(itemId) => update(id, { itemId })}
-                    onReplacementQuantity={(replacementQuantity) => update(id, { replacementQuantity })}
+                    onReplacementQuantity={(replacementQuantity) =>
+                      update(id, { replacementQuantity })
+                    }
                     onNote={(note) => update(id, { note })}
                   />
                 ) : null}
@@ -380,7 +454,7 @@ export function RequesterReturnSheetForm({
             value={reasonCode}
             disabled={busy}
             onChange={(e) => setReasonCode(e.target.value as ReturnReasonCodeValue | '')}
-            className="border-input bg-background h-10 w-full rounded-md border px-3 text-sm"
+            className={cn(FIELD, 'h-9 w-full px-2.5 max-sm:h-11')}
           >
             <option value="">Pick a reason</option>
             {REQUESTER_REASON_OPTIONS.map((r) => (
@@ -400,24 +474,35 @@ export function RequesterReturnSheetForm({
             placeholder={RETURNS_COPY.requesterNotesPlaceholder}
             rows={3}
             maxLength={2000}
-            className="resize-none text-sm"
+            className="resize-none text-[13px]"
           />
         </div>
       </div>
 
       {problem ? (
-        <p id={errorId} role="alert" className="text-destructive text-sm">
+        <p id={errorId} role="alert" className="text-destructive text-[13px]">
           {problem.message}
         </p>
       ) : null}
 
       <div className={cn('flex gap-2', page ? 'flex-col' : 'flex-wrap items-center')}>
-        <Button type="submit" disabled={busy || options.status === 'loading'} className={page ? 'w-full' : undefined} size={page ? 'default' : 'sm'}>
+        <Button
+          type="submit"
+          disabled={busy || options.status === 'loading'}
+          className={page ? 'w-full' : undefined}
+          size={page ? 'default' : 'sm'}
+        >
           {busy ? <Loader2 className="animate-spin" aria-hidden /> : null}
           {busy ? RETURNS_COPY.requesterSending : submitLabel}
         </Button>
         {onCancel ? (
-          <Button type="button" variant="ghost" size={page ? 'default' : 'sm'} onClick={onCancel} disabled={busy}>
+          <Button
+            type="button"
+            variant="ghost"
+            size={page ? 'default' : 'sm'}
+            onClick={onCancel}
+            disabled={busy}
+          >
             Cancel
           </Button>
         ) : null}
@@ -465,11 +550,11 @@ function ReplacementCard({
 
   let body: React.ReactNode;
   if (!exchangesOn) {
-    body = <p className="text-sm">{RETURNS_COPY.exchangeKillSwitch}</p>;
+    body = <p className="text-[13px]">{RETURNS_COPY.exchangeKillSwitch}</p>;
   } else if (options.status === 'failed') {
     body = (
       <div className="space-y-2" role="alert">
-        <p className="text-destructive text-sm">{options.message}</p>
+        <p className="text-destructive text-[13px]">{options.message}</p>
         <Button type="button" variant="outline" size="sm" onClick={onRetry} disabled={busy}>
           Try again
         </Button>
@@ -477,7 +562,11 @@ function ReplacementCard({
     );
   } else if (opts === null) {
     body = (
-      <p className="text-muted-foreground flex items-center gap-2 text-sm" role="status" aria-live="polite">
+      <p
+        className="text-muted-foreground flex items-center gap-2 text-[13px]"
+        role="status"
+        aria-live="polite"
+      >
         <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
         {LOADING_SIZES}
       </p>
@@ -493,18 +582,26 @@ function ReplacementCard({
         aria-labelledby={headingId}
         aria-invalid={problemHere ? true : undefined}
         aria-describedby={problemHere ? errorId : undefined}
-        className="grid grid-cols-2 gap-2 @md:grid-cols-3"
+        className="@md:grid-cols-3 grid grid-cols-2 gap-2"
       >
         {opts.map((o) => (
-          <OptionCard key={o.itemId} p={p} lineId={id} option={o} checked={draft.itemId === o.itemId} disabled={busy} onChoose={onChoose} />
+          <OptionCard
+            key={o.itemId}
+            p={p}
+            lineId={id}
+            option={o}
+            checked={draft.itemId === o.itemId}
+            disabled={busy}
+            onChoose={onChoose}
+          />
         ))}
       </div>
     );
   } else {
     body = (
       <div className="space-y-2">
-        <p className="text-sm font-medium">{RETURNS_COPY.warehouseReview}</p>
-        <Label htmlFor={`${p}-note-${id}`} className="text-sm font-normal leading-snug">
+        <p className="text-[13px] font-medium">{RETURNS_COPY.warehouseReview}</p>
+        <Label htmlFor={`${p}-note-${id}`} className="text-[13px] font-normal leading-snug">
           {RETURNS_COPY.warehouseReviewNote}
         </Label>
         <Textarea
@@ -515,10 +612,15 @@ function ReplacementCard({
           rows={3}
           onChange={(e) => onNote(e.target.value)}
           aria-invalid={problemHere ? true : undefined}
-          aria-describedby={problemHere ? `${errorId} ${p}-note-count-${id}` : `${p}-note-count-${id}`}
-          className="resize-none text-sm"
+          aria-describedby={
+            problemHere ? `${errorId} ${p}-note-count-${id}` : `${p}-note-count-${id}`
+          }
+          className="resize-none text-[13px]"
         />
-        <p id={`${p}-note-count-${id}`} className="text-muted-foreground text-right text-xs tabular-nums">
+        <p
+          id={`${p}-note-count-${id}`}
+          className="text-muted-foreground text-right font-mono text-[11.5px] tabular-nums"
+        >
           {draft.note.length}/{RETURN_EXCHANGE_NOTE_MAX}
         </p>
       </div>
@@ -527,12 +629,15 @@ function ReplacementCard({
 
   const ready = exchangesOn && opts !== null && options.status === 'loaded';
   return (
-    <article className={cn(cardClass, 'border-l-primary @container space-y-3 border-l-4')} aria-labelledby={headingId}>
+    <article
+      className={cn(cardClass, 'border-l-accent @container space-y-3 border-l-[3px]')}
+      aria-labelledby={headingId}
+    >
       {/* The card's name, not a heading (RX-3 fix round 1, L5: the token page
           went from its h1 straight to an h3 here). */}
-      <p id={headingId} className="flex items-center gap-1.5 text-xs font-medium">
-        <ArrowRight className="h-3.5 w-3.5" aria-hidden />
-        <span className="font-mono uppercase tracking-[0.12em]">{RETURNS_COPY.replacement}</span>
+      <p id={headingId} className="flex items-center gap-1.5">
+        <ArrowRight className="text-accent h-3.5 w-3.5" aria-hidden />
+        <span className={eyebrowClass}>{RETURNS_COPY.replacement}</span>
         <span className="sr-only"> for {label}</span>
       </p>
       {body}
@@ -549,9 +654,7 @@ function ReplacementCard({
             onChange={onReplacementQuantity}
           />
         ) : (
-          <p className="text-sm tabular-nums">
-            {requesterReplacementQuantityLabel(quantity)}
-          </p>
+          <p className="text-[13px] tabular-nums">{requesterReplacementQuantityLabel(quantity)}</p>
         )
       ) : null}
     </article>
@@ -580,8 +683,8 @@ function OptionCard({
     <label
       htmlFor={inputId}
       className={cn(
-        'flex cursor-pointer flex-col gap-2 rounded-xl border p-2',
-        'has-[:checked]:border-primary has-[:checked]:bg-primary/5 has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-2',
+        'bg-card hover:border-line-strong flex cursor-pointer flex-col gap-2 rounded-lg border p-2 transition-colors',
+        CHOICE_TILE,
       )}
     >
       <PhotoBox photo={option.photo} className="aspect-square w-full" />
@@ -594,17 +697,26 @@ function OptionCard({
           checked={checked}
           disabled={disabled}
           onChange={() => onChoose(option.itemId)}
-          className="mt-0.5 h-4 w-4 shrink-0"
+          className={cn(nativeRadioClass, 'mt-0.5')}
         />
         <span className="min-w-0">
-          <span className="block text-sm font-medium leading-snug">{option.sizeLabel ?? option.name}</span>
-          {option.sizeLabel ? <span className="text-muted-foreground block truncate text-xs">{option.name}</span> : null}
-          <span className="mt-0.5 flex items-start gap-1.5 text-xs">
+          <span className="block text-[13px] font-medium leading-snug">
+            {option.sizeLabel ?? option.name}
+          </span>
+          {option.sizeLabel ? (
+            <span className="text-muted-foreground block truncate text-[12px]">{option.name}</span>
+          ) : null}
+          <span className="mt-0.5 flex items-start gap-1.5 text-[12px]">
             <span
               aria-hidden
-              className={cn('mt-1 inline-block h-2 w-2 shrink-0 rounded-full', available ? 'bg-success' : 'bg-warning')}
+              className={cn(
+                'mt-[5px] inline-block size-[5px] shrink-0 rounded-full',
+                available ? 'bg-accent' : 'bg-warning',
+              )}
             />
-            <span className="min-w-0 break-words">{REQUESTER_AVAILABILITY_WORDS[option.availability]}</span>
+            <span className="min-w-0 break-words">
+              {REQUESTER_AVAILABILITY_WORDS[option.availability]}
+            </span>
           </span>
         </span>
       </span>
@@ -612,7 +724,9 @@ function OptionCard({
   );
 }
 
-/** A whole-number stepper (− field +), labelled with the item it is for. */
+/** A whole-number stepper (− field +), labelled with the item it is for. On a
+ *  phone the buttons and the field are 44 px, the phone's touch size, like the
+ *  reason select above them. */
 function QuantityStepper({
   id,
   label,
@@ -638,7 +752,7 @@ function QuantityStepper({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Label htmlFor={id} className="text-sm font-normal">
+      <Label htmlFor={id} className="text-[13px] font-normal">
         {label}
         <span className="sr-only"> for {context}</span>
       </Label>
@@ -647,7 +761,7 @@ function QuantityStepper({
           type="button"
           variant="outline"
           size="icon"
-          className="h-9 w-9"
+          className="h-9 w-9 max-sm:size-11"
           onClick={() => onChange(clampWhole(value - 1, min, max))}
           disabled={disabled || value <= min}
           aria-label={`One fewer: ${label.toLowerCase()} for ${context}`}
@@ -666,13 +780,13 @@ function QuantityStepper({
           onChange={(e) => onChange(clampWhole(e.target.value, min, max))}
           aria-invalid={invalid ? true : undefined}
           aria-describedby={invalid ? errorId : undefined}
-          className="border-input bg-background h-9 w-16 rounded-md border px-2 text-center text-sm tabular-nums"
+          className={cn(FIELD, 'h-9 w-16 px-2 text-center font-mono tabular-nums max-sm:h-11')}
         />
         <Button
           type="button"
           variant="outline"
           size="icon"
-          className="h-9 w-9"
+          className="h-9 w-9 max-sm:size-11"
           onClick={() => onChange(clampWhole(value + 1, min, max))}
           disabled={disabled || value >= max}
           aria-label={`One more: ${label.toLowerCase()} for ${context}`}
@@ -691,7 +805,12 @@ function QuantityStepper({
  */
 function PhotoBox({ photo, className }: { photo: RequesterPhoto | null; className?: string }) {
   const sources = React.useMemo(
-    () => (photo ? [photo.thumbUrl, photo.url].filter((s): s is string => typeof s === 'string' && s.length > 0) : []),
+    () =>
+      photo
+        ? [photo.thumbUrl, photo.url].filter(
+            (s): s is string => typeof s === 'string' && s.length > 0,
+          )
+        : [],
     [photo],
   );
   const [failed, setFailed] = React.useState(0);
@@ -699,13 +818,24 @@ function PhotoBox({ photo, className }: { photo: RequesterPhoto | null; classNam
   return (
     <span
       aria-hidden
-      className={cn('bg-muted text-muted-foreground relative flex shrink-0 items-center justify-center overflow-hidden rounded-lg', className)}
+      className={cn(
+        'border-border relative flex shrink-0 overflow-hidden rounded-lg border bg-white',
+        className,
+      )}
     >
       {src ? (
         // eslint-disable-next-line @next/next/no-img-element -- signed storage URL for this item only, sized box
-        <img src={src} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" onError={() => setFailed((n) => n + 1)} />
+        <img
+          src={src}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          className="h-full w-full object-cover"
+          onError={() => setFailed((n) => n + 1)}
+        />
       ) : (
-        <ImageOff className="h-5 w-5" />
+        // The missing-photo hatch (DESIGN-SPEC 6.14), the redesign's one placeholder.
+        <MissingPhoto />
       )}
     </span>
   );

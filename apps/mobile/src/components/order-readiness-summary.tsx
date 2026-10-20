@@ -19,7 +19,7 @@ import { Card } from '@/components/ui/card';
 import { Body, Eyebrow } from '@/components/ui/text';
 import { readinessFailureAnnouncement, type ReplacementReadinessGate } from '@/lib/order-readiness';
 import type { ShortfallPoOffer } from '@/lib/order-shortfall-po';
-import { ACCENT, FONT } from '@/lib/theme';
+import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -70,6 +70,11 @@ import { useTheme } from '@/lib/use-theme';
  * with Orders and Purchase orders on, which opens the draft sheet; core's
  * sentence instead for anyone else ("Drafting a PO needs a manager with
  * purchase-order access."). 44 pt, disabled while anything runs and offline.
+ *
+ * The redesign look: the reference's card with a muted eyebrow; the
+ * headline's icon in its tone's per-mode ink (accent, warnText, critText;
+ * the single-mode mint, amber and red were under AA in one mode each), the
+ * needed-by signal in the warning ink; every button the shared outline.
  */
 /** What "Put away N items" does, for VoiceOver. */
 export const PUT_AWAY_STRIP_HINT = 'Opens Staging with these items, to put them away';
@@ -118,7 +123,7 @@ export function OrderReadinessSummary({
     onPress: () => void;
   } | null;
 }) {
-  const { c, mode } = useTheme();
+  const { c } = useTheme();
   const opts: ReadinessCopyOptions = { timeZone: timeZone ?? undefined, ...gate };
 
   // Announced when the failure appears, keyed on its words: a re-render, or a
@@ -155,7 +160,7 @@ export function OrderReadinessSummary({
   if (audience === 'requester') {
     const card = describeReadinessForRequester(result, opts);
     if (!card) return null;
-    const tone = readinessToneColor(card.tone, c, mode);
+    const tone = readinessToneColor(card.tone, c);
     return (
       <Card padding={14}>
         <Eyebrow>STOCK</Eyebrow>
@@ -188,7 +193,7 @@ export function OrderReadinessSummary({
   if (!rollup) return null;
   const putAwayOffer = putAway?.offer ?? null;
   const failed = result.state === 'failed';
-  const color = readinessToneColor(rollup.tone, c, mode);
+  const color = readinessToneColor(rollup.tone, c);
   // A failure's own reason, when core names one (the web strip shows the same).
   const detail = rollup.detail;
 
@@ -220,7 +225,7 @@ export function OrderReadinessSummary({
           </Body>
         ))}
         {rollup.neededBy ? (
-          <Body size={13.5} color={ACCENT.warn}>
+          <Body size={13.5} color={c.warnText}>
             {rollup.neededBy}
           </Body>
         ) : null}

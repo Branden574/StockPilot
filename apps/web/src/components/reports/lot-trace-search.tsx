@@ -4,8 +4,17 @@ import * as React from 'react';
 
 import { formatOrderNumber } from '@stockpilot/core';
 
+import { DetailSection } from '@/components/patterns/detail-section';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { traceLotAction } from '@/server/actions/lot-trace';
 import type { LotTraceResult } from '@/server/services/lots';
 
@@ -14,86 +23,132 @@ export function LotTraceSearch() {
   const [result, setResult] = React.useState<LotTraceResult | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
+  // Each result card's heading names its table's scroll region.
+  const receivedId = React.useId();
+  const pickedId = React.useId();
 
   async function run(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
     setError(null);
-    const res = await traceLotAction(term);
-    setLoading(false);
-    if (!res.ok) {
-      setError(res.error.message);
+    // The action answers every server-side failure with a result, but the
+    // call itself can still reject (the network dropped, the deployment
+    // changed under the tab). The button used to stay on "Searching…" and
+    // disabled for good then; now it comes back and the reason is shown.
+    try {
+      const res = await traceLotAction(term);
+      if (!res.ok) {
+        setError(res.error.message);
+        setResult(null);
+        return;
+      }
+      setResult(res.data);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
       setResult(null);
-      return;
+    } finally {
+      setLoading(false);
     }
-    setResult(res.data);
   }
 
   return (
-    <div>
-      <form onSubmit={run} className="flex gap-2">
-        <Input value={term} onChange={(e) => setTerm(e.target.value)} placeholder="Lot number (partial ok)" />
-        <Button type="submit" disabled={loading}>{loading ? 'Searching…' : 'Trace'}</Button>
+    <div className="flex flex-col gap-4">
+      <form onSubmit={run} className="flex max-w-xl gap-2">
+        {/* Named by its own words: the placeholder alone gave the field no
+            accessible name once something was typed. */}
+        <Input
+          value={term}
+          onChange={(e) => setTerm(e.target.value)}
+          placeholder="Lot number (partial ok)"
+          aria-label="Lot number (partial ok)"
+        />
+        <Button type="submit" disabled={loading} className="max-sm:h-11">
+          {loading ? 'Searching…' : 'Trace'}
+        </Button>
       </form>
-      {error && <p className="text-destructive mt-2 text-sm">{error}</p>}
+      {error && (
+        <p role="alert" className="text-destructive text-[13px]">
+          {error}
+        </p>
+      )}
       {result && (
-        <div className="mt-4 space-y-4">
-          <section>
-            <h2 className="text-sm font-medium">Received ({result.receipts.length})</h2>
-            <div className="mt-2 overflow-x-auto rounded-lg border">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/50 text-muted-foreground text-xs">
-                  <tr>
-                    <th className="px-3 py-2 text-left">Receipt</th>
-                    <th className="px-3 py-2 text-left">Item</th>
-                    <th className="px-3 py-2 text-left">Received</th>
-                    <th className="px-3 py-2 text-left">Expiry</th>
-                    <th className="px-3 py-2 text-right">Qty</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {result.receipts.map((r, i) => (
-                    <tr key={i} className="border-t">
-                      <td className="px-3 py-2 font-mono">{r.receiptNumber ?? '—'}</td>
-                      <td className="px-3 py-2">{r.itemName}</td>
-                      <td className="px-3 py-2">{r.receivedAt.slice(0, 10)}</td>
-                      <td className="px-3 py-2">{r.expirationDate ?? '—'}</td>
-                      <td className="px-3 py-2 text-right">{r.qty}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-          <section>
-            <h2 className="text-sm font-medium">Picked / shipped ({result.picks.length})</h2>
-            <div className="mt-2 overflow-x-auto rounded-lg border">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/50 text-muted-foreground text-xs">
-                  <tr>
-                    <th className="px-3 py-2 text-left">Order</th>
-                    <th className="px-3 py-2 text-left">When</th>
-                    <th className="px-3 py-2 text-right">Qty</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {result.picks.length === 0 && (
-                    <tr><td colSpan={3} className="text-muted-foreground px-3 py-4 text-center">No recorded picks.</td></tr>
-                  )}
-                  {result.picks.map((p, i) => (
-                    <tr key={i} className="border-t">
-                      {/* The real SO- handle. Legacy orders carry no
-                          order_number — those fall back to the id prefix. */}
-                      <td className="px-3 py-2 font-mono">{formatOrderNumber(p.orderNumber) ?? (p.orderRequestId ? p.orderRequestId.slice(0, 8).toUpperCase() : '—')}</td>
-                      <td className="px-3 py-2">{p.pickedAt.slice(0, 10)}</td>
-                      <td className="px-3 py-2 text-right">{p.qty}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        </div>
+        <>
+          <DetailSection
+            headingId={receivedId}
+            title={<>Received ({result.receipts.length})</>}
+            flush
+          >
+            <Table scrollLabelledBy={receivedId} className="min-w-[560px]">
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead>Receipt</TableHead>
+                  <TableHead>Item</TableHead>
+                  <TableHead>Received</TableHead>
+                  <TableHead>Expiry</TableHead>
+                  <TableHead className="text-right">Qty</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {result.receipts.map((r, i) => (
+                  <TableRow key={i}>
+                    <TableCell className="font-mono text-[12.5px]">
+                      {r.receiptNumber ?? '—'}
+                    </TableCell>
+                    <TableCell className="font-medium">{r.itemName}</TableCell>
+                    <TableCell className="whitespace-nowrap tabular-nums">
+                      {r.receivedAt.slice(0, 10)}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap tabular-nums">
+                      {r.expirationDate ?? '—'}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">{r.qty}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </DetailSection>
+          <DetailSection
+            headingId={pickedId}
+            title={<>Picked / shipped ({result.picks.length})</>}
+            flush
+          >
+            <Table scrollLabelledBy={pickedId} className="min-w-[420px]">
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead>Order</TableHead>
+                  <TableHead>When</TableHead>
+                  <TableHead className="text-right">Qty</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {result.picks.length === 0 && (
+                  <TableRow className="hover:bg-transparent">
+                    <TableCell
+                      colSpan={3}
+                      className="text-muted-foreground py-8 text-center text-[13px]"
+                    >
+                      No recorded picks.
+                    </TableCell>
+                  </TableRow>
+                )}
+                {result.picks.map((p, i) => (
+                  <TableRow key={i}>
+                    {/* The real SO- handle. Legacy orders carry no
+                        order_number — those fall back to the id prefix. */}
+                    <TableCell className="font-mono text-[12.5px]">
+                      {formatOrderNumber(p.orderNumber) ??
+                        (p.orderRequestId ? p.orderRequestId.slice(0, 8).toUpperCase() : '—')}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap tabular-nums">
+                      {p.pickedAt.slice(0, 10)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">{p.qty}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </DetailSection>
+        </>
       )}
     </div>
   );

@@ -48,10 +48,7 @@ interface EditableWidget {
  *     visible (so a newly-shipped widget always shows up).
  * A null/garbage layout => catalog order, all visible.
  */
-function buildInitialState(
-  widgets: WidgetDef[],
-  layout: DashboardLayout | null,
-): EditableWidget[] {
+function buildInitialState(widgets: WidgetDef[], layout: DashboardLayout | null): EditableWidget[] {
   const byId = new Map(widgets.map((w) => [w.id, w]));
   const out: EditableWidget[] = [];
   const placed = new Set<string>();
@@ -140,18 +137,18 @@ export function DashboardCustomizer({ widgets, initialLayout }: DashboardCustomi
 
   return (
     <div className="space-y-6">
-      <section className="space-y-3">
-        <div className="divide-border divide-y rounded-md border">
+      <section className="bg-card overflow-hidden rounded-lg border">
+        <div className="divide-border divide-y">
           {items.map((it, idx) => (
             <div
               key={it.id}
               className={cn(
-                'flex items-center gap-3 px-3 py-2.5',
+                'flex min-h-[52px] items-center gap-3 px-[18px] py-2.5',
                 it.hidden && 'opacity-50',
               )}
             >
-              <span className="min-w-0 flex-1 truncate text-sm font-medium">{it.title}</span>
-              <div className="flex shrink-0 items-center gap-1">
+              <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{it.title}</span>
+              <div className="flex shrink-0 items-center gap-1.5">
                 <Button
                   type="button"
                   variant="ghost"
@@ -192,7 +189,7 @@ export function DashboardCustomizer({ widgets, initialLayout }: DashboardCustomi
         </div>
       </section>
 
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-2">
         <Button type="button" onClick={save} disabled={saving}>
           {saving ? 'Saving…' : 'Save changes'}
         </Button>

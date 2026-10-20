@@ -1,6 +1,6 @@
 import { useNetworkState } from 'expo-network';
 import { type Href, useFocusEffect, useNavigation, useRouter } from 'expo-router';
-import { AlertTriangle, ArrowLeft, Check, Menu } from 'lucide-react-native';
+import { AlertTriangle, ArrowLeft, Menu } from 'lucide-react-native';
 import * as React from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, View, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -34,6 +34,7 @@ import {
 import { ExceptionRecountSheet } from '@/components/exception-recount-sheet';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { CheckboxMark } from '@/components/ui/checkbox';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
@@ -52,9 +53,12 @@ import {
   type MobileExceptionList,
   type MobileExceptionOccurrence,
 } from '@/lib/exceptions-api';
-import { FONT } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useOrg } from '@/lib/use-org';
 import { useTheme } from '@/lib/use-theme';
+
+/** The iOS minimum tap target, in points. */
+const MIN_TAP = 44;
 
 /**
  * Exceptions: the native twin of the web /dashboard/exceptions page (F1-1).
@@ -277,7 +281,12 @@ export default function ExceptionsScreen() {
               </Button>
             ) : null}
             {list?.canCheckNow ? (
-              <Button size="sm" variant="outline" disabled={checking || offline} onPress={() => void checkNow()}>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={checking || offline}
+                onPress={() => void checkNow()}
+              >
                 {checking ? 'Starting...' : 'Check now'}
               </Button>
             ) : null}
@@ -292,22 +301,25 @@ export default function ExceptionsScreen() {
             Exceptions<Em>.</Em>
           </Display>
         </View>
-        <View style={styles.tabs}>
-          <Pressable onPress={() => setStatus('open')} accessibilityRole="button" accessibilityState={{ selected: status === 'open' }}>
-            <Pill status={status === 'open' ? 'ok' : 'default'} dot={false}>
-              Open
-            </Pill>
-          </Pressable>
-          <Pressable onPress={() => setStatus('resolved')} accessibilityRole="button" accessibilityState={{ selected: status === 'resolved' }}>
-            <Pill status={status === 'resolved' ? 'ok' : 'default'} dot={false}>
-              {`Resolved, last ${EXCEPTION_RESOLVED_WINDOW_DAYS} days`}
-            </Pill>
-          </Pressable>
+        {/* Open / Resolved as the reference's segmented switch: a recessed
+            track with the chosen tab on the card colour, ringed in muted ink
+            (3:1 or more on the track in both modes), its words in ink. Each
+            tab is a 44pt target (they were 22pt pills); the same buttons,
+            words and selected state. */}
+        <View style={styles.tabsWrap}>
+          <View style={[styles.tabs, { backgroundColor: c.sunk }]}>
+            <StatusTab label="Open" active={status === 'open'} onPress={() => setStatus('open')} />
+            <StatusTab
+              label={`Resolved, last ${EXCEPTION_RESOLVED_WINDOW_DAYS} days`}
+              active={status === 'resolved'}
+              onPress={() => setStatus('resolved')}
+            />
+          </View>
         </View>
       </SafeAreaView>
 
       {view.kind === 'loading' ? (
-        <ActivityIndicator color={c.ink4} style={{ marginTop: 32 }} />
+        <ActivityIndicator color={c.ink3} style={{ marginTop: 32 }} />
       ) : view.kind === 'error' ? (
         <View style={{ paddingHorizontal: 20, marginTop: 12 }}>
           <Card padding={16}>
@@ -507,6 +519,46 @@ function GroupHeader({ meta, count }: { meta: ExceptionRuleMeta; count: number }
   );
 }
 
+/** The tabs' words are control chrome: the shared Button's ceiling, with the
+ *  tab growing with them (minHeight, never height). */
+const TAB_LABEL_CAP = capTo(13, TYPE_CEILING.control);
+
+function StatusTab({
+  label,
+  active,
+  onPress,
+}: {
+  label: string;
+  active: boolean;
+  onPress: () => void;
+}) {
+  const { c } = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+      style={({ pressed }) => [
+        styles.tab,
+        {
+          backgroundColor: active ? c.card : 'transparent',
+          borderColor: active ? c.ink3 : 'transparent',
+          opacity: pressed ? 0.7 : 1,
+        },
+      ]}
+    >
+      <Body
+        size={13}
+        color={active ? c.ink : c.ink3}
+        maxFontSizeMultiplier={TAB_LABEL_CAP}
+        style={{ fontFamily: active ? FONT.displaySemi : FONT.display, textAlign: 'center' }}
+      >
+        {label}
+      </Body>
+    </Pressable>
+  );
+}
+
 function statePillTone(state: OccurrenceState): 'default' | 'ok' | 'warn' {
   if (state.kind === 'resolved') return 'ok';
   if (state.kind === 'open') return 'warn';
@@ -547,24 +599,23 @@ function OccurrenceRow({
       accessibilityState={selecting ? { checked: picked } : undefined}
       style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
     >
-      <Card padding={14}>
+      {/* A picked card takes the accent wash, as a picked Items or Books row
+          does (DESIGN-SPEC 6.21); the box is the cue that is not colour. */}
+      <Card padding={14} style={picked && selecting ? { backgroundColor: c.accentWash } : undefined}>
         {selecting ? (
+          // The shared checkbox (P2.5b), drawn only while selecting: the card
+          // is the press target and VoiceOver's checkbox, so it draws the
+          // mark alone. Its clear edge is ink4 (3:1 or more on the card in
+          // both modes; the hand-drawn box's hairline edge was 1.1 to 1.3:1).
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-            <View
-              style={[
-                styles.checkBox,
-                { borderColor: picked ? c.ink : c.hair, backgroundColor: picked ? c.ink : 'transparent' },
-              ]}
-            >
-              {picked ? <Check size={14} color={c.paper} strokeWidth={2.5} /> : null}
-            </View>
+            <CheckboxMark checked={picked} />
             <Body size={13} muted>
               {picked ? 'Selected for a recount' : 'Tap to select for a recount'}
             </Body>
           </View>
         ) : null}
         {o.reference ? (
-          <Mono size={11} color={c.ink4}>
+          <Mono size={11} color={c.ink3}>
             {o.reference}
           </Mono>
         ) : null}
@@ -597,7 +648,7 @@ function OccurrenceRow({
             {recountNote}
           </Body>
         ) : null}
-        <Mono size={11} color={c.ink4} style={{ marginTop: 8 }}>
+        <Mono size={11} color={c.ink3} style={{ marginTop: 8 }}>
           {o.resolvedAt
             ? `Resolved ${exceptionTimeLabel(o.resolvedAt, timeZone)}`
             : o.presentWhenTrackingBegan
@@ -625,7 +676,25 @@ const styles = StyleSheet.create({
   },
   chips: { flexDirection: 'row', alignItems: 'center', gap: 2, marginLeft: -3 },
   head: { paddingHorizontal: 20, paddingTop: 9, paddingBottom: 4 },
-  tabs: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 20, paddingTop: 14 },
+  tabsWrap: { paddingHorizontal: 20, paddingTop: 14 },
+  // The segmented track: padding 3, radius 10 (DESIGN-SPEC 6.5, the phone's
+  // segments), the tabs sharing its width.
+  tabs: {
+    flexDirection: 'row',
+    gap: 4,
+    padding: 3,
+    borderRadius: 10,
+  },
+  tab: {
+    flex: 1,
+    minHeight: MIN_TAP,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   list: { paddingHorizontal: 20, paddingTop: 14, paddingBottom: 32, gap: 10 },
   empty: { paddingTop: 36, paddingHorizontal: 24, alignItems: 'center' },
   // Pinned under the list in select mode. Its height follows its text (it is
@@ -637,13 +706,5 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
     gap: 8,
     borderTopWidth: StyleSheet.hairlineWidth,
-  },
-  checkBox: {
-    width: 22,
-    height: 22,
-    borderRadius: 6,
-    borderWidth: 1.5,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
 });

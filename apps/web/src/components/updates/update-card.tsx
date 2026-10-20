@@ -111,7 +111,7 @@ export function UpdateCard({
       aria-label="Product update"
       data-update-notice
       className={cn(
-        'bg-card text-card-foreground border-border pointer-events-auto relative w-full rounded-xl border p-4 font-sans shadow-lg duration-200 animate-in fade-in slide-in-from-bottom-2 sm:w-[400px]',
+        'bg-card text-card-foreground border-line-strong pointer-events-auto relative w-full rounded-lg border p-4 font-sans shadow-[0_10px_30px_rgba(0,0,0,0.25)] duration-200 animate-in fade-in slide-in-from-bottom-2 sm:w-[400px]',
         className,
       )}
     >
@@ -156,8 +156,8 @@ export function UpdateCard({
             <X className="size-4" aria-hidden />
           </button>
           <div className="flex items-start gap-3 pr-10 sm:pr-8">
-            <span className="bg-primary/10 text-primary mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg">
-              <Icon className="size-4" aria-hidden />
+            <span className="bg-sunk text-foreground mt-0.5 grid size-8 shrink-0 place-items-center rounded-md border border-[var(--ed-line-strong)]">
+              <Icon className="size-4" strokeWidth={1.6} aria-hidden />
             </span>
             <div className="min-w-0">
               <h2 className="text-sm font-semibold tracking-tight">{copy.title}</h2>

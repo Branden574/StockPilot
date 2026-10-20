@@ -98,8 +98,7 @@ vi.mock('@/components/ui/image-hover-preview', () => ({
 }));
 
 vi.mock('@/lib/cycle-counts/use-count-selection', () => ({
-  useCountSelection: (selector: (s: { add: () => void }) => unknown) =>
-    selector({ add: vi.fn() }),
+  useCountSelection: (selector: (s: { add: () => void }) => unknown) => selector({ add: vi.fn() }),
 }));
 
 import { deriveInstantView, instantStateFromPageParams } from '@/lib/inventory/instant-mode';
@@ -111,7 +110,9 @@ import {
   type InstantDatasetItem,
 } from './inventory-table';
 
-function item(over: Partial<InstantDatasetItem> & { id: string; name: string }): InstantDatasetItem {
+function item(
+  over: Partial<InstantDatasetItem> & { id: string; name: string },
+): InstantDatasetItem {
   return {
     sku: `SKU-${over.id}`,
     status: 'active',
@@ -147,7 +148,11 @@ function renderInstant({
   initialQuery?: string;
 }) {
   getSearchParams(search);
-  window.history.replaceState(null, '', search ? `/dashboard/inventory?${search}` : '/dashboard/inventory');
+  window.history.replaceState(
+    null,
+    '',
+    search ? `/dashboard/inventory?${search}` : '/dashboard/inventory',
+  );
   return render(
     <InventoryTable
       items={items}
@@ -186,7 +191,10 @@ describe('InventoryTable Rack column: a SITE is not a rack (owner report 2026-09
       />,
     );
     const noRack = screen.getByText('No rack');
-    expect(noRack).toHaveAttribute('title', expect.stringContaining('At DC4 (the site), not on a rack'));
+    expect(noRack).toHaveAttribute(
+      'title',
+      expect.stringContaining('At DC4 (the site), not on a rack'),
+    );
     expect(screen.queryByText('DC4')).not.toBeInTheDocument();
     expect(screen.getByText('31-C')).toBeInTheDocument();
   });
@@ -202,10 +210,7 @@ describe('InventoryTable instant mode', () => {
 
   it('hydrates a ?q= deep link straight from the dataset — complete footer totals, NO "(searching…)" phase, NO search fetch', () => {
     renderInstant({
-      items: [
-        item({ id: 'a', name: 'Alpha Widget' }),
-        item({ id: 'b', name: 'Beta Gadget' }),
-      ],
+      items: [item({ id: 'a', name: 'Alpha Widget' }), item({ id: 'b', name: 'Beta Gadget' })],
       search: 'q=alpha',
       initialQuery: 'alpha',
     });
@@ -339,7 +344,10 @@ describe('InventoryTable instant mode', () => {
   it('paginates locally: Next → is a shallow history.pushState, never a router navigation', async () => {
     const user = userEvent.setup();
     const many = Array.from({ length: 35 }, (_, i) =>
-      item({ id: `i${String(i).padStart(2, '0')}`, name: `Bulk Item ${String(i).padStart(2, '0')}` }),
+      item({
+        id: `i${String(i).padStart(2, '0')}`,
+        name: `Bulk Item ${String(i).padStart(2, '0')}`,
+      }),
     );
     renderInstant({ items: many });
 
@@ -524,8 +532,20 @@ describe('InventoryTable instant mode', () => {
     getSearchParams('status=all');
     window.history.replaceState(null, '', '/dashboard/inventory?status=all');
     const rows = [
-      item({ id: 'a', name: 'Mixed Status Widget', sku: 'SKU-MIXED', status: 'active', quantity_on_hand: 100 }),
-      item({ id: 'b', name: 'Mixed Status Widget', sku: 'SKU-MIXED', status: 'discontinued', quantity_on_hand: 50 }),
+      item({
+        id: 'a',
+        name: 'Mixed Status Widget',
+        sku: 'SKU-MIXED',
+        status: 'active',
+        quantity_on_hand: 100,
+      }),
+      item({
+        id: 'b',
+        name: 'Mixed Status Widget',
+        sku: 'SKU-MIXED',
+        status: 'discontinued',
+        quantity_on_hand: 50,
+      }),
     ];
     render(
       <InventoryTable
@@ -607,9 +627,12 @@ describe('InventoryTable instant mode', () => {
 // charter_id, bin_location) — so one title legitimately exists as several
 // inventory_items rows, one per charter/rack, and the Books list rendered
 // the same title several times. These pin both halves of the fix: the
-// grouping itself, and the 14-column header layout it has to line up with
+// grouping itself, and the 13-column header layout it has to line up with
 // (the books body row emits Grade/Rack/Crate where items emits one Rack
-// cell, so a 12-cell header would shift every column right of Location).
+// cell, so an 11-cell header would shift every column right of Location).
+// CHANGED (owner decision 2026-10-19: SKU stacked under the item name): the
+// SKU is the Item cell's second line, not a column, so every row kind emits
+// one cell fewer than it did (14 → 13 on Books, 12 → 11 on Items).
 describe('InventoryTable books SKU grouping', () => {
   const fetchSpy = vi.fn();
 
@@ -683,26 +706,29 @@ describe('InventoryTable books SKU grouping', () => {
     expect(screen.getByText('2')).toBeInTheDocument();
   });
 
-  // The structural risk: the books layout is 14 columns, the SKU header
-  // was written for the 12-column items layout. A cell-count assertion is
+  // The structural risk: the books layout is 13 columns, the SKU header
+  // was written for the 11-column items layout. A cell-count assertion is
   // the only thing that catches a future column being added to the body
   // but not the header.
-  it('books group header emits the SAME 14 cells as a books body row', async () => {
+  // CHANGED (owner decision 2026-10-19: SKU stacked under the item name):
+  // 14 → 13, the SKU column is gone from every row kind.
+  it('books group header emits the SAME 13 cells as a books body row', async () => {
     const user = userEvent.setup();
     const { container } = renderBooks({ items: algebraRows() });
 
     const collapsed = bodyRows(container);
     expect(collapsed).toHaveLength(1);
-    expect(collapsed[0]!.children).toHaveLength(14);
+    expect(collapsed[0]!.children).toHaveLength(13);
 
     await user.click(screen.getByRole('button', { name: /expand/i }));
     const expanded = bodyRows(container);
     expect(expanded).toHaveLength(4); // header + 3 placements
-    expect(expanded[0]!.children).toHaveLength(14);
-    expect(expanded[1]!.children).toHaveLength(14);
+    expect(expanded[0]!.children).toHaveLength(13);
+    expect(expanded[1]!.children).toHaveLength(13);
   });
 
-  it('items group header still emits 12 cells, matching an items body row (no regression)', async () => {
+  // CHANGED (owner decision 2026-10-19: SKU stacked under the item name): 12 → 11.
+  it('items group header still emits 11 cells, matching an items body row (no regression)', async () => {
     const user = userEvent.setup();
     getSearchParams('');
     window.history.replaceState(null, '', '/dashboard/inventory');
@@ -720,11 +746,11 @@ describe('InventoryTable books SKU grouping', () => {
       />,
     );
 
-    expect(bodyRows(container)[0]!.children).toHaveLength(12);
+    expect(bodyRows(container)[0]!.children).toHaveLength(11);
     await user.click(screen.getByRole('button', { name: /expand/i }));
     const expanded = bodyRows(container);
-    expect(expanded[0]!.children).toHaveLength(12);
-    expect(expanded[1]!.children).toHaveLength(12);
+    expect(expanded[0]!.children).toHaveLength(11);
+    expect(expanded[1]!.children).toHaveLength(11);
   });
 
   // book_grade lives in custom_fields PER inventory_items row, so two
@@ -839,8 +865,9 @@ describe('InventoryTable books SKU grouping', () => {
       ],
     });
     const header = bodyRows(differing.container)[0]!;
-    // Crate is col 9 of 14 (0-indexed 8).
-    const crateCell = header.children[8] as HTMLElement;
+    // Crate is col 8 of 13 (0-indexed 7). CHANGED (owner decision
+    // 2026-10-19: SKU stacked under the item name): was col 9 of 14.
+    const crateCell = header.children[7] as HTMLElement;
     expect(crateCell.textContent).toBe('Multiple');
     expect(crateCell.querySelectorAll('[style*="background-color"]')).toHaveLength(0);
     differing.unmount();
@@ -861,7 +888,7 @@ describe('InventoryTable books SKU grouping', () => {
         }),
       ],
     });
-    const agreeCell = bodyRows(agreeing.container)[0]!.children[8] as HTMLElement;
+    const agreeCell = bodyRows(agreeing.container)[0]!.children[7] as HTMLElement;
     expect(agreeCell.textContent).toBe('5');
     expect(agreeCell.querySelectorAll('[style*="background-color"]')).toHaveLength(1);
   });
@@ -904,8 +931,11 @@ describe('InventoryTable books SKU grouping', () => {
     expect(screen.queryByRole('button', { name: /expand/i })).not.toBeInTheDocument();
     const rows = bodyRows(container);
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.className).not.toContain('bg-muted/30');
-    expect(rows[0]!.children).toHaveLength(14);
+    // Redesign P3.2 (visual locator only): a plain record row, not a header
+    // (was: no bg-muted/30 header tint).
+    expect(rows[0]!.getAttribute('data-row-kind')).toBe('record');
+    // CHANGED (owner decision 2026-10-19: SKU stacked under the item name): 14 → 13.
+    expect(rows[0]!.children).toHaveLength(13);
   });
 
   // Books are never sized — groupBySizeRun must stay OFF for them. This
@@ -955,8 +985,10 @@ describe('InventoryTable books SKU grouping', () => {
 
     expect(screen.getByText('10')).toBeInTheDocument();
     expect(screen.getByText('*')).toBeInTheDocument();
-    // On hand is col 10 of 14 (0-indexed 9) and carries the disclosure.
-    const onHand = bodyRows(container)[0]!.children[9] as HTMLElement;
+    // On hand is col 9 of 13 (0-indexed 8) and carries the disclosure.
+    // CHANGED (owner decision 2026-10-19: SKU stacked under the item name):
+    // was col 10 of 14.
+    const onHand = bodyRows(container)[0]!.children[8] as HTMLElement;
     expect(onHand.getAttribute('title')).toContain('only counts placements on the current page');
   });
 
@@ -992,9 +1024,12 @@ describe('InventoryTable SKU-group correctness (Items and Books)', () => {
     window.localStorage.clear();
   });
 
+  // CHANGED (owner decision 2026-10-19: SKU stacked under the item name):
+  // 12 → 11 and 14 → 13 cells. Status, 14-day, Coverage and On hand keep their
+  // order at the end, so the end-relative indices below still hold.
   const SURFACES = [
-    { label: 'items', books: false, base: '/dashboard/inventory', cells: 12 },
-    { label: 'books', books: true, base: '/dashboard/books', cells: 14 },
+    { label: 'items', books: false, base: '/dashboard/inventory', cells: 11 },
+    { label: 'books', books: true, base: '/dashboard/books', cells: 13 },
   ] as const;
 
   function renderSurface(
@@ -1040,8 +1075,11 @@ describe('InventoryTable SKU-group correctness (Items and Books)', () => {
 
   const bodyRows = (container: HTMLElement) =>
     Array.from(container.querySelectorAll('tbody tr')) as HTMLTableRowElement[];
+  // Redesign P3.2 (visual locator only): header rows were found by their old
+  // tint class (bg-muted/30); the redesign draws them on the sunk surface, so
+  // they are found by the row's own data-row-kind="header" mark instead.
   const headerRows = (container: HTMLElement) =>
-    bodyRows(container).filter((r) => r.className.includes('bg-muted/30'));
+    bodyRows(container).filter((r) => r.getAttribute('data-row-kind') === 'header');
   /** The pagination footer's "Showing X–Y of N" readout (top + bottom
    *  render the same string). */
   const showingText = () =>
@@ -1207,8 +1245,8 @@ describe('InventoryTable SKU-group correctness (Items and Books)', () => {
           }),
         ],
       });
-      // On hand is the cell right before the coverage bar: 12-cell items
-      // layout → index 7, 14-cell books layout → index 9.
+      // On hand is the cell right before the coverage bar: 11-cell items
+      // layout → index 6, 13-cell books layout → index 8.
       const onHandIdx = surface.cells - 5;
       const headerOnHand = () => headerRows(container)[0]!.children[onHandIdx]!.textContent ?? '';
 
@@ -1232,7 +1270,7 @@ describe('InventoryTable SKU-group correctness (Items and Books)', () => {
 
     // The common case must stay byte-identical: one placement, no header,
     // no chevron — and the header's cell count must match a body row's
-    // exactly (12 items / 14 books) or every column right of Location
+    // exactly (11 items / 13 books) or every column right of Location
     // shifts.
     it('a one-placement SKU renders as a plain row, and a group header matches the body cell count', async () => {
       const user = userEvent.setup();
@@ -1242,7 +1280,8 @@ describe('InventoryTable SKU-group correctness (Items and Books)', () => {
       expect(screen.queryByRole('button', { name: /expand/i })).not.toBeInTheDocument();
       const soloRows = bodyRows(solo.container);
       expect(soloRows).toHaveLength(1);
-      expect(soloRows[0]!.className).not.toContain('bg-muted/30');
+      // Redesign P3.2 (visual locator only): a plain record row, not a header.
+      expect(soloRows[0]!.getAttribute('data-row-kind')).toBe('record');
       expect(soloRows[0]!.children).toHaveLength(surface.cells);
       solo.unmount();
 
@@ -1438,10 +1477,12 @@ describe('InventoryTable SKU-group correctness (Items and Books)', () => {
       ]),
       charters: new Map<string, { name: string; code: string | null }>(),
     };
-    // 12-cell items layout: checkbox, name, sku, CATEGORY, charter,
-    // LOCATION, N locations, on hand, bar, spark, badge, updated.
-    const CATEGORY_CELL = 3;
-    const LOCATION_CELL = 5;
+    // 11-cell items layout: checkbox, name (with the SKU under it), CATEGORY,
+    // charter, LOCATION, N locations, on hand, bar, spark, badge, updated.
+    // CHANGED (owner decision 2026-10-19: SKU stacked under the item name):
+    // was 3 and 5, with the SKU column after the name.
+    const CATEGORY_CELL = 2;
+    const LOCATION_CELL = 4;
 
     const pair = (over: Partial<InstantDatasetItem>[]) =>
       over.map((o, i) => item({ id: `m${i}`, name: 'Acer Chromebook', sku: 'SP-G69UU-05H', ...o }));
@@ -1489,7 +1530,9 @@ describe('InventoryTable SKU-group correctness (Items and Books)', () => {
   // PLACEMENTS. Three placements sharing two racks read "3 racks" while
   // the tooltip beside it correctly listed only "38-A, 12-B".
   describe('books list: the Rack cell counts DISTINCT racks', () => {
-    const RACK_CELL = 7; // 14-cell books layout: ..., grade(6), RACK(7), crate(8)
+    // 13-cell books layout: ..., grade(5), RACK(6), crate(7). CHANGED (owner
+    // decision 2026-10-19: SKU stacked under the item name): was 7 of 14.
+    const RACK_CELL = 6;
     const rack = (id: string, number: string | null, row: string | null) =>
       item({
         id,
@@ -1583,7 +1626,9 @@ describe('InventoryTable SKU-group correctness (Items and Books)', () => {
   // printed `items.length` — a count of placement ROWS — under the label
   // "locations". Same fix, same shape.
   describe('items list: the "N locations" cell counts DISTINCT racks', () => {
-    const LOCATIONS_CELL = 6; // 12-cell items layout: ..., location(5), N LOCATIONS(6)
+    // 11-cell items layout: ..., location(4), N LOCATIONS(5). CHANGED (owner
+    // decision 2026-10-19: SKU stacked under the item name): was 6 of 12.
+    const LOCATIONS_CELL = 5;
     const shelf = (id: string, number: string | null, row: string | null) =>
       item({
         id,
@@ -2206,17 +2251,21 @@ describe('InventoryTable count vocabulary (SKUs vs item rows vs placement rows)'
 
   const bodyRows = (container: HTMLElement) =>
     Array.from(container.querySelectorAll('tbody tr')) as HTMLTableRowElement[];
+  // Redesign P3.2 (visual locator only): header rows were found by their old
+  // tint class (bg-muted/30); the redesign draws them on the sunk surface, so
+  // they are found by the row's own data-row-kind="header" mark instead.
   const headerRows = (container: HTMLElement) =>
-    bodyRows(container).filter((r) => r.className.includes('bg-muted/30'));
+    bodyRows(container).filter((r) => r.getAttribute('data-row-kind') === 'header');
   const footerText = () =>
     Array.from(document.querySelectorAll('p'))
       .map((p) => p.textContent ?? '')
       .find((t) => t.includes('on hand'))!;
   /** The coverage bar's fill percentage inside one rendered row. The
-   *  outer track carries the fixed 80px width; its single child is the
-   *  fill, whose inline width IS stock/par. */
+   *  outer track carries the fixed 72px width (StockBar's default since the
+   *  redesign's 72 x 4 bar); its single child is the fill, whose inline
+   *  width IS stock/par. */
   const barFillPct = (row: HTMLElement): string | undefined => {
-    const track = row.querySelector('span[style*="width: 80px"]');
+    const track = row.querySelector('span[style*="width: 72px"]');
     return (track?.firstElementChild as HTMLElement | null)?.style.width;
   };
 
@@ -2396,7 +2445,8 @@ describe('InventoryTable count vocabulary (SKUs vs item rows vs placement rows)'
 
     const header = headerRows(container)[0]!;
     await user.click(screen.getByRole('button', { name: /expand/i }));
-    const row = bodyRows(container).find((r) => !r.className.includes('bg-muted/30'))!;
+    // Redesign P3.2 (visual locator only): the first row that is not a header.
+    const row = bodyRows(container).find((r) => r.getAttribute('data-row-kind') !== 'header')!;
 
     // Body: available 50 / par max(0, 100×1.5, 10) = 150 → 33.33%.
     // Header must summarise at the SAME fraction (100 / 300), not 66.67%.
@@ -2436,13 +2486,29 @@ describe('InventoryTable — size runs keyed on a stored product group', () => {
   // The exact case a name regex can never serve: three real variants of one
   // shoe, identically named, differing only by variant_size.
   const pegasus = (): InstantDatasetItem[] => [
-    item({ id: 'p10', name: 'Nike Pegasus 41', sku: 'PEG-10', quantity_on_hand: 20, group_id: 'grp-1', variant_size: '10' }),
-    item({ id: 'p9', name: 'Nike Pegasus 41', sku: 'PEG-9', quantity_on_hand: 32, group_id: 'grp-1', variant_size: '9' }),
+    item({
+      id: 'p10',
+      name: 'Nike Pegasus 41',
+      sku: 'PEG-10',
+      quantity_on_hand: 20,
+      group_id: 'grp-1',
+      variant_size: '10',
+    }),
+    item({
+      id: 'p9',
+      name: 'Nike Pegasus 41',
+      sku: 'PEG-9',
+      quantity_on_hand: 32,
+      group_id: 'grp-1',
+      variant_size: '9',
+    }),
   ];
 
   it('collapses identically-named variants that share a group_id, and says so in the group vocabulary', () => {
     renderGrouped({ items: pegasus() });
-    expect(screen.getByRole('button', { name: /expand nike pegasus 41 \(2 variants\)/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /expand nike pegasus 41 \(2 variants\)/i }),
+    ).toBeInTheDocument();
     // "sizes" is the weaker, name-derived claim — never used for a real group.
     expect(screen.queryByText(/2 sizes/)).not.toBeInTheDocument();
   });
@@ -2461,26 +2527,56 @@ describe('InventoryTable — size runs keyed on a stored product group', () => {
   // size label legitimately still appears elsewhere in the row.
   function headerRackCell(container: HTMLElement): string {
     const cells = bodyRows(container)[0]!.querySelectorAll('td');
-    // checkbox, Item, SKU, Category, Charter, Location, Rack -> index 6
-    return cells[6]?.textContent?.trim() ?? '';
+    // checkbox, Item (SKU under the name), Category, Charter, Location, Rack
+    // -> index 5. CHANGED (owner decision 2026-10-19: SKU stacked under the
+    // item name): was index 6, with a SKU column after the Item.
+    return cells[5]?.textContent?.trim() ?? '';
   }
 
   it('shows the concrete rack in the header when every variant sits in the same one', () => {
     const { container } = renderGrouped({
       items: [
-        item({ id: 'p9', name: 'Nike Pegasus 41', sku: 'PEG-9', group_id: 'grp-1', variant_size: '9', placed_racks: ['31-B'] }),
-        item({ id: 'p10', name: 'Nike Pegasus 41', sku: 'PEG-10', group_id: 'grp-1', variant_size: '10', placed_racks: ['31-B'] }),
+        item({
+          id: 'p9',
+          name: 'Nike Pegasus 41',
+          sku: 'PEG-9',
+          group_id: 'grp-1',
+          variant_size: '9',
+          placed_racks: ['31-B'],
+        }),
+        item({
+          id: 'p10',
+          name: 'Nike Pegasus 41',
+          sku: 'PEG-10',
+          group_id: 'grp-1',
+          variant_size: '10',
+          placed_racks: ['31-B'],
+        }),
       ],
     });
 
     expect(headerRackCell(container)).toBe('31-B');
   });
 
-  it('shows a COUNT, never one variant\'s rack, when placements differ', () => {
+  it("shows a COUNT, never one variant's rack, when placements differ", () => {
     const { container } = renderGrouped({
       items: [
-        item({ id: 'p9', name: 'Nike Pegasus 41', sku: 'PEG-9', group_id: 'grp-1', variant_size: '9', placed_racks: ['31-B'] }),
-        item({ id: 'p10', name: 'Nike Pegasus 41', sku: 'PEG-10', group_id: 'grp-1', variant_size: '10', placed_racks: ['Z9'] }),
+        item({
+          id: 'p9',
+          name: 'Nike Pegasus 41',
+          sku: 'PEG-9',
+          group_id: 'grp-1',
+          variant_size: '9',
+          placed_racks: ['31-B'],
+        }),
+        item({
+          id: 'p10',
+          name: 'Nike Pegasus 41',
+          sku: 'PEG-10',
+          group_id: 'grp-1',
+          variant_size: '10',
+          placed_racks: ['Z9'],
+        }),
       ],
     });
 
@@ -2494,8 +2590,22 @@ describe('InventoryTable — size runs keyed on a stored product group', () => {
   it('counts variants with no rack separately rather than folding them into the rack count', () => {
     const { container } = renderGrouped({
       items: [
-        item({ id: 'p9', name: 'Nike Pegasus 41', sku: 'PEG-9', group_id: 'grp-1', variant_size: '9', placed_racks: ['31-B'] }),
-        item({ id: 'p10', name: 'Nike Pegasus 41', sku: 'PEG-10', group_id: 'grp-1', variant_size: '10', placed_racks: [] }),
+        item({
+          id: 'p9',
+          name: 'Nike Pegasus 41',
+          sku: 'PEG-9',
+          group_id: 'grp-1',
+          variant_size: '9',
+          placed_racks: ['31-B'],
+        }),
+        item({
+          id: 'p10',
+          name: 'Nike Pegasus 41',
+          sku: 'PEG-10',
+          group_id: 'grp-1',
+          variant_size: '10',
+          placed_racks: [],
+        }),
       ],
     });
 
@@ -2506,8 +2616,22 @@ describe('InventoryTable — size runs keyed on a stored product group', () => {
   it('shows a dash when nothing in the run is placed', () => {
     const { container } = renderGrouped({
       items: [
-        item({ id: 'p9', name: 'Nike Pegasus 41', sku: 'PEG-9', group_id: 'grp-1', variant_size: '9', placed_racks: [] }),
-        item({ id: 'p10', name: 'Nike Pegasus 41', sku: 'PEG-10', group_id: 'grp-1', variant_size: '10', placed_racks: [] }),
+        item({
+          id: 'p9',
+          name: 'Nike Pegasus 41',
+          sku: 'PEG-9',
+          group_id: 'grp-1',
+          variant_size: '9',
+          placed_racks: [],
+        }),
+        item({
+          id: 'p10',
+          name: 'Nike Pegasus 41',
+          sku: 'PEG-10',
+          group_id: 'grp-1',
+          variant_size: '10',
+          placed_racks: [],
+        }),
       ],
     });
 
@@ -2530,8 +2654,20 @@ describe('InventoryTable — size runs keyed on a stored product group', () => {
     // so the label used to come from one variant while the link went to another.
     const { container } = renderGrouped({
       items: [
-        item({ id: 'nine', name: 'Court Shoe - 9', sku: 'CS-9', group_id: 'grp-9', variant_size: '9' }),
-        item({ id: 'eight', name: 'Court Shoe - 8', sku: 'CS-8', group_id: 'grp-9', variant_size: '8' }),
+        item({
+          id: 'nine',
+          name: 'Court Shoe - 9',
+          sku: 'CS-9',
+          group_id: 'grp-9',
+          variant_size: '9',
+        }),
+        item({
+          id: 'eight',
+          name: 'Court Shoe - 8',
+          sku: 'CS-8',
+          group_id: 'grp-9',
+          variant_size: '8',
+        }),
       ],
     });
 
@@ -2625,7 +2761,9 @@ describe('InventoryTable — size runs keyed on a stored product group', () => {
         item({ id: 'xl', name: 'Pink Shirt - XL', sku: 'X' }),
       ],
     });
-    expect(screen.getByRole('button', { name: /expand pink shirt \(2 sizes\)/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /expand pink shirt \(2 sizes\)/i }),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/variants/)).not.toBeInTheDocument();
   });
 
@@ -2637,10 +2775,38 @@ describe('InventoryTable — size runs keyed on a stored product group', () => {
     getSearchParams('');
     window.history.replaceState(null, '', '/dashboard/inventory');
     const rows = [
-      item({ id: 'p9', name: 'Nike Pegasus 41', sku: 'PEG-9', quantity_on_hand: 32, group_id: 'grp-1', variant_size: '9', updated_at: '2026-01-09T00:00:00+00:00' }),
-      item({ id: 'x1', name: 'Stapler', sku: 'STP-1', quantity_on_hand: 1, updated_at: '2026-01-08T00:00:00+00:00' }),
-      item({ id: 'x2', name: 'Kettle', sku: 'KTL-1', quantity_on_hand: 1, updated_at: '2026-01-07T00:00:00+00:00' }),
-      item({ id: 'p10', name: 'Nike Pegasus 41', sku: 'PEG-10', quantity_on_hand: 20, group_id: 'grp-1', variant_size: '10', updated_at: '2026-01-06T00:00:00+00:00' }),
+      item({
+        id: 'p9',
+        name: 'Nike Pegasus 41',
+        sku: 'PEG-9',
+        quantity_on_hand: 32,
+        group_id: 'grp-1',
+        variant_size: '9',
+        updated_at: '2026-01-09T00:00:00+00:00',
+      }),
+      item({
+        id: 'x1',
+        name: 'Stapler',
+        sku: 'STP-1',
+        quantity_on_hand: 1,
+        updated_at: '2026-01-08T00:00:00+00:00',
+      }),
+      item({
+        id: 'x2',
+        name: 'Kettle',
+        sku: 'KTL-1',
+        quantity_on_hand: 1,
+        updated_at: '2026-01-07T00:00:00+00:00',
+      }),
+      item({
+        id: 'p10',
+        name: 'Nike Pegasus 41',
+        sku: 'PEG-10',
+        quantity_on_hand: 20,
+        group_id: 'grp-1',
+        variant_size: '10',
+        updated_at: '2026-01-06T00:00:00+00:00',
+      }),
     ];
     render(
       <InventoryTable

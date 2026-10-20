@@ -41,7 +41,8 @@ import {
 } from '@/lib/exception-evidence';
 import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';
 import { photoPermissionDenial } from '@/lib/maintenance-request-photos';
-import { ACCENT, capTo, FONT, TYPE_CEILING } from '@/lib/theme';
+import { PHOTO_BACKGROUND } from '@/components/ui/tones';
+import { capTo, FONT, TYPE_CEILING } from '@/lib/theme';
 import { useSheetKeyboard } from '@/lib/use-sheet-keyboard';
 import { useTheme } from '@/lib/use-theme';
 
@@ -267,7 +268,7 @@ function AddSheetContent({
               accessibilityLabel="Close"
               style={styles.close}
             >
-              <X size={18} color={c.ink4} />
+              <X size={18} color={c.ink3} />
             </Pressable>
           </View>
 
@@ -288,7 +289,10 @@ function AddSheetContent({
                   <Image
                     key={`${p.uri}:${i}`}
                     source={{ uri: p.uri }}
-                    style={styles.preview}
+                    style={[
+                      styles.preview,
+                      { backgroundColor: PHOTO_BACKGROUND, borderColor: c.hair },
+                    ]}
                     contentFit="cover"
                     accessible
                     accessibilityLabel={many ? `Photo ${i + 1} of ${photos.length} to add` : 'The photo to add'}
@@ -333,12 +337,15 @@ function AddSheetContent({
                 maxFontSizeMultiplier={NOTE_FONT_CAP}
                 multiline
                 placeholder="What the photo shows"
-                placeholderTextColor={c.ink4}
+                placeholderTextColor={c.ink3}
                 accessibilityLabel="Note, optional"
                 accessibilityHint={many ? 'Saved with each photo' : undefined}
-                style={[styles.input, { borderColor: c.hair, backgroundColor: c.paper2, color: c.ink }]}
+                style={[
+                  styles.input,
+                  { borderColor: c.hair2, backgroundColor: c.sunk, color: c.ink },
+                ]}
               />
-              <Mono size={11} color={text.tooLong ? ACCENT.crit : c.ink4}>
+              <Mono size={11} color={text.tooLong ? c.critText : c.ink3}>
                 {`${text.length.toLocaleString('en-US')} / ${EXCEPTION_EVIDENCE_NOTE_MAX.toLocaleString('en-US')}`}
               </Mono>
               {many ? (
@@ -492,7 +499,7 @@ function RemoveSheetContent({
               accessibilityLabel="Close"
               style={styles.close}
             >
-              <X size={18} color={c.ink4} />
+              <X size={18} color={c.ink3} />
             </Pressable>
           </View>
 
@@ -509,7 +516,7 @@ function RemoveSheetContent({
           >
             <Image
               source={{ uri: photo.thumbUrl ?? photo.url }}
-              style={styles.preview}
+              style={[styles.preview, { backgroundColor: PHOTO_BACKGROUND, borderColor: c.hair }]}
               contentFit="cover"
               accessible
               accessibilityLabel={`The photo to remove. ${exceptionEvidenceAddedByCopy(photo.uploadedBy.label)}`}
@@ -530,11 +537,14 @@ function RemoveSheetContent({
                 multiline
                 editable={!submitting}
                 placeholder="Why it is being removed"
-                placeholderTextColor={c.ink4}
+                placeholderTextColor={c.ink3}
                 accessibilityLabel="Reason, optional"
-                style={[styles.input, { borderColor: c.hair, backgroundColor: c.paper2, color: c.ink }]}
+                style={[
+                  styles.input,
+                  { borderColor: c.hair2, backgroundColor: c.sunk, color: c.ink },
+                ]}
               />
-              <Mono size={11} color={text.tooLong ? ACCENT.crit : c.ink4}>
+              <Mono size={11} color={text.tooLong ? c.critText : c.ink3}>
                 {`${text.length.toLocaleString('en-US')} / ${EXCEPTION_EVIDENCE_NOTE_MAX.toLocaleString('en-US')}`}
               </Mono>
             </View>
@@ -546,7 +556,7 @@ function RemoveSheetContent({
             </Body>
           ) : null}
           {error ? (
-            <Body size={13} color={ACCENT.crit} accessibilityRole="alert">
+            <Body size={13} color={c.critText} accessibilityRole="alert">
               {error}
             </Body>
           ) : null}
@@ -587,16 +597,22 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 8,
   },
+  // A photo on the photo ground (white in both modes) with a hairline edge
+  // (DESIGN-SPEC 6.14).
   preview: {
     width: 88,
     height: 88,
     borderRadius: 10,
+    borderWidth: 1,
   },
+  // The typed note or reason in the body face (Inter Tight), as the shared
+  // Field's input; without a family it fell back to the system font.
   input: {
     minHeight: 96,
     borderWidth: 1,
     borderRadius: 10,
     padding: 12,
+    fontFamily: FONT.displayRegular,
     fontSize: 15,
     textAlignVertical: 'top',
   },

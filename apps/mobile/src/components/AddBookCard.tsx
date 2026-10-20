@@ -3,16 +3,22 @@ import {
   ActivityIndicator,
   Alert,
   Image,
-  Pressable,
   StyleSheet,
   Text,
-  TextInput,
   View,
+  useWindowDimensions,
 } from 'react-native';
 
+import { Button } from '@/components/ui/button';
+import { Chip } from '@/components/ui/chip';
+import { Field } from '@/components/ui/field';
+import { Mono } from '@/components/ui/text';
+import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { listWarehouses, type CachedWarehouse } from '@/lib/db-reads';
+import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { buildQuickAddInput, describeFailure, submitCreateItem } from '@/lib/item-create';
-import { radius, space, theme } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo, palette, space, type Palette } from '@/lib/theme';
+import { useTheme } from '@/lib/use-theme';
 
 import type { User } from '@supabase/supabase-js';
 
@@ -64,8 +70,16 @@ interface Props {
  * Unplaced. The server now writes the `initial` movement inside create(), so
  * there is no RPC call left to make. Still online-only: no offline queue wraps
  * item creation.
+ *
+ * Look (redesign P3.8): the reference's scanned card in the device's mode,
+ * the shared Field boxes, the warehouse chips and the button pair (Add to
+ * inventory commits the card, so it is the ink button). It was drawn from the
+ * light-only legacy theme, so it stayed light in dark mode.
  */
 export function AddBookCard({ user, result, onCancel, onCreated }: Props) {
+  const { mode, c } = useTheme();
+  const styles = CARD_STYLES[mode];
+  const stacked = shouldStackRow(useWindowDimensions().fontScale);
   const isExisting = Boolean(result.existingItem);
   const meta = result.metadata ?? {};
   const [title, setTitle] = React.useState(meta.title ?? '');
@@ -82,7 +96,8 @@ export function AddBookCard({ user, result, onCancel, onCreated }: Props) {
     void (async () => {
       const list = await listWarehouses();
       setWarehouses(list);
-      if (list.length > 0 && !warehouseId) setWarehouseId(list[0]?.id ?? null);
+      // The first warehouse is the default until one is picked.
+      if (list.length > 0) setWarehouseId((current) => current ?? list[0]?.id ?? null);
     })();
   }, []);
 
@@ -91,12 +106,11 @@ export function AddBookCard({ user, result, onCancel, onCreated }: Props) {
       <View style={styles.card}>
         <Text style={styles.title}>Already in inventory</Text>
         <Text style={styles.body}>
-          {result.existingItem!.name} — currently {result.existingItem!.quantityOnHand}{' '}
-          on hand.
+          {result.existingItem!.name} — currently {result.existingItem!.quantityOnHand} on hand.
         </Text>
-        <Pressable style={styles.btnGhost} onPress={onCancel}>
-          <Text style={styles.btnGhostLabel}>Close</Text>
-        </Pressable>
+        <Button variant="outline" onPress={onCancel} style={styles.closeBtn}>
+          Close
+        </Button>
       </View>
     );
   }
@@ -150,108 +164,115 @@ export function AddBookCard({ user, result, onCancel, onCreated }: Props) {
           <Image source={{ uri: meta.coverUrl }} style={styles.cover} />
         ) : (
           <View style={[styles.cover, styles.coverPlaceholder]}>
-            <Text style={styles.coverPlaceholderText}>No cover</Text>
+            <Text style={styles.coverPlaceholderText} maxFontSizeMultiplier={PLACEHOLDER_CAP}>
+              No cover
+            </Text>
           </View>
         )}
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={styles.isbnLabel}>ISBN</Text>
-          <Text style={styles.isbnValue}>{result.isbn}</Text>
+        <View style={styles.headerText}>
+          <Text style={styles.codeLabel}>ISBN</Text>
+          <Text style={styles.codeValue}>{result.isbn}</Text>
           {!meta.title && (
-            <Text style={styles.warn}>
-              No metadata found — add the title and author manually.
-            </Text>
+            <Text style={styles.warn}>No metadata found — add the title and author manually.</Text>
           )}
         </View>
       </View>
 
-      <Field label="Title">
-        <TextInput
-          style={styles.input}
-          value={title}
-          onChangeText={setTitle}
-          placeholder="The Great Gatsby"
-          placeholderTextColor={theme.textMuted}
+      {/* What is typed is content, so it grows with the text size as these
+          boxes always did: 0, React Native's no-limit sentinel, lifts the
+          shared Field's 24pt input ceiling (the box grows with it). */}
+      <Field
+        label="Title"
+        accessibilityLabel="Title"
+        value={title}
+        onChangeText={setTitle}
+        placeholder="The Great Gatsby"
+        maxFontSizeMultiplier={0}
+        style={styles.field}
+      />
+      <Field
+        label="Author"
+        accessibilityLabel="Author"
+        value={author}
+        onChangeText={setAuthor}
+        placeholder="F. Scott Fitzgerald"
+        maxFontSizeMultiplier={0}
+        style={styles.field}
+      />
+      <View style={[styles.row, stacked && styles.rowStacked]}>
+        <Field
+          label="SKU"
+          accessibilityLabel="SKU"
+          value={sku}
+          onChangeText={setSku}
+          autoCapitalize="characters"
+          maxFontSizeMultiplier={0}
+          style={stacked ? styles.field : styles.fieldInRow}
         />
-      </Field>
-      <Field label="Author">
-        <TextInput
-          style={styles.input}
-          value={author}
-          onChangeText={setAuthor}
-          placeholder="F. Scott Fitzgerald"
-          placeholderTextColor={theme.textMuted}
+        <Field
+          label="Initial qty"
+          accessibilityLabel="Initial qty"
+          value={qty}
+          onChangeText={setQty}
+          keyboardType="numeric"
+          maxFontSizeMultiplier={0}
+          style={stacked ? styles.field : styles.fieldInRow}
         />
-      </Field>
-      <View style={styles.row}>
-        <Field label="SKU">
-          <TextInput
-            style={styles.input}
-            value={sku}
-            onChangeText={setSku}
-            autoCapitalize="characters"
-          />
-        </Field>
-        <Field label="Initial qty">
-          <TextInput
-            style={styles.input}
-            value={qty}
-            onChangeText={setQty}
-            keyboardType="numeric"
-          />
-        </Field>
       </View>
-      <Field label="Warehouse">
+      <FieldBlock label="Warehouse" color={c.ink3}>
         <View style={styles.warehouseRow}>
           {warehouses.length === 0 ? (
             <Text style={styles.body}>No warehouses cached. Refresh and try again.</Text>
           ) : (
             warehouses.map((w) => (
-              <Pressable
+              <Chip
                 key={w.id}
+                label={w.name}
+                active={w.id === warehouseId}
                 onPress={() => setWarehouseId(w.id)}
-                style={[
-                  styles.whBtn,
-                  w.id === warehouseId && { backgroundColor: theme.primary },
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.whLabel,
-                    w.id === warehouseId && { color: '#fff' },
-                  ]}
-                >
-                  {w.name}
-                </Text>
-              </Pressable>
+              />
             ))
           )}
         </View>
-      </Field>
+      </FieldBlock>
 
+      {/* One full-width button under the other at every text size: a
+          button's words stay on one line, and side by side "Cancel" was cut
+          short from the largest standard text size, as was "Add to inventory"
+          beside its spinner while it saves. */}
       <View style={styles.actions}>
-        <Pressable style={styles.btnGhost} onPress={onCancel} disabled={busy}>
-          <Text style={styles.btnGhostLabel}>Cancel</Text>
-        </Pressable>
-        <Pressable
-          style={[styles.btnPrimary, busy && { opacity: 0.5 }]}
+        <Button variant="outline" onPress={onCancel} disabled={busy}>
+          Cancel
+        </Button>
+        {/* Adding commits the card: the ink button (redesign button rule). */}
+        <Button
           onPress={create}
           disabled={busy || !warehouseId}
+          leading={busy ? <ActivityIndicator color={c.paper} /> : undefined}
         >
-          {busy ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.btnPrimaryLabel}>Add to inventory</Text>
-          )}
-        </Pressable>
+          Add to inventory
+        </Button>
       </View>
     </View>
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+/** A label over a block that is not a text box (the warehouse chips). */
+function FieldBlock({
+  label,
+  color,
+  children,
+}: {
+  label: string;
+  color: string;
+  children: React.ReactNode;
+}) {
   return (
-    <View style={{ flex: 1, marginTop: space.md }}>
-      <Text style={styles.label}>{label}</Text>
+    <View style={FIELD_BLOCK}>
+      {/* The shared Field's label, so every label on the card reads alike. */}
+      <Mono size={10} tracking={0.12} upper color={color}>
+        {label}
+      </Mono>
       {children}
     </View>
   );
@@ -262,63 +283,75 @@ function suggestedSku(isbn: string): string {
   return `BOOK-${cleaned.slice(-8)}`;
 }
 
-const styles = StyleSheet.create({
-  card: {
-    backgroundColor: theme.card,
-    borderRadius: radius.xl,
-    padding: space.lg,
-    borderWidth: 1,
-    borderColor: theme.border,
-  },
-  headerRow: { flexDirection: 'row', gap: space.md, alignItems: 'center' },
-  cover: { width: 72, height: 96, borderRadius: radius.sm, backgroundColor: theme.bgElevated },
-  coverPlaceholder: { alignItems: 'center', justifyContent: 'center' },
-  coverPlaceholderText: { color: theme.textMuted, fontSize: 10 },
-  isbnLabel: { color: theme.textMuted, fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.5 },
-  isbnValue: { color: theme.text, fontFamily: 'Menlo', fontSize: 14, marginTop: 2 },
-  warn: { color: theme.warning, fontSize: 11, marginTop: space.xs },
-  title: { color: theme.text, fontSize: 18, fontWeight: '700' },
-  body: { color: theme.textMuted, fontSize: 13, marginTop: space.xs },
-  label: { color: theme.textMuted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 },
-  input: {
-    backgroundColor: theme.bgElevated,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: theme.border,
-    color: theme.text,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    fontSize: 14,
-    marginTop: 4,
-  },
-  row: { flexDirection: 'row', gap: space.md },
-  warehouseRow: { flexDirection: 'row', gap: space.sm, flexWrap: 'wrap', marginTop: 4 },
-  whBtn: {
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: radius.md,
-    backgroundColor: theme.bgElevated,
-    borderWidth: 1,
-    borderColor: theme.border,
-  },
-  whLabel: { color: theme.text, fontSize: 12, fontWeight: '600' },
-  actions: { flexDirection: 'row', gap: space.md, marginTop: space.lg },
-  btnGhost: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: radius.md,
-    backgroundColor: theme.bgElevated,
-    borderWidth: 1,
-    borderColor: theme.border,
-    alignItems: 'center',
-  },
-  btnGhostLabel: { color: theme.text, fontWeight: '600', fontSize: 14 },
-  btnPrimary: {
-    flex: 2,
-    paddingVertical: 12,
-    borderRadius: radius.md,
-    backgroundColor: theme.primary,
-    alignItems: 'center',
-  },
-  btnPrimaryLabel: { color: '#fff', fontWeight: '700', fontSize: 14 },
-});
+/** The placeholder sits in the cover's fixed 72 × 96 frame. */
+const PLACEHOLDER_CAP = capTo(10, TYPE_CEILING.chrome);
+
+const FIELD_BLOCK = { marginTop: space.md, gap: 6 } as const;
+
+/** The card's styles in one mode. */
+function makeStyles(c: Palette) {
+  return StyleSheet.create({
+    card: {
+      backgroundColor: c.card,
+      borderRadius: 16,
+      padding: space.lg,
+      borderWidth: 1,
+      borderColor: c.hair,
+    },
+    headerRow: { flexDirection: 'row', gap: space.md, alignItems: 'center' },
+    headerText: { flex: 1, minWidth: 0 },
+    cover: {
+      width: 72,
+      height: 96,
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: c.hair,
+      backgroundColor: PHOTO_BACKGROUND,
+    },
+    coverPlaceholder: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 4,
+      backgroundColor: c.sunk,
+    },
+    coverPlaceholderText: {
+      color: c.ink3,
+      fontFamily: FONT.displayRegular,
+      fontSize: 10,
+      textAlign: 'center',
+    },
+    codeLabel: {
+      color: c.ink3,
+      fontFamily: FONT.mono,
+      fontSize: 10.5,
+      letterSpacing: 10.5 * 0.12,
+      textTransform: 'uppercase',
+    },
+    codeValue: { color: c.ink, fontFamily: FONT.mono, fontSize: 14, marginTop: 4 },
+    warn: {
+      color: c.warnText,
+      fontFamily: FONT.displayRegular,
+      fontSize: 12,
+      lineHeight: 17,
+      marginTop: space.xs,
+    },
+    title: { color: c.ink, fontFamily: FONT.displaySemi, fontWeight: '600', fontSize: 17 },
+    body: {
+      color: c.ink3,
+      fontFamily: FONT.displayRegular,
+      fontSize: 13.5,
+      lineHeight: 19,
+      marginTop: space.xs,
+    },
+    field: { marginTop: space.md },
+    fieldInRow: { flex: 1, marginTop: space.md },
+    row: { flexDirection: 'row', gap: space.md },
+    rowStacked: { flexDirection: 'column', gap: 0 },
+    warehouseRow: { flexDirection: 'row', gap: space.sm, flexWrap: 'wrap' },
+    actions: { flexDirection: 'column', gap: space.sm, marginTop: space.lg },
+    closeBtn: { marginTop: space.md },
+  });
+}
+
+/** Both modes' styles, made once; the card takes the one for the device's mode. */
+const CARD_STYLES = { light: makeStyles(palette('light')), dark: makeStyles(palette('dark')) };

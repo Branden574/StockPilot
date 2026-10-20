@@ -1,8 +1,7 @@
-import { BlurView } from 'expo-blur';
 import { Tabs, useRouter, useSegments } from 'expo-router';
 import { type LucideIcon } from 'lucide-react-native';
 import * as React from 'react';
-import { Platform, StyleSheet, Text, View, type ColorValue } from 'react-native';
+import { Platform, StyleSheet, Text, type ColorValue } from 'react-native';
 
 import { useAuth } from '@/lib/auth-context';
 import { useEnabledModules } from '@/lib/enabled-modules';
@@ -17,11 +16,19 @@ import {
 } from '@/lib/tab-config';
 import { useStoredTabSlots } from '@/lib/tab-config-store';
 import { HOME_TAB_ICON, TAB_ICONS } from '@/lib/tab-icons';
-import { tabLabelStyleForCount } from '@/lib/tab-label';
+import { tabLabelStyleForCount, type TabLabelPlatform } from '@/lib/tab-label';
 import { FONT } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useRole } from '@/lib/use-role';
 import { useTheme } from '@/lib/use-theme';
+
+/**
+ * Which of tabLabelStyleForCount's tiers the labels take: the display-face
+ * ones, on both platforms. They are kept under 'android', where the bar always
+ * drew this face; the iOS tiers were sized for the JetBrains Mono labels the
+ * bar used to draw there.
+ */
+const LABEL_FACE_TIERS: TabLabelPlatform = 'android';
 
 /**
  * Customizable bottom bar — Home pinned first, then 2–5 user-chosen tabs
@@ -47,11 +54,15 @@ import { useTheme } from '@/lib/use-theme';
  * (see activeTabShouldRedirect). Either way the screen stays mounted via
  * href:null, so there is no crash.
  *
- * The bar uses a translucent BlurView on iOS for the brand's editorial
- * "paper through glass" feel.
+ * The bar is a solid page-coloured surface with a hairline above it, the
+ * reference phone bar (DESIGN-SPEC 6.20; CONFLICTS N11: no glass), in place of
+ * the translucent iOS BlurView it had. It keeps `position: 'absolute'`, its
+ * height and its bottom padding, so the inset contract every screen relies on
+ * is unchanged: lists pad by useBottomTabBarHeight() + 24, DataListScreen by
+ * BottomTabBarHeightContext, the select bar sits at tabBarHeight + 12.
  */
 export default function TabsLayout() {
-  const { c, mode } = useTheme();
+  const { c } = useTheme();
   // Same sources drawer-content gates with: enabledModules defaults to
   // DEFAULT_MODULE_IDS until a snapshot persists (no flicker for the
   // grandfathered all-modules org), role falls back to 'staff' while loading,
@@ -76,11 +87,11 @@ export default function TabsLayout() {
     [visibleSlots],
   );
   // Home + chosen slots = everything the bar actually shows; the label size
-  // tier depends on that density (hidden href:null tabs take no width).
-  const labelMetrics = tabLabelStyleForCount(
-    1 + visibleSlots.length,
-    Platform.OS === 'android' ? 'android' : 'ios',
-  );
+  // tier depends on that density (hidden href:null tabs take no width). The
+  // labels are the display face on both platforms now (the reference's tab
+  // label), so both take the display-face tiers, which tabLabelStyleForCount
+  // keeps under 'android' (the platform that always drew this face).
+  const labelMetrics = tabLabelStyleForCount(1 + visibleSlots.length, LABEL_FACE_TIERS);
 
   // Active-tab gating guard: if the focused tab is one the user CHOSE and its
   // module/permission gate turns off (org disables a module, admin revokes a
@@ -109,24 +120,15 @@ export default function TabsLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarStyle: styles.bar,
-        tabBarBackground: () =>
-          Platform.OS === 'ios' ? (
-            <BlurView
-              tint={mode === 'dark' ? 'dark' : 'light'}
-              intensity={70}
-              style={StyleSheet.absoluteFill}
-            />
-          ) : (
-            <View
-              style={[
-                StyleSheet.absoluteFill,
-                { backgroundColor: c.paper },
-              ]}
-            />
-          ),
-        tabBarActiveTintColor: c.ink,
-        tabBarInactiveTintColor: c.ink4,
+        // Solid, in the page colour of the device's mode, with the hairline
+        // in the mode's line colour (the navigator's own default border is a
+        // light grey that showed as a bright line on the dark bar).
+        tabBarStyle: [styles.bar, { backgroundColor: c.paper, borderTopColor: c.hair }],
+        // The reference bar: the active tab in the accent, the others in the
+        // muted ink (ink4 held their words under AA). The active tab also
+        // takes the heavier label and stroke, so colour is never the only cue.
+        tabBarActiveTintColor: c.accent,
+        tabBarInactiveTintColor: c.ink3,
         tabBarShowLabel: true,
         // Custom label renderer instead of tabBarLabelStyle: labels must be
         // ONE line, never wrap or mid-word break, and never scale with
@@ -135,12 +137,16 @@ export default function TabsLayout() {
         // letterSpacing step DOWN as the bar fills (tabLabelStyleForCount,
         // pure + unit-tested): counts 1–4 keep the original styling, 5–6
         // tighten so the longest label fits a 375/6 = 62.5pt SE slot.
-        tabBarLabel: ({ color, children }) => (
+        tabBarLabel: ({ color, focused, children }) => (
           <Text
             numberOfLines={1}
             ellipsizeMode="tail"
             allowFontScaling={false}
-            style={[styles.label, { color }, labelMetrics]}
+            style={[
+              styles.label,
+              { color, fontFamily: focused ? FONT.displaySemi : FONT.display },
+              labelMetrics,
+            ]}
           >
             {children}
           </Text>
@@ -216,16 +222,16 @@ function TabIcon({
 }
 
 const styles = StyleSheet.create({
+  // Absolute, at the same height and bottom padding as ever: the inset
+  // contract (see the component note) is measured against exactly this box.
   bar: {
     borderTopWidth: StyleSheet.hairlineWidth,
     height: Platform.OS === 'ios' ? 84 : 72,
     paddingBottom: Platform.OS === 'ios' ? 24 : 14,
     position: 'absolute',
-    backgroundColor: 'transparent',
     elevation: 0,
   },
   label: {
-    fontFamily: Platform.OS === 'android' ? FONT.display : FONT.mono,
     textAlign: 'center',
   },
 });

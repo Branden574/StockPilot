@@ -4,6 +4,7 @@ import * as React from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { Button } from '@/components/ui/button';
 import { Card, Hair } from '@/components/ui/card';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
@@ -17,7 +18,7 @@ import {
   REJECTED_RETENTION_DAYS,
   rejectedWhen,
 } from '@/lib/rejected-work';
-import { ACCENT, FONT } from '@/lib/theme';
+import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -50,12 +51,25 @@ import { useTheme } from '@/lib/use-theme';
  * here although it MAY have been applied. Those rows are listed apart, under
  * "Not confirmed", and this screen never says they were not applied: each
  * row's message names the item and the change to check.
+ *
+ * A READ THAT FAILED IS SAID, never shown as "Nothing was left unsent." (the
+ * failed-read class of D25): when the device's own record could not be read,
+ * the screen says so with Try again, and "nothing" is claimed only after both
+ * reads answered.
+ *
+ * The look (redesign P5.10): the device mode's palette; the times, key
+ * prefixes and the retention line are the muted ink (AA), a not-confirmed
+ * message the per-mode warning words, a refusal, Discard and Clear this list
+ * the per-mode refusal red. Discard and Clear are named buttons, each at
+ * least 44pt tall.
  */
 export default function RejectedWorkScreen() {
   const { c } = useTheme();
   const router = useRouter();
   const [rows, setRows] = React.useState<PendingActionRow[] | null>(null);
   const [held, setHeld] = React.useState<PendingActionRow[] | null>(null);
+  // The last read of either list failed: never "Nothing was left unsent".
+  const [readFailed, setReadFailed] = React.useState(false);
 
   const [now, setNow] = React.useState(() => Date.now());
   const load = React.useCallback(async () => {
@@ -63,6 +77,7 @@ export default function RejectedWorkScreen() {
     // "when" labels refresh when the list does - every focus - not on
     // arbitrary re-renders.
     setNow(Date.now());
+    let failed = false;
     try {
       // Match the true retention ceiling (REJECTED_KEEP_MAX, pruned to at cold
       // launch), not listRejected's smaller internal default — otherwise the
@@ -73,13 +88,16 @@ export default function RejectedWorkScreen() {
     } catch (e) {
       console.warn('[rejected-work] could not read the outbox', e);
       setRows([]);
+      failed = true;
     }
     try {
       setHeld(await listHeld(REJECTED_KEEP_MAX));
     } catch (e) {
       console.warn('[rejected-work] could not read the held work', e);
       setHeld([]);
+      failed = true;
     }
+    setReadFailed(failed);
   }, []);
 
   // Re-read on focus: the list changes underneath this screen (an eviction can
@@ -142,7 +160,8 @@ export default function RejectedWorkScreen() {
     );
   }
 
-  const nothing = rows !== null && held !== null && rows.length === 0 && held.length === 0;
+  const nothing =
+    !readFailed && rows !== null && held !== null && rows.length === 0 && held.length === 0;
   // The adjustments that MAY have been applied, listed apart from the rest.
   const unconfirmedRows = (rows ?? []).filter(isUnconfirmedAdjustRow);
   const neverSentRows = (rows ?? []).filter((r) => !isUnconfirmedAdjustRow(r));
@@ -179,6 +198,22 @@ export default function RejectedWorkScreen() {
           confirmed is different: it may have been applied, so check the item first.
         </Body>
 
+        {readFailed ? (
+          <Card padding={16} style={{ marginTop: 18, gap: 12 }}>
+            <Body size={14.5} color={c.critText} accessibilityRole="alert">
+              Could not read the unsent work saved on this device.
+            </Body>
+            <Button
+              size="sm"
+              variant="outline"
+              onPress={() => void load()}
+              style={{ alignSelf: 'flex-start', minHeight: MIN_TAP }}
+            >
+              Try again
+            </Button>
+          </Card>
+        ) : null}
+
         {held !== null && held.length > 0 ? (
           <View style={{ marginTop: 18 }}>
             <View style={{ paddingHorizontal: 4, paddingBottom: 10 }}>
@@ -193,7 +228,7 @@ export default function RejectedWorkScreen() {
                       <Body size={15.5} style={{ fontFamily: FONT.display, flexShrink: 1 }}>
                         {pendingActionLabel(row.kind)}
                       </Body>
-                      <Mono size={11} color={c.ink4}>
+                      <Mono size={11} color={c.ink3}>
                         {rejectedWhen(row.createdAt, now)}
                       </Mono>
                     </View>
@@ -207,7 +242,7 @@ export default function RejectedWorkScreen() {
                       accessibilityLabel={`Discard ${pendingActionLabel(row.kind)} queued by another account`}
                       style={({ pressed }) => [styles.discard, { opacity: pressed ? 0.7 : 1 }]}
                     >
-                      <Body size={14} color={ACCENT.crit} style={{ fontFamily: FONT.display }}>
+                      <Body size={14} color={c.critText} style={{ fontFamily: FONT.display }}>
                         Discard
                       </Body>
                     </Pressable>
@@ -250,16 +285,16 @@ export default function RejectedWorkScreen() {
                           <Body size={15.5} style={{ fontFamily: FONT.display, flexShrink: 1 }}>
                             {pendingActionLabel(row.kind)}
                           </Body>
-                          <Mono size={11} color={c.ink4}>
+                          <Mono size={11} color={c.ink3}>
                             {rejectedWhen(row.lastAttemptAt ?? row.createdAt, now)}
                           </Mono>
                         </View>
                         {/* Warn, not crit: this may have worked. The message
                             names the item and the change to check. */}
-                        <Body size={13.5} color={ACCENT.warn} style={{ marginTop: 4 }}>
+                        <Body size={13.5} color={c.warnText} style={{ marginTop: 4 }}>
                           {row.lastError}
                         </Body>
-                        <Mono size={10} tracking={0.1} color={c.ink4} style={{ marginTop: 6 }}>
+                        <Mono size={10} tracking={0.1} color={c.ink3} style={{ marginTop: 6 }}>
                           {row.idempotencyKey.slice(0, 8).toUpperCase()}
                         </Mono>
                       </View>
@@ -282,16 +317,16 @@ export default function RejectedWorkScreen() {
                           <Body size={15.5} style={{ fontFamily: FONT.display, flexShrink: 1 }}>
                             {pendingActionLabel(row.kind)}
                           </Body>
-                          <Mono size={11} color={c.ink4}>
+                          <Mono size={11} color={c.ink3}>
                             {rejectedWhen(row.lastAttemptAt ?? row.createdAt, now)}
                           </Mono>
                         </View>
                         {row.lastError ? (
-                          <Body size={13.5} color={ACCENT.crit} style={{ marginTop: 4 }}>
+                          <Body size={13.5} color={c.critText} style={{ marginTop: 4 }}>
                             {row.lastError}
                           </Body>
                         ) : null}
-                        <Mono size={10} tracking={0.1} color={c.ink4} style={{ marginTop: 6 }}>
+                        <Mono size={10} tracking={0.1} color={c.ink3} style={{ marginTop: 6 }}>
                           {row.idempotencyKey.slice(0, 8).toUpperCase()}
                         </Mono>
                       </View>
@@ -304,16 +339,17 @@ export default function RejectedWorkScreen() {
             <Pressable
               onPress={confirmClear}
               hitSlop={10}
+              accessibilityRole="button"
               style={({ pressed }) => [styles.clear, { opacity: pressed ? 0.7 : 1 }]}
             >
-              <Body size={14.5} color={ACCENT.crit} style={{ fontFamily: FONT.display }}>
+              <Body size={14.5} color={c.critText} style={{ fontFamily: FONT.display }}>
                 Clear this list
               </Body>
             </Pressable>
           </View>
         )}
 
-        <Mono size={10} tracking={0.1} color={c.ink4} style={{ marginTop: 18 }}>
+        <Mono size={10} tracking={0.1} color={c.ink3} style={{ marginTop: 18 }}>
           {/* Retention applies to this account's record only (never sent and
               not confirmed): work held for another account is never removed
               except by Discard. */}
@@ -323,6 +359,9 @@ export default function RejectedWorkScreen() {
     </View>
   );
 }
+
+/** The iOS minimum tap target, in points. */
+const MIN_TAP = 44;
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
@@ -344,6 +383,18 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 10,
   },
-  clear: { paddingVertical: 14, paddingHorizontal: 4, alignSelf: 'flex-start' },
-  discard: { paddingTop: 10, alignSelf: 'flex-start' },
+  clear: {
+    paddingVertical: 14,
+    paddingHorizontal: 4,
+    minHeight: MIN_TAP,
+    justifyContent: 'center',
+    alignSelf: 'flex-start',
+  },
+  // A 44pt frame (it was the word and 10pt above it, about 31pt tall).
+  discard: {
+    marginTop: 2,
+    minHeight: MIN_TAP,
+    justifyContent: 'center',
+    alignSelf: 'flex-start',
+  },
 });

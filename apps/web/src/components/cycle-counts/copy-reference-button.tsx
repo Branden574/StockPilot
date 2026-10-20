@@ -4,10 +4,15 @@ import { Check, Copy } from 'lucide-react';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { Button } from '@/components/ui/button';
+
 /**
  * Copies a count's reference ("CC-000042") to the clipboard. Success is
  * announced only after the browser confirms the write; a refused or missing
  * clipboard says so and leaves the reference on screen to select by hand.
+ *
+ * A 28 px quiet icon button beside the title (DESIGN-SPEC 6.2), with the
+ * shared Button's 44 px touch target on phones.
  */
 export function CopyReferenceButton({ reference }: { reference: string }) {
   const [copied, setCopied] = React.useState(false);
@@ -31,14 +36,16 @@ export function CopyReferenceButton({ reference }: { reference: string }) {
   };
 
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
+      size="icon"
       onClick={copy}
       aria-label={`Copy reference ${reference}`}
       title="Copy reference"
-      className="text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex h-7 w-7 items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-2"
+      className="text-muted-foreground hover:text-foreground h-7 w-7 [&_svg]:size-3.5"
     >
-      {copied ? <Check aria-hidden className="h-3.5 w-3.5" /> : <Copy aria-hidden className="h-3.5 w-3.5" />}
-    </button>
+      {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
+    </Button>
   );
 }

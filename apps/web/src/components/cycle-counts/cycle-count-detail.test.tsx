@@ -7,8 +7,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // clear buttons, "Cancel count", and "Review & post" — while all count
 // data stays visible.
 
+const router = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }));
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
+  useRouter: () => router,
   usePathname: () => '/dashboard/cycle-counts/cc-1',
   useSearchParams: () => new URLSearchParams(),
 }));
@@ -23,8 +24,12 @@ vi.mock('@/server/actions/cycle-counts', () => ({
   recordCycleCountLineAction: vi.fn(),
 }));
 
+import { toast } from 'sonner';
+
 import {
+  cancelCycleCountAction,
   clearCycleCountLineAction,
+  postCycleCountAction,
   recordCycleCountLineAction,
 } from '@/server/actions/cycle-counts';
 
@@ -333,5 +338,156 @@ describe('CycleCountDetail — failed line save', () => {
     });
     expect(input.value).toBe('7');
     expect(within(row).queryByRole('alert')).toBeNull();
+  });
+});
+
+/**
+ * THE REDESIGNED COUNT PAGE (M6) keeps the four whole-count numbers, the
+ * "x of y counted · z with variance" line, the server-side line filters and
+ * the entry / posting split: posting is a manager's step behind the
+ * "Post this count?" confirmation, and it is allowed with lines uncounted.
+ */
+describe('CycleCountDetail: the whole-count numbers', () => {
+  const bigSummary = {
+    total: 142,
+    counted: 68,
+    varianceCount: 3,
+    netDelta: -4,
+  } as CycleCountSummary;
+
+  it('prints the four numbers from the whole-count summary, never from the page of lines', () => {
+    render(
+      <CycleCountDetail {...baseProps} summary={bigSummary} total={142} canAdjust role="staff" />,
+    );
+    expect(screen.getByTestId('count-stat-in-scope')).toHaveTextContent('Items in scope142');
+    expect(screen.getByTestId('count-stat-counted')).toHaveTextContent('Counted68');
+    expect(screen.getByTestId('count-stat-uncounted')).toHaveTextContent('Uncounted74');
+    expect(screen.getByTestId('count-stat-net-variance')).toHaveTextContent('Net variance-4');
+    expect(screen.getByText('68 of 142 counted · 3 with variance')).toBeInTheDocument();
+  });
+
+  it('signs a positive net variance', () => {
+    render(
+      <CycleCountDetail
+        {...baseProps}
+        summary={{ ...bigSummary, netDelta: 5 }}
+        total={142}
+        canAdjust
+        role="staff"
+      />,
+    );
+    expect(screen.getByTestId('count-stat-net-variance')).toHaveTextContent('Net variance+5');
+  });
+});
+
+describe('CycleCountDetail: line search and filters stay in the URL', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('All / Uncounted / Variance say which is chosen and push ?filter= back to page 1', () => {
+    render(<CycleCountDetail {...baseProps} page={2} canAdjust role="staff" />);
+    const filters = screen.getByRole('group', { name: 'Filter lines' });
+    expect(within(filters).getByRole('button', { name: 'All' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(within(filters).getByRole('button', { name: 'Variance' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+    fireEvent.click(within(filters).getByRole('button', { name: 'Variance' }));
+    expect(router.push).toHaveBeenCalledWith('/dashboard/cycle-counts/cc-1?filter=variance');
+  });
+
+  it('pressing the filter already chosen does not navigate', () => {
+    render(<CycleCountDetail {...baseProps} filter="uncounted" canAdjust role="staff" />);
+    const filters = screen.getByRole('group', { name: 'Filter lines' });
+    fireEvent.click(within(filters).getByRole('button', { name: 'Uncounted' }));
+    expect(router.push).not.toHaveBeenCalled();
+  });
+});
+
+describe('CycleCountDetail: Review & post', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('cannot be opened before a single line is counted', () => {
+    render(
+      <CycleCountDetail
+        {...baseProps}
+        summary={{ total: 2, counted: 0, varianceCount: 0, netDelta: 0 } as CycleCountSummary}
+        canAdjust
+        canAssign
+        role="manager"
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Review & post' })).toBeDisabled();
+  });
+
+  it('confirms the adjustments, warns about uncounted lines, and posts with them uncounted', async () => {
+    vi.mocked(postCycleCountAction).mockResolvedValue({ ok: true } as never);
+    render(<CycleCountDetail {...baseProps} canAdjust canAssign role="manager" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review & post' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Post this count?' });
+    expect(dialog).toHaveTextContent(
+      'This will post 1 adjustment (net -1 units). Each line moves stock by counted minus the system quantity at the time it was counted; stock that moved after a line was counted is kept.',
+    );
+    expect(dialog).toHaveTextContent("1 item weren't counted — they'll be left unchanged.");
+    expect(dialog).toHaveTextContent('This is irreversible');
+    // Nothing is posted by opening the review.
+    expect(postCycleCountAction).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Post adjustments' }));
+    await waitFor(() => {
+      expect(postCycleCountAction).toHaveBeenCalledWith('cc-1');
+    });
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith('Cycle count posted. 1 adjustment applied.');
+    });
+    expect(router.refresh).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Post this count?' })).not.toBeInTheDocument();
+    });
+  });
+
+  it('a refused post keeps the dialog open and says why inside it, as well as in the toast', async () => {
+    const message = 'A line was counted by a newer count. Clear and recount that line.';
+    vi.mocked(postCycleCountAction).mockResolvedValue({
+      ok: false,
+      error: { code: 'conflict', message },
+    } as never);
+    render(<CycleCountDetail {...baseProps} canAdjust canAssign role="manager" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review & post' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Post this count?' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Post adjustments' }));
+
+    await waitFor(() => {
+      expect(within(dialog).getByRole('alert')).toHaveTextContent(message);
+    });
+    expect(toast.error).toHaveBeenCalledWith(message);
+    expect(screen.getByRole('dialog', { name: 'Post this count?' })).toBeInTheDocument();
+  });
+
+  it('a refused cancel keeps the confirmation open and says why inside it', async () => {
+    const message = 'Only a manager can cancel this count.';
+    vi.mocked(cancelCycleCountAction).mockResolvedValue({
+      ok: false,
+      error: { code: 'forbidden', message },
+    } as never);
+    render(<CycleCountDetail {...baseProps} canAdjust canAssign role="manager" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel count' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Cancel this cycle count?' });
+    expect(within(dialog).getByRole('button', { name: 'Keep counting' })).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel count' }));
+
+    await waitFor(() => {
+      expect(within(dialog).getByRole('alert')).toHaveTextContent(message);
+    });
+    expect(toast.error).toHaveBeenCalledWith(message);
   });
 });

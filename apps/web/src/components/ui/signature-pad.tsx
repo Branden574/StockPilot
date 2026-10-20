@@ -19,7 +19,8 @@ interface Point {
 }
 
 interface SignaturePadProps {
-  /** Optional className passed to the outer wrapper for layout overrides. */
+  /** Optional className passed to the outer wrapper (the pad and its Clear
+   *  row) for layout overrides. */
   className?: string;
   /** Fires the first time the user draws something (so parents can dismiss hints). */
   onChange?: (isEmpty: boolean) => void;
@@ -33,6 +34,11 @@ const STROKE_WIDTH = 2;
 // turn the captured signature into a near-invisible stroke on a too-
 // dark or too-light background when re-rendered in the PDF.
 const PAD_BACKGROUND = '#fafaf7';
+// "Sign here" is drawn ON the pad, on that fixed light canvas in both themes,
+// so its colour is fixed too: the light theme's ink-3 (#5a5d56, 6.3:1 on the
+// canvas). The theme's muted token turned it into light grey (2.5:1) in dark
+// mode. Clear sits under the pad on the theme card, so it takes theme colours.
+export const PAD_INK_QUIET = '#5a5d56';
 
 /**
  * Vanilla-canvas signature pad — no dependency. Built for warehouse-loading-
@@ -157,17 +163,14 @@ export const SignaturePad = React.forwardRef<SignaturePadHandle, SignaturePadPro
 
     // ── Pointer event handlers ───────────────────────────────────────────
 
-    const pointFromEvent = React.useCallback(
-      (e: React.PointerEvent<HTMLCanvasElement>): Point => {
-        const canvas = canvasRef.current!;
-        const rect = canvas.getBoundingClientRect();
-        return {
-          x: e.clientX - rect.left,
-          y: e.clientY - rect.top,
-        };
-      },
-      [],
-    );
+    const pointFromEvent = React.useCallback((e: React.PointerEvent<HTMLCanvasElement>): Point => {
+      const canvas = canvasRef.current!;
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+      };
+    }, []);
 
     const onPointerDown = React.useCallback(
       (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -233,30 +236,33 @@ export const SignaturePad = React.forwardRef<SignaturePadHandle, SignaturePadPro
       [getCtx, pointFromEvent],
     );
 
-    const endStroke = React.useCallback((e?: React.PointerEvent<HTMLCanvasElement>) => {
-      const current = currentStrokeRef.current;
-      if (!current) return;
-      // Draw the final tail of the stroke (the last point isn't otherwise
-      // rendered by the incremental quadratic path above).
-      const ctx = getCtx();
-      if (ctx && current.length >= 2) {
-        const p1 = current[current.length - 2]!;
-        const p2 = current[current.length - 1]!;
-        const mStart = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
-        ctx.beginPath();
-        ctx.moveTo(mStart.x, mStart.y);
-        ctx.lineTo(p2.x, p2.y);
-        ctx.stroke();
-      }
-      currentStrokeRef.current = null;
-      if (e) {
-        try {
-          (e.target as Element).releasePointerCapture?.(e.pointerId);
-        } catch {
-          /* non-fatal */
+    const endStroke = React.useCallback(
+      (e?: React.PointerEvent<HTMLCanvasElement>) => {
+        const current = currentStrokeRef.current;
+        if (!current) return;
+        // Draw the final tail of the stroke (the last point isn't otherwise
+        // rendered by the incremental quadratic path above).
+        const ctx = getCtx();
+        if (ctx && current.length >= 2) {
+          const p1 = current[current.length - 2]!;
+          const p2 = current[current.length - 1]!;
+          const mStart = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+          ctx.beginPath();
+          ctx.moveTo(mStart.x, mStart.y);
+          ctx.lineTo(p2.x, p2.y);
+          ctx.stroke();
         }
-      }
-    }, [getCtx]);
+        currentStrokeRef.current = null;
+        if (e) {
+          try {
+            (e.target as Element).releasePointerCapture?.(e.pointerId);
+          } catch {
+            /* non-fatal */
+          }
+        }
+      },
+      [getCtx],
+    );
 
     const onPointerUp = React.useCallback(
       (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -286,9 +292,7 @@ export const SignaturePad = React.forwardRef<SignaturePadHandle, SignaturePadPro
       ro.observe(container);
       // Also resize on devicePixelRatio changes — happens when a window
       // moves between monitors with different scaling.
-      const dprQuery = window.matchMedia(
-        `(resolution: ${window.devicePixelRatio || 1}dppx)`,
-      );
+      const dprQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
       const onDprChange = () => resize();
       try {
         dprQuery.addEventListener('change', onDprChange);
@@ -329,47 +333,60 @@ export const SignaturePad = React.forwardRef<SignaturePadHandle, SignaturePadPro
 
     return (
       <div
-        ref={containerRef}
-        className={[
-          'relative w-full select-none',
-          'aspect-[3/1]',
-          'rounded-xl',
-          'border border-dashed border-[var(--ed-line-strong)]',
-          className ?? '',
-        ]
-          .filter(Boolean)
-          .join(' ')}
-        style={{ backgroundColor: PAD_BACKGROUND }}
+        data-slot="signature-pad"
+        className={['w-full', className ?? ''].filter(Boolean).join(' ')}
       >
-        {/*
-          The hint sits absolutely behind the canvas. Hidden as soon as
-          the user starts drawing, restored on clear.
-        */}
-        {hintVisible ? (
-          <div className="pointer-events-none absolute inset-0 flex items-end justify-center pb-3">
-            <span className="text-muted-foreground text-xs font-medium uppercase tracking-[0.12em]">
-              Sign here
-            </span>
-          </div>
-        ) : null}
-        <canvas
-          ref={canvasRef}
-          className="block h-full w-full touch-none rounded-xl"
-          style={{ touchAction: 'none' }}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerCancel={onPointerCancel}
-          aria-label="Signature pad"
-          role="img"
-        />
-        <button
-          type="button"
-          onClick={clear}
-          className="text-muted-foreground hover:text-foreground absolute right-3 top-2 text-xs font-medium underline-offset-2 hover:underline"
+        <div
+          ref={containerRef}
+          data-slot="signature-pad-box"
+          className={[
+            'relative w-full select-none',
+            'aspect-[3/1]',
+            'rounded-lg',
+            'border-line-strong border border-dashed',
+          ].join(' ')}
+          style={{ backgroundColor: PAD_BACKGROUND }}
         >
-          Clear
-        </button>
+          {/*
+            The hint sits absolutely behind the canvas. Hidden as soon as
+            the user starts drawing, restored on clear.
+          */}
+          {hintVisible ? (
+            <div className="pointer-events-none absolute inset-0 flex items-end justify-center pb-3">
+              <span
+                data-slot="signature-pad-hint"
+                className="text-[11px] font-medium uppercase tracking-[0.1em]"
+                style={{ color: PAD_INK_QUIET }}
+              >
+                Sign here
+              </span>
+            </div>
+          ) : null}
+          <canvas
+            ref={canvasRef}
+            className="block h-full w-full touch-none rounded-lg"
+            style={{ touchAction: 'none' }}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            onPointerCancel={onPointerCancel}
+            aria-label="Signature pad"
+            role="img"
+          />
+        </div>
+        {/* Clear sits in its own row under the pad, never on it: on a phone
+            the pad is about 105 px tall, and a 44 px button over its corner
+            caught strokes that started there and wiped the signature on a
+            tap. 44 px target on phones (one hand at a dock), 32 px from sm. */}
+        <div className="mt-1 flex justify-end">
+          <button
+            type="button"
+            onClick={clear}
+            className="text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex min-h-11 min-w-11 items-center justify-center rounded-md px-3 text-xs font-medium underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 sm:min-h-8"
+          >
+            Clear
+          </button>
+        </div>
       </div>
     );
   },

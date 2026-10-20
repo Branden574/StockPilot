@@ -1,13 +1,4 @@
 import { Suspense } from 'react';
-import {
-  AlertTriangle,
-  ClipboardCheck,
-  ClipboardList,
-  Download,
-  PenLine,
-  Plus,
-  Zap,
-} from 'lucide-react';
 import Link from 'next/link';
 
 import {
@@ -16,12 +7,24 @@ import {
   toValueSeries,
 } from '@/components/dashboard/charts/widget-data';
 import {
+  OVERVIEW_PAGE_CLASS,
+  OverviewBodySkeleton,
+} from '@/components/dashboard/overview-skeleton';
+import {
   renderDashboardWidgets,
   type AttentionItem,
   type DashboardWidgetProps,
 } from '@/components/dashboard/widgets';
+import { percentDelta, worseWhenUpDelta } from '@/components/dashboard/widgets/deltas';
+import { PageHeader } from '@/components/patterns/page-header';
 import { Button } from '@/components/ui/button';
-import { can, DASHBOARD_WIDGETS, isManagerOrAbove, resolveDashboardWidgets, type DashboardLayout } from '@stockpilot/core';
+import {
+  can,
+  DASHBOARD_WIDGETS,
+  isManagerOrAbove,
+  resolveDashboardWidgets,
+  type DashboardLayout,
+} from '@stockpilot/core';
 import {
   getDashboardActions,
   getDashboardHistory,
@@ -36,6 +39,7 @@ import { OrderRequestsService } from '@/server/services/order-requests';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
 import { ReportsService } from '@/server/services/reports';
 import { requireOrgContext } from '@/lib/auth/session';
+import { movementTypeLabel } from '@/lib/movements/movement-type';
 import { ORDERS_AWAITING_SIGNATURE_HREF } from '@/lib/orders/export';
 import { orSessionEnded } from '@/lib/auth/session-ended';
 import {
@@ -71,11 +75,7 @@ function buildGreeting(timezone: string | null): { word: string; dateLabel: stri
   const now = new Date();
   const hour = Number(safeFormat({ hour: 'numeric', hour12: false }).format(now));
   const word =
-    hour >= 5 && hour <= 11
-      ? 'morning'
-      : hour >= 12 && hour <= 17
-        ? 'afternoon'
-        : 'evening';
+    hour >= 5 && hour <= 11 ? 'morning' : hour >= 12 && hour <= 17 ? 'afternoon' : 'evening';
   const dateLabel = safeFormat({
     weekday: 'long',
     month: 'long',
@@ -108,11 +108,7 @@ export default async function DashboardHome() {
   const [orgRow, activeWhNameRes] = await Promise.all([
     getOrgRowForRequest(ctx.organizationId),
     warehouseFilter
-      ? supabaseShell
-          .from('warehouses')
-          .select('name')
-          .eq('id', warehouseFilter)
-          .maybeSingle()
+      ? supabaseShell.from('warehouses').select('name').eq('id', warehouseFilter).maybeSingle()
       : Promise.resolve({ data: null }),
   ]);
   const activeWarehouseName = (activeWhNameRes.data?.name as string | undefined) ?? null;
@@ -126,96 +122,66 @@ export default async function DashboardHome() {
   const firstName = ctx.fullName?.split(' ')[0]?.trim() || 'there';
 
   return (
-    <div className="mx-auto w-full max-w-[1760px] px-5 pb-20 pt-6 sm:px-7 2xl:px-9">
-      {/* ──────────────── Morning briefing — greeting + hero attention ─────────
+    <div className={OVERVIEW_PAGE_CLASS}>
+      {/* ──────────────── Morning briefing — greeting + actions ─────────────
        *
-       * The hero section is the LEAD. Everything below it (stat row, charts,
-       * activity feed) is context. The greeting + briefing sentence answer
-       * "who is at the keyboard and what should they look at first"; the
-       * attention list answers "where should they click right now".
+       * The greeting answers "who is at the keyboard"; the attention card
+       * below answers "where should they click right now". Everything else
+       * (stat strips, charts, activity feed) is context.
        *
-       * The greeting + action buttons paint immediately from the request-
-       * cached auth context; the data-driven body (checklist, attention hero,
-       * stat row, charts, activity feed) streams in via <Suspense> below.
+       * The header paints immediately from the request-cached auth context;
+       * the data-driven body (checklist, attention card, stats, charts,
+       * activity feed) streams in via <Suspense> below. It is the reference's
+       * greeting header (DESIGN-SPEC 6.1): the date eyebrow, the 32 px
+       * greeting, then Tour, Export and New item as secondary buttons and
+       * Receive stock as the page's one ink button, each behind its own gate.
        */}
-      <section className="mb-6">
-        <div className="flex flex-col gap-4 pb-5 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <p className="mb-1.5 text-[11px] font-medium uppercase tracking-[0.1em] text-[var(--ed-ink-4)]">
-              {today}
-              {activeWarehouseName && (
-                <>
-                  {' · '}
-                  <span className="text-foreground">
-                    filtered to {activeWarehouseName}
-                  </span>
-                </>
-              )}
-            </p>
-            <h1 className="font-display text-[34px] font-medium leading-tight tracking-[-0.025em]">
-              Good {greetingWord}, {firstName}.
-            </h1>
-            {/* Warehouse-scoped users (staff/viewer): name the scope so the
-                narrowed dashboard reads as intentional. Null for managers+.
-                Request-cached from the layout render — no extra queries. */}
-            <ScopedWarehouseNotice className="mt-1.5 text-xs text-muted-foreground" />
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <PageTour tour={DASHBOARD_TOUR} />
-            <Button variant="outline" size="sm" asChild>
-              <Link href="/dashboard/reports">
-                <Download className="h-3 w-3" /> Export
-              </Link>
+      <PageHeader
+        variant="greeting"
+        eyebrow={
+          <>
+            {today}
+            {activeWarehouseName && (
+              <>
+                {' · '}
+                <span className="text-foreground">filtered to {activeWarehouseName}</span>
+              </>
+            )}
+          </>
+        }
+        title={`Good ${greetingWord}, ${firstName}.`}
+        tour={<PageTour tour={DASHBOARD_TOUR} />}
+        actions={
+          <>
+            <Button variant="outline" asChild>
+              <Link href="/dashboard/reports">Export</Link>
             </Button>
             {can(ctx, 'items:create') && (
-              <Button variant="outline" size="sm" asChild>
-                <Link href="/dashboard/inventory/new">
-                  <Plus className="h-3 w-3" /> New item
-                </Link>
+              <Button variant="outline" asChild>
+                <Link href="/dashboard/inventory/new">New item</Link>
               </Button>
             )}
-            {can(ctx, 'purchase_orders:manage') && (
-              <Button size="sm" asChild>
-                <Link href="/dashboard/purchase-orders/new">
-                  <Zap className="h-3 w-3" /> Receive stock
-                </Link>
-              </Button>
-            )}
-          </div>
-        </div>
-      </section>
+          </>
+        }
+        commitAction={
+          can(ctx, 'purchase_orders:manage') ? (
+            <Button asChild>
+              <Link href="/dashboard/purchase-orders/new">Receive stock</Link>
+            </Button>
+          ) : null
+        }
+      >
+        {/* Warehouse-scoped users (staff/viewer): name the scope so the
+            narrowed dashboard reads as intentional. Null for managers+.
+            Request-cached from the layout render — no extra queries. */}
+        <ScopedWarehouseNotice className="text-muted-foreground mt-1.5 text-[12.5px]" />
+      </PageHeader>
 
       {ctx.organizationId === DEMO_ORG_ID && <DemoScenarios />}
 
-      <Suspense fallback={<DashboardBodySkeleton />}>
+      <Suspense fallback={<OverviewBodySkeleton />}>
         <DashboardBody ctx={ctx} warehouseFilter={warehouseFilter} />
       </Suspense>
-    </div>
-  );
-}
-
-/**
- * Lightweight fallback for the streamed dashboard body. Mirrors the rough
- * shape of the data sections (stat row + chart row) so the layout doesn't
- * jump when the real content streams in. Chrome above (greeting + actions)
- * has already painted by the time this shows.
- */
-function DashboardBodySkeleton() {
-  return (
-    <div className="animate-pulse">
-      <div className="mb-4 grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="bg-card h-[120px] rounded-lg border border-border" />
-        ))}
-      </div>
-      <div className="mb-4 grid grid-cols-1 gap-3.5 lg:grid-cols-12">
-        <div className="bg-card h-[360px] rounded-lg border border-border lg:col-span-9" />
-        <div className="bg-card h-[360px] rounded-lg border border-border lg:col-span-3" />
-      </div>
-      <div className="grid grid-cols-1 gap-3.5 lg:grid-cols-12">
-        <div className="bg-card h-[300px] rounded-lg border border-border lg:col-span-7" />
-        <div className="bg-card h-[300px] rounded-lg border border-border lg:col-span-5" />
-      </div>
     </div>
   );
 }
@@ -403,8 +369,10 @@ async function DashboardBody({
   // breakdownRows that lived here. Both are bounded by stock_movements
   // count over 30d, so query cost is small.
   const barValues = metrics.dailyCounts;
+  // Each type in the Movements page's words ("Receive PO", "Bundle assembly"),
+  // never the raw code with a capital ("Receive_po") (FX5, DESIGN-SPEC 6.10).
   const breakdownRows = metrics.byType.slice(0, 5).map((b) => ({
-    label: b.type.replace(/^./, (s) => s.toUpperCase()),
+    label: movementTypeLabel(b.type),
     share: b.share,
     val: b.count,
   }));
@@ -438,57 +406,14 @@ async function DashboardBody({
   // hardwired to recentMovements.length and capped at 6.
   const movements7d = metrics.dailyCounts.slice(-7).reduce((a, b) => a + b, 0);
 
-  // Compute delta + direction for a tile by comparing today (index 29) to
-  // 30 days ago (index 0). Returns a percentage label for value-y series
-  // (currency, big counts) and a raw delta label for low/out.
-  //
-  // When `head` is at or near zero (fresh org just loading inventory, or
-  // floating-point dust from the reverse-walk math), the percentage
-  // explodes to astronomical garbage. Treat that as "new" instead of
-  // dividing into a tiny denominator. The 1.0 threshold absorbs the
-  // common case of a near-zero starting value while still treating
-  // "1 unit → 100 units" as a real +9900% growth signal.
-  const NEAR_ZERO = 1.0;
-  // Cap the displayed percentage so even legitimate huge growths render
-  // as a readable token instead of a 17-digit number.
-  const MAX_DISPLAY_PCT = 999;
-  const deltaPct = (series: number[]): { label: string; direction: 'up' | 'down' | 'flat' } => {
-    const head = series[0] ?? 0;
-    const tail = series.at(-1) ?? 0;
-    if (Math.abs(head) < NEAR_ZERO && Math.abs(tail) < NEAR_ZERO) {
-      return { label: '—', direction: 'flat' };
-    }
-    if (Math.abs(head) < NEAR_ZERO) {
-      return { label: 'new', direction: 'up' };
-    }
-    const pct = ((tail - head) / head) * 100;
-    if (Math.abs(pct) < 0.05) return { label: '—', direction: 'flat' };
-    if (Math.abs(pct) > MAX_DISPLAY_PCT) {
-      return {
-        label: `${pct > 0 ? '+' : '−'}${MAX_DISPLAY_PCT}%+`,
-        direction: pct > 0 ? 'up' : 'down',
-      };
-    }
-    const rounded = pct.toFixed(1);
-    return {
-      label: `${pct > 0 ? '+' : ''}${rounded}%`,
-      direction: pct > 0 ? 'up' : 'down',
-    };
-  };
-  const deltaRaw = (series: number[]): { label: string; direction: 'up' | 'down' | 'flat' } => {
-    const head = series[0] ?? 0;
-    const tail = series.at(-1) ?? 0;
-    const diff = tail - head;
-    if (diff === 0) return { label: '—', direction: 'flat' };
-    return {
-      label: `${diff > 0 ? '+' : ''}${diff}`,
-      // For low/out, MORE is bad — invert so up=red feels right.
-      direction: diff > 0 ? 'down' : 'up',
-    };
-  };
-  const inventoryValueDelta = deltaPct(inventoryValueSeries);
-  const itemCountDelta = deltaPct(itemCountSeries);
-  const lowOutDelta = deltaRaw(lowOutSeries);
+  // Delta + direction for a tile: today (index 29) against 30 days ago
+  // (index 0). A percentage for value-y series (currency, big counts) and a
+  // raw, inverted delta for low/out, where more is worse. The rules (near-zero
+  // starts read "new", the 999%+ cap) live in widgets/deltas.ts, shared with
+  // the value card's island so both say the same thing for the same line.
+  const inventoryValueDelta = percentDelta(inventoryValueSeries);
+  const itemCountDelta = percentDelta(itemCountSeries);
+  const lowOutDelta = worseWhenUpDelta(lowOutSeries);
 
   const attentionStockCount = summary.lowStockCount + summary.outOfStockCount;
   const healthyCount = Math.max(summary.itemCount - attentionStockCount, 0);
@@ -496,7 +421,7 @@ async function DashboardBody({
     summary.itemCount > 0 ? Math.round((healthyCount / summary.itemCount) * 100) : 100;
   const valuePerSku = summary.itemCount > 0 ? summary.inventoryValue / summary.itemCount : 0;
 
-  // Hero "needs attention" list — five categories, fixed priority order.
+  // "Needs attention" list — five categories, fixed priority order.
   // Each surfaced only when its count is > 0. Rank ascending = most urgent
   // first (stock runs out before paperwork goes stale). When ALL categories
   // are zero we render the "all clear" card instead of a misleading list.
@@ -504,7 +429,6 @@ async function DashboardBody({
   if (attentionStockCount > 0) {
     attentionItems.push({
       id: 'low-stock',
-      icon: AlertTriangle,
       title: `${attentionStockCount} item${attentionStockCount === 1 ? '' : 's'} at or below reorder point`,
       detail:
         summary.outOfStockCount > 0
@@ -518,7 +442,6 @@ async function DashboardBody({
   if (poOverdueCount > 0) {
     attentionItems.push({
       id: 'po-overdue',
-      icon: ClipboardList,
       title: `${poOverdueCount} overdue purchase order${poOverdueCount === 1 ? '' : 's'}`,
       detail: 'Expected receipt date has passed. Chase your suppliers or update the ETA.',
       href: '/dashboard/purchase-orders?status=overdue',
@@ -529,7 +452,6 @@ async function DashboardBody({
   if (isManagerPlus && pendingApprovals > 0) {
     attentionItems.push({
       id: 'order-approvals',
-      icon: ClipboardCheck,
       title: `${pendingApprovals} order request${pendingApprovals === 1 ? '' : 's'} awaiting your approval`,
       detail: 'Requests are blocked until a manager moves them forward.',
       href: '/dashboard/orders?status=pending_approval',
@@ -540,7 +462,6 @@ async function DashboardBody({
   if (cycleInProgress > 0) {
     attentionItems.push({
       id: 'cycle-counts',
-      icon: ClipboardCheck,
       title: `${cycleInProgress} cycle count${cycleInProgress === 1 ? '' : 's'} in progress`,
       detail: 'Lines are still open. Post counts to reconcile, or cancel if abandoned.',
       href: '/dashboard/cycle-counts',
@@ -551,7 +472,6 @@ async function DashboardBody({
   if (awaitingSignature > 0) {
     attentionItems.push({
       id: 'orders-awaiting-signature',
-      icon: PenLine,
       title: `${awaitingSignature} order${awaitingSignature === 1 ? '' : 's'} waiting for signature`,
       detail:
         'Staged for pickup or out for delivery. Confirm the QR-scan signature on arrival or hand-off.',
@@ -630,7 +550,7 @@ async function DashboardBody({
       {renderDashboardWidgets(widgetIds, widgetProps)}
       {/* Performance marker: mounts WITH the widgets, inside the Suspense
           boundary, once the data fan-out above has resolved. The greeting
-          shell and DashboardBodySkeleton never render it. */}
+          shell and OverviewBodySkeleton never render it. */}
       <PerfUseful />
     </>
   );

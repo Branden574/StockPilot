@@ -6,6 +6,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -304,7 +305,7 @@ export function ScheduleEventForm({
       </div>
 
       {conflicts.length > 0 ? (
-        <div className="border-amber-500/50 bg-amber-500/10 text-amber-800 dark:text-amber-200 rounded-md border px-3 py-2 text-[11.5px]">
+        <div className="border-warning/40 bg-warning-wash text-warning rounded-lg border px-3 py-2.5 text-[12.5px] leading-[18px]">
           <p className="font-medium">
             Heads up — {conflicts.length} overlapping event
             {conflicts.length === 1 ? '' : 's'} in this warehouse:
@@ -313,7 +314,8 @@ export function ScheduleEventForm({
             {conflicts.slice(0, 5).map((c) => (
               <li key={c.id}>
                 <span className="font-medium">{c.title}</span>{' '}
-                <span className="opacity-70">
+                {/* Full tone: faded on the warning wash it read under 4.5:1. */}
+                <span>
                   ({formatOrgDateTime(c.startsAt, {
                     month: 'short',
                     day: 'numeric',
@@ -324,11 +326,9 @@ export function ScheduleEventForm({
                 </span>
               </li>
             ))}
-            {conflicts.length > 5 ? (
-              <li className="opacity-70">+{conflicts.length - 5} more</li>
-            ) : null}
+            {conflicts.length > 5 ? <li>+{conflicts.length - 5} more</li> : null}
           </ul>
-          <p className="mt-1 opacity-80">
+          <p className="mt-1">
             You can still save — overlaps are sometimes intentional.
           </p>
         </div>
@@ -346,15 +346,9 @@ export function ScheduleEventForm({
         clone the event manually (right now we don't expose a "duplicate"
         action; it's on the polish list).
       */}
-      <label className="flex items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          checked={allDay}
-          onChange={(e) => setAllDay(e.target.checked)}
-          className="border-input h-3.5 w-3.5 rounded-[3px] border"
-        />
+      <Checkbox checked={allDay} onCheckedChange={setAllDay}>
         All day
-      </label>
+      </Checkbox>
 
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
@@ -367,11 +361,11 @@ export function ScheduleEventForm({
           />
         </div>
         <div className="space-y-1.5">
-          <Label>
+          <Label htmlFor="warehouse">
             Warehouse <span className="text-destructive">*</span>
           </Label>
           <Select value={warehouseId} onValueChange={setWarehouseId}>
-            <SelectTrigger>
+            <SelectTrigger id="warehouse">
               <SelectValue placeholder="Pick a warehouse" />
             </SelectTrigger>
             <SelectContent>
@@ -382,7 +376,7 @@ export function ScheduleEventForm({
               ))}
             </SelectContent>
           </Select>
-          <p className="text-muted-foreground text-[11px]">
+          <p className="text-muted-foreground text-[12px]">
             Only staff assigned to this warehouse will see the event.
           </p>
         </div>
@@ -399,14 +393,14 @@ export function ScheduleEventForm({
           />
         </div>
         <div className="space-y-1.5">
-          <Label>Status</Label>
+          <Label htmlFor="status">Status</Label>
           <Select
             value={status}
             onValueChange={(v) =>
               setStatus(v as 'scheduled' | 'in_progress' | 'completed' | 'cancelled')
             }
           >
-            <SelectTrigger>
+            <SelectTrigger id="status">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -420,17 +414,19 @@ export function ScheduleEventForm({
         </div>
       </div>
 
-      <div className="border-border space-y-3 rounded-lg border bg-card/50 p-4">
+      <div className="border-border bg-sunk space-y-3 rounded-lg border p-4">
         <div>
-          <Label className="text-sm font-medium">Linked bundle (optional)</Label>
-          <p className="text-muted-foreground mt-0.5 text-[11.5px]">
+          <p className="text-foreground text-[13px] font-medium leading-none">
+            Linked bundle (optional)
+          </p>
+          <p className="text-muted-foreground mt-1.5 text-[12px]">
             When this event is marked complete, the bundle is automatically
             distributed at the selected warehouse. Leave blank to skip.
           </p>
         </div>
 
         {bundleLocked && (
-          <p className="text-warning rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-[11.5px]">
+          <p className="text-warning border-warning/40 bg-warning-wash rounded-lg border px-3 py-2 text-[12px]">
             This event already triggered a distribution. Editing the bundle
             here won't re-distribute or undo the original — adjust on the
             bundle page if needed.
@@ -439,13 +435,13 @@ export function ScheduleEventForm({
 
         <div className="grid gap-3 sm:grid-cols-3">
           <div className="space-y-1.5 sm:col-span-2">
-            <Label>Bundle</Label>
+            <Label htmlFor="bundle">Bundle</Label>
             <Select
               value={bundleId || '__none'}
               onValueChange={(v) => setBundleId(v === '__none' ? '' : v)}
               disabled={bundleLocked}
             >
-              <SelectTrigger>
+              <SelectTrigger id="bundle">
                 <SelectValue placeholder="None" />
               </SelectTrigger>
               <SelectContent>
@@ -460,8 +456,9 @@ export function ScheduleEventForm({
             </Select>
           </div>
           <div className="space-y-1.5">
-            <Label>Quantity</Label>
+            <Label htmlFor="bundle-quantity">Quantity</Label>
             <Input
+              id="bundle-quantity"
               type="number"
               min={1}
               step="any"
@@ -474,13 +471,13 @@ export function ScheduleEventForm({
         </div>
 
         <div className="space-y-1.5">
-          <Label>Distribute from warehouse</Label>
+          <Label htmlFor="bundle-warehouse">Distribute from warehouse</Label>
           <Select
             value={bundleWarehouseId || '__none'}
             onValueChange={(v) => setBundleWarehouseId(v === '__none' ? '' : v)}
             disabled={bundleLocked || !bundleId}
           >
-            <SelectTrigger>
+            <SelectTrigger id="bundle-warehouse">
               <SelectValue placeholder="Pick a warehouse" />
             </SelectTrigger>
             <SelectContent>
@@ -506,7 +503,7 @@ export function ScheduleEventForm({
         />
       </div>
 
-      <div className="flex items-center justify-between">
+      <div className="border-border -mx-[18px] -mb-[18px] flex items-center justify-between gap-3 border-t px-[18px] py-3.5">
         {isEdit ? (
           <Button
             type="button"

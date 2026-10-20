@@ -1,6 +1,7 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { ArrowLeft } from 'lucide-react-native';
+import { StatusBar } from 'expo-status-bar';
+import { ArrowLeft, Camera, Check } from 'lucide-react-native';
 import * as React from 'react';
 import {
   ActivityIndicator,
@@ -13,11 +14,12 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { dbPermissionRefusedCopy } from '@stockpilot/core';
 
 import { PoAttachments } from '@/components/po-attachments';
+import { Button } from '@/components/ui/button';
 import { IconChip } from '@/components/ui/row';
 import { api, ApiError } from '@/lib/api';
 import { showWriteCtaForRole } from '@/lib/cta-gating';
@@ -48,7 +50,17 @@ import {
   receiptNotesForPost,
   varianceCaption,
 } from '@/lib/po-receive';
-import { radius, space, theme } from '@/lib/theme';
+import {
+  FONT,
+  RADIUS,
+  SPACE,
+  TYPE_CEILING,
+  capTo,
+  palette,
+  type Palette,
+  type ThemeMode,
+} from '@/lib/theme';
+import { useTheme } from '@/lib/use-theme';
 
 interface PoLine {
   id: string;
@@ -94,6 +106,9 @@ interface ReceiptHistoryItem {
 export default function PoReceiveScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
+  const { c, mode } = useTheme();
+  const styles = PO_STYLES[mode];
+  const insets = useSafeAreaInsets();
   // The root stack shows no header, so this screen carries its own Back (the
   // other card screens' chip). A draft opened from the order's "Draft PO for
   // what is short" result is read-only here, and was left only by the edge
@@ -141,9 +156,14 @@ export default function PoReceiveScreen() {
   // after a successful post (the screen navigates away on success anyway).
   const idemKeyRef = React.useRef<string | null>(null);
   const [scannerOpen, setScannerOpen] = React.useState(false);
+  // The scanner takes ONE read per opening. The camera reports a code on every
+  // frame it stays in view, and the scanner takes a moment to slide away, so
+  // the reports after the first are dropped here: before, an unmatched code
+  // stacked a "Not on this PO" alert for each of them. Cleared each time the
+  // scanner opens.
+  const scanTakenRef = React.useRef(false);
   const [permission, requestPermission] = useCameraPermissions();
   const [highlightLineId, setHighlightLineId] = React.useState<string | null>(null);
-
 
   const enabledModules = useEnabledModules();
   const sportsEnabled = enabledModules.has('sports');
@@ -324,20 +344,34 @@ export default function PoReceiveScreen() {
       return;
     }
 
-    if (po) {
-      const r = po as Record<string, unknown>;
-      const supplier = r.supplier as { name: string } | { name: string }[] | null;
-      const dest = r.destination as { warehouse_id: string | null } | { warehouse_id: string | null }[] | null;
-      const supplierObj = Array.isArray(supplier) ? supplier[0] : supplier;
-      const destObj = Array.isArray(dest) ? dest[0] : dest;
-      setHeader({
-        id: r.id as string,
-        po_number: r.po_number as string,
-        status: r.status as string,
-        supplier_name: supplierObj?.name ?? null,
-        destination_warehouse_id: destObj?.warehouse_id ?? null,
-      });
+    // No purchase order with this id in the workspace on screen (another
+    // workspace's, a deleted one, or one this member cannot read): the screen
+    // says so instead of an empty receiving form. It used to keep an earlier
+    // read's header (a workspace switch) or show "PO · No supplier", the
+    // lines its other read could still see, and a Post receipt that did
+    // nothing when tapped.
+    if (!po) {
+      setHeader(null);
+      setLines([]);
+      setGroups({});
+      setReceipts([]);
+      setLoading(false);
+      return;
     }
+
+    const r = po as Record<string, unknown>;
+    const supplier = r.supplier as { name: string } | { name: string }[] | null;
+    const dest = r.destination as
+      { warehouse_id: string | null } | { warehouse_id: string | null }[] | null;
+    const supplierObj = Array.isArray(supplier) ? supplier[0] : supplier;
+    const destObj = Array.isArray(dest) ? dest[0] : dest;
+    setHeader({
+      id: r.id as string,
+      po_number: r.po_number as string,
+      status: r.status as string,
+      supplier_name: supplierObj?.name ?? null,
+      destination_warehouse_id: destObj?.warehouse_id ?? null,
+    });
 
     type ItemEmbed = {
       id: string;
@@ -359,9 +393,7 @@ export default function PoReceiveScreen() {
         unit_cost: Number(r.unit_cost) || 0,
         groupId: item?.group_id ?? null,
         variantSize: item?.variant_size ?? null,
-        item: item
-          ? { id: item.id, sku: item.sku, name: item.name, barcode: item.barcode }
-          : null,
+        item: item ? { id: item.id, sku: item.sku, name: item.name, barcode: item.barcode } : null,
       };
     });
     setLines(flatLines);
@@ -419,8 +451,7 @@ export default function PoReceiveScreen() {
   // the footer's Post receipt, the Notes that go with a receipt and the
   // attachment hint about posting one all follow it (a fully received PO
   // showed a Notes field whose note could never be sent; review 2026-10-05).
-  const receivable =
-    !readOnly && lines.some((l) => l.quantity_ordered - l.quantity_received > 0);
+  const receivable = !readOnly && lines.some((l) => l.quantity_ordered - l.quantity_received > 0);
   const blocks = React.useMemo(
     () => buildPoBlocks(lines, readOnly ? {} : groups),
     [lines, groups, readOnly],
@@ -447,15 +478,18 @@ export default function PoReceiveScreen() {
         return;
       }
     }
+    scanTakenRef.current = false;
     setScannerOpen(true);
   }
 
   function onScanned({ data }: { data: string }) {
     const code = data.trim();
     if (!code) return;
-    const match = lines.find(
-      (l) => l.item?.barcode === code || l.item?.sku === code,
-    );
+    // One read per opening (scanTakenRef): the later reports of the same
+    // opening never reach a line or an alert.
+    if (scanTakenRef.current) return;
+    scanTakenRef.current = true;
+    const match = lines.find((l) => l.item?.barcode === code || l.item?.sku === code);
     setScannerOpen(false);
     if (!match) {
       Alert.alert('Not on this PO', `${code} doesn't match any line.`);
@@ -580,19 +614,16 @@ export default function PoReceiveScreen() {
     // the same digest both clients use, and a key-as-hash cannot recur here.
     let failure: unknown = null;
     try {
-      await api<{ receiptId: string; receiptNumber: string }>(
-        `/api/v1/po/${id}/receipts`,
-        {
-          method: 'POST',
-          body: {
-            warehouseId: header.destination_warehouse_id,
-            idempotencyKey,
-            lines: payloadLines,
-            // The optional note (L21); left out when nothing was typed.
-            notes: receiptNotesForPost(notes),
-          },
+      await api<{ receiptId: string; receiptNumber: string }>(`/api/v1/po/${id}/receipts`, {
+        method: 'POST',
+        body: {
+          warehouseId: header.destination_warehouse_id,
+          idempotencyKey,
+          lines: payloadLines,
+          // The optional note (L21); left out when nothing was typed.
+          notes: receiptNotesForPost(notes),
         },
-      );
+      });
     } catch (e) {
       failure = e;
     }
@@ -622,7 +653,7 @@ export default function PoReceiveScreen() {
       const reason =
         failure instanceof ApiError &&
         typeof (failure.details as { reason?: unknown } | undefined)?.reason === 'string'
-          ? ((failure.details as { reason: string }).reason)
+          ? (failure.details as { reason: string }).reason
           : null;
       const action = mapPostReceiptError({
         message: reason ?? (failure instanceof Error ? failure.message : String(failure)),
@@ -650,8 +681,8 @@ export default function PoReceiveScreen() {
       <Stack.Screen
         options={{
           title: header?.po_number ?? 'PO',
-          headerStyle: { backgroundColor: theme.bg },
-          headerTintColor: theme.text,
+          headerStyle: { backgroundColor: c.paper },
+          headerTintColor: c.ink,
         }}
       />
       {/* Above every state (loading, "Could not load this PO", the PO). */}
@@ -661,45 +692,62 @@ export default function PoReceiveScreen() {
 
       {loading ? (
         <View style={styles.center}>
-          <ActivityIndicator color={theme.primary} />
+          <ActivityIndicator color={c.ink} />
         </View>
       ) : loadError ? (
         <View style={styles.center}>
-          <Text style={styles.errorTitle}>Could not load this PO</Text>
+          <Text style={styles.errorTitle} accessibilityRole="alert">
+            Could not load this PO
+          </Text>
           <Text style={styles.errorBody}>{loadError}</Text>
-          <Pressable
+          <Button
+            variant="outline"
             onPress={() => {
               setLoading(true);
               setLoadError(null);
               void load();
             }}
-            style={({ pressed }) => [styles.scanBtn, pressed && { opacity: 0.7 }]}
           >
-            <Text style={styles.scanBtnText}>Try again</Text>
-          </Pressable>
+            Try again
+          </Button>
+        </View>
+      ) : !header ? (
+        <View style={styles.center}>
+          <Text style={styles.errorBody} accessibilityRole="alert">
+            This PO was not found, or you no longer have access to it.
+          </Text>
         </View>
       ) : (
         <>
           <View style={styles.headerBar}>
-            <View style={{ flex: 1 }}>
+            <View style={{ flex: 1, minWidth: 0 }}>
               <Text style={styles.title}>{header?.po_number ?? 'PO'}</Text>
               <Text style={styles.subtitle}>
-                {header?.supplier_name ?? 'No supplier'} ·{' '}
-                {labelForStatus(header?.status ?? '')}
+                {header?.supplier_name ?? 'No supplier'} · {labelForStatus(header?.status ?? '')}
               </Text>
             </View>
             {readOnly ? null : (
               <Pressable
                 onPress={openScanner}
+                accessibilityRole="button"
                 style={({ pressed }) => [styles.scanBtn, pressed && { opacity: 0.7 }]}
               >
-                <Text style={styles.scanBtnText}>📷 Scan</Text>
+                {/* The camera glyph was an emoji in the words ("📷 Scan"); it
+                    is an icon now, so VoiceOver says "Scan, button". */}
+                <Camera size={16} color={c.ink} strokeWidth={1.75} />
+                <Text style={styles.scanBtnText} numberOfLines={1} maxFontSizeMultiplier={SCAN_CAP}>
+                  Scan
+                </Text>
               </Pressable>
             )}
           </View>
 
+          {/* The focused quantity or note scrolls clear of the keyboard: the
+              decimal pad has no key that puts it away, and a box near the end
+              of a long PO sat under it. */}
           <ScrollView
-            contentContainerStyle={{ padding: space.md, paddingBottom: 140 }}
+            contentContainerStyle={{ padding: SPACE.md, paddingBottom: 140 }}
+            automaticallyAdjustKeyboardInsets
           >
             {reviewOnly ? (
               <View style={styles.partNotice}>
@@ -727,7 +775,7 @@ export default function PoReceiveScreen() {
                   ]}
                 >
                   {retryingPart === 'groups' ? (
-                    <ActivityIndicator color={theme.text} />
+                    <ActivityIndicator color={c.ink} />
                   ) : (
                     <Text style={styles.partRetryText}>Try again</Text>
                   )}
@@ -760,87 +808,89 @@ export default function PoReceiveScreen() {
                   }
                 }
                 return block.lines.map((l) => {
-                const remaining = Math.max(
-                  0,
-                  l.quantity_ordered - l.quantity_received,
-                );
-                const d = draft[l.id] ?? { received: '', rejected: '' };
-                // Variance = what's still outstanding after this receipt.
-                const variance = remaining - (Number(d.received) || 0);
-                const isHighlighted = highlightLineId === l.id;
-                return (
-                  <View
-                    key={l.id}
-                    style={[
-                      styles.lineCard,
-                      isHighlighted && {
-                        borderColor: theme.success,
-                        shadowColor: theme.success,
-                        shadowOpacity: 0.6,
-                        shadowRadius: 8,
-                      },
-                    ]}
-                  >
-                    <Text style={styles.lineName} numberOfLines={2}>
-                      {l.item?.name ?? 'Unknown item'}
-                    </Text>
-                    <Text style={styles.lineMeta}>
-                      {l.item?.sku ?? '—'}
-                      {l.item?.barcode ? ` · ${l.item.barcode}` : ''}
-                    </Text>
-                    <View style={styles.lineMetricsRow}>
-                      <Metric label="Ordered" value={l.quantity_ordered} />
-                      {reviewOnly ? null : (
-                        <>
-                          <Metric label="Already" value={l.quantity_received} />
-                          {readOnly ? null : (
-                            <Metric
-                              label="Variance"
-                              value={variance}
-                              tone={variance < 0 ? 'danger' : 'primary'}
-                              caption={remaining > 0 ? varianceCaption(variance) : undefined}
+                  const remaining = Math.max(0, l.quantity_ordered - l.quantity_received);
+                  const d = draft[l.id] ?? { received: '', rejected: '' };
+                  // Variance = what's still outstanding after this receipt.
+                  const variance = remaining - (Number(d.received) || 0);
+                  const isHighlighted = highlightLineId === l.id;
+                  return (
+                    <View
+                      key={l.id}
+                      style={[styles.lineCard, isHighlighted && styles.lineCardHighlighted]}
+                    >
+                      <Text style={styles.lineName} numberOfLines={2}>
+                        {l.item?.name ?? 'Unknown item'}
+                      </Text>
+                      <Text style={styles.lineMeta}>
+                        {l.item?.sku ?? '—'}
+                        {l.item?.barcode ? ` · ${l.item.barcode}` : ''}
+                      </Text>
+                      <View style={styles.lineMetricsRow}>
+                        <Metric label="Ordered" value={l.quantity_ordered} />
+                        {reviewOnly ? null : (
+                          <>
+                            <Metric label="Already" value={l.quantity_received} />
+                            {readOnly ? null : (
+                              <Metric
+                                label="Variance"
+                                value={variance}
+                                tone={variance < 0 ? 'danger' : 'primary'}
+                                caption={remaining > 0 ? varianceCaption(variance) : undefined}
+                              />
+                            )}
+                          </>
+                        )}
+                      </View>
+                      {reviewOnly ? null : remaining === 0 ? (
+                        <View style={styles.fullyReceivedRow}>
+                          {/* The check mark was a glyph in the words; an icon
+                              now, so VoiceOver reads only the sentence. */}
+                          <Check
+                            size={14}
+                            color={c.accent}
+                            strokeWidth={2}
+                            style={styles.checkIcon}
+                          />
+                          <Text style={styles.fullyReceived}>
+                            Fully received — nothing left to receive on this line.
+                          </Text>
+                        </View>
+                      ) : readOnly ? null : (
+                        <View style={styles.qtyRow}>
+                          <View style={styles.qtyField}>
+                            <Text style={styles.qtyLabel}>Received now</Text>
+                            <TextInput
+                              value={d.received}
+                              onChangeText={(v) => setField(l.id, 'received', v)}
+                              keyboardType="decimal-pad"
+                              placeholder="0"
+                              placeholderTextColor={c.ink3}
+                              accessibilityLabel={`Received now: ${l.item?.name ?? 'Unknown item'}`}
+                              style={styles.qtyInput}
                             />
-                          )}
-                        </>
+                          </View>
+                          <Pressable
+                            onPress={() => fillRemaining(l)}
+                            accessibilityRole="button"
+                            style={({ pressed }) => [styles.allBtn, pressed && { opacity: 0.7 }]}
+                          >
+                            <Text style={styles.allBtnText} maxFontSizeMultiplier={ALL_CAP}>
+                              All
+                            </Text>
+                          </Pressable>
+                        </View>
                       )}
                     </View>
-                    {reviewOnly ? null : remaining === 0 ? (
-                      <Text style={styles.fullyReceived}>
-                        ✓ Fully received — nothing left to receive on this line.
-                      </Text>
-                    ) : readOnly ? null : (
-                      <View style={styles.qtyRow}>
-                        <View style={styles.qtyField}>
-                          <Text style={styles.qtyLabel}>Received now</Text>
-                          <TextInput
-                            value={d.received}
-                            onChangeText={(v) => setField(l.id, 'received', v)}
-                            keyboardType="decimal-pad"
-                            placeholder="0"
-                            placeholderTextColor={theme.textMuted}
-                            style={styles.qtyInput}
-                          />
-                        </View>
-                        <Pressable
-                          onPress={() => fillRemaining(l)}
-                          style={({ pressed }) => [
-                            styles.allBtn,
-                            pressed && { opacity: 0.7 },
-                          ]}
-                        >
-                          <Text style={styles.allBtnText}>All</Text>
-                        </Pressable>
-                      </View>
-                    )}
-                  </View>
-                );
+                  );
                 });
               })
             )}
 
             {receiptsError !== null ? (
               <View style={styles.historySection}>
-                <Text style={styles.historyHeading}>Receipt history</Text>
+                <Text style={styles.historyHeading} accessibilityRole="header">
+                  Receipt history
+                </Text>
                 <View style={styles.partNotice}>
                   <Text style={styles.partNoticeText}>
                     Receipt history did not load, so past receipts and their totals are not shown.
@@ -856,7 +906,7 @@ export default function PoReceiveScreen() {
                     ]}
                   >
                     {retryingPart === 'history' ? (
-                      <ActivityIndicator color={theme.text} />
+                      <ActivityIndicator color={c.ink} />
                     ) : (
                       <Text style={styles.partRetryText}>Try again</Text>
                     )}
@@ -867,7 +917,9 @@ export default function PoReceiveScreen() {
 
             {receiptsError === null && receipts.length > 0 && (
               <View style={styles.historySection}>
-                <Text style={styles.historyHeading}>Receipt history</Text>
+                <Text style={styles.historyHeading} accessibilityRole="header">
+                  Receipt history
+                </Text>
                 {receipts.map((r) => (
                   <View key={r.id} style={styles.historyCard}>
                     <View style={styles.historyTopRow}>
@@ -895,7 +947,7 @@ export default function PoReceiveScreen() {
                   multiline
                   maxLength={2000}
                   placeholder="Anything to note about this delivery"
-                  placeholderTextColor={theme.textMuted}
+                  placeholderTextColor={c.ink3}
                   accessibilityLabel={RECEIPT_NOTES_LABEL}
                   style={[styles.qtyInput, styles.notesInput]}
                 />
@@ -907,8 +959,8 @@ export default function PoReceiveScreen() {
                 left to post. */}
             {receivable ? (
               <Text style={styles.attachHint}>
-                Documents save as soon as you add them — you don&apos;t need to post a
-                receipt to keep an attachment.
+                Documents save as soon as you add them — you don&apos;t need to post a receipt to
+                keep an attachment.
               </Text>
             ) : null}
             <PoAttachments poId={id} />
@@ -916,19 +968,12 @@ export default function PoReceiveScreen() {
 
           {readOnly ? null : (
             <View style={styles.footer}>
-              <Pressable
-                onPress={postReceipt}
-                disabled={posting || !receivable}
-                style={({ pressed }) => [
-                  styles.postBtn,
-                  pressed && { opacity: 0.85 },
-                  (posting || !receivable) && { opacity: 0.5 },
-                ]}
-              >
-                <Text style={styles.postBtnText}>
-                  {posting ? 'Posting…' : receivable ? 'Post receipt' : 'Fully received'}
-                </Text>
-              </Pressable>
+              {/* Committing the receipt: the screen's one ink button. */}
+              <Button block onPress={postReceipt} disabled={posting || !receivable}>
+                {posting ? 'Posting…' : receivable ? 'Post receipt' : 'Fully received'}
+              </Button>
+              {/* Clear of the home indicator: the button sat in its strip. */}
+              <View style={{ height: Math.max(0, insets.bottom - SPACE.md) }} />
             </View>
           )}
         </>
@@ -939,22 +984,53 @@ export default function PoReceiveScreen() {
         animationType="slide"
         onRequestClose={() => setScannerOpen(false)}
       >
-        <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
-          <CameraView
-            style={{ flex: 1 }}
-            facing="back"
-            onBarcodeScanned={onScanned}
-            barcodeScannerSettings={{
-              barcodeTypes: ['ean13', 'ean8', 'upc_a', 'upc_e', 'code128', 'code39', 'qr'],
-            }}
-          />
-          <Pressable
-            onPress={() => setScannerOpen(false)}
-            style={styles.scanCloseBtn}
-          >
-            <Text style={styles.scanCloseText}>Cancel</Text>
-          </Pressable>
-        </SafeAreaView>
+        {/* THE CAMERA CHROME IS DARK IN BOTH MODES (CAMERA, below), so the
+            clock and battery over it are light; it was dark text on the black
+            camera ground in light mode. */}
+        <View style={cameraStyles.root}>
+          <StatusBar style="light" />
+          <SafeAreaView edges={['top']} style={cameraStyles.bar}>
+            <View style={cameraStyles.barRow}>
+              <Pressable
+                onPress={() => setScannerOpen(false)}
+                accessibilityRole="button"
+                accessibilityLabel="Cancel"
+                style={({ pressed }) => [cameraStyles.closeFrame, pressed && { opacity: 0.7 }]}
+              >
+                <View style={cameraStyles.closeBtn}>
+                  <Text
+                    style={cameraStyles.closeText}
+                    numberOfLines={1}
+                    maxFontSizeMultiplier={CLOSE_CAP}
+                  >
+                    Cancel
+                  </Text>
+                </View>
+              </Pressable>
+            </View>
+          </SafeAreaView>
+          <View style={cameraStyles.viewfinder}>
+            <CameraView
+              style={StyleSheet.absoluteFill}
+              facing="back"
+              onBarcodeScanned={onScanned}
+              barcodeScannerSettings={{
+                barcodeTypes: ['ean13', 'ean8', 'upc_a', 'upc_e', 'code128', 'code39', 'qr'],
+              }}
+            />
+            {/* The reference finder: corner brackets and a resting line, no
+                motion. Decoration only, so taps and VoiceOver pass through. */}
+            <View style={cameraStyles.frameWrap} pointerEvents="none">
+              <View style={cameraStyles.frame}>
+                <View style={[cameraStyles.corner, cameraStyles.cornerTL]} />
+                <View style={[cameraStyles.corner, cameraStyles.cornerTR]} />
+                <View style={[cameraStyles.corner, cameraStyles.cornerBL]} />
+                <View style={[cameraStyles.corner, cameraStyles.cornerBR]} />
+                <View style={cameraStyles.scanLine} />
+              </View>
+            </View>
+          </View>
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -989,6 +1065,8 @@ function SizeRunCard({
   onChangeReceived: (lineId: string, value: string) => void;
   onReceiveAll: () => void;
 }) {
+  const { c, mode } = useTheme();
+  const styles = PO_STYLES[mode];
   const received = React.useMemo(() => {
     const m: Record<string, string> = {};
     for (const l of lines) m[l.id] = draft[l.id]?.received ?? '';
@@ -1001,7 +1079,7 @@ function SizeRunCard({
   return (
     <View style={styles.runCard}>
       <View style={styles.runHeader}>
-        <View style={{ flex: 1 }}>
+        <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={styles.runName} numberOfLines={2}>
             {group.name}
           </Text>
@@ -1012,9 +1090,12 @@ function SizeRunCard({
         {anyOutstanding && (
           <Pressable
             onPress={onReceiveAll}
+            accessibilityRole="button"
             style={({ pressed }) => [styles.allBtn, pressed && { opacity: 0.7 }]}
           >
-            <Text style={styles.allBtnText}>All</Text>
+            <Text style={styles.allBtnText} maxFontSizeMultiplier={ALL_CAP}>
+              All
+            </Text>
           </Pressable>
         )}
       </View>
@@ -1025,24 +1106,24 @@ function SizeRunCard({
         return (
           <View
             key={l.id}
-            style={[
-              styles.runRow,
-              highlightLineId === l.id && { borderColor: theme.success, borderWidth: 1 },
-            ]}
+            style={[styles.runRow, highlightLineId === l.id && styles.runRowHighlighted]}
           >
             <Text style={styles.runSize}>{poSizeLabel(l.variantSize)}</Text>
             <Text style={styles.runOrdered}>
               {l.quantity_ordered} ord · {l.quantity_received} rec
             </Text>
             {outstanding === 0 ? (
-              <Text style={styles.runDone}>✓ Full</Text>
+              <View style={styles.runDoneRow}>
+                <Check size={13} color={c.accent} strokeWidth={2} />
+                <Text style={styles.runDone}>Full</Text>
+              </View>
             ) : (
               <TextInput
                 value={value}
                 onChangeText={(v) => onChangeReceived(l.id, v)}
                 keyboardType="decimal-pad"
                 placeholder="0"
-                placeholderTextColor={theme.textMuted}
+                placeholderTextColor={c.ink3}
                 style={styles.runInput}
                 accessibilityLabel={`Receiving size ${poSizeLabel(l.variantSize)}`}
               />
@@ -1051,9 +1132,7 @@ function SizeRunCard({
         );
       })}
 
-      <Text style={styles.runSubtotal}>
-        {poRunSubtotalLabel(subtotal, group.countingUnit)}
-      </Text>
+      <Text style={styles.runSubtotal}>{poRunSubtotalLabel(subtotal, group.countingUnit)}</Text>
     </View>
   );
 }
@@ -1070,14 +1149,16 @@ function Metric({
   /** What the number means, under it (the Variance's web words). */
   caption?: string;
 }) {
+  const { c, mode } = useTheme();
+  const styles = PO_STYLES[mode];
   return (
     <View style={styles.metric}>
       <Text style={styles.metricLabel}>{label}</Text>
       <Text
         style={[
           styles.metricValue,
-          tone === 'primary' && { color: theme.primary },
-          tone === 'danger' && { color: theme.destructive },
+          tone === 'primary' && { color: c.ink },
+          tone === 'danger' && { color: c.critText },
         ]}
       >
         {value}
@@ -1108,271 +1189,393 @@ function formatReceiptDate(iso: string | null): string {
   });
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: theme.bg },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  // The order screen's top bar: the 44 pt chip frame, 3 pt outside the 38 pt chip.
-  topbar: { paddingHorizontal: 9, paddingTop: 5, flexDirection: 'row' },
-  headerBar: {
+/**
+ * Dynamic Type: the chrome caps (lib/theme.ts TYPE_CEILING). Scan and the two
+ * All buttons are controls in a row beside content they must not squeeze;
+ * Cancel sits on the camera bar. Every name, SKU, quantity, label and note is
+ * content and scales all the way, as before.
+ */
+const SCAN_CAP = capTo(14, TYPE_CEILING.control);
+const ALL_CAP = capTo(14, TYPE_CEILING.control);
+const CLOSE_CAP = capTo(13, TYPE_CEILING.chrome);
+
+/**
+ * The screen's styles for one mode's palette, built once per mode at load
+ * (PO_STYLES), so a memoised row and a style array stay the same objects
+ * from one render to the next. The screen was on the light-only legacy theme
+ * alias and stayed light in dark mode; it follows the device now.
+ */
+function makeStyles(c: Palette) {
+  return StyleSheet.create({
+    root: { flex: 1, backgroundColor: c.paper },
+    center: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: SPACE.lg,
+      gap: SPACE.sm,
+    },
+    // The order screen's top bar: the 44 pt chip frame, 3 pt outside the 38 pt chip.
+    topbar: { paddingHorizontal: 9, paddingTop: 5, flexDirection: 'row' },
+    headerBar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: SPACE.md,
+      paddingHorizontal: SPACE.md,
+      paddingVertical: SPACE.md,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.hair,
+    },
+    // The PO number is a code: the reference's mono face.
+    title: { color: c.ink, fontFamily: FONT.mono, fontSize: 20, letterSpacing: 0.2 },
+    subtitle: { color: c.ink3, fontFamily: FONT.displayRegular, fontSize: 13, marginTop: 4 },
+    muted: {
+      color: c.ink3,
+      fontFamily: FONT.displayRegular,
+      fontSize: 14,
+      padding: SPACE.lg,
+      textAlign: 'center',
+    },
+    errorTitle: { color: c.ink, fontFamily: FONT.display, fontSize: 17, textAlign: 'center' },
+    errorBody: {
+      color: c.ink3,
+      fontFamily: FONT.displayRegular,
+      fontSize: 13.5,
+      lineHeight: 19,
+      textAlign: 'center',
+      paddingHorizontal: SPACE.lg,
+    },
+    fullyReceivedRow: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: 6,
+      marginTop: SPACE.sm,
+    },
+    checkIcon: { marginTop: 2 },
+    fullyReceived: { flex: 1, color: c.accent, fontFamily: FONT.display, fontSize: 13 },
+    notesBlock: { marginTop: SPACE.lg, gap: SPACE.xs },
+    // A note is prose: the body face on the card fill (the boxes on a line
+    // card are recessed; this one sits on the page).
+    notesInput: {
+      minHeight: 72,
+      textAlignVertical: 'top',
+      fontFamily: FONT.displayRegular,
+      fontSize: 15,
+      backgroundColor: c.card,
+    },
+    attachHint: {
+      color: c.ink3,
+      fontFamily: FONT.displayRegular,
+      fontSize: 12.5,
+      lineHeight: 17,
+      paddingHorizontal: SPACE.md,
+      marginTop: SPACE.lg,
+      marginBottom: SPACE.xs,
+      textAlign: 'center',
+    },
+    // A secondary control beside the PO: outlined (the stronger border on the
+    // card fill), 44pt, so Post receipt stays the one ink button.
+    scanBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      minHeight: 44,
+      paddingHorizontal: 14,
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: c.hair2,
+      backgroundColor: c.card,
+      flexShrink: 0,
+    },
+    scanBtnText: { color: c.ink, fontFamily: FONT.display, fontSize: 14 },
+    lineCard: {
+      backgroundColor: c.card,
+      borderRadius: RADIUS.card,
+      borderWidth: 1,
+      borderColor: c.hair,
+      padding: 14,
+      marginBottom: SPACE.sm,
+    },
+    // The line a scan just filled, for two seconds: the accent edge on the
+    // accent wash (it was a green glow).
+    lineCardHighlighted: { borderColor: c.accent, backgroundColor: c.accentWash },
+    runCard: {
+      backgroundColor: c.card,
+      borderRadius: RADIUS.card,
+      borderWidth: 1,
+      borderColor: c.hair,
+      padding: 14,
+      marginBottom: SPACE.sm,
+    },
+    runHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: SPACE.sm,
+      marginBottom: SPACE.sm,
+    },
+    runName: { color: c.ink, fontFamily: FONT.display, fontSize: 15 },
+    runMeta: { color: c.ink3, fontFamily: FONT.monoRegular, fontSize: 11.5, marginTop: 3 },
+    runRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: SPACE.sm,
+      paddingVertical: SPACE.xs,
+      borderRadius: 8,
+    },
+    runRowHighlighted: { borderWidth: 1, borderColor: c.accent, backgroundColor: c.accentWash },
+    // Dynamic Type: all three of these were HARD widths. At 2x a 15pt size label
+    // is ~39pt, so `XXXL` fractured inside the 64pt cell, and `runOrdered`
+    // (flex: 1) was the only shrinkable child in the row, so it absorbed the
+    // whole deficit and collapsed to nothing. minWidth lets each cell grow to its
+    // own content while still column-aligning at default size.
+    runSize: { color: c.ink, fontFamily: FONT.mono, fontSize: 15, minWidth: 64 },
+    runOrdered: {
+      color: c.ink3,
+      fontFamily: FONT.monoRegular,
+      fontSize: 11.5,
+      flex: 1,
+      minWidth: 0,
+    },
+    runDoneRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'flex-end',
+      gap: 4,
+      minWidth: 96,
+    },
+    runDone: { color: c.accent, fontFamily: FONT.display, fontSize: 12.5 },
+    // A quantity box: the reference's count input, recessed (sunk) with the
+    // stronger border, mono figures, at least 44pt tall.
+    runInput: {
+      backgroundColor: c.sunk,
+      color: c.ink,
+      paddingHorizontal: SPACE.md,
+      paddingVertical: SPACE.sm,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: c.hair2,
+      fontFamily: FONT.mono,
+      fontSize: 16,
+      minWidth: 96,
+      minHeight: 44,
+      textAlign: 'right',
+    },
+    runSubtotal: {
+      color: c.ink,
+      fontFamily: FONT.display,
+      fontSize: 12.5,
+      marginTop: SPACE.sm,
+      paddingTop: SPACE.sm,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: c.hair,
+    },
+    lineName: { color: c.ink, fontFamily: FONT.display, fontSize: 15, lineHeight: 20 },
+    lineMeta: { color: c.ink3, fontFamily: FONT.monoRegular, fontSize: 11.5, marginTop: 3 },
+    // Dynamic Type: Ordered / Already / Variance. The three uppercase labels need
+    // ~336pt at 2x against ~345pt of card interior and overflow just past that,
+    // and nothing in the row is shrinkable — so it wraps instead.
+    lineMetricsRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      marginTop: SPACE.sm,
+      gap: SPACE.md,
+    },
+    metric: {},
+    metricLabel: {
+      color: c.ink3,
+      fontFamily: FONT.mono,
+      fontSize: 10,
+      textTransform: 'uppercase',
+      letterSpacing: 1,
+    },
+    metricValue: { color: c.ink, fontFamily: FONT.mono, fontSize: 16, marginTop: 3 },
+    metricCaption: {
+      color: c.ink3,
+      fontFamily: FONT.displayRegular,
+      fontSize: 11.5,
+      marginTop: 2,
+    },
+    qtyRow: {
+      flexDirection: 'row',
+      alignItems: 'flex-end',
+      gap: SPACE.sm,
+      marginTop: SPACE.md,
+    },
+    qtyField: { flex: 1 },
+    qtyLabel: { color: c.ink3, fontFamily: FONT.display, fontSize: 12, marginBottom: 4 },
+    qtyInput: {
+      backgroundColor: c.sunk,
+      color: c.ink,
+      paddingHorizontal: SPACE.md,
+      paddingVertical: SPACE.sm,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: c.hair2,
+      fontFamily: FONT.mono,
+      fontSize: 16,
+      minHeight: 44,
+    },
+    // "All" fills what is left to receive: an outlined control, 44pt square
+    // at the least, beside the box it fills.
+    allBtn: {
+      minHeight: 44,
+      minWidth: 52,
+      paddingHorizontal: 14,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: c.hair2,
+      backgroundColor: c.card,
+    },
+    allBtnText: { color: c.ink, fontFamily: FONT.display, fontSize: 14 },
+    historySection: { marginTop: SPACE.lg },
+    // A notice about this PO (a draft, a missing permission, a part that did
+    // not load): the warning wash with its own words, as the lists' stale
+    // banners (it was a light card with a warning-coloured hairline).
+    partNotice: {
+      backgroundColor: c.warnWash,
+      borderRadius: 10,
+      padding: 12,
+      marginBottom: SPACE.sm,
+      gap: SPACE.sm,
+    },
+    partNoticeText: {
+      color: c.warnText,
+      fontFamily: FONT.displayRegular,
+      fontSize: 13.5,
+      lineHeight: 19,
+    },
+    partRetry: {
+      alignSelf: 'flex-start',
+      minHeight: 44,
+      paddingHorizontal: 14,
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: c.hair2,
+      backgroundColor: c.card,
+      justifyContent: 'center',
+    },
+    partRetryText: { color: c.ink, fontFamily: FONT.display, fontSize: 13.5 },
+    historyHeading: {
+      color: c.ink3,
+      fontFamily: FONT.mono,
+      fontSize: 11,
+      textTransform: 'uppercase',
+      letterSpacing: 1.5,
+      marginBottom: SPACE.sm,
+    },
+    historyCard: {
+      backgroundColor: c.card,
+      borderRadius: RADIUS.card,
+      borderWidth: 1,
+      borderColor: c.hair,
+      padding: 12,
+      marginBottom: SPACE.sm,
+    },
+    historyTopRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      gap: SPACE.sm,
+    },
+    historyNumber: { color: c.ink, fontFamily: FONT.mono, fontSize: 13, flexShrink: 1 },
+    historyDate: { color: c.ink3, fontFamily: FONT.displayRegular, fontSize: 12 },
+    historyMeta: { color: c.ink3, fontFamily: FONT.displayRegular, fontSize: 12.5, marginTop: 4 },
+    footer: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      bottom: 0,
+      padding: SPACE.md,
+      backgroundColor: c.paper,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: c.hair,
+    },
+  });
+}
+
+const PO_STYLES: Record<ThemeMode, ReturnType<typeof makeStyles>> = {
+  light: makeStyles(palette('light')),
+  dark: makeStyles(palette('dark')),
+};
+
+/**
+ * THE CAMERA CHROME IS DARK IN BOTH MODES. The scanner's bar and viewfinder
+ * sit over a live camera, which does not change with the device's mode, so
+ * they draw from the dark palette whatever the mode is: the same camera as
+ * the Scan tab and the count scanner (DESIGN-SPEC 10: the viewfinder and the
+ * reticle are fixed colours).
+ */
+const CAMERA_PALETTE = palette('dark');
+const CAMERA = {
+  /** The bar and the ground behind the camera: the reference viewfinder. */
+  surface: '#0a0b09',
+  ink: CAMERA_PALETTE.ink,
+  /** A control on the bar: the raised fill with an outline at 3:1. */
+  chip: CAMERA_PALETTE.card,
+  chipBorder: CAMERA_PALETTE.ink4,
+  /** Corner brackets and scan line: the reference's dark-mode mint. */
+  reticle: CAMERA_PALETTE.accent,
+} as const;
+
+const cameraStyles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: CAMERA.surface },
+  bar: { backgroundColor: CAMERA.surface },
+  barRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: space.md,
-    paddingVertical: space.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: theme.border,
+    paddingHorizontal: SPACE.md,
+    paddingVertical: SPACE.xs,
   },
-  title: { color: theme.text, fontSize: 20, fontWeight: '700', fontFamily: 'Menlo' },
-  subtitle: { color: theme.textMuted, fontSize: 12, marginTop: 2 },
-  muted: { color: theme.textMuted, padding: space.lg, textAlign: 'center' },
-  errorTitle: {
-    color: theme.text,
-    fontSize: 16,
-    fontWeight: '700',
-    marginBottom: space.xs,
-    textAlign: 'center',
-  },
-  errorBody: {
-    color: theme.textMuted,
-    fontSize: 13,
-    textAlign: 'center',
-    paddingHorizontal: space.lg,
-    marginBottom: space.md,
-  },
-  fullyReceived: {
-    color: theme.success,
-    fontSize: 13,
-    fontWeight: '600',
-    marginTop: space.sm,
-  },
-  notesBlock: { marginTop: space.lg, gap: space.xs },
-  notesInput: { minHeight: 72, textAlignVertical: 'top', fontVariant: [] },
-  attachHint: {
-    color: theme.textMuted,
-    fontSize: 12,
-    paddingHorizontal: space.md,
-    marginTop: space.lg,
-    marginBottom: space.xs,
-    textAlign: 'center',
-  },
-  scanBtn: {
-    backgroundColor: theme.primary,
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    borderRadius: radius.md,
-  },
-  scanBtnText: { color: '#fff', fontWeight: '700' },
-  lineCard: {
-    backgroundColor: theme.card,
-    borderRadius: radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-    padding: space.md,
-    marginBottom: space.sm,
-  },
-  runCard: {
-    backgroundColor: theme.card,
-    borderRadius: radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-    padding: space.md,
-    marginBottom: space.sm,
-  },
-  runHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.sm,
-    marginBottom: space.sm,
-  },
-  runName: { color: theme.text, fontSize: 15, fontWeight: '700' },
-  runMeta: { color: theme.textMuted, fontSize: 11, marginTop: 2 },
-  runRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.sm,
-    paddingVertical: space.xs,
-    borderRadius: radius.sm,
-  },
-  // Dynamic Type: all three of these were HARD widths. At 2x a 15pt size label
-  // is ~39pt, so `XXXL` fractured inside the 64pt cell, and `runOrdered`
-  // (flex: 1) was the only shrinkable child in the row, so it absorbed the
-  // whole deficit and collapsed to nothing. minWidth lets each cell grow to its
-  // own content while still column-aligning at default size.
-  runSize: {
-    color: theme.text,
-    fontSize: 15,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-    minWidth: 64,
-  },
-  runOrdered: { color: theme.textMuted, fontSize: 11, flex: 1, minWidth: 0 },
-  runDone: {
-    color: theme.success,
-    fontSize: 12,
-    fontWeight: '700',
-    minWidth: 96,
-    textAlign: 'right',
-  },
-  runInput: {
-    backgroundColor: theme.bgElevated,
-    color: theme.text,
-    paddingHorizontal: space.sm,
-    paddingVertical: space.sm,
-    borderRadius: radius.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-    fontSize: 16,
-    fontVariant: ['tabular-nums'],
-    minWidth: 96,
-    textAlign: 'right',
-  },
-  runSubtotal: {
-    color: theme.text,
-    fontSize: 12,
-    fontWeight: '600',
-    marginTop: space.sm,
-    paddingTop: space.sm,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: theme.border,
-  },
-  lineName: { color: theme.text, fontSize: 15, fontWeight: '600' },
-  lineMeta: { color: theme.textMuted, fontSize: 11, fontFamily: 'Menlo', marginTop: 2 },
-  // Dynamic Type: Ordered / Already / Variance. The three uppercase labels need
-  // ~336pt at 2x against ~345pt of card interior and overflow just past that,
-  // and nothing in the row is shrinkable — so it wraps instead.
-  lineMetricsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    marginTop: space.sm,
-    gap: space.md,
-  },
-  metric: {},
-  metricLabel: {
-    color: theme.textMuted,
-    fontSize: 10,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  metricValue: {
-    color: theme.text,
-    fontSize: 16,
-    fontWeight: '600',
-    fontVariant: ['tabular-nums'],
-    marginTop: 2,
-  },
-  metricCaption: {
-    color: theme.textMuted,
-    fontSize: 11,
-    marginTop: 2,
-  },
-  qtyRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: space.sm,
-    marginTop: space.md,
-  },
-  qtyField: { flex: 1 },
-  qtyLabel: {
-    color: theme.textMuted,
-    fontSize: 11,
-    fontWeight: '600',
-    marginBottom: 4,
-  },
-  qtyInput: {
-    backgroundColor: theme.bgElevated,
-    color: theme.text,
-    paddingHorizontal: space.sm,
-    paddingVertical: space.sm,
-    borderRadius: radius.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-    fontSize: 16,
-    fontVariant: ['tabular-nums'],
-  },
-  allBtn: {
-    backgroundColor: theme.bgElevated,
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm + 2,
-    borderRadius: radius.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-  },
-  allBtnText: { color: theme.text, fontWeight: '700' },
-  historySection: { marginTop: space.lg },
-  partNotice: {
-    backgroundColor: theme.card,
-    borderRadius: radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.warning,
-    padding: space.md,
-    marginBottom: space.sm,
-    gap: space.sm,
-  },
-  partNoticeText: { color: theme.text, fontSize: 13, lineHeight: 18 },
-  partRetry: {
-    alignSelf: 'flex-start',
-    minHeight: 36,
-    paddingHorizontal: space.md,
-    borderRadius: radius.md,
+  // Cancel is a button in a frame at least 44pt tall around the pill.
+  closeFrame: { minHeight: 44, minWidth: 44, justifyContent: 'center' },
+  closeBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: theme.border,
-    justifyContent: 'center',
+    borderColor: CAMERA.chipBorder,
+    backgroundColor: CAMERA.chip,
   },
-  partRetryText: { color: theme.text, fontSize: 13, fontWeight: '600' },
-  historyHeading: {
-    color: theme.textMuted,
-    fontSize: 11,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    marginBottom: space.sm,
-  },
-  historyCard: {
-    backgroundColor: theme.card,
-    borderRadius: radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-    padding: space.md,
-    marginBottom: space.sm,
-  },
-  historyTopRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  historyNumber: {
-    color: theme.text,
-    fontSize: 13,
-    fontWeight: '700',
-    fontFamily: 'Menlo',
-  },
-  historyDate: { color: theme.textMuted, fontSize: 11 },
-  historyMeta: { color: theme.textMuted, fontSize: 12, marginTop: 4 },
-  footer: {
+  closeText: { color: CAMERA.ink, fontFamily: FONT.displaySemi, fontWeight: '600', fontSize: 13 },
+  viewfinder: { flex: 1, backgroundColor: CAMERA.surface },
+  frameWrap: {
     position: 'absolute',
-    left: 0,
+    top: 0,
     right: 0,
     bottom: 0,
-    padding: space.md,
-    backgroundColor: theme.bg,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: theme.border,
-  },
-  postBtn: {
-    backgroundColor: theme.success,
-    paddingVertical: space.md + 2,
-    borderRadius: radius.md,
+    left: 0,
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  postBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
-  scanCloseBtn: {
+  frame: { width: 260, height: 220 },
+  corner: { position: 'absolute', width: 26, height: 26, borderColor: CAMERA.reticle },
+  cornerTL: { top: 0, left: 0, borderTopWidth: 3, borderLeftWidth: 3, borderTopLeftRadius: 8 },
+  cornerTR: { top: 0, right: 0, borderTopWidth: 3, borderRightWidth: 3, borderTopRightRadius: 8 },
+  cornerBL: {
+    bottom: 0,
+    left: 0,
+    borderBottomWidth: 3,
+    borderLeftWidth: 3,
+    borderBottomLeftRadius: 8,
+  },
+  cornerBR: {
+    bottom: 0,
+    right: 0,
+    borderBottomWidth: 3,
+    borderRightWidth: 3,
+    borderBottomRightRadius: 8,
+  },
+  scanLine: {
     position: 'absolute',
-    top: 60,
-    right: 20,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    paddingHorizontal: space.lg,
-    paddingVertical: space.sm,
-    borderRadius: radius.md,
+    left: '8%',
+    right: '8%',
+    top: '50%',
+    marginTop: -1,
+    height: 2,
+    borderRadius: 1,
+    backgroundColor: CAMERA.reticle,
+    opacity: 0.7,
   },
-  scanCloseText: { color: '#fff', fontSize: 14, fontWeight: '600' },
 });

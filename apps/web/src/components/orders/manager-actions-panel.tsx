@@ -33,6 +33,7 @@ import {
   type DriverOption,
 } from '@/components/orders/assign-delivery-dialog';
 import { AssignPickerDialog } from '@/components/orders/assign-picker-dialog';
+import { DetailSection, DetailSectionMeta } from '@/components/patterns/detail-section';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -354,8 +355,7 @@ export function ManagerActionsPanel({
       ? stockGates.notice
       : null;
   const shortNotice = approves && status === 'pending_approval' ? approveNotice : null;
-  const isPickingPhase =
-    status === 'pick_slip_generated' || status === 'picking_in_progress';
+  const isPickingPhase = status === 'pick_slip_generated' || status === 'picking_in_progress';
   const pickingStatus = derivePickingStatus(status, assignedPickerId);
   const [sigOpen, setSigOpen] = React.useState(false);
   // Signature blob is fetched on first dialog-open, then cached for the mount.
@@ -693,7 +693,9 @@ export function ManagerActionsPanel({
 
   function collectSignature() {
     if (!signatureToken) {
-      toast.error(handOverMfaMessage ?? 'No signature token on this order — regenerate the packing slip.');
+      toast.error(
+        handOverMfaMessage ?? 'No signature token on this order — regenerate the packing slip.',
+      );
       return;
     }
     window.open(`/orders/sign/${signatureToken}`, '_blank', 'noopener,noreferrer');
@@ -739,336 +741,326 @@ export function ManagerActionsPanel({
   const dirty = notes !== initialNotes.current;
 
   return (
-    <section data-tour="manager-actions" className="bg-card rounded-xl border">
-      <div className="border-border border-b px-4 py-3">
-        <h2 className="text-sm font-medium">Manager actions</h2>
-        <p className="text-muted-foreground mt-0.5 text-[11.5px]">
-          Move this request through the fulfillment pipeline.
-        </p>
-      </div>
+    // The record's action card (DESIGN-SPEC 6.7): the titled card with the
+    // pipeline's buttons. Button hierarchy (6.2): the step that moves the
+    // order on is the ink primary (Approve, Generate pick slip, Claim
+    // picking, Open digital pick, Generate packing slips, Mark staged, Assign
+    // delivery, Mark in transit, Collect signature, Resume fulfillment);
+    // everything beside it is secondary. Which buttons show is unchanged
+    // (core availableOrderActions and the page's gates).
+    <DetailSection
+      data-tour="manager-actions"
+      title="Manager actions"
+      aside={
+        <DetailSectionMeta>Move this request through the fulfillment pipeline.</DetailSectionMeta>
+      }
+      bodyClassName="space-y-3"
+    >
+      <div className="flex flex-wrap items-center gap-2" data-testid="manager-actions-buttons">
+        {status === 'pending_approval' && approves && (
+          <>
+            <NeededBySuggest
+              orderId={orderId}
+              neededBy={neededBy}
+              timeZone={orgTimeZone}
+              hasRequesterNote={hasRequesterNote}
+            />
+            <Button variant="default" onClick={approve} disabled={busy !== null}>
+              {busy === 'approve' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Check className="h-3.5 w-3.5" />
+              )}
+              Approve
+            </Button>
+            {actions.includes('approve_partial') && (
+              <Button
+                variant="outline"
+                onClick={() => openPartial('approve_partial')}
+                disabled={busy !== null || stockGates.approvePartial === 'disabled'}
+                aria-describedby={stockNotice ? 'order-stock-notice' : undefined}
+                aria-haspopup="dialog"
+              >
+                <PackageCheck className="h-3.5 w-3.5" />
+                Approve partial
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              className="text-destructive hover:text-destructive"
+              onClick={() => setDenyOpen(true)}
+              disabled={busy !== null}
+            >
+              <X className="h-3.5 w-3.5" />
+              Deny
+            </Button>
+          </>
+        )}
 
-      <div className="space-y-3 p-4">
-        <div className="flex flex-wrap gap-2">
-          {status === 'pending_approval' && approves && (
-            <>
-              <NeededBySuggest
-                orderId={orderId}
-                neededBy={neededBy}
-                timeZone={orgTimeZone}
-                hasRequesterNote={hasRequesterNote}
-              />
-              <Button variant="gradient" onClick={approve} disabled={busy !== null}>
-                {busy === 'approve' ? (
+        {status === 'approved' && approves && !pickBlocked && (
+          <Button variant="default" onClick={generatePickSlip} disabled={busy !== null}>
+            {busy === 'generate-pick-slip' ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <ClipboardList className="h-3.5 w-3.5" />
+            )}
+            Generate pick slip
+          </Button>
+        )}
+
+        {/* RX-2: the return-first gate (0396) holds the pick slip of an
+              exchange replacement until the returned item is received. */}
+        {(status === 'approved' || status === 'backordered') && gated && (
+          <>
+            <span
+              className="text-muted-foreground inline-flex w-full items-center gap-1.5 text-[12.5px]"
+              role="status"
+            >
+              <ClipboardList className="h-3.5 w-3.5" />
+              {waitingForReturnLine(replacement?.returnNumber ?? null, {
+                exchangeStatus: replacement?.exchangeStatus ?? null,
+                held: replacement?.held ?? null,
+              })}
+            </span>
+            {status === 'approved' && approves && replacement?.canReleaseEarly ? (
+              <Button
+                variant="outline"
+                onClick={() => setReleaseOpen(true)}
+                disabled={busy !== null}
+              >
+                <Unlock className="h-3.5 w-3.5" />
+                {RETURNS_COPY.releaseBeforeReturn}
+              </Button>
+            ) : null}
+          </>
+        )}
+        {(status === 'approved' || status === 'backordered') && returnClosed && !gated && (
+          <span
+            className="text-muted-foreground inline-flex w-full items-center gap-1.5 text-[12.5px]"
+            role="status"
+          >
+            <ClipboardList className="h-3.5 w-3.5" />
+            {returnCancelledReplacementLine(replacement?.returnNumber ?? null)}
+          </span>
+        )}
+
+        {isPickingPhase && (
+          <>
+            {/* Picker lock chip — full-row so it sits above the buttons. */}
+            <span
+              className="text-muted-foreground inline-flex w-full items-center gap-1.5 text-[12.5px]"
+              data-testid="picker-chip"
+            >
+              <User className="h-3.5 w-3.5" />
+              {pickingStatus === 'unassigned'
+                ? 'Unassigned'
+                : `Being picked by ${assignedPickerName ?? 'someone'}`}
+            </span>
+
+            {actions.includes('claim_picking') && (
+              <Button variant="default" onClick={claimPicking} disabled={busy !== null}>
+                {busy === 'claim-picking' ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 ) : (
-                  <Check className="h-3.5 w-3.5" />
+                  <Hand className="h-3.5 w-3.5" />
                 )}
-                Approve
+                Claim picking
               </Button>
-              {actions.includes('approve_partial') && (
-                <Button
-                  variant="outline"
-                  onClick={() => openPartial('approve_partial')}
-                  disabled={busy !== null || stockGates.approvePartial === 'disabled'}
-                  aria-describedby={stockNotice ? 'order-stock-notice' : undefined}
-                  aria-haspopup="dialog"
-                >
-                  <PackageCheck className="h-3.5 w-3.5" />
-                  Approve partial
-                </Button>
-              )}
-              <Button
-                variant="destructive"
-                onClick={() => setDenyOpen(true)}
-                disabled={busy !== null}
-              >
-                <X className="h-3.5 w-3.5" />
-                Deny
-              </Button>
-            </>
-          )}
+            )}
 
-          {status === 'approved' && approves && !pickBlocked && (
-            <Button
-              variant="gradient"
-              onClick={generatePickSlip}
-              disabled={busy !== null}
-            >
-              {busy === 'generate-pick-slip' ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <ClipboardList className="h-3.5 w-3.5" />
-              )}
-              Generate pick slip
+            {actions.includes('open_digital_pick') && (
+              <Button variant="default" asChild disabled={busy !== null}>
+                <Link href={`/dashboard/orders/${orderId}/pick`}>
+                  <ScanLine className="h-3.5 w-3.5" />
+                  Open digital pick
+                </Link>
+              </Button>
+            )}
+
+            <Button variant="outline" onClick={printPickSlip} disabled={busy !== null}>
+              <Printer className="h-3.5 w-3.5" />
+              Print pick slip
             </Button>
-          )}
 
-          {/* RX-2: the return-first gate (0396) holds the pick slip of an
-              exchange replacement until the returned item is received. */}
-          {(status === 'approved' || status === 'backordered') && gated && (
-            <>
-              <span className="text-muted-foreground inline-flex w-full items-center gap-1.5 text-xs" role="status">
-                <ClipboardList className="h-3.5 w-3.5" />
-                {waitingForReturnLine(replacement?.returnNumber ?? null, {
-                  exchangeStatus: replacement?.exchangeStatus ?? null,
-                  held: replacement?.held ?? null,
-                })}
-              </span>
-              {status === 'approved' && approves && replacement?.canReleaseEarly ? (
-                <Button variant="outline" onClick={() => setReleaseOpen(true)} disabled={busy !== null}>
+            {actions.includes('mark_picking_complete') && (
+              <Button variant="outline" onClick={requestCompletePicking} disabled={busy !== null}>
+                {busy === 'complete-picking' ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <ClipboardCheck className="h-3.5 w-3.5" />
+                )}
+                Mark picking complete
+              </Button>
+            )}
+
+            {actions.includes('reassign_picker') && (
+              <AssignPickerDialog
+                orderId={orderId}
+                pickers={pickers}
+                currentPickerId={assignedPickerId}
+                trigger={
+                  <Button variant="outline" disabled={busy !== null}>
+                    <UserCog className="h-3.5 w-3.5" />
+                    {assignedPickerId ? 'Reassign picker' : 'Assign picker'}
+                  </Button>
+                }
+              />
+            )}
+
+            {actions.includes('release_picking') && (
+              <Button variant="outline" onClick={releasePicking} disabled={busy !== null}>
+                {busy === 'release-picking' ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
                   <Unlock className="h-3.5 w-3.5" />
-                  {RETURNS_COPY.releaseBeforeReturn}
-                </Button>
-              ) : null}
-            </>
-          )}
-          {(status === 'approved' || status === 'backordered') && returnClosed && !gated && (
-            <span className="text-muted-foreground inline-flex w-full items-center gap-1.5 text-xs" role="status">
-              <ClipboardList className="h-3.5 w-3.5" />
-              {returnCancelledReplacementLine(replacement?.returnNumber ?? null)}
-            </span>
-          )}
-
-          {isPickingPhase && (
-            <>
-              {/* Picker lock chip — full-row so it sits above the buttons. */}
-              <span className="text-muted-foreground inline-flex w-full items-center gap-1.5 text-[11.5px]">
-                <User className="h-3.5 w-3.5" />
-                {pickingStatus === 'unassigned'
-                  ? 'Unassigned'
-                  : `Being picked by ${assignedPickerName ?? 'someone'}`}
-              </span>
-
-              {actions.includes('claim_picking') && (
-                <Button
-                  variant="gradient"
-                  onClick={claimPicking}
-                  disabled={busy !== null}
-                >
-                  {busy === 'claim-picking' ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Hand className="h-3.5 w-3.5" />
-                  )}
-                  Claim picking
-                </Button>
-              )}
-
-              {actions.includes('open_digital_pick') && (
-                <Button variant="gradient" asChild disabled={busy !== null}>
-                  <Link href={`/dashboard/orders/${orderId}/pick`}>
-                    <ScanLine className="h-3.5 w-3.5" />
-                    Open digital pick
-                  </Link>
-                </Button>
-              )}
-
-              <Button
-                variant="outline"
-                onClick={printPickSlip}
-                disabled={busy !== null}
-              >
-                <Printer className="h-3.5 w-3.5" />
-                Print pick slip
+                )}
+                Release
               </Button>
+            )}
+          </>
+        )}
 
-              {actions.includes('mark_picking_complete') && (
-                <Button
-                  variant="outline"
-                  onClick={requestCompletePicking}
-                  disabled={busy !== null}
-                >
-                  {busy === 'complete-picking' ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <ClipboardCheck className="h-3.5 w-3.5" />
-                  )}
-                  Mark picking complete
-                </Button>
-              )}
-
-              {actions.includes('reassign_picker') && (
-                <AssignPickerDialog
-                  orderId={orderId}
-                  pickers={pickers}
-                  currentPickerId={assignedPickerId}
-                  trigger={
-                    <Button variant="default" disabled={busy !== null}>
-                      <UserCog className="h-3.5 w-3.5" />
-                      {assignedPickerId ? 'Reassign picker' : 'Assign picker'}
-                    </Button>
-                  }
-                />
-              )}
-
-              {actions.includes('release_picking') && (
-                <Button
-                  variant="outline"
-                  onClick={releasePicking}
-                  disabled={busy !== null}
-                >
-                  {busy === 'release-picking' ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Unlock className="h-3.5 w-3.5" />
-                  )}
-                  Release
-                </Button>
-              )}
-            </>
-          )}
-
-          {status === 'picking_complete' && (
-            <>
-              {approves && (
-                <Button
-                  variant="gradient"
-                  onClick={generatePackingSlips}
-                  disabled={busy !== null}
-                >
-                  {busy === 'generate-packing-slips' ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Box className="h-3.5 w-3.5" />
-                  )}
-                  Generate packing slips
-                </Button>
-              )}
-              <Button
-                variant="outline"
-                onClick={printPickSlip}
-                disabled={busy !== null}
-              >
-                <Printer className="h-3.5 w-3.5" />
-                Print pick slip
+        {status === 'picking_complete' && (
+          <>
+            {approves && (
+              <Button variant="default" onClick={generatePackingSlips} disabled={busy !== null}>
+                {busy === 'generate-packing-slips' ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Box className="h-3.5 w-3.5" />
+                )}
+                Generate packing slips
               </Button>
-              {actions.includes('reopen_picking') && (
-                <Button variant="outline" onClick={() => setReopenOpen(true)} disabled={busy !== null}>
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  Reopen picking
-                </Button>
-              )}
-            </>
-          )}
-
-          {DOWNSTREAM_PACKING_STATUSES.includes(status) && (
-            <>
-              <Button
-                variant="outline"
-                onClick={printCustomerSlip}
-                disabled={busy !== null}
-              >
-                <Printer className="h-3.5 w-3.5" />
-                Print customer slip
-              </Button>
-              <Button
-                variant="outline"
-                onClick={printWarehouseSlip}
-                disabled={busy !== null}
-              >
-                <Printer className="h-3.5 w-3.5" />
-                Print warehouse slip
-              </Button>
-              {hasSignature && (
-                <Button
-                  variant="outline"
-                  onClick={() => setSigOpen(true)}
-                  disabled={busy !== null}
-                >
-                  <PenLine className="h-3.5 w-3.5" />
-                  View signature
-                </Button>
-              )}
-            </>
-          )}
-
-          {status === 'packing_slip_generated' && fulfillmentType === 'pickup' && approves && (
-            <Button
-              variant="default"
-              onClick={() => guardDeparture('stage', () => void stagePickup())}
-              disabled={busy !== null}
-            >
-              {busy === 'stage-pickup' ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <PackageCheck className="h-3.5 w-3.5" />
-              )}
-              Mark staged for pickup
+            )}
+            <Button variant="outline" onClick={printPickSlip} disabled={busy !== null}>
+              <Printer className="h-3.5 w-3.5" />
+              Print pick slip
             </Button>
-          )}
+            {actions.includes('reopen_picking') && (
+              <Button
+                variant="outline"
+                onClick={() => setReopenOpen(true)}
+                disabled={busy !== null}
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                Reopen picking
+              </Button>
+            )}
+          </>
+        )}
 
-          {status === 'packing_slip_generated' && fulfillmentType === 'delivery' && approves && (
-            <Button
-              variant="default"
-              onClick={() => guardDeparture('stage', () => void stageDelivery())}
-              disabled={busy !== null}
-            >
-              {busy === 'stage-delivery' ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <PackageCheck className="h-3.5 w-3.5" />
-              )}
-              Mark staged for delivery
+        {DOWNSTREAM_PACKING_STATUSES.includes(status) && (
+          <>
+            <Button variant="outline" onClick={printCustomerSlip} disabled={busy !== null}>
+              <Printer className="h-3.5 w-3.5" />
+              Print customer slip
             </Button>
-          )}
-
-          {status === 'packing_slip_generated' && actions.includes('reopen_picking') && (
-            <Button variant="outline" onClick={() => setReopenOpen(true)} disabled={busy !== null}>
-              <RotateCcw className="h-3.5 w-3.5" />
-              Reopen picking
+            <Button variant="outline" onClick={printWarehouseSlip} disabled={busy !== null}>
+              <Printer className="h-3.5 w-3.5" />
+              Print warehouse slip
             </Button>
-          )}
+            {hasSignature && (
+              <Button variant="outline" onClick={() => setSigOpen(true)} disabled={busy !== null}>
+                <PenLine className="h-3.5 w-3.5" />
+                View signature
+              </Button>
+            )}
+          </>
+        )}
 
-          {/* assign_order_delivery asks orders:assign_delivery AND
+        {status === 'packing_slip_generated' && fulfillmentType === 'pickup' && approves && (
+          <Button
+            variant="default"
+            onClick={() => guardDeparture('stage', () => void stagePickup())}
+            disabled={busy !== null}
+          >
+            {busy === 'stage-pickup' ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <PackageCheck className="h-3.5 w-3.5" />
+            )}
+            Mark staged for pickup
+          </Button>
+        )}
+
+        {status === 'packing_slip_generated' && fulfillmentType === 'delivery' && approves && (
+          <Button
+            variant="default"
+            onClick={() => guardDeparture('stage', () => void stageDelivery())}
+            disabled={busy !== null}
+          >
+            {busy === 'stage-delivery' ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <PackageCheck className="h-3.5 w-3.5" />
+            )}
+            Mark staged for delivery
+          </Button>
+        )}
+
+        {status === 'packing_slip_generated' && actions.includes('reopen_picking') && (
+          <Button variant="outline" onClick={() => setReopenOpen(true)} disabled={busy !== null}>
+            <RotateCcw className="h-3.5 w-3.5" />
+            Reopen picking
+          </Button>
+        )}
+
+        {/* assign_order_delivery asks orders:assign_delivery AND
               orders:approve (0390); the phone shows it the same way. */}
-          {status === 'staged_for_delivery' && approves && canAssignDelivery && (
-            <AssignDeliveryDialog
-              orderId={orderId}
-              drivers={drivers}
-              currentDriverId={assignedDeliveryUserId}
-              trigger={
-                <Button variant="default" disabled={busy !== null}>
-                  <Truck className="h-3.5 w-3.5" />
-                  {assignedDeliveryUserId ? 'Reassign delivery' : 'Assign delivery'}
-                </Button>
-              }
-            />
-          )}
+        {status === 'staged_for_delivery' && approves && canAssignDelivery && (
+          <AssignDeliveryDialog
+            orderId={orderId}
+            drivers={drivers}
+            currentDriverId={assignedDeliveryUserId}
+            trigger={
+              <Button
+                variant={assignedDeliveryUserId ? 'outline' : 'default'}
+                disabled={busy !== null}
+              >
+                <Truck className="h-3.5 w-3.5" />
+                {assignedDeliveryUserId ? 'Reassign delivery' : 'Assign delivery'}
+              </Button>
+            }
+          />
+        )}
 
-          {/* Owner decision O3 (default, 0390): marking in transit needs
+        {/* Owner decision O3 (default, 0390): marking in transit needs
               orders:approve, the driver included, so an assigned staff
               driver without it is not offered a button the server refuses
               (the phone's order screen hides it the same way). */}
-          {status === 'staged_for_delivery' && assignedDeliveryUserId && approves && (
-            <Button
-              variant="default"
-              onClick={() => guardDeparture('in_transit', () => void markInTransit())}
-              disabled={busy !== null}
-            >
-              {busy === 'mark-in-transit' ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Truck className="h-3.5 w-3.5" />
-              )}
-              Mark in transit
-            </Button>
-          )}
+        {status === 'staged_for_delivery' && assignedDeliveryUserId && approves && (
+          <Button
+            variant="default"
+            onClick={() => guardDeparture('in_transit', () => void markInTransit())}
+            disabled={busy !== null}
+          >
+            {busy === 'mark-in-transit' ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Truck className="h-3.5 w-3.5" />
+            )}
+            Mark in transit
+          </Button>
+        )}
 
-          {/* RX-2 review fix P10: the driver's line for an exchange swap shows
+        {/* RX-2 review fix P10: the driver's line for an exchange swap shows
               once, in the replacement banner (core's replacementDriverLine:
               an early-released delivery not yet returned, never to the
               requester), never repeated here. */}
 
-          {(status === 'staged_for_pickup' || status === 'in_transit') && (approves || isDriverHere) && (
+        {(status === 'staged_for_pickup' || status === 'in_transit') &&
+          (approves || isDriverHere) && (
             <>
               {/* The sign page opens in the "anyway" click itself, so the
                   browser still treats it as the person's own action. With no
                   link (held back for MFA) the click only says why, so the
                   departure check is not asked first. */}
               <Button
-                variant="gradient"
+                variant="default"
                 onClick={() =>
-                  signatureToken ? guardDeparture('signature', collectSignature) : collectSignature()
+                  signatureToken
+                    ? guardDeparture('signature', collectSignature)
+                    : collectSignature()
                 }
                 disabled={busy !== null || (!signatureToken && !handOverMfaMessage)}
               >
@@ -1093,117 +1085,113 @@ export function ManagerActionsPanel({
             </>
           )}
 
-          {status === 'backordered' && approves && (
-            <>
-              {pickBlocked ? null : stockGates.resume !== 'waiting' ? (
-                <Button
-                  variant="gradient"
-                  onClick={() => openPartial('resume')}
-                  disabled={busy !== null || stockGates.resume === 'disabled'}
-                  aria-describedby={stockNotice ? 'order-stock-notice' : undefined}
-                  aria-haspopup="dialog"
-                >
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  Resume fulfillment
-                </Button>
-              ) : (
-                <span className="text-muted-foreground inline-flex items-center gap-1.5 text-xs">
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  Resume unlocks when owed items are back in stock.
-                </span>
-              )}
-              {/* Core decides (availableOrderActions): never for an exchange
+        {status === 'backordered' && approves && (
+          <>
+            {pickBlocked ? null : stockGates.resume !== 'waiting' ? (
+              <Button
+                variant="default"
+                onClick={() => openPartial('resume')}
+                disabled={busy !== null || stockGates.resume === 'disabled'}
+                aria-describedby={stockNotice ? 'order-stock-notice' : undefined}
+                aria-haspopup="dialog"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                Resume fulfillment
+              </Button>
+            ) : (
+              <span className="text-muted-foreground inline-flex items-center gap-1.5 text-[12.5px]">
+                <RotateCcw className="h-3.5 w-3.5" />
+                Resume unlocks when owed items are back in stock.
+              </span>
+            )}
+            {/* Core decides (availableOrderActions): never for an exchange
                   replacement, whose close-partial the 0396 header guard
                   refuses from anywhere but its RMA (security F-1). */}
-              {actions.includes('close_partial') && (
-                <Button
-                  variant="outline"
-                  onClick={() => setClosePartialOpen(true)}
-                  disabled={busy !== null}
-                >
-                  <PackageX className="h-3.5 w-3.5" />
-                  Close as delivered-partial
-                </Button>
-              )}
-            </>
-          )}
-
-          {(status === 'completed' || status === 'denied' || status === 'cancelled') && (
-            <div className="text-muted-foreground inline-flex items-center gap-1.5 text-xs">
-              <CheckCircle2 className="h-3.5 w-3.5" />
-              No further actions — this request is in a terminal state.
-            </div>
-          )}
-        </div>
-
-        {/* Under the actions: why a stock-dependent action is disabled (a
-            failed readiness read, an item the viewer cannot read, a moved
-            item), with Try again when a new read can help; and the note under
-            Approve when a strict Approve would be refused. */}
-        {stockNotice && (
-          <div
-            id="order-stock-notice"
-            role="status"
-            className="flex flex-wrap items-center gap-2 text-xs text-amber-800 dark:text-amber-300"
-            data-testid="order-stock-notice"
-          >
-            <span>{stockNotice}</span>
-            {stockGates.canRetry && (
+            {actions.includes('close_partial') && (
               <Button
                 variant="outline"
-                size="sm"
-                className="h-7 px-2 text-xs"
-                onClick={() => startRecheck(() => router.refresh())}
-                disabled={rechecking}
+                onClick={() => setClosePartialOpen(true)}
+                disabled={busy !== null}
               >
-                {rechecking ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <RotateCcw className="h-3.5 w-3.5" />
-                )}
-                Try again
+                <PackageX className="h-3.5 w-3.5" />
+                Close as delivered-partial
               </Button>
             )}
-          </div>
-        )}
-        {shortNotice && (
-          <p className="text-xs text-amber-800 dark:text-amber-300" data-testid="approve-short-notice">
-            {shortNotice}
-          </p>
+          </>
         )}
 
-        {approves && (
-          <div className="space-y-1.5 pt-2">
-            <Label htmlFor="internal-notes" className="text-xs">
-              Internal notes
-            </Label>
-            <Textarea
-              id="internal-notes"
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              rows={3}
-              maxLength={2000}
-              placeholder="Notes only managers can see"
-              disabled={busy === 'notes'}
-            />
-            <div className="flex justify-end">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={saveNotes}
-                disabled={!dirty || busy !== null}
-              >
-                {busy === 'notes' ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Save className="h-3.5 w-3.5" />
-                )}
-                Save notes
-              </Button>
-            </div>
+        {(status === 'completed' || status === 'denied' || status === 'cancelled') && (
+          <div className="text-muted-foreground inline-flex items-center gap-1.5 text-[12.5px]">
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            No further actions — this request is in a terminal state.
           </div>
         )}
       </div>
+
+      {/* Under the actions: why a stock-dependent action is disabled (a
+            failed readiness read, an item the viewer cannot read, a moved
+            item), with Try again when a new read can help; and the note under
+            Approve when a strict Approve would be refused. */}
+      {stockNotice && (
+        <div
+          id="order-stock-notice"
+          role="status"
+          className="text-warning flex flex-wrap items-center gap-2 text-[12.5px]"
+          data-testid="order-stock-notice"
+        >
+          <span>{stockNotice}</span>
+          {stockGates.canRetry && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => startRecheck(() => router.refresh())}
+              disabled={rechecking}
+            >
+              {rechecking ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RotateCcw className="h-3.5 w-3.5" />
+              )}
+              Try again
+            </Button>
+          )}
+        </div>
+      )}
+      {shortNotice && (
+        <p className="text-warning text-[12.5px]" data-testid="approve-short-notice">
+          {shortNotice}
+        </p>
+      )}
+
+      {approves && (
+        <div className="border-border -mx-[18px] space-y-1.5 border-t px-[18px] pt-3">
+          <Label htmlFor="internal-notes">Internal notes</Label>
+          <Textarea
+            id="internal-notes"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            rows={3}
+            maxLength={2000}
+            placeholder="Notes only managers can see"
+            disabled={busy === 'notes'}
+          />
+          <div className="flex justify-end">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={saveNotes}
+              disabled={!dirty || busy !== null}
+            >
+              {busy === 'notes' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Save className="h-3.5 w-3.5" />
+              )}
+              Save notes
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Approve partial and Resume fulfillment (F2-3): what each item would
           hold now before the commit, and what was held after it, read again.
@@ -1261,7 +1249,7 @@ export function ManagerActionsPanel({
               {completionConfirm?.reviewLabel}
             </Button>
             <Button
-              variant="gradient"
+              variant="default"
               onClick={() => {
                 setCompletionOpen(false);
                 void completePicking();
@@ -1305,7 +1293,7 @@ export function ManagerActionsPanel({
               {departure?.risk.cancelLabel}
             </Button>
             <Button
-              variant="gradient"
+              variant="default"
               onClick={() => {
                 const go = departure?.proceed;
                 setDeparture(null);
@@ -1334,8 +1322,8 @@ export function ManagerActionsPanel({
           <DialogHeader>
             <DialogTitle>Deny this request?</DialogTitle>
             <DialogDescription>
-              The requester will be notified with the reason you provide.
-              This action can&apos;t be undone.
+              The requester will be notified with the reason you provide. This action can&apos;t be
+              undone.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-1.5">
@@ -1363,9 +1351,7 @@ export function ManagerActionsPanel({
               onClick={deny}
               disabled={busy === 'deny' || !denyReason.trim()}
             >
-              {busy === 'deny' ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : null}
+              {busy === 'deny' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
               Deny request
             </Button>
           </DialogFooter>
@@ -1381,16 +1367,14 @@ export function ManagerActionsPanel({
           <DialogHeader>
             <DialogTitle>Reopen picking?</DialogTitle>
             <DialogDescription>
-              Sends this order back to picking so the count can be corrected.
-              The picked quantities and the assigned picker are kept, but the
-              stock that was picked returns to Unplaced — not necessarily its
-              original rack — and will need to be put away again before it
-              can ship.
+              Sends this order back to picking so the count can be corrected. The picked quantities
+              and the assigned picker are kept, but the stock that was picked returns to Unplaced —
+              not necessarily its original rack — and will need to be put away again before it can
+              ship.
               {status === 'packing_slip_generated'
                 ? ' The already-generated packing slip will be voided; a new one must be printed after picking finishes.'
                 : ''}{' '}
-              A signed order can&apos;t be reopened. This is recorded in the
-              audit log.
+              A signed order can&apos;t be reopened. This is recorded in the audit log.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-1.5">
@@ -1418,9 +1402,7 @@ export function ManagerActionsPanel({
               onClick={reopenPicking}
               disabled={busy === 'reopen-picking' || !reopenReason.trim()}
             >
-              {busy === 'reopen-picking' ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : null}
+              {busy === 'reopen-picking' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
               Reopen picking
             </Button>
           </DialogFooter>
@@ -1438,12 +1420,15 @@ export function ManagerActionsPanel({
       >
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>{orderLabel ? `Record a physical signature for ${orderLabel}` : 'Record a physical signature'}</DialogTitle>
+            <DialogTitle>
+              {orderLabel
+                ? `Record a physical signature for ${orderLabel}`
+                : 'Record a physical signature'}
+            </DialogTitle>
             <DialogDescription>
-              Use this when the customer signed on paper. It completes the
-              hand-over exactly like the digital sign page (including
-              backordering any still-owed items) and records the signature as
-              physical — no image is stored.
+              Use this when the customer signed on paper. It completes the hand-over exactly like
+              the digital sign page (including backordering any still-owed items) and records the
+              signature as physical — no image is stored.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-1.5">
@@ -1467,7 +1452,7 @@ export function ManagerActionsPanel({
               Cancel
             </Button>
             <Button
-              variant="gradient"
+              variant="default"
               onClick={confirmPhysicalSignature}
               disabled={busy === 'physical-signature' || !physicalSignerName.trim()}
             >
@@ -1494,9 +1479,8 @@ export function ManagerActionsPanel({
           <DialogHeader>
             <DialogTitle>Close as delivered-partial?</DialogTitle>
             <DialogDescription>
-              This ends the order and keeps the record of what was already
-              delivered. The remaining backordered units will NOT be fulfilled.
-              You can&apos;t reopen the order afterward.
+              This ends the order and keeps the record of what was already delivered. The remaining
+              backordered units will NOT be fulfilled. You can&apos;t reopen the order afterward.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -1507,10 +1491,8 @@ export function ManagerActionsPanel({
             >
               Cancel
             </Button>
-            <Button variant="gradient" onClick={closePartial} disabled={busy === 'close-partial'}>
-              {busy === 'close-partial' ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : null}
+            <Button variant="default" onClick={closePartial} disabled={busy === 'close-partial'}>
+              {busy === 'close-partial' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
               Close order
             </Button>
           </DialogFooter>
@@ -1524,9 +1506,7 @@ export function ManagerActionsPanel({
             <DialogTitle>Customer signature</DialogTitle>
             <DialogDescription>
               {signedByName ? `Signed by ${signedByName}` : 'Signed'}
-              {signedAt
-                ? ` · ${new Date(signedAt).toLocaleString()}`
-                : ''}
+              {signedAt ? ` · ${new Date(signedAt).toLocaleString()}` : ''}
             </DialogDescription>
           </DialogHeader>
           {sigLoading ? (
@@ -1554,10 +1534,9 @@ export function ManagerActionsPanel({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </section>
+    </DetailSection>
   );
 }
-
 
 /**
  * AI needed-by suggestion (pending orders without a deadline whose requester
@@ -1579,12 +1558,14 @@ function NeededBySuggest({
   hasRequesterNote: boolean;
 }) {
   const router = useRouter();
-  const [phase, setPhase] = React.useState<'idle' | 'loading' | 'suggested' | 'applying' | 'none'>('idle');
+  const [phase, setPhase] = React.useState<'idle' | 'loading' | 'suggested' | 'applying' | 'none'>(
+    'idle',
+  );
   const [iso, setIso] = React.useState<string | null>(null);
 
   if (neededBy) {
     return (
-      <div className="text-muted-foreground -mt-1 mb-1 flex w-full items-center gap-1.5 text-xs">
+      <div className="text-muted-foreground -mt-1 mb-1 flex w-full flex-wrap items-center gap-1.5 text-[12.5px]">
         <CalendarClock className="size-3.5" />
         Needed by{' '}
         <span className="text-foreground font-medium">{formatNeededBy(neededBy, timeZone)}</span>
@@ -1620,9 +1601,9 @@ function NeededBySuggest({
   }
 
   return (
-    <div className="-mt-1 mb-1 flex w-full flex-wrap items-center gap-2 text-xs">
+    <div className="-mt-1 mb-1 flex w-full flex-wrap items-center gap-2 text-[12.5px]">
       {phase === 'idle' || phase === 'loading' ? (
-        <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={suggest} disabled={phase === 'loading'}>
+        <Button size="sm" variant="ghost" onClick={suggest} disabled={phase === 'loading'}>
           {phase === 'loading' ? (
             <Loader2 className="size-3.5 animate-spin" />
           ) : (
@@ -1639,10 +1620,10 @@ function NeededBySuggest({
               {iso && formatNeededBy(iso, timeZone)}
             </span>
           </span>
-          <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={apply} disabled={phase === 'applying'}>
+          <Button size="sm" variant="outline" onClick={apply} disabled={phase === 'applying'}>
             {phase === 'applying' ? <Loader2 className="size-3.5 animate-spin" /> : 'Apply'}
           </Button>
-          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => setPhase('none')}>
+          <Button size="sm" variant="ghost" onClick={() => setPhase('none')}>
             Dismiss
           </Button>
         </>

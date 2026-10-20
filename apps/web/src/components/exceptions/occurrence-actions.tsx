@@ -46,6 +46,10 @@ function newClientEventId(): string {
  * the count instead" and Confirm this count instead opens the page's confirm
  * dialog with the note typed here (ConfirmCountInsteadButton, which shows
  * only where the page's ConfirmCountProvider offers Confirm).
+ *
+ * Look (redesign): it sits in the page's "Acknowledge or add a note" card;
+ * the buttons are the 32 px pair of DESIGN-SPEC 6.2 (Acknowledge ink-filled,
+ * or outline on a count difference; Add note outline), 8 px apart.
  */
 export function OccurrenceActions({
   occurrenceId,
@@ -107,14 +111,16 @@ export function OccurrenceActions({
     <section aria-label="Acknowledge or add a note" className="space-y-3">
       {!acknowledged ? (
         <div className="space-y-1">
-          <p className="text-muted-foreground text-sm">{ackHelp ?? EXCEPTION_ACKNOWLEDGE_HELP}</p>
+          <p className="text-muted-foreground text-[13.5px] leading-5">
+            {ackHelp ?? EXCEPTION_ACKNOWLEDGE_HELP}
+          </p>
           {rule === 'count_variance' ? (
             <ConfirmCountInsteadButton note={note} disabled={pending !== null} />
           ) : null}
         </div>
       ) : null}
-      <div className="space-y-1">
-        <label htmlFor="exception-note" className="text-sm font-medium">
+      <div className="space-y-1.5">
+        <label htmlFor="exception-note" className="text-foreground text-[13px] font-medium">
           Note{!acknowledged ? ' (optional when acknowledging)' : ''}
         </label>
         <Textarea
@@ -128,12 +134,18 @@ export function OccurrenceActions({
           placeholder="What you checked or what you are doing about it"
           disabled={pending !== null}
         />
-        <p className={tooLong ? 'text-destructive text-xs' : 'text-muted-foreground text-xs'}>
+        <p
+          className={
+            tooLong
+              ? 'text-destructive text-[12px] tabular-nums'
+              : 'text-muted-foreground text-[12px] tabular-nums'
+          }
+        >
           {Array.from(trimmed).length.toLocaleString('en-US')} / {NOTE_MAX.toLocaleString('en-US')}
         </p>
       </div>
       {error ? (
-        <p role="alert" className="text-destructive text-sm">
+        <p role="alert" className="text-destructive text-[13.5px]">
           {error}
         </p>
       ) : null}
@@ -141,7 +153,6 @@ export function OccurrenceActions({
         {!acknowledged ? (
           <Button
             type="button"
-            size="sm"
             variant={acknowledgeVariant}
             data-variant={acknowledgeVariant}
             onClick={() => void submit('acknowledge')}
@@ -152,7 +163,6 @@ export function OccurrenceActions({
         ) : null}
         <Button
           type="button"
-          size="sm"
           variant="outline"
           onClick={() => void submit('note')}
           disabled={pending !== null || tooLong || trimmed === ''}

@@ -1,24 +1,25 @@
-import { ArrowLeftRight, Download } from 'lucide-react';
+import { ArrowLeftRight } from 'lucide-react';
+import type { Metadata } from 'next';
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
+import type { ReactNode } from 'react';
 
-import { Button } from '@/components/ui/button';
-import { EmptyState } from '@/components/ui/empty-state';
-import { EditableMovementNote } from '@/components/movements/editable-movement-note';
+import {
+  MovementsExportButton,
+  MovementsInstantFiltersProvider,
+} from '@/components/movements/movements-export';
 import { MovementsFilterBar } from '@/components/movements/movements-filter-bar';
+import { MovementsInstantTable } from '@/components/movements/movements-instant-table';
 import {
-  MovementsInstantTable,
+  MOVEMENTS_TITLE_ID,
+  MovementsTable,
   type MovementDisplayRow,
-} from '@/components/movements/movements-instant-table';
+} from '@/components/movements/movements-table';
+import { PageHeader } from '@/components/patterns/page-header';
+import { StatePanel } from '@/components/patterns/state-panel';
 import { PerfUseful } from '@/components/perf/perf-useful';
+import { Button } from '@/components/ui/button';
 import { Pagination } from '@/components/ui/pagination';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
 import { requireOrgContext } from '@/lib/auth/session';
 import { movementActorLabel } from '@/lib/movements/actor-label';
 import {
@@ -27,12 +28,15 @@ import {
   parseMovementTypeParam,
   parseToDateParam,
 } from '@/lib/movements-filters';
-import { MovementsService } from '@/server/services/movements';
+import { MovementsService, type MovementWithItem } from '@/server/services/movements';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
-import { LocalDateTime } from '@/components/ui/local-datetime';
-import { formatNumber, formatRelative } from '@/lib/utils';
 
 import { can, isReceiptNoteSentinel, userMovementNote } from '@stockpilot/core';
+
+// The tab says what the page is: "Stock movements · StockPilot" through the
+// (dashboard) layout's title template. With no title of its own the tab read
+// the group's default, "Dashboard · StockPilot" (CONFLICTS D16).
+export const metadata: Metadata = { title: 'Stock movements' };
 
 const PAGE_SIZE = 50;
 
@@ -70,6 +74,60 @@ function isReceiptLineNote(rawNotes: unknown): boolean {
 // older rows' reason text — null means "render plain text", never a dead link.
 function orderHref(orderRefId: string | null | undefined): string | null {
   return orderRefId ? `/dashboard/orders/${orderRefId}` : null;
+}
+
+/**
+ * One ledger row as the table prints it. Both modes go through this one
+ * mapping and the one MovementsTable, so the server-paged ledger and the
+ * instant ledger can no longer print the same movement differently.
+ */
+function toDisplayRow(m: MovementWithItem): MovementDisplayRow {
+  return {
+    id: m.id as string,
+    movementType: m.movement_type as string,
+    quantityChange: Number(m.quantity_change),
+    newQuantity: Number(m.new_quantity),
+    movedQuantity: m.moved_quantity == null ? null : Number(m.moved_quantity),
+    // reason (read-only "why") and note (editable free text) are carried as
+    // TWO fields now — the note cell edits `note` and falls back to showing
+    // `reason` when there's no note (see EditableMovementNote).
+    reason: (m.reason as string | null) ?? null,
+    reasonHref: orderHref(m.order_ref_id),
+    note: userNote(m.notes),
+    // receipt_line rows carry a system-managed note (the RPC rejects edits)
+    // — never expose the add/edit affordance on them.
+    noteEditable: !isReceiptLineNote(m.notes),
+    createdAt: m.created_at as string,
+    itemName: m.item?.name ?? null,
+    itemSku: m.item?.sku ?? null,
+    actorLabel: movementActorLabel(m),
+    actorEmail: m.actor?.fullName && m.actor?.email ? m.actor.email : null,
+  };
+}
+
+const NO_MATCH = {
+  title: 'No movements match',
+  description:
+    'Nothing found for the current filters. Try a different search, type, or date range.',
+};
+
+const EMPTY_LEDGER = {
+  title: 'No movements yet',
+  description:
+    "Every stock change gets recorded here — create an item, adjust quantity, or receive a PO and it'll show up.",
+};
+
+/**
+ * A state panel's way out, a real link: the flat accent button every
+ * EmptyState draws its call to action with (the `gradient` variant), so these
+ * states keep the button they had and look like every other empty list.
+ */
+function StateLink({ href, children }: { href: string; children: ReactNode }) {
+  return (
+    <Button asChild variant="gradient">
+      <Link href={href}>{children}</Link>
+    </Button>
+  );
 }
 
 export default async function MovementsPage({
@@ -141,28 +199,7 @@ export default async function MovementsPage({
   let totalPages: number | undefined;
 
   if (instant) {
-    const all = speculativeAll;
-    instantRows = all.map((m) => ({
-      id: m.id as string,
-      movementType: m.movement_type as string,
-      quantityChange: Number(m.quantity_change),
-      newQuantity: Number(m.new_quantity),
-      movedQuantity: m.moved_quantity == null ? null : Number(m.moved_quantity),
-      // reason (read-only "why") and note (editable free text) are carried as
-      // TWO fields now — the note cell edits `note` and falls back to showing
-      // `reason` when there's no note (see EditableMovementNote).
-      reason: (m.reason as string | null) ?? null,
-      reasonHref: orderHref(m.order_ref_id),
-      note: userNote(m.notes),
-      // receipt_line rows carry a system-managed note (the RPC rejects edits)
-      // — never expose the add/edit affordance on them.
-      noteEditable: !isReceiptLineNote(m.notes),
-      createdAt: m.created_at as string,
-      itemName: m.item?.name ?? null,
-      itemSku: m.item?.sku ?? null,
-      actorLabel: movementActorLabel(m),
-      actorEmail: m.actor?.fullName && m.actor?.email ? m.actor.email : null,
-    }));
+    instantRows = speculativeAll.map(toDisplayRow);
   } else {
     // One extra row detects a next page even if the count is unavailable; the
     // count drives the numbered pager. Server-side search + type/date here.
@@ -209,193 +246,123 @@ export default async function MovementsPage({
   const exportQs = buildMovementsQueryString(activeFilters);
   const exportHref = exportQs ? `/api/movements/export.csv?${exportQs}` : '/api/movements/export.csv';
 
+  // The instant ledger draws its own controls; an empty ledger has none.
+  const instantLedger = instant && total !== 0;
+  // Server mode keeps its controls whenever there is a ledger to filter, or
+  // filters to clear: a no-match filter must stay visible (and clearable).
+  const serverControls = !instant && (total !== 0 || hasActiveFilters);
+
   return (
-    <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
-      {/* Performance marker. No Suspense split on this page: the ledger rows
-          (instant or server mode) are awaited above, so this markup only
-          exists once they are in hand. loading.tsx is the skeleton and never
-          renders this; every empty state below is a finished page and counts. */}
-      <PerfUseful />
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Stock movements</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Every quantity change, audited. The ledger is append-only.
-        </p>
-      </div>
-      {/* Controls get their own full-width row (filter bar left, export +
-          pager right) so they never fight the heading for space — the same
-          layout MovementsInstantTable renders in instant mode. */}
-      {!instant && (total !== 0 || hasActiveFilters) && (
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <MovementsFilterBar mode="server" initial={activeFilters} />
-          <div className="flex items-center gap-3">
-            <Button asChild variant="outline" size="sm">
-              <a href={exportHref} download aria-label="Export movements to CSV">
-                <Download className="mr-1.5 h-3.5 w-3.5" />
-                Export CSV
-              </a>
-            </Button>
-            <Pagination
-              page={page}
-              pageSize={PAGE_SIZE}
-              total={total}
-              totalPages={totalPages}
-              hasNext={hasNext}
-              basePath="/dashboard/movements"
-              baseParams={movementsBaseParams}
+    // The page area (DESIGN-SPEC 4 and 5.3): 1320 wide at most, 28 / 32 / 64
+    // around it and a 16 px gutter on a phone, as the route's skeleton draws.
+    // The provider only shares the instant ledger's filters with the header's
+    // Export CSV; it reads nothing.
+    <MovementsInstantFiltersProvider>
+      <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+        {/* Performance marker. No Suspense split on this page: the ledger rows
+            (instant or server mode) are awaited above, so this markup only
+            exists once they are in hand. loading.tsx is the skeleton and never
+            renders this; every empty state below is a finished page and counts. */}
+        <PerfUseful />
+        <PageHeader
+          title="Stock movements"
+          titleId={MOVEMENTS_TITLE_ID}
+          subline="Every quantity change, audited. The ledger is append-only."
+          actions={
+            instantLedger ? (
+              <MovementsExportButton />
+            ) : serverControls ? (
+              <MovementsExportButton href={exportHref} />
+            ) : undefined
+          }
+        />
+
+        {/* Server mode: the type chips, then search, dates and the top pager,
+            the same rows MovementsInstantTable renders in instant mode. */}
+        {serverControls && (
+          <MovementsFilterBar
+            mode="server"
+            initial={activeFilters}
+            trailing={
+              <Pagination
+                page={page}
+                pageSize={PAGE_SIZE}
+                total={total}
+                totalPages={totalPages}
+                hasNext={hasNext}
+                basePath="/dashboard/movements"
+                baseParams={movementsBaseParams}
+                className="flex-wrap"
+              />
+            }
+          />
+        )}
+
+        {!instant && total === 0 && hasActiveFilters ? (
+          // Server mode, filtered count is 0: a no-match filter must stay
+          // visible (and clearable), not get swallowed by the "ledger's
+          // truly empty" state below — otherwise the user can't tell why
+          // nothing showed up or how to get back to an unfiltered view.
+          <StatePanel
+            kind="no-match"
+            title={NO_MATCH.title}
+            description={NO_MATCH.description}
+            action={<StateLink href="/dashboard/movements">Clear filters</StateLink>}
+          />
+        ) : total === 0 ? (
+          <StatePanel
+            kind="empty"
+            icon={ArrowLeftRight}
+            title={EMPTY_LEDGER.title}
+            description={EMPTY_LEDGER.description}
+            action={<StateLink href="/dashboard/inventory">Go to inventory</StateLink>}
+          />
+        ) : instant ? (
+          <MovementsInstantTable rows={instantRows} canEditNotes={canEditNotes} />
+        ) : visible.length === 0 ? (
+          hasActiveFilters ? (
+            <StatePanel
+              kind="no-match"
+              title={NO_MATCH.title}
+              description={NO_MATCH.description}
+              action={<StateLink href="/dashboard/movements">Clear filters</StateLink>}
             />
-          </div>
-        </div>
-      )}
-
-      {!instant && total === 0 && hasActiveFilters ? (
-        // Server mode, filtered count is 0: a no-match filter must stay
-        // visible (and clearable), not get swallowed by the "ledger's
-        // truly empty" state below — otherwise the user can't tell why
-        // nothing showed up or how to get back to an unfiltered view.
-        <EmptyState
-          icon={ArrowLeftRight}
-          title="No movements match"
-          description="Nothing found for the current filters. Try a different search, type, or date range."
-          cta={{ label: 'Clear filters', href: '/dashboard/movements' }}
-        />
-      ) : total === 0 ? (
-        <EmptyState
-          icon={ArrowLeftRight}
-          title="No movements yet"
-          description="Every stock change gets recorded here — create an item, adjust quantity, or receive a PO and it'll show up."
-          cta={{ label: 'Go to inventory', href: '/dashboard/inventory' }}
-        />
-      ) : instant ? (
-        <MovementsInstantTable rows={instantRows} canEditNotes={canEditNotes} />
-      ) : visible.length === 0 ? (
-        hasActiveFilters ? (
-          <EmptyState
-            icon={ArrowLeftRight}
-            title="No movements match"
-            description="Nothing found for the current filters. Try a different search, type, or date range."
-            cta={{ label: 'Clear filters', href: '/dashboard/movements' }}
-          />
-        ) : page === 1 ? (
-          <EmptyState
-            icon={ArrowLeftRight}
-            title="No movements yet"
-            description="Every stock change gets recorded here — create an item, adjust quantity, or receive a PO and it'll show up."
-            cta={{ label: 'Go to inventory', href: '/dashboard/inventory' }}
-          />
+          ) : page === 1 ? (
+            <StatePanel
+              kind="empty"
+              icon={ArrowLeftRight}
+              title={EMPTY_LEDGER.title}
+              description={EMPTY_LEDGER.description}
+              action={<StateLink href="/dashboard/inventory">Go to inventory</StateLink>}
+            />
+          ) : (
+            <StatePanel
+              kind="empty"
+              icon={ArrowLeftRight}
+              title="End of the ledger"
+              description="You've scrolled past the oldest movement. Head back to page one to see recent activity."
+              action={<StateLink href="/dashboard/movements">Back to newest</StateLink>}
+            />
+          )
         ) : (
-          <EmptyState
-            icon={ArrowLeftRight}
-            title="End of the ledger"
-            description="You've scrolled past the oldest movement. Head back to page one to see recent activity."
-            cta={{ label: 'Back to newest', href: '/dashboard/movements' }}
+          <MovementsTable
+            rows={visible.map(toDisplayRow)}
+            canEditNotes={canEditNotes}
+            footer={
+              <Pagination
+                page={page}
+                pageSize={PAGE_SIZE}
+                total={total}
+                totalPages={totalPages}
+                hasNext={hasNext}
+                basePath="/dashboard/movements"
+                baseParams={movementsBaseParams}
+              />
+            }
           />
-        )
-      ) : (
-        <div className="overflow-x-auto rounded-xl border bg-card">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>When</TableHead>
-                <TableHead>Item</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead className="text-right">Δ</TableHead>
-                <TableHead className="text-right">After</TableHead>
-                <TableHead>By</TableHead>
-                <TableHead>Note</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {visible.map((m) => {
-                const itemName = m.item?.name;
-                const change = Number(m.quantity_change);
-                // Transfers are net-zero (quantity_change is ALWAYS 0 — the
-                // ledger sums to on-hand); show the physical qty moved
-                // (moved_quantity, mig 0231) neutrally instead. Pre-0231
-                // transfer rows have none → em dash, never a misleading 0.
-                const isTransfer = m.movement_type === 'transfer';
-                const moved = m.moved_quantity == null ? null : Number(m.moved_quantity);
-                const actorLabel = movementActorLabel(m);
-                return (
-                  <TableRow key={m.id as string}>
-                    <TableCell className="text-xs text-muted-foreground">
-                      <div>{formatRelative(m.created_at as string)}</div>
-                      <LocalDateTime
-                        iso={m.created_at as string}
-                        className="text-[11px] opacity-80"
-                      />
-                    </TableCell>
-                    <TableCell className="font-medium">{itemName ?? '—'}</TableCell>
-                    <TableCell className="text-xs uppercase tracking-wider text-muted-foreground">
-                      {m.movement_type as string}
-                    </TableCell>
-                    <TableCell
-                      className={
-                        'text-right font-mono tabular-nums ' +
-                        (isTransfer
-                          ? ''
-                          : change > 0
-                            ? 'text-success'
-                            : change < 0
-                              ? 'text-destructive'
-                              : '')
-                      }
-                    >
-                      {isTransfer ? (
-                        moved != null ? (
-                          formatNumber(moved)
-                        ) : (
-                          '—'
-                        )
-                      ) : (
-                        <>
-                          {change > 0 ? '+' : ''}
-                          {formatNumber(change)}
-                        </>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatNumber(Number(m.new_quantity))}
-                    </TableCell>
-                    <TableCell className="text-xs">
-                      <div className="font-medium">{actorLabel}</div>
-                      {m.actor?.fullName && m.actor.email && (
-                        <div className="text-muted-foreground text-[11px]">
-                          {m.actor.email}
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      <EditableMovementNote
-                        movementId={m.id as string}
-                        note={userNote(m.notes)}
-                        reason={(m.reason as string | null) ?? null}
-                        reasonHref={orderHref(m.order_ref_id)}
-                        // receipt_line rows are system-managed (RPC rejects the
-                        // edit) — read-only regardless of the caller's perm.
-                        canEdit={canEditNotes && !isReceiptLineNote(m.notes)}
-                      />
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </div>
-      )}
-
-      {visible.length > 0 && (
-        <div className="mt-4 flex items-center justify-end">
-          <Pagination
-            page={page}
-            totalPages={totalPages}
-            hasNext={hasNext}
-            basePath="/dashboard/movements"
-            baseParams={movementsBaseParams}
-          />
-        </div>
-      )}
-    </div>
+        )}
+      </div>
+    </MovementsInstantFiltersProvider>
   );
 }
 

@@ -144,9 +144,7 @@ export function PoScanForm() {
       fd.append(
         'displayNames',
         JSON.stringify(
-          mode === 'separate'
-            ? files.map((_, i) => toEntry(names[i]))
-            : [toEntry(names[0])],
+          mode === 'separate' ? files.map((_, i) => toEntry(names[i])) : [toEntry(names[0])],
         ),
       );
       const res = await fetch('/api/po-imports/scan', {
@@ -155,7 +153,10 @@ export function PoScanForm() {
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok || !json.ok) {
-        toast.error(json.message || `Couldn't scan the upload (${res.status}). Try again or use a clearer photo.`);
+        toast.error(
+          json.message ||
+            `Couldn't scan the upload (${res.status}). Try again or use a clearer photo.`,
+        );
         return;
       }
       stopProgress();
@@ -184,7 +185,11 @@ export function PoScanForm() {
       }
       router.push(`/dashboard/purchase-orders/imports/${json.id}`);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't reach the scan service. Check your network and try again.");
+      toast.error(
+        e instanceof Error
+          ? e.message
+          : "Couldn't reach the scan service. Check your network and try again.",
+      );
     } finally {
       stopProgress();
       setBusy(false);
@@ -208,9 +213,9 @@ export function PoScanForm() {
             placeholder="Example: August DC4 Book Order"
             disabled={busy}
           />
-          <p className="text-muted-foreground text-xs">
-            Give this import a name so it is easy to find later. Optional — without
-            one, the import is listed by its file name.
+          <p className="text-muted-foreground text-[12.5px]">
+            Give this import a name so it is easy to find later. Optional — without one, the import
+            is listed by its file name.
           </p>
         </div>
       )}
@@ -226,6 +231,17 @@ export function PoScanForm() {
           setDragOver(false);
           if (e.dataTransfer.files.length > 0) add(e.dataTransfer.files);
         }}
+        // A real control for the keyboard too: Tab reaches it and Enter or
+        // Space opens the file picker, as a click does.
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return;
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            inputRef.current?.click();
+          }
+        }}
         onClick={(e) => {
           // The file input lives INSIDE this div, so a click on it bubbles back
           // here and re-clicks it — an infinite loop (RangeError: maximum call
@@ -236,15 +252,20 @@ export function PoScanForm() {
           inputRef.current?.click();
         }}
         className={cn(
-          'border-border bg-muted/30 hover:bg-muted/40 flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed px-6 py-10 text-center transition-colors',
-          dragOver && 'border-foreground/60 bg-muted/60',
+          // The drop zone (DESIGN-SPEC 6.21 extension): the sunk well with a
+          // dashed stronger hairline that turns ink while a file is over it.
+          'bg-sunk hover:bg-muted focus-visible:ring-ring focus-visible:ring-offset-background border-line-strong flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed px-6 py-10 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
+          dragOver && 'border-foreground bg-muted',
         )}
       >
-        <Camera className="text-muted-foreground h-6 w-6" />
-        <p className="text-sm font-medium">
-          Drop a photo or PDF of your PO
-        </p>
-        <p className="text-muted-foreground text-xs">
+        <span
+          aria-hidden
+          className="bg-card text-muted-foreground border-border flex size-10 items-center justify-center rounded-full border"
+        >
+          <Camera className="h-5 w-5" strokeWidth={1.75} />
+        </span>
+        <p className="text-foreground text-[13.5px] font-medium">Drop a photo or PDF of your PO</p>
+        <p className="text-muted-foreground text-[12.5px]">
           Up to {MAX_FILES} files · 8 MB each · JPEG, PNG, WEBP, HEIC, or PDF
         </p>
         <input
@@ -262,30 +283,33 @@ export function PoScanForm() {
       </div>
 
       {files.length > 0 && (
-        <ul className="space-y-2">
+        // The attached files as rows of one list card (DESIGN-SPEC 6.7).
+        <ul className="border-border bg-card divide-border divide-y rounded-lg border">
           {files.map((f, i) => (
-            <li
-              key={`${f.name}-${i}`}
-              className="border-border bg-card space-y-2 rounded-md border px-3 py-2 text-sm"
-            >
+            <li key={`${f.name}-${i}`} className="space-y-2 px-4 py-2.5 text-[13px]">
               <div className="flex items-center gap-3">
-                <Upload className="text-muted-foreground h-3.5 w-3.5" />
-                <span className="flex-1 truncate">{f.name}</span>
-                <span className="text-muted-foreground text-[11px] tabular-nums">
+                <Upload aria-hidden className="text-muted-foreground h-3.5 w-3.5 shrink-0" />
+                <span className="text-foreground min-w-0 flex-1 truncate">{f.name}</span>
+                <span className="text-muted-foreground shrink-0 font-mono text-[12px] tabular-nums">
                   {(f.size / 1024).toFixed(0)} KB
                 </span>
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="icon"
                   onClick={() => remove(i)}
-                  className="text-muted-foreground hover:text-destructive p-1"
+                  className="text-muted-foreground hover:text-destructive h-7 w-7 shrink-0"
                   aria-label={`Remove ${f.name}`}
                 >
                   <X className="h-3.5 w-3.5" />
-                </button>
+                </Button>
               </div>
               {perFileNames && (
                 <div className="space-y-1">
-                  <Label htmlFor={`scan-display-name-${i}`} className="text-xs">
+                  <Label
+                    htmlFor={`scan-display-name-${i}`}
+                    className="text-muted-foreground text-[12px] font-normal"
+                  >
                     PO name
                   </Label>
                   <Input
@@ -299,7 +323,6 @@ export function PoScanForm() {
                     maxLength={PO_IMPORT_DISPLAY_NAME_MAX}
                     placeholder="Example: August DC4 Book Order"
                     disabled={busy}
-                    className="h-8 text-sm"
                   />
                 </div>
               )}
@@ -309,38 +332,40 @@ export function PoScanForm() {
       )}
 
       {files.length > 1 && !busy && (
-        <div className="border-border bg-muted/30 space-y-2 rounded-lg border p-3">
-          <p className="text-xs font-medium">
+        <div className="border-border bg-sunk space-y-2 rounded-lg border p-3">
+          <p className="text-foreground text-[13px] font-medium">
             You attached {files.length} files — are these…
           </p>
           <div className="grid gap-2 sm:grid-cols-2">
             <button
               type="button"
               onClick={() => setSeparate(true)}
+              aria-pressed={separate}
               className={cn(
-                'rounded-md border px-3 py-2 text-left text-xs transition-colors',
+                'focus-visible:ring-ring focus-visible:ring-offset-background rounded-md border px-3 py-2 text-left text-[12.5px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
                 separate
-                  ? 'border-foreground/60 bg-card'
-                  : 'border-border hover:bg-muted/40',
+                  ? 'border-foreground bg-card shadow-[0_0_0_1px_hsl(var(--foreground))]'
+                  : 'bg-card/60 hover:bg-card border-line-strong',
               )}
             >
-              <span className="block font-medium">Separate POs</span>
+              <span className="text-foreground block font-medium">Separate POs</span>
               <span className="text-muted-foreground">
-                Each file becomes its own import to review &amp; approve — name
-                them individually above
+                Each file becomes its own import to review &amp; approve — name them individually
+                above
               </span>
             </button>
             <button
               type="button"
               onClick={() => setSeparate(false)}
+              aria-pressed={!separate}
               className={cn(
-                'rounded-md border px-3 py-2 text-left text-xs transition-colors',
+                'focus-visible:ring-ring focus-visible:ring-offset-background rounded-md border px-3 py-2 text-left text-[12.5px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
                 !separate
-                  ? 'border-foreground/60 bg-card'
-                  : 'border-border hover:bg-muted/40',
+                  ? 'border-foreground bg-card shadow-[0_0_0_1px_hsl(var(--foreground))]'
+                  : 'bg-card/60 hover:bg-card border-line-strong',
               )}
             >
-              <span className="block font-medium">One multi-page PO</span>
+              <span className="text-foreground block font-medium">One multi-page PO</span>
               <span className="text-muted-foreground">
                 Combine all files as pages of a single PO
               </span>
@@ -351,17 +376,19 @@ export function PoScanForm() {
 
       {busy ? (
         <div className="space-y-2">
-          <div className="flex items-center gap-2 text-sm font-medium">
+          <div className="text-foreground flex items-center gap-2 text-[13px] font-medium">
             <Loader2 className="h-4 w-4 animate-spin" />
             {stage || 'Working…'}
           </div>
-          <div className="bg-muted h-2 w-full overflow-hidden rounded-full">
+          {/* The progress bar's look (DESIGN-SPEC 6.11): a 4 px track with
+              the accent fill. */}
+          <div className="bg-line-strong h-1 w-full overflow-hidden rounded-full">
             <div
-              className="bg-foreground h-full rounded-full transition-[width] duration-200 ease-out"
+              className="bg-accent h-full rounded-full transition-[width] duration-200 ease-out"
               style={{ width: `${pct}%` }}
             />
           </div>
-          <p className="text-muted-foreground text-xs">
+          <p className="text-muted-foreground text-[12.5px]">
             Extracting with AI — this usually takes a few seconds. Keep this tab open.
           </p>
         </div>
@@ -384,12 +411,10 @@ export function PoScanForm() {
         </div>
       )}
 
-      <p className="text-xs text-muted-foreground">
-        Scanned POs run through AI vision extraction. Your data stays in
-        your Supabase project; the scan endpoint only sends the image bytes
-        for extraction. After review, the existing approve flow learns
-        vendor-SKU mappings so repeat POs from the same supplier need almost
-        no edits.
+      <p className="text-muted-foreground text-[12.5px]">
+        Scanned POs run through AI vision extraction. Your data stays in your Supabase project; the
+        scan endpoint only sends the image bytes for extraction. After review, the existing approve
+        flow learns vendor-SKU mappings so repeat POs from the same supplier need almost no edits.
       </p>
     </div>
   );

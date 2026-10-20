@@ -4,6 +4,8 @@ import userEvent from '@testing-library/user-event';
 import * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { formatPlacementLabel, resolvePlacement } from '@stockpilot/core';
+
 import { useCountSelection } from '@/lib/cycle-counts/use-count-selection';
 
 import { CountItemPicker } from './count-item-picker';
@@ -380,5 +382,95 @@ describe('CountItemPicker — product groups', () => {
       'Nike Pegasus 41 has no active variants to count.',
     );
     expect(Object.keys(useCountSelection.getState().picks)).toEqual([]);
+  });
+});
+
+/**
+ * The redesigned picker rows (the owner's "make sure our check boxes ... work
+ * in the redesign"): the shared checkbox, a whole row that toggles on a click
+ * as the old label row did, exactly ONE toggle per click whether it lands on
+ * the box or on the words, and the tabs as a switch that says which is chosen.
+ */
+describe('CountItemPicker — rows and tabs', () => {
+  const fetchSpy = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useCountSelection.getState().clear();
+    vi.stubGlobal('fetch', fetchSpy);
+    fetchSpy.mockResolvedValue(
+      jsonResponse([row({ id: 'a', name: 'Alpha Charger', sku: 'SP-A', quantity_on_hand: 7 })]),
+    );
+  });
+
+  it('a click on the row words toggles the row once, and again back', async () => {
+    const user = userEvent.setup();
+    render(<CountItemPicker warehouses={WAREHOUSES} />);
+    const name = await screen.findByText('Alpha Charger');
+    await user.click(name);
+    expect(Object.keys(useCountSelection.getState().picks)).toEqual(['a']);
+    expect(screen.getByRole('checkbox', { name: 'Select Alpha Charger' })).toBeChecked();
+    await user.click(screen.getByText('7 on hand'));
+    expect(useCountSelection.getState().picks).toEqual({});
+    expect(screen.getByRole('checkbox', { name: 'Select Alpha Charger' })).not.toBeChecked();
+  });
+
+  it('a click on the box toggles once, never twice through its row', async () => {
+    const user = userEvent.setup();
+    render(<CountItemPicker warehouses={WAREHOUSES} />);
+    const box = await screen.findByRole('checkbox', { name: 'Select Alpha Charger' });
+    await user.click(box);
+    expect(Object.keys(useCountSelection.getState().picks)).toEqual(['a']);
+    expect(box).toBeChecked();
+  });
+
+  it('Space on the focused box toggles it (the keyboard path)', async () => {
+    const user = userEvent.setup();
+    render(<CountItemPicker warehouses={WAREHOUSES} />);
+    const box = await screen.findByRole('checkbox', { name: 'Select Alpha Charger' });
+    box.focus();
+    await user.keyboard(' ');
+    expect(Object.keys(useCountSelection.getState().picks)).toEqual(['a']);
+  });
+
+  it('the tabs say which list is open', async () => {
+    const user = userEvent.setup();
+    render(<CountItemPicker warehouses={WAREHOUSES} sportsEnabled />);
+    await screen.findByText('Alpha Charger');
+    expect(screen.getByRole('button', { name: 'Inventory' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(screen.getByRole('button', { name: 'Books' })).toHaveAttribute('aria-pressed', 'false');
+    await user.click(screen.getByRole('button', { name: 'Books' }));
+    expect(screen.getByRole('button', { name: 'Books' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Product groups' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+  });
+
+  it('shows the SKU, the walk-to place (the count sheet rule) and the on-hand figure', async () => {
+    // Split across two racks: the resolver names both, as the sheet does.
+    const holdings = [
+      { name: '12-A', quantity: 3, kind: 'rack' },
+      { name: '5-C', quantity: 1, kind: 'rack' },
+    ];
+    fetchSpy.mockResolvedValue(
+      jsonResponse([
+        {
+          ...row({ id: 'r', name: 'Rack Item', sku: 'SP-R', quantity_on_hand: 4 }),
+          placed_holdings: holdings,
+        } as unknown as Row,
+      ]),
+    );
+    render(<CountItemPicker warehouses={WAREHOUSES} />);
+    await screen.findByText('Rack Item');
+    const place = formatPlacementLabel(
+      resolvePlacement({ itemType: 'product', customFields: null, holdings }),
+    );
+    expect(place).toBeTruthy();
+    expect(screen.getByText(`SP-R · ${place}`)).toBeInTheDocument();
+    expect(screen.getByText('4 on hand')).toBeInTheDocument();
   });
 });

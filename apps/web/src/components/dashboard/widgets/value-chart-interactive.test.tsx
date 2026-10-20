@@ -10,7 +10,13 @@ import { ValueChartInteractive } from './value-chart-interactive';
 // (`series`), the series labels (order matters), and the primary line's first
 // value — so the island's wiring can be asserted without any SVG maths.
 vi.mock('@/components/dashboard/big-chart', () => ({
-  BigChart: ({ data, series }: { data?: Array<{ value: number }>; series?: Array<{ label: string; data: Array<{ value: number }> }> }) => (
+  BigChart: ({
+    data,
+    series,
+  }: {
+    data?: Array<{ value: number }>;
+    series?: Array<{ label: string; data: Array<{ value: number }> }>;
+  }) => (
     <div
       data-testid="big-chart"
       data-variant={series ? 'multi' : 'single'}
@@ -242,6 +248,102 @@ describe('ValueChartInteractive', () => {
 
     // Served from the session cache — still only ONE network call total.
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// The reference value card's figure (P3.1): the 30 px value and its delta
+// always describe the primary line on screen.
+describe('ValueChartInteractive: the figure', () => {
+  const figure = () => document.querySelector('[data-slot="value-figure"]');
+
+  it("prints the key stats' own value and delta in the default view, with no fetch", () => {
+    renderCard({ initialValue: 156087.72, initialDelta: { label: '+0.4%', direction: 'up' } });
+    expect(figure()).toHaveTextContent('$156,087.72');
+    expect(figure()).toHaveTextContent('+0.4%');
+    expect(figure()).toHaveTextContent('vs. 30 days ago');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the seed line's last point when no value is passed", () => {
+    renderCard();
+    expect(figure()).toHaveTextContent('$129.00'); // SEED[29].value
+  });
+
+  it('follows the fetched line after a basis change: its last point and its own delta', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    fetchMock.mockResolvedValue(okJson(previousPayload('retail', 4000, 3000)));
+    renderCard({ initialValue: 156087.72, initialDelta: { label: '+0.4%', direction: 'up' } });
+    await user.click(screen.getByRole('button', { name: 'Retail' }));
+    await waitFor(() => expect(figure()).toHaveTextContent('$4,029.00'));
+    // 4000 -> 4029 over the window.
+    expect(figure()).toHaveTextContent('+0.7%');
+  });
+
+  it('describes the current period in a Previous period comparison', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    fetchMock.mockResolvedValue(okJson(previousPayload('cost', 2000, 1000)));
+    renderCard({ initialValue: 1, initialDelta: { label: '—', direction: 'flat' } });
+    await pickCompare(user, 'Previous period');
+    await waitFor(() =>
+      expect(screen.getByTestId('big-chart')).toHaveAttribute('data-variant', 'multi'),
+    );
+    expect(figure()).toHaveTextContent('$2,029.00');
+  });
+
+  it('shows no figure for By location (no single line) or after a failed view', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    fetchMock.mockResolvedValueOnce(
+      okJson({
+        mode: 'locations',
+        days: 30,
+        basis: 'cost',
+        series: [
+          { label: 'Main Warehouse', data: [1, 2] },
+          { label: 'Overflow Depot', data: [3, 4] },
+        ],
+      }),
+    );
+    renderCard({ initialValue: 5 });
+    await pickCompare(user, 'By location');
+    await waitFor(() =>
+      expect(screen.getByTestId('big-chart')).toHaveAttribute('data-variant', 'multi'),
+    );
+    expect(figure()).toBeNull();
+
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 403, json: async () => ({}) } as Response);
+    await user.click(screen.getByRole('button', { name: 'Retail' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
+    expect(figure()).toBeNull();
+  });
+
+  it("keeps the controls' names and the basis toggle's pressed state", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    fetchMock.mockResolvedValue(okJson(previousPayload('retail', 4000, 3000)));
+    renderCard();
+    expect(screen.getByRole('group', { name: 'Value basis' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cost' })).toHaveAttribute('aria-pressed', 'true');
+    const retail = screen.getByRole('button', { name: 'Retail' });
+    expect(retail).toHaveAttribute('aria-pressed', 'false');
+    expect(retail).toHaveAttribute(
+      'title',
+      'Approximate — retail price held constant across past days',
+    );
+    expect(screen.getByRole('button', { name: 'All locations' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '+ Compare' })).toBeInTheDocument();
+    await user.click(retail);
+    expect(retail).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  // FX7 (DESIGN-SPEC 4 "Range toggle track / chip 28 / 22", 6.17's value card
+  // toggle): Cost / Retail is the value card's range-style toggle, so it takes
+  // the xs size (a 28 px transparent track, 22 px chips), not List / Grid's.
+  it('draws Cost / Retail at the range toggle size', () => {
+    renderCard();
+    const group = screen.getByRole('group', { name: 'Value basis' });
+    expect(group).toHaveClass('bg-transparent');
+    expect(group).not.toHaveClass('bg-sunk');
+    expect(screen.getByRole('button', { name: 'Cost' })).toHaveClass('h-[22px]', 'bg-muted');
+    expect(screen.getByRole('button', { name: 'Retail' })).toHaveClass('h-[22px]', 'font-normal');
   });
 });
 

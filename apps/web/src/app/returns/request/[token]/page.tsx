@@ -1,5 +1,6 @@
 import { headers } from 'next/headers';
 
+import { ExternalHeader, ExternalShell, ExternalStatusCard } from '@/components/auth/external-shell';
 import { RequesterTracking } from '@/components/returns/requester-tracking';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { exchangeCreateEnabled } from '@/lib/returns/exchange-switch';
@@ -78,47 +79,40 @@ export default async function RequesterReturnPage({
 
   const exchanges = sheet.exchangesEnabled;
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <main className="mx-auto w-full max-w-2xl px-4 py-8 sm:px-6 sm:py-12">
-        <header className="border-border mb-8 border-b pb-6">
-          <div className="text-primary mb-3 font-mono text-[11px] uppercase tracking-[0.18em]">
-            Return request{sheet.orderNumber ? ` · Order ${sheet.orderNumber}` : ''}
-          </div>
-          <h1 className="font-display text-3xl font-medium leading-[1.05] tracking-[-0.03em] sm:text-[34px]">
-            {requesterEntryLabel(exchanges)}
-          </h1>
-          <p className="text-muted-foreground mt-4 max-w-[56ch] text-sm leading-relaxed">
-            {exchanges ? (
-              <>
-                Choose the items you&apos;re sending back and how many of each. For each one, choose{' '}
-                {RETURNS_COPY.returnOnly} or {RETURNS_COPY.exchangeRequester}. The warehouse team reviews
-                every request before anything happens, and this page shows where each request stands.
-              </>
-            ) : (
-              <>
-                Pick the items you&apos;d like to return and how many of each. The
-                warehouse team reviews every request before anything is processed —
-                you&apos;ll hear back once it&apos;s approved.
-              </>
-            )}
-          </p>
-        </header>
+    <ExternalShell width="xl" poweredBy>
+      <ExternalHeader
+        align="start"
+        divided
+        className="mb-8"
+        eyebrow={<>Return request{sheet.orderNumber ? ` · Order ${sheet.orderNumber}` : ''}</>}
+        title={requesterEntryLabel(exchanges)}
+        description={
+          exchanges ? (
+            <>
+              Choose the items you&apos;re sending back and how many of each. For each one, choose{' '}
+              {RETURNS_COPY.returnOnly} or {RETURNS_COPY.exchangeRequester}. The warehouse team reviews
+              every request before anything happens, and this page shows where each request stands.
+            </>
+          ) : (
+            <>
+              Pick the items you&apos;d like to return and how many of each. The
+              warehouse team reviews every request before anything is processed —
+              you&apos;ll hear back once it&apos;s approved.
+            </>
+          )
+        }
+      />
 
-        <RequesterReturnForm
-          token={token}
-          lines={sheet.lines}
-          exchangesEnabled={exchanges}
-          requesterName={sheet.requesterName}
-          hasRequests={sheet.tracking.length > 0}
-        />
+      <RequesterReturnForm
+        token={token}
+        lines={sheet.lines}
+        exchangesEnabled={exchanges}
+        requesterName={sheet.requesterName}
+        hasRequests={sheet.tracking.length > 0}
+      />
 
-        <RequesterTracking requests={sheet.tracking} className="mt-10" id="your-requests" />
-
-        <p className="text-muted-foreground mt-10 text-center text-[11px]">
-          Powered by StockPilot
-        </p>
-      </main>
-    </div>
+      <RequesterTracking requests={sheet.tracking} className="mt-10" id="your-requests" />
+    </ExternalShell>
   );
 }
 
@@ -131,52 +125,37 @@ export default async function RequesterReturnPage({
  */
 function ReturnLinkInvalid() {
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <main className="mx-auto w-full max-w-2xl px-4 py-8 sm:px-6 sm:py-12">
-        <header className="border-border mb-8 border-b pb-6">
-          <div className="text-primary mb-3 font-mono text-[11px] uppercase tracking-[0.18em]">
-            Return request
-          </div>
-          <h1 className="font-display text-3xl font-medium leading-[1.05] tracking-[-0.03em] sm:text-[34px]">
-            This return link isn&apos;t active
-          </h1>
-        </header>
-        <div className="border-border bg-card rounded-2xl border p-6 text-center">
-          <p className="text-muted-foreground mx-auto max-w-[52ch] text-sm leading-relaxed">
+    <ExternalShell width="xl" poweredBy>
+      <ExternalStatusCard
+        eyebrow="Return request"
+        title="This return link isn't active"
+        body={
+          <>
             The link may have been mistyped, or it&apos;s no longer available.
             If you received it by email and think this is a mistake, reply to
             that email or contact the team that fulfilled your order — they can
             start the return for you.
-          </p>
-        </div>
-        <p className="text-muted-foreground mt-10 text-center text-[11px]">
-          Powered by StockPilot
-        </p>
-      </main>
-    </div>
+          </>
+        }
+      />
+    </ExternalShell>
   );
 }
 
-/** Too many page views from one address in an hour. */
+/** Too many page views from one address in an hour (its own words). */
 function ReturnLinkBusy() {
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <main className="mx-auto w-full max-w-2xl px-4 py-8 sm:px-6 sm:py-12">
-        <header className="border-border mb-8 border-b pb-6">
-          <div className="text-primary mb-3 font-mono text-[11px] uppercase tracking-[0.18em]">
-            Return request
-          </div>
-          <h1 className="font-display text-3xl font-medium leading-[1.05] tracking-[-0.03em] sm:text-[34px]">
-            Too many requests
-          </h1>
-        </header>
-        <div className="border-border bg-card rounded-2xl border p-6 text-center">
-          <p className="text-muted-foreground mx-auto max-w-[52ch] text-sm leading-relaxed">
+    <ExternalShell width="xl">
+      <ExternalStatusCard
+        eyebrow="Return request"
+        title="Too many requests"
+        body={
+          <>
             This page was opened too many times from your network in the last hour. Wait a while and
             open your return link again.
-          </p>
-        </div>
-      </main>
-    </div>
+          </>
+        }
+      />
+    </ExternalShell>
   );
 }

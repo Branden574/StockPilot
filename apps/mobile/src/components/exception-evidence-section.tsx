@@ -24,6 +24,7 @@ import { PhotoViewer } from '@/components/photo-viewer';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Body, Eyebrow } from '@/components/ui/text';
+import { meterColor, meterTrack, PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import {
   EVIDENCE_REMOVE_OFFLINE_COPY,
@@ -42,7 +43,6 @@ import {
 } from '@/lib/exception-evidence';
 import { asEvidenceFailure, runEvidenceAttempt } from '@/lib/exception-evidence-upload';
 import { createPhotoAttemptGuard } from '@/lib/signed-photo-upload';
-import { ACCENT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -217,6 +217,8 @@ export function ExceptionEvidenceSection({
 
   const heading =
     block.status === 'ok' ? exceptionEvidenceCountLabel(block.liveCount).toUpperCase() : 'PHOTOS';
+  // Each photo, and each photo being added, is a card row (DESIGN-SPEC 6.7).
+  const rowSurface = { backgroundColor: c.card, borderColor: c.hair };
 
   return (
     <View style={{ gap: 10 }}>
@@ -232,7 +234,7 @@ export function ExceptionEvidenceSection({
             size="sm"
             disabled={!online}
             onPress={onChanged}
-            style={{ alignSelf: 'flex-start', marginTop: 12, minHeight: MIN_TAP }}
+            style={{ alignSelf: 'flex-start', marginTop: 12 }}
           >
             Try again
           </Button>
@@ -248,10 +250,12 @@ export function ExceptionEvidenceSection({
       {parts.photos.map((p, i) => {
         const failed = evidencePhotoFailed(p, failedUrls);
         return (
-          <View key={p.id} style={[styles.row, stack ? styles.stacked : null]}>
+          <View key={p.id} style={[styles.row, rowSurface, stack ? styles.stacked : null]}>
             {failed ? (
+              // The missing photo: a recessed tile with a hairline edge
+              // (DESIGN-SPEC 6.14), said to VoiceOver.
               <View
-                style={[styles.thumb, { backgroundColor: c.paper2 }]}
+                style={[styles.thumb, { backgroundColor: c.sunk, borderColor: c.hair }]}
                 accessible
                 accessibilityLabel={`Photo ${i + 1} of ${parts.photos.length} could not be loaded`}
               />
@@ -265,7 +269,7 @@ export function ExceptionEvidenceSection({
               >
                 <Image
                   source={{ uri: p.thumbUrl ?? p.url }}
-                  style={[styles.thumb, { backgroundColor: c.paper2 }]}
+                  style={[styles.thumb, { backgroundColor: PHOTO_BACKGROUND, borderColor: c.hair }]}
                   contentFit="cover"
                   onError={() => markFailed(p.thumbUrl ?? p.url)}
                 />
@@ -274,7 +278,7 @@ export function ExceptionEvidenceSection({
             <View style={stack ? styles.rowTextStacked : styles.rowText}>
               {failed ? (
                 <>
-                  <Body size={13.5} color={ACCENT.crit} accessibilityRole="alert">
+                  <Body size={13.5} color={c.critText} accessibilityRole="alert">
                     {EXCEPTION_EVIDENCE_PHOTO_FAILED_COPY}
                   </Body>
                   <Button
@@ -283,7 +287,7 @@ export function ExceptionEvidenceSection({
                     disabled={!online}
                     onPress={onChanged}
                     accessibilityLabel={`Try loading photo ${i + 1} again`}
-                    style={{ alignSelf: 'flex-start', minHeight: MIN_TAP }}
+                    style={{ alignSelf: 'flex-start' }}
                   >
                     Try again
                   </Button>
@@ -307,7 +311,7 @@ export function ExceptionEvidenceSection({
                     disabled={!online}
                     onPress={() => setRemoving(p)}
                     accessibilityLabel={`Remove photo ${i + 1}`}
-                    style={{ alignSelf: 'flex-start', minHeight: MIN_TAP }}
+                    style={{ alignSelf: 'flex-start' }}
                   >
                     Remove
                   </Button>
@@ -324,12 +328,16 @@ export function ExceptionEvidenceSection({
       })}
 
       {parts.queue.map((entry) => (
-        <View key={entry.key} style={[styles.row, stack ? styles.stacked : null]}>
+        <View key={entry.key} style={[styles.row, rowSurface, stack ? styles.stacked : null]}>
           <Image
             source={{ uri: entry.uri }}
             style={[
               styles.thumb,
-              { backgroundColor: c.paper2, opacity: entry.status === 'error' ? 0.5 : 1 },
+              {
+                backgroundColor: PHOTO_BACKGROUND,
+                borderColor: c.hair,
+                opacity: entry.status === 'error' ? 0.5 : 1,
+              },
             ]}
             contentFit="cover"
             accessible
@@ -338,19 +346,22 @@ export function ExceptionEvidenceSection({
           <View style={stack ? styles.rowTextStacked : styles.rowText}>
             <Body
               size={13.5}
-              color={entry.status === 'error' ? ACCENT.crit : c.ink}
+              color={entry.status === 'error' ? c.critText : c.ink}
               accessibilityRole={entry.status === 'error' ? 'alert' : undefined}
               accessibilityLiveRegion="polite"
             >
               {evidenceQueueRowCopy(entry)}
             </Body>
             {entry.status === 'uploading' ? (
-              <View style={[styles.track, { backgroundColor: c.paper2 }]}>
+              // The reference's progress bar (DESIGN-SPEC 6.11): the accent
+              // fill on the stronger-border track (paper2 showed nothing on a
+              // card in dark mode).
+              <View style={[styles.track, { backgroundColor: meterTrack(c) }]}>
                 <View
                   style={[
                     styles.fill,
                     {
-                      backgroundColor: c.ink,
+                      backgroundColor: meterColor('ok', c),
                       width: `${Math.round(Math.min(1, Math.max(0, entry.progress)) * 100)}%`,
                     },
                   ]}
@@ -366,7 +377,6 @@ export function ExceptionEvidenceSection({
                     disabled={retryReason !== null}
                     onPress={() => retry(entry.key)}
                     accessibilityLabel="Retry adding this photo"
-                    style={{ minHeight: MIN_TAP }}
                   >
                     Retry
                   </Button>
@@ -376,7 +386,6 @@ export function ExceptionEvidenceSection({
                   size="sm"
                   onPress={() => discard(entry.key)}
                   accessibilityLabel="Discard this photo"
-                  style={{ minHeight: MIN_TAP }}
                 >
                   Discard
                 </Button>
@@ -466,6 +475,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderRadius: 10,
   },
   stacked: {
     flexDirection: 'column',
@@ -488,6 +500,7 @@ const styles = StyleSheet.create({
     width: 76,
     height: 76,
     borderRadius: 10,
+    borderWidth: 1,
   },
   track: {
     height: 4,

@@ -1,5 +1,12 @@
 import * as React from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Pressable,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 
 import {
   NEEDED_BY_CHANGE_ACCESSIBILITY_LABEL,
@@ -9,9 +16,10 @@ import {
 
 import { MIN_TAP } from '@/components/item-verification-card';
 import { Card } from '@/components/ui/card';
-import { Body, Mono } from '@/components/ui/text';
+import { Body } from '@/components/ui/text';
+import { buttonTone } from '@/components/ui/tones';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
-import { TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -21,7 +29,9 @@ import { useTheme } from '@/lib/use-theme';
  * and core's Change, the web page's words. The button is its own VoiceOver
  * element, 44 pt, named for what it changes ("Change needed-by date"),
  * disabled offline with the reason as its hint. At accessibility text sizes
- * it goes under the date (shouldStackRow).
+ * it goes under the date (shouldStackRow). Change is the shared outline
+ * button's look (the card fill in the stronger border, its words in the
+ * display face).
  */
 export function OrderNeededByCard({
   value,
@@ -43,6 +53,8 @@ export function OrderNeededByCard({
   onChange: () => void;
 }) {
   const { c } = useTheme();
+  const outline = buttonTone('outline', c);
+  const labelText = [styles.label, { color: outline.fg }];
   const { fontScale } = useWindowDimensions();
   const stack = shouldStackRow(fontScale);
   const off = disabled || offline || busy;
@@ -68,16 +80,20 @@ export function OrderNeededByCard({
             accessibilityHint={offline ? READINESS_NEEDS_CONNECTION_COPY : undefined}
             style={[
               styles.button,
-              { borderColor: c.hair, opacity: off && !busy ? 0.5 : 1 },
+              {
+                backgroundColor: outline.bg,
+                borderColor: outline.border,
+                opacity: off && !busy ? 0.5 : 1,
+              },
               stack ? { alignSelf: 'flex-start' } : null,
             ]}
           >
             {busy ? (
-              <ActivityIndicator color={c.ink} />
+              <ActivityIndicator color={outline.fg} />
             ) : (
-              <Mono size={13} color={c.ink} maxFontSizeMultiplier={BUTTON_CAP}>
+              <Text style={labelText} maxFontSizeMultiplier={BUTTON_CAP}>
                 {NEEDED_BY_CHANGE_LABEL}
-              </Mono>
+              </Text>
             )}
           </Pressable>
         ) : null}
@@ -100,4 +116,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  label: { fontFamily: FONT.display, fontSize: 13, textAlign: 'center' },
 });

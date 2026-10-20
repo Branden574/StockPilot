@@ -90,7 +90,12 @@ describe('RentalEmailsCard', () => {
 
   it('no email on file: nothing is sent, and the page says so for all three', () => {
     render(
-      <RentalEmailsCard rental={rental({ borrower_email: null })} remindersOn nowMs={NOW} timeZone={PT} />,
+      <RentalEmailsCard
+        rental={rental({ borrower_email: null })}
+        remindersOn
+        nowMs={NOW}
+        timeZone={PT}
+      />,
     );
     expect(screen.getByText('No email on file')).toBeTruthy();
     for (const key of ['checkout', 'returned', 'overdue'] as const) {
@@ -112,7 +117,9 @@ describe('RentalEmailsCard', () => {
 
   it('an unreadable switch: says it could not check, never a promise', () => {
     render(<RentalEmailsCard rental={rental()} remindersOn={null} nowMs={NOW} timeZone={PT} />);
-    expect(within(line('overdue')).getByText(/Could not check whether overdue reminders are on/)).toBeTruthy();
+    expect(
+      within(line('overdue')).getByText(/Could not check whether overdue reminders are on/),
+    ).toBeTruthy();
     expect(line('overdue').textContent).not.toMatch(/Will be sent/);
   });
 
@@ -125,13 +132,24 @@ describe('RentalEmailsCard', () => {
         timeZone={PT}
       />,
     );
-    expect(within(line('returned')).getByText('Goes out when the rental is marked returned.')).toBeTruthy();
+    expect(
+      within(line('returned')).getByText('Goes out when the rental is marked returned.'),
+    ).toBeTruthy();
     expect(within(line('overdue')).getByText('Not needed: returned on time.')).toBeTruthy();
     unmount();
 
-    render(<RentalEmailsCard rental={rental({ status: 'cancelled' })} remindersOn nowMs={NOW} timeZone={PT} />);
+    render(
+      <RentalEmailsCard
+        rental={rental({ status: 'cancelled' })}
+        remindersOn
+        nowMs={NOW}
+        timeZone={PT}
+      />,
+    );
     expect(
-      within(line('returned')).getByText('Not sent: a cancelled rental gets no return confirmation.'),
+      within(line('returned')).getByText(
+        'Not sent: a cancelled rental gets no return confirmation.',
+      ),
     ).toBeTruthy();
     expect(within(line('overdue')).getByText('Not sent: the rental was cancelled.')).toBeTruthy();
   });
@@ -141,8 +159,42 @@ describe('RentalEmailsCard', () => {
       const { container, unmount } = render(
         <RentalEmailsCard rental={rental()} remindersOn={on} nowMs={NOW} timeZone={PT} />,
       );
-      expect(container.textContent).not.toMatch(/due soon|before (it is|the rental is) due|upcoming reminder/i);
+      expect(container.textContent).not.toMatch(
+        /due soon|before (it is|the rental is) due|upcoming reminder/i,
+      );
       unmount();
     }
+  });
+});
+
+// Redesign P4.D1: the tone icons moved to the shared tokens. The accent is the
+// recorded (already sent) tone, so an email still to come must not share it:
+// the two lines read apart by colour as well as by icon and words.
+describe('RentalEmailsCard tone colours', () => {
+  function iconClass(key: 'checkout' | 'returned' | 'overdue') {
+    return line(key).querySelector('svg')!.getAttribute('class') ?? '';
+  }
+
+  it('an upcoming reminder and a recorded one use different colours', () => {
+    const { unmount } = render(
+      <RentalEmailsCard rental={rental()} remindersOn nowMs={NOW} timeZone={PT} />,
+    );
+    const upcoming = iconClass('overdue');
+    unmount();
+    render(
+      <RentalEmailsCard
+        rental={rental({
+          expected_return_at: '2026-09-20T00:00:00.000Z',
+          overdue_reminder_sent_at: '2026-09-20T15:00:03.000Z',
+        })}
+        remindersOn
+        nowMs={NOW}
+        timeZone={PT}
+      />,
+    );
+    const recorded = iconClass('overdue');
+    expect(upcoming).toMatch(/(^|\s)text-ink-2(\s|$)/);
+    expect(recorded).toMatch(/(^|\s)text-success(\s|$)/);
+    expect(upcoming).not.toMatch(/(^|\s)text-(success|accent)(\s|$)/);
   });
 });

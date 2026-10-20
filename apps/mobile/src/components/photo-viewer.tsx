@@ -4,12 +4,14 @@ import { Modal, Pressable, ScrollView, useWindowDimensions, View } from 'react-n
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CachedImage } from '@/components/ui/cached-image';
+import { IconChip } from '@/components/ui/row';
 import { Mono } from '@/components/ui/text';
+import { useTheme } from '@/lib/use-theme';
 
 /**
- * Full-screen photo viewer — a transparent Modal over a near-black backdrop
- * with pinch-zoom via the classic iOS ScrollView zoom (maximumZoomScale +
- * a single viewport-sized child). No new dependencies.
+ * Full-screen photo viewer — a transparent Modal over the page colour of the
+ * device's mode, with pinch-zoom via the classic iOS ScrollView zoom
+ * (maximumZoomScale + a single viewport-sized child). No new dependencies.
  *
  * The image goes in as the master signed URL via CachedImage, so the viewer
  * hits the same disk cache entry the list rows and the detail hero already
@@ -31,6 +33,14 @@ import { Mono } from '@/components/ui/text';
  *
  * PARITY NOTE: order proof tiles and future maintenance-request photos on
  * mobile can reuse this component — same contract, master URL straight in.
+ *
+ * LOOK (redesign): the viewer follows the device's mode, as every overlay does
+ * (DESIGN-SPEC 10: the image lightbox needs both themes). The ground is the
+ * page colour, the close button the shared header chip (a 44pt frame around
+ * the 38pt card chip, where it was a 36pt circle with hitSlop), and the label
+ * sits on a card pill so it reads over any photo. It was a fixed near-black
+ * ground with white marks in both modes, under a status bar drawn for the
+ * page behind it: in light mode the clock was dark on near-black.
  */
 export function PhotoViewer({
   uri,
@@ -53,6 +63,7 @@ export function PhotoViewer({
 }) {
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
+  const { c } = useTheme();
   // Ref, not state: onScroll fires per frame while pinching, and the only
   // consumer is the tap handler's "am I zoomed" check at press time.
   const zoomedRef = React.useRef(false);
@@ -73,7 +84,7 @@ export function PhotoViewer({
       onRequestClose={onClose}
       statusBarTranslucent
     >
-      <View style={{ flex: 1, backgroundColor: 'rgba(8,8,8,0.97)' }}>
+      <View style={{ flex: 1, backgroundColor: c.paper }}>
         <ScrollView
           style={{ flex: 1 }}
           contentContainerStyle={{ width, height }}
@@ -106,26 +117,17 @@ export function PhotoViewer({
           </Pressable>
         </ScrollView>
 
-        <Pressable
-          onPress={onClose}
-          hitSlop={12}
-          accessibilityRole="button"
-          accessibilityLabel="Close photo viewer"
-          style={({ pressed }) => ({
-            position: 'absolute',
-            top: insets.top + 10,
-            right: 16,
-            width: 36,
-            height: 36,
-            borderRadius: 18,
-            backgroundColor: 'rgba(255,255,255,0.14)',
-            justifyContent: 'center',
-            alignItems: 'center',
-            opacity: pressed ? 0.7 : 1,
-          })}
-        >
-          <X size={19} color="#fff" strokeWidth={1.8} />
-        </Pressable>
+        {/* The 44pt frame is centred where the old 36pt circle was (its centre
+            28pt below the inset, 34pt from the right edge). */}
+        <View style={{ position: 'absolute', top: insets.top + 6, right: 12 }}>
+          <IconChip
+            icon={X}
+            shape="circle"
+            onPress={onClose}
+            accessibilityLabel="Close photo viewer"
+            minTap
+          />
+        </View>
 
         {label ? (
           <View
@@ -138,9 +140,24 @@ export function PhotoViewer({
               alignItems: 'center',
             }}
           >
-            <Mono size={11} tracking={0.08} upper color="rgba(255,255,255,0.72)" numberOfLines={2}>
-              {label}
-            </Mono>
+            {/* The name on a card pill with a hairline edge, so it reads over a
+                light or a dark photo alike: the secondary ink on the card is
+                14.1:1 in light and 12.7:1 in dark. */}
+            <View
+              style={{
+                maxWidth: '100%',
+                paddingHorizontal: 12,
+                paddingVertical: 6,
+                borderRadius: 999,
+                borderWidth: 1,
+                borderColor: c.hair,
+                backgroundColor: c.card,
+              }}
+            >
+              <Mono size={11} tracking={0.08} upper color={c.ink2} numberOfLines={2}>
+                {label}
+              </Mono>
+            </View>
           </View>
         ) : null}
       </View>

@@ -26,10 +26,24 @@ interface ScheduleRow {
   warehouse: { name: string | null } | null;
 }
 
+/**
+ * The schedule's failed read, in its own words (redesign defect D25: a failed
+ * read used to show "No upcoming events."). Events an earlier read left on
+ * screen stay, with the reload note above them.
+ */
+const SCHEDULE_LOAD_FAILED = {
+  title: 'Could not load the schedule.',
+  body: 'Check your connection and pull down to try again.',
+  reloadNote:
+    'Could not load the schedule again, so these events may be out of date. Pull down to try again.',
+};
+
 export default function ScheduleScreen() {
   const router = useRouter();
   const { orgId } = useOrg();
   const [rows, setRows] = React.useState<ScheduleRow[]>([]);
+  // The last read failed (set by every read that answers).
+  const [loadFailed, setLoadFailed] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   // Write-CTA gate: adding an event requires schedule:manage. Cosmetic (the
@@ -43,7 +57,7 @@ export default function ScheduleScreen() {
     // Upcoming events for the next 30 days (matches the web's default view).
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const until = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('schedule_events')
       .select(
         `id, title, starts_at, ends_at, all_day, location_text, requester_name,
@@ -54,6 +68,13 @@ export default function ScheduleScreen() {
       .lte('starts_at', until)
       .order('starts_at', { ascending: true })
       .limit(100);
+    if (error) {
+      // Said, never shown as an empty schedule; earlier rows stay.
+      setLoadFailed(true);
+      setLoading(false);
+      return;
+    }
+    setLoadFailed(false);
     setRows(
       (data ?? []).map((row) => {
         const r = row as Record<string, unknown>;
@@ -92,6 +113,7 @@ export default function ScheduleScreen() {
       emptyTitle="No upcoming events."
       emptyBody="Schedule deliveries, pickups, and team work on the web — it shows here so you can check on the floor."
       emptyIcon={Calendar}
+      failed={loadFailed ? SCHEDULE_LOAD_FAILED : null}
       data={rows}
       loading={loading}
       refreshing={refreshing}
@@ -129,25 +151,34 @@ function EventCard({ event }: { event: ScheduleRow }) {
   }
 
   return (
-    <Pressable onPress={openOnWeb} style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}>
+    <Pressable
+      onPress={openOnWeb}
+      accessibilityRole="link"
+      style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
+    >
       <Card padding={14}>
         <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 14 }}>
+          {/* minWidth, not width: the date and time are uncapped content and
+              grow with the text size instead of being cut. 65 holds the
+              widest time at the default size ("10:30 AM": 8 mono characters
+              at 6.4pt = 51.2, plus the 12pt padding and the 1pt divider =
+              64.2), so every card's divider lines up down the list. */}
           <View
             style={{
-              width: 56,
+              minWidth: 65,
               alignItems: 'center',
               borderRightWidth: 1,
               borderRightColor: c.hair,
               paddingRight: 12,
             }}
           >
-            <Mono size={9.5} tracking={0.18} upper color={c.ink4}>
+            <Mono size={9.5} tracking={0.18} upper color={c.ink3}>
               {starts.toLocaleDateString(undefined, { month: 'short' })}
             </Mono>
             <Mono size={22} tracking={-0.022} color={c.ink} style={{ fontFamily: FONT.display, marginTop: 2 }}>
               {starts.getDate()}
             </Mono>
-            <Mono size={10} tracking={0.04} color={c.ink4} style={{ marginTop: 2 }}>
+            <Mono size={10} tracking={0.04} color={c.ink3} style={{ marginTop: 2 }}>
               {event.all_day ? 'all day' : starts.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
             </Mono>
           </View>
@@ -159,12 +190,12 @@ function EventCard({ event }: { event: ScheduleRow }) {
               {isToday ? <Pill status="ok">TODAY</Pill> : isTomorrow ? <Pill status="warn">TOMORROW</Pill> : null}
             </View>
             {event.location_text ? (
-              <Mono size={11.5} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
+              <Mono size={11.5} tracking={0.04} color={c.ink3} style={{ marginTop: 4 }}>
                 {event.location_text}
               </Mono>
             ) : null}
             {event.warehouse?.name || event.requester_name ? (
-              <Mono size={11} tracking={0.04} color={c.ink4} style={{ marginTop: 2 }}>
+              <Mono size={11} tracking={0.04} color={c.ink3} style={{ marginTop: 2 }}>
                 {[event.warehouse?.name, event.requester_name].filter(Boolean).join(' · ')}
               </Mono>
             ) : null}

@@ -84,7 +84,10 @@ export function SignInForm() {
   return (
     <form onSubmit={onSubmit} className="space-y-4" noValidate>
       {sessionEnded ? (
-        <p role="status" className="text-sm text-[var(--ed-ink-3)]">
+        <p
+          role="status"
+          className="bg-sunk text-ink-2 rounded-md px-3 py-2 text-[13px] leading-[19.5px]"
+        >
           You were signed out on this device. Sign in again to continue.
         </p>
       ) : null}
@@ -95,6 +98,7 @@ export function SignInForm() {
           type="email"
           autoComplete="email"
           placeholder="you@company.com"
+          className="sm:h-10"
           {...register('email')}
           onFocus={() => publishAuthState('email')}
           onBlur={(e) => {
@@ -111,13 +115,21 @@ export function SignInForm() {
       <div className="auth-field space-y-2">
         <div className="flex items-center justify-between">
           <Label htmlFor="password">Password</Label>
-          <Link href="/reset" className="text-muted-foreground hover:text-foreground text-xs">
+          {/* A 44 px hit area on phones and touch screens without moving
+              anything (the Button's ::before pattern): the 16 px line plus
+              20 px above and 8 px below. Below stops at the 8 px gap, so the
+              password field under it keeps every tap on its own box. */}
+          <Link
+            href="/reset"
+            className="text-muted-foreground hover:text-foreground focus-visible:ring-ring pointer-coarse:before:content-[''] relative rounded-sm text-xs before:absolute before:-inset-x-2 before:-bottom-2 before:-top-5 before:content-none focus-visible:outline-none focus-visible:ring-2 max-sm:before:content-['']"
+          >
             Forgot?
           </Link>
         </div>
         <PasswordInput
           id="password"
           autoComplete="current-password"
+          className="sm:h-10"
           {...register('password')}
           onFocus={() => publishAuthState('password')}
           onBlur={(e) => {
@@ -131,10 +143,10 @@ export function SignInForm() {
         </p>
       </div>
 
-      <label className="text-muted-foreground flex items-center gap-2.5 text-sm">
+      <label className="text-ink-2 flex min-h-11 cursor-pointer items-center gap-2.5 text-[13px] sm:min-h-0">
         <input
           type="checkbox"
-          className="border-border accent-foreground h-4 w-4 rounded"
+          className="border-border accent-foreground h-4 w-4 cursor-pointer rounded"
           {...register('rememberMe')}
         />
         <span>Remember me on this device</span>
@@ -142,7 +154,7 @@ export function SignInForm() {
 
       <Button
         type="submit"
-        className="w-full"
+        className="h-11 w-full text-[14px]"
         variant="gradient"
         size="lg"
         disabled={isSubmitting || succeeded}

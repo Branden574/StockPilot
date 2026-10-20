@@ -62,19 +62,20 @@ export function ItemCard({ item }: ItemCardProps) {
         ? `${available} low`
         : `${available} avail`;
 
-  const stockDotClass =
+  // The status label's tone (DESIGN-SPEC 6.10): wash, tone text and a dot in
+  // the text colour; the words carry the meaning, never the colour alone.
+  const stockToneClass =
     status === 'out'
-      ? 'bg-red-500'
+      ? 'bg-destructive-wash text-destructive'
       : status === 'low'
-        ? 'bg-orange-400'
-        : 'bg-emerald-500';
+        ? 'bg-warning-wash text-warning'
+        : 'bg-success-wash text-success';
 
   return (
     <article
       className={cn(
-        'relative flex flex-col rounded-lg border bg-card overflow-hidden',
-        inCart &&
-          'border-emerald-500 shadow-[inset_0_0_0_1px_rgb(16_185_129)]',
+        'relative flex flex-col overflow-hidden rounded-lg border bg-background transition-colors hover:border-ink-4',
+        inCart && 'border-accent shadow-[0_0_0_1px_hsl(var(--accent))] hover:border-accent',
       )}
     >
       {/* Thumbnail area.
@@ -86,16 +87,16 @@ export function ItemCard({ item }: ItemCardProps) {
           time the real photo decodes, the blur underneath has already
           painted, so the swap looks like a gentle focus-in instead of
           a stark placeholder-to-photo pop. */}
-      <div className="relative aspect-square w-full bg-muted overflow-hidden">
+      <div className="relative aspect-square w-full overflow-hidden border-b bg-sunk">
         {/* Layer 1 — always: serif glyph over pinstripes */}
         <div
           className="absolute inset-0 flex items-center justify-center"
           style={{
             backgroundImage:
-              'repeating-linear-gradient(45deg, transparent, transparent 3px, rgba(0,0,0,.04) 3px, rgba(0,0,0,.04) 6px)',
+              'repeating-linear-gradient(45deg, var(--ed-line) 0 1px, transparent 1px 6px)',
           }}
         >
-          <span className="text-4xl font-serif text-muted-foreground/40 select-none">
+          <span className="font-display text-ink-4 select-none text-4xl font-medium">
             {item.name.slice(0, 1).toUpperCase()}
           </span>
         </div>
@@ -130,41 +131,42 @@ export function ItemCard({ item }: ItemCardProps) {
             fill
             sizes="(max-width: 640px) 50vw, (max-width: 1024px) 25vw, 200px"
             loading="lazy"
-            className="object-cover opacity-0 transition-opacity duration-300 [&.loaded]:opacity-100"
+            className="bg-white object-contain opacity-0 transition-opacity duration-300 [&.loaded]:opacity-100"
             onLoad={(e) => (e.currentTarget as HTMLImageElement).classList.add('loaded')}
           />
         ) : null}
 
         {/* In-cart badge on thumbnail */}
         {inCart && (
-          <div className="absolute bottom-1 right-1 bg-emerald-500 text-white text-[10px] font-semibold rounded-full px-1.5 py-0.5 leading-none">
+          <div className="bg-foreground text-background absolute bottom-2 right-2 rounded-full px-2 font-mono text-[11px] font-medium leading-[18px]">
             ×{qty}
           </div>
         )}
 
-        {/* Stock pill — glass blur */}
-        <div className="absolute bottom-2 left-2 flex items-center gap-1 backdrop-blur-md bg-card/70 px-2 py-1 rounded-full text-[10px] leading-none">
-          <span className={cn('h-1.5 w-1.5 rounded-full flex-none', stockDotClass)} />
-          <span className={cn(
-            status === 'out' ? 'text-red-600 dark:text-red-400' :
-            status === 'low' ? 'text-orange-600 dark:text-orange-400' :
-            'text-emerald-700 dark:text-emerald-400',
-            'font-medium',
-          )}>
-            {stockLabel}
-          </span>
+        {/* Stock pill: the status label (no blur, DESIGN-SPEC 6.10) */}
+        <div
+          className={cn(
+            'absolute bottom-2 left-2 flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-[12px] leading-[18px]',
+            stockToneClass,
+          )}
+        >
+          <span className="h-[5px] w-[5px] flex-none rounded-full bg-current" />
+          <span>{stockLabel}</span>
         </div>
       </div>
 
       {/* Card body */}
-      <div className="flex flex-col gap-1 p-3 flex-1">
+      <div className="flex flex-1 flex-col gap-1 p-3">
         <h4
-          className="text-sm font-medium leading-snug line-clamp-2"
+          className="line-clamp-2 text-[13.5px] font-medium leading-[1.35]"
           title={item.name}
         >
           {item.name}
         </h4>
-        <p className="font-mono text-[10px] text-muted-foreground truncate">
+        <p
+          className="text-muted-foreground truncate font-mono text-[11.5px]"
+          title={item.categoryName ? `${item.sku} · ${item.categoryName}` : item.sku}
+        >
           {item.sku}
           {item.categoryName ? (
             <span className="font-sans"> · {item.categoryName}</span>
@@ -175,22 +177,22 @@ export function ItemCard({ item }: ItemCardProps) {
             the short charter code; falls back to the full name. */}
         {item.charterId ? (
           <p
-            className="font-sans text-[10px] text-muted-foreground/80 truncate"
+            className="text-muted-foreground truncate font-sans text-[11px]"
             title={item.charterName ?? undefined}
           >
             Charter ·{' '}
-            <span className="text-foreground/80">
+            <span className="text-ink-2">
               {item.charterCode ?? item.charterName}
             </span>
           </p>
         ) : null}
 
-        <div className="mt-auto pt-2 border-t border-border/50">
+        <div className="border-border mt-auto border-t pt-2">
           <div className="flex items-center justify-between gap-2">
             {/* Bin location */}
             {item.rackLabel ? (
               <div
-                className="flex items-center gap-1 text-[10px] text-muted-foreground truncate min-w-0"
+                className="text-muted-foreground flex min-w-0 items-center gap-1 truncate text-[11px]"
                 title={item.rackLabel}
               >
                 <MapPin className="h-3 w-3 flex-none" />
@@ -200,10 +202,12 @@ export function ItemCard({ item }: ItemCardProps) {
               <div />
             )}
 
-            {/* Add / Stepper */}
-            <div className="flex-none min-w-[5.5rem] flex justify-end">
+            {/* Add / Stepper. The stepper's width is held only while the
+                item is in the cart, so the Add button leaves the rack label
+                the room it does not need (a narrow card cut it to "1."). */}
+            <div className={cn('flex flex-none justify-end', inCart && 'min-w-[5.5rem]')}>
               {inCart ? (
-                <div className="flex items-center border border-border rounded-md overflow-hidden h-7">
+                <div className="border-line-strong bg-card flex h-7 items-center overflow-hidden rounded-md border focus-within:border-accent focus-within:shadow-[0_0_0_1px_hsl(var(--accent))]">
                   <button
                     type="button"
                     onClick={handleDec}
@@ -221,7 +225,7 @@ export function ItemCard({ item }: ItemCardProps) {
                     value={qty}
                     onChange={(e) => handleSetQty(e.target.value)}
                     onFocus={(e) => e.currentTarget.select()}
-                    className="w-7 h-7 bg-transparent text-center text-xs font-semibold tabular-nums focus:outline-none focus:ring-1 focus:ring-emerald-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    className="h-7 w-7 bg-transparent text-center font-mono text-[12.5px] font-medium tabular-nums focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     aria-label="Quantity"
                   />
                   <button
@@ -241,9 +245,10 @@ export function ItemCard({ item }: ItemCardProps) {
                   variant="outline"
                   onClick={handleAdd}
                   disabled={available <= 0}
-                  className="h-7 px-3 text-xs"
+                  className="h-7 px-2.5 text-[12.5px]"
                 >
-                  <Plus className="h-3 w-3 mr-1" />
+                  {/* The button's own gap spaces the icon from the word. */}
+                  <Plus className="h-3 w-3" />
                   Add
                 </Button>
               )}

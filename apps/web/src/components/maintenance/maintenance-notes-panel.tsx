@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { DetailSection } from '@/components/patterns/detail-section';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { formatRelative } from '@/lib/utils';
@@ -68,27 +69,30 @@ export function MaintenanceNotesPanel({ requestId, canManage, notes, authorNames
   }
 
   return (
-    <section aria-label="Internal StockPilot notes" className="space-y-3 rounded-xl border bg-card p-4 text-xs">
-      <div>
-        <h2 className="text-muted-foreground text-[10.5px] uppercase tracking-[0.08em]">
-          Internal StockPilot notes
-        </h2>
-        <p className="mt-1 text-[11px] text-muted-foreground">
-          Visible only to StockPilot coordinators. Internal StockPilot notes only — never sent to the requester,
-          never part of a Zendesk ticket thread, and never included in any email.
-        </p>
-      </div>
+    // The aside card look (DESIGN-SPEC 6.7): a titled card; each note a
+    // hairline-separated row with its author and time quiet under it.
+    <DetailSection
+      title="Internal StockPilot notes"
+      aria-label="Internal StockPilot notes"
+      bodyClassName="space-y-3"
+    >
+      <p className="text-muted-foreground text-[12.5px] leading-[18.75px]">
+        Visible only to StockPilot coordinators. Internal StockPilot notes only — never sent to the
+        requester, never part of a Zendesk ticket thread, and never included in any email.
+      </p>
 
       {notes.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No internal notes yet.</p>
+        <p className="text-muted-foreground text-[13px]">No internal notes yet.</p>
       ) : (
-        <ul className="space-y-2">
+        <ul className="divide-border border-border divide-y border-y">
           {notes.map((n) => (
-            <li key={n.id} className="rounded-md bg-muted/40 p-3">
-              <p className="whitespace-pre-wrap text-sm">{n.body}</p>
+            <li key={n.id} className="py-2.5">
+              <p className="whitespace-pre-wrap text-[13.5px] leading-[20.25px] [overflow-wrap:anywhere]">
+                {n.body}
+              </p>
               {/* The relative time is rendered on the server and hydrated a
                   minute later: tolerate the drift instead of React error #418. */}
-              <p className="mt-1 text-[11px] text-muted-foreground" suppressHydrationWarning>
+              <p className="text-muted-foreground mt-0.5 text-[12px]" suppressHydrationWarning>
                 {(n.authorUserId && authorNames[n.authorUserId]) || 'StockPilot coordinator'} ·{' '}
                 {formatRelative(n.createdAt)}
               </p>
@@ -97,7 +101,7 @@ export function MaintenanceNotesPanel({ requestId, canManage, notes, authorNames
         </ul>
       )}
       {truncated ? (
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-muted-foreground text-[12px]">
           Showing the most recent 500 notes. Older notes are not shown.
         </p>
       ) : null}
@@ -113,14 +117,14 @@ export function MaintenanceNotesPanel({ requestId, canManage, notes, authorNames
           disabled={submitting}
         />
         {error ? (
-          <p role="alert" className="text-destructive text-xs">
+          <p role="alert" className="text-destructive text-[12.5px]">
             {error}
           </p>
         ) : null}
-        <Button type="submit" size="sm" disabled={submitting || !body.trim()}>
+        <Button type="submit" variant="outline" size="sm" disabled={submitting || !body.trim()}>
           {submitting ? 'Adding...' : 'Add note'}
         </Button>
       </form>
-    </section>
+    </DetailSection>
   );
 }

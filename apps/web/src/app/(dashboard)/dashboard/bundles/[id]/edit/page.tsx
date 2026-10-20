@@ -1,16 +1,15 @@
-import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 
 import { BundleForm } from '@/components/bundles/bundle-form';
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { can } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { BundlesService } from '@/server/services/bundles';
 
-export default async function EditBundlePage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
+/** The form page area (DESIGN-SPEC 4 and 5.3): the page box at a form's width. */
+const PAGE = 'mx-auto flex w-full max-w-[880px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
+
+export default async function EditBundlePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const ctx = await requireOrgContext();
   if (!can(ctx, 'bundles:manage')) {
@@ -26,16 +25,15 @@ export default async function EditBundlePage({
   }
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href={`/dashboard/bundles/${id}`}
-          className="text-muted-foreground hover:text-foreground text-sm"
-        >
-          ← Back to bundle
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">Edit bundle</h1>
-      </div>
+    <div className={PAGE}>
+      <PageHeader
+        back={
+          <PageHeaderBackLink href={`/dashboard/bundles/${id}`}>
+            ← Back to bundle
+          </PageHeaderBackLink>
+        }
+        title="Edit bundle"
+      />
       <BundleForm
         initial={{
           id: detail.bundle.id,

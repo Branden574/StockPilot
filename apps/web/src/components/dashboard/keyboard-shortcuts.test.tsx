@@ -156,3 +156,17 @@ describe('KeyboardShortcutsProvider', () => {
     expect(pushMock).not.toHaveBeenCalled();
   });
 });
+
+// The overlay showed ⌘ "then" K: a chord read as a sequence. Chords are
+// pressed together and say "+"; only the g / n sequences say "then".
+describe('keyboard shortcuts overlay: chords and sequences', () => {
+  it('joins a chord with "+" and a sequence with "then"', () => {
+    render(<KeyboardShortcutsProvider />);
+    dispatch('?');
+    const rowOf = (description: RegExp) => screen.getByText(description).closest('li')!;
+    expect(rowOf(/Open command palette/).textContent).toContain('⌘+K');
+    expect(rowOf(/Open command palette/).textContent).not.toContain('then');
+    expect(rowOf(/Hide\/show the sidebar/).textContent).toContain('⌘+\\');
+    expect(rowOf(/^Inventory items$/).textContent).toContain('gtheni');
+  });
+});

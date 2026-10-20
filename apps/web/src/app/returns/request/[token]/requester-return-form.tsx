@@ -4,7 +4,10 @@ import { CheckCircle2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 
-import { RequesterReturnSheetForm, type RequesterSubmitted } from '@/components/returns/requester-return-sheet';
+import {
+  RequesterReturnSheetForm,
+  type RequesterSubmitted,
+} from '@/components/returns/requester-return-sheet';
 import { readPublicOptionsResponse, readPublicSubmitResponse } from '@/lib/returns/requester-sheet';
 
 import { RETURNS_COPY, type RequesterReturnableLine } from '@stockpilot/core';
@@ -39,7 +42,13 @@ const JSON_HEADERS = { 'content-type': 'application/json' } as const;
  * line's own sizes. After a request it refreshes the page, so "Your requests
  * on this order" below shows it; the confirmation stays where the form was.
  */
-export function RequesterReturnForm({ token, lines, exchangesEnabled, requesterName, hasRequests }: RequesterReturnFormProps) {
+export function RequesterReturnForm({
+  token,
+  lines,
+  exchangesEnabled,
+  requesterName,
+  hasRequests,
+}: RequesterReturnFormProps) {
   const router = useRouter();
   const [hp, setHp] = React.useState('');
   const [submitted, setSubmitted] = React.useState<RequesterSubmitted | null>(null);
@@ -53,16 +62,28 @@ export function RequesterReturnForm({ token, lines, exchangesEnabled, requesterN
   if (submitted) {
     const first = requesterName?.trim().split(/\s+/)[0];
     return (
-      <div className="border-border bg-card rounded-2xl border p-6 text-center" role="status">
-        <CheckCircle2 className="text-success mx-auto mb-3 h-6 w-6" aria-hidden />
-        <h2 ref={doneHeading} tabIndex={-1} className="font-display text-lg outline-none">
-          {submitted.hasExchange ? RETURNS_COPY.requesterReceivedExchangeRequest : RETURNS_COPY.requesterReceivedReturnRequest}
+      <div className="border-border bg-card rounded-lg border px-6 py-8 text-center" role="status">
+        <span
+          aria-hidden
+          className="bg-success-wash text-success mx-auto mb-3 grid size-11 place-items-center rounded-full"
+        >
+          <CheckCircle2 className="h-5 w-5" strokeWidth={1.75} />
+        </span>
+        <h2
+          ref={doneHeading}
+          tabIndex={-1}
+          className="text-foreground font-display text-[20px] font-medium leading-[1.3] tracking-[-0.02em] outline-none"
+        >
+          {submitted.hasExchange
+            ? RETURNS_COPY.requesterReceivedExchangeRequest
+            : RETURNS_COPY.requesterReceivedReturnRequest}
         </h2>
-        <p className="text-muted-foreground mt-2 text-sm">
+        <p className="text-muted-foreground mx-auto mt-2 max-w-[52ch] text-[13.5px] leading-[20.25px]">
           {first ? `Thanks, ${first}. ` : ''}
           {submitted.returnNumber ? (
             <>
-              Your reference is <span className="text-foreground font-mono">{submitted.returnNumber}</span>.{' '}
+              Your reference is{' '}
+              <span className="text-foreground font-mono">{submitted.returnNumber}</span>.{' '}
             </>
           ) : null}
           {RETURNS_COPY.requesterWarehouseWillReview} This page shows where it stands.
@@ -73,9 +94,11 @@ export function RequesterReturnForm({ token, lines, exchangesEnabled, requesterN
 
   if (lines.length === 0) {
     return (
-      <div className="border-border bg-card rounded-2xl border p-6 text-center">
-        <h2 className="font-display text-lg">Nothing left to return</h2>
-        <p className="text-muted-foreground mt-2 text-sm">
+      <div className="border-border bg-card rounded-lg border px-6 py-8 text-center">
+        <h2 className="text-foreground font-display text-[20px] font-medium leading-[1.3] tracking-[-0.02em]">
+          Nothing left to return
+        </h2>
+        <p className="text-muted-foreground mx-auto mt-2 max-w-[52ch] text-[13.5px] leading-[20.25px]">
           {hasRequests
             ? 'Every item on this order is already returned or in one of your requests below. If you think this is a mistake, reach out to the warehouse directly.'
             : 'Every item on this order has already been returned, or this order has no returnable items. If you think this is a mistake, reach out to the warehouse directly.'}

@@ -6,7 +6,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
-import { Label } from '@/components/ui/label';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { setOrgMfaPolicyAction } from '@/server/actions/mfa';
 
 type Policy = 'optional' | 'admins_required' | 'all_required';
@@ -52,34 +52,23 @@ export function MfaPolicyEditor({ current }: { current: Policy }) {
   }
 
   return (
-    <div className="space-y-3">
-      <div role="radiogroup" className="space-y-2">
+    <div className="space-y-4">
+      <RadioGroup
+        variant="card"
+        aria-label="Organization MFA policy"
+        value={policy}
+        onValueChange={(v) => setPolicy(v as Policy)}
+      >
         {OPTIONS.map((o) => (
-          <label
+          <RadioGroupItem
             key={o.value}
-            className={
-              'flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2.5 transition-colors ' +
-              (policy === o.value
-                ? 'border-primary bg-primary/5'
-                : 'border-border bg-card hover:bg-muted/40')
-            }
-          >
-            <input
-              type="radio"
-              name="mfa-policy"
-              value={o.value}
-              checked={policy === o.value}
-              onChange={() => setPolicy(o.value)}
-              className="mt-1"
-            />
-            <div className="flex-1">
-              <Label className="cursor-pointer font-medium">{o.label}</Label>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">{o.description}</p>
-            </div>
-          </label>
+            value={o.value}
+            label={o.label}
+            description={o.description}
+          />
         ))}
-      </div>
-      <div className="flex items-center justify-end gap-2">
+      </RadioGroup>
+      <div className="flex flex-wrap items-center justify-end gap-2">
         {dirty && (
           <Button
             type="button"
@@ -90,13 +79,9 @@ export function MfaPolicyEditor({ current }: { current: Policy }) {
             Discard
           </Button>
         )}
-        <Button
-          type="button"
-          variant="gradient"
-          onClick={save}
-          disabled={!dirty || pending}
-        >
-          {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save policy'}
+        <Button type="button" variant="gradient" onClick={save} disabled={!dirty || pending}>
+          {pending ? <Loader2 className="animate-spin" aria-hidden /> : null}
+          Save policy
         </Button>
       </div>
     </div>

@@ -7,7 +7,8 @@ import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
 import { isSystemLocation, locationGroup, type LocationGroup } from '@/lib/locations/groups';
-import { cn } from '@/lib/utils';
+import { PageHeader } from '@/components/patterns/page-header';
+import { SegmentedTabs } from '@/components/patterns/segmented-tabs';
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
@@ -101,10 +102,14 @@ const TYPES = [
 export function LocationsManager({
   initial,
   view = 'active',
+  title = 'Locations',
   canManage = true,
 }: {
   initial: LocationRow[];
   view?: 'active' | 'archived';
+  /** The page's h1: "Locations", or the org's Settings > Navigation rename of
+   *  the sidebar entry, resolved by the page (PLAN rule 10). */
+  title?: string;
   /** Hides New / Edit / Archive / Restore buttons when false. */
   canManage?: boolean;
 }) {
@@ -186,14 +191,23 @@ export function LocationsManager({
 
   return (
     <>
-      <div className="mb-5 flex items-center justify-between gap-2">
-        <ArchiveViewToggle view={view} />
-        {canManage && !isArchivedView && (
-          <Button variant="gradient" onClick={openNew}>
-            <Plus className="h-4 w-4" /> New location
-          </Button>
-        )}
-      </div>
+      <PageHeader
+        title={title}
+        titleId="locations-title"
+        subline={
+          isArchivedView
+            ? 'Locations you archived. Restore one to bring it back into pick lists.'
+            : 'Warehouses, rooms, shelves, vehicles, job sites — wherever stock lives.'
+        }
+        actions={<ArchiveViewToggle view={view} />}
+        primaryAction={
+          canManage && !isArchivedView ? (
+            <Button variant="gradient" onClick={openNew}>
+              <Plus className="h-4 w-4" /> New location
+            </Button>
+          ) : null
+        }
+      />
 
       {initial.length === 0 ? (
         isArchivedView ? (
@@ -213,26 +227,20 @@ export function LocationsManager({
         <>
           {/* Sites vs Racks & shelves vs System are three different kinds of
               place — keep them on separate tabs instead of one flat list. */}
-          <div className="mb-4 flex flex-wrap gap-1 border-b">
-            {TAB_ORDER.map((key) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setTab(key)}
-                className={cn(
-                  'relative -mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors',
-                  tab === key
-                    ? 'border-primary text-foreground'
-                    : 'border-transparent text-muted-foreground hover:text-foreground',
-                )}
-              >
-                {TAB_META[key].label}
-                <span className="ml-1.5 text-xs tabular-nums text-muted-foreground">
-                  {grouped[key].length}
-                </span>
-              </button>
-            ))}
-          </div>
+          {/* The three groups as the shared segmented control (DESIGN-SPEC
+              6.5), each with its count. Client state, as before (not in the
+              URL); toggle buttons with aria-pressed. */}
+          <SegmentedTabs
+            semantics="nav"
+            aria-label="Location groups"
+            activeId={tab}
+            onSelect={(id) => setTab(id as LocationGroup)}
+            items={TAB_ORDER.map((key) => ({
+              id: key,
+              label: TAB_META[key].label,
+              count: grouped[key].length,
+            }))}
+          />
 
           {rows.length === 0 ? (
             <EmptyState
@@ -241,10 +249,10 @@ export function LocationsManager({
               description={activeTab.emptyDescription}
             />
           ) : (
-            <div className="overflow-x-auto rounded-xl border bg-card">
-              <Table>
+            <div className="border-border bg-card min-w-0 overflow-hidden rounded-lg border">
+              <Table scrollLabelledBy="locations-title" className="min-w-[640px]">
                 <TableHeader>
-                  <TableRow>
+                  <TableRow className="hover:bg-transparent">
                     <TableHead>Name</TableHead>
                     <TableHead>Type</TableHead>
                     <TableHead>Warehouse</TableHead>
@@ -255,60 +263,66 @@ export function LocationsManager({
                 <TableBody>
                   {rows.map((row) => (
                     <TableRow key={row.id}>
-                      <TableCell className="font-medium">
+                      <TableCell className="text-foreground font-medium">
                         {/* The location's own page (F1-3): what is held here
                             and when each item was last counted. */}
                         <Link
                           href={`/dashboard/locations/${row.id}`}
-                          className="hover:underline underline-offset-4"
+                          className="underline-offset-4 [overflow-wrap:anywhere] hover:underline"
                         >
                           {row.name}
                         </Link>
                       </TableCell>
-                      <TableCell className="text-xs uppercase tracking-wider text-muted-foreground">
+                      <TableCell className="text-muted-foreground whitespace-nowrap text-[11px] uppercase tracking-[0.06em]">
                         {row.type ?? '—'}
                       </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
+                      <TableCell className="text-ink-2 whitespace-nowrap">
                         {row.warehouseName ?? '—'}
                       </TableCell>
-                      <TableCell className="max-w-xs truncate text-sm text-muted-foreground">
+                      <TableCell className="text-muted-foreground max-w-xs truncate">
                         {row.notes ?? '—'}
                       </TableCell>
-                      <TableCell className="flex justify-end gap-2">
-                        {canManage && (isArchivedView ? (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setRestoreTarget(row)}
-                          >
-                            <RotateCcw className="h-3.5 w-3.5" /> Restore
-                          </Button>
-                        ) : isSystemLocation(row) ? (
-                          // Staging/Unplaced are created + owned by the
-                          // receiving flow; editing or archiving one breaks
-                          // put-away. The service refuses too — this just
-                          // keeps the footgun out of the UI.
-                          <span className="self-center text-xs uppercase tracking-wider text-muted-foreground">
-                            Auto-managed
-                          </span>
-                        ) : (
-                          <>
-                            <Button variant="outline" size="sm" onClick={() => openEdit(row)}>
-                              Edit
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => {
-                                setArchiveStockBlock(null);
-                                setArchiveTarget(row);
-                              }}
-                              aria-label={`Archive ${row.name}`}
-                            >
-                              <Trash2 className="h-4 w-4 text-muted-foreground" />
-                            </Button>
-                          </>
-                        ))}
+                      <TableCell className="text-right">
+                        {/* The buttons sit in their own flex row: a flex <td>
+                            leaves the table's cell layout. 8 px apart, the
+                            gap their 44 px touch areas need. */}
+                        <div className="flex items-center justify-end gap-2">
+                          {canManage &&
+                            (isArchivedView ? (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setRestoreTarget(row)}
+                              >
+                                <RotateCcw className="h-3.5 w-3.5" /> Restore
+                              </Button>
+                            ) : isSystemLocation(row) ? (
+                              // Staging/Unplaced are created + owned by the
+                              // receiving flow; editing or archiving one breaks
+                              // put-away. The service refuses too — this just
+                              // keeps the footgun out of the UI.
+                              <span className="text-muted-foreground whitespace-nowrap text-[11px] uppercase tracking-[0.06em]">
+                                Auto-managed
+                              </span>
+                            ) : (
+                              <>
+                                <Button variant="outline" size="sm" onClick={() => openEdit(row)}>
+                                  Edit
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => {
+                                    setArchiveStockBlock(null);
+                                    setArchiveTarget(row);
+                                  }}
+                                  aria-label={`Archive ${row.name}`}
+                                >
+                                  <Trash2 className="text-muted-foreground h-4 w-4" />
+                                </Button>
+                              </>
+                            ))}
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -337,8 +351,8 @@ export function LocationsManager({
             <span className="text-destructive">{archiveStockBlock}</span>
           ) : (
             <>
-              The location is hidden from pick lists and item forms. Items currently assigned to
-              it keep their assignment until you move them. You can restore it from the{' '}
+              The location is hidden from pick lists and item forms. Items currently assigned to it
+              keep their assignment until you move them. You can restore it from the{' '}
               <strong>Archived view</strong>.
             </>
           )
@@ -401,7 +415,7 @@ function LocationDialog({
     const payload = {
       name: values.name,
       type: (values.type || undefined) as
-        | 'warehouse' | 'room' | 'shelf' | 'bin' | 'vehicle' | 'jobsite' | 'other' | undefined,
+        'warehouse' | 'room' | 'shelf' | 'bin' | 'vehicle' | 'jobsite' | 'other' | undefined,
       notes: values.notes || undefined,
     };
     const res = editing
@@ -428,13 +442,17 @@ function LocationDialog({
         <form onSubmit={onSubmit} className="space-y-4" noValidate>
           <div className="space-y-1.5">
             <Label htmlFor="name">Name</Label>
-            <Input id="name" placeholder="Main warehouse" {...register('name', { required: true })} />
-            {errors.name && <p className="text-xs text-destructive">Name is required.</p>}
+            <Input
+              id="name"
+              placeholder="Main warehouse"
+              {...register('name', { required: true })}
+            />
+            {errors.name && <p className="text-destructive text-xs">Name is required.</p>}
           </div>
           <div className="space-y-1.5">
             <Label>
               Type
-              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+              <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
             </Label>
             <Select value={watch('type')} onValueChange={(v: string) => setValue('type', v)}>
               <SelectTrigger>
@@ -452,12 +470,17 @@ function LocationDialog({
           <div className="space-y-1.5">
             <Label htmlFor="notes">
               Notes
-              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+              <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
             </Label>
             <Textarea id="notes" rows={3} {...register('notes')} />
           </div>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              disabled={isSubmitting}
+            >
               Cancel
             </Button>
             <Button type="submit" variant="gradient" disabled={isSubmitting}>

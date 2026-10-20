@@ -1,12 +1,14 @@
 'use client';
 
-import { Archive, Loader2 } from 'lucide-react';
+import { Archive, Loader2, TriangleAlert } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { SettingsPanel } from '@/components/settings/settings-nav';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { setAutoArchiveSettingsAction } from '@/server/actions/auto-archive-settings';
 
@@ -48,34 +50,39 @@ export function AutoArchivePanel({ initial, eligibleCount }: Props) {
     router.refresh();
   }
 
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Archive className="h-4 w-4" /> Auto-archive out-of-stock items
-        </CardTitle>
-        <CardDescription>
-          Automatically archive items that stay out of stock. Restocking brings them back.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <label className="flex items-center gap-2 text-sm font-medium">
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={(e) => setEnabled(e.target.checked)}
-            disabled={busy}
-          />
-          Automatically archive out-of-stock items
-        </label>
+  const warn = enabled && eligibleCount > 0;
 
-        <p
-          className={
-            enabled && eligibleCount > 0
-              ? 'text-amber-600 dark:text-amber-400 text-sm font-medium'
-              : 'text-muted-foreground text-sm'
-          }
-        >
+  return (
+    <SettingsPanel
+      title={
+        <span className="flex items-center gap-2">
+          <Archive aria-hidden className="text-muted-foreground h-4 w-4" /> Auto-archive
+          out-of-stock items
+        </span>
+      }
+      description="Automatically archive items that stay out of stock. Restocking brings them back."
+      bodyClassName="space-y-4"
+    >
+      <Checkbox
+        checked={enabled}
+        onCheckedChange={setEnabled}
+        disabled={busy}
+        className="text-[13.5px] font-medium"
+      >
+        Automatically archive out-of-stock items
+      </Checkbox>
+
+      {/* Amber when items would be archived on the next run; the icon is the
+          cue that does not rely on colour. */}
+      <p
+        className={
+          warn
+            ? 'text-warning flex items-start gap-1.5 text-[13px] font-medium'
+            : 'text-muted-foreground text-[13px]'
+        }
+      >
+        {warn ? <TriangleAlert aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : null}
+        <span>
           {eligibleCount === 0 ? (
             'No items are currently eligible.'
           ) : enabled ? (
@@ -89,38 +96,40 @@ export function AutoArchivePanel({ initial, eligibleCount }: Props) {
               archived when you turn this on.
             </>
           )}
-        </p>
+        </span>
+      </p>
 
-        {enabled && (
-          <div className="max-w-xs space-y-1.5">
-            <Label htmlFor="aa-dwell-days">Archive after an item has been out of stock for</Label>
-            <div className="flex items-center gap-2">
-              <input
-                id="aa-dwell-days"
-                type="number"
-                min={1}
-                max={365}
-                value={dwellDays}
-                onChange={(e) => setDwellDays(Math.max(1, Number(e.target.value) || 1))}
-                disabled={busy}
-                className="border-input bg-background focus:border-ring h-9 w-24 rounded-md border px-2.5 text-sm outline-none"
-              />
-              <span className="text-muted-foreground text-sm">days</span>
-            </div>
-            <p className="text-muted-foreground text-xs">
-              Checked once a day — only items that have been at zero stock longer than this are
-              archived. Items with an open order reservation or rental checkout are skipped.
-            </p>
+      {enabled && (
+        <div className="max-w-xs space-y-1.5">
+          <Label htmlFor="aa-dwell-days">Archive after an item has been out of stock for</Label>
+          <div className="flex items-center gap-2">
+            <Input
+              id="aa-dwell-days"
+              type="number"
+              min={1}
+              max={365}
+              value={dwellDays}
+              onChange={(e) => setDwellDays(Math.max(1, Number(e.target.value) || 1))}
+              disabled={busy}
+              className="w-24 font-mono tabular-nums"
+            />
+            <span className="text-muted-foreground text-[13px]">days</span>
           </div>
-        )}
+          <p className="text-muted-foreground text-[12.5px]">
+            Checked once a day — only items that have been at zero stock longer than this are
+            archived. Items with an open order reservation or rental checkout are skipped.
+          </p>
+        </div>
+      )}
 
-        {error ? <p className="text-destructive text-sm">{error}</p> : null}
+      {error ? <p className="text-destructive text-[13px]">{error}</p> : null}
 
-        <Button onClick={save} disabled={busy} size="sm">
+      <div>
+        <Button onClick={save} disabled={busy}>
           {busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null}
           Save settings
         </Button>
-      </CardContent>
-    </Card>
+      </div>
+    </SettingsPanel>
   );
 }

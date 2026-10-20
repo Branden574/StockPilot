@@ -513,7 +513,7 @@ function OrdersBody({
             </Mono>
           ) : null}
           {place ? (
-            <Mono size={12} color={c.ink4}>
+            <Mono size={12} color={c.ink3}>
               {place}
             </Mono>
           ) : null}

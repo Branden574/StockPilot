@@ -186,3 +186,34 @@ describe('/auth/confirm — email_change', () => {
     expect(res.headers.get('location')).toBe(`${BASE}/dashboard/settings/profile?emailChanged=1`);
   });
 });
+
+// Redesign P5.1: the page keeps zero JS and its words, and draws the app's
+// palette in both schemes with the flat accent button (the blue-to-indigo
+// gradient predated the brand).
+describe('GET /auth/confirm page look', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('is zero JS, with the brand palette, a dark scheme and a 44 px button, and no gradient', async () => {
+    const res = await GET(getReq('token_hash=abc123&type=invite&next=%2Fdashboard'));
+    const html = await res.text();
+    expect(html).not.toMatch(/<script\b/i);
+    expect(html).not.toMatch(/gradient|#3b82f6|#6366f1/i);
+    expect(html).toMatch(/@media \(prefers-color-scheme:dark\)/);
+    expect(html).toContain('background:#fafaf7');
+    expect(html).toMatch(/\.btn\{[^}]*min-height:44px/);
+    expect(html).toContain('<button type="submit" class="btn">');
+    expect(html).toContain('Accept your invite');
+    expect(html).toContain('Continue to StockPilot');
+    expect(html).toContain('This link works once. Press the button to continue.');
+  });
+
+  it('the email-change status page keeps its words and its one link', async () => {
+    verifyOtp.mockResolvedValueOnce({ data: {}, error: { message: 'expired' } });
+    const res = await POST(postReq({ token_hash: 'x', type: 'email_change' }));
+    const html = await res.text();
+    expect(html).not.toMatch(/<script\b/i);
+    expect(html).toContain(
+      '<a href="/dashboard/settings/profile" class="btn">Go to Settings → Profile</a>',
+    );
+  });
+});

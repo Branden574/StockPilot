@@ -1,12 +1,24 @@
 'use client';
 
-import { Building2, History, Loader2, MapPin, Plus, RotateCcw, Trash2, TriangleAlert } from 'lucide-react';
+import {
+  Building2,
+  History,
+  Loader2,
+  MapPin,
+  Plus,
+  RotateCcw,
+  Trash2,
+  TriangleAlert,
+} from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
+import { STICKY_ACTIONS } from '@/components/admin/sticky-actions';
+import { PageHeader } from '@/components/patterns/page-header';
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
+import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
@@ -29,6 +41,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
+import { cn } from '@/lib/utils';
 import {
   archiveCharterAction,
   createCharterAction,
@@ -105,10 +118,17 @@ export function ChartersManager({
   initial,
   termSingular,
   view = 'active',
+  eyebrow,
+  title,
+  subline,
 }: {
   initial: CharterRow[];
   termSingular: string;
   view?: 'active' | 'archived';
+  /** The page header's words, resolved by the page (terminology included). */
+  eyebrow?: React.ReactNode;
+  title: React.ReactNode;
+  subline?: React.ReactNode;
 }) {
   const isArchivedView = view === 'archived';
   const [editing, setEditing] = React.useState<CharterRow | null>(null);
@@ -116,19 +136,30 @@ export function ChartersManager({
 
   return (
     <>
-      <div className="mb-5 flex items-center justify-between gap-2">
-        <ArchiveViewToggle view={view} />
-        {!isArchivedView && (
-          <Button
-            onClick={() => {
-              setEditing(null);
-              setOpen(true);
-            }}
-          >
-            <Plus className="h-4 w-4" /> New {termSingular.toLowerCase()}
-          </Button>
-        )}
-      </div>
+      {/* The header lives here because "New" and each row's Edit share one
+          dialog. The Active / Archived toggle is the header's view control
+          (DESIGN-SPEC 6.21); "New" is the page-level create, so it is the
+          accent primary, hidden in the archived view as before. */}
+      <PageHeader
+        eyebrow={eyebrow}
+        title={title}
+        titleId="charters-title"
+        subline={subline}
+        actions={<ArchiveViewToggle view={view} />}
+        primaryAction={
+          !isArchivedView ? (
+            <Button
+              variant="gradient"
+              onClick={() => {
+                setEditing(null);
+                setOpen(true);
+              }}
+            >
+              <Plus className="h-4 w-4" /> New {termSingular.toLowerCase()}
+            </Button>
+          ) : null
+        }
+      />
 
       {initial.length === 0 ? (
         isArchivedView ? (
@@ -145,16 +176,21 @@ export function ChartersManager({
           />
         )
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-border bg-card">
-          <Table>
+        // The table scrolls sideways inside its card on a narrow screen, so
+        // the Actions column is always reachable and never pushed off the page.
+        <div className="border-border bg-card overflow-hidden rounded-lg border">
+          <Table scrollLabelledBy="charters-title" className="min-w-[760px]">
             <TableHeader>
-              <TableRow>
+              <TableRow className="hover:bg-transparent">
                 <TableHead>Name</TableHead>
                 <TableHead>Code</TableHead>
                 <TableHead className="text-right">Warehouses</TableHead>
                 <TableHead className="text-right">Users</TableHead>
                 <TableHead>Shipping address</TableHead>
-                <TableHead className="w-32 text-right">Actions</TableHead>
+                {/* Below md the Actions column stays pinned to the card's right edge
+                    while the other columns scroll under it, so Edit and Archive
+                    are always on screen. */}
+                <TableHead className={cn('w-32 text-right', STICKY_ACTIONS)}>Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -198,12 +234,17 @@ function CharterTableRow({
   const [archiveBusy, setArchiveBusy] = React.useState(false);
   const [restoreOpen, setRestoreOpen] = React.useState(false);
   const [restoreBusy, setRestoreBusy] = React.useState(false);
+  // Why the last try was refused, shown inside the confirm: a toast alone
+  // sits behind the open dialog. Cleared on open and on each try.
+  const [confirmError, setConfirmError] = React.useState<string | null>(null);
 
   async function confirmArchive() {
     setArchiveBusy(true);
+    setConfirmError(null);
     const res = await archiveCharterAction(row.id);
     setArchiveBusy(false);
     if (!res.ok) {
+      setConfirmError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -214,9 +255,11 @@ function CharterTableRow({
 
   async function confirmRestore() {
     setRestoreBusy(true);
+    setConfirmError(null);
     const res = await restoreCharterAction(row.id);
     setRestoreBusy(false);
     if (!res.ok) {
+      setConfirmError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -227,73 +270,92 @@ function CharterTableRow({
 
   return (
     <TableRow>
-      <TableCell className="font-medium">{row.name}</TableCell>
-      <TableCell className="font-mono text-xs text-muted-foreground">{row.code ?? '—'}</TableCell>
-      <TableCell className="text-right tabular-nums">{row.warehouse_count}</TableCell>
-      <TableCell className="text-right tabular-nums">{row.user_count}</TableCell>
-      <TableCell className="w-[280px] max-w-[280px] text-sm text-muted-foreground">
+      <TableCell className="text-foreground font-medium">{row.name}</TableCell>
+      <TableCell className="text-muted-foreground font-mono text-[12.5px]">
+        {row.code ?? '—'}
+      </TableCell>
+      <TableCell className="text-right font-mono tabular-nums">{row.warehouse_count}</TableCell>
+      <TableCell className="text-right font-mono tabular-nums">{row.user_count}</TableCell>
+      <TableCell className="text-ink-2 w-[280px] max-w-[280px] text-[13px]">
         {isAddressEmpty(row.address) ? (
-          <span className="inline-flex items-center gap-1.5 text-amber-600 dark:text-amber-500">
-            <TriangleAlert className="h-3.5 w-3.5 shrink-0" />
-            <span className="text-xs">Needed for shipping labels</span>
-          </span>
+          <Badge variant="warning" className="gap-1">
+            <TriangleAlert className="h-3 w-3 shrink-0" aria-hidden />
+            Needed for shipping labels
+          </Badge>
         ) : (
           // Wrap long mailing addresses inside the bounded cell instead of
           // truncating with nowrap — nowrap expands the auto-layout column and
           // shoves the Actions/Edit buttons off-screen (owner caught this).
           <span className="flex min-w-0 items-start gap-1.5">
-            <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <MapPin className="text-muted-foreground mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
             <span className="min-w-0 break-words">
               {formatAddressLines(row.address).join(', ')}
             </span>
           </span>
         )}
       </TableCell>
-      <TableCell className="flex justify-end gap-2 whitespace-nowrap">
-        {isArchivedView ? (
-          <>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setRestoreOpen(true)}
-            >
-              <RotateCcw className="h-3.5 w-3.5" /> Restore
-            </Button>
-            <DestructiveConfirm
-              open={restoreOpen}
-              onOpenChange={setRestoreOpen}
-              title={`Restore "${row.name}"?`}
-              description="This brings the charter back into the active list."
-              confirmLabel="Restore"
-              tone="primary"
-              pending={restoreBusy}
-              onConfirm={confirmRestore}
-            />
-          </>
-        ) : (
-          <>
-            <Button variant="outline" size="sm" onClick={onEdit}>
-              Edit
-            </Button>
-            <Button variant="ghost" size="icon" onClick={() => setArchiveOpen(true)} aria-label="Archive">
-              <Trash2 className="h-4 w-4 text-muted-foreground" />
-            </Button>
-            <DestructiveConfirm
-              open={archiveOpen}
-              onOpenChange={setArchiveOpen}
-              title={`Archive "${row.name}"?`}
-              description={
-                <>
-                  Existing warehouses keep working. You can restore this from the{' '}
-                  <strong>Archived view</strong> later.
-                </>
-              }
-              confirmLabel="Archive"
-              pending={archiveBusy}
-              onConfirm={confirmArchive}
-            />
-          </>
-        )}
+      <TableCell className={cn('whitespace-nowrap', STICKY_ACTIONS)}>
+        {/* The buttons sit in their own flex box: a flex table cell stops
+            being a table cell (its row border and alignment break). */}
+        <div className="flex items-center justify-end gap-2">
+          {isArchivedView ? (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setConfirmError(null);
+                  setRestoreOpen(true);
+                }}
+              >
+                <RotateCcw className="h-3.5 w-3.5" /> Restore
+              </Button>
+              <DestructiveConfirm
+                open={restoreOpen}
+                onOpenChange={setRestoreOpen}
+                title={`Restore "${row.name}"?`}
+                description="This brings the charter back into the active list."
+                confirmLabel="Restore"
+                tone="primary"
+                pending={restoreBusy}
+                error={confirmError}
+                onConfirm={confirmRestore}
+              />
+            </>
+          ) : (
+            <>
+              <Button variant="outline" size="sm" onClick={onEdit}>
+                Edit
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => {
+                  setConfirmError(null);
+                  setArchiveOpen(true);
+                }}
+                aria-label="Archive"
+              >
+                <Trash2 className="text-muted-foreground h-4 w-4" />
+              </Button>
+              <DestructiveConfirm
+                open={archiveOpen}
+                onOpenChange={setArchiveOpen}
+                title={`Archive "${row.name}"?`}
+                description={
+                  <>
+                    Existing warehouses keep working. You can restore this from the{' '}
+                    <strong>Archived view</strong> later.
+                  </>
+                }
+                confirmLabel="Archive"
+                pending={archiveBusy}
+                error={confirmError}
+                onConfirm={confirmArchive}
+              />
+            </>
+          )}
+        </div>
       </TableCell>
     </TableRow>
   );
@@ -406,26 +468,22 @@ function CharterDialog({
               placeholder="Southern California"
               {...register('name', { required: true, maxLength: 120 })}
             />
-            {errors.name && <p className="text-xs text-destructive">Name is required.</p>}
+            {errors.name && <p className="text-destructive text-[12px]">Name is required.</p>}
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="charter-code">
               Code
-              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+              <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
             </Label>
-            <Input
-              id="charter-code"
-              placeholder="SOCAL"
-              {...register('code', { maxLength: 32 })}
-            />
-            <p className="text-xs text-muted-foreground">
+            <Input id="charter-code" placeholder="SOCAL" {...register('code', { maxLength: 32 })} />
+            <p className="text-muted-foreground text-xs">
               Short identifier used in reports and exports.
             </p>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="charter-description">
               Description
-              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+              <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
             </Label>
             <Textarea
               id="charter-description"
@@ -434,15 +492,15 @@ function CharterDialog({
               {...register('description', { maxLength: 2000 })}
             />
           </div>
-          <div className="space-y-2 rounded-lg border border-border bg-muted/20 p-3">
+          <div className="border-border bg-sunk space-y-2 rounded-lg border p-3">
             <div>
-              <Label className="text-sm font-medium">
+              <Label>
                 Shipping address
-                <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+                <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
               </Label>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                Destination for delivery orders. Required before you can buy a shipping label
-                for this {termSingular.toLowerCase()}.
+              <p className="text-muted-foreground mt-0.5 text-xs">
+                Destination for delivery orders. Required before you can buy a shipping label for
+                this {termSingular.toLowerCase()}.
               </p>
             </div>
             <div className="space-y-2">
@@ -457,7 +515,11 @@ function CharterDialog({
                 {...register('addressLine2', { maxLength: 200 })}
               />
               <div className="grid grid-cols-2 gap-2">
-                <Input placeholder="City" aria-label="City" {...register('city', { maxLength: 120 })} />
+                <Input
+                  placeholder="City"
+                  aria-label="City"
+                  {...register('city', { maxLength: 120 })}
+                />
                 <Input
                   placeholder="State / region"
                   aria-label="State or region"
@@ -482,10 +544,14 @@ function CharterDialog({
           <div className="space-y-1.5">
             <Label>
               Contact
-              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+              <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
             </Label>
-            <div className="grid grid-cols-3 gap-2">
-              <Input placeholder="Name" aria-label="Contact name" {...register('contactName', { maxLength: 120 })} />
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+              <Input
+                placeholder="Name"
+                aria-label="Contact name"
+                {...register('contactName', { maxLength: 120 })}
+              />
               <Input
                 placeholder="Email"
                 type="email"
@@ -502,14 +568,14 @@ function CharterDialog({
               />
             </div>
             {errors.contactEmail && (
-              <p className="text-xs text-destructive">Enter a valid email address.</p>
+              <p className="text-destructive text-[12px]">Enter a valid email address.</p>
             )}
           </div>
 
           <div className="space-y-1.5">
             <Label htmlFor="charter-notes">
               Internal notes
-              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+              <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
             </Label>
             <Textarea id="charter-notes" rows={2} {...register('notes', { maxLength: 2000 })} />
           </div>
@@ -522,14 +588,15 @@ function CharterDialog({
             >
               Cancel
             </Button>
-            <Button type="submit" variant="gradient" disabled={isSubmitting}>
-              {isSubmitting ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : editing ? (
-                'Save changes'
-              ) : (
-                `Create ${termSingular.toLowerCase()}`
-              )}
+            {/* The button keeps its words beside the spinner while it saves. */}
+            <Button
+              type="submit"
+              variant="gradient"
+              disabled={isSubmitting}
+              aria-busy={isSubmitting}
+            >
+              {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
+              {editing ? 'Save changes' : `Create ${termSingular.toLowerCase()}`}
             </Button>
           </DialogFooter>
         </form>

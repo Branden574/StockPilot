@@ -22,29 +22,59 @@ interface BinRow {
   warehouse: { name: string | null; code: string | null } | null;
 }
 
+/** No rows yet (one array, so an empty list keeps one identity). */
+const NO_ROWS: BinRow[] = [];
+
+/**
+ * Admin · Bins (latest 200 by code), read only. A read that fails is said as
+ * a failure, never "No bins yet." (D25): with no rows its words stand in for
+ * the list, with rows from an earlier read they stay under "Could not
+ * refresh", and the eyebrow quotes no count it did not read.
+ */
 export default function BinsAdmin() {
   const { orgId } = useOrg();
   const { isAdmin, loading: roleLoading } = useRole();
-  const [rows, setRows] = React.useState<BinRow[]>([]);
+  // The rows on screen and the workspace they were read for: a failed read
+  // keeps them only when they are this workspace's (never the last
+  // workspace's rows under "Could not refresh" after a switch).
+  const [list, setList] = React.useState<{ orgId: string; rows: BinRow[] } | null>(null);
+  const rows = list?.rows ?? NO_ROWS;
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
+  // The last read failed (set by every read that completes).
+  const [failed, setFailed] = React.useState(false);
 
   const load = React.useCallback(async () => {
     if (!orgId || !isAdmin) {
       setLoading(false);
       return;
     }
-    const { data } = await supabase
-      .from('bins')
-      .select(
-        `id, code, name, bin_type, is_default, status,
+    const forOrg = orgId;
+    let read;
+    try {
+      read = await supabase
+        .from('bins')
+        .select(
+          `id, code, name, bin_type, is_default, status,
          warehouse:warehouses!warehouse_id (name, code)`,
-      )
-      .eq('organization_id', orgId)
-      .order('code', { ascending: true })
-      .limit(200);
-    setRows(
-      (data ?? []).map((row) => {
+        )
+        .eq('organization_id', orgId)
+        .order('code', { ascending: true })
+        .limit(200);
+    } catch {
+      read = null;
+    }
+    if (!read || read.error) {
+      setList((prev) => (prev !== null && prev.orgId === forOrg ? prev : null));
+      setFailed(true);
+      setLoading(false);
+      return;
+    }
+    const { data } = read;
+    setFailed(false);
+    setList({
+      orgId: forOrg,
+      rows: (data ?? []).map((row) => {
         const r = row as Record<string, unknown>;
         const wh = r.warehouse as { name: string | null; code: string | null } | { name: string | null; code: string | null }[] | null;
         return {
@@ -57,7 +87,7 @@ export default function BinsAdmin() {
           warehouse: Array.isArray(wh) ? wh[0] ?? null : wh,
         };
       }),
-    );
+    });
     setLoading(false);
   }, [orgId, isAdmin]);
 
@@ -91,12 +121,21 @@ export default function BinsAdmin() {
 
   return (
     <DataListScreen
-      eyebrow={`ADMIN · ${rows.length} BINS`}
+      eyebrow={failed && rows.length === 0 ? 'ADMIN · BINS' : `ADMIN · ${rows.length} BINS`}
       title="Bins"
       italic="& putaway."
       emptyTitle="No bins yet."
       emptyBody="Bins live inside warehouses for pick paths and damage holds."
       emptyIcon={MapPin}
+      failed={
+        failed
+          ? {
+              title: 'Could not load bins.',
+              body: 'Check your connection and pull down to try again.',
+              reloadNote: 'Could not refresh. Showing the last list.',
+            }
+          : null
+      }
       data={rows}
       loading={loading || roleLoading}
       refreshing={refreshing}
@@ -113,7 +152,7 @@ function BinCard({ bin }: { bin: BinRow }) {
     <Card padding={14}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
         <View style={{ flex: 1, minWidth: 0 }}>
-          <Mono size={9.5} tracking={0.18} upper color={c.ink4}>
+          <Mono size={9.5} tracking={0.18} upper color={c.ink3}>
             — {bin.warehouse?.code ?? '—'} · {bin.bin_type}
           </Mono>
           <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 6 }}>

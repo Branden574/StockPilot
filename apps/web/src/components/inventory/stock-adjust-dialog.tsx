@@ -44,7 +44,14 @@ const REASON_PRESETS: Array<{ type: MovementType; label: string; sign: 1 | -1 }>
   { type: 'correction', label: 'Correction', sign: 1 },
 ];
 
-export function StockAdjustDialog({ itemId, itemName, currentQuantity, trigger }: StockAdjustDialogProps) {
+export function StockAdjustDialog({
+  itemId,
+  itemName,
+  currentQuantity,
+  trigger,
+}: StockAdjustDialogProps) {
+  // Each field's label names it (its accessible name), one id set per dialog.
+  const fieldId = React.useId();
   const [open, setOpen] = React.useState(false);
   const [movementType, setMovementType] = React.useState<MovementType>('add');
   const [quantity, setQuantity] = React.useState('1');
@@ -64,7 +71,7 @@ export function StockAdjustDialog({ itemId, itemName, currentQuantity, trigger }
       return;
     }
     if (newQty < 0) {
-      toast.error("That adjustment would push stock below zero. Pick a smaller quantity.");
+      toast.error('That adjustment would push stock below zero. Pick a smaller quantity.');
       return;
     }
     setSubmitting(true);
@@ -107,16 +114,19 @@ export function StockAdjustDialog({ itemId, itemName, currentQuantity, trigger }
         <DialogHeader>
           <DialogTitle>Adjust stock</DialogTitle>
           <DialogDescription>
-            Adjusting <span className="font-medium text-foreground">{itemName}</span>. Current:{' '}
+            Adjusting <span className="text-foreground font-medium">{itemName}</span>. Current:{' '}
             <span className="tabular-nums">{currentQuantity}</span>.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
           <div className="space-y-1.5">
-            <Label>Reason</Label>
-            <Select value={movementType} onValueChange={(v: string) => setMovementType(v as MovementType)}>
-              <SelectTrigger>
+            <Label htmlFor={`${fieldId}-reason`}>Reason</Label>
+            <Select
+              value={movementType}
+              onValueChange={(v: string) => setMovementType(v as MovementType)}
+            >
+              <SelectTrigger id={`${fieldId}-reason`}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -130,18 +140,24 @@ export function StockAdjustDialog({ itemId, itemName, currentQuantity, trigger }
           </div>
 
           <div className="space-y-1.5">
-            <Label>Quantity</Label>
+            <Label htmlFor={`${fieldId}-quantity`}>Quantity</Label>
             <div className="flex items-center gap-2">
+              {/* The direction of the change, beside the quantity: added on the
+                  accent wash, removed on the danger wash (the sign is also in
+                  the New quantity line, so the tone is never the only cue). */}
               <span
                 aria-hidden
                 className={cn(
-                  'grid h-10 w-10 place-items-center rounded-md border',
-                  sign > 0 ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive',
+                  'grid size-8 shrink-0 place-items-center rounded-md max-sm:size-11',
+                  sign > 0
+                    ? 'bg-success-wash text-success'
+                    : 'bg-destructive-wash text-destructive',
                 )}
               >
                 {sign > 0 ? <Plus className="h-4 w-4" /> : <Minus className="h-4 w-4" />}
               </span>
               <Input
+                id={`${fieldId}-quantity`}
                 type="number"
                 step="1"
                 min="0"
@@ -150,7 +166,7 @@ export function StockAdjustDialog({ itemId, itemName, currentQuantity, trigger }
                 className="flex-1"
               />
             </div>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-muted-foreground text-[12px]">
               New quantity:{' '}
               <span className={cn('font-semibold tabular-nums', newQty < 0 && 'text-destructive')}>
                 {newQty}
@@ -159,8 +175,9 @@ export function StockAdjustDialog({ itemId, itemName, currentQuantity, trigger }
           </div>
 
           <div className="space-y-1.5">
-            <Label>Note (optional)</Label>
+            <Label htmlFor={`${fieldId}-note`}>Note (optional)</Label>
             <Input
+              id={`${fieldId}-note`}
               placeholder="Damaged in transit, customer return…"
               value={reason}
               onChange={(e) => setReason(e.target.value)}
@@ -168,8 +185,13 @@ export function StockAdjustDialog({ itemId, itemName, currentQuantity, trigger }
           </div>
 
           <div className="space-y-1.5">
-            <Label>Internal notes</Label>
-            <Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
+            <Label htmlFor={`${fieldId}-internal-notes`}>Internal notes</Label>
+            <Textarea
+              id={`${fieldId}-internal-notes`}
+              rows={2}
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+            />
           </div>
         </div>
 
@@ -177,7 +199,12 @@ export function StockAdjustDialog({ itemId, itemName, currentQuantity, trigger }
           <Button variant="outline" onClick={() => setOpen(false)} disabled={submitting}>
             Cancel
           </Button>
-          <Button variant="gradient" onClick={submit} disabled={submitting || qtyNum <= 0 || newQty < 0}>
+          {/* The commit in front of you: the ink primary (DESIGN-SPEC 6.2). */}
+          <Button
+            variant="default"
+            onClick={submit}
+            disabled={submitting || qtyNum <= 0 || newQty < 0}
+          >
             {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Apply'}
           </Button>
         </div>

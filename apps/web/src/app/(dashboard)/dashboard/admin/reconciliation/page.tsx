@@ -1,6 +1,10 @@
 import Link from 'next/link';
 
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { FilterChipLink } from '@/components/patterns/chip';
+import { DetailSection } from '@/components/patterns/detail-section';
+import { PageHeader } from '@/components/patterns/page-header';
+import { StatStrip, StatStripItem } from '@/components/patterns/stat-strip';
+import { Badge, type BadgeProps } from '@/components/ui/badge';
 import {
   Table,
   TableBody,
@@ -9,18 +13,22 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { effectiveNavLabel } from '@/lib/nav-labels';
 import { ReconciliationService } from '@/server/services/reconciliation';
 import { formatCurrency, formatRelative } from '@/lib/utils';
 
-const STATUS_COLORS: Record<string, string> = {
-  draft: 'bg-muted text-muted-foreground',
-  expected_inbound: 'bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300',
-  ordered: 'bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300',
-  partially_received:
-    'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300',
-  received:
-    'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300',
-  cancelled: 'bg-muted text-muted-foreground',
+/**
+ * The status label's tone (DESIGN-SPEC 6.10), the same tones the PO pages use
+ * for each status. The words stay this page's own (the status with its
+ * underscores turned into spaces), so colour is never the only cue.
+ */
+const STATUS_VARIANT: Record<string, NonNullable<BadgeProps['variant']>> = {
+  draft: 'outline',
+  expected_inbound: 'secondary',
+  ordered: 'secondary',
+  partially_received: 'warning',
+  received: 'success',
+  cancelled: 'destructive',
 };
 
 export default async function ReconciliationPage({
@@ -32,169 +40,147 @@ export default async function ReconciliationPage({
   const status = (params.status as 'open' | 'closed' | 'all' | undefined) ?? 'open';
 
   const svc = await ReconciliationService.forCurrentUser();
-  const data = await svc.summary({
-    status,
-    vendorId: params.vendor || null,
-  });
+  const [data, title] = await Promise.all([
+    svc.summary({
+      status,
+      vendorId: params.vendor || null,
+    }),
+    // A Settings > Navigation rename of the sidebar entry reaches the heading
+    // (no read of its own: the org row is cached for the request).
+    effectiveNavLabel('/dashboard/admin/reconciliation', 'Reconciliation'),
+  ]);
 
   return (
-    <div className="mx-auto w-full max-w-[1400px] px-8 pb-20 pt-7">
-      <h1 className="font-display text-[28px] font-medium tracking-[-0.025em]">
-        Reconciliation
-      </h1>
-      <p className="text-muted-foreground mt-1 text-[13.5px]">
-        What was ordered vs received vs open, by PO, vendor, and warehouse.
-      </p>
+    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <PageHeader
+        title={title}
+        subline="What was ordered vs received vs open, by PO, vendor, and warehouse."
+      />
 
-      <div className="mt-4 flex flex-wrap gap-2 text-xs">
+      {/* The status filter stays in the URL (?status=), as before. */}
+      <div className="flex flex-wrap gap-2">
         {(['open', 'closed', 'all'] as const).map((s) => (
-          <Link
+          <FilterChipLink
             key={s}
             href={`/dashboard/admin/reconciliation?status=${s}`}
-            className={
-              'rounded-full border px-3 py-1 transition-colors ' +
-              (status === s
-                ? 'border-primary bg-primary/5'
-                : 'border-border bg-card hover:bg-muted/40')
-            }
+            active={status === s}
+            aria-current={status === s ? 'page' : undefined}
+            size="md"
           >
             {s.charAt(0).toUpperCase() + s.slice(1)}
-          </Link>
+          </FilterChipLink>
         ))}
       </div>
 
-      <div className="mt-6 grid gap-4 sm:grid-cols-3">
-        <SummaryCard label="Qty ordered" value={data.totals.qtyOrdered.toLocaleString()} />
-        <SummaryCard
-          label="Qty received"
-          value={data.totals.qtyReceived.toLocaleString()}
-        />
-        <SummaryCard label="Qty open" value={data.totals.qtyOpen.toLocaleString()} />
-      </div>
+      {/* Totals over every matching PO (the service reads all of them). */}
+      <StatStrip>
+        <StatStripItem label="Qty ordered" value={data.totals.qtyOrdered.toLocaleString()} />
+        <StatStripItem label="Qty received" value={data.totals.qtyReceived.toLocaleString()} />
+        <StatStripItem label="Qty open" value={data.totals.qtyOpen.toLocaleString()} />
+      </StatStrip>
 
-      <Card className="mt-6">
-        <CardHeader>
-          <CardTitle className="text-base">Vendor performance</CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Vendor</TableHead>
-                <TableHead className="text-right">POs</TableHead>
-                <TableHead className="text-right">Ordered</TableHead>
-                <TableHead className="text-right">Received</TableHead>
-                <TableHead className="text-right">Fill rate</TableHead>
+      <DetailSection headingId="reconciliation-vendors-heading" title="Vendor performance" flush>
+        <Table scrollLabelledBy="reconciliation-vendors-heading" className="min-w-[560px]">
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead>Vendor</TableHead>
+              <TableHead className="text-right">POs</TableHead>
+              <TableHead className="text-right">Ordered</TableHead>
+              <TableHead className="text-right">Received</TableHead>
+              <TableHead className="text-right">Fill rate</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {data.byVendor.length === 0 ? (
+              <TableRow className="hover:bg-transparent">
+                <TableCell colSpan={5} className="text-muted-foreground py-6 text-center">
+                  No vendor data yet.
+                </TableCell>
               </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.byVendor.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={5} className="text-muted-foreground text-center text-xs">
-                    No vendor data yet.
+            ) : (
+              data.byVendor.map((v) => (
+                <TableRow key={v.supplier_id}>
+                  <TableCell className="font-medium">{v.supplier_name ?? '—'}</TableCell>
+                  <TableCell className="text-right font-mono tabular-nums">{v.po_count}</TableCell>
+                  <TableCell className="text-right font-mono tabular-nums">
+                    {Number(v.qty_ordered).toLocaleString()}
+                  </TableCell>
+                  <TableCell className="text-right font-mono tabular-nums">
+                    {Number(v.qty_received).toLocaleString()}
+                  </TableCell>
+                  <TableCell className="text-right font-mono tabular-nums">
+                    {v.fill_rate_pct != null ? `${v.fill_rate_pct}%` : '—'}
                   </TableCell>
                 </TableRow>
-              ) : (
-                data.byVendor.map((v) => (
-                  <TableRow key={v.supplier_id}>
-                    <TableCell className="font-medium">{v.supplier_name ?? '—'}</TableCell>
-                    <TableCell className="text-right tabular-nums">{v.po_count}</TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {Number(v.qty_ordered).toLocaleString()}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {Number(v.qty_received).toLocaleString()}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {v.fill_rate_pct != null ? `${v.fill_rate_pct}%` : '—'}
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </DetailSection>
 
-      <Card className="mt-6">
-        <CardHeader>
-          <CardTitle className="text-base">Purchase orders ({status})</CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>PO #</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Vendor</TableHead>
-                <TableHead className="text-right">Ordered</TableHead>
-                <TableHead className="text-right">Received</TableHead>
-                <TableHead className="text-right">Open</TableHead>
-                <TableHead className="text-right">Cost ordered</TableHead>
-                <TableHead className="text-right">Updated</TableHead>
+      <DetailSection
+        headingId="reconciliation-pos-heading"
+        title={`Purchase orders (${status})`}
+        flush
+      >
+        <Table scrollLabelledBy="reconciliation-pos-heading" className="min-w-[860px]">
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead>PO #</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Vendor</TableHead>
+              <TableHead className="text-right">Ordered</TableHead>
+              <TableHead className="text-right">Received</TableHead>
+              <TableHead className="text-right">Open</TableHead>
+              <TableHead className="text-right">Cost ordered</TableHead>
+              <TableHead className="text-right">Updated</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {data.rows.length === 0 ? (
+              <TableRow className="hover:bg-transparent">
+                <TableCell colSpan={8} className="text-muted-foreground py-6 text-center">
+                  No POs in this filter.
+                </TableCell>
               </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.rows.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={8} className="text-muted-foreground text-center text-xs">
-                    No POs in this filter.
+            ) : (
+              data.rows.map((r) => (
+                <TableRow key={r.purchase_order_id}>
+                  <TableCell>
+                    <Link
+                      href={`/dashboard/purchase-orders/${r.purchase_order_id}`}
+                      className="text-foreground font-mono text-[12.5px] underline-offset-2 hover:underline"
+                    >
+                      {r.po_number}
+                    </Link>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={STATUS_VARIANT[r.status] ?? 'outline'}>
+                      {r.status.replace(/_/g, ' ')}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-ink-2">{r.supplier_name ?? '—'}</TableCell>
+                  <TableCell className="text-right font-mono tabular-nums">
+                    {Number(r.qty_ordered_total).toLocaleString()}
+                  </TableCell>
+                  <TableCell className="text-right font-mono tabular-nums">
+                    {Number(r.qty_received_total).toLocaleString()}
+                  </TableCell>
+                  <TableCell className="text-right font-mono tabular-nums">
+                    {Number(r.qty_open_total).toLocaleString()}
+                  </TableCell>
+                  <TableCell className="text-right font-mono tabular-nums">
+                    {formatCurrency(Number(r.cost_ordered_total))}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground whitespace-nowrap text-right text-[12.5px]">
+                    {formatRelative(r.updated_at)}
                   </TableCell>
                 </TableRow>
-              ) : (
-                data.rows.map((r) => (
-                  <TableRow key={r.purchase_order_id}>
-                    <TableCell>
-                      <Link
-                        href={`/dashboard/purchase-orders/${r.purchase_order_id}`}
-                        className="font-mono hover:underline"
-                      >
-                        {r.po_number}
-                      </Link>
-                    </TableCell>
-                    <TableCell>
-                      <span
-                        className={`rounded-full px-2 py-0.5 text-[11px] ${
-                          STATUS_COLORS[r.status] ?? 'bg-muted text-muted-foreground'
-                        }`}
-                      >
-                        {r.status.replace(/_/g, ' ')}
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-sm">{r.supplier_name ?? '—'}</TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {Number(r.qty_ordered_total).toLocaleString()}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {Number(r.qty_received_total).toLocaleString()}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {Number(r.qty_open_total).toLocaleString()}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatCurrency(Number(r.cost_ordered_total))}
-                    </TableCell>
-                    <TableCell className="text-right text-xs text-muted-foreground">
-                      {formatRelative(r.updated_at)}
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </DetailSection>
     </div>
-  );
-}
-
-function SummaryCard({ label, value }: { label: string; value: string }) {
-  return (
-    <Card>
-      <CardContent className="py-4">
-        <p className="text-muted-foreground text-xs uppercase tracking-wider">{label}</p>
-        <p className="mt-1 font-display text-2xl font-medium tabular-nums">{value}</p>
-      </CardContent>
-    </Card>
   );
 }

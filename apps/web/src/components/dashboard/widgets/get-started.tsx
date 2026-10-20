@@ -10,9 +10,5 @@ import type { DashboardWidgetProps } from './types';
  */
 export function GetStartedWidget({ checklistSteps, checklistComplete }: DashboardWidgetProps) {
   if (checklistComplete) return null;
-  return (
-    <div className="mb-5">
-      <GetStartedChecklist steps={checklistSteps} />
-    </div>
-  );
+  return <GetStartedChecklist steps={checklistSteps} />;
 }

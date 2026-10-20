@@ -67,3 +67,39 @@ describe('ApiKeysPanel hydrates with the server in UTC and the browser in Los An
     }
   });
 });
+
+describe('ApiKeysPanel names its icon buttons and keeps its scope boxes (CONFLICTS D17)', () => {
+  it('names each Revoke button after its key, and the scope boxes toggle as checkboxes', async () => {
+    const { render, screen, fireEvent } = await import('@testing-library/react');
+    render(<ApiKeysPanel apiKeys={KEYS} />);
+    expect(screen.getByRole('button', { name: 'Revoke Zapier' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Revoke Spare' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /New key/ }));
+    const read = screen.getByRole('checkbox', { name: /Read inventory/ });
+    // "Read inventory" is preselected, as before.
+    expect(read).toBeChecked();
+    fireEvent.click(read);
+    expect(read).not.toBeChecked();
+    const orders = screen.getByRole('checkbox', { name: /Read orders/ });
+    expect(orders).not.toBeChecked();
+    fireEvent.click(orders);
+    expect(orders).toBeChecked();
+  });
+
+  it('names the show-once Copy button', async () => {
+    const { render, screen, fireEvent, waitFor } = await import('@testing-library/react');
+    const { createApiKeyAction } = await import('@/server/actions/api-keys');
+    vi.mocked(createApiKeyAction).mockResolvedValueOnce({
+      ok: true,
+      data: { key: 'sk_live_example' },
+    } as never);
+    render(<ApiKeysPanel apiKeys={[]} />);
+    fireEvent.click(screen.getByRole('button', { name: /New key/ }));
+    fireEvent.change(screen.getByLabelText('Key name'), { target: { value: 'Zapier' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create key' }));
+    await waitFor(() => expect(screen.getByText('sk_live_example')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Copy API key' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Done' })).toBeInTheDocument();
+  });
+});

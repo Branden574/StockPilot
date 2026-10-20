@@ -3,10 +3,18 @@ import * as React from 'react';
 import { Pressable, Text, View } from 'react-native';
 
 import { Sentry } from '@/lib/sentry';
+import { palette } from '@/lib/theme';
 
 interface State {
   error: Error | null;
 }
+
+/**
+ * The fallback's colours: the dark palette, read once at module load. A plain
+ * constant, never the theme hook or a context, so the screen still draws when
+ * the theme layer is what threw; dark in both modes, as it always was.
+ */
+const SCREEN = palette('dark');
 
 /**
  * App-wide render-error boundary.
@@ -17,8 +25,10 @@ interface State {
  * app to a white screen with no recovery but force-quit. This boundary catches
  * those throws and degrades to a branded "Something went wrong — Reload" screen.
  *
- * Colors are hardcoded on purpose: a last-resort screen must not depend on the
- * theme/context layer, which could itself be the thing that threw.
+ * Colors are fixed on purpose: a last-resort screen must not depend on the
+ * theme/context layer, which could itself be the thing that threw. They are
+ * the dark palette's tokens (SCREEN above), with the system font, and Reload
+ * is the reference's ink button at the shared 52pt height and radius 14.
  *
  * Scope note: this catches RENDER-phase throws only. A MODULE-INIT throw (e.g.
  * a build shipped without EXPO_PUBLIC_SUPABASE_* inlined) happens before React
@@ -59,17 +69,18 @@ export class AppErrorBoundary extends React.Component<
         <View
           style={{
             flex: 1,
-            backgroundColor: '#0c0d0a',
+            backgroundColor: SCREEN.paper,
             alignItems: 'center',
             justifyContent: 'center',
             padding: 24,
           }}
         >
           <Text
+            accessibilityRole="header"
             style={{
               fontSize: 19,
               fontWeight: '700',
-              color: '#f5f5f0',
+              color: SCREEN.ink,
               marginBottom: 8,
               textAlign: 'center',
             }}
@@ -80,7 +91,7 @@ export class AppErrorBoundary extends React.Component<
             style={{
               fontSize: 14,
               lineHeight: 20,
-              color: '#a8a89c',
+              color: SCREEN.ink3,
               marginBottom: 28,
               textAlign: 'center',
             }}
@@ -91,13 +102,15 @@ export class AppErrorBoundary extends React.Component<
             accessibilityRole="button"
             onPress={this.handleReload}
             style={{
-              backgroundColor: '#c8a44d',
+              backgroundColor: SCREEN.ink,
+              minHeight: 52,
+              justifyContent: 'center',
               paddingHorizontal: 28,
               paddingVertical: 13,
-              borderRadius: 12,
+              borderRadius: 14,
             }}
           >
-            <Text style={{ color: '#0c0d0a', fontWeight: '700', fontSize: 15 }}>Reload</Text>
+            <Text style={{ color: SCREEN.paper, fontWeight: '700', fontSize: 15 }}>Reload</Text>
           </Pressable>
         </View>
       );

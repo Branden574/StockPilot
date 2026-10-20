@@ -27,9 +27,7 @@ export default async function MfaChallengePage() {
         eyebrow="Two-factor"
         title="Two-factor authentication"
         description="We could not load your authenticator just now. Reload this page to try again."
-      >
-        {null}
-      </AuthCard>
+      />
     );
   }
   const verifiedTotp = (factorsData?.totp ?? []).filter((f) => f.status === 'verified');

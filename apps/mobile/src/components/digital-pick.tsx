@@ -1,6 +1,14 @@
 import { Landmark } from 'lucide-react-native';
 import * as React from 'react';
-import { ActivityIndicator, Alert, Pressable, TextInput, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 
 import {
   digitalPickCompletionConfirm,
@@ -11,6 +19,7 @@ import {
 
 import { MIN_TAP } from '@/components/item-verification-card';
 import { Body, Eyebrow, Mono } from '@/components/ui/text';
+import { BUTTON_RADIUS } from '@/components/ui/tones';
 import {
   getOrderDetail,
   recordPickedLine,
@@ -25,7 +34,7 @@ import {
   PICK_QTY_MAX_FONT_SIZE_MULTIPLIER,
   PICK_QTY_PADDING_X,
 } from '@/lib/pick-qty-field';
-import { ACCENT, FONT } from '@/lib/theme';
+import { FONT, RADIUS, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -50,6 +59,15 @@ import { useTheme } from '@/lib/use-theme';
  * picker typed, so the count is what to check first. The line's own fixes
  * (lower, remove) stay on the order screen, where a line short by readiness
  * offers them.
+ *
+ * The redesign look: each line on the reference's card (DESIGN-SPEC 6.7), its
+ * SKU and figures in muted mono (ink3, AA), the charter on the accent wash,
+ * the quantity in the reference's count input (the recessed fill, the
+ * stronger border). Complete picking is the one ink button (it commits the
+ * pick: 52pt, the shared Button's corner and label); a line's Save is an
+ * outline whose edge turns ink while the line has unsaved changes, so the
+ * screen never shows a column of ink buttons. Every word, gate and the
+ * flush-before-complete rule are unchanged.
  */
 export function DigitalPick({
   orderId,
@@ -97,7 +115,9 @@ export function DigitalPick({
    */
   readiness?: OrderReadinessResult | null;
 }) {
-  const { c, mode } = useTheme();
+  const { c } = useTheme();
+  const inkAction = [styles.textAction, { color: c.ink }];
+  const completeText = [styles.completeLabel, { color: c.paper }];
   const [lines, setLines] = React.useState<OrderDetailLine[] | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   // Current text in each line's input, and the last-persisted qty per line.
@@ -235,29 +255,27 @@ export function DigitalPick({
   if (!canPick) {
     // Locked to another picker — show a muted notice, never the pick inputs.
     return (
-      <View
-        style={{
-          borderWidth: 1,
-          borderColor: c.hair,
-          borderRadius: 12,
-          padding: 14,
-          backgroundColor: c.card,
-        }}
-      >
-        <Mono size={11.5} color={c.ink4}>Being picked by another picker.</Mono>
+      <View style={[styles.card, { borderColor: c.hair, backgroundColor: c.card, padding: 14 }]}>
+        <Body size={13} color={c.ink3}>
+          Being picked by another picker.
+        </Body>
       </View>
     );
   }
   if (error) {
     return (
       <View style={{ gap: 8 }}>
-        <Mono size={11} color="#b42318">{error}</Mono>
+        <Body size={13} color={c.critText} accessibilityRole="alert">
+          {error}
+        </Body>
         <Pressable
           onPress={() => void load()}
           accessibilityRole="button"
           style={{ minHeight: MIN_TAP, justifyContent: 'center', alignSelf: 'flex-start' }}
         >
-          <Mono size={12} color={c.ink}>Tap to retry</Mono>
+          <Text style={inkAction} maxFontSizeMultiplier={ACTION_CAP}>
+            Tap to retry
+          </Text>
         </Pressable>
       </View>
     );
@@ -288,7 +306,9 @@ export function DigitalPick({
           accessibilityRole="button"
           style={{ minHeight: MIN_TAP, justifyContent: 'center' }}
         >
-          <Mono size={11} color={c.ink}>Fill all as requested</Mono>
+          <Text style={inkAction} maxFontSizeMultiplier={ACTION_CAP}>
+            Fill all as requested
+          </Text>
         </Pressable>
       </View>
       {lines.map((line) => {
@@ -297,19 +317,15 @@ export function DigitalPick({
         return (
           <View
             key={line.id}
-            style={{
-              borderWidth: 1,
-              borderColor: c.hair,
-              borderRadius: 12,
-              padding: 12,
-              gap: 8,
-              backgroundColor: c.card,
-            }}
+            style={[
+              styles.card,
+              { borderColor: c.hair, backgroundColor: c.card, padding: 12, gap: 8 },
+            ]}
           >
             <Body size={14} color={c.ink} style={{ fontFamily: FONT.display }}>
               {line.item?.name ?? 'Item'}
             </Body>
-            <Mono size={11} color={c.ink4}>
+            <Mono size={11.5} color={c.ink3}>
               {line.item?.sku ?? '—'} · requested {requested}
             </Mono>
             {line.item?.charter_name ? (
@@ -326,16 +342,13 @@ export function DigitalPick({
                   paddingHorizontal: 6,
                   paddingVertical: 1,
                   borderRadius: 999,
-                  backgroundColor: ACCENT.mintSoft,
+                  // The accent tone's pill (tones.ts pillTone 'ok'): the
+                  // per-mode accent on its wash, AA in both modes.
+                  backgroundColor: c.accentWash,
                 }}
               >
-                <Landmark size={10} color={mode === 'dark' ? ACCENT.mintInkDark : ACCENT.mintInk} />
-                <Mono
-                  size={10}
-                  color={mode === 'dark' ? ACCENT.mintInkDark : ACCENT.mintInk}
-                  numberOfLines={1}
-                  style={{ flexShrink: 1 }}
-                >
+                <Landmark size={10} color={c.accent} />
+                <Mono size={10} color={c.accent} numberOfLines={1} style={{ flexShrink: 1 }}>
                   {line.item.charter_code
                     ? `${line.item.charter_name} (${line.item.charter_code})`
                     : line.item.charter_name}
@@ -374,7 +387,8 @@ export function DigitalPick({
                   minWidth: PICK_QTY_FIELD_MIN_WIDTH,
                   minHeight: MIN_TAP,
                   borderWidth: 1,
-                  borderColor: c.hair,
+                  borderColor: c.hair2,
+                  backgroundColor: c.sunk,
                   borderRadius: 10,
                   paddingVertical: 8,
                   paddingHorizontal: PICK_QTY_PADDING_X,
@@ -384,7 +398,9 @@ export function DigitalPick({
                   textAlign: 'center',
                 }}
               />
-              <Mono size={11} color={c.ink4}>of {requested}</Mono>
+              <Mono size={11.5} color={c.ink3}>
+                of {requested}
+              </Mono>
               <View style={{ flex: 1 }} />
               <Pressable
                 onPress={() => void saveLine(line)}
@@ -395,17 +411,19 @@ export function DigitalPick({
                   minHeight: MIN_TAP,
                   justifyContent: 'center',
                   borderWidth: 1,
-                  borderColor: c.ink,
+                  // Unsaved changes: the ink edge (an outline, not a second
+                  // ink fill on the screen); saved: the stronger border.
+                  borderColor: dirty ? c.ink : c.hair2,
                   borderRadius: 10,
                   paddingVertical: 8,
                   paddingHorizontal: 16,
                   opacity: !dirty || savingLine === line.id || offline ? 0.4 : 1,
-                  backgroundColor: dirty ? c.ink : 'transparent',
+                  backgroundColor: c.card,
                 }}
               >
-                <Mono size={12} color={dirty ? c.paper : c.ink}>
+                <Text style={inkAction} maxFontSizeMultiplier={ACTION_CAP}>
                   {savingLine === line.id ? 'Saving…' : dirty ? 'Save' : 'Saved'}
-                </Mono>
+                </Text>
               </Pressable>
             </View>
           </View>
@@ -418,22 +436,23 @@ export function DigitalPick({
         accessibilityRole="button"
         accessibilityState={{ disabled: !anyPicked || completing || offline }}
         style={{
-          minHeight: MIN_TAP,
+          minHeight: Math.max(MIN_TAP, 52),
           justifyContent: 'center',
-          borderRadius: 12,
-          paddingVertical: 14,
+          borderRadius: BUTTON_RADIUS.md,
+          paddingVertical: 8,
+          paddingHorizontal: 20,
           alignItems: 'center',
           backgroundColor: c.ink,
           opacity: !anyPicked || completing || offline ? 0.4 : 1,
         }}
       >
-        <Mono size={13} color={c.paper}>
+        <Text style={completeText} maxFontSizeMultiplier={COMPLETE_CAP}>
           {completing
             ? 'Completing…'
             : allPicked
               ? 'Complete picking'
               : 'Complete picking (partial)'}
-        </Mono>
+        </Text>
       </Pressable>
       {offline ? (
         <Body size={12.5} muted>
@@ -443,3 +462,15 @@ export function DigitalPick({
     </View>
   );
 }
+
+/** A text action's words are control chrome (the shared Button's ceiling). */
+const ACTION_CAP = capTo(13, TYPE_CEILING.control);
+/** Complete picking: the 52pt ink button's 15.5pt label, at the same ceiling. */
+const COMPLETE_CAP = capTo(15.5, TYPE_CEILING.control);
+
+const styles = StyleSheet.create({
+  // The reference's card (DESIGN-SPEC 6.7): the card fill in the hairline.
+  card: { borderWidth: 1, borderRadius: RADIUS.card },
+  textAction: { fontFamily: FONT.display, fontSize: 13 },
+  completeLabel: { fontFamily: FONT.display, fontSize: 15.5, textAlign: 'center' },
+});

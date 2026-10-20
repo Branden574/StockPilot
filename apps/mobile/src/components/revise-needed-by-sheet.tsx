@@ -9,6 +9,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Text,
   TextInput,
   useWindowDimensions,
   View,
@@ -29,6 +30,7 @@ import {
 import { MIN_TAP } from '@/components/item-verification-card';
 import { NeededByPicker } from '@/components/needed-by-picker';
 import { Body, FieldLabel, Mono } from '@/components/ui/text';
+import { buttonTone } from '@/components/ui/tones';
 import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';
 import {
   NEEDED_BY_CANCEL_LABEL,
@@ -43,7 +45,7 @@ import {
 } from '@/lib/order-needed-by';
 import { reviseOrderNeededBy } from '@/lib/orders-api';
 import { supabase } from '@/lib/supabase';
-import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useSheetKeyboard } from '@/lib/use-sheet-keyboard';
 import { useTheme } from '@/lib/use-theme';
 
@@ -74,6 +76,11 @@ import { useTheme } from '@/lib/use-theme';
  * button is its own VoiceOver element, at least 44 pt, with its label capped
  * at the control ceiling; the sentences are content and grow with Dynamic
  * Type (the body scrolls).
+ *
+ * The redesign look: Save is the ink button, Cancel or Close the outline in
+ * the stronger border (labels in the display face); the reason box is the
+ * shared text box's recipe; a refusal and a reason problem take the per-mode
+ * refusal and warning inks (critText / warnText, AA in both modes).
  */
 export function ReviseNeededBySheet({
   visible,
@@ -108,6 +115,11 @@ export function ReviseNeededBySheet({
   onRefresh: () => void;
 }) {
   const { c, mode } = useTheme();
+  // Save commits (the ink button); Cancel or Close is the outline.
+  const ink = buttonTone('primary', c);
+  const outline = buttonTone('outline', c);
+  const inkText = [styles.actionLabel, { color: ink.fg }];
+  const outlineText = [styles.actionLabel, { color: outline.fg }];
   const { height } = useWindowDimensions();
   const [draft, setDraft] = React.useState<NeededByDraft>(() =>
     initialNeededByDraft(startNeededBy, Date.now(), timeZone),
@@ -294,7 +306,7 @@ export function ReviseNeededBySheet({
                   {NEEDED_BY_REVISE_TITLE}
                 </Body>
                 {orderLabel ? (
-                  <Mono size={11} color={c.ink4}>
+                  <Mono size={11.5} color={c.ink3}>
                     {orderLabel}
                   </Mono>
                 ) : null}
@@ -312,7 +324,7 @@ export function ReviseNeededBySheet({
                   justifyContent: 'center',
                 }}
               >
-                <X size={18} color={c.ink4} />
+                <X size={18} color={c.ink2} />
               </Pressable>
             </View>
 
@@ -338,7 +350,7 @@ export function ReviseNeededBySheet({
               {/* A refusal first, where the body is scrolled to when it
                   appears (announced too: iOS gives the alert role no trait). */}
               {error ? (
-                <Body size={13} color={ACCENT.crit} accessibilityRole="alert">
+                <Body size={13} color={c.critText} accessibilityRole="alert">
                   {error}
                 </Body>
               ) : null}
@@ -386,14 +398,14 @@ export function ReviseNeededBySheet({
                   style={[
                     styles.input,
                     styles.reason,
-                    { borderColor: c.hair, backgroundColor: c.paper2, color: c.ink },
+                    { borderColor: c.hair2, backgroundColor: c.card, color: c.ink },
                   ]}
                 />
                 <Body size={12} color={c.ink3}>
                   {NEEDED_BY_REASON_HINT}
                 </Body>
                 {view.reasonProblem ? (
-                  <Body size={12.5} color={ACCENT.warn}>
+                  <Body size={12.5} color={c.warnText}>
                     {view.reasonProblem}
                   </Body>
                 ) : null}
@@ -422,15 +434,19 @@ export function ReviseNeededBySheet({
                 accessibilityHint={view.saveBlockedBy ?? undefined}
                 style={[
                   styles.action,
-                  { backgroundColor: c.ink, opacity: view.canSave || busy ? 1 : 0.5 },
+                  {
+                    backgroundColor: ink.bg,
+                    borderColor: ink.border,
+                    opacity: view.canSave || busy ? 1 : 0.5,
+                  },
                 ]}
               >
                 {busy ? (
-                  <ActivityIndicator color={c.paper} />
+                  <ActivityIndicator color={ink.fg} />
                 ) : (
-                  <Mono size={13} color={c.paper} maxFontSizeMultiplier={ACTION_CAP}>
+                  <Text style={inkText} maxFontSizeMultiplier={ACTION_CAP}>
                     {NEEDED_BY_SAVE_LABEL}
-                  </Mono>
+                  </Text>
                 )}
               </Pressable>
             )}
@@ -440,11 +456,18 @@ export function ReviseNeededBySheet({
               accessibilityRole="button"
               accessibilityLabel={closed ? NEEDED_BY_CLOSE_LABEL : NEEDED_BY_CANCEL_LABEL}
               accessibilityState={{ disabled: busy }}
-              style={[styles.action, { borderWidth: 1, borderColor: c.hair, opacity: busy ? 0.5 : 1 }]}
+              style={[
+                styles.action,
+                {
+                  backgroundColor: outline.bg,
+                  borderColor: outline.border,
+                  opacity: busy ? 0.5 : 1,
+                },
+              ]}
             >
-              <Mono size={13} color={c.ink} maxFontSizeMultiplier={ACTION_CAP}>
+              <Text style={outlineText} maxFontSizeMultiplier={ACTION_CAP}>
                 {closed ? NEEDED_BY_CLOSE_LABEL : NEEDED_BY_CANCEL_LABEL}
-              </Mono>
+              </Text>
             </Pressable>
           </View>
         </View>
@@ -496,5 +519,8 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     minHeight: MIN_TAP,
     borderRadius: 10,
+    borderWidth: 1,
   },
+  /** The shared Button's label: the display face at 500; it wraps. */
+  actionLabel: { fontFamily: FONT.display, fontSize: 13, textAlign: 'center', flexShrink: 1 },
 });

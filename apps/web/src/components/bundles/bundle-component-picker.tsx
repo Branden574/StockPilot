@@ -3,6 +3,7 @@
 import { Loader2, Search } from 'lucide-react';
 import * as React from 'react';
 
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { ItemMatchTier } from '@/lib/inventory/rank-item-matches';
@@ -317,7 +318,11 @@ export function BundleComponentPicker({
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOpen(false);
       }}
     >
-      <Search className="text-muted-foreground pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2" />
+      <Search
+        aria-hidden="true"
+        strokeWidth={1.8}
+        className="text-muted-foreground pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+      />
       <Input
         ref={inputRef}
         value={query}
@@ -346,7 +351,7 @@ export function BundleComponentPicker({
       {searching && (
         <Loader2
           aria-hidden="true"
-          className="text-muted-foreground absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 animate-spin"
+          className="text-muted-foreground absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 animate-spin"
         />
       )}
       <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
@@ -355,14 +360,14 @@ export function BundleComponentPicker({
 
       {showPopover && (
         <div
-          className="border-border bg-popover absolute z-10 mt-1 w-full overflow-hidden rounded-md border shadow-lg"
+          className="border-border bg-popover text-popover-foreground absolute z-10 mt-1 w-full overflow-hidden rounded-lg border shadow-md"
           // Keeps focus in the search box when a row or Try again is clicked.
           onMouseDown={(e) => e.preventDefault()}
         >
           {failure ? (
             <div
               role="alert"
-              className="flex items-center justify-between gap-3 px-3 py-2.5 text-sm"
+              className="flex items-center justify-between gap-3 px-3 py-2.5 text-[13px]"
             >
               <span className="text-destructive">{failureMessage(failure.status)}</span>
               {failure.status !== 401 ? (
@@ -372,15 +377,15 @@ export function BundleComponentPicker({
               ) : null}
             </div>
           ) : current?.ok && results.length === 0 ? (
-            <div className="px-3 py-2.5 text-sm">
+            <div className="px-3 py-2.5 text-[13px]">
               <p>No items match &ldquo;{term}&rdquo;.</p>
-              <p className="text-muted-foreground mt-0.5 text-xs">
+              <p className="text-muted-foreground mt-0.5 text-[12px]">
                 Kits, rental equipment, and archived or discontinued items aren&apos;t listed
                 here.
               </p>
             </div>
           ) : searching && rows.length === 0 ? (
-            <p className="text-muted-foreground flex items-center gap-2 px-3 py-2.5 text-sm">
+            <p className="text-muted-foreground flex items-center gap-2 px-3 py-2.5 text-[13px]">
               <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
               Searching…
             </p>
@@ -425,11 +430,13 @@ export function BundleComponentPicker({
                     if (!stale) add(item);
                   }}
                   className={cn(
-                    'border-border/60 flex items-center justify-between gap-3 border-b px-3 py-2 text-sm last:border-b-0',
-                    // The row Enter adds: a bar in the accent ink as well as
-                    // the tint, since the muted tint alone is about 1.1:1
-                    // against the popover in either theme.
-                    isActive && 'bg-muted shadow-[inset_3px_0_0_hsl(var(--accent-foreground))]',
+                    'border-border flex items-center justify-between gap-3 border-b px-3 py-2 text-[13px] last:border-b-0',
+                    // The row Enter adds: a 3 px rail in the page accent as
+                    // well as the tint (the reference's selected-row rail),
+                    // since the muted tint alone is about 1.1:1 against the
+                    // popover in either theme. Accent marks on the page use
+                    // --accent itself (DESIGN-SPEC 2.3).
+                    isActive && 'bg-muted shadow-[inset_3px_0_0_hsl(var(--accent))]',
                     added ? 'cursor-default' : 'cursor-pointer',
                     (added || stale) && 'opacity-60',
                     stale && 'pointer-events-none',
@@ -441,7 +448,7 @@ export function BundleComponentPicker({
                     <div className="line-clamp-2 break-words font-medium" title={item.name}>
                       {item.name}
                     </div>
-                    <div className="text-muted-foreground flex flex-wrap gap-x-1 text-[11px]">
+                    <div className="text-muted-foreground flex flex-wrap gap-x-1 text-[11.5px]">
                       <span className="break-all font-mono">{item.sku}</span>
                       {item.warehouse_name ? <span>· {item.warehouse_name}</span> : null}
                       {typeLabel ? <span>· {typeLabel}</span> : null}
@@ -451,11 +458,11 @@ export function BundleComponentPicker({
                     </div>
                   </div>
                   {added ? (
-                    <span className="bg-muted text-muted-foreground shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium">
+                    <Badge variant="secondary" className="shrink-0">
                       Added
-                    </span>
+                    </Badge>
                   ) : (
-                    <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
+                    <span className="text-muted-foreground shrink-0 font-mono text-[12px] tabular-nums">
                       {formatStockQuantity(item.quantity_on_hand)} on hand
                     </span>
                   )}
@@ -465,7 +472,7 @@ export function BundleComponentPicker({
           </ul>
 
           {current?.ok && current.total > results.length && results.length > 0 ? (
-            <p className="text-muted-foreground border-border/60 border-t px-3 py-1.5 text-[11px]">
+            <p className="text-muted-foreground border-border border-t px-3 py-1.5 text-[11.5px]">
               Showing {results.length} of {current.total} matches. Keep typing to narrow the list.
             </p>
           ) : null}

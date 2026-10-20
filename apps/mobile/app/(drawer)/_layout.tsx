@@ -1,5 +1,6 @@
 import { Drawer } from 'expo-router/drawer';
 import * as React from 'react';
+import { StyleSheet } from 'react-native';
 
 import { DrawerContent } from '@/components/drawer-content';
 import { useTheme } from '@/lib/use-theme';
@@ -10,6 +11,17 @@ import { useTheme } from '@/lib/use-theme';
  * Tags, Movements, Procedures, Purchase orders, Locations, Suppliers,
  * Reports, AI Assistant, Schedule, Notifications, Team, Settings, Admin)
  * — the bottom tabs are just the 5 most-used surfaces.
+ *
+ * The panel is the page colour with a hairline on its open edge, as the
+ * reference sidebar (DESIGN-SPEC 5.1), so it keeps a visible edge over the
+ * dimmed screen in dark mode too.
+ *
+ * The status bar is the drawer content's to hide (hidesStatusBar in
+ * src/components/drawer-content.tsx: only while the drawer is open over the
+ * Scan tab's dark camera bar in light mode). The navigator's
+ * drawerHideStatusBarOnOpen is left off on purpose: it hides the bar as a
+ * swipe starts and shows it again only when the drawer's state changes, so a
+ * swipe that never opened the drawer would leave it hidden.
  */
 export default function DrawerLayout() {
   const { c, mode } = useTheme();
@@ -22,6 +34,8 @@ export default function DrawerLayout() {
         swipeEdgeWidth: 32,
         drawerStyle: {
           backgroundColor: c.paper,
+          borderRightWidth: StyleSheet.hairlineWidth,
+          borderRightColor: c.hair,
           width: 320,
         },
         sceneStyle: { backgroundColor: c.paper },

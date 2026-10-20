@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 
 import { LabelSheet } from '@/components/inventory/label-sheet';
@@ -7,6 +8,10 @@ import { LabelsHeader, labelsSummary } from '@/components/inventory/labels-heade
 import { cleanLabelIds, LABELS_MAX_ITEMS } from '@/lib/inventory/labels-selection';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
+
+// A tab title of its own (CONFLICTS D16): the page used to inherit the
+// dashboard's.
+export const metadata: Metadata = { title: 'Print labels' };
 
 interface LabelItem {
   id: string;
@@ -89,9 +94,11 @@ export default async function LabelsPage({
   );
 }
 
+/** The page area (DESIGN-SPEC 4 and 5.3), the same box every redesigned page
+ *  draws; on paper it gives the whole page to the sheet. */
 function LabelsContainer({ children }: { children: ReactNode }) {
   return (
-    <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6 print:max-w-none print:px-0 print:py-0">
+    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7 print:max-w-none print:gap-0 print:p-0">
       {children}
     </div>
   );

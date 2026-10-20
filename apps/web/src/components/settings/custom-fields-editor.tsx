@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -67,8 +68,7 @@ export function CustomFieldsEditor({
 }: {
   initialDefinitions: CustomFieldDefinition[];
 }) {
-  const [definitions, setDefinitions] =
-    React.useState<CustomFieldDefinition[]>(initialDefinitions);
+  const [definitions, setDefinitions] = React.useState<CustomFieldDefinition[]>(initialDefinitions);
   const [draft, setDraft] = React.useState<DraftState | null>(null);
   const [pending, setPending] = React.useState(false);
 
@@ -170,85 +170,98 @@ export function CustomFieldsEditor({
   }
 
   return (
-    <div className="space-y-8">
+    <div className="flex flex-col gap-4">
       {/* Active definitions */}
-      <section className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-medium">Item fields</h2>
+      <section className="space-y-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-[13.5px] font-medium">Item fields</h2>
           {!draft && (
             <Button size="sm" variant="outline" onClick={() => setDraft(emptyDraft())}>
-              <Plus className="mr-1 h-4 w-4" /> Add field
+              <Plus aria-hidden className="h-4 w-4" /> Add field
             </Button>
           )}
         </div>
 
         {active.length === 0 && !draft && (
-          <p className="text-muted-foreground text-sm">
+          <p className="text-muted-foreground bg-card rounded-lg border px-[18px] py-6 text-center text-[13.5px]">
             No custom fields yet. Add one to capture extra item data (warranty, voltage, color,
             etc.).
           </p>
         )}
 
-        <ul className="divide-border divide-y rounded-md border">
-          {active.map((def, idx) => (
-            <li key={def.id} className="flex items-center gap-3 px-3 py-2">
-              <div className="flex flex-col">
-                <button
-                  type="button"
-                  className="text-muted-foreground hover:text-foreground disabled:opacity-30"
-                  disabled={pending || idx === 0}
-                  onClick={() => reorder(def, -1)}
-                  aria-label="Move up"
-                >
-                  <ArrowUp className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  type="button"
-                  className="text-muted-foreground hover:text-foreground disabled:opacity-30"
-                  disabled={pending || idx === active.length - 1}
-                  onClick={() => reorder(def, 1)}
-                  aria-label="Move down"
-                >
-                  <ArrowDown className="h-3.5 w-3.5" />
-                </button>
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="truncate text-sm font-medium">{def.label}</span>
-                  <Badge variant="secondary">{TYPE_LABELS[def.fieldType]}</Badge>
-                  {def.required && <Badge variant="outline">Required</Badge>}
+        {active.length > 0 && (
+          <ul className="bg-card divide-border divide-y rounded-lg border">
+            {active.map((def, idx) => (
+              <li key={def.id} className="flex min-h-[60px] items-center gap-3 px-[18px] py-2.5">
+                {/* Reorder: each button names its field (it said only "Move up"). */}
+                <div className="flex shrink-0 items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    disabled={pending || idx === 0}
+                    onClick={() => reorder(def, -1)}
+                    aria-label={`Move ${def.label} up`}
+                  >
+                    <ArrowUp aria-hidden className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    disabled={pending || idx === active.length - 1}
+                    onClick={() => reorder(def, 1)}
+                    aria-label={`Move ${def.label} down`}
+                  >
+                    <ArrowDown aria-hidden className="h-3.5 w-3.5" />
+                  </Button>
                 </div>
-                <code className="text-muted-foreground text-xs">{def.fieldKey}</code>
-              </div>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={pending}
-                onClick={() => setDraft(draftFromDefinition(def))}
-              >
-                <Pencil className="h-4 w-4" />
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={pending}
-                onClick={() => setArchived(def, true)}
-                aria-label="Archive field"
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            </li>
-          ))}
-        </ul>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="truncate text-[13.5px] font-medium">{def.label}</span>
+                    <Badge variant="secondary">{TYPE_LABELS[def.fieldType]}</Badge>
+                    {def.required && <Badge variant="outline">Required</Badge>}
+                  </div>
+                  <code className="text-muted-foreground font-mono text-[12px]">
+                    {def.fieldKey}
+                  </code>
+                </div>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    disabled={pending}
+                    onClick={() => setDraft(draftFromDefinition(def))}
+                    aria-label={`Edit ${def.label}`}
+                  >
+                    <Pencil aria-hidden className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    disabled={pending}
+                    onClick={() => setArchived(def, true)}
+                    aria-label="Archive field"
+                    title={`Archive ${def.label}`}
+                  >
+                    <Trash2 aria-hidden className="h-4 w-4" />
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
 
       {/* Draft editor */}
       {draft && (
-        <section className="space-y-4 rounded-md border p-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-medium">{draft.id ? 'Edit field' : 'New field'}</h3>
-            <Button size="sm" variant="ghost" onClick={() => setDraft(null)} aria-label="Cancel">
-              <X className="h-4 w-4" />
+        <section className="bg-card space-y-4 rounded-lg border p-[18px]">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-[13.5px] font-medium">{draft.id ? 'Edit field' : 'New field'}</h3>
+            <Button size="icon" variant="ghost" onClick={() => setDraft(null)} aria-label="Cancel">
+              <X aria-hidden className="h-4 w-4" />
             </Button>
           </div>
 
@@ -273,22 +286,21 @@ export function CustomFieldsEditor({
                 onChange={(e) => setDraft({ ...draft, fieldKey: e.target.value })}
                 placeholder="warranty_months"
               />
-              <p className="text-muted-foreground text-xs">
-                snake_case. {draft.id ? 'Cannot be changed after creation.' : 'Stored on each item.'}
+              <p className="text-muted-foreground text-[12px]">
+                snake_case.{' '}
+                {draft.id ? 'Cannot be changed after creation.' : 'Stored on each item.'}
               </p>
             </div>
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label>Type</Label>
+              <Label htmlFor="cf-type">Type</Label>
               <Select
                 value={draft.fieldType}
-                onValueChange={(v) =>
-                  setDraft({ ...draft, fieldType: v as CustomFieldType })
-                }
+                onValueChange={(v) => setDraft({ ...draft, fieldType: v as CustomFieldType })}
               >
-                <SelectTrigger>
+                <SelectTrigger id="cf-type">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -300,16 +312,13 @@ export function CustomFieldsEditor({
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex items-end">
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4"
-                  checked={draft.required}
-                  onChange={(e) => setDraft({ ...draft, required: e.target.checked })}
-                />
+            <div className="flex items-end pb-1.5">
+              <Checkbox
+                checked={draft.required}
+                onCheckedChange={(next) => setDraft({ ...draft, required: next })}
+              >
                 Required
-              </label>
+              </Checkbox>
             </div>
           </div>
 
@@ -320,11 +329,11 @@ export function CustomFieldsEditor({
             />
           )}
 
-          <div className="flex gap-2">
-            <Button size="sm" onClick={save} disabled={pending}>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={save} disabled={pending}>
               {draft.id ? 'Save changes' : 'Add field'}
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => setDraft(null)} disabled={pending}>
+            <Button variant="ghost" onClick={() => setDraft(null)} disabled={pending}>
               Cancel
             </Button>
           </div>
@@ -333,14 +342,16 @@ export function CustomFieldsEditor({
 
       {/* Archived definitions */}
       {archived.length > 0 && (
-        <section className="space-y-3">
-          <h2 className="text-muted-foreground text-sm font-medium">Archived</h2>
-          <ul className="divide-border divide-y rounded-md border">
+        <section className="space-y-2.5">
+          <h2 className="text-muted-foreground text-[13.5px] font-medium">Archived</h2>
+          <ul className="bg-card divide-border divide-y rounded-lg border">
             {archived.map((def) => (
-              <li key={def.id} className="flex items-center gap-3 px-3 py-2">
+              <li key={def.id} className="flex min-h-[52px] items-center gap-3 px-[18px] py-2.5">
                 <div className="min-w-0 flex-1">
-                  <span className="truncate text-sm">{def.label}</span>
-                  <code className="text-muted-foreground ml-2 text-xs">{def.fieldKey}</code>
+                  <span className="truncate text-[13.5px]">{def.label}</span>
+                  <code className="text-muted-foreground ml-2 font-mono text-[12px]">
+                    {def.fieldKey}
+                  </code>
                 </div>
                 <Button
                   size="sm"
@@ -348,7 +359,7 @@ export function CustomFieldsEditor({
                   disabled={pending}
                   onClick={() => setArchived(def, false)}
                 >
-                  <RotateCcw className="mr-1 h-4 w-4" /> Restore
+                  <RotateCcw aria-hidden className="h-4 w-4" /> Restore
                 </Button>
               </li>
             ))}
@@ -372,7 +383,10 @@ function OptionsEditor({
     const trimmed = label.trim();
     if (!trimmed) return;
     // value defaults to a slugified, lowercase label; keep it stable + unique.
-    const value = trimmed.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    const value = trimmed
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
     if (!value || options.some((o) => o.value === value)) {
       setLabel('');
       return;
@@ -388,15 +402,18 @@ function OptionsEditor({
         {options.map((o, i) => (
           <li key={o.value} className="flex items-center gap-2">
             <Badge variant="secondary">{o.value}</Badge>
-            <span className="text-sm">{o.label}</span>
-            <button
+            <span className="text-[13px]">{o.label}</span>
+            <Button
               type="button"
-              className="text-muted-foreground hover:text-foreground"
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
               onClick={() => onChange(options.filter((_, j) => j !== i))}
               aria-label="Remove option"
+              title={`Remove ${o.label}`}
             >
-              <X className="h-3.5 w-3.5" />
-            </button>
+              <X aria-hidden className="h-3.5 w-3.5" />
+            </Button>
           </li>
         ))}
       </ul>
@@ -413,7 +430,7 @@ function OptionsEditor({
             }
           }}
         />
-        <Button type="button" size="sm" variant="outline" onClick={add}>
+        <Button type="button" variant="outline" onClick={add}>
           Add
         </Button>
       </div>

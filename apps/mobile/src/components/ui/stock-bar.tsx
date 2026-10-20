@@ -1,14 +1,16 @@
 import * as React from 'react';
 import { View } from 'react-native';
 
-import { ACCENT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
+import { meterColor, meterTrack, type MeterKind } from './tones';
 
-type Kind = 'ok' | 'warn' | 'crit' | 'ink';
+type Kind = MeterKind;
 
 /**
- * Thin mint progress bar — 3pt tall by default. Used on cycle counts,
- * PO partial-receive progress, and bundle distribute previews.
+ * Thin accent progress bar — 3pt tall by default. Used on cycle counts,
+ * PO partial-receive progress, and bundle distribute previews. The fill is
+ * the per-mode accent (or warn / crit / ink) and the track the stronger
+ * border, so the fill stands at 3.5:1 or more against it in both modes.
  */
 export function StockBar({
   value,
@@ -24,16 +26,13 @@ export function StockBar({
   const { c } = useTheme();
   const pct = Math.max(0, Math.min(100, (value / max) * 100));
 
-  let fill = ACCENT.mint;
-  if (kind === 'warn') fill = ACCENT.warn;
-  if (kind === 'crit') fill = ACCENT.crit;
-  if (kind === 'ink') fill = c.ink;
+  const fill = meterColor(kind, c);
 
   return (
     <View
       style={{
         height,
-        backgroundColor: c.hair,
+        backgroundColor: meterTrack(c),
         borderRadius: 100,
         overflow: 'hidden',
       }}

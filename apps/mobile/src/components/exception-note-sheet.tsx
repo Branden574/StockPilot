@@ -41,7 +41,7 @@ import {
   type ExceptionSheetMode,
   type MobileExceptionOccurrence,
 } from '@/lib/exceptions-api';
-import { ACCENT, capTo, FONT, TYPE_CEILING } from '@/lib/theme';
+import { capTo, FONT, TYPE_CEILING } from '@/lib/theme';
 import { useSheetKeyboard } from '@/lib/use-sheet-keyboard';
 import { useTheme } from '@/lib/use-theme';
 
@@ -348,7 +348,7 @@ function SheetContent({
                 justifyContent: 'center',
               }}
             >
-              <X size={18} color={c.ink4} />
+              <X size={18} color={c.ink3} />
             </Pressable>
           </View>
 
@@ -367,7 +367,7 @@ function SheetContent({
             style={{ maxHeight: layout.bodyMaxHeight, flexShrink: 1 }}
           >
             {occurrence.reference ? (
-              <Mono size={12} color={c.ink4}>
+              <Mono size={12} color={c.ink3}>
                 {occurrence.reference}
               </Mono>
             ) : null}
@@ -427,14 +427,17 @@ function SheetContent({
                       ? 'Write a note'
                       : (dialog?.notePlaceholder ?? CONFIRM_COUNT_NOTE_PLACEHOLDER)
                 }
-                placeholderTextColor={c.ink4}
+                // Muted ink, at AA (ink4 held the placeholder under it).
+                placeholderTextColor={c.ink3}
                 accessibilityLabel={mode === 'note' ? 'Note' : 'Note, optional'}
+                // Recessed, with the stronger border: paper2 is the card
+                // colour in dark mode, so the box showed nothing there.
                 style={[
                   styles.input,
-                  { borderColor: c.hair, backgroundColor: c.paper2, color: c.ink },
+                  { borderColor: c.hair2, backgroundColor: c.sunk, color: c.ink },
                 ]}
               />
-              <Mono size={11} color={count > EXCEPTION_NOTE_MAX ? ACCENT.crit : c.ink4}>
+              <Mono size={11} color={count > EXCEPTION_NOTE_MAX ? c.critText : c.ink3}>
                 {`${count.toLocaleString('en-US')} / ${EXCEPTION_NOTE_MAX.toLocaleString('en-US')}`}
               </Mono>
             </View>
@@ -448,7 +451,7 @@ function SheetContent({
             </Body>
           ) : null}
           {error ? (
-            <Body size={13} color={ACCENT.crit} accessibilityRole="alert">
+            <Body size={13} color={c.critText} accessibilityRole="alert">
               {error}
             </Body>
           ) : null}
@@ -497,11 +500,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
   },
+  // The typed note in the body face (Inter Tight), as the shared Field's
+  // input; without a family it fell back to the system font.
   input: {
     minHeight: 96,
     borderWidth: 1,
     borderRadius: 10,
     padding: 12,
+    fontFamily: FONT.displayRegular,
     fontSize: 15,
     textAlignVertical: 'top',
   },

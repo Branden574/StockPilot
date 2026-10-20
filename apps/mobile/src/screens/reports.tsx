@@ -30,14 +30,14 @@ import {
 } from '@stockpilot/core';
 
 import { Card } from '@/components/ui/card';
-import { MintWash } from '@/components/ui/mint-wash';
 import { IconChip } from '@/components/ui/row';
 import { StatCard } from '@/components/ui/stat-card';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { BUTTON_RADIUS, buttonTone } from '@/components/ui/tones';
 import { isRole, showBookReportEntry } from '@/lib/book-order-totals-view';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import { supabase } from '@/lib/supabase';
-import { ACCENT, FONT } from '@/lib/theme';
+import { FONT, type Palette } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useTheme } from '@/lib/use-theme';
 import { retryWorkspace, useWorkspace } from '@/lib/use-workspace';
@@ -72,6 +72,12 @@ type KpiState =
  * refresh." instead of zeros, and a workspace that could not be loaded no
  * longer leaves the spinner turning forever (pull to refresh asks for it
  * again).
+ *
+ * The look (redesign P5.10): the tiles carry the real figures only; the
+ * small charts they drew were the same made-up lines for every workspace, so
+ * they are gone (CONFLICTS D26). Every colour is the device mode's palette,
+ * the hero card is the flat reference card (no glow behind it), and the web
+ * hand-off takes the shared outline button's colours and corner.
  */
 export default function ReportsScreen() {
   const { c } = useTheme();
@@ -256,80 +262,37 @@ export default function ReportsScreen() {
           <>
             <View style={styles.grid}>
               <View style={styles.col}>
-                <StatCard
-                  label="ITEMS"
-                  value={summary.itemCount.toLocaleString()}
-                  unit="SKUs"
-                  spark={[3, 4, 4, 5, 4.5, 5, 6]}
-                  sparkKind="ok"
-                />
+                <StatCard label="ITEMS" value={summary.itemCount.toLocaleString()} unit="SKUs" />
               </View>
               <View style={styles.col}>
-                <StatCard
-                  label="VALUE"
-                  value={value.value}
-                  unit={value.unit}
-                  spark={[4, 5, 4.8, 6, 5.5, 6.2, 7]}
-                  sparkKind="ok"
-                />
+                <StatCard label="VALUE" value={value.value} unit={value.unit} />
               </View>
               <View style={styles.col}>
-                <StatCard
-                  label="LOW"
-                  value={summary.lowStockCount.toLocaleString()}
-                  unit="SKUs"
-                  spark={[2, 3, 5, 4, 6, 7, 9]}
-                  sparkKind="warn"
-                />
+                <StatCard label="LOW" value={summary.lowStockCount.toLocaleString()} unit="SKUs" />
               </View>
               <View style={styles.col}>
-                <StatCard
-                  label="OUT"
-                  value={summary.outOfStockCount.toLocaleString()}
-                  unit="SKUs"
-                  spark={[3, 2, 4, 3, 2, 2, 4]}
-                  sparkKind="crit"
-                />
+                <StatCard label="OUT" value={summary.outOfStockCount.toLocaleString()} unit="SKUs" />
               </View>
             </View>
 
             <Card hero style={styles.activityCard}>
-              <View pointerEvents="none" style={styles.washPos}>
-                <MintWash width={200} height={200} intensity={0.2} />
-              </View>
               <Eyebrow>LAST 30 DAYS</Eyebrow>
               <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 12 }}>
                 <Mono size={44} tracking={-0.025} color={c.ink} style={{ fontFamily: FONT.display }}>
                   {summary.thirtyDayMovements.toLocaleString()}
                 </Mono>
-                <Mono size={13} color={c.ink4} tracking={0.04}>
+                <Mono size={13} color={c.ink3} tracking={0.04}>
                   movements
                 </Mono>
               </View>
               <Body muted style={{ marginTop: 4 }}>
                 Receives, adjusts, transfers, returns posted to the ledger.
               </Body>
-              <Pressable
-                onPress={() => Linking.openURL('https://stockpilotusa.com/dashboard/reports').catch(() => undefined)}
-                style={({ pressed }) => ({
-                  marginTop: 16,
-                  alignSelf: 'flex-start',
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  gap: 6,
-                  paddingVertical: 8,
-                  paddingHorizontal: 14,
-                  borderRadius: 999,
-                  borderWidth: 1,
-                  borderColor: c.hair,
-                  opacity: pressed ? 0.85 : 1,
-                })}
-              >
-                <Mono size={11.5} tracking={0.08} upper color={c.ink}>
-                  Full report on web
-                </Mono>
-                <ArrowUpRight size={14} color={c.ink} strokeWidth={1.6} />
-              </Pressable>
+              <WebReportLink
+                onPress={() =>
+                  Linking.openURL('https://stockpilotusa.com/dashboard/reports').catch(() => undefined)
+                }
+              />
             </Card>
 
             <View style={{ marginTop: 20, gap: 10 }}>
@@ -377,7 +340,7 @@ function ReportRow({
   tone?: 'ok' | 'warn' | 'crit' | 'default';
 }) {
   const { c } = useTheme();
-  const tint = tone === 'ok' ? ACCENT.mint : tone === 'warn' ? ACCENT.warn : tone === 'crit' ? ACCENT.crit : c.ink3;
+  const tint = reportRowTint(tone, c);
   return (
     <Card padding={14}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
@@ -418,6 +381,51 @@ function ReportRow({
   );
 }
 
+/**
+ * "Full report on web": a secondary action, so the shared outline button's
+ * colours and corner (tones.ts), announced as a button with its words (the
+ * bare Pressable it was had no role), in a frame at least 44pt tall. Not the
+ * Button primitive itself: that keeps its label on one line, and these words
+ * must wrap rather than cut off on a narrow phone at the largest text sizes
+ * (the label is uncapped, as it was).
+ */
+function WebReportLink({ onPress }: { onPress: () => void }) {
+  const { c } = useTheme();
+  const tone = buttonTone('outline', c);
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel="Full report on web"
+      style={({ pressed }) => [
+        styles.webLink,
+        { backgroundColor: tone.bg, borderColor: tone.border, opacity: pressed ? 0.85 : 1 },
+      ]}
+    >
+      <Body size={13} color={tone.fg} style={styles.webLinkLabel}>
+        Full report on web
+      </Body>
+      <ArrowUpRight size={14} color={tone.fg} strokeWidth={1.6} />
+    </Pressable>
+  );
+}
+
+/** The iOS minimum tap target, in points. */
+const MIN_TAP = 44;
+
+/**
+ * The status dot in a figure row's icon well: the per-mode accent, warning
+ * and refusal marks (each 3:1 or more on the card in both modes; the single
+ * mint, amber and red it used fell under that in one mode or the other), or
+ * the muted ink for a figure with no status.
+ */
+function reportRowTint(tone: 'ok' | 'warn' | 'crit' | 'default', c: Palette): string {
+  if (tone === 'ok') return c.accent;
+  if (tone === 'warn') return c.warnText;
+  if (tone === 'crit') return c.critText;
+  return c.ink3;
+}
+
 const styles = StyleSheet.create({
   root: { flex: 1 },
   // The menu chip's 44pt frame (IconChip minTap) is 3pt wider than the 38pt
@@ -448,8 +456,20 @@ const styles = StyleSheet.create({
   activityCard: {
     marginTop: 20,
     padding: 22,
-    overflow: 'hidden',
-    position: 'relative',
   },
-  washPos: { position: 'absolute', top: -50, right: -50 },
+  // minHeight, never height: the words wrap and the frame grows with them.
+  webLink: {
+    marginTop: 16,
+    alignSelf: 'flex-start',
+    maxWidth: '100%',
+    minHeight: MIN_TAP,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: BUTTON_RADIUS.sm,
+    borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  webLinkLabel: { fontFamily: FONT.display, flexShrink: 1 },
 });

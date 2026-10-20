@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import * as React from 'react';
 
+import { useWarmRoute } from '@/lib/hooks/use-warm-route';
 import { queueLiveNotification } from '@/lib/notifications/live-toast';
 import { createClient } from '@/lib/supabase/client';
 import { ensureRealtimeAuth } from '@/lib/supabase/realtime-auth';
@@ -304,21 +305,29 @@ export function NotificationBell({ userId, organizationId }: Props) {
   const showBadge = count > 0;
   const label = count > 99 ? '99+' : String(count);
 
+  // The bell is in the top bar of every dashboard page, so it never prefetches
+  // the Notifications page on sight (two requests, each a full dynamic render,
+  // on every page view). It warms that page when a person comes to it, as the
+  // sidebar's links do (PLAN 0.6; lib/hooks/use-warm-route.ts).
+  const warmRoute = useWarmRoute();
+
+  // The EXACT unread count (99+ past 99) on the danger tone, where the
+  // reference design draws only a dot: the number is real data the bell has.
   return (
     <Link
-      href="/dashboard/notifications"
-      className="hover:bg-muted hover:text-foreground relative grid h-[30px] w-[30px] shrink-0 place-items-center rounded-md text-[var(--ed-ink-3)] transition-colors"
-      aria-label={
-        showBadge
-          ? `Notifications (${count} unread)`
-          : 'Notifications'
-      }
+      href={NOTIFICATIONS_PAGE}
+      prefetch={false}
+      onFocus={() => warmRoute(NOTIFICATIONS_PAGE)}
+      onPointerEnter={() => warmRoute(NOTIFICATIONS_PAGE)}
+      onPointerDown={() => warmRoute(NOTIFICATIONS_PAGE)}
+      className="hover:bg-muted hover:text-foreground relative grid size-8 shrink-0 place-items-center rounded-md text-[var(--ed-ink-2)] transition-colors [@media(pointer:coarse)]:size-11"
+      aria-label={showBadge ? `Notifications (${count} unread)` : 'Notifications'}
     >
-      <Bell className="h-3.5 w-3.5" />
+      <Bell aria-hidden strokeWidth={1.6} className="size-4" />
       {showBadge && (
         <span
           aria-hidden
-          className="outline-background bg-destructive text-destructive-foreground absolute -right-0.5 -top-0.5 grid min-h-[14px] min-w-[14px] place-items-center rounded-full px-1 text-[9.5px] font-bold leading-none outline outline-[1.5px]"
+          className="bg-destructive text-destructive-foreground ring-background absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full px-1 font-mono text-[10px] font-medium leading-none tabular-nums ring-2"
         >
           {label}
         </span>

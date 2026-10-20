@@ -53,7 +53,8 @@ function renderDialog() {
 async function openAndSubmitToExisting(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole('button', { name: /transfer/i }));
   // Destination select (second combobox; the source select auto-picks the
-  // only holding). Radix triggers carry no label-derived accessible name.
+  // only holding). Since redesign P3.3 each select is also named by its label
+  // ("From location", "To location"); see the field-names test below.
   const destination = screen.getAllByRole('combobox')[1]!;
   await user.click(destination);
   await user.click(await screen.findByRole('option', { name: /aisle a/i }));
@@ -93,6 +94,18 @@ describe('StockTransferDialog server-error surfacing', () => {
     expect(screen.queryByText('Transfer stock', { selector: 'h2' })).not.toBeInTheDocument();
   });
 });
+describe('StockTransferDialog field names (redesign P3.3)', () => {
+  it('names each field by its label: the selects, the quantity and the notes had no name before', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    await user.click(screen.getByRole('button', { name: /transfer/i }));
+    expect(screen.getByRole('combobox', { name: 'From location' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'To location' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Quantity')).toHaveValue(1);
+    expect(screen.getByLabelText('Notes (optional)').tagName).toBe('TEXTAREA');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // The BOOK destination — the four fields, always visible, seeded from the record.
 //

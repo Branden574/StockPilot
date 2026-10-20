@@ -111,6 +111,39 @@ describe('GroupingPreview', () => {
     expect(onUseCandidate).toHaveBeenCalledWith('grp-2');
   });
 
+  it('gives each "Use this group" a 44 px touch area on touch screens, one row apart (P2.2 hand-off)', () => {
+    // The 12 px text button was a 20 px tap on a phone, and rows 4 px apart
+    // would let one button's 44 px area reach over the next row's button.
+    render(
+      <GroupingPreview
+        groupName="Nike Pegasus 41"
+        variantLabel="Size 10.5"
+        mode="QUANTITY_BY_VARIANT"
+        countingUnit="pair"
+        candidates={[
+          { id: 'grp-1', name: 'Nike Pegasus 40' },
+          { id: 'grp-2', name: 'Nike Pegasus 41 (2025)' },
+        ]}
+        onUseCandidate={vi.fn()}
+      />,
+    );
+    const classes = (el: Element) => (el.getAttribute('class') ?? '').split(/\s+/);
+    for (const button of screen.getAllByRole('button', { name: 'Use this group' })) {
+      expect(classes(button)).toEqual(
+        expect.arrayContaining([
+          'relative',
+          'before:min-h-11',
+          'before:min-w-11',
+          "max-sm:before:content-['']",
+          "pointer-coarse:before:content-['']",
+        ]),
+      );
+      expect(classes(button.closest('li')!)).toEqual(
+        expect.arrayContaining(['max-sm:min-h-11', 'pointer-coarse:min-h-11']),
+      );
+    }
+  });
+
   it('renders no candidates section when the list is empty', () => {
     render(
       <GroupingPreview

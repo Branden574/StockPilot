@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -69,19 +70,19 @@ export function CustomFieldsInputs({
         const inputId = `cf-${def.fieldKey}`;
 
         if (def.fieldType === 'checkbox') {
+          // The shared checkbox, its label part of the one control (the whole
+          // line toggles, as the native label did).
           return (
-            <label key={def.id} className="flex items-center gap-2 text-sm">
-              <input
-                id={inputId}
-                type="checkbox"
-                className="h-4 w-4"
-                disabled={disabled}
-                checked={current === true}
-                onChange={(e) => set(def.fieldKey, e.target.checked ? true : undefined)}
-              />
+            <Checkbox
+              key={def.id}
+              id={inputId}
+              disabled={disabled}
+              checked={current === true}
+              onCheckedChange={(next) => set(def.fieldKey, next ? true : undefined)}
+            >
               {def.label}
               {def.required && <span className="text-destructive">*</span>}
-            </label>
+            </Checkbox>
           );
         }
 

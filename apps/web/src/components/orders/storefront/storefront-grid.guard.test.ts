@@ -6,8 +6,8 @@ import { describe, expect, it } from 'vitest';
 /**
  * The storefront card grid (.sf-grid) must use auto-FILL.
  *
- * Each category on the New order page (and on the B2B portal, which shares the
- * class) is its own .sf-grid. With `repeat(auto-fit, ...)` the empty columns
+ * Each category on the New order page (and on the public order page,
+ * /r/<token>, which shares the class) is its own .sf-grid. With `repeat(auto-fit, ...)` the empty columns
  * collapse to 0px, so a category with fewer items than fit on a row stretched
  * its cards: measured on production 2026-09-25 at 1920px, 4+ cards were 265px
  * wide, 2 cards 543px, and a lone card about 1100px with an 825px photo.

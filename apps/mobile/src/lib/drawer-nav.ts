@@ -1,6 +1,7 @@
 import {
   MODULE_REGISTRY,
   type ModuleId,
+  type NavSectionKey,
   type Permission,
   resolveSurface,
   type Role,
@@ -17,10 +18,12 @@ import { NAV_ICONS } from './nav-icons';
  * the drawer has always used. The web sidebar already derives the same way
  * (Task 9), so the two surfaces stay 1:1 with the registry.
  *
- * The `mobile_drawer` placements were transcribed 1:1 from the old static
- * DRAWER_SECTIONS, so resolving for a given role with the full module set
- * reproduces today's drawer exactly (sections, items, labels, order, and the
- * "TAB" badge — see `inTabs`).
+ * The `mobile_drawer` placements were first transcribed 1:1 from the old
+ * static DRAWER_SECTIONS (sections, items, labels and the "TAB" badge — see
+ * `inTabs`). Since the owner's decision of 2026-10-19 the drawer groups its
+ * links like the web sidebar (Inventory, Fulfillment, Purchasing, Insights,
+ * Workspace, Tools, Admin) and orders them as the approved "Five groups"
+ * preview; drawer-nav.test.ts and core's resolve.test.ts pin that order.
  */
 export interface DrawerNavItem {
   id: string;
@@ -37,10 +40,16 @@ export interface DrawerNavSection {
 }
 
 // Mobile uses UPPERCASE section headers (matches today's drawer). The overview
-// section renders with no header.
-const SECTION_LABEL: Record<string, string | undefined> = {
+// section renders with no header. FULFILLMENT, PURCHASING and INSIGHTS are the
+// owner's regroup of 2026-10-19, the same sections as the web sidebar. Typed
+// by the registry's own key list, so a section added there fails to compile
+// here until it has a header, instead of drawing its links under none.
+const SECTION_LABEL: Record<NavSectionKey, string | undefined> = {
   overview: undefined,
   inventory: 'INVENTORY',
+  fulfillment: 'FULFILLMENT',
+  purchasing: 'PURCHASING',
+  insights: 'INSIGHTS',
   workspace: 'WORKSPACE',
   tools: 'TOOLS',
   admin: 'ADMIN',

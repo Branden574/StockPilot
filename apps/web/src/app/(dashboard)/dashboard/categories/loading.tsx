@@ -1,5 +1,5 @@
-import { TablePageSkeleton } from '@/components/dashboard/skeletons';
+import { CategoriesPageSkeleton } from '@/components/categories/categories-grid-skeleton';
 
 export default function CategoriesLoading() {
-  return <TablePageSkeleton rows={6} />;
+  return <CategoriesPageSkeleton />;
 }

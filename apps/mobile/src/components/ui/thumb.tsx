@@ -4,13 +4,15 @@ import { Box, type LucideIcon } from 'lucide-react-native';
 
 import { CachedImage } from '@/components/ui/cached-image';
 import { useTheme } from '@/lib/use-theme';
+import { PHOTO_BACKGROUND } from './tones';
 
 /**
  * Thumb — square thumbnail used in inventory rows, bundle components,
  * and scan result cards. Renders the user's uploaded product photo
- * when `imageUrl` is supplied; otherwise falls back to a Lucide
- * line-art glyph centred in a hairline-bordered square. Optional
- * accent pip top-right.
+ * when `imageUrl` is supplied, on white in both modes (the reference's
+ * thumbnail ground, so a photo shot on white reads the same in light and
+ * dark); otherwise falls back to a Lucide line-art glyph centred in a
+ * recessed, hairline-bordered square. Optional accent pip top-right.
  */
 export function Thumb({
   size = 56,
@@ -35,7 +37,7 @@ export function Thumb({
           width: size,
           height: size,
           borderColor: c.hair,
-          backgroundColor: c.card,
+          backgroundColor: imageUrl ? PHOTO_BACKGROUND : c.sunk,
         },
       ]}
     >
