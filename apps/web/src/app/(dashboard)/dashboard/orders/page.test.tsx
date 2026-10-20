@@ -403,6 +403,45 @@ describe('Orders page: the table keeps every column', () => {
     expect(within(publicCell).getByText('Public').closest('a')).toBeNull();
   });
 
+  // FX3 (DESIGN-SPEC 8 "1440: everything fits", 6.9 tables; CONFLICTS R5
+  // keeps every column): on All active the table needed 1320 px of the
+  // 1146 px card at 1440, so Requested was cut and Last update hidden behind
+  // a sideways scroll. Picker and Driver names now wrap, the requester's
+  // floor is 8rem (was 11rem), and an exchange's state sits beside its
+  // Exchange pill as text that wraps, instead of inside a pill that held
+  // "Exchange · Waiting for return" on one 183 px line.
+  it('lets the people, the requester and an exchange state wrap, so the table fits 1440', async () => {
+    m.list.mockResolvedValue([
+      row({
+        status: 'in_transit',
+        fulfillmentType: 'delivery',
+        assignedPickerName: 'Hugo Stanton',
+        assignedDeliveryUserName: 'Leo Fairbanks',
+        replacementForReturnId: 'rma-1',
+        exchange: { returnId: 'rma-1', returnNumber: 'RMA-1', state: 'Waiting for return' },
+      }),
+    ]);
+    const view = await renderPage({ status: 'all_active' });
+    const cells = within(view.getAllByRole('row')[1]!).getAllByRole('cell');
+    expect(cells[7]).toHaveTextContent('Hugo Stanton');
+    expect(cells[7]).not.toHaveClass('whitespace-nowrap');
+    expect(cells[8]).toHaveTextContent('Leo Fairbanks');
+    expect(cells[8]).not.toHaveClass('whitespace-nowrap');
+    const requester = cells[1]!.firstElementChild!;
+    expect(requester).toHaveClass('min-w-32');
+    expect(requester).not.toHaveClass('min-w-44');
+    // The words read as before ("Exchange · Waiting for return"), but the
+    // pill holds only "Exchange" and the state beside it may wrap.
+    const chip = within(cells[5]!).getByTestId('order-exchange-chip');
+    expect(chip.textContent).toBe('Exchange · Waiting for return');
+    const pill = within(chip).getByText('Exchange');
+    expect(pill.textContent).toBe('Exchange');
+    const state = within(chip).getByText(/Waiting for return/);
+    expect(pill.contains(state)).toBe(false);
+    expect(state).toHaveClass('text-muted-foreground', 'text-[12px]');
+    expect(state).not.toHaveClass('whitespace-nowrap');
+  });
+
   it('shows the driver only on a delivery, a dash where nobody is assigned, and no Public badge on an internal order', async () => {
     m.list.mockResolvedValue([
       row({
