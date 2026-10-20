@@ -666,6 +666,7 @@ async function inventoryTableSection({
         instant={{ items: instantItems, placement: instantData.placement, view: 'items' }}
         productGroupUnits={productGroupUnits}
         initialView={initialView}
+        emptyNote={scope ? scopedWarehouseMessage(scope) : null}
       />
     );
   }
@@ -1030,6 +1031,9 @@ async function inventoryTableSection({
       expectedCount={data.expectedCount}
       productGroupUnits={productGroupUnits}
       initialView={initialView}
+      // A staff member's or viewer's warehouse scope, added to the table's own
+      // empty messages as the page's empty states add it (withScope).
+      emptyNote={scope ? scopedWarehouseMessage(scope) : null}
     />
   );
   // Never the partial figures presented as complete: when the stock in other
@@ -1090,9 +1094,12 @@ async function countMatchesInOtherWarehouses(
  * InventoryService.list()'s count, the instant branch the local
  * derivation's (same semantics by the instant-mode parity contract).
  * Returns null when the table should render, which it does for every view a
- * filter or a search narrows (listFilterActive): the table's own
- * "No items match your filters." keeps the filter bar, the active chips and
- * "Clear all filters", as when the same filter is set in the app.
+ * filter or a search narrows (listFilterActive): the table's empty area keeps
+ * the filter bar, the active chips and "Clear all filters", as when the same
+ * filter is set in the app, and says what this page said for a search, a
+ * stock view or the Expected chip on its own (listEmptyMessage, with the
+ * warehouse-scope sentence the table is handed as emptyNote), or "No items
+ * match your filters." when more than one narrows the list.
  */
 function inventoryEmptyState({
   total,
@@ -1165,7 +1172,9 @@ function inventoryEmptyState({
   // viewers (server mode) now show it too. This used to fall through to
   // "No items yet" with an offer to add a first item whenever the view had
   // no search, stock view or Auto-archived only chip, and a search, a stock
-  // view or the Expected chip each had a page-level state without the bar.
+  // view or the Expected chip each had a page-level state without the bar:
+  // their words ("No items match your search", "No low-stock items", "Nothing
+  // is out of stock", "No expected items") are the table's now, unchanged.
   if (listFilterActive(params)) return null;
   // Append the warehouse-scoping explanation (when present) to whichever
   // branch fires — one place, so no branch can forget it.

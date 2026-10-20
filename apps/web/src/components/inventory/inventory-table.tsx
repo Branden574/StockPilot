@@ -1,6 +1,8 @@
 'use client';
 
 import {
+  BookOpen,
+  Boxes,
   ChevronDown,
   ChevronRight,
   Download,
@@ -116,6 +118,7 @@ import {
   isPagePartiallySelected,
   selectPage,
 } from '@/components/inventory/selection-utils';
+import { listEmptyMessage } from '@/lib/inventory/list-empty-message';
 import { rememberLastListUrl } from '@/lib/last-list-url';
 import { isSplitRackItem } from '@/lib/inventory/rack-holdings';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
@@ -527,6 +530,14 @@ export interface InventoryTableProps {
    * never reaches the URL, the derivation or isDefaultInventoryView.
    */
   initialView?: InventoryView;
+  /**
+   * The Items page's warehouse-scope sentence for a staff member or viewer
+   * ("You're viewing North DC only. An admin can adjust warehouse access from
+   * the Team page."), added after the description of a list's own empty
+   * message (listEmptyMessage), as the page added it to its empty states.
+   * Absent (managers and up, Books, Rentals items): nothing is added.
+   */
+  emptyNote?: string | null;
 }
 
 interface SavedViewSummary {
@@ -684,10 +695,15 @@ function interceptShallowNav(
   href: string,
   navigate: (href: string) => void,
 ): void {
-  if (e.defaultPrevented) return;
-  if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  if (!isPlainLeftClick(e)) return;
   e.preventDefault();
   navigate(href);
+}
+
+/** A plain left click that follows a link here (not one that opens a new tab or window). */
+function isPlainLeftClick(e: React.MouseEvent<HTMLAnchorElement>): boolean {
+  if (e.defaultPrevented) return false;
+  return !(e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey);
 }
 
 /**
@@ -776,6 +792,7 @@ export function InventoryTable({
   expectedCount = 0,
   productGroupUnits,
   initialView = 'table',
+  emptyNote = null,
 }: InventoryTableProps) {
   // Performance marker (lib/perf/marks.ts): "the list is useful". A mount-only
   // effect, so it fires when the INITIAL rows render — the cached page-1
@@ -2320,8 +2337,66 @@ export function InventoryTable({
     };
   }
 
-  // What shows when the page has no rows: the quiet in-table line.
-  const noMatchLine = (
+  // What shows when the page has no rows (every view a filter or a search
+  // narrows, since batch D: the pages render the table for those). One
+  // narrowing on its own gets the list's own message, word for word as the
+  // pages wrote it, with its way back to the whole list (listEmptyMessage:
+  // "No items match your search", "No low-stock items", "Nothing is out of
+  // stock", "No expected items", the Books stock and Expected messages and
+  // Rentals items' "No rental items match your search"); anything else, the
+  // quiet general line. Read from what is on screen now: the box's search, the
+  // ticked filters (optimistic) and the address's stock view, Expected,
+  // Auto-archived only and rack, so it is right in instant mode the moment a
+  // filter is set, after a reload, from a pasted address and in server mode.
+  const emptyMessage =
+    displayed.length === 0
+      ? listEmptyMessage(rentalsOnly ? 'rentals' : showBookFields ? 'books' : 'items', {
+          ...instantStateFromSearchParams(params),
+          q,
+          cat: [...categoryIds],
+          loc: [...locationIds],
+          charter: [...charterIds],
+        })
+      : null;
+  const noMatchLine = emptyMessage ? (
+    <StatePanel
+      kind="no-match"
+      surface="plain"
+      icon={showBookFields ? BookOpen : Boxes}
+      headingLevel={3}
+      title={emptyMessage.title}
+      description={
+        <p>{emptyNote ? `${emptyMessage.description} ${emptyNote}` : emptyMessage.description}</p>
+      }
+      action={
+        <Button asChild variant="gradient">
+          <Link
+            href={emptyMessage.cta.href}
+            prefetch={false}
+            onClick={(e) => {
+              // Instant mode: the whole list derives here, so the way back is a
+              // shallow push that empties the box with it (a typed search may
+              // not be in the address yet).
+              if (instantMode) {
+                interceptShallowNav(e, emptyMessage.cta.href, (href) => {
+                  setQ('');
+                  shallowPush(href);
+                });
+                return;
+              }
+              // Server mode: the link navigates, and the box takes the address's
+              // (empty) search when the list lands (agreedQ), with the list. A
+              // typed search the address does not hold yet would not change
+              // with it, so the box drops that one now.
+              if (q.trim() !== addressQ.trim() && isPlainLeftClick(e)) setQ('');
+            }}
+          >
+            {emptyMessage.cta.label}
+          </Link>
+        </Button>
+      }
+    />
+  ) : (
     <StatePanel
       kind="no-match"
       surface="plain"
@@ -3231,13 +3306,6 @@ export function InventoryTable({
                 </tr>
               </thead>
               <tbody>
-                {displayed.length === 0 && (
-                  <tr>
-                    <td colSpan={showBookFields ? 13 : 11} className="p-0">
-                      {noMatchLine}
-                    </td>
-                  </tr>
-                )}
                 {styledRenderItems.map((se) => {
                   // Size-run (apparel) header — one collapsed row per style
                   // base (e.g. "L4L - Pink Shirt"), stacked ABOVE the SKU
@@ -3479,6 +3547,13 @@ export function InventoryTable({
             </table>
           </div>
         )}
+        {/* The Table view's empty area sits OUTSIDE the sideways scroller (review
+            2026-10-20): inside, it was a row of the 900 px table, centred out
+            of sight at phone width (the box at x 381-553 of a 390 px screen),
+            so a filtered empty list showed the filter bar, "0 SKUs" and a
+            blank table. Here it spans the card at every width, under the
+            header row, as the Grid's empty area does. */}
+        {listView !== 'grid' && displayed.length === 0 ? noMatchLine : null}
 
         {showPagination || (plannedPageStranded && pageRange) || canCreate ? (
           <div className="border-border flex flex-wrap items-center justify-between gap-3 border-t px-4 py-2.5">

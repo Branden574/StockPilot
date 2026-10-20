@@ -761,7 +761,8 @@ function booksEmptyState({
   // page). It used to be "No books yet" with an offer to add a first book
   // whenever the view had no search, stock view or Auto-archived only chip,
   // and a stock view or the Expected chip had a page-level state without
-  // the bar.
+  // the bar: their words ("No low-stock books", "No out-of-stock books", "No
+  // expected books") are the table's now, unchanged (listEmptyMessage).
   if (listFilterActive(params)) return null;
   // The Archived view with nothing archived (no filter on it: see above).
   if (lifecycleStatus === 'archived') {

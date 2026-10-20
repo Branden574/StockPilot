@@ -301,6 +301,12 @@ function snapshot(container: HTMLElement) {
      *  state draws through the state panel, whose title sits under the page's
      *  h1 as an h2. The page header's own h1 is not an empty state's title. */
     headings: [...container.querySelectorAll('h2, h3')].map((n) => norm(n.textContent)),
+    /** Every empty area on screen, the page's or the table's (the table's sits
+     *  under its header row, outside the rows, since the review of
+     *  2026-10-20: inside them it was out of sight at phone width). */
+    empty: [...container.querySelectorAll('[data-slot="state-panel"]')].map((p) =>
+      norm(p.textContent),
+    ),
   };
 }
 
@@ -606,7 +612,8 @@ describe('URL probe: an Items URL paints what it settles on (review 2026-10-05)'
 
       const { firstPaint } = await openUrl(target);
       expect(firstPaint).toEqual(inApp);
-      expect(firstPaint.rows.map((r) => r.text)).toEqual(['No items match your filters.']);
+      expect(firstPaint.rows).toEqual([]);
+      expect(firstPaint.empty).toEqual(['No items match your filters.']);
       expect(firstPaint.headings).not.toContain('No items yet');
     },
   );
@@ -642,7 +649,8 @@ describe('URL probe: an Items URL paints what it settles on (review 2026-10-05)'
 
         const { view, firstPaint } = await openUrl(target);
         expect(firstPaint).toEqual(inApp);
-        expect(firstPaint.rows.map((r) => r.text)).toEqual(['No items match your filters.']);
+        expect(firstPaint.rows).toEqual([]);
+        expect(firstPaint.empty).toEqual(['No items match your filters.']);
         expect(firstPaint.headings).not.toContain('No items yet');
         expect(firstPaint.headings).not.toContain('No archived items');
         const page = within(view.container);
@@ -654,15 +662,73 @@ describe('URL probe: an Items URL paints what it settles on (review 2026-10-05)'
       },
     );
 
-    it('a search that matches nothing, opened as a link: the no-match row, the search in its box, and Clear all filters', async () => {
+    // Integrator decision 1 (2026-10-20): the page's own words for a search
+    // that matches nothing stay, now in the table's empty area, with the
+    // search box and Clear all filters on screen around them.
+    it('a search that matches nothing, opened as a link: "No items match your search", the search in its box, and Clear all filters', async () => {
+      const start = await openUrl('');
+      await act(async () => nav.set('q=zzqqxx'));
+      const inApp = snapshot(start.view.container);
+      start.view.unmount();
+
       const { view, firstPaint } = await openUrl('q=zzqqxx');
-      expect(firstPaint.rows.map((r) => r.text)).toEqual(['No items match your filters.']);
-      expect(firstPaint.headings).not.toContain('No items match your search');
+      expect(firstPaint).toEqual(inApp);
+      expect(firstPaint.rows).toEqual([]);
+      expect(firstPaint.headings).toContain('No items match your search');
+      // Its title, its sentence and its way back (textContent runs them together).
+      expect(firstPaint.empty).toEqual([
+        [
+          'No items match your search',
+          'Nothing matched "zzqqxx". Try a different SKU, name, or barcode.',
+          'Clear search',
+        ].join(''),
+      ]);
       const page = within(view.container);
       expect(page.getByRole('textbox', { name: 'Search items' })).toHaveValue('zzqqxx');
       expect(page.getByRole('button', { name: 'Clear all filters' })).toBeInTheDocument();
-      expect(page.queryByRole('link', { name: 'Clear search' })).toBeNull();
+      expect(page.getByRole('link', { name: 'Clear search' })).toHaveAttribute(
+        'href',
+        '/dashboard/inventory',
+      );
+      expect(page.queryByRole('link', { name: 'Add your first item' })).toBeNull();
     });
+
+    it.each([
+      [
+        'stock=low',
+        [
+          'No low-stock items',
+          'Nothing is at or below its reorder point right now. Nice.',
+          'Show all items',
+        ],
+      ],
+      [
+        'expected=1',
+        [
+          'No expected items',
+          'Items created from purchase orders appear here until their first stock is received.',
+          'Back to all items',
+        ],
+      ],
+    ])(
+      "?%s with nothing in it, opened as a link: the page's own words in the table",
+      async (qs, parts) => {
+        const words = parts.join('');
+        // Nothing is low or expected in the fixture's view once these are gone.
+        h.db!.tables.inventory_items = h.db!.tables.inventory_items!.filter(
+          (r) =>
+            !(r.awaiting_first_receipt === true) &&
+            Number(r.quantity_on_hand) > Number(r.reorder_point ?? 0) &&
+            Number(r.quantity_on_hand) > 0,
+        );
+        const { view, firstPaint } = await openUrl(qs);
+        expect(firstPaint.rows).toEqual([]);
+        expect(firstPaint.empty).toEqual([words]);
+        expect(
+          within(view.container).getByRole('button', { name: 'Filter by Category' }),
+        ).toBeInTheDocument();
+      },
+    );
 
     it('an empty Archived view with no filter keeps its own state, words and way back', async () => {
       h.db!.tables.inventory_items = h.db!.tables.inventory_items!.filter(

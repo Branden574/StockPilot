@@ -213,6 +213,9 @@ describe('Rentals items: header, tabs and states', () => {
  * search"). Every view a filter or a search leaves empty is now the table, whose
  * no-match state keeps the filter bar, the active chips and "Clear all filters",
  * as on Items and Books. The list still applies the filter exactly as before.
+ * The table (stubbed here) says what the page said for a search that matches
+ * nothing, "No rental items match your search" with "Clear search": see
+ * page.no-match.test.tsx, which renders the real table.
  */
 describe('Rentals items: a filter that leaves nothing is the table, with its filters', () => {
   it.each<[string, Record<string, string>, Record<string, unknown>]>([
@@ -233,7 +236,6 @@ describe('Rentals items: a filter that leaves nothing is the table, with its fil
     expect(h.list).toHaveBeenCalledWith(expect.objectContaining(applied));
     expect(screen.queryByText('No rental items yet')).toBeNull();
     expect(screen.queryByText('No archived rental items')).toBeNull();
-    expect(screen.queryByText('No rental items match your search')).toBeNull();
     expect(screen.queryByRole('link', { name: 'Add your first rental item' })).toBeNull();
     expect(h.tableProps).toHaveBeenCalledTimes(1);
     expect(h.tableProps.mock.calls[0]![0]).toMatchObject({

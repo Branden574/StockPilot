@@ -190,9 +190,11 @@ export default async function RentalItemsPage({
   // on Items and Books (grouping walk 2026-10-20, W4 no-match): it used to be
   // "No rental items yet" with an offer to add a first one whenever the view
   // had no search or stock view, and a search had a page-level state without
-  // the bar. Only what this page's list applies counts (it reads no charter,
-  // rack, Expected or Auto-archived only); the empty states below are for a
-  // list with nothing in it and no filter at all.
+  // the bar: its words ("No rental items match your search", "Clear search")
+  // are the table's now, unchanged (listEmptyMessage, rentalsOnly). Only what
+  // this page's list applies counts (it reads no charter, rack, Expected or
+  // Auto-archived only); the empty states below are for a list with nothing
+  // in it and no filter at all.
   const filtered = listFilterActive({
     q: params.q,
     status: params.status,

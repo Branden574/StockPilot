@@ -693,6 +693,36 @@ describe('Items page: a filter that leaves nothing is the table, with its filter
     );
   });
 
+  // Integrator decision 1 (2026-10-20): the table now says what this page said
+  // for a search, a stock view or the Expected chip on its own, and the page
+  // hands it the warehouse-scope sentence it added to those messages.
+  it.each<[string, Record<string, string>]>([
+    ['a search', { q: 'zzqqxx' }],
+    ['Low + critical', { stock: 'low' }],
+    ['the Expected chip', { expected: '1' }],
+  ])(
+    "staff, %s that leaves nothing: the table gets the page's warehouse-scope sentence",
+    async (_l, params) => {
+      h.role = 'staff';
+      h.listTotal = 0;
+      render(await callPage(params));
+      expect(m.emptyStateProps).not.toHaveBeenCalled();
+      expect(m.tableProps.mock.calls[0]![0]).toMatchObject({
+        emptyNote:
+          "You're viewing North only. An admin can adjust warehouse access from the Team page.",
+      });
+    },
+  );
+
+  it('manager: no warehouse-scope sentence (all access), in either branch', async () => {
+    render(await callPage({ q: 'zzqqxx' }));
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ emptyNote: null });
+    m.tableProps.mockClear();
+    h.datasetGate = Promise.resolve({ items: [ROW], placement: {} });
+    render(await callPage({ q: 'zzqqxx' }));
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ emptyNote: null });
+  });
+
   it.each(FILTERED)(
     'manager, reloaded or pasted (the awaited instant branch), %s: the table, never an empty state',
     async (_l, params) => {
