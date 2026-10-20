@@ -181,7 +181,7 @@ const redesignReads = () =>
 const redesignSeen = (): Record<string, boolean> =>
   Object.fromEntries(REDESIGN_IDS.map((id) => [id, true]));
 /**
- * SET AT PUBLISH: the whole minute at which the redesign's web build was live
+ * Set at publish: the whole minute at which the redesign's web build was live
  * on production and the OTA's first iOS launches showed (EAS
  * update:insights), whichever came later, written like 2026-10-20T16:05:00Z.
  * The four releases at the top (the three redesign releases and the parked
@@ -189,7 +189,7 @@ const redesignSeen = (): Record<string, boolean> =>
  * was merged, with a provisional T earlier than the merge: the publish guard
  * at the end of this file fails until this is set and T is at or after it.
  */
-const REDESIGN_LIVE_AT = 'SET-AT-PUBLISH';
+const REDESIGN_LIVE_AT = '2026-10-20T15:37:00Z';
 
 describe('release registry', () => {
   it('is valid against the shared schema', () => {

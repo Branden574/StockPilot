@@ -34,19 +34,16 @@ export const RELEASES: Release[] = [
     // page and phone screen redrawn; no migration, no new dependency, no native
     // change, no permission or stock-logic change, and one API change: an opt-in
     // flag, /api/items/search?rentalsOnly=1, for the Rentals items search box.
-    // Web deploy and OTA (runtime 1.4.0) together: merged as <merge sha>, web
-    // build <id> live at <time>; OTA group <group>, iOS launches seen at <time>;
-    // Demo Co sweep (PLAN P7.4) <result>.
-    // SET AT PUBLISH: T, the publishedAt of the four releases at the top (here
-    // 12:47Z to 12:50Z on 2026-10-20), is provisional and earlier than the
-    // merge, the web build and the OTA. The publish PR sets T to the real
-    // whole-minute instant once the web build is live and the OTA's iOS
-    // launches show, sets REDESIGN_LIVE_AT in registry.test.ts, fills in the
-    // facts above and the OTA group and phone walks in
-    // redesign-mobile-app-2026-10's comment, moves the bounds and days the
-    // four "is published" tests pin, and deletes this note. Until then the
-    // publish guard in registry.test.ts fails, so this change cannot be
-    // merged with a provisional date.
+    // Web deploy and OTA (runtime 1.4.0) together: squash-merged as 31f4b3e61
+    // at 14:17Z on 2026-10-20, web build 8264e83c8f9b live from 14:20Z; OTA
+    // group 07d19d8b-e189-4ad9-93cf-a909a7e8f9e5 published at 14:29Z, its first
+    // iOS launches seen at 15:36Z on 2026-10-20 (EAS update:insights); T =
+    // 2026-10-20T15:37:00Z. Demo Co check after the merge: a read-only load of
+    // every sidebar page and five detail pages as demo@ (53 loads, 44 at 1440
+    // and 9 at 390), all 200 with no error screen, page error or 5xx. The full
+    // P7.4 sweep (the checkbox, grouping and workflow walks in Demo Co) did not
+    // run before this publish: the owner released at ~14:13Z with "release now
+    // and put in memory to fix the tests the first time the usage resets".
     // Drafted from stage2/WHATSNEW-DRAFTS.md and fact-checked at 036002d43, each
     // "now" against production 36cb9b619 (the merge base):
     // - sections: core modules/registry.ts placements and nav.ts SECTION_LABEL
@@ -146,7 +143,7 @@ export const RELEASES: Release[] = [
     title: 'StockPilot has a new look, and the sidebar is sorted into groups',
     summary:
       "StockPilot has a new look on the web, in light and dark mode, with every page, button and setting still there under the same name. The web sidebar now sorts its links into Inventory, Fulfillment, Purchasing, Insights and Workspace, each group folds, and the mobile app's side menu uses the same groups. On the web, Items and Books can show your stock as photo cards, their tables show the SKU under each name so more columns fit on screen, and Settings is grouped by topic.",
-    publishedAt: '2026-10-20T12:50:00Z',
+    publishedAt: '2026-10-20T15:40:00Z',
     entries: [
       {
         // platform: web. From: P2.1-P2.6, P2.6c, P2.3 (top bar), P4.A1 (forms, labels).
@@ -339,7 +336,8 @@ export const RELEASES: Release[] = [
     id: 'redesign-mobile-app-2026-10',
     revision: 1,
     // The phone half of the redesign (P2.5, P2.5b, P2.5c, P3.8, P5.4-P5.10,
-    // P5.4b and Stage 6 batch E), in OTA group <group> for runtime 1.4.0;
+    // P5.4b and Stage 6 batch E), in OTA group
+    // 07d19d8b-e189-4ad9-93cf-a909a7e8f9e5 for runtime 1.4.0;
     // JavaScript only, no store build (owner O4). Published with the web
     // releases once iOS launches of the group show (EAS update:insights).
     // Fact-checked at 036002d43, each "now", "no longer" and "used to" against
@@ -383,10 +381,18 @@ export const RELEASES: Release[] = [
     // review already read the new ones. The app opens both reviews only from
     // Items and Books (their select bar and Add to group), which sit beneath
     // an open review, so only a link from outside the app reaches it.
-    // STILL TO CHECK at publish: the phone walks N1-N14 and B16 on the iPhone 17
-    // Pro and iPad Pro 13, on the final tip. Do not merge before they pass;
-    // replace this line with their result (the publish guard in
-    // registry.test.ts fails while it is here).
+    // Phone walks on the release's bundle before this publish (iPhone 17 Pro
+    // simulator, Large text, manager): N2 Group selected (its alerts, review
+    // and Save with the suggested name) and N4 Ungroup passed on Items and
+    // Books (offline steps skipped); N1 select mode passed on both lists (its
+    // page-flip step skipped); N5 expandable rows passed expand and collapse on
+    // Items, with its other steps and the Books cell still running. N3 Add to
+    // group from a row failed at its first step on both lists: the search
+    // showed the SKU's two records as one family header, not a row reading Same
+    // SKU as records in the group, so whether production does the same is the
+    // follow-up's first check. N6-N14, B16, the largest text sizes and the iPad
+    // had not run when the owner released at ~14:13Z on 2026-10-20 ("release
+    // now and put in memory to fix the tests the first time the usage resets").
     // Who is told: everyone; entries for a module name its permission and
     // module. If the OTA is rolled back while the web stays, withdraw this
     // release (status 'withdrawn' and a withdrawnNote): rollback-plan.md.
@@ -394,7 +400,7 @@ export const RELEASES: Release[] = [
     title: 'The mobile app has a new look and says clearly when something did not load',
     summary:
       'Every screen in the mobile app now follows your light or dark mode, with the same screens, tabs and steps as before and buttons that are easier to tap. Lists now say when they could not load instead of looking empty, Home shows the real sync status, VoiceOver can name more buttons and choices, and scan to count no longer records an empty box as 0. Close the app completely and open it again to load the update.',
-    publishedAt: '2026-10-20T12:49:00Z',
+    publishedAt: '2026-10-20T15:39:00Z',
     entries: [
       {
         // platform: phone. From: P2.5, P5.4, P5.6, P5.9a, P5.9b, P5.10a, P5.10b, P5.4b, P2.5c.
@@ -624,7 +630,7 @@ export const RELEASES: Release[] = [
     title: 'Fixes on the web found while redrawing every page',
     summary:
       "While every web page was redrawn, these were fixed too: dates and times show in your own time zone where they used the server's, buttons that showed only under a mouse pointer now show on touch screens and to the keyboard, more forms ask before Refresh to update would lose your typing, and email and phone links open only for one plain address or number. Several pages now say what went wrong instead of failing or looking empty.",
-    publishedAt: '2026-10-20T12:48:00Z',
+    publishedAt: '2026-10-20T15:38:00Z',
     entries: [
       {
         // platform: web. From: P3.4 (D12), P4.G2 (D13), P4.F1, P5.2.
@@ -916,7 +922,7 @@ export const RELEASES: Release[] = [
     title: 'The AI Assistant finds size runs and copied items by what they are',
     summary:
       "Items added as a run of sizes, and copies made with Duplicate, are now included when you ask the AI Assistant to find items by what they are. The assistant's search data is also kept up to date after edits, and while the AI Assistant is switched on in Settings, Modules, an hourly check fills it in for any item still missing it.",
-    publishedAt: '2026-10-20T12:47:00Z',
+    publishedAt: '2026-10-20T15:37:00Z',
     entries: [
       {
         id: 'ai-search-finds-sizes-and-duplicates',
