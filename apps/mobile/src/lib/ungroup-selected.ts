@@ -11,7 +11,12 @@ import {
 } from '@stockpilot/core';
 
 import { api } from './api';
-import type { GroupingIdentity, PhoneGroupingReview } from './display-groups';
+import {
+  reviewRecordDetail,
+  type GroupingIdentity,
+  type PhoneGroupingRecord,
+  type PhoneGroupingReview,
+} from './display-groups';
 import type { CountPick } from './use-count-selection';
 
 /**
@@ -240,6 +245,49 @@ export async function postUngroupSelected(
   const outcome = parseUngroupSelectedOutcome(raw.result);
   if (!outcome) throw new Error(UNREADABLE);
   return outcome;
+}
+
+// ── A "keeps the SKU" radio's name (redesign Stage 6, F9) ─────────────────
+// When every record of a SKU the person can see is ticked, each of its rows
+// carries a radio for the one that keeps the SKU. Each radio was named "Keeps
+// SKU <sku>: <name>" and nothing more, so three Wireless Mouse records were
+// three radios VoiceOver could not tell apart, and the outcome beside each
+// ("Gets its own SKU") was never heard: the radio's name replaced its words.
+
+/** How a record's line joins its parts (core groupingRecordLine). */
+const RECORD_LINE_SEPARATOR = ' · ';
+
+/**
+ * The spoken name of a record's "keeps the SKU" radio: the choice and the
+ * record's name, then what tells the record apart from the SKU's other
+ * records, in the words its line shows (reviewRecordDetail): every part of
+ * its line that is not on all of theirs, such as its rack or placement,
+ * warehouse, charter, on hand, size or ISBN. Records whose names and lines
+ * read the same are told apart by where they are listed ("record 2 of 3").
+ * The outcome beside the radio is its value, never part of its name.
+ *
+ * `rows` are the review's records in the order listed, and `skuRecords` the
+ * SKU's records that each carry a radio (core's group.selected).
+ */
+export function keepsSkuRadioLabel(
+  choice: string,
+  record: PhoneGroupingRecord,
+  rows: readonly PhoneGroupingRecord[],
+  skuRecords: readonly { id: string }[],
+  view: 'items' | 'books',
+): string {
+  const withRadio = new Set(skuRecords.map((s) => s.id));
+  const peers = rows.filter((r) => withRadio.has(r.id));
+  const parts = (r: PhoneGroupingRecord) =>
+    reviewRecordDetail(r, view).split(RECORD_LINE_SEPARATOR);
+  const lines = peers.map(parts);
+  const onEvery = new Set((lines[0] ?? []).filter((p) => lines.every((l) => l.includes(p))));
+  const named = (r: PhoneGroupingRecord) =>
+    [`${choice}: ${r.name}`, ...parts(r).filter((p) => !onEvery.has(p))].join(', ');
+  const label = named(record);
+  const at = peers.findIndex((p) => p.id === record.id);
+  const readsTheSame = peers.some((p) => p.id !== record.id && named(p) === label);
+  return at >= 0 && readsTheSame ? `${label}, record ${at + 1} of ${peers.length}` : label;
 }
 
 // ── A change elsewhere ─────────────────────────────────────────────────────

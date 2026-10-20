@@ -49,6 +49,7 @@ import { footerReservation } from '@/lib/dynamic-type-layout';
 import { isOnline } from '@/lib/sync';
 import { FONT } from '@/lib/theme';
 import {
+  keepsSkuRadioLabel,
   notifyRecordsUngrouped,
   postUngroupSelected,
   previewUngroupSelected,
@@ -366,11 +367,23 @@ function UngroupSelectedReview({ params }: { params: UngroupSelectedParams | nul
                           </Body>
                         ) : null}
                         {group?.allSelected ? (
+                          // Named for its record and for what tells it apart
+                          // from the SKU's other records, with the outcome
+                          // beside it as its value: three Wireless Mouse
+                          // radios read the same, and the outcome was never
+                          // heard (redesign Stage 6, F9).
                           <Pressable
                             onPress={() => setAnchorBySku((m) => ({ ...m, [group.sku]: rec.id }))}
                             disabled={busy}
                             accessibilityRole="radio"
-                            accessibilityLabel={`${UNGROUP_COPY.keepsSku(group.sku)}: ${r.name}`}
+                            accessibilityLabel={keepsSkuRadioLabel(
+                              UNGROUP_COPY.keepsSku(group.sku),
+                              r,
+                              plan.records,
+                              group.selected,
+                              view,
+                            )}
+                            accessibilityValue={{ text: ungroupOutcomeWords(o) }}
                             accessibilityState={{ checked: keeps, disabled: busy }}
                             style={styles.choiceRow}
                           >

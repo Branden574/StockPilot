@@ -960,7 +960,14 @@ describe('Ungroup review: the words and the save', () => {
     expect(code).toMatch(
       /for \(const p of outcome\.parts\) for \(const id of p\.changedItemIds\) countSelection\.remove\(id\);/,
     );
-    // Keeps SKU X: a radio named for its record.
-    expect(code).toContain('accessibilityLabel={`${UNGROUP_COPY.keepsSku(group.sku)}: ${r.name}`}');
+    // Keeps SKU X: a radio named for its record and for what tells it apart
+    // from the SKU's other records, with the outcome beside it as its value
+    // (redesign Stage 6, F9; ungroup-keeps-sku-radio.test.ts runs both).
+    const sf = treeOf(UNGROUP);
+    const radio = nodesIn(sf).find((n) => attrText(n.el, 'accessibilityRole', sf) === 'radio')!;
+    expect(attrText(radio.el, 'accessibilityLabel', sf)?.replace(/\s+/g, ' ')).toBe(
+      'keepsSkuRadioLabel( UNGROUP_COPY.keepsSku(group.sku), r, plan.records, group.selected, view, )',
+    );
+    expect(attrText(radio.el, 'accessibilityValue', sf)).toBe('{ text: ungroupOutcomeWords(o) }');
   });
 });
