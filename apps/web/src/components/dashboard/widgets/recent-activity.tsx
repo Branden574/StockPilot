@@ -1,6 +1,7 @@
 import { Boxes } from 'lucide-react';
 import Link from 'next/link';
 
+import { movementTypeLabel, movementTypeTone } from '@/components/movements/movements-table';
 import {
   DetailSection,
   DetailSectionLink,
@@ -214,11 +215,12 @@ export function RecentActivityWidget({
                       data-movement-type={m.movement_type}
                       title={
                         <>
-                          <TimelineLabel
-                            tone={change > 0 ? 'accent' : 'muted'}
-                            className="inline-block first-letter:uppercase"
-                          >
-                            {m.movement_type.replace('_', ' ')}
+                          {/* The type in the Movements page's words and tone
+                              (DESIGN-SPEC 6.16 and 6.10): Receive PO, not
+                              "Receive po", and its colour from the type, not
+                              the sign of the change (FX5). */}
+                          <TimelineLabel tone={movementTypeTone(m.movement_type)}>
+                            {movementTypeLabel(m.movement_type)}
                           </TimelineLabel>
                           {' · '}
                           {item?.name ?? 'Unknown'}

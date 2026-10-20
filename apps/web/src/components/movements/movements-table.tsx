@@ -69,22 +69,43 @@ export function movementTypeLabel(type: string): string {
 }
 
 /**
- * The type label's tone (DESIGN-SPEC 6.10, the reference's coloured type with
+ * A movement type's tone (DESIGN-SPEC 6.10, the reference's coloured type with
  * a dot): stock coming in reads in the accent, adjustments in caution,
  * write-offs in danger, and moves, removals and opening counts in the
  * secondary ink. The words are always printed, so colour is never the only cue.
+ *
+ * One map for every page that colours a type: this table and the Overview's
+ * activity rows (recent-activity.tsx) both read it, so a type cannot read one
+ * colour here and another there. The Overview used to colour the type by the
+ * sign of the change, so Correction read in the accent there and in caution
+ * here, and Loss and Damage read grey there and red here (FX5).
  */
-const TYPE_TONE: Record<string, string> = {
-  add: 'text-success',
-  receive_po: 'text-success',
-  return: 'text-success',
-  adjust: 'text-warning',
-  correction: 'text-warning',
-  damage: 'text-destructive',
-  loss: 'text-destructive',
-  remove: 'text-ink-2',
-  transfer: 'text-ink-2',
-  initial: 'text-ink-2',
+export type MovementTypeTone = 'accent' | 'warning' | 'destructive' | 'muted';
+
+export const MOVEMENT_TYPE_TONE: Readonly<Record<string, MovementTypeTone>> = {
+  add: 'accent',
+  receive_po: 'accent',
+  return: 'accent',
+  adjust: 'warning',
+  correction: 'warning',
+  damage: 'destructive',
+  loss: 'destructive',
+  remove: 'muted',
+  transfer: 'muted',
+  initial: 'muted',
+};
+
+/** The tone for a type; any other code the ledger holds is in ink 2. */
+export function movementTypeTone(type: string): MovementTypeTone {
+  return Object.hasOwn(MOVEMENT_TYPE_TONE, type) ? MOVEMENT_TYPE_TONE[type]! : 'muted';
+}
+
+/** Each tone's text colour on this table (--success is the accent). */
+const TYPE_TONE: Record<MovementTypeTone, string> = {
+  accent: 'text-success',
+  warning: 'text-warning',
+  destructive: 'text-destructive',
+  muted: 'text-ink-2',
 };
 
 export function MovementTypeLabel({ type }: { type: string }) {
@@ -93,7 +114,7 @@ export function MovementTypeLabel({ type }: { type: string }) {
       data-movement-type={type}
       className={cn(
         'inline-flex items-center gap-1.5 whitespace-nowrap font-medium',
-        TYPE_TONE[type] ?? 'text-ink-2',
+        TYPE_TONE[movementTypeTone(type)],
       )}
     >
       <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-current" />

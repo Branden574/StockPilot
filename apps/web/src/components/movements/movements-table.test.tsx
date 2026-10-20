@@ -9,7 +9,13 @@ vi.mock('@/server/actions/movements', () => ({ editMovementNoteAction: vi.fn() }
 
 import { MOVEMENT_TYPE_OPTIONS } from '@/lib/movements-filters';
 
-import { MovementsTable, movementTypeLabel, type MovementDisplayRow } from './movements-table';
+import {
+  MOVEMENT_TYPE_TONE,
+  MovementsTable,
+  movementTypeLabel,
+  movementTypeTone,
+  type MovementDisplayRow,
+} from './movements-table';
 
 function row(over: Partial<MovementDisplayRow> = {}): MovementDisplayRow {
   return {
@@ -98,6 +104,40 @@ describe('MovementsTable type column', () => {
     expect(movementTypeLabel('bundle_shortage')).toBe('Bundle shortage');
     render(<MovementsTable rows={[row({ movementType: 'bundle_distribution' })]} />);
     expect(cellsFor('Copy Paper Case')[2]!.textContent).toBe('Bundle distribution');
+  });
+
+  // FX5 (DESIGN-SPEC 6.10 movement type tones, 6.16 "the type in its tone"):
+  // the type's tone is one exported map, read here and by the Overview's
+  // activity rows, so the two pages cannot colour a type differently.
+  it('colours each type from the one shared tone map, and any other code in ink 2', () => {
+    expect(MOVEMENT_TYPE_TONE).toEqual({
+      add: 'accent',
+      receive_po: 'accent',
+      return: 'accent',
+      adjust: 'warning',
+      correction: 'warning',
+      damage: 'destructive',
+      loss: 'destructive',
+      remove: 'muted',
+      transfer: 'muted',
+      initial: 'muted',
+    });
+    expect(movementTypeTone('bundle_assembly')).toBe('muted');
+    expect(movementTypeTone('toString')).toBe('muted');
+    const toneClass = {
+      accent: 'text-success',
+      warning: 'text-warning',
+      destructive: 'text-destructive',
+      muted: 'text-ink-2',
+    } as const;
+    const rows = [...MOVEMENT_TYPE_OPTIONS.map((o) => o.value), 'bundle_assembly'].map((type, i) =>
+      row({ id: `m-${type}`, movementType: type, itemName: `Item ${i}` }),
+    );
+    render(<MovementsTable rows={rows} />);
+    rows.forEach((r, i) => {
+      const label = cellsFor(`Item ${i}`)[2]!.querySelector('[data-movement-type]')!;
+      expect(label).toHaveClass(toneClass[movementTypeTone(r.movementType)]);
+    });
   });
 
   it('keeps a word on every type, so its colour is never the only cue', () => {

@@ -16,6 +16,7 @@ import {
   type DashboardWidgetProps,
 } from '@/components/dashboard/widgets';
 import { percentDelta, worseWhenUpDelta } from '@/components/dashboard/widgets/deltas';
+import { movementTypeLabel } from '@/components/movements/movements-table';
 import { PageHeader } from '@/components/patterns/page-header';
 import { Button } from '@/components/ui/button';
 import {
@@ -368,8 +369,10 @@ async function DashboardBody({
   // breakdownRows that lived here. Both are bounded by stock_movements
   // count over 30d, so query cost is small.
   const barValues = metrics.dailyCounts;
+  // Each type in the Movements page's words ("Receive PO", "Bundle assembly"),
+  // never the raw code with a capital ("Receive_po") (FX5, DESIGN-SPEC 6.10).
   const breakdownRows = metrics.byType.slice(0, 5).map((b) => ({
-    label: b.type.replace(/^./, (s) => s.toUpperCase()),
+    label: movementTypeLabel(b.type),
     share: b.share,
     val: b.count,
   }));

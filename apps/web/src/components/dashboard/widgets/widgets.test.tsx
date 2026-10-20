@@ -340,11 +340,46 @@ describe("Recent activity: today's activity", () => {
     expect(screen.getByRole('heading', { name: "Today's activity" })).toBeInTheDocument();
     expect(screen.getByText('Live · across all locations')).toBeInTheDocument();
     const [first, second] = screen.getAllByRole('listitem');
-    expect(first).toHaveTextContent('return · Index Cards');
+    // FX5 (DESIGN-SPEC 6.16 and 6.10): the type prints in the Movements
+    // page's words ("Return", "Damage"), no longer the raw code ("return").
+    expect(first).toHaveTextContent('Return · Index Cards');
     expect(first).toHaveTextContent('Dana Whitcombe · Return restock · 5 m');
     expect(first).toHaveTextContent('+5');
-    expect(second).toHaveTextContent('damage · Unknown');
+    expect(second).toHaveTextContent('Damage · Unknown');
     expect(second).toHaveTextContent('-2');
+  });
+
+  // FX5 (DESIGN-SPEC 6.16 "the type in its tone at 500", 6.10 movement type
+  // tones and words): the type took its colour from the sign of the change
+  // and printed the raw code, so Correction read in the accent here and in
+  // caution on Movements, and Loss and Damage read grey here and red there.
+  it('names and colours each type as the Movements page does, whatever the sign of the change', () => {
+    const cases: Array<[type: string, change: number, words: string, tone: string]> = [
+      ['receive_po', 10, 'Receive PO', 'text-accent'],
+      ['correction', 0.5, 'Correction', 'text-warning'],
+      ['adjust', -1, 'Adjust', 'text-warning'],
+      ['loss', -5, 'Loss', 'text-destructive'],
+      ['damage', -2, 'Damage', 'text-destructive'],
+      ['return', 3, 'Return', 'text-accent'],
+      ['remove', -4, 'Remove', 'text-[var(--ed-ink-2)]'],
+      ['bundle_assembly', 6, 'Bundle assembly', 'text-[var(--ed-ink-2)]'],
+    ];
+    render(
+      <RecentActivityWidget
+        {...makeProps({
+          recentMovements: cases.map(([type, change], i) =>
+            movement({ id: `t${i}`, movement_type: type, quantity_change: change }),
+          ),
+        })}
+      />,
+    );
+    const rows = screen.getAllByRole('listitem');
+    cases.forEach(([type, , words, tone], i) => {
+      expect(rows[i]).toHaveAttribute('data-movement-type', type);
+      const label = within(rows[i]!).getByText(words);
+      expect(label).toHaveClass('font-medium', tone);
+      expect(label.className).not.toContain('first-letter:uppercase');
+    });
   });
 
   // FX1 (DESIGN-SPEC 6.16, the activity row's second line: name · time): a
@@ -409,27 +444,30 @@ describe("Recent activity: today's activity", () => {
 });
 
 describe('Movements breakdown', () => {
-  it('lets a long type wrap only after its underscore, keeping the label whole', () => {
+  // FX5 (DESIGN-SPEC 6.10, the movement type words): the page now hands the
+  // card the Movements page's words ("Bundle assembly", "Receive PO"), not the
+  // raw codes ("Bundle_assembly", "Receive_po") that needed a <wbr> after the
+  // underscore. The words wrap between words, never inside one; the page's
+  // mapping is pinned in dashboard/page.test.tsx.
+  it('prints each type in its words, whole, wrapping only between words', () => {
     render(
       <MovementsBreakdownWidget
         {...makeProps({
           barValues: [1, 2, 3],
           breakdownRows: [
-            { label: 'Bundle_assembly', share: 0.5, val: 10 },
-            { label: 'Receive', share: 0.5, val: 10 },
+            { label: 'Bundle assembly', share: 0.5, val: 10 },
+            { label: 'Receive PO', share: 0.5, val: 10 },
           ],
         })}
       />,
     );
-    const label = screen.getByText('Bundle_assembly');
-    expect(label.textContent).toBe('Bundle_assembly');
-    // The only break opportunity sits right after the underscore.
-    const wbrs = label.querySelectorAll('wbr');
-    expect(wbrs).toHaveLength(1);
-    expect(wbrs[0]!.previousSibling?.textContent).toBe('_');
-    expect(label.innerHTML).toBe('Bundle_<wbr>assembly');
-    expect(label.className).not.toContain('overflow-wrap:anywhere');
-    expect(screen.getByText('Receive').querySelector('wbr')).toBeNull();
+    for (const words of ['Bundle assembly', 'Receive PO']) {
+      const label = screen.getByText(words);
+      expect(label.innerHTML).toBe(words);
+      expect(label.querySelector('wbr')).toBeNull();
+      expect(label.className).not.toContain('overflow-wrap:anywhere');
+    }
+    expect(screen.queryByText(/_/)).toBeNull();
   });
 });
 

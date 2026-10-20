@@ -1,5 +1,3 @@
-import { Fragment } from 'react';
-
 import { ChartCard } from '@/components/dashboard/charts/chart-card';
 import { MiniBarChart } from '@/components/dashboard/mini-bar-chart';
 
@@ -28,21 +26,11 @@ export function MovementsBreakdownWidget({ barValues, breakdownRows }: Dashboard
           )}
           {breakdownRows.map((r) => (
             <div key={r.label} className="flex items-center justify-between gap-3">
-              {/* A long type such as Bundle_assembly may only wrap after an
-                  underscore (a <wbr> there), never mid-word; the text stays
-                  the same label. */}
-              <span className="min-w-0 break-words text-[12.5px]">
-                {r.label.split('_').map((part, i, all) => (
-                  <Fragment key={i}>
-                    {part}
-                    {i < all.length - 1 ? (
-                      <>
-                        _<wbr />
-                      </>
-                    ) : null}
-                  </Fragment>
-                ))}
-              </span>
+              {/* The type in the Movements page's words ("Bundle assembly",
+                  "Receive PO"; the page maps the codes, FX5), so a long one
+                  wraps between its words, never inside one. The raw codes
+                  this card printed needed a <wbr> after the underscore. */}
+              <span className="min-w-0 break-words text-[12.5px]">{r.label}</span>
               <div className="flex shrink-0 items-center gap-2">
                 <span
                   className="bg-line-strong block h-1 w-12 overflow-hidden rounded-[2px]"
