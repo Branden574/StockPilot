@@ -313,9 +313,11 @@ describe('Books page: server chain before rows', () => {
 
   it('a context that fails while the gate says no is observed, and the page is the not-enabled screen', async () => {
     h.booksEnabled = false;
-    m.withContext.mockImplementation(() => logged('withContext', async () => {
-      throw new Error('context read failed');
-    }));
+    m.withContext.mockImplementation(() =>
+      logged('withContext', async () => {
+        throw new Error('context read failed');
+      }),
+    );
 
     render(await callPage());
     await flush();
