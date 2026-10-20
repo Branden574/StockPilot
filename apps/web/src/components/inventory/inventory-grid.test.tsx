@@ -719,10 +719,10 @@ describe('a category reads in ink 2, its colour on the dot (FX2)', () => {
  */
 describe('a Grid card`s meta line wraps instead of cutting a word (W5)', () => {
   /** Each card's meta line, as [card key, the line]. */
-  const metaLines = (container: HTMLElement) =>
+  const metaLines = (container: HTMLElement): Array<[string | null, HTMLElement | null]> =>
     [...container.querySelectorAll('[data-slot="grid-card"]')].map((card) => [
       card.getAttribute('data-row-key') ?? card.getAttribute('data-group-key'),
-      card.querySelector('[data-slot="meta-line"]') as HTMLElement | null,
+      card.querySelector<HTMLElement>('[data-slot="meta-line"]'),
     ]);
 
   // Mutation caught: the line made one line again (no flex-wrap), a row gap
