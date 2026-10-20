@@ -37,6 +37,7 @@ import { Thumb } from '@/components/ui/thumb';
 import { useAuth } from '@/lib/auth-context';
 import {
   describeGroupingError,
+  groupSelectedReviewKey,
   keyedGroupingBody,
   notifyDisplayGroupsChanged,
   postGrouping,
@@ -45,6 +46,7 @@ import {
   reviewAnnouncement,
   reviewIdsForRetry,
   reviewRecordDetail,
+  type GroupSelectedParams,
   type GroupingIdentity,
   type PendingGroupingBody,
   type PhoneGroupingReview,
@@ -91,10 +93,6 @@ function announce(message: string) {
 }
 
 export default function GroupSelectedScreen() {
-  const router = useRouter();
-  const { c } = useTheme();
-  const { user } = useAuth();
-  const { activeOrgId } = useWorkspace();
   const {
     ids: idsParam,
     view: viewParam,
@@ -104,6 +102,28 @@ export default function GroupSelectedScreen() {
     () => readGroupSelectedParams({ ids: idsParam, view: viewParam, groupId: groupParam }),
     [idsParam, viewParam, groupParam],
   );
+  // A fresh review whenever the route names other records, another list or
+  // another target group (groupSelectedReviewKey, redesign Stage 6 F8):
+  // expo-router REUSES this screen when a link to it arrives while it is on
+  // top, swapping only the params, and the review kept the records it first
+  // opened with (BOOKS · GROUP over the items link's records). The same
+  // selection, in any order or case, keeps its review, and what the person
+  // chose or typed in it: the review holds the params it was mounted with.
+  return <GroupSelectedReview key={groupSelectedReviewKey(params)} params={params} />;
+}
+
+/** The review itself. Every piece of its state belongs to the selection it
+ *  was mounted for: the route mounts a new one for another selection. */
+function GroupSelectedReview({ params: routeParams }: { params: GroupSelectedParams | null }) {
+  // The selection the review was mounted for, kept for its whole life. The
+  // route mounts a new review for any other selection, so later params can
+  // only name this one in another order or case. Reading them previewed the
+  // same records again, with a loading flash (redesign Stage 6, F8 review).
+  const [params] = React.useState(routeParams);
+  const router = useRouter();
+  const { c } = useTheme();
+  const { user } = useAuth();
+  const { activeOrgId } = useWorkspace();
   const view = params?.view ?? 'items';
 
   // The records under review: the selection, plus same-SKU records the person

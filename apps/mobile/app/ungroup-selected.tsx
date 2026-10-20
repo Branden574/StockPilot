@@ -49,11 +49,14 @@ import { footerReservation } from '@/lib/dynamic-type-layout';
 import { isOnline } from '@/lib/sync';
 import { FONT } from '@/lib/theme';
 import {
+  keepsSkuRadioLabels,
   notifyRecordsUngrouped,
   postUngroupSelected,
   previewUngroupSelected,
   readUngroupSelectedParams,
+  ungroupSelectedReviewKey,
   type PhoneUngroupReview,
+  type UngroupSelectedParams,
 } from '@/lib/ungroup-selected';
 import { countSelection } from '@/lib/use-count-selection';
 import { useTheme } from '@/lib/use-theme';
@@ -82,10 +85,6 @@ function announce(message: string) {
 }
 
 export default function UngroupSelectedScreen() {
-  const router = useRouter();
-  const { c } = useTheme();
-  const { user } = useAuth();
-  const { activeOrgId } = useWorkspace();
   const {
     ids: idsParam,
     view: viewParam,
@@ -95,6 +94,31 @@ export default function UngroupSelectedScreen() {
     () => readUngroupSelectedParams({ ids: idsParam, view: viewParam, under: underParam }),
     [idsParam, viewParam, underParam],
   );
+  // A fresh review whenever the route names other records, another list or
+  // another grouping a record is shown under (ungroupSelectedReviewKey,
+  // redesign Stage 6 F8): expo-router REUSES this screen when a link to it
+  // arrives while it is on top, swapping only the params. The reload below
+  // reset most of the review, but a refused Save's error (and its Review
+  // again) stayed over the new records, and the old review or result showed
+  // under the new params until the reload ran. The same selection, in any
+  // order or case, keeps its review and the person's choices: the review
+  // holds the params it was mounted with.
+  return <UngroupSelectedReview key={ungroupSelectedReviewKey(params)} params={params} />;
+}
+
+/** The review itself. Every piece of its state belongs to the selection it
+ *  was mounted for: the route mounts a new one for another selection. */
+function UngroupSelectedReview({ params: routeParams }: { params: UngroupSelectedParams | null }) {
+  // The selection the review was mounted for, kept for its whole life. The
+  // route mounts a new review for any other selection, so later params can
+  // only name this one in another order or case. Reading them ran the reload
+  // below again, which cleared the person's keeps-the-SKU choice, any result
+  // shown and its Try again (redesign Stage 6, F8 review).
+  const [params] = React.useState(routeParams);
+  const router = useRouter();
+  const { c } = useTheme();
+  const { user } = useAuth();
+  const { activeOrgId } = useWorkspace();
   const view = params?.view ?? 'items';
   const idsKey = params?.itemIds.join(',') ?? '';
 
@@ -121,10 +145,15 @@ export default function UngroupSelectedScreen() {
   // result sat under the footer. 170 stays the floor.
   const [footerHeight, setFooterHeight] = React.useState<number | null>(null);
 
-  // The newest review for these records; an overtaken answer is dropped.
+  // The newest review for these records. An answer is dropped once the
+  // effect runs again (seq) or the review unmounts (live, cleared by the
+  // cleanup): a link for other records mounts a new review, and the old one
+  // must not tell VoiceOver "2 records to review." for records no longer on
+  // screen (redesign Stage 6, F8 review).
   React.useEffect(() => {
     if (!params || !activeOrgId || !user?.id) return;
     const mine = ++seq.current;
+    let live = true;
     pending.current = null;
     /* eslint-disable react-hooks/set-state-in-effect -- a new look at the records: reset, then post-await sets */
     setLoadState({ kind: 'loading' });
@@ -136,7 +165,7 @@ export default function UngroupSelectedScreen() {
     const ids = idsKey ? idsKey.split(',') : [];
     void (async () => {
       if (!(await isOnline())) {
-        if (mine === seq.current) setLoadState({ kind: 'offline' });
+        if (live && mine === seq.current) setLoadState({ kind: 'offline' });
         return;
       }
       try {
@@ -145,16 +174,19 @@ export default function UngroupSelectedScreen() {
           organizationId: activeOrgId,
           actorUserId: user.id,
         });
-        if (mine !== seq.current) return;
+        if (!live || mine !== seq.current) return;
         setLoadState({ kind: 'ready', data: r, identity: r.identity });
         announce(GROUP_COPY.reviewReady(r.review.records.length));
       } catch (e) {
-        if (mine !== seq.current) return;
+        if (!live || mine !== seq.current) return;
         const { message } = describeGroupingError(e);
         setLoadState({ kind: 'failed', message });
         announce(message);
       }
     })();
+    return () => {
+      live = false;
+    };
   }, [params, activeOrgId, user?.id, idsKey, nonce]);
 
   const data = loadState.kind === 'ready' ? loadState.data : null;
@@ -168,6 +200,28 @@ export default function UngroupSelectedScreen() {
           })
         : null,
     [data, params],
+  );
+  // Every "keeps the SKU" radio's name, by record, worked out once per plan
+  // (redesign Stage 6, F9 review): naming each radio as it rendered rebuilt
+  // every other record's line twice, 20,000 lines on every tap for a SKU of
+  // 100 ticked records.
+  const radioNames = React.useMemo(
+    () =>
+      new Map(
+        plan
+          ? plan.split.groups
+              .filter((g) => g.allSelected)
+              .flatMap((g) => [
+                ...keepsSkuRadioLabels(
+                  UNGROUP_COPY.keepsSku(g.sku),
+                  plan.records,
+                  g.selected,
+                  view,
+                ),
+              ])
+          : [],
+      ),
+    [plan, view],
   );
   const changing = plan ? ungroupChangeCount(plan, anchorBySku) : 0;
   const reviewById = new Map((data?.review.records ?? []).map((r) => [r.id, r]));
@@ -350,11 +404,17 @@ export default function UngroupSelectedScreen() {
                           </Body>
                         ) : null}
                         {group?.allSelected ? (
+                          // Named for its record and for what tells it apart
+                          // from the SKU's other records, with the outcome
+                          // beside it as its value: three Wireless Mouse
+                          // radios read the same, and the outcome was never
+                          // heard (redesign Stage 6, F9).
                           <Pressable
                             onPress={() => setAnchorBySku((m) => ({ ...m, [group.sku]: rec.id }))}
                             disabled={busy}
                             accessibilityRole="radio"
-                            accessibilityLabel={`${UNGROUP_COPY.keepsSku(group.sku)}: ${r.name}`}
+                            accessibilityLabel={radioNames.get(rec.id)}
+                            accessibilityValue={{ text: ungroupOutcomeWords(o) }}
                             accessibilityState={{ checked: keeps, disabled: busy }}
                             style={styles.choiceRow}
                           >
