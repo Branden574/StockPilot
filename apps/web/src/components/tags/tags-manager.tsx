@@ -19,11 +19,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-  createTagAction,
-  deleteTagAction,
-  updateTagAction,
-} from '@/server/actions/tags';
+import { createTagAction, deleteTagAction, updateTagAction } from '@/server/actions/tags';
 
 export interface TagManagerRow {
   id: string;
@@ -253,7 +249,7 @@ function TagDialog({
               maxLength={60}
               {...register('name', { required: true, maxLength: 60 })}
             />
-            {errors.name && <p className="text-xs text-destructive">Name is required.</p>}
+            {errors.name && <p className="text-destructive text-xs">Name is required.</p>}
           </div>
           <div className="space-y-2">
             <Label>Color</Label>
@@ -263,7 +259,7 @@ function TagDialog({
                   type="button"
                   key={c}
                   onClick={() => setValue('color', c)}
-                  className="h-7 w-7 rounded-full ring-offset-2 ring-offset-background transition-all data-[selected=true]:ring-2 data-[selected=true]:ring-ring"
+                  className="ring-offset-background data-[selected=true]:ring-ring h-7 w-7 rounded-full ring-offset-2 transition-all data-[selected=true]:ring-2"
                   data-selected={currentColor === c}
                   style={{ backgroundColor: c }}
                   aria-label={`Use color ${c}`}
@@ -275,11 +271,7 @@ function TagDialog({
               */}
               <Input
                 type="color"
-                value={
-                  /^#[0-9a-fA-F]{6}$/.test(currentColor)
-                    ? currentColor
-                    : DEFAULT_COLOR
-                }
+                value={/^#[0-9a-fA-F]{6}$/.test(currentColor) ? currentColor : DEFAULT_COLOR}
                 onChange={(e) => setValue('color', e.target.value)}
                 className="h-7 w-10 cursor-pointer p-0.5"
                 aria-label="Custom tag color"
