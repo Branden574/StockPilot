@@ -194,7 +194,8 @@ describe('CONFLICTS D8: every box has a name', () => {
     );
     const header = container.querySelector('tr[data-row-kind="header"]')!;
     expect(header.querySelectorAll('[role="checkbox"]')).toHaveLength(0);
-    expect(header.children).toHaveLength(12);
+    // CHANGED (owner decision 2026-10-19: SKU stacked under the item name): 12 → 11.
+    expect(header.children).toHaveLength(11);
   });
 });
 

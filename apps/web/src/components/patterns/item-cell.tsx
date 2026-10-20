@@ -3,6 +3,7 @@ import * as React from 'react';
 import { cn } from '@/lib/utils';
 
 import { Thumb } from './thumb';
+import { textActionTouchGapY, textActionTouchMarginTop } from './touch-target';
 
 /**
  * The record cell for a table row (DESIGN-SPEC 6.9 "Item" recipe): a 34 px
@@ -19,6 +20,23 @@ import { Thumb } from './thumb';
  * - `badge` is the size badge ("8 sizes"); `chip` the row's group chip ("In
  *   group X", "Same SKU as records in X") with its "Add to group" action.
  *   The cell only places what the page hands it and reads no group itself.
+ * - `chipAction`: the chip carries that action, a text action with the shared
+ *   touch target. Where the target is on (below sm, or a coarse pointer) the
+ *   first line's wrapped lines and the SKU line then keep 14 px from it, so
+ *   the target never lies over the name link or the SKU text, which stays
+ *   selectable (textActionTouchGapY, textActionTouchMarginTop).
+ * - `actions` is a header row's own text actions ("Rename group", "Remove
+ *   from group"), each with the shared touch target, on a line of their own
+ *   under the SKU. The line may wrap between two actions; the caller keeps
+ *   each action on one line. Wrapped actions sit 6 px apart, so on a fine
+ *   pointer the 24 px circle around one never reaches the other (WCAG 2.2
+ *   2.5.8), and where the touch target is on the line keeps 14 px from the SKU
+ *   and between its own lines, so no action's target lies over the SKU or
+ *   over the other action.
+ * - `wrapSku` (a table column that must not widen): the SKU line may wrap,
+ *   between its parts or, for a long unbroken run, anywhere inside it, so a
+ *   long SKU never widens the column. A soft wrap adds no character, so a
+ *   copied SKU is exactly the SKU. Without it the SKU stays on one line.
  * - `nested` indents a member row 24 px so its thumbnail sits under its
  *   header's.
  */
@@ -30,6 +48,9 @@ export interface ItemCellProps extends Omit<React.ComponentProps<'div'>, 'childr
   imageAlt?: string;
   badge?: React.ReactNode;
   chip?: React.ReactNode;
+  chipAction?: boolean;
+  actions?: React.ReactNode;
+  wrapSku?: boolean;
   nested?: boolean;
 }
 
@@ -41,6 +62,9 @@ export function ItemCell({
   imageAlt = '',
   badge,
   chip,
+  chipAction = false,
+  actions,
+  wrapSku = false,
   nested = false,
   className,
   ...props
@@ -54,7 +78,12 @@ export function ItemCell({
     >
       {thumb ?? <Thumb size={34} src={imageSrc} alt={imageAlt} />}
       <div className="min-w-0">
-        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+        <div
+          className={cn(
+            'flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5',
+            chipAction && textActionTouchGapY,
+          )}
+        >
           <span
             data-slot="item-cell-name"
             className="text-foreground min-w-0 break-words text-[13.5px] font-medium leading-5"
@@ -67,9 +96,25 @@ export function ItemCell({
         {sku != null ? (
           <div
             data-slot="item-cell-sku"
-            className="text-muted-foreground whitespace-nowrap font-mono text-[11.5px] leading-[17.25px]"
+            className={cn(
+              'text-muted-foreground font-mono text-[11.5px] leading-[17.25px]',
+              wrapSku ? '[overflow-wrap:anywhere]' : 'whitespace-nowrap',
+              chipAction && textActionTouchMarginTop,
+            )}
           >
             {sku}
+          </div>
+        ) : null}
+        {actions != null ? (
+          <div
+            data-slot="item-cell-actions"
+            className={cn(
+              'mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1.5',
+              textActionTouchMarginTop,
+              textActionTouchGapY,
+            )}
+          >
+            {actions}
           </div>
         ) : null}
       </div>

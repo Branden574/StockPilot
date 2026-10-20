@@ -22,13 +22,13 @@ export function TourSampleItem() {
   return (
     <div className="mb-4">
       {/* The list's own table look (DESIGN-SPEC 6.9), so the example reads as
-          a row of it. */}
+          a row of it: the SKU on its own mono line under the name, as the list
+          shows it (owner decision 2026-10-19). */}
       <div className="border-border bg-card overflow-x-auto rounded-lg border">
         <table className="w-full text-[13.5px]">
           <thead>
             <tr className="border-border text-muted-foreground border-b text-left text-[11px] uppercase tracking-[0.06em]">
               <th className="px-4 py-2.5 font-medium">Item</th>
-              <th className="px-3 py-2.5 font-medium">SKU</th>
               <th className="px-3 py-2.5 text-right font-medium">On hand</th>
               <th className="py-2.5 pl-3 pr-4 font-medium">Status</th>
             </tr>
@@ -36,15 +36,17 @@ export function TourSampleItem() {
           <tbody>
             <tr>
               <td className="px-4 py-[var(--row-py)]">
-                <span className="flex items-center gap-3 font-medium">
+                <span className="flex items-center gap-3">
                   <span className="bg-sunk text-muted-foreground border-border grid size-[34px] shrink-0 place-items-center rounded-md border">
                     <Package className="size-4" aria-hidden />
                   </span>
-                  Acer Chromebook 511
+                  <span className="min-w-0">
+                    <span className="block font-medium">Acer Chromebook 511</span>
+                    <span className="text-muted-foreground block font-mono text-[11.5px] leading-[17.25px]">
+                      SAMPLE-001
+                    </span>
+                  </span>
                 </span>
-              </td>
-              <td className="text-muted-foreground px-3 py-[var(--row-py)] font-mono text-[11.5px]">
-                SAMPLE-001
               </td>
               <td className="px-3 py-[var(--row-py)] text-right font-mono font-medium tabular-nums">
                 25

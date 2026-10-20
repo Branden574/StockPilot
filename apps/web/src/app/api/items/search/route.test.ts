@@ -748,3 +748,71 @@ describe('GET /api/items/search display groups (recheck R2-6)', () => {
     });
   });
 });
+
+// ── Rentals items search box (?rentalsOnly=1) ─────────────────────────────
+// The Rentals items page lists rentals only, of every type
+// (InventoryService.list({ rentalsOnly: true, itemType: 'all' })). Its search
+// box runs through this route, which used to list non-rentals only, so a
+// typed SKU or name never found a rental, even one on screen.
+
+describe('GET /api/items/search — ?rentalsOnly=1 (Rentals items search)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    withApiContextMock.mockResolvedValue({
+      supabase: {} as never,
+      organizationId: 'org-1',
+      userId: 'u-1',
+      email: 'a@b.c',
+      role: 'staff',
+    });
+    primaryImagesMock.mockResolvedValue(new Map());
+    inventoryListMock.mockResolvedValue({ items: [], total: 0 });
+    lineLabelsMock.mockResolvedValue([]);
+    searchForPickerMock.mockResolvedValue({ items: [], total: 0 });
+  });
+
+  it('lists rentals only, of every type, exactly as the Rentals table asks', async () => {
+    await GET(makeReq('q=RNT-PROJ-01&rentalsOnly=1&type=all&limit=50&groups=1'));
+    expect(inventoryListMock).toHaveBeenCalledWith(
+      expect.objectContaining({ q: 'RNT-PROJ-01', rentalsOnly: true, itemType: 'all' }),
+    );
+  });
+
+  it('with no type it still searches every type: a rental can be a book', async () => {
+    await GET(makeReq('q=Projector&rentalsOnly=1'));
+    expect(inventoryListMock).toHaveBeenCalledWith(
+      expect.objectContaining({ rentalsOnly: true, itemType: 'all', itemTypes: undefined }),
+    );
+  });
+
+  it('keeps a type the caller names', async () => {
+    await GET(makeReq('q=atlas&rentalsOnly=1&type=book'));
+    expect(inventoryListMock).toHaveBeenCalledWith(
+      expect.objectContaining({ rentalsOnly: true, itemType: 'book' }),
+    );
+  });
+
+  it.each(['', 'rentalsOnly=0', 'rentalsOnly=true', 'rentalsOnly=only', 'rentals=only'])(
+    'without rentalsOnly=1 (%s) the listing is exactly as before: no rentals key, the default type',
+    async (flag) => {
+      await GET(makeReq(`q=shir${flag ? `&${flag}` : ''}`));
+      const args = inventoryListMock.mock.calls[0]![0] as Record<string, unknown>;
+      expect(args).not.toHaveProperty('rentalsOnly');
+      expect(args.itemType).toBeUndefined();
+    },
+  );
+
+  it('changes neither an ids label lookup nor the ranked picker search', async () => {
+    await GET(makeReq('ids=11111111-1111-4111-8111-111111111111&rentalsOnly=1'));
+    expect(lineLabelsMock).toHaveBeenCalledWith(['11111111-1111-4111-8111-111111111111'], {
+      itemType: undefined,
+      itemTypes: undefined,
+      warehouseId: undefined,
+    });
+    await GET(makeReq('q=pen&rank=relevance&rentalsOnly=1'));
+    const ranked = searchForPickerMock.mock.calls[0]![0] as Record<string, unknown>;
+    expect(ranked).not.toHaveProperty('rentalsOnly');
+    expect(ranked.itemType).toBeUndefined();
+    expect(inventoryListMock).not.toHaveBeenCalled();
+  });
+});

@@ -99,6 +99,27 @@ describe('pattern classes that only a layout engine can check', () => {
     );
   });
 
+  it('keeps 14 px beside an 18 px text action exactly where its touch target is on', () => {
+    // textActionTouchGapY and textActionTouchMarginTop (touch-target.ts): the
+    // target turns on below sm and on a coarse pointer, and so does the room.
+    for (const [cls, prop, media] of [
+      ['max-sm:gap-y-3.5', 'row-gap', '@media (width < 40rem)'],
+      ['pointer-coarse:gap-y-3.5', 'row-gap', '@media (pointer: coarse)'],
+      ['max-sm:mt-3.5', 'margin-top', '@media (width < 40rem)'],
+      ['pointer-coarse:mt-3.5', 'margin-top', '@media (pointer: coarse)'],
+    ] as const) {
+      const rule = only(cls);
+      expect(rule.at, cls).toContain(media);
+      expect(rule.decls[prop], cls).toBe('calc(var(--spacing) * 3.5)');
+    }
+    // Wrapped header actions on a fine pointer: 6 px.
+    expect(only('gap-y-1.5').decls['row-gap']).toBe('calc(var(--spacing) * 1.5)');
+  });
+
+  it('lets a table`s SKU line wrap anywhere inside it (ItemCell wrapSku)', () => {
+    expect(only('[overflow-wrap:anywhere]').decls).toEqual({ 'overflow-wrap': 'anywhere' });
+  });
+
   it('lets a segment take the track padding above and below it, and no more', () => {
     expect(only('before:-inset-y-[3px]').decls['inset-block']).toBe('calc(3px * -1)');
     expect(only('before:-inset-y-0.5').decls['inset-block']).toBe('calc(var(--spacing) * -0.5)');

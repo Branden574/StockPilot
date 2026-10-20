@@ -37,6 +37,7 @@ import {
 import { StockStatusBadge } from '@/components/inventory/stock-status-badge';
 import { chipActionClass, filterChipClass, MetaChip } from '@/components/patterns/chip';
 import { FilterTrigger } from '@/components/patterns/filter-bar';
+import { ItemCell } from '@/components/patterns/item-cell';
 import { SegmentedTabs } from '@/components/patterns/segmented-tabs';
 import { SizeBadge } from '@/components/patterns/size-badge';
 import { StatePanel } from '@/components/patterns/state-panel';
@@ -455,6 +456,12 @@ export interface InventoryTableProps {
       On hand cell. Absent (inventory + books lists) → the On hand cell
       renders exactly as before, byte-identical. */
   reservedByItem?: Map<string, number>;
+  /** The Rentals items list (/dashboard/rentals/items), which lists rentals
+      of every type. Its server search then asks /api/items/search for the
+      same set (`rentalsOnly=1&type=all`); without it the endpoint answers
+      non-rentals only, so every typed search there came back empty. Absent
+      (every other caller) → the search request is exactly as before. */
+  rentalsOnly?: boolean;
   /** Instant mode — see InstantInventoryDataset. Absent (staff/viewer,
       over-cap orgs, every other caller) → server mode, byte-identical
       to today. */
@@ -751,6 +758,7 @@ export function InventoryTable({
   activeWarehouseId = null,
   currentUserId = null,
   reservedByItem,
+  rentalsOnly = false,
   instant,
   instantPromise,
   firstPage,
@@ -1200,10 +1208,11 @@ export function InventoryTable({
     for (const v of params.getAll('cat')) key.append('cat', v);
     for (const v of params.getAll('loc')) key.append('loc', v);
     // The books tab forces type=book below when the URL didn't set one, so
-    // it belongs in the key too.
+    // it belongs in the key too; so does the Rentals list's rentals-only set.
     if (showBookFields) key.set('books', '1');
+    if (rentalsOnly) key.set('rentals', '1');
     return key.toString();
-  }, [params, showBookFields]);
+  }, [params, showBookFields, rentalsOnly]);
 
   React.useEffect(() => {
     // Streamed default view (instantPromise pending, not yet adopted):
@@ -1270,6 +1279,14 @@ export function InventoryTable({
         // filtered out of the search results.
         if (!url.searchParams.has('type') && showBookFields) {
           url.searchParams.set('type', 'book');
+        }
+        // The Rentals items list: its page lists rentals ONLY, of every type
+        // (a rental can be a product or a book) and whatever the URL's
+        // ?type= says, so its search asks for exactly that set. Without the
+        // flag the endpoint lists non-rentals, as every other table wants.
+        if (rentalsOnly) {
+          url.searchParams.set('rentalsOnly', '1');
+          url.searchParams.set('type', 'all');
         }
         url.searchParams.set('limit', String(pageSize));
         // Each hit's display group (0400): the route reads memberships only
@@ -2000,8 +2017,16 @@ export function InventoryTable({
     );
   }
 
-  /** A row's group chip ("In group X", or "Same SKU as records in X" with Add to group). */
-  function rowChip(entry: Extract<RenderEntry, { kind: 'row' }>, item: Item) {
+  /**
+   * A row's group chip ("In group X", or "Same SKU as records in X" with Add to
+   * group). `wrapAction` (the table): Add to group may drop under the chip
+   * instead of widening the Item column; a Grid card passes nothing.
+   */
+  function rowChip(
+    entry: Extract<RenderEntry, { kind: 'row' }>,
+    item: Item,
+    { wrapAction = false }: { wrapAction?: boolean } = {},
+  ) {
     const chip = entry.chip;
     if (!chip) return null;
     return (
@@ -2010,12 +2035,18 @@ export function InventoryTable({
         name={groupNames.get(chip.groupId) ?? DISPLAY_GROUP_FALLBACK_NAME}
         recordName={item.name}
         onAddToGroup={
-          canUngroup && chip.kind === 'same-sku'
+          rowChipHasAction(entry)
             ? () => setGroupAction({ kind: 'add', ids: [item.id], groupId: chip.groupId })
             : undefined
         }
+        wrapAction={wrapAction}
       />
     );
+  }
+
+  /** The row's chip carries Add to group: a same-SKU chip, for a viewer who may group. */
+  function rowChipHasAction(entry: Extract<RenderEntry, { kind: 'row' }>): boolean {
+    return canUngroup && entry.chip?.kind === 'same-sku';
   }
 
   /** A named group's header facts: its name, count rule and its gated actions. */
@@ -2912,13 +2943,16 @@ export function InventoryTable({
                       label="Select all rows on this page"
                     />
                   </th>
-                  {TABLE_COLUMNS(showBookFields).map(([label, align], i, all) => (
+                  {TABLE_COLUMNS(showBookFields).map(([label, align]) => (
                     <th
                       key={label}
                       className={cn(
-                        'text-muted-foreground h-[37px] whitespace-nowrap py-2.5 text-[11px] font-medium uppercase tracking-[0.06em]',
+                        'text-muted-foreground h-[37px] py-2.5 text-[11px] font-medium uppercase tracking-[0.06em]',
+                        // The 14-day toggle may take two lines ("14-day" over
+                        // "· qty"); every other label stays on one.
+                        label === '14-day' ? 'py-1' : 'whitespace-nowrap',
                         align === 'right' ? 'text-right' : 'text-left',
-                        i === all.length - 1 ? 'pl-3 pr-4' : 'px-3',
+                        columnPad(label, showBookFields),
                       )}
                     >
                       {label === '14-day' ? (
@@ -2933,7 +2967,7 @@ export function InventoryTable({
               <tbody>
                 {displayed.length === 0 && (
                   <tr>
-                    <td colSpan={showBookFields ? 14 : 12} className="p-0">
+                    <td colSpan={showBookFields ? 13 : 11} className="p-0">
                       {noMatchLine}
                     </td>
                   </tr>
@@ -3030,7 +3064,8 @@ export function InventoryTable({
                   // Bulk actions still collapse back to distinct item ids (see
                   // selectedItemIds).
                   const isSelected = selected.has(item.rowKey ?? item.id);
-                  const cell = 'px-3 py-[var(--row-py)]';
+                  // Each body cell pads like its column's header cell (columnPad).
+                  const td = (label: string) => columnTd(label, showBookFields);
 
                   return (
                     <tr
@@ -3049,52 +3084,48 @@ export function InventoryTable({
                       )}
                     >
                       <td className="w-10 py-[var(--row-py)] pl-4 pr-0">{recordCheckbox(item)}</td>
-                      <td className="min-w-[220px] py-[var(--row-py)] pl-3 pr-3">
-                        <div
-                          className={cn('flex min-w-0 items-center gap-3', entry.nested && 'pl-9')}
-                        >
-                          <ListThumb
-                            photo={item}
-                            alt={item.name}
-                            title={item.name}
-                            subtitle={item.sku}
-                            meta={<OnHandMeta value={item.quantity_on_hand} />}
-                            // First ~12 rows are above the fold on a typical
-                            // 1080p screen — bypass lazy loading so they start
-                            // fetching with the initial HTML instead of after
-                            // JS paints.
-                            priority={rowIdx < 12}
-                          />
-                          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
-                            {itemLink(item, 'text-foreground font-medium hover:underline')}
-                            {entry.nested ? null : rowChip(entry, item)}
-                          </span>
-                        </div>
+                      <td className={itemTd(showBookFields)}>
+                        {/* The SKU is the Item cell's second line, plain text
+                            outside the name link and alone in its block, so it
+                            is still selected and copied on its own (owner
+                            decision 2026-10-19: SKU stacked under the item name).
+                            It wraps inside the column, so a long SKU never
+                            widens the table. */}
+                        <ItemCell
+                          nested={!!entry.nested}
+                          // A member's thumb sits under its header's, which
+                          // has the chevron (24) and its gap (12) before it.
+                          className={entry.nested ? 'pl-9' : undefined}
+                          thumb={
+                            <ListThumb
+                              photo={item}
+                              alt={item.name}
+                              title={item.name}
+                              subtitle={item.sku}
+                              meta={<OnHandMeta value={item.quantity_on_hand} />}
+                              // First ~12 rows are above the fold on a typical
+                              // 1080p screen — bypass lazy loading so they start
+                              // fetching with the initial HTML instead of after
+                              // JS paints.
+                              priority={rowIdx < 12}
+                            />
+                          }
+                          name={itemLink(item, ITEM_NAME_LINK)}
+                          chip={entry.nested ? null : rowChip(entry, item, { wrapAction: true })}
+                          chipAction={!entry.nested && rowChipHasAction(entry)}
+                          sku={item.sku}
+                          wrapSku
+                        />
                       </td>
-                      <td
-                        className={cn(
-                          cell,
-                          'text-muted-foreground whitespace-nowrap font-mono text-[11.5px]',
-                        )}
-                      >
-                        {item.sku}
+                      <td className={td('Category')}>
+                        <CategoryLabel category={facts.category} wrap />
                       </td>
-                      <td className={cn(cell, 'whitespace-nowrap')}>
-                        <CategoryLabel category={facts.category} />
-                      </td>
-                      <td className={cn(cell, 'whitespace-nowrap text-[13px]')}>
+                      <td className={cn(td('Charter'), 'whitespace-nowrap text-[13px]')}>
                         <CharterLabel item={item} lookups={lookups} />
                       </td>
-                      <td className={cn(cell, 'min-w-[112px] text-[13px] text-[var(--ed-ink-2)]')}>
-                        {facts.location?.name ?? '—'}
-                      </td>
+                      <td className={locationTd(showBookFields)}>{facts.location?.name ?? '—'}</td>
                       {!showBookFields && (
-                        <td
-                          className={cn(
-                            cell,
-                            'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]',
-                          )}
-                        >
+                        <td className={cn(td('Rack'), RACK_TD)}>
                           <ItemsRackContent item={item} />
                         </td>
                       )}
@@ -3105,23 +3136,18 @@ export function InventoryTable({
                             <>
                               <td
                                 className={cn(
-                                  cell,
+                                  td('Grade'),
                                   'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]',
                                 )}
                               >
                                 <BookGradeLabel grade={storage.grade} />
                               </td>
-                              <td
-                                className={cn(
-                                  cell,
-                                  'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]',
-                                )}
-                              >
+                              <td className={cn(td('Rack'), RACK_TD)}>
                                 <BookRackContent item={item} />
                               </td>
                               <td
                                 className={cn(
-                                  cell,
+                                  td('Crate'),
                                   'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]',
                                 )}
                               >
@@ -3133,30 +3159,30 @@ export function InventoryTable({
                             </>
                           );
                         })()}
-                      <td
-                        className={cn(
-                          cell,
-                          'text-right font-mono text-[13.5px] font-medium tabular-nums',
-                        )}
-                      >
-                        {formatNumber(onHandFigure(item, stockView))}
+                      <td className={cn(td('On hand'), 'text-right')}>
+                        {/* Only the figure is mono: the notes under it read in
+                            the body face, as on a Grid card. */}
+                        <span className={ON_HAND_FIGURE}>
+                          {formatNumber(onHandFigure(item, stockView))}
+                        </span>
                         <OnHandNotes
                           item={item}
                           stockView={stockView}
                           reservedByItem={reservedByItem}
+                          table
                         />
                       </td>
-                      <td className={cell}>
+                      <td className={td('Coverage')}>
                         <StockBar
                           stock={facts.availableForStatus}
                           par={facts.par}
                           status={facts.status}
                         />
                       </td>
-                      <td className={cn(cell, 'text-right')}>
+                      <td className={cn(td('14-day'), 'text-right')}>
                         <Sparkline data={series} width={56} height={18} />
                       </td>
-                      <td className={cell}>
+                      <td className={cn(td('Status'), STATUS_WRAP)}>
                         <StockStatusBadge
                           quantity={facts.availableForStatus}
                           reorderPoint={item.reorder_point}
@@ -3166,7 +3192,10 @@ export function InventoryTable({
                         />
                       </td>
                       <td
-                        className="text-muted-foreground whitespace-nowrap py-[var(--row-py)] pl-3 pr-4 text-right text-[12.5px]"
+                        className={cn(
+                          td('Updated'),
+                          'text-muted-foreground whitespace-nowrap text-right text-[12.5px]',
+                        )}
                         // `formatRelative` reads `new Date()` at call time, so
                         // the string produced during server SSR ("15 minutes
                         // ago") can shift by the time the client hydrates ("16
@@ -3224,15 +3253,15 @@ export function InventoryTable({
   );
 }
 
-/** The table's columns after the checkbox: 12 cells in all on Items, 14 on
+/** The table's columns after the checkbox: 11 cells in all on Items, 13 on
  *  Books (Grade, Rack, Crate in place of Rack). Every row kind emits the same
- *  count (tests count them). */
+ *  count (tests count them). The SKU has no column of its own: it is the
+ *  Item cell's second line, under the name (owner decision 2026-10-19). */
 function TABLE_COLUMNS(
   showBookFields: boolean,
 ): ReadonlyArray<readonly [string, 'left' | 'right']> {
   return [
     ['Item', 'left'],
-    ['SKU', 'left'],
     ['Category', 'left'],
     ['Charter', 'left'],
     ['Location', 'left'],
@@ -3429,17 +3458,32 @@ const PAGER_EDGE_DISABLED =
 
 type CategoryLookup = { name: string; color: string | null };
 
-/** The Category cell: the category's name in its own colour with its dot, or a dash. */
-function CategoryLabel({ category }: { category: CategoryLookup | null | undefined }) {
+/**
+ * The Category cell: the category's name in its own colour with its dot, or a
+ * dash. `wrap` (the table): a name may wrap between its words, and the dot
+ * stays beside the first line (7 px down is the centre of a 20.25 px line, so a
+ * one-line name sits exactly where it did); a Grid card passes nothing.
+ */
+function CategoryLabel({
+  category,
+  wrap = false,
+}: {
+  category: CategoryLookup | null | undefined;
+  wrap?: boolean;
+}) {
   return category ? (
     <span
-      className="inline-flex items-center gap-1.5"
+      className={wrap ? 'inline-flex items-start gap-1.5' : 'inline-flex items-center gap-1.5'}
       style={category.color ? { color: category.color } : undefined}
     >
       {category.color && (
         <span
           aria-hidden
-          className="h-1.5 w-1.5 shrink-0 rounded-full"
+          className={
+            wrap
+              ? 'mt-[7.125px] h-1.5 w-1.5 shrink-0 rounded-full'
+              : 'h-1.5 w-1.5 shrink-0 rounded-full'
+          }
           style={{ backgroundColor: category.color }}
         />
       )}
@@ -3649,15 +3693,24 @@ function MetaLine({ children }: { children: React.ReactNode }) {
  * The On hand cell's sub-lines: a split row's amber "awaiting put-away"; a
  * record's "N placed · N awaiting put-away" (total) or "+N awaiting put-away"
  * (placed only); and on Rentals items "{available} avail · {out} out".
+ *
+ * `table` (owner decision 2026-10-19: no extra space in On hand): in the table
+ * the notes may wrap between words, so they no longer set the column's width
+ * (its label and figure do). "N placed ·", "N avail ·" and "N out" stay whole,
+ * the count stays with "awaiting" (a no-break space), and the lines are
+ * balanced, so "put-away" is never split at its hyphen. A Grid card passes
+ * nothing and keeps every phrase on one line, exactly as before.
  */
 function OnHandNotes({
   item,
   stockView,
   reservedByItem,
+  table = false,
 }: {
   item: Item;
   stockView: StockView;
   reservedByItem?: Map<string, number>;
+  table?: boolean;
 }) {
   // Rentals-only: reserve-not-decrement model means a checkout never lowers
   // on-hand. Surface available + out-on-rental under the qty so reserved stock
@@ -3666,9 +3719,28 @@ function OnHandNotes({
   const reserved = reservedByItem?.get(item.id) ?? 0;
   const rentals =
     reserved > 0 ? (
-      <div className="text-muted-foreground mt-0.5 text-[11px] font-normal leading-tight">
-        {formatNumber(Math.max(0, item.quantity_on_hand - reserved))} avail ·{' '}
-        {formatNumber(reserved)} out
+      <div
+        className={
+          table
+            ? 'text-muted-foreground mt-0.5 text-balance text-[11px] font-normal leading-tight'
+            : 'text-muted-foreground mt-0.5 text-[11px] font-normal leading-tight'
+        }
+      >
+        {table ? (
+          // Each phrase stays whole, so a second line starts with the "out"
+          // count, never with the dot.
+          <>
+            <span className="whitespace-nowrap">
+              {formatNumber(Math.max(0, item.quantity_on_hand - reserved))} avail ·
+            </span>{' '}
+            <span className="whitespace-nowrap">{formatNumber(reserved)} out</span>
+          </>
+        ) : (
+          <>
+            {formatNumber(Math.max(0, item.quantity_on_hand - reserved))} avail ·{' '}
+            {formatNumber(reserved)} out
+          </>
+        )}
       </div>
     ) : null;
   // Split "one line per rack" row: ON HAND is THIS rack's quantity. If the
@@ -3680,7 +3752,15 @@ function OnHandNotes({
     return (
       <>
         {awaiting && (
-          <div className="text-warning mt-0.5 whitespace-nowrap text-[11px] font-normal leading-tight">
+          // One text node either way (tests read it whole); in the table it
+          // may take two balanced lines, "awaiting" over "put-away".
+          <div
+            className={
+              table
+                ? 'text-warning mt-0.5 text-balance text-[11px] font-normal leading-tight'
+                : 'text-warning mt-0.5 whitespace-nowrap text-[11px] font-normal leading-tight'
+            }
+          >
             awaiting put-away
           </div>
         )}
@@ -3701,12 +3781,20 @@ function OnHandNotes({
   return (
     <>
       {awaiting > 0 && (
-        <div className="mt-0.5 text-[11px] font-normal leading-tight">
+        <div
+          className={
+            table
+              ? 'mt-0.5 text-balance text-[11px] font-normal leading-tight'
+              : 'mt-0.5 text-[11px] font-normal leading-tight'
+          }
+        >
           {stockView === 'total' ? (
             <>
               {/* Omit "0 placed" — for a fully-unplaced item it reads as if
                   the item is unavailable. */}
-              {/* Each phrase stays whole; the line may break only between them. */}
+              {/* Each phrase stays whole; the line may break only between them
+                  (in the table also inside "N awaiting put-away", before
+                  "put-away"). */}
               {placed > 0 && (
                 <>
                   <span className="text-muted-foreground whitespace-nowrap">
@@ -3714,10 +3802,16 @@ function OnHandNotes({
                   </span>{' '}
                 </>
               )}
-              <span className="text-warning whitespace-nowrap">
-                {formatNumber(awaiting)} awaiting put-away
-              </span>
+              {table ? (
+                <span className="text-warning">{`${formatNumber(awaiting)} awaiting put-away`}</span>
+              ) : (
+                <span className="text-warning whitespace-nowrap">
+                  {formatNumber(awaiting)} awaiting put-away
+                </span>
+              )}
             </>
+          ) : table ? (
+            <span className="text-warning">{`+${formatNumber(awaiting)} awaiting put-away`}</span>
           ) : (
             <span className="text-warning whitespace-nowrap">
               +{formatNumber(awaiting)} awaiting put-away
@@ -4233,9 +4327,12 @@ function HeaderSkuContent({
 function ItemsHeaderRackContent({
   items,
   distinctItems,
+  table = false,
 }: {
   items: Item[];
   distinctItems: Item[];
+  /** The table: the count may break before its "+N unset" tail (RackCountPhrase). */
+  table?: boolean;
 }) {
   const labels = Array.from(new Set(items.flatMap(itemRackLabels)));
   // The "In other warehouses" line (0371) names no rack, but it is not a
@@ -4270,10 +4367,39 @@ function ItemsHeaderRackContent({
           unset > 0 ? ` (+${unset} with no rack set)` : ''
         }`}
       >
-        {labels.length} location{labels.length === 1 ? '' : 's'}
-        {unset > 0 ? ` +${unset} unset` : ''}
+        {table ? (
+          <RackCountPhrase
+            count={`${labels.length} location${labels.length === 1 ? '' : 's'}`}
+            unset={unset}
+          />
+        ) : (
+          <>
+            {labels.length} location{labels.length === 1 ? '' : 's'}
+            {unset > 0 ? ` +${unset} unset` : ''}
+          </>
+        )}
       </span>
       {elsewhereTail}
+    </>
+  );
+}
+
+/**
+ * A header's count in the table's Rack cell ("2 locations +1 unset", "1 rack
+ * +2 unset"). The cell may wrap, but only before the "+N unset" tail: each part
+ * stays whole, so it never reads "2" over "locations". The words are the
+ * Grid's, unchanged.
+ */
+function RackCountPhrase({ count, unset }: { count: string; unset: number }) {
+  return (
+    <>
+      <span className="whitespace-nowrap">{count}</span>
+      {unset > 0 ? (
+        <>
+          {' '}
+          <span className="whitespace-nowrap">+{unset} unset</span>
+        </>
+      ) : null}
     </>
   );
 }
@@ -4286,7 +4412,12 @@ function ItemsHeaderRackContent({
  * across a SKU's placements (one row graded during a PO import, its sibling
  * graded by hand).
  */
-function booksHeaderContent(items: Item[], distinctItems: Item[]) {
+function booksHeaderContent(
+  items: Item[],
+  distinctItems: Item[],
+  /** The table: the rack count may break before its "+N unset" tail. */
+  { table = false }: { table?: boolean } = {},
+) {
   const storages = items.map((it) => readBookStorage(it.custom_fields));
   const grade = rollupText(storages.map((s) => s.grade));
   // Rolled up from the RESOLVED label, not the raw custom_fields one —
@@ -4353,7 +4484,14 @@ function booksHeaderContent(items: Item[], distinctItems: Item[]) {
               : 'Placements span multiple racks — expand to see each'
           }
         >
-          {rackCountLabel}
+          {table ? (
+            <RackCountPhrase
+              count={`${rackNames.length} rack${rackNames.length === 1 ? '' : 's'}`}
+              unset={rackUnset}
+            />
+          ) : (
+            rackCountLabel
+          )}
         </span>
       ) : hasElsewhere(distinctItems) ? null : (
         <span className="text-muted-foreground">—</span>
@@ -4411,8 +4549,98 @@ function HeaderChevron({
   );
 }
 
-/** The body cells of a header row pad like the rows (`--row-py`, 16 / 12). */
-const HEADER_TD = 'px-3 py-[var(--row-py)]';
+/** Body cells pad top and bottom by the density's row padding (`--row-py`, 16 / 12). */
+const ROW_PY = 'py-[var(--row-py)]';
+
+/**
+ * Each column's side padding. The header cell and the body cell of every row
+ * kind take it from here, so a label always stands over its figures.
+ *
+ * Items: 12 px a side inside the table (DESIGN-SPEC 6.9), with On hand,
+ * 14-day and Status trimmed to what they hold (owner decision 2026-10-19: no
+ * extra space there). On hand and 14-day are right-aligned, so 4 px on their
+ * left is enough beside the column before them; Status keeps its 12 px from
+ * the trend and gives 4 px to Updated, which pads its own left 12 and keeps
+ * 16 at the table's edge.
+ *
+ * Books shows two more columns (Grade, Rack and Crate where Items has Rack),
+ * so every inner column there pads 8 px a side, 16 px between neighbours, and
+ * the trimmed columns keep their 4 px sides. With the Item and Location floors
+ * below, that keeps the Books table inside a 1440 screen with every column,
+ * word and state on it (owner decision 2026-10-19), Out of stock and "59
+ * seconds ago" in the same row and the 14-day toggle on "moves" included. The
+ * Item cell pads 12 and Updated 12 and 16 on both.
+ */
+function columnPad(label: string, books: boolean): string {
+  switch (label) {
+    case 'Item':
+      return 'px-3';
+    case 'On hand':
+    case '14-day':
+      return books ? 'pl-1 pr-2' : 'pl-1 pr-3';
+    case 'Status':
+      return books ? 'pl-2 pr-1' : 'pl-3 pr-1';
+    case 'Updated':
+      return 'pl-3 pr-4';
+    default:
+      return books ? 'px-2' : 'px-3';
+  }
+}
+
+/** A body cell of the `label` column, in every row kind: its side padding and the row padding. */
+function columnTd(label: string, books: boolean): string {
+  return `${columnPad(label, books)} ${ROW_PY}`;
+}
+
+/**
+ * The Item cell of every row kind (DESIGN-SPEC 6.9 Item recipe; owner decision
+ * 2026-10-19): the thumb, the name with its badge and chip, then the SKU on a
+ * mono line of its own. On Items the 220 px floor leaves about 150 px beside
+ * the thumb for the name, so a name of up to about 44 characters takes two
+ * lines at most there; Books, with two more columns, has a 208 px floor
+ * (about 138 px, some 40 characters in two lines). The column grows past the
+ * floor when the screen has room. The name and the SKU (wrapSku) wrap inside
+ * the column; what cannot break (a size badge, a chip, an action) can still
+ * make it wider.
+ */
+function itemTd(books: boolean): string {
+  return cn(books ? 'min-w-[208px]' : 'min-w-[220px]', columnTd('Item', books));
+}
+
+/**
+ * A row's or a header's name. It wraps between words and is never cut: every
+ * word stays on screen. A word longer than the column (a part number, a URL)
+ * breaks inside the column instead of widening it.
+ */
+const ITEM_NAME_LINK = 'text-foreground font-medium hover:underline [overflow-wrap:anywhere]';
+
+/**
+ * Location: a site name wraps between its words. The floor keeps 64 px for
+ * the name inside the column's padding on both tables (88 on Items, 80 on
+ * Books), so a short site name such as "North DC" stays on one line.
+ */
+function locationTd(books: boolean): string {
+  return cn(
+    columnTd('Location', books),
+    books ? 'min-w-[80px]' : 'min-w-[88px]',
+    'text-[13px] text-[var(--ed-ink-2)]',
+  );
+}
+
+/**
+ * Rack (Items and Books): the cell may wrap between words ("+3 in other
+ * warehouses", "In other warehouses"), while a rack or crate label (mono), an
+ * amber "No rack" or staging label, and each part of a header's count ("2
+ * locations", "+1 unset") stay whole.
+ */
+const RACK_TD =
+  'text-[12.5px] text-[var(--ed-ink-2)] [&_.font-mono]:whitespace-nowrap [&_.text-warning]:whitespace-nowrap';
+
+/** The On hand figure. Only the figure is mono; the notes under it are not. */
+const ON_HAND_FIGURE = 'font-mono text-[13.5px] font-medium tabular-nums';
+
+/** Status: an Archived and Auto-archived pair stacks in a narrow column (each pill stays whole). */
+const STATUS_WRAP = '[&>div:has(>div)]:flex-wrap';
 
 /**
  * Model B: the collapsed SKU-group header row. Renders once per SKU that
@@ -4451,8 +4679,8 @@ function SkuGroupHeaderRow({
   rowLinkPrefix: string;
   currentListUrl: string;
   rowIdx: number;
-  /** Books layout renders 14 columns (Grade/Rack/Crate) where Items
-   *  renders 12 (one Rack column) — the header must emit the SAME cell
+  /** Books layout renders 13 columns (Grade/Rack/Crate) where Items
+   *  renders 11 (one Rack column) — the header must emit the SAME cell
    *  count as the body rows beneath it or every cell right of Location
    *  shifts one column. See the Rack/Grade/Crate branch below. */
   showBookFields: boolean;
@@ -4505,6 +4733,8 @@ function SkuGroupHeaderRow({
       ? GROUP_PARTIAL_TITLE
       : SKU_PARTIAL_TITLE
     : undefined;
+  // Each body cell pads like its column's header cell (columnPad).
+  const td = (label: string) => columnTd(label, showBookFields);
 
   return (
     <tr
@@ -4514,97 +4744,97 @@ function SkuGroupHeaderRow({
     >
       {/* Not selectable — no checkbox (bulk actions target placements). */}
       <td className="w-10 py-[var(--row-py)] pl-4 pr-0" />
-      <td className="min-w-[220px] py-[var(--row-py)] pl-3 pr-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <HeaderChevron
-            expanded={expanded}
-            onToggle={onToggle}
-            label={
-              explicit
-                ? `${expanded ? 'Collapse' : 'Expand'} group ${explicit.name} (${count})`
-                : `${expanded ? 'Collapse' : 'Expand'} ${group.sku} (${items.length} placements)`
-            }
-          />
-          <ListThumb
-            // `cover`: the first placement's picture on a SKU header, the first
-            // record's with a picture on a group's (owner 2026-10-12,
-            // overruling P5's "no cover"). A thumb-only row fetches its master
-            // on hover, from that same record.
-            photo={f.cover}
-            alt={explicit ? explicit.name : first.name}
-            title={explicit ? explicit.name : first.name}
-            subtitle={explicit ? count : group.sku}
-            priority={rowIdx < 12}
-            meta={
-              <OnHandMeta
-                value={f.displayedTotal}
-                title={partialTitle}
-                partial={!!group.totalIsPartial}
+      <td className={itemTd(showBookFields)}>
+        {/* The header's name, then its SKU line: the shared SKU on a SKU
+            header; on a named group's, the SKU its records share or "Multiple"
+            (they keep their own). Rename and Remove come last, on a line that
+            may wrap between them. */}
+        <ItemCell
+          wrapSku
+          thumb={
+            <>
+              <HeaderChevron
+                expanded={expanded}
+                onToggle={onToggle}
+                label={
+                  explicit
+                    ? `${expanded ? 'Collapse' : 'Expand'} group ${explicit.name} (${count})`
+                    : `${expanded ? 'Collapse' : 'Expand'} ${group.sku} (${items.length} placements)`
+                }
               />
-            }
-          />
-          {explicit ? (
-            <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
-              <span className="text-foreground font-medium">{explicit.name}</span>
-              <span className="text-muted-foreground text-[12px]">{count}</span>
-              {explicit.onRename || explicit.onRemove ? (
-                // Rename and Remove share a line under the name and count.
-                <span className="flex basis-full items-center gap-x-3">
-                  {explicit.onRename ? (
-                    <button
-                      type="button"
-                      onClick={explicit.onRename}
-                      aria-label={GROUP_COPY.renameFor(explicit.name)}
-                      className={cn(
-                        touchTargetClass,
-                        chipActionClass,
-                        'shrink-0 whitespace-nowrap',
-                      )}
-                    >
-                      {GROUP_COPY.renameAction}
-                    </button>
-                  ) : null}
-                  {explicit.onRemove ? (
-                    <button
-                      type="button"
-                      onClick={explicit.onRemove}
-                      aria-label={GROUP_COPY.removeFor(explicit.name)}
-                      className={cn(
-                        touchTargetClass,
-                        chipActionClass,
-                        'shrink-0 whitespace-nowrap',
-                      )}
-                    >
-                      {GROUP_COPY.removeAction}
-                    </button>
-                  ) : null}
-                </span>
-              ) : null}
-            </span>
-          ) : (
-            <Link
-              href={`${rowLinkPrefix}/${first.id}?return=${encodeURIComponent(currentListUrl)}`}
-              prefetch={false}
-              className="text-foreground font-medium hover:underline"
-            >
-              {first.name}
-            </Link>
-          )}
-        </div>
+              <ListThumb
+                // `cover`: the first placement's picture on a SKU header, the first
+                // record's with a picture on a group's (owner 2026-10-12,
+                // overruling P5's "no cover"). A thumb-only row fetches its master
+                // on hover, from that same record.
+                photo={f.cover}
+                alt={explicit ? explicit.name : first.name}
+                title={explicit ? explicit.name : first.name}
+                subtitle={explicit ? count : group.sku}
+                priority={rowIdx < 12}
+                meta={
+                  <OnHandMeta
+                    value={f.displayedTotal}
+                    title={partialTitle}
+                    partial={!!group.totalIsPartial}
+                  />
+                }
+              />
+            </>
+          }
+          name={
+            explicit ? (
+              <span className="[overflow-wrap:anywhere]">{explicit.name}</span>
+            ) : (
+              <Link
+                href={`${rowLinkPrefix}/${first.id}?return=${encodeURIComponent(currentListUrl)}`}
+                prefetch={false}
+                className={ITEM_NAME_LINK}
+              >
+                {first.name}
+              </Link>
+            )
+          }
+          badge={
+            explicit ? <span className="text-muted-foreground text-[12px]">{count}</span> : null
+          }
+          sku={<HeaderSkuContent items={items} explicit={!!explicit} sku={group.sku} />}
+          actions={
+            explicit && (explicit.onRename || explicit.onRemove) ? (
+              <>
+                {explicit.onRename ? (
+                  <button
+                    type="button"
+                    onClick={explicit.onRename}
+                    aria-label={GROUP_COPY.renameFor(explicit.name)}
+                    className={cn(touchTargetClass, chipActionClass, 'shrink-0 whitespace-nowrap')}
+                  >
+                    {GROUP_COPY.renameAction}
+                  </button>
+                ) : null}
+                {explicit.onRemove ? (
+                  <button
+                    type="button"
+                    onClick={explicit.onRemove}
+                    aria-label={GROUP_COPY.removeFor(explicit.name)}
+                    className={cn(touchTargetClass, chipActionClass, 'shrink-0 whitespace-nowrap')}
+                  >
+                    {GROUP_COPY.removeAction}
+                  </button>
+                ) : null}
+              </>
+            ) : null
+          }
+        />
       </td>
-      <td
-        className={cn(HEADER_TD, 'text-muted-foreground whitespace-nowrap font-mono text-[11.5px]')}
-      >
-        <HeaderSkuContent items={items} explicit={!!explicit} sku={group.sku} />
-      </td>
-      <td className={cn(HEADER_TD, 'whitespace-nowrap')}>
+      <td className={td('Category')}>
         {f.categoryRollup.kind === 'multiple' ? (
           <MultipleLabel title="Placements span multiple categories — expand to see each" />
         ) : (
-          <CategoryLabel category={f.category} />
+          <CategoryLabel category={f.category} wrap />
         )}
       </td>
-      <td className={cn(HEADER_TD, 'whitespace-nowrap text-[13px]')}>
+      <td className={cn(td('Charter'), 'whitespace-nowrap text-[13px]')}>
         <HeaderCharterContent
           first={first}
           distinctCharterIds={f.distinctCharterIds}
@@ -4612,7 +4842,7 @@ function SkuGroupHeaderRow({
           multipleTitle="Placements span multiple charters — expand to see each"
         />
       </td>
-      <td className={cn(HEADER_TD, 'min-w-[112px] text-[13px] text-[var(--ed-ink-2)]')}>
+      <td className={locationTd(showBookFields)}>
         {f.locationRollup.kind === 'multiple' ? (
           <MultipleLabel title="Placements span multiple sites — expand to see each" />
         ) : (
@@ -4622,27 +4852,29 @@ function SkuGroupHeaderRow({
         )}
       </td>
       {!showBookFields && (
-        <td className={cn(HEADER_TD, 'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]')}>
-          <ItemsHeaderRackContent items={items} distinctItems={distinctItems} />
+        <td className={cn(td('Rack'), RACK_TD)}>
+          <ItemsHeaderRackContent items={items} distinctItems={distinctItems} table />
         </td>
       )}
       {showBookFields &&
         (() => {
-          const books = booksHeaderContent(items, distinctItems);
+          const books = booksHeaderContent(items, distinctItems, { table: true });
           return (
             <>
               <td
-                className={cn(HEADER_TD, 'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]')}
+                className={cn(
+                  td('Grade'),
+                  'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]',
+                )}
               >
                 {books.gradeContent}
               </td>
+              <td className={cn(td('Rack'), RACK_TD)}>{books.rackContent}</td>
               <td
-                className={cn(HEADER_TD, 'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]')}
-              >
-                {books.rackContent}
-              </td>
-              <td
-                className={cn(HEADER_TD, 'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]')}
+                className={cn(
+                  td('Crate'),
+                  'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]',
+                )}
               >
                 {books.crateContent}
               </td>
@@ -4650,26 +4882,29 @@ function SkuGroupHeaderRow({
           );
         })()}
       <td
-        className={cn(HEADER_TD, 'text-right font-mono text-[13.5px] font-medium tabular-nums')}
+        className={cn(td('On hand'), 'text-right')}
         // A named group's records are not placements of one SKU: its own
         // words, as its hover card already said (they used to read "of this
         // SKU" here too).
         title={partialTitle}
       >
-        {formatNumber(f.displayedTotal)}
-        {group.totalIsPartial && (
-          <span aria-hidden className="text-muted-foreground ml-0.5">
-            *
-          </span>
-        )}
+        {/* The "*" stays with the figure it marks. */}
+        <span className={ON_HAND_FIGURE}>
+          {formatNumber(f.displayedTotal)}
+          {group.totalIsPartial && (
+            <span aria-hidden className="text-muted-foreground ml-0.5">
+              *
+            </span>
+          )}
+        </span>
       </td>
-      <td className={HEADER_TD}>
+      <td className={td('Coverage')}>
         <StockBar stock={f.healthQuantity} par={f.par} status={f.status} />
       </td>
-      <td className={cn(HEADER_TD, 'text-right')}>
+      <td className={cn(td('14-day'), 'text-right')}>
         <Sparkline data={series} width={56} height={18} />
       </td>
-      <td className={HEADER_TD}>
+      <td className={cn(td('Status'), STATUS_WRAP)}>
         <StockStatusBadge
           quantity={f.healthQuantity}
           reorderPoint={f.groupReorderPoint}
@@ -4678,9 +4913,7 @@ function SkuGroupHeaderRow({
           awaitingFirstReceipt={f.allAwaitingFirstReceipt}
         />
       </td>
-      <td className="text-muted-foreground py-[var(--row-py)] pl-3 pr-4 text-right text-[12.5px]">
-        —
-      </td>
+      <td className={cn(td('Updated'), 'text-muted-foreground text-right text-[12.5px]')}>—</td>
     </tr>
   );
 }
@@ -4692,7 +4925,13 @@ function SkuGroupHeaderRow({
  * "sizes" are tokens parsed out of a display string — so it keeps the older,
  * weaker claim. Byte-identical for every ungrouped org.
  */
-function styleHeaderFacts(group: SizeRunGroup<RenderEntry>, items: Item[], lookups: Lookups) {
+function styleHeaderFacts(
+  group: SizeRunGroup<RenderEntry>,
+  items: Item[],
+  lookups: Lookups,
+  /** The table: the rack count may break before its "+N unset" tail. */
+  { table = false }: { table?: boolean } = {},
+) {
   const first = items[0]!;
   const status = deriveStatus(group.total, first.reorder_point);
   const par = Math.max(first.reorder_point * 4, group.total * 1.5, 10);
@@ -4755,7 +4994,14 @@ function styleHeaderFacts(group: SizeRunGroup<RenderEntry>, items: Item[], looku
           rackUnset > 0 ? ` (+${rackUnset} with no rack set)` : ''
         }`}
       >
-        {rackCountLabel}
+        {table ? (
+          <RackCountPhrase
+            count={`${rackNames.length} rack${rackNames.length === 1 ? '' : 's'}`}
+            unset={rackUnset}
+          />
+        ) : (
+          rackCountLabel
+        )}
       </span>
     );
   return {
@@ -4774,7 +5020,7 @@ function styleHeaderFacts(group: SizeRunGroup<RenderEntry>, items: Item[], looku
 /**
  * Size-run (apparel) group header — one collapsed row for a run of same-base
  * sized items ("L4L - Pink Shirt - L / - XL / - 2XL"). A clone of
- * SkuGroupHeaderRow adapted for a run: the SKU column reads "—" (members have
+ * SkuGroupHeaderRow adapted for a run: the SKU line reads "—" (members have
  * distinct SKUs), the roll-up total sums member on-hand, and a "N sizes" chip
  * shows the run size. Not selectable (bulk actions target the member rows).
  */
@@ -4795,8 +5041,11 @@ function StyleGroupHeaderRow({
   rowLinkPrefix: string;
   currentListUrl: string;
 }) {
-  const f = styleHeaderFacts(group, items, lookups);
+  const f = styleHeaderFacts(group, items, lookups, { table: true });
   const { first } = f;
+  // Size runs are an Items-only row kind (Books lists draw none), so the cells
+  // pad as the Items columns do.
+  const td = (label: string) => columnTd(label, false);
   return (
     <tr
       data-row-kind="header"
@@ -4805,38 +5054,43 @@ function StyleGroupHeaderRow({
     >
       {/* Not selectable — no checkbox (bulk actions target the member rows). */}
       <td className="w-10 py-[var(--row-py)] pl-4 pr-0" />
-      <td className="min-w-[220px] py-[var(--row-py)] pl-3 pr-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <HeaderChevron
-            expanded={expanded}
-            onToggle={onToggle}
-            label={`${expanded ? 'Collapse' : 'Expand'} ${group.baseName} (${f.sizeLabel})`}
-          />
-          <ListThumb
-            photo={first}
-            alt={first.name}
-            title={group.baseName}
-            subtitle={f.sizeLabel}
-            meta={<OnHandMeta value={group.total} />}
-          />
-          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+      <td className={itemTd(false)}>
+        <ItemCell
+          wrapSku
+          thumb={
+            <>
+              <HeaderChevron
+                expanded={expanded}
+                onToggle={onToggle}
+                label={`${expanded ? 'Collapse' : 'Expand'} ${group.baseName} (${f.sizeLabel})`}
+              />
+              <ListThumb
+                photo={first}
+                alt={first.name}
+                title={group.baseName}
+                subtitle={f.sizeLabel}
+                meta={<OnHandMeta value={group.total} />}
+              />
+            </>
+          }
+          name={
             <Link
               href={`${rowLinkPrefix}/${first.id}?return=${encodeURIComponent(currentListUrl)}`}
               prefetch={false}
-              className="text-foreground font-medium hover:underline"
+              className={ITEM_NAME_LINK}
             >
               {group.baseName}
             </Link>
-            <SizeBadge>{f.sizeLabel}</SizeBadge>
-          </span>
-        </div>
+          }
+          badge={<SizeBadge>{f.sizeLabel}</SizeBadge>}
+          // SKU — a run spans multiple SKUs, so no single value.
+          sku={<span className="font-sans text-[12px] italic">—</span>}
+        />
       </td>
-      {/* SKU — a run spans multiple SKUs, so no single value. */}
-      <td className={cn(HEADER_TD, 'text-muted-foreground text-[12px] italic')}>—</td>
-      <td className={cn(HEADER_TD, 'whitespace-nowrap')}>
-        <CategoryLabel category={f.category} />
+      <td className={td('Category')}>
+        <CategoryLabel category={f.category} wrap />
       </td>
-      <td className={cn(HEADER_TD, 'whitespace-nowrap text-[13px]')}>
+      <td className={cn(td('Charter'), 'whitespace-nowrap text-[13px]')}>
         <HeaderCharterContent
           first={first}
           distinctCharterIds={f.distinctCharterIds}
@@ -4844,29 +5098,23 @@ function StyleGroupHeaderRow({
           multipleTitle="Sizes span multiple charters — expand to see each"
         />
       </td>
-      <td className={cn(HEADER_TD, 'min-w-[112px] text-[13px] text-[var(--ed-ink-2)]')}>
-        {f.location?.name ?? '—'}
+      <td className={locationTd(false)}>{f.location?.name ?? '—'}</td>
+      <td className={cn(td('Rack'), RACK_TD)}>{f.rackContent}</td>
+      <td className={cn(td('On hand'), 'text-right')}>
+        <span className={ON_HAND_FIGURE}>{formatNumber(group.total)}</span>
       </td>
-      <td className={cn(HEADER_TD, 'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]')}>
-        {f.rackContent}
-      </td>
-      <td className={cn(HEADER_TD, 'text-right font-mono text-[13.5px] font-medium tabular-nums')}>
-        {formatNumber(group.total)}
-      </td>
-      <td className={HEADER_TD}>
+      <td className={td('Coverage')}>
         <StockBar stock={group.total} par={f.par} status={f.status} />
       </td>
-      <td className={cn(HEADER_TD, 'text-muted-foreground text-right text-[12px]')}>—</td>
-      <td className={HEADER_TD}>
+      <td className={cn(td('14-day'), 'text-muted-foreground text-right text-[12px]')}>—</td>
+      <td className={cn(td('Status'), STATUS_WRAP)}>
         <StockStatusBadge
           quantity={group.total}
           reorderPoint={first.reorder_point}
           itemStatus={f.rolledUpStatus}
         />
       </td>
-      <td className="text-muted-foreground py-[var(--row-py)] pl-3 pr-4 text-right text-[12.5px]">
-        —
-      </td>
+      <td className={cn(td('Updated'), 'text-muted-foreground text-right text-[12.5px]')}>—</td>
     </tr>
   );
 }
@@ -5410,17 +5658,25 @@ function SparkModeToggle({
   onChange: (m: SparkMode) => void;
 }) {
   const [open, setOpen] = React.useState(false);
-  const label = mode === 'qty' ? '14-day · qty' : '14-day · moves';
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
+        {/* The same words as ever ("14-day · qty", "14-day · moves"), on two
+            lines when the column is narrow: "14-day" over "· qty" and the
+            chevron, each part kept whole (owner decision 2026-10-19: no extra
+            space in the 14-day column). A block at the cell's right edge, so
+            no text line of the cell adds to its height: two lines stay inside
+            the 37 px header row. */}
         <button
           type="button"
-          className="text-muted-foreground hover:bg-muted hover:text-foreground -mr-1 ml-auto inline-flex h-6 items-center gap-1 whitespace-nowrap rounded-md px-1 text-[11px] font-medium uppercase tracking-[0.06em] transition-colors"
+          className="text-muted-foreground hover:bg-muted hover:text-foreground -mr-1 ml-auto block min-h-6 w-fit rounded-md px-1 py-0.5 text-right text-[11px] font-medium uppercase leading-[1.1] tracking-[0.06em] transition-colors"
           aria-label={`Sparkline mode: ${mode === 'qty' ? 'quantity trend' : 'movement count'}`}
         >
-          {label}
-          <ChevronDown aria-hidden className="h-3 w-3" strokeWidth={2} />
+          <span className="whitespace-nowrap">14-day</span>{' '}
+          <span className="inline-flex items-center gap-1 whitespace-nowrap">
+            · {mode === 'qty' ? 'qty' : 'moves'}
+            <ChevronDown aria-hidden className="h-3 w-3" strokeWidth={2} />
+          </span>
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-[200px] p-1">
@@ -5464,22 +5720,26 @@ function DisplayGroupChipView({
   name,
   recordName,
   onAddToGroup,
+  wrapAction = false,
 }: {
   chip: DisplayGroupChip;
   name: string;
   /** The row's record: each chip's button names it (P11). */
   recordName: string;
   onAddToGroup?: () => void;
+  /** The table: Add to group may wrap under the chip (each stays whole). */
+  wrapAction?: boolean;
 }) {
   return (
     <MetaChip
+      className={wrapAction && onAddToGroup ? 'flex-wrap gap-y-0.5' : undefined}
       action={
         onAddToGroup ? (
           <button
             type="button"
             onClick={onAddToGroup}
             aria-label={GROUP_COPY.addToGroupFor(name, recordName)}
-            className={cn(touchTargetClass, chipActionClass)}
+            className={cn(touchTargetClass, chipActionClass, wrapAction && 'whitespace-nowrap')}
           >
             {GROUP_COPY.addToGroup}
           </button>

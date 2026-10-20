@@ -135,6 +135,9 @@ describe('Rentals items: the Table / Grid choice comes from its own cookie', () 
     expect(props.rowLinkPrefix).toBe('/dashboard/rentals/items');
     expect(props.basePath).toBe('/dashboard/rentals/items');
     expect((props.reservedByItem as Map<string, number>).get('r1')).toBe(2);
+    // Its search box asks for this same set (rentals of every type); without
+    // it a typed SKU or name found nothing on this page.
+    expect(props.rentalsOnly).toBe(true);
   });
 });
 
