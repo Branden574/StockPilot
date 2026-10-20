@@ -215,6 +215,8 @@ vi.mock('@/server/services/charters', () => ({ ChartersService: lookupSvc('list'
 
 import { ELSEWHERE_UNAVAILABLE_NOTE } from '@stockpilot/core';
 
+import { createClient } from '@/lib/supabase/server';
+
 import InventoryPage from './page';
 
 const ROW = {
@@ -644,6 +646,168 @@ describe('Items page: a zero Auto-archived only view', () => {
       expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ total: 0 });
     },
   );
+});
+
+/**
+ * Grouping walk 2026-10-20 (W4 no-match): a Category filter that leaves no
+ * item showed the table's "No items match your filters." with its filters only
+ * in instant mode right after the tick. A reload or a pasted address (the
+ * manager's awaited instant branch) and staff and viewers (the live path) got
+ * "No items yet" with an offer to add a first item and no filter bar, so the
+ * filter could be neither seen nor undone; a search, a stock view or the
+ * Expected chip had page-level states without the bar too. Every view a filter
+ * leaves empty is now the table, whose no-match state keeps the bar; "No items
+ * yet" is only for a list with nothing in it and no filter at all.
+ */
+describe('Items page: a filter that leaves nothing is the table, with its filters', () => {
+  const FILTERED: Array<[string, Record<string, string>]> = [
+    ['a Category', { cat: 'cat-empty' }],
+    ['a Location', { loc: 'loc-empty' }],
+    ['a Charter', { charter: 'generic' }],
+    ['a rack', { rack: '9-Z' }],
+    ['a search', { q: 'zzqqxx' }],
+    ['Low + critical', { stock: 'low' }],
+    ['Out of stock', { stock: 'out' }],
+    ['the Expected chip', { expected: '1' }],
+    ['a Category on the Archived view', { status: 'archived', cat: 'cat-empty' }],
+    ['the Discontinued view', { status: 'discontinued' }],
+    ["a saved view's search and sort", { q: 'Grade 2', sort: 'name_asc' }],
+  ];
+
+  describe.each(['staff', 'viewer'])('%s (server mode)', (role) => {
+    it.each(FILTERED)(
+      '%s: the table with nothing in it, never an empty state',
+      async (_l, params) => {
+        h.role = role;
+        h.listTotal = 0;
+        render(await callPage(params));
+        expect(m.emptyStateProps).not.toHaveBeenCalled();
+        expect(m.tableProps).toHaveBeenCalledTimes(1);
+        expect(m.tableProps.mock.calls[0]![0]).toMatchObject({
+          total: 0,
+          items: [],
+          // The search box holds the search (the table's own initial value).
+          initialQuery: params.q,
+        });
+      },
+    );
+  });
+
+  it.each(FILTERED)(
+    'manager, reloaded or pasted (the awaited instant branch), %s: the table, never an empty state',
+    async (_l, params) => {
+      h.datasetGate = Promise.resolve({ items: [ROW], placement: {} });
+      render(await callPage(params));
+      expect(m.emptyStateProps).not.toHaveBeenCalled();
+      expect(m.tableProps).toHaveBeenCalledTimes(1);
+      const props = m.tableProps.mock.calls[0]![0] as Record<string, unknown>;
+      expect(props).toHaveProperty('instant');
+      expect(props).toMatchObject({ total: 0, initialQuery: params.q });
+    },
+  );
+
+  it.each<[string, Record<string, string>]>([
+    ['no address', {}],
+    ['a sort', { sort: 'name_asc' }],
+    ['a page', { page: '2' }],
+    ['the Active view', { status: 'active' }],
+    ['an all-whitespace search', { q: '   ' }],
+  ])(
+    'staff, an empty list with %s: "No items yet" and its add action, as before',
+    async (_l, params) => {
+      h.role = 'staff';
+      h.listTotal = 0;
+      render(await callPage(params));
+      expect(m.tableProps).not.toHaveBeenCalled();
+      expect(m.emptyStateProps).toHaveBeenCalledTimes(1);
+      expect(m.emptyStateProps.mock.calls[0]![0]).toMatchObject({
+        title: 'No items yet',
+        cta: { label: 'Add your first item', href: '/dashboard/inventory/new' },
+      });
+    },
+  );
+
+  it('viewer, an empty list and no filter: "No items yet" without an add action, as before', async () => {
+    h.role = 'viewer';
+    h.listTotal = 0;
+    render(await callPage());
+    expect(m.tableProps).not.toHaveBeenCalled();
+    const props = m.emptyStateProps.mock.calls[0]![0] as {
+      title: string;
+      description: string;
+      cta?: unknown;
+    };
+    expect(props.title).toBe('No items yet');
+    expect(props.description).toContain('No items have been added to this workspace yet.');
+    expect(props.cta).toBeUndefined();
+  });
+
+  it('manager, a deep link to an empty list with only a sort: "No items yet", as before', async () => {
+    h.datasetGate = Promise.resolve({ items: [], placement: {} });
+    render(await callPage({ sort: 'name_asc' }));
+    expect(m.tableProps).not.toHaveBeenCalled();
+    expect(m.emptyStateProps.mock.calls[0]![0]).toMatchObject({ title: 'No items yet' });
+  });
+
+  it.each(['manager', 'staff'])(
+    '%s, the Archived view with nothing archived and no filter: "No archived items", as before',
+    async (role) => {
+      h.role = role;
+      h.listTotal = 0;
+      h.datasetGate = Promise.resolve({ items: [ROW], placement: {} });
+      render(await callPage({ status: 'archived' }));
+      expect(m.tableProps).not.toHaveBeenCalled();
+      expect(m.emptyStateProps.mock.calls[0]![0]).toMatchObject({
+        title: 'No archived items',
+        cta: { label: 'Back to active items', href: '/dashboard/inventory' },
+      });
+    },
+  );
+
+  describe('with a warehouse filter: "Nothing here in North" only when the search is the one filter', () => {
+    /** A user-authed client whose HEAD count answers `count` (the count elsewhere). */
+    function countingClient(count: number) {
+      // The query is the thenable, never the client (a thenable client would
+      // be adopted by createClient's own promise).
+      const q: Record<string, unknown> = {};
+      for (const k of ['select', 'eq', 'is', 'or']) q[k] = () => q;
+      q.then = (resolve: (v: unknown) => unknown) => resolve({ count, error: null });
+      return { from: () => q };
+    }
+
+    afterEach(() => {
+      vi.mocked(createClient).mockReset();
+    });
+
+    it('a search that matches only in other warehouses still says so, with the way out', async () => {
+      vi.mocked(createClient).mockResolvedValue(countingClient(3) as never);
+      h.filter = 'wh-1';
+      h.datasetGate = Promise.resolve({ items: [ROW], placement: {} });
+      render(await callPage({ q: 'lanyard' }));
+      expect(m.tableProps).not.toHaveBeenCalled();
+      expect(m.emptyStateProps.mock.calls[0]![0]).toMatchObject({
+        title: 'Nothing here in North',
+        description: '3 items match in your other warehouses. This view is filtered to North.',
+      });
+    });
+
+    it.each<[string, Record<string, string>]>([
+      ['a Category', { cat: 'cat-empty' }],
+      ['a search and a stock view', { q: 'lanyard', stock: 'low' }],
+      ['the Expected chip', { expected: '1' }],
+    ])(
+      '%s: the table and its filters (the count elsewhere would leave that filter out)',
+      async (_l, params) => {
+        vi.mocked(createClient).mockResolvedValue(countingClient(3) as never);
+        h.filter = 'wh-1';
+        h.datasetGate = Promise.resolve({ items: [ROW], placement: {} });
+        render(await callPage(params));
+        expect(m.emptyStateProps).not.toHaveBeenCalled();
+        expect(m.tableProps).toHaveBeenCalledTimes(1);
+        expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ total: 0 });
+      },
+    );
+  });
 });
 
 // Phase 2 of the grouping brief (owner 2026-10-11, go to start 2026-10-12):

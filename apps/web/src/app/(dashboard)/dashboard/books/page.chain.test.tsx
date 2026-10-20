@@ -60,6 +60,7 @@ const m = vi.hoisted(() => ({
   tableProps: vi.fn(),
   notEnabledProps: vi.fn(),
   toggleProps: vi.fn(),
+  emptyStateProps: vi.fn(),
 }));
 
 vi.mock('next/link', async () => {
@@ -90,7 +91,12 @@ vi.mock('@/components/inventory/rack-filter-dropdown', () => ({ RackFilterDropdo
 vi.mock('@/components/ui/button', () => ({
   Button: ({ children }: { children: unknown }) => children,
 }));
-vi.mock('@/components/ui/empty-state', () => ({ EmptyState: () => null }));
+vi.mock('@/components/ui/empty-state', () => ({
+  EmptyState: (props: Record<string, unknown>) => {
+    m.emptyStateProps(props);
+    return null;
+  },
+}));
 vi.mock('@/components/perf/perf-useful', () => ({
   PerfUseful: ({ children }: { children: unknown }) => children,
 }));
@@ -454,6 +460,102 @@ describe('Books page: the Auto-archived only parameter', () => {
       expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ total: 0 });
     },
   );
+});
+
+/**
+ * Grouping walk 2026-10-20 (W4 no-match), as on the Items page: a Category
+ * filter that leaves no book showed the table's "No items match your
+ * filters." with its filters only in instant mode right after the tick; a
+ * reload or a pasted address (the manager's instant branch) and staff and
+ * viewers (the live path) got "No books yet" with an offer to add a first book
+ * and no filter bar. A stock view or the Expected chip had page-level states
+ * without the bar too. Every view a filter leaves empty is now the table;
+ * "No books yet" is only for a list with nothing in it and no filter at all.
+ */
+describe('Books page: a filter that leaves nothing is the table, with its filters', () => {
+  const FILTERED: Array<[string, Record<string, string>]> = [
+    ['a Category', { cat: 'cat-empty' }],
+    ['a Location', { loc: 'loc-empty' }],
+    ['a Charter', { charter: 'generic' }],
+    ['a rack', { rack: '9-Z' }],
+    ['a search', { q: 'zzqqxx' }],
+    ['Low + critical', { stock: 'low' }],
+    ['Out of stock', { stock: 'out' }],
+    ['the Expected chip', { expected: '1' }],
+    ['a Category on the Archived view', { status: 'archived', cat: 'cat-empty' }],
+    ['the shared view Grade 2 readers (a search and a sort)', { q: 'Grade 2', sort: 'name_asc' }],
+  ];
+
+  it.each(FILTERED)(
+    'manager, reloaded or pasted (instant mode), %s: the table with nothing in it, never an empty state',
+    async (_l, params) => {
+      render(await callPage(params));
+      expect(m.emptyStateProps).not.toHaveBeenCalled();
+      expect(m.tableProps).toHaveBeenCalledTimes(1);
+      const props = m.tableProps.mock.calls[0]![0] as Record<string, unknown>;
+      expect(props).toHaveProperty('instant');
+      expect(props).toMatchObject({ total: 0, initialQuery: params.q });
+    },
+  );
+
+  describe.each(['staff', 'viewer'])('%s (server mode)', (role) => {
+    it.each(FILTERED)(
+      '%s: the table with nothing in it, never an empty state',
+      async (_l, params) => {
+        h.role = role;
+        h.liveExtra = { items: [], total: 0, valueOnHand: 0 };
+        render(await callPage(params));
+        expect(m.emptyStateProps).not.toHaveBeenCalled();
+        expect(m.tableProps).toHaveBeenCalledTimes(1);
+        expect(m.tableProps.mock.calls[0]![0]).toMatchObject({
+          total: 0,
+          items: [],
+          initialQuery: params.q,
+        });
+      },
+    );
+  });
+
+  it.each<[string, Record<string, string>]>([
+    ['no address', {}],
+    ['a sort', { sort: 'name_asc' }],
+    ['a page', { page: '2' }],
+  ])(
+    'staff, an empty list with %s: "No books yet" and its add action, as before',
+    async (_l, params) => {
+      h.role = 'staff';
+      h.liveExtra = { items: [], total: 0, valueOnHand: 0 };
+      render(await callPage(params));
+      expect(m.tableProps).not.toHaveBeenCalled();
+      expect(m.emptyStateProps).toHaveBeenCalledTimes(1);
+      expect(m.emptyStateProps.mock.calls[0]![0]).toMatchObject({
+        title: 'No books yet',
+        cta: { label: 'Add your first book', href: '/dashboard/books/new' },
+      });
+    },
+  );
+
+  it('viewer, an empty list and no filter: "No books yet" without an add action, as before', async () => {
+    h.role = 'viewer';
+    h.liveExtra = { items: [], total: 0, valueOnHand: 0 };
+    render(await callPage());
+    expect(m.tableProps).not.toHaveBeenCalled();
+    expect(m.emptyStateProps.mock.calls[0]![0]).toMatchObject({
+      title: 'No books yet',
+      description: 'No books have been added to this workspace yet.',
+      cta: undefined,
+    });
+  });
+
+  it('manager, the Archived view with nothing archived and no filter: "No archived books", as before', async () => {
+    render(await callPage({ status: 'archived' }));
+    expect(m.tableProps).not.toHaveBeenCalled();
+    expect(m.emptyStateProps.mock.calls[0]![0]).toMatchObject({
+      title: 'No archived books',
+      description: 'Nothing here yet. Books you archive will show up in this view.',
+      cta: { label: 'Back to active books', href: '/dashboard/books' },
+    });
+  });
 });
 
 // Phase 2 of the grouping brief: a staff member's or viewer's Books page is

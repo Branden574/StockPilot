@@ -11,8 +11,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * Books lists' cookies never decide this list's view.
  *
  * Also pinned here: the rentals-only read, the shared header with the
- * Active / Archived toggle and the gated "+ New item", the section tabs, and
- * the three empty states with their words.
+ * Active / Archived toggle and the gated "+ New item", the section tabs, the
+ * two empty states of an empty list with their words, and the table (never
+ * an empty state) for a view a filter or a search leaves empty.
  */
 
 const h = vi.hoisted(() => ({
@@ -168,20 +169,78 @@ describe('Rentals items: header, tabs and states', () => {
     expect(screen.getByText('Archived rental items.')).toBeTruthy();
   });
 
-  it('the three empty states keep their words', async () => {
+  it('the two empty states of an empty list keep their words', async () => {
     h.total = 0;
     await renderPage();
     expect(screen.getByText('No rental items yet')).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Add your first rental item' })).toBeTruthy();
+    expect(
+      screen.getByText(
+        'Add canopies, supplies, and other circulating assets that staff can check out.',
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole('link', { name: 'Add your first rental item' }).getAttribute('href'),
+    ).toBe('/dashboard/rentals/items/new');
     document.body.innerHTML = '';
     await renderPage({ status: 'archived' });
     expect(screen.getByText('No archived rental items')).toBeTruthy();
+    expect(screen.getByText('Nothing here yet.')).toBeTruthy();
+    expect(
+      screen.getByRole('link', { name: 'Back to active rental items' }).getAttribute('href'),
+    ).toBe('/dashboard/rentals/items');
     document.body.innerHTML = '';
-    await renderPage({ q: 'tent' });
-    expect(screen.getByText('No rental items match your search')).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Clear search' }).getAttribute('href')).toBe(
-      '/dashboard/rentals/items',
-    );
+    // A sort is not a filter: the list is still empty with nothing narrowing it.
+    await renderPage({ sort: 'name_asc' });
+    expect(screen.getByText('No rental items yet')).toBeTruthy();
     expect(h.tableProps).not.toHaveBeenCalled();
+  });
+
+  it('without items:create, "No rental items yet" has no add action, as before', async () => {
+    h.total = 0;
+    h.canCreate = false;
+    await renderPage();
+    expect(screen.getByText('No rental items have been added yet.')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Add your first rental item' })).toBeNull();
+  });
+});
+
+/**
+ * Grouping walk 2026-10-20 (W4 no-match): Rentals items is always server mode,
+ * and a Category filter that left no rental answered "No rental items yet" with
+ * an offer to add one and no filter bar, right after the tick and after a
+ * reload, so the filter could be neither seen nor undone; a search that matched
+ * nothing had a page-level state without the bar ("No rental items match your
+ * search"). Every view a filter or a search leaves empty is now the table, whose
+ * no-match state keeps the filter bar, the active chips and "Clear all filters",
+ * as on Items and Books. The list still applies the filter exactly as before.
+ */
+describe('Rentals items: a filter that leaves nothing is the table, with its filters', () => {
+  it.each<[string, Record<string, string>, Record<string, unknown>]>([
+    ['a Category', { cat: 'cat-empty' }, { categoryIds: ['cat-empty'] }],
+    ['a Location', { loc: 'loc-empty' }, { locationIds: ['loc-empty'] }],
+    ['a search', { q: 'tent' }, { q: 'tent' }],
+    ['Low + critical', { stock: 'low' }, { lowStock: true }],
+    ['Out of stock', { stock: 'out' }, { outOfStock: true }],
+    [
+      'a Category on the Archived view',
+      { status: 'archived', cat: 'cat-empty' },
+      { status: 'archived', categoryIds: ['cat-empty'] },
+    ],
+    ['the Discontinued view', { status: 'discontinued' }, { status: 'discontinued' }],
+  ])('%s that leaves nothing: the table, never an empty state', async (_l, params, applied) => {
+    h.total = 0;
+    await renderPage(params);
+    expect(h.list).toHaveBeenCalledWith(expect.objectContaining(applied));
+    expect(screen.queryByText('No rental items yet')).toBeNull();
+    expect(screen.queryByText('No archived rental items')).toBeNull();
+    expect(screen.queryByText('No rental items match your search')).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Add your first rental item' })).toBeNull();
+    expect(h.tableProps).toHaveBeenCalledTimes(1);
+    expect(h.tableProps.mock.calls[0]![0]).toMatchObject({
+      total: 0,
+      items: [],
+      // The search box holds the search.
+      initialQuery: params.q,
+    });
   });
 });

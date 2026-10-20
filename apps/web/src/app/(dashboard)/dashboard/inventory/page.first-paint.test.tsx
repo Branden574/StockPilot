@@ -611,6 +611,72 @@ describe('URL probe: an Items URL paints what it settles on (review 2026-10-05)'
     },
   );
 
+  // Grouping walk 2026-10-20 (W4 no-match): a Category no item is in showed
+  // the table's no-match row with its filters right after the tick, and "No
+  // items yet" with an offer to add a first item, and no filter bar, once the
+  // same address was reloaded or opened as a link. The filter must stay seen
+  // and undoable: the link shows what the app shows.
+  describe('a filter that leaves nothing', () => {
+    const EMPTY_CATEGORY = '0c000000-0000-4000-8000-0000000000ee';
+    beforeEach(() => {
+      // A Category no item is in (the fixture's own Apparel holds rows).
+      h.db!.tables.categories!.push({
+        id: EMPTY_CATEGORY,
+        organization_id: fixture.FIXTURE_ORG,
+        name: 'Seasonal Decor',
+        color: null,
+        deleted_at: null,
+      });
+    });
+
+    it.each([
+      [`cat=${EMPTY_CATEGORY}`, ''],
+      [`status=archived&cat=${EMPTY_CATEGORY}`, 'status=archived'],
+    ])(
+      '?%s opened as a link shows what the app shows on reaching it from ?%s, filter bar and all',
+      async (target, from) => {
+        const start = await openUrl(from);
+        await act(async () => nav.set(target));
+        const inApp = snapshot(start.view.container);
+        start.view.unmount();
+
+        const { view, firstPaint } = await openUrl(target);
+        expect(firstPaint).toEqual(inApp);
+        expect(firstPaint.rows.map((r) => r.text)).toEqual(['No items match your filters.']);
+        expect(firstPaint.headings).not.toContain('No items yet');
+        expect(firstPaint.headings).not.toContain('No archived items');
+        const page = within(view.container);
+        expect(page.getByRole('button', { name: 'Filter by Category' })).toHaveTextContent(
+          /Category\s*1/,
+        );
+        expect(page.getByRole('button', { name: 'Clear all filters' })).toBeInTheDocument();
+        expect(page.queryByRole('link', { name: 'Add your first item' })).toBeNull();
+      },
+    );
+
+    it('a search that matches nothing, opened as a link: the no-match row, the search in its box, and Clear all filters', async () => {
+      const { view, firstPaint } = await openUrl('q=zzqqxx');
+      expect(firstPaint.rows.map((r) => r.text)).toEqual(['No items match your filters.']);
+      expect(firstPaint.headings).not.toContain('No items match your search');
+      const page = within(view.container);
+      expect(page.getByRole('textbox', { name: 'Search items' })).toHaveValue('zzqqxx');
+      expect(page.getByRole('button', { name: 'Clear all filters' })).toBeInTheDocument();
+      expect(page.queryByRole('link', { name: 'Clear search' })).toBeNull();
+    });
+
+    it('an empty Archived view with no filter keeps its own state, words and way back', async () => {
+      h.db!.tables.inventory_items = h.db!.tables.inventory_items!.filter(
+        (r) => r.status !== 'archived',
+      );
+      const { view, firstPaint } = await openUrl('status=archived');
+      expect(firstPaint.headings).toContain('No archived items');
+      expect(firstPaint.rows).toEqual([]);
+      expect(
+        within(view.container).getByRole('link', { name: 'Back to active items' }),
+      ).toHaveAttribute('href', '/dashboard/inventory');
+    });
+  });
+
   it('Active, from the Auto-archived only view, opens the plain list: the toggle drops auto', async () => {
     const { view } = await openUrl('status=archived&auto=1');
     const toggle = within(view.container);

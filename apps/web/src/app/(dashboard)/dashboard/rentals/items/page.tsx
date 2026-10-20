@@ -19,6 +19,7 @@ import { getItemTrends } from '@/server/services/movements';
 import { SuppliersService } from '@/server/services/suppliers';
 import { TagsService } from '@/server/services/tags';
 import { requireOrgContext } from '@/lib/auth/session';
+import { listFilterActive } from '@/lib/inventory/list-filter-active';
 
 const PAGE_SIZE = 50;
 
@@ -184,6 +185,21 @@ export default async function RentalItemsPage({
   };
 
   const canCreate = can(sessionCtx, 'items:create');
+  // A filter or a search that leaves nothing is the table's own no-match
+  // state, with the filter bar, the active chips and "Clear all filters", as
+  // on Items and Books (grouping walk 2026-10-20, W4 no-match): it used to be
+  // "No rental items yet" with an offer to add a first one whenever the view
+  // had no search or stock view, and a search had a page-level state without
+  // the bar. Only what this page's list applies counts (it reads no charter,
+  // rack, Expected or Auto-archived only); the empty states below are for a
+  // list with nothing in it and no filter at all.
+  const filtered = listFilterActive({
+    q: params.q,
+    status: params.status,
+    stock: params.stock,
+    cat: params.cat,
+    loc: params.loc,
+  });
 
   return (
     // The page box every redesigned dashboard page shares (max 1320, 16 px
@@ -215,14 +231,14 @@ export default async function RentalItemsPage({
       <RentalsTabs activeTab="items" />
 
       <div className="min-w-0">
-        {rentalTotal === 0 && lifecycleStatus === 'archived' && !params.q && !params.stock ? (
+        {rentalTotal === 0 && !filtered && lifecycleStatus === 'archived' ? (
           <EmptyState
             icon={Boxes}
             title="No archived rental items"
             description="Nothing here yet."
             cta={{ label: 'Back to active rental items', href: '/dashboard/rentals/items' }}
           />
-        ) : rentalTotal === 0 && !params.q && !params.stock ? (
+        ) : rentalTotal === 0 && !filtered ? (
           <EmptyState
             icon={Boxes}
             title="No rental items yet"
@@ -236,13 +252,6 @@ export default async function RentalItemsPage({
                 ? { label: 'Add your first rental item', href: '/dashboard/rentals/items/new' }
                 : undefined
             }
-          />
-        ) : rentalTotal === 0 && params.q ? (
-          <EmptyState
-            icon={Boxes}
-            title="No rental items match your search"
-            description={`Nothing matched "${params.q.slice(0, 40)}". Try a different name or SKU.`}
-            cta={{ label: 'Clear search', href: '/dashboard/rentals/items' }}
           />
         ) : (
           <ElsewhereUnavailableNotice unavailable={inventory.elsewhereUnavailable}>

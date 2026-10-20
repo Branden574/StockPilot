@@ -26,6 +26,7 @@ import {
   parseRevealGroupParam,
   type PlannedServerPage,
 } from '@/lib/inventory/instant-mode';
+import { listFilterActive } from '@/lib/inventory/list-filter-active';
 import {
   ALL_WAREHOUSES_KEY,
   canUseSharedInventoryCaches,
@@ -737,9 +738,10 @@ async function booksTableSection({
 }
 
 /**
- * The rich zero-result EmptyStates, shared VERBATIM by the instant and
- * server branches (extracted, not duplicated, so the two modes can't
- * drift). Returns null when the table should render.
+ * The zero-result EmptyStates, shared VERBATIM by the instant and server
+ * branches (extracted, not duplicated, so the two modes can't drift).
+ * Returns null when the table should render, which it does for every view a
+ * filter or a search narrows (listFilterActive), as on the Items page.
  */
 function booksEmptyState({
   total,
@@ -753,24 +755,16 @@ function booksEmptyState({
   canCreate: boolean;
 }) {
   if (total !== 0) return null;
-  // Expected chip view (mig 0277) with zero rows — same dedicated branch
-  // as the Items page so the generic "No books yet" CTA never fires here.
-  if (params.expected === '1' && !params.q && !params.stock) {
-    return (
-      <EmptyState
-        icon={BookOpen}
-        title="No expected books"
-        description="Books created from purchase orders appear here until their first stock is received."
-        cta={{ label: 'Back to all books', href: '/dashboard/books' }}
-      />
-    );
-  }
-  // Excludes ?auto=1 (the "Auto-archived only" chip) — same rationale as
-  // the Items page: a zero result there just means none of the archived
-  // books were system-archived, not that nothing is archived at all. So
-  // does "No books yet" below, as on Items: the view falls through to the
-  // table's own "No items match your filters." row, chip and all.
-  if (lifecycleStatus === 'archived' && !params.q && !params.stock && params.auto !== '1') {
+  // A filter or a search that leaves nothing is the table's own no-match
+  // state, with the filter bar, the active chips and "Clear all filters",
+  // in every mode (grouping walk 2026-10-20, W4 no-match; see the Items
+  // page). It used to be "No books yet" with an offer to add a first book
+  // whenever the view had no search, stock view or Auto-archived only chip,
+  // and a stock view or the Expected chip had a page-level state without
+  // the bar.
+  if (listFilterActive(params)) return null;
+  // The Archived view with nothing archived (no filter on it: see above).
+  if (lifecycleStatus === 'archived') {
     return (
       <EmptyState
         icon={BookOpen}
@@ -780,39 +774,17 @@ function booksEmptyState({
       />
     );
   }
-  if (!params.q && !params.stock && params.auto !== '1') {
-    return (
-      <EmptyState
-        icon={BookOpen}
-        title="No books yet"
-        description={
-          canCreate
-            ? 'Add your first book — title, ISBN, author, quantity. Books roll up into the same dashboard totals as regular items.'
-            : 'No books have been added to this workspace yet.'
-        }
-        cta={canCreate ? { label: 'Add your first book', href: '/dashboard/books/new' } : undefined}
-      />
-    );
-  }
-  if (params.stock === 'low') {
-    return (
-      <EmptyState
-        icon={BookOpen}
-        title="No low-stock books"
-        description="No books are at or below their reorder point right now. Clear the filter to see all books."
-        cta={{ label: 'Show all books', href: '/dashboard/books' }}
-      />
-    );
-  }
-  if (params.stock === 'out') {
-    return (
-      <EmptyState
-        icon={BookOpen}
-        title="No out-of-stock books"
-        description="Nothing is at zero quantity right now. Clear the filter to see all books."
-        cta={{ label: 'Show all books', href: '/dashboard/books' }}
-      />
-    );
-  }
-  return null;
+  // The list itself is empty and nothing filters it.
+  return (
+    <EmptyState
+      icon={BookOpen}
+      title="No books yet"
+      description={
+        canCreate
+          ? 'Add your first book — title, ISBN, author, quantity. Books roll up into the same dashboard totals as regular items.'
+          : 'No books have been added to this workspace yet.'
+      }
+      cta={canCreate ? { label: 'Add your first book', href: '/dashboard/books/new' } : undefined}
+    />
+  );
 }

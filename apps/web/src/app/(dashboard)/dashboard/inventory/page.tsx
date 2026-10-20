@@ -24,6 +24,7 @@ import {
   type InstantFirstPage,
   type PlannedServerPage,
 } from '@/lib/inventory/instant-mode';
+import { listFilterActive } from '@/lib/inventory/list-filter-active';
 import {
   ALL_WAREHOUSES_KEY,
   canUseSharedInventoryCaches,
@@ -1041,14 +1042,6 @@ async function inventoryTableSection({
 }
 
 /**
- * The rich zero-result EmptyStates, shared VERBATIM by the instant and
- * server branches (extracted, not duplicated, so the two modes can't
- * drift). `total` is the current view's filtered total — the server
- * branch passes InventoryService.list()'s count, the instant branch the
- * local derivation's (same semantics by the instant-mode parity
- * contract). Returns null when the table should render.
- */
-/**
  * How many rows the CURRENT query matches once the warehouse filter is lifted.
  *
  * Runs only when the filtered view came back empty, so it costs one HEAD count
@@ -1090,6 +1083,17 @@ async function countMatchesInOtherWarehouses(
   }
 }
 
+/**
+ * The zero-result EmptyStates, shared VERBATIM by the instant and server
+ * branches (extracted, not duplicated, so the two modes can't drift).
+ * `total` is the current view's filtered total — the server branch passes
+ * InventoryService.list()'s count, the instant branch the local
+ * derivation's (same semantics by the instant-mode parity contract).
+ * Returns null when the table should render, which it does for every view a
+ * filter or a search narrows (listFilterActive): the table's own
+ * "No items match your filters." keeps the filter bar, the active chips and
+ * "Clear all filters", as when the same filter is set in the app.
+ */
 function inventoryEmptyState({
   total,
   params,
@@ -1132,8 +1136,16 @@ function inventoryEmptyState({
   // warehouse filter, say so and offer the way out. Without this the page says
   // "no items match" while the item sits in another warehouse, and the phone —
   // which keeps its own warehouse scope — still lists it. The two platforms
-  // then disagree with nothing on screen to explain why.
-  if (filteredWarehouseName && (otherWarehouseMatches ?? 0) > 0) {
+  // then disagree with nothing on screen to explain why. Only when the search
+  // is the view's one filter, if it has any: the count elsewhere applies the
+  // search and nothing else, so with a Category, a stock view or any other
+  // filter on it would count records that filter leaves out, and the page
+  // would hide the filter that emptied the view (the table below keeps it).
+  if (
+    filteredWarehouseName &&
+    (otherWarehouseMatches ?? 0) > 0 &&
+    !listFilterActive({ ...params, q: undefined })
+  ) {
     const n = otherWarehouseMatches as number;
     return (
       <EmptyState
@@ -1144,35 +1156,23 @@ function inventoryEmptyState({
       />
     );
   }
+  // A filter or a search that leaves nothing is the table's own no-match
+  // state, never a page-level one (grouping walk 2026-10-20, W4 no-match):
+  // the table keeps the search box, the filters, the stock views and the
+  // chips, the active ones marked, and "Clear all filters", so the filter
+  // can be seen and undone. It is what the app shows the moment the same
+  // filter is set in instant mode, so a reload, a pasted address, staff and
+  // viewers (server mode) now show it too. This used to fall through to
+  // "No items yet" with an offer to add a first item whenever the view had
+  // no search, stock view or Auto-archived only chip, and a search, a stock
+  // view or the Expected chip each had a page-level state without the bar.
+  if (listFilterActive(params)) return null;
   // Append the warehouse-scoping explanation (when present) to whichever
   // branch fires — one place, so no branch can forget it.
   const withScope = (description: string): string =>
     scopedNote ? `${description} ${scopedNote}` : description;
-  // Expected chip view (mig 0277) with zero rows: everything that was
-  // awaiting a first receipt has arrived (or none ever existed). Its own
-  // branch so the generic "No items yet" CTA never fires here.
-  if (params.expected === '1' && !params.q && !params.stock) {
-    return (
-      <EmptyState
-        icon={Boxes}
-        title="No expected items"
-        description={withScope(
-          'Items created from purchase orders appear here until their first stock is received.',
-        )}
-        cta={{ label: 'Back to all items', href: '/dashboard/inventory' }}
-      />
-    );
-  }
-  // Excludes ?auto=1 (the "Auto-archived only" chip): a zero result there
-  // just means none of the archived items were system-archived, which is
-  // NOT the same as "nothing archived at all" — fall through to the
-  // table's plain "No items match your filters." row instead of this
-  // misleading "archive something" CTA. The "No items yet" branch below
-  // excludes it too: it used to catch this fall-through, so a refresh of a
-  // zero Auto-archived only view offered to add a first item and lost the
-  // chip, while switching the chip on in the app showed the table's row
-  // (review 2026-10-05). The table keeps the chip, so it can be switched off.
-  if (lifecycleStatus === 'archived' && !params.q && !params.stock && params.auto !== '1') {
+  // The Archived view with nothing archived (no filter on it: see above).
+  if (lifecycleStatus === 'archived') {
     return (
       <EmptyState
         icon={Boxes}
@@ -1182,66 +1182,24 @@ function inventoryEmptyState({
       />
     );
   }
-  if (!params.q && !params.stock && params.auto !== '1') {
-    return (
-      <>
-        {/* Renders only while the Items tour runs — gives its "here's a
-            row" step a labeled example to spotlight on a brand-new org. */}
-        <TourSampleItem />
-        <EmptyState
-          icon={Boxes}
-          title="No items yet"
-          description={withScope(
-            canCreate
-              ? 'Add your first item to start tracking stock, locations, and movements.'
-              : 'No items have been added to this workspace yet.',
-          )}
-          cta={
-            canCreate
-              ? { label: 'Add your first item', href: '/dashboard/inventory/new' }
-              : undefined
-          }
-        />
-      </>
-    );
-  }
-  if (params.stock === 'low') {
-    return (
+  // The list itself is empty and nothing filters it.
+  return (
+    <>
+      {/* Renders only while the Items tour runs — gives its "here's a
+          row" step a labeled example to spotlight on a brand-new org. */}
+      <TourSampleItem />
       <EmptyState
         icon={Boxes}
-        title="No low-stock items"
-        description={withScope('Nothing is at or below its reorder point right now. Nice.')}
-        cta={{ label: 'Show all items', href: '/dashboard/inventory' }}
-      />
-    );
-  }
-  if (params.stock === 'out') {
-    return (
-      <EmptyState
-        icon={Boxes}
-        title="Nothing is out of stock"
+        title="No items yet"
         description={withScope(
-          'No active items have a quantity of zero. Clear the filter to see all items.',
+          canCreate
+            ? 'Add your first item to start tracking stock, locations, and movements.'
+            : 'No items have been added to this workspace yet.',
         )}
-        cta={{ label: 'Show all items', href: '/dashboard/inventory' }}
+        cta={
+          canCreate ? { label: 'Add your first item', href: '/dashboard/inventory/new' } : undefined
+        }
       />
-    );
-  }
-  if (params.q) {
-    // Search returned zero results. Without this branch the page
-    // fell through to InventoryTable rendering a single bare cell
-    // ("No items match your filters.") — the only empty state on
-    // the page that wasn't using the rich <EmptyState> component.
-    return (
-      <EmptyState
-        icon={Boxes}
-        title="No items match your search"
-        description={withScope(
-          `Nothing matched "${params.q.slice(0, 40)}". Try a different SKU, name, or barcode.`,
-        )}
-        cta={{ label: 'Clear search', href: '/dashboard/inventory' }}
-      />
-    );
-  }
-  return null;
+    </>
+  );
 }
