@@ -151,6 +151,48 @@ describe('the redesign rules for this page', () => {
   });
 });
 
+// P68-02 (DESIGN-SPEC 8: no page-wide sideways scroll, and lay out on the
+// space after navigation, not on the window): the catalog toolbar wrapped
+// only below 640 px of window, so beside the pinned 228 px sidebar the view
+// switch ran 54 px past the column's edge at 768 px (12 at 810, 2 at 820) and
+// the whole column scrolled sideways. The sticky bar is now a size container,
+// and below 640 px of its own width (the toolbar needs about 632 px in one
+// row at its widest) the search takes its own row and Availability, sort and
+// the view switch share the next, on the New order page and the public page.
+describe('the catalog toolbar wraps on its own width, not the window', () => {
+  it('makes the sticky bar a named inline-size container', () => {
+    expect(ruleBody(CODE, '.sp-storefront .sf-sticky')).toContain(
+      'container: sf-toolbar / inline-size;',
+    );
+  });
+
+  it('below 640 px of that width, wraps the toolbar and gives the search its own row', () => {
+    const at = CODE.indexOf('@container sf-toolbar (max-width: 639.98px) {');
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(ruleBody(CODE, '.sp-storefront .sf-tools', at)).toContain('flex-wrap: wrap;');
+    const search = ruleBody(CODE, '.sp-storefront .sf-search', at);
+    expect(search).toContain('flex: 1 1 100%;');
+    expect(search).toContain('min-width: 0;');
+  });
+
+  it('keys neither rule to the window width any more', () => {
+    const phone = CODE.slice(
+      CODE.indexOf('@media (max-width: 639.98px) {'),
+      CODE.indexOf('@media (hover: none) {'),
+    );
+    // The slice is the phone block (its 44 px tool buttons are still there).
+    expect(phone).toContain('.sp-storefront .sf-tools > .sf-popwrap {');
+    expect(phone).not.toContain('.sp-storefront .sf-tools {');
+    expect(phone).not.toContain('.sp-storefront .sf-search {');
+    // The container rule is the only one that wraps the toolbar.
+    const wraps = rules(CODE).filter(
+      ({ selectors, body }) =>
+        selectors.includes('.sp-storefront .sf-tools') && /flex-wrap/.test(body),
+    );
+    expect(wraps).toHaveLength(1);
+  });
+});
+
 describe('the narrow setup bar is the New order page bar only', () => {
   // The two-by-two grid below 1024 px, its dividers and its corners count
   // cells: four on the New order page (Ship from, For, Pickup or delivery,
