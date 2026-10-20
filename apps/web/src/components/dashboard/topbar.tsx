@@ -17,6 +17,7 @@ import { cn } from '@/lib/utils';
 
 import type { NavSection } from './nav';
 import { applyNavLabelsToCrumbs, crumbsForPathname, navLabelMap } from './topbar-crumbs';
+import { TRAIL_MEASURE_SLOT, TRAIL_SLOT, useTrailFit } from './topbar-trail-fit';
 import { UserMenu } from './user-menu';
 
 interface TopbarProps {
@@ -87,6 +88,12 @@ export function Topbar({
     () => applyNavLabelsToCrumbs(crumbsForPathname(pathname), labelByHref),
     [pathname, labelByHref],
   );
+  // How much of the trail the bar has room for (topbar-trail-fit.ts): the
+  // whole trail, the current page alone, or none.
+  const headerRef = React.useRef<HTMLElement>(null);
+  const measureRef = React.useRef<HTMLDivElement>(null);
+  const fit = useTrailFit(headerRef, measureRef, crumbs.map((c) => c.label).join('\u0000'));
+  const firstShown = fit === 'current' ? crumbs.length - 1 : 0;
 
   // NO LINK IN THE BAR PREFETCHES ITS PAGE ON SIGHT (PLAN 0.6). The bar is on
   // every dashboard page, so a default <Link> here costs a prefetch (two
@@ -119,13 +126,17 @@ export function Topbar({
   // the narrowest was 768px beside the sidebar (iPad portrait, 768-834px, is
   // touch only, so ⌘K is no substitute). At 400px the icon fits beside the
   // picker's whole "All warehouses" (measured: header-check).
-  // The warehouse picker is the one control that yields: its name truncates,
-  // and it gives up its width before the breadcrumb does (shrink 10 to the
-  // trail's 1), so on a touch tablet, where every icon button is 44px, the
-  // trail stays readable. Before (2026-09-28/29): the buttons shrank to 14px
-  // and the account avatar was pushed past the right edge, 13px at 390px and
-  // entirely at 768px with the sidebar, clipped by the shell's overflow-hidden
-  // (no page scroll).
+  // Where the trail is shown (520px up) it is the one thing that gives way:
+  // the warehouse picker keeps its whole name (shrink-0; a long name up to
+  // the label's 160px cap, as before the redesign) and the trail steps down
+  // to the current page's name alone, then to nothing, as the room left for
+  // it shrinks (useTrailFit). On a touch tablet, where every icon button is
+  // 44px, the picker had given up its width first and read "Al…" (P68-01).
+  // Under 520px there is no trail, and the picker's name truncates when the
+  // bar is too narrow for it, as before (a long name on a phone). Before
+  // (2026-09-28/29): the buttons shrank to 14px and the account avatar was
+  // pushed past the right edge, 13px at 390px and entirely at 768px with the
+  // sidebar, clipped by the shell's overflow-hidden (no page scroll).
   //
   // A SOLID bar (DESIGN-SPEC 5.2): the page colour and a hairline, no blur.
   // It stays 56px tall, the height the storefront's --sf-topbar-h assumes. Its
@@ -133,6 +144,7 @@ export function Topbar({
   // narrowest.
   return (
     <header
+      ref={headerRef}
       className="border-border bg-background @container sticky top-0 z-20 flex shrink-0 items-center gap-2 border-b px-4 sm:gap-3 sm:px-6"
       style={{ height: 56 }}
     >
@@ -142,47 +154,81 @@ export function Topbar({
         onToggle={() => onToggleSidebar?.()}
       />
 
-      {/* The trail keeps its natural width while the search bar yields (down
-          to 240px); squeezed further, the parent crumbs give way before the
-          page's own name. */}
-      <nav aria-label="Breadcrumb" className="@min-[520px]:flex hidden min-w-0">
-        <ol className="text-muted-foreground flex min-w-0 items-center gap-2 text-[13.5px] leading-5">
-          {crumbs.map((c, i) => {
-            const isLast = i === crumbs.length - 1;
-            return (
-              <li
-                key={i}
-                className={cn('flex min-w-0 items-center gap-2', isLast ? 'shrink' : 'shrink-[3]')}
-              >
-                {i > 0 && (
-                  <span aria-hidden className="shrink-0 text-[var(--ed-ink-4)]">
-                    /
-                  </span>
-                )}
-                {c.href && !isLast ? (
-                  <Link
-                    href={c.href}
-                    prefetch={false}
-                    {...warmOnApproach(c.href)}
-                    className="hover:text-foreground truncate underline-offset-2 transition-colors hover:underline"
-                  >
-                    {c.label}
-                  </Link>
-                ) : (
-                  <span
-                    aria-current={isLast ? 'page' : undefined}
-                    className={cn('truncate', isLast && 'text-foreground')}
-                  >
-                    {c.label}
-                  </span>
-                )}
-              </li>
-            );
-          })}
-        </ol>
-      </nav>
+      {/* The trail takes the room the other controls leave (the search bar
+          yields down to 240px first): the whole trail, else the current
+          page's name alone, else none at all, landmark included. Its crumbs
+          still truncate as a last resort, for the moment before the first
+          measurement (the server draws the whole trail). */}
+      {fit !== 'none' && (
+        <nav
+          aria-label="Breadcrumb"
+          data-slot={TRAIL_SLOT}
+          className="@min-[520px]:flex hidden min-w-0"
+        >
+          <ol className="text-muted-foreground flex min-w-0 items-center gap-2 text-[13.5px] leading-5">
+            {crumbs.map((c, i) => {
+              if (i < firstShown) return null;
+              const isLast = i === crumbs.length - 1;
+              return (
+                <li
+                  key={i}
+                  className={cn(
+                    'flex min-w-0 items-center gap-2',
+                    isLast ? 'shrink' : 'shrink-[3]',
+                  )}
+                >
+                  {i > firstShown && (
+                    <span aria-hidden className="shrink-0 text-[var(--ed-ink-4)]">
+                      /
+                    </span>
+                  )}
+                  {c.href && !isLast ? (
+                    <Link
+                      href={c.href}
+                      prefetch={false}
+                      {...warmOnApproach(c.href)}
+                      className="hover:text-foreground truncate underline-offset-2 transition-colors hover:underline"
+                    >
+                      {c.label}
+                    </Link>
+                  ) : (
+                    <span
+                      aria-current={isLast ? 'page' : undefined}
+                      className={cn('truncate', isLast && 'text-foreground')}
+                    >
+                      {c.label}
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ol>
+        </nav>
+      )}
 
-      <div className="ml-auto flex min-w-0 shrink-[10] items-center gap-2">
+      {/* The whole trail's natural width, whichever step is drawn: a copy
+          with the trail's type and spacing, out of the flow, invisible,
+          hidden from screen readers and clipped to nothing, so it can never
+          be clicked or widen the page. */}
+      <div
+        aria-hidden
+        data-slot={TRAIL_MEASURE_SLOT}
+        className="pointer-events-none invisible absolute inset-x-0 top-0 h-0 overflow-hidden"
+      >
+        <div ref={measureRef} className="flex w-max items-center gap-2 text-[13.5px] leading-5">
+          {crumbs.map((c, i) => (
+            <React.Fragment key={i}>
+              {i > 0 && <span>/</span>}
+              <span>{c.label}</span>
+            </React.Fragment>
+          ))}
+        </div>
+      </div>
+
+      {/* Where the trail can show (520px up) the picker never shrinks, so
+          "All warehouses" and a short name stay whole and a long one keeps
+          its 160px; under 520px it is the one control that yields. */}
+      <div className="@min-[520px]:shrink-0 ml-auto flex min-w-0 items-center gap-2">
         {warehouseFilter && warehouseFilter.warehouses.length > 0 && (
           <WarehouseFilterPicker
             warehouses={warehouseFilter.warehouses}

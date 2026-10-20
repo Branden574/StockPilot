@@ -1,6 +1,6 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { setTheme, nav } = vi.hoisted(() => ({
   setTheme: vi.fn(),
@@ -138,11 +138,195 @@ describe('the top bar decides what fits from its own width', () => {
     expect(classesOf(within(bar).getByRole('navigation', { name: 'Breadcrumb' }))).toContain(
       'min-w-0',
     );
+    // The picker can still narrow to its icons (min-w-16, P68-01: its own
+    // floor, so its chevron never sits outside it), and its name truncates.
     const picker = within(bar).getByRole('button', { name: /^Filter by/ });
-    expect(classesOf(picker)).toEqual(expect.arrayContaining(['min-w-0', 'max-w-full']));
+    expect(classesOf(picker)).toEqual(expect.arrayContaining(['min-w-16', 'max-w-full']));
     expect(classesOf(picker.parentElement!)).toContain('min-w-0');
     const name = within(picker).getByText('Demo Distribution Center');
     expect(classesOf(name)).toEqual(expect.arrayContaining(['min-w-0', 'truncate']));
+  });
+});
+
+/**
+ * P68-01 (verified in Chromium and WebKit): on a touch tablet, where every
+ * icon button is 44px, the picker gave up its width before the trail did
+ * (flex-shrink 10 to 1): "Al…" on New order at 810px, 4 of 92px at 744px, and
+ * on Settings > Roles at 1024px a 22px button with no name and its chevron
+ * outside it, where the bar before the redesign showed "All warehouses"
+ * whole. The trail now gives way first, in steps (topbar-trail-fit.ts).
+ */
+describe('the trail gives way before the warehouse picker', () => {
+  // Mutation caught: the picker allowed to shrink again where a trail can be
+  // shown, or made rigid on a phone (a long name would push the avatar out).
+  it('from a 520px bar the picker never shrinks; under 520px, with no trail, it is the one that yields', () => {
+    const bar = renderBar();
+    const wrapper = within(bar).getByRole('button', { name: /^Filter by/ }).parentElement!;
+    expect(classesOf(wrapper)).toEqual(
+      expect.arrayContaining(['@min-[520px]:shrink-0', 'min-w-0', 'ml-auto']),
+    );
+    expect(classesOf(wrapper).filter((c) => /^shrink/.test(c))).toEqual([]);
+    // The trail is shown from the same 520px.
+    expect(classesOf(within(bar).getByRole('navigation', { name: 'Breadcrumb' }))).toContain(
+      '@min-[520px]:flex',
+    );
+  });
+
+  // Mutation caught: the min-width dropped (the chevron overflows a squeezed
+  // button again) or set above the picker's own icons and padding.
+  it("the picker's floor is exactly its icons and padding, so its chevron is always inside it", () => {
+    const picker = within(renderBar()).getByRole('button', { name: /^Filter by/ });
+    expect(classesOf(picker)).toEqual(
+      expect.arrayContaining(['min-w-16', 'px-2.5', 'gap-2', 'border']),
+    );
+    // 1px border + 10px padding a side + 14px icon + two 8px gaps + 12px
+    // chevron = 64px = min-w-16 (4rem): the parts that floor is made of.
+    const [icon, chevron] = Array.from(picker.querySelectorAll('svg'));
+    expect(classesOf(icon!)).toEqual(expect.arrayContaining(['size-3.5', 'shrink-0']));
+    expect(classesOf(chevron!)).toEqual(expect.arrayContaining(['size-3', 'shrink-0']));
+  });
+
+  // Mutation caught: the accessible name back to "Filter by warehouse" alone,
+  // which a truncated name leaves no way to read, or the title dropped.
+  it('names the whole warehouse in its accessible name and its title, however much of it shows', () => {
+    const picker = within(renderBar()).getByRole('button', {
+      name: 'Filter by warehouse: Demo Distribution Center',
+    });
+    expect(picker).toHaveAttribute('title', 'Filter by warehouse: Demo Distribution Center');
+  });
+});
+
+/**
+ * The steps themselves, in a bar whose widths are stubbed (happy-dom has no
+ * layout): a ResizeObserver the test fires, the bar's inside width, the
+ * picker's width and the measuring copy's widths.
+ */
+describe('the trail steps down: whole, then the current page alone, then none', () => {
+  const FULL = 180; // "Fulfillment / Orders / New"
+  const CURRENT = 28.8; // "New"
+  const PICKER = 156.5;
+  let inside = 1000;
+  let fire: () => void = () => {};
+  const restore: Array<() => void> = [];
+
+  beforeEach(() => {
+    nav.pathname = '/dashboard/orders/new';
+    inside = 1000;
+    const RealRO = globalThis.ResizeObserver;
+    class FiringResizeObserver {
+      constructor(cb: () => void) {
+        fire = () => cb();
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    globalThis.ResizeObserver = FiringResizeObserver as unknown as typeof ResizeObserver;
+    const clientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.tagName === 'HEADER' ? inside : 0;
+      },
+    });
+    const rect = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = function (this: Element) {
+      const measure = document.querySelector('[data-slot="topbar-trail-measure"] > div');
+      const width =
+        this === measure
+          ? FULL
+          : this === measure?.lastElementChild
+            ? CURRENT
+            : this.querySelector(':scope > button[aria-label^="Filter by"]')
+              ? PICKER
+              : 0;
+      return { width, height: 0, top: 0, left: 0, right: width, bottom: 0, x: 0, y: 0 } as DOMRect;
+    };
+    restore.push(() => {
+      globalThis.ResizeObserver = RealRO;
+      if (clientWidth) Object.defineProperty(HTMLElement.prototype, 'clientWidth', clientWidth);
+      else delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
+      Element.prototype.getBoundingClientRect = rect;
+    });
+  });
+  afterEach(() => {
+    while (restore.length) restore.pop()!();
+  });
+
+  const crumbsShown = (bar: HTMLElement) => {
+    const trail = within(bar).queryByRole('navigation', { name: 'Breadcrumb' });
+    return trail
+      ? within(trail)
+          .getAllByRole('listitem')
+          .map((li) => li.textContent)
+      : null;
+  };
+
+  // Mutation caught: the parents dropped one at a time instead (no such step
+  // was asked for), a slash left before the lone current page, the landmark
+  // kept with nothing in it, or the step not measured again on a resize.
+  it('picks the step from the room left beside the picker, and again when the bar resizes', () => {
+    const bar = renderBar();
+    // Room 1000 - 156.5: the whole trail (each later crumb after its slash).
+    expect(crumbsShown(bar)).toEqual(['Fulfillment', '/Orders', '/New']);
+
+    // Room 120: the current page alone, as the current page, with no slash.
+    inside = PICKER + 120;
+    act(() => fire());
+    expect(crumbsShown(bar)).toEqual(['New']);
+    const trail = within(bar).getByRole('navigation', { name: 'Breadcrumb' });
+    expect(within(trail).getByText('New')).toHaveAttribute('aria-current', 'page');
+    expect(within(trail).queryByText('/')).toBeNull();
+    expect(within(trail).queryByRole('link')).toBeNull();
+
+    // Room 20: no trail, and no empty landmark.
+    inside = PICKER + 20;
+    act(() => fire());
+    expect(crumbsShown(bar)).toBeNull();
+
+    // Wider again: back to the whole trail, with its link.
+    inside = 1000;
+    act(() => fire());
+    expect(crumbsShown(bar)).toHaveLength(3);
+    expect(within(bar).getByRole('link', { name: 'Orders' })).toHaveAttribute(
+      'href',
+      '/dashboard/orders',
+    );
+  });
+
+  // The picker is the same button at every step: the step only ever takes
+  // from the trail.
+  it('never changes the picker or any other control', () => {
+    const bar = renderBar();
+    const before = within(bar)
+      .getAllByRole('button')
+      .map((b) => [b.getAttribute('aria-label'), b.className]);
+    inside = PICKER + 20;
+    act(() => fire());
+    expect(
+      within(bar)
+        .getAllByRole('button')
+        .map((b) => [b.getAttribute('aria-label'), b.className]),
+    ).toEqual(before);
+  });
+
+  // The copy that gives the widths is never read out, never clicked and never
+  // in the flow: hidden from the accessibility tree, out of the flex row.
+  it('measures from an invisible copy that no reader, pointer or layout sees', () => {
+    const bar = renderBar();
+    const copy = bar.querySelector('[data-slot="topbar-trail-measure"]')!;
+    expect(copy).toHaveAttribute('aria-hidden', 'true');
+    expect(classesOf(copy)).toEqual(
+      expect.arrayContaining([
+        'invisible',
+        'pointer-events-none',
+        'absolute',
+        'h-0',
+        'overflow-hidden',
+      ]),
+    );
+    expect(copy.querySelector('a, button, [tabindex]')).toBeNull();
+    expect(copy.textContent).toBe('Fulfillment/Orders/New');
   });
 });
 
@@ -366,9 +550,10 @@ describe('the redesigned bar (DESIGN-SPEC 5.2)', () => {
         }}
       />,
     );
-    expect(screen.getByRole('button', { name: 'Filter by campus' })).toHaveTextContent(
-      'All campuses',
-    );
+    // The accessible name holds the name it shows (P68-01).
+    expect(
+      screen.getByRole('button', { name: 'Filter by campus: All campuses' }),
+    ).toHaveTextContent('All campuses');
   });
 });
 
