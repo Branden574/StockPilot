@@ -308,7 +308,10 @@ export default async function OrdersPage({
                           holds "Exchange" and the state follows it as text
                           that may wrap, so the words still read "Exchange ·
                           Waiting for return" without one 183 px pill setting
-                          the Status column's width (FX3). */}
+                          the Status column's width (FX3). The separator is for
+                          the text and screen readers only: the state usually
+                          wraps under the pill, where a leading dot read as a
+                          list bullet. */}
                       {r.replacementForReturnId ? (
                         <div
                           data-testid="order-exchange-chip"
@@ -317,8 +320,8 @@ export default async function OrdersPage({
                           <Badge variant="outline">{RETURNS_COPY.typeExchange}</Badge>
                           {r.exchange?.state ? (
                             <span className="text-muted-foreground text-[12px]">
-                              {' '}
-                              · {r.exchange.state}
+                              <span className="sr-only">{' · '}</span>
+                              {r.exchange.state}
                             </span>
                           ) : null}
                         </div>

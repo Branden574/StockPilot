@@ -442,6 +442,31 @@ describe('Orders page: the table keeps every column', () => {
     expect(state).not.toHaveClass('whitespace-nowrap');
   });
 
+  // Review of FX3: in the Status column the state wraps under its Exchange
+  // pill at every width from 1024 to 1600, and its line began with the
+  // separator ("· Waiting for return"), which read as a list bullet under the
+  // pill. The separator is now for the text and screen readers only: the chip
+  // still reads "Exchange · Waiting for return", and the line on screen reads
+  // "Waiting for return".
+  it("keeps the separator before an exchange's state for screen readers only", async () => {
+    m.list.mockResolvedValue([
+      row({
+        replacementForReturnId: 'rma-1',
+        exchange: { returnId: 'rma-1', returnNumber: 'RMA-1', state: 'Waiting for return' },
+      }),
+    ]);
+    const view = await renderPage({ status: 'all_active' });
+    const chip = view.getByTestId('order-exchange-chip');
+    expect(chip.textContent).toBe('Exchange · Waiting for return');
+    // The state's own text (what is drawn) is the words alone...
+    const state = within(chip).getByText('Waiting for return');
+    expect(state).toHaveClass('text-muted-foreground', 'text-[12px]');
+    // ...and the separator before them sits in an sr-only span.
+    const separator = state.querySelector('.sr-only');
+    expect(separator?.textContent).toBe(' · ');
+    expect(state.firstChild).toBe(separator);
+  });
+
   it('shows the driver only on a delivery, a dash where nobody is assigned, and no Public badge on an internal order', async () => {
     m.list.mockResolvedValue([
       row({
