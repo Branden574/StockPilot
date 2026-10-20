@@ -275,8 +275,9 @@ export function ValueChartInteractive({
   const basisLabel = basis === 'retail' ? 'retail basis (approx.)' : 'cost basis';
   const subtitle = `USD · ${basisLabel} · ${subtitleLocation}`;
 
-  // 32 px controls 8 px apart: below sm and on coarse pointers each grows an
-  // invisible 44 px target, which this gap keeps from overlapping.
+  // 32 px filter buttons and the 28 px basis toggle, 8 px apart: below sm and
+  // on coarse pointers each button grows an invisible 44 px target, which this
+  // gap keeps from overlapping.
   const controls = (
     <>
       {/* Location filter */}
@@ -303,11 +304,12 @@ export function ValueChartInteractive({
         </DropdownMenuContent>
       </DropdownMenu>
 
-      {/* Basis toggle (segmented, aria-pressed buttons in a named group).
-          Retail is flagged approximate. */}
+      {/* Basis toggle (segmented, aria-pressed buttons in a named group),
+          at the range toggle's size (xs: a 28 px track, 22 px chips; FX7,
+          DESIGN-SPEC 4 and 6.5). Retail is flagged approximate. */}
       <SegmentedTabs
         semantics="nav"
-        size="sm"
+        size="xs"
         aria-label="Value basis"
         activeId={basis}
         onSelect={(id) => setBasis(id as Basis)}

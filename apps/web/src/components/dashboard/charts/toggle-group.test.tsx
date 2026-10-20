@@ -28,6 +28,18 @@ describe('ToggleGroup', () => {
     expect(onChange).toHaveBeenCalledWith('90');
   });
 
+  // FX7 (DESIGN-SPEC 4 and 6.5): Range, Chart type and Breakdown dimension
+  // take the range toggle's size (a 28 px transparent track, 22 px chips),
+  // not the 32 px List / Grid toggle's.
+  it('draws the range toggle size (SegmentedTabs xs)', () => {
+    render(<ToggleGroup aria-label="Range" options={options} value="30" onChange={() => {}} />);
+    const group = screen.getByRole('group', { name: 'Range' });
+    expect(group).toHaveClass('bg-transparent', 'p-0.5');
+    expect(group).not.toHaveClass('bg-sunk');
+    expect(screen.getByRole('button', { name: '30d' })).toHaveClass('h-[22px]', 'bg-muted');
+    expect(screen.getByRole('button', { name: '90d' })).toHaveClass('h-[22px]', 'font-normal');
+  });
+
   it('renders nothing with fewer than two options', () => {
     const { container } = render(
       <ToggleGroup aria-label="Range" options={[options[0]!]} value="30" onChange={() => {}} />,

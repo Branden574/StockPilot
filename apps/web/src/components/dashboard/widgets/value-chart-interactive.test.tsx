@@ -333,6 +333,18 @@ describe('ValueChartInteractive: the figure', () => {
     await user.click(retail);
     expect(retail).toHaveAttribute('aria-pressed', 'true');
   });
+
+  // FX7 (DESIGN-SPEC 4 "Range toggle track / chip 28 / 22", 6.17's value card
+  // toggle): Cost / Retail is the value card's range-style toggle, so it takes
+  // the xs size (a 28 px transparent track, 22 px chips), not List / Grid's.
+  it('draws Cost / Retail at the range toggle size', () => {
+    renderCard();
+    const group = screen.getByRole('group', { name: 'Value basis' });
+    expect(group).toHaveClass('bg-transparent');
+    expect(group).not.toHaveClass('bg-sunk');
+    expect(screen.getByRole('button', { name: 'Cost' })).toHaveClass('h-[22px]', 'bg-muted');
+    expect(screen.getByRole('button', { name: 'Retail' })).toHaveClass('h-[22px]', 'font-normal');
+  });
 });
 
 // Small helper kept below the suite to avoid noise above; returns a Response.
