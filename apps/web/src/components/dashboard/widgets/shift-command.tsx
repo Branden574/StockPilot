@@ -41,8 +41,13 @@ export function ShiftCommandWidget({
           <StatStripItem size="detail" label="Out" value={formatNumber(outOfStockCount)} />
         </StatStrip>
 
+        {/* At most three links to a row (3 + 2). The Overview's page box
+            stops at 1320 px, so this grid is never wider than about 1218 px,
+            and five to a row (from 1180 px) cut "Open purchase orders" and
+            "Cycle counts in progress" with their counts at every window from
+            about 1510 px up (P68-04). */}
         <div className="@container mt-3">
-          <div className="grid gap-2 @min-[480px]:grid-cols-2 @min-[760px]:grid-cols-3 @min-[1180px]:grid-cols-5">
+          <div className="@min-[480px]:grid-cols-2 @min-[760px]:grid-cols-3 grid gap-2">
             <QuickAction
               href="/dashboard/inventory?stock=low&type=all"
               icon={AlertTriangle}

@@ -217,6 +217,22 @@ describe('Shift command', () => {
   });
 });
 
+// P68-04 (DESIGN-SPEC 7.1 and 4: the Overview's page box caps the content at
+// 1320 px, so this card's link grid is never wider than about 1218 px): five
+// links in a row, from a 1180 px grid, cut "Open purchase orders" and "Cycle
+// counts in progress" with their counts at every window from about 1510 px up
+// (1600, 1680, 1920, 2560). The fast paths now stop at three to a row (3 + 2),
+// the layout 1440 already had, where every label is whole.
+describe('Shift command: the fast paths on a wide screen (P68-04)', () => {
+  it('lays the five fast paths out at most three to a row', () => {
+    render(<ShiftCommandWidget {...makeProps()} />);
+    const grid = screen.getByRole('link', { name: /Review low stock/ }).parentElement!;
+    expect(grid).toHaveClass('grid', '@min-[480px]:grid-cols-2', '@min-[760px]:grid-cols-3');
+    expect(grid.className).not.toMatch(/grid-cols-5/);
+    expect(grid.children).toHaveLength(5);
+  });
+});
+
 describe('Key stats', () => {
   it('keeps the four figures, their feet and their deltas', () => {
     const { container } = render(<StatRowWidget {...makeProps()} />);
