@@ -28,6 +28,918 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'redesign-2026-10',
+    revision: 1,
+    // The full-app redesign (PR #369, redesign/full-app at 036002d43): every web
+    // page and phone screen redrawn; no migration, no new dependency, no native
+    // change, no permission or stock-logic change, and one API change: an opt-in
+    // flag, /api/items/search?rentalsOnly=1, for the Rentals items search box.
+    // Web deploy and OTA (runtime 1.4.0) together: squash-merged as 31f4b3e61
+    // at 14:17Z on 2026-10-20, web build 8264e83c8f9b live from 14:20Z; OTA
+    // group 07d19d8b-e189-4ad9-93cf-a909a7e8f9e5 published at 14:29Z, its first
+    // iOS launches seen at 15:36Z on 2026-10-20 (EAS update:insights); T =
+    // 2026-10-20T15:37:00Z. Demo Co check after the merge: a read-only load of
+    // every sidebar page and five detail pages as demo@ (53 loads, 44 at 1440
+    // and 9 at 390), all 200 with no error screen, page error or 5xx. The full
+    // P7.4 sweep (the checkbox, grouping and workflow walks in Demo Co) did not
+    // run before this publish: the owner released at ~14:13Z with "release now
+    // and put in memory to fix the tests the first time the usage resets".
+    // Drafted from stage2/WHATSNEW-DRAFTS.md and fact-checked at 036002d43, each
+    // "now" against production 36cb9b619 (the merge base):
+    // - sections: core modules/registry.ts placements and nav.ts SECTION_LABEL
+    //   (Inventory, Fulfillment, Purchasing, Insights, Workspace); folding in
+    //   sidebar.tsx (aria-expanded), sp_nav_collapsed (one year), Admin folded
+    //   for owners and admins; the phone drawer (drawer-nav.ts) uses the same
+    //   sections, with Receive POs (105) first under Purchasing; the carry-over
+    //   is core customization orderNavSectionItems;
+    // - the summary says "On the web" of the photo cards: a phone shows the
+    //   title, the summary and the first linked entry's link as its button
+    //   (logic.ts legacyAnnouncementsFor), here items-books-grid's Open Items,
+    //   which opens the app's own Items tab, and the Grid is web only (O7);
+    // - the summary says "The web sidebar": only the web's groups fold
+    //   (sidebar.tsx aria-expanded); the phone's side menu has the same groups
+    //   and no fold (drawer-content.tsx), and a phone shows the summary;
+    // - statuses: Badge draws its dot only when asked (ui/badge.tsx `dot`); the
+    //   stock status asks (stock-status-badge.tsx: In stock, Low stock, Out of
+    //   stock ...), as do some other labels (an API key's Active and Revoked,
+    //   webhook types, integration and public link states, What's New's
+    //   Unread, the Overview's Out and Low, the customer portal's stock), so
+    //   the words give the stock status as the example, never as the only one;
+    // - top bar: production already drew the trail from 520 px (topbar.tsx
+    //   @min-[520px], Inventory / Orders); only its group names are new
+    //   (topbar-crumbs.ts SECTION_FULFILLMENT ...), so the words say the trail
+    //   uses the new groups, not that the trail is new;
+    // - Density: user-menu.tsx Comfortable / Compact in the sp_density cookie;
+    //   globals.css undoes Compact below 48rem, so the words say narrower than
+    //   768 pixels, not "phones" (a phone held sideways is wider);
+    // - Grid: inventory-table.tsx 'Show as' Table / Grid at the right of the
+    //   views row (VIEWS: All items, Low + critical, Out of stock); Rentals
+    //   items passes no saved views; grid-card.tsx shows a card's check box on
+    //   hover, focus within the card, a coarse pointer, or once one is ticked;
+    //   on Rentals items a card's "N avail · N out" line shows only while some
+    //   of the rental is out (inventory-table.tsx hasOnHandNotes and
+    //   OnHandNotes: reserved > 0), so the words say "while any of a rental is
+    //   checked out", not "each card";
+    // - table fit: the SKU under the name (ItemCell wrapSku), Item floor 220 px
+    //   (208 on Books). Measured on 7f2b43e25 (lab/tmp/items-width-measure.json,
+    //   sidebar open): at 1440 the table fits, at 1280 Coverage is on screen;
+    //   the later b53ac3de7 only narrowed Books columns and let long SKUs wrap,
+    //   so the 1,280 words hold. The PR's Known gaps: worst-case rows (a group
+    //   chip, which does not wrap, with Out of stock and "11 months ago") still
+    //   scroll 2 to 22 pixels at 1440, so the words allow a few pixels;
+    // - the Rentals items search box sends rentalsOnly=1 (740e41aa5, merged in
+    //   378765ba7); production's route always listed non-rentals
+    //   (InventoryService.list is_rental = false), so a typed SKU found nothing;
+    // - Settings: settings-nav.tsx groups; the rail from xl (1280 px) and a
+    //   Settings button below it; Save name, Save labels and Save policy keep
+    //   their words beside the spinner (Profile, Organization, Security), where
+    //   production swapped them for it; Navigation, Dashboard and the
+    //   integration cards still say Saving..., so the words name the three;
+    // - Orders: manager-actions-panel.tsx draws each next step as variant
+    //   default, near white in dark mode (globals.css .dark --primary), so
+    //   "solid", not "dark"; the cart line's stepper is a fixed 108 px
+    //   (storefront.css .sf-step.mini), where production's auto width let the
+    //   typed-quantity box take half the rail and squeeze names to one word
+    //   per line (P4.B2: also in BEFORE); the name still clamps at two lines.
+    //   The words claim no more room on an order's lines: the order page's
+    //   Item column is 208 px at 1280 (P4.B1 widened it from the redesign's
+    //   own 168 px), about what production's max-w-5xl page gave it, and at
+    //   390 it still squeezes names to their longest word, as production did;
+    // - Overview: the Inventory value card's figure and its "vs. 30 days ago"
+    //   change are new (value-chart-interactive.tsx THE FIGURE; production's
+    //   card already followed location, Cost or Retail and Compare, with no
+    //   figure), so they are told in overview-and-item-pages, not as a fix;
+    // - purchase orders: po-form.tsx DetailSection "PO details" with the total,
+    //   Cancel and Create PO or Save changes in its footer; Suppliers' table
+    //   card has no title; po-attachments-panel.tsx wraps the file name, which
+    //   production truncated;
+    // - Movements: the type buttons are MOVEMENT_TYPE_OPTIONS (Receive PO,
+    //   Transfer ...; no bundle button); a count's Counted figure carries
+    //   CountProgressBar whatever its status, and the Cycle counts list adds
+    //   one to counts in progress (production printed "N / M counted" only);
+    //   selection-confirm.tsx's footer is sticky (production's was not), while
+    //   production's picker rows already ticked on a click anywhere;
+    // - Maintenance: a SegmentedTabs scope switch over a stages StatStrip;
+    // - Shift command (shift-command.tsx): at most three quick links to a row
+    //   (528 and 792 px container steps), where production's five across cut
+    //   their labels short (QuickAction truncate).
+    // Told once, in redesign-web-fixes-2026-10: the Overview's movement type
+    // words and "yesterday", the label print window, the View orders width and
+    // the Group and Ungroup radio names. Deferred, so not claimed: Stage 6
+    // batches C, D, G and H and the phone half of F.
+    // E9 control census, BEFORE 36cb9b619 against AFTER 036002d43
+    // (lab/census/diff/triage-final-2026-10-20.md, run 2026-10-20 10:08Z to
+    // 10:44Z): 11,235 missing instances, 0 unexplained; no control lost. Its
+    // 65 renames are a control's role or the name a screen reader hears
+    // (links that became tabs or buttons, Sites4 read as Sites 4, a radio's
+    // description moved out of its name, the Movements type select now
+    // chips), and its 3 removals a button nested in its own link and a test
+    // hook, so "every page, tab, filter, button, export and setting is still
+    // there, under the same name" stands.
+    // Who is told: everyone (no release audience); entries that name a page
+    // carry its permission and module; the admins' entry links to Settings,
+    // Navigation. The word zendesk is left out (registry.test.ts FORBIDDEN).
+    status: 'published',
+    title: 'StockPilot has a new look, and the sidebar is sorted into groups',
+    summary:
+      "StockPilot has a new look on the web, in light and dark mode, with every page, button and setting still there under the same name. The web sidebar now sorts its links into Inventory, Fulfillment, Purchasing, Insights and Workspace, each group folds, and the mobile app's side menu uses the same groups. On the web, Items and Books can show your stock as photo cards, their tables show the SKU under each name so more columns fit on screen, and Settings is grouped by topic.",
+    publishedAt: '2026-10-20T15:40:00Z',
+    entries: [
+      {
+        // platform: web. From: P2.1-P2.6, P2.6c, P2.3 (top bar), P4.A1 (forms, labels).
+        id: 'web-new-look',
+        category: 'improved',
+        area: 'Web app',
+        title: 'Every page of the web app has the new look',
+        whatChanged:
+          'Every page of the web app is redrawn in the new look, in light and dark mode. Pages open with the same header, with their main actions at the right. Key figures sit in one strip, tables sit in cards that scroll sideways inside themselves on a narrow screen, and statuses are small coloured labels, with a dot before a stock status such as Low stock. On wider screens the trail in the top bar uses the new sidebar groups, such as Fulfillment / Orders.',
+        whyItMatters:
+          'Pages had grown different layouts over time. One layout on every page makes a page you open for the first time easier to find your way around.',
+        howItAffectsYou:
+          'Every page, tab, filter, button, export and setting is still there, under the same name, and printed labels and PDFs are unchanged. Your account menu has a new Density choice for tables in this browser: Comfortable, or Compact for shorter rows. On a screen narrower than 768 pixels, such as a phone held upright, rows stay Comfortable.',
+        whatToDo: 'No action needed.',
+      },
+      {
+        // platform: web + phone (the phone side menu groups; no overrides on the phone). From:
+        // integrator nav sections (draft line 210), owner decision 2026-10-19.
+        id: 'sidebar-groups',
+        category: 'improved',
+        area: 'Web and mobile apps',
+        title: 'The sidebar sorts its links into groups you can fold',
+        whatChanged:
+          "The sidebar has three new groups between Inventory and Workspace: Fulfillment (Orders, Returns, Rentals, Bundles), Purchasing (Purchase orders, Recurring POs, Reorder Planning, PO imports, Suppliers) and Insights (Reports, Briefing, AI Assistant). Select a group's name to fold it or open it again. A folded group opens by itself when you go to one of its pages.",
+        whyItMatters:
+          'Orders, purchasing and Reports sat in one long Inventory list, and the AI Assistant and Briefing in Workspace, so they were harder to find.',
+        howItAffectsYou:
+          "You see the same links as before, under the same names. On the web, links your admins hid, renamed or added in Settings, Navigation stay as they set them, and so does the order they saved. Folded groups are remembered in this browser, and for owners and admins Admin starts folded. The mobile app's side menu uses the same groups for the links it has, with Receive POs first under Purchasing.",
+        whatToDo:
+          'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
+      },
+      {
+        // platform: web. From: P3.2 (Grid), P4.D1 (rental items Grid).
+        id: 'items-books-grid',
+        category: 'new',
+        area: 'Inventory',
+        title: 'Items and Books can show your stock as photo cards',
+        whatChanged:
+          "Items, Books and Rentals items have a Table and Grid switch at the right end of the row with All items, Low + critical and Out of stock. Grid shows each record as a card with its photo, name, SKU, status, on hand and location. A size run, a SKU family or a named group shows as one card that opens in place to show its records. Checkboxes, Select all and the bulk actions work the same as in Table. With a mouse, a card's check box shows when you point at the card or tab to it, and on every card once one is ticked.",
+        whyItMatters:
+          'Some items are easier to recognise by their photo than by their name or SKU.',
+        howItAffectsYou:
+          'Each list remembers Table or Grid in this browser, and Table stays the default. Filters, sorting, saved views, pages and totals are the same in both. On Rentals items, while any of a rental is checked out, its card also shows how many are available and how many are out.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/inventory', label: 'Open Items' },
+        audience: { anyPermission: ['items:read'] },
+      },
+      {
+        // platform: web. From: integrator Items width (draft line 211), owner decision 2026-10-19
+        // ~22:40Z, and the Rentals items search fix in the same merge (378765ba7).
+        id: 'items-books-table-fits',
+        category: 'improved',
+        area: 'Inventory',
+        title:
+          'The Items and Books tables show the SKU under each name, so more columns fit on screen',
+        whatChanged:
+          "On Items, Books and Rentals items, each record's SKU now sits under its name instead of in a column of its own. Long names wrap instead of widening the table, and On hand, 14-day and Status take only the room they need.",
+        whyItMatters:
+          'Before, every column was squeezed in, so a SKU could break over three lines and a status over two.',
+        howItAffectsYou:
+          'In a browser window at least 1,440 pixels wide the table fits with no sideways scroll, though a page can still scroll a few pixels when a row carries an unusually long label, such as a long group name. In a window 1,280 pixels wide, such as a laptop screen, you see every column from Item to Coverage, and the rest scroll inside the table; in a narrower window more of them scroll. Searching and sorting by SKU, and copying a SKU, work as before, and the Rentals items search box now finds a rental by its SKU or name, which it could not do before.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:read'] },
+      },
+      {
+        // platform: web. From: P4.G1, P4.G2, Stage 6 batch A (the settings menu's focus ring).
+        id: 'settings-grouped',
+        category: 'improved',
+        area: 'Settings',
+        title: 'Settings is grouped by topic, with a settings menu on every page',
+        whatChanged:
+          'The Settings page now groups its pages under Account, Workspace, Access, Requests and email, Data safety, Connections and Plan. Every settings page has a settings menu: a list down the side on a wide screen and a Settings button at the top on a narrower one, so you can move between settings pages without going back.',
+        whyItMatters:
+          'Settings was one long list, and moving from one settings page to another meant going back to it each time.',
+        howItAffectsYou:
+          'Every setting is on the same page as before. On Roles & permissions, each box keeps its place while it saves, and if a change is refused only that box goes back. Notification switches each show their own save, and on Profile, Organization and Security the save buttons keep their words while they work.',
+        whatToDo: 'No action needed.',
+      },
+      {
+        // platform: web (Settings, Navigation is web only). From: integrator nav sections (carry-
+        // over rule, core orderNavSectionItems).
+        id: 'navigation-settings-new-groups',
+        category: 'improved',
+        area: 'Settings',
+        title: 'Settings, Navigation arranges the new sidebar groups',
+        whatChanged:
+          'Settings, Navigation now shows Fulfillment, Purchasing and Insights as groups of their own, in the order the sidebar draws them, and a custom link can be added to any group. Until you save the page, a new group follows the order you saved for Inventory or Workspace before the change, and links that order never named come after them in the new default order.',
+        whyItMatters:
+          "Your organization's saved sidebar carries over without anyone setting it up again.",
+        howItAffectsYou:
+          'Hidden links, renamed links, custom links and the saved order still apply for every member. When you save the page, each group keeps the order it shows.',
+        whatToDo:
+          'No action needed. To change the order of a new group, open Settings, Navigation, move its links and save.',
+        link: { href: '/dashboard/settings/navigation', label: 'Open Navigation settings' },
+        audience: { anyPermission: ['organization:update'] },
+      },
+      {
+        // platform: web. From: P3.1, P3.3, D16 (P3.3, P3.7, P4.A1, P4.A4), Stage 6 batch B (Shift
+        // command, P68-04).
+        id: 'overview-and-item-pages',
+        category: 'improved',
+        area: 'Dashboard and items',
+        title: 'Overview and item pages put the figures and actions you use first',
+        whatChanged:
+          'Overview opens with a greeting and a Needs attention card with one row per thing to act on, then the 30-day trends and key figures as compact strips and the charts as flat cards. Item and book pages show the photo, name, SKU and stock status at the top with every action in one row, the on hand, value and reorder point as figures, and where the stock sits in a By location card.',
+        whyItMatters: 'The figures and actions people use most were spread down the page.',
+        howItAffectsYou:
+          "Every Overview widget and link is where it was, and Settings, Dashboard still chooses and orders them. The Inventory value card now also shows the value of the line it draws and its change over 30 days, for the location, Cost or Retail and comparison you pick. When stock is reserved for open orders, an item shows the reserved and available amounts beside its on hand. Browser tabs now name item and book pages, their forms, Movements, Categories, Tags and Locations instead of saying Dashboard. Shift command's quick links now sit at most three to a row, with room for their full names.",
+        whatToDo: 'No action needed.',
+      },
+      {
+        // platform: web. From: P3.5, P4.B1, P4.B2.
+        id: 'orders-new-layout',
+        category: 'improved',
+        area: 'Orders',
+        title: 'Orders and order pages show the next step clearly',
+        whatChanged:
+          "On Orders, the status tabs are a row of stage tiles, and each requester's school or group shows under their name. An order's page puts its lines, returns, notes, shipping, proof of delivery and history in titled cards, with the dates and details beside them, and the order's next step is the one solid button under Manager actions. The digital pick shows every line in one card.",
+        whyItMatters:
+          'The next step on an order was one button among many, and in the New order cart the quantity buttons squeezed item names to one word per line.',
+        howItAffectsYou:
+          "Every tab, filter, export and action works as before. The New order page now works on a phone, with one choice per line and buttons big enough to tap, and the quantity buttons in the cart take less room, so each item's name reads on up to two lines instead of one word per line.",
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/orders', label: 'View orders' },
+        audience: { anyPermission: ['orders:request', 'orders:approve'], modules: ['orders'] },
+      },
+      {
+        // platform: web. From: P3.4, P4.C1, P4.C2, D11, Stage 6 batch A (attachment names).
+        id: 'purchasing-new-layout',
+        category: 'improved',
+        area: 'Purchase orders',
+        title: 'Purchase orders show what was received against what was ordered',
+        whatChanged:
+          'Purchase orders shows its four figures in one strip with the status tabs beside the search, and on a phone each purchase order reads as two short lines. On a purchase order, each line shows what was received against what was ordered with a small progress bar, receipts read as a timeline, and Mark as ordered and Receive items stand out as the main actions.',
+        whyItMatters:
+          'Comparing received with ordered meant reading two columns for each line, and on a phone the list scrolled sideways.',
+        howItAffectsYou:
+          'New and Edit purchase order use one PO details card, with the total in the bar at its foot beside Cancel and Create PO, or Save changes when you edit. PO imports names each source in words, Suppliers shows its table in a card, and Recurring purchase orders and Reorder Planning sit in titled cards. Receiving a size run on a phone lists each size with its figures labelled. A long attachment file name on a purchase order now wraps instead of being cut off. Every action works as before.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/purchase-orders', label: 'View purchase orders' },
+        audience: { anyPermission: ['purchase_orders:read'], modules: ['purchase_orders'] },
+      },
+      {
+        // platform: web. From: P3.6, P3.7, P4.A2, P4.A3.
+        id: 'stock-pages-new-layout',
+        category: 'improved',
+        area: 'Inventory',
+        title: 'Movements, cycle counts, Exceptions and Staging are easier to read',
+        whatChanged:
+          'On Movements, the movement types are a row of buttons above the list, Export CSV sits at the top right, the Type column uses the same words as the buttons, such as Receive PO or Transfer, and each row shows the SKU under the item name. A cycle count shows its four totals in one strip, with a progress bar under Counted, and each count in progress on the Cycle counts list has a progress bar too. Exceptions shows each rule as a card with its severity and count.',
+        whyItMatters:
+          'The Type column showed system codes such as RECEIVE_PO, and the totals of a count were spread around the page.',
+        howItAffectsYou:
+          'On Staging, ticking a row no longer moves the table: the Place selected bar takes the place of the item count. In Start a count, when you pick items, the number selected and Start count stay at the bottom of the window however long the list grows. Entering, reviewing and posting counts work as before, and Export CSV writes the same file.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:read'] },
+      },
+      {
+        // platform: web. From: P4.B3, P4.D1, P4.D2, P4.D3, P4.E1, P4.E2, P4.F1, P4.F2, P4.F3,
+        // P4.A4, P5.2.
+        id: 'more-pages-new-layout',
+        category: 'improved',
+        area: 'Web app',
+        title: 'Returns, Rentals, Reports, Maintenance and the other pages have the new layout',
+        whatChanged:
+          "Returns has search at the top, filters as chips you tap and a photo of each item coming back. On a return, the next step sits in one bar at the top, with The item is here as a switch beside it. Reports open with the same header and the date range as a switch beside the exports. Maintenance shows My requests and All requests as a switch, with the statuses as a row of tiles under it. On a phone, each rental row shows its items and checkout date under the borrower's name.",
+        whyItMatters:
+          'These pages each had their own layout, so the same kind of control sat somewhere different on each.',
+        howItAffectsYou:
+          "Schedule, Team, Accounts, Bundles, Procedures, Categories, Tags, Locations, warehouse pages, the AI Assistant, Briefing, Notifications, Help, Support, What's New and the admin pages have the new look too. Every filter, button, dialog and rule is still there. The fixes made on these pages are listed under Fixes on the web found while redrawing every page.",
+        whatToDo: 'No action needed.',
+      },
+      {
+        // platform: web (pages people outside the organization open too). From: P5.1, P5.1b, D14.
+        id: 'sign-in-and-shared-pages',
+        category: 'improved',
+        area: 'Web app',
+        title: 'Sign-in and the pages people open from a link have a cleaner look',
+        whatChanged:
+          'Sign-in, two-factor sign-in, password reset, invites and workspace setup have a flat look with larger fields and buttons on phones. Pages people open from a link or a QR code, such as a packing-slip signature, an order request and its tracking, a return request, a shared maintenance request and an item label page, share one simple layout in light and dark mode, as do the public order page and the customer ordering portal.',
+        whyItMatters:
+          'These are the first pages new members, requesters and customers see, and some did not read well in dark mode.',
+        howItAffectsYou:
+          'Every label and step is the same. Order tracking now shows Backordered instead of an internal code when part of an order is waiting on stock.',
+        whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'redesign-mobile-app-2026-10',
+    revision: 1,
+    // The phone half of the redesign (P2.5, P2.5b, P2.5c, P3.8, P5.4-P5.10,
+    // P5.4b and Stage 6 batch E), in OTA group
+    // 07d19d8b-e189-4ad9-93cf-a909a7e8f9e5 for runtime 1.4.0;
+    // JavaScript only, no store build (owner O4). Published with the web
+    // releases once iOS launches of the group show (EAS update:insights).
+    // Fact-checked at 036002d43, each "now", "no longer" and "used to" against
+    // production 36cb9b619, so a fix of something only the restyle broke (the
+    // Add cards' typed text size, button words cut short, the clock over the
+    // side menu) is not told:
+    // - light-only screens: production's Scan tab, a count and its Release and
+    //   Reassign sheets, scan to count, the AI shelf scan, Bundles, a purchase
+    //   order and Scan a PO imported the light-only `theme` alias; item screens
+    //   already used useTheme, so they are not named;
+    // - the side menu already highlighted the page; new are 44pt rows and
+    //   accessibilityState selected (drawer-content.tsx);
+    // - Button sm, Chip and Paginator draw at 36pt inside a 44pt frame, so the
+    //   summary says "easier to tap", not "larger"; the Scan tab's close
+    //   control is an X named Close scanner;
+    // - select mode: picked rows use accentWash, light teal in light mode and
+    //   dark teal in dark (theme.ts); the checkbox role is new on Items and
+    //   Books only (New count and Exceptions had it); the select bar has Clear,
+    //   Group, Ungroup and Review (count-select-bar.tsx);
+    // - the Ungroup review names each Keeps SKU radio with keepsSkuRadioLabels
+    //   (lib/ungroup-selected.ts) and reads ungroupOutcomeWords as its value
+    //   (batch E); the phone Group review's radio names are unchanged (batch
+    //   F's phone half is deferred), so the words name the Ungroup review only;
+    // - counts: only scan to count and the AI review stop saving an empty box;
+    //   on the count screen an emptied box still posts its saved count
+    //   (OWNER-REVIEW-NOTES P5.9a), so the title names the two; the Counts tab's
+    //   PENDING tile shows a dash and no SYNCED pill when the phone's store
+    //   cannot be read (cycle-counts.tsx);
+    // - failed reads: Orders, Returns, PO imports, Team and Users already said
+    //   so in production, so they are not listed; Receive POs and Bundles are
+    //   new; Home clears its figures on a failed read, hence "Except on Home";
+    // - returns: production already drew the status pill and Try again; new are
+    //   the chips, white photos, the iPad rail, and the spinner until the read
+    //   for the filter and search on screen has answered;
+    // - a new checkout is RENTALS · NEW CHECKOUT, opened from the + on Rentals
+    //   (named New rental for VoiceOver only).
+    // Left out on purpose: batch E's F8. A link to the Group review that
+    // arrives while that review is open now starts a fresh review for the
+    // records it names (group-selected.tsx groupSelectedReviewKey), where
+    // production kept the first selection's records; production's Ungroup
+    // review already read the new ones. The app opens both reviews only from
+    // Items and Books (their select bar and Add to group), which sit beneath
+    // an open review, so only a link from outside the app reaches it.
+    // Phone walks on the release's bundle before this publish (iPhone 17 Pro
+    // simulator, Large text, manager): N2 Group selected (its alerts, review
+    // and Save with the suggested name) and N4 Ungroup passed on Items and
+    // Books (offline steps skipped); N1 select mode passed on both lists (its
+    // page-flip step skipped); N5 expandable rows passed expand and collapse on
+    // Items, with its other steps and the Books cell still running. N3 Add to
+    // group from a row failed at its first step on both lists: the search
+    // showed the SKU's two records as one family header, not a row reading Same
+    // SKU as records in the group, so whether production does the same is the
+    // follow-up's first check. N6-N14, B16, the largest text sizes and the iPad
+    // had not run when the owner released at ~14:13Z on 2026-10-20 ("release
+    // now and put in memory to fix the tests the first time the usage resets").
+    // Who is told: everyone; entries for a module name its permission and
+    // module. If the OTA is rolled back while the web stays, withdraw this
+    // release (status 'withdrawn' and a withdrawnNote): rollback-plan.md.
+    status: 'published',
+    title: 'The mobile app has a new look and says clearly when something did not load',
+    summary:
+      'Every screen in the mobile app now follows your light or dark mode, with the same screens, tabs and steps as before and buttons that are easier to tap. Lists now say when they could not load instead of looking empty, Home shows the real sync status, VoiceOver can name more buttons and choices, and scan to count no longer records an empty box as 0. Close the app completely and open it again to load the update.',
+    publishedAt: '2026-10-20T15:39:00Z',
+    entries: [
+      {
+        // platform: phone. From: P2.5, P5.4, P5.6, P5.9a, P5.9b, P5.10a, P5.10b, P5.4b, P2.5c.
+        id: 'app-new-look',
+        category: 'improved',
+        area: 'Mobile app',
+        title: 'Every screen in the mobile app has the new look',
+        whatChanged:
+          "Every screen in the mobile app now follows your phone's light or dark mode, including the Scan tab, a count and its Release and Reassign sheets, scan to count, the AI shelf scan, Bundles, receiving a purchase order and Scan a PO, which used to stay light. The tab bar is a solid bar with the tab you are on in the accent colour, and in the side menu every row is easier to tap and VoiceOver says which page you are on. Switching workspace from the side menu opens in the new sheet style, and VoiceOver says which organization and warehouse you are in.",
+        whyItMatters:
+          'Several screens stayed light in dark mode, and many buttons were smaller than the 44 points Apple recommends.',
+        howItAffectsYou:
+          'Your tabs, screens and steps are the same, and buttons, chips and page numbers now have 44-point touch areas. The Scan tab has a dark camera bar with an X to close it and the Scan and Photo ID switch, and a scanned item shows on a card with the same details and the same -1, +1, +5 and +25 buttons.',
+        whatToDo: 'Close the app completely and open it again to load the latest update.',
+      },
+      {
+        // platform: phone. From: P5.5, P5.6 (recount sheet), P5.9a (New count, Exceptions), D29,
+        // Stage 6 batch E (Ungroup review names).
+        id: 'app-select-mode-check-boxes',
+        category: 'improved',
+        area: 'Inventory',
+        title: 'Select mode shows a check box on every row',
+        whatChanged:
+          'In select mode on Items and Books, in New count and when you pick exceptions to recount, each row shows a check box and picked rows are shaded teal. On Items and Books, VoiceOver now says whether each row is checked. The select bar on Items and Books has larger buttons, and the list scrolls far enough that the page numbers are never hidden behind it.',
+        whyItMatters:
+          'Picked rows were hard to tell apart, VoiceOver could not tell whether a row on Items or Books was picked, and the bar could cover the page numbers.',
+        howItAffectsYou:
+          "Group, Ungroup and Review work as before, and a long Ungroup result can scroll clear of the buttons. On the Ungroup review, VoiceOver now names each Keeps SKU choice by its record's name and what sets that record apart from the SKU's other records, such as its rack, warehouse or on hand, and then says what will happen to it, such as Gets its own SKU. After you start a recount, closing the sheet by tapping outside it now refreshes the list and clears your selection, as Done does.",
+        whatToDo: 'Close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['items:read'] },
+      },
+      {
+        // platform: phone. From: P3.8 (scan to count), P5.9a (AI review, Post, saved counts).
+        id: 'app-counts-record-what-you-type',
+        category: 'fixed',
+        area: 'Cycle counts',
+        title: 'Scan to count and the AI shelf scan no longer record an empty box as 0',
+        whatChanged:
+          'In scan to count and on the AI shelf scan review, an empty Counted box is no longer saved as a count of 0: type a number, including 0, to record it. If you tap Post right after typing a count, the app now saves that count first and asks you to wait for it to sync, so a count is never posted without the number you just typed.',
+        whyItMatters:
+          'An empty box could record a count of 0, and a count typed just before Post could be left out of what was posted.',
+        howItAffectsYou:
+          'The Burst switch now shows both settings, Burst off and Burst, so you can see which is on. The count card stays above the keyboard, the count list scrolls clear of the number pad, and Post sits above the home indicator. If the app cannot read the counts saved on your phone, the Counts tab shows a dash instead of 0 to sync and no longer says Synced, and a count it cannot read says so.',
+        whatToDo: 'Close the app completely and open it again to load the latest update.',
+        audience: {
+          anyPermission: ['cycle_counts:read', 'stock:adjust'],
+          modules: ['cycle_counts'],
+        },
+      },
+      {
+        // platform: phone. From: D25 (P2.5 DataListScreen and the owning screens), P5.7a, P5.7b,
+        // P5.8, P5.9b, P5.10a, P5.10b, D26.
+        id: 'app-lists-say-when-not-loaded',
+        category: 'fixed',
+        area: 'Mobile app',
+        title: 'Lists say when they could not load',
+        whatChanged:
+          'Home, Receive POs, Purchase orders, Recurring POs, Suppliers, Categories, Tags, Procedures, Movements, Bundles, Schedule, Notifications, Accounts, Audit log, Bins, Charters, UoM conversions, Vendor mappings and Warehouses now say when they could not load, instead of showing an empty list or zeros. Except on Home, if a refresh fails, what you last saw stays on screen with a note that it could not be refreshed, and PO imports now does the same.',
+        whyItMatters:
+          'A list that failed to load looked empty, so it could seem there was nothing to do.',
+        howItAffectsYou:
+          'Pull down, or tap Try again where it shows, to load it again. Opening a bundle that is not on your phone yet now says so instead of loading forever, and Unsent work in Settings says when it could not read the work saved on your phone.',
+        whatToDo: 'Close the app completely and open it again to load the latest update.',
+      },
+      {
+        // platform: phone. From: P5.10a (Home sync words, Home charts), P5.10b (Reports tiles),
+        // D26.
+        id: 'app-home-sync-status',
+        category: 'fixed',
+        area: 'Mobile app',
+        title: 'Home shows the real sync status',
+        whatChanged:
+          'Beside your workspace name, Home now shows the real sync status, such as All synced, Offline · 2 queued or 1 not sent, instead of always saying synced now. The small charts on the figure cards of Home and Reports are gone: they were drawings that looked the same in every workspace.',
+        whyItMatters:
+          'Home said synced now even with changes still waiting to send, and the small charts did not show your data.',
+        howItAffectsYou:
+          'The figures themselves are unchanged. After you work offline, Home tells you when everything has been sent.',
+        whatToDo: 'Close the app completely and open it again to load the latest update.',
+      },
+      {
+        // platform: phone (iPhone and iPad). From: P5.7b.
+        id: 'app-returns-stay-current',
+        category: 'fixed',
+        area: 'Returns',
+        title: 'A return no longer jumps back to an earlier step',
+        whatChanged:
+          'In the mobile app, a return no longer jumps back to an earlier state when you pull to refresh just before receiving or approving it. Returns also have the new look: filters are chips, item photos sit on white, and on the iPad the return open beside the list is marked with a coloured bar.',
+        whyItMatters:
+          'An older answer arriving after a newer one could show the return as it was before your last step.',
+        howItAffectsYou:
+          "While the returns list is loading after you change a filter or the search, or tap Try again, it now shows a spinner instead of saying No returns match this view, and a list that cannot load shows a warning sign with its message. Reasons and notes you type use the app's own typeface, and the replacement search box is easier to tap.",
+        whatToDo: 'Close the app completely and open it again to load the latest update.',
+        audience: {
+          anyPermission: ['returns:read', 'returns:manage', 'orders:approve'],
+          modules: ['returns'],
+        },
+      },
+      {
+        // platform: phone. From: P5.7a, owner review note P5.7a (Email delivery request outline).
+        id: 'app-order-screens-keyboard',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'Order screens stay usable with the keyboard up and at large text sizes',
+        whatChanged:
+          'Deny and Reopen picking now stay above the keyboard while you type the reason, and their buttons show even at the largest text sizes. Notes you type when creating a return stay in view above the keyboard. The signature screen follows dark mode, while the signature pad stays white so the signature prints clearly on the packing slip.',
+        whyItMatters: 'The keyboard could cover the reason box and its buttons.',
+        howItAffectsYou:
+          'Orders, the storefront, checkout and the order screen have the new look. Buttons, chips and links on the order screen are easier to tap and VoiceOver names each of them. Email delivery request is now an outline button, so the order keeps one main button.',
+        whatToDo: 'Close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['orders:request', 'orders:approve'], modules: ['orders'] },
+      },
+      {
+        // platform: phone. From: P5.4, P5.5, P5.6, P5.10a, P5.10b, D28 (P5.10a), D29.
+        id: 'app-voiceover-names',
+        category: 'fixed',
+        area: 'Mobile app',
+        title: 'VoiceOver can name and use more of the mobile app',
+        whatChanged:
+          'VoiceOver now reads Keep me signed in as a checkbox, names the show password button and the two-factor code box, and reads sign-in errors and a refused code aloud. It names the Filters and Books scan buttons, says which filter choices are chosen, and can turn Face ID unlock on and off, use the role picker in Users, find Send in the AI chat and close a sheet with the escape gesture.',
+        whyItMatters:
+          'These buttons and choices had no name or state, so VoiceOver could not say what they were or whether they were on.',
+        howItAffectsYou:
+          "They sit where they did. New item and New book name each box for VoiceOver, Support has a Back button, and its menu button is read out. The AI screen's footer now says the mobile chat is in beta instead of saying it ships later.",
+        whatToDo: 'Close the app completely and open it again to load the latest update.',
+      },
+      {
+        // platform: phone. From: P3.8 fixes, P5.4 (D24 fonts, Face ID ring, What's New buttons).
+        id: 'app-text-size-and-motion',
+        category: 'fixed',
+        area: 'Mobile app',
+        title: 'Large text and Reduce Motion are followed more closely',
+        whatChanged:
+          'With large text on, each location line on the scanned card shows its name above its value. Take photo and Scan another now sit one under the other, so each keeps its words on one line. With Reduce Motion on, the scan line and the pulsing Face ID ring stay still.',
+        whyItMatters:
+          "At larger text sizes a location's name and value shared one line and button words wrapped, and the moving scan line and ring ignored Reduce Motion.",
+        howItAffectsYou:
+          "If the app's fonts ever fail to load, it now opens in the system font after a short wait instead of staying on a blank screen. What's New and the screen tours have larger buttons.",
+        whatToDo: 'Close the app completely and open it again to load the latest update.',
+      },
+      {
+        // platform: phone. From: P5.8, D27.
+        id: 'app-scan-and-receive-pos',
+        category: 'fixed',
+        area: 'Receiving',
+        title: 'Scanning and receiving purchase orders behave more predictably',
+        whatChanged:
+          'Scanning a barcode on a purchase order now takes one read each time you open the scanner, so a code that is not on it shows one message instead of several. Scan a PO takes at most five pages, and a quick second tap on Extract no longer sends the same pages twice. Receive POs now says its purchase orders are listed by when each last changed, and its progress bar that never moved is gone.',
+        whyItMatters:
+          'One scan could show the same message several times, a double tap could send the pages twice, and Receive POs said it was sorted by expected arrival when it was not.',
+        howItAffectsYou:
+          "If an attachment could not be removed, the app now says so. A supplier's email or phone number opens Mail or the phone only when it is one plain address or number; otherwise it shows as text.",
+        whatToDo: 'Close the app completely and open it again to load the latest update.',
+        audience: {
+          anyPermission: ['purchase_orders:read'],
+          modules: ['purchase_orders', 'receiving'],
+        },
+      },
+      {
+        // platform: phone. From: P3.8.
+        id: 'app-scan-tab-cards',
+        category: 'fixed',
+        area: 'Scan',
+        title: 'The Scan tab shows one card at a time and keeps its buttons in reach',
+        whatChanged:
+          'After Photo ID finds a product, the Scan tab shows only the Add item card, so the camera can no longer start underneath it. The Add book and Add item cards follow dark mode, and you can scroll them while the keyboard is up to reach the warehouse choices and Add to inventory. The tip shown before your first document scan follows dark mode and scrolls at the largest text sizes.',
+        whyItMatters:
+          'The camera could start under the Add item card, and the keyboard could hide Add to inventory.',
+        howItAffectsYou:
+          'On the Add book and Add item cards, Cancel and Add to inventory now sit one under the other, so each keeps its words on one line.',
+        whatToDo: 'Close the app completely and open it again to load the latest update.',
+      },
+      {
+        // platform: phone. From: P5.9b, P5.10a, P5.10b.
+        id: 'app-bundles-rentals-staging',
+        category: 'fixed',
+        area: 'Mobile app',
+        title: 'Bundles, Staging, Rentals, New event and Maintenance are easier to use',
+        whatChanged:
+          'Bundles follow dark mode, you can pull down on the Bundles list to refresh it, and Distribute keeps its words on the button while it sends. On Staging, All, Books and Items are a switch above the list, and the Rentals list shows Checkouts and Items as a switch at the top. On a new checkout (the + on Rentals), the plus and minus buttons, warehouse choices, Try again and Change are larger.',
+        whyItMatters:
+          'Bundles stayed light in dark mode and could not be refreshed by pulling down, and several choices were small and did not say which one was picked.',
+        howItAffectsYou:
+          'New event has All-day event as a proper checkbox and says when warehouses could not be loaded. On Maintenance, the My requests and All requests switch, the status filters and the site, category and priority choices say which one is chosen and are easier to tap, as are History and Place on Staging and the buttons in Customize tab bar.',
+        whatToDo: 'Close the app completely and open it again to load the latest update.',
+      },
+    ],
+  },
+  {
+    id: 'redesign-web-fixes-2026-10',
+    revision: 1,
+    // Fixes made on the web while every page was redrawn: the CONFLICTS D
+    // defects (each fixed in its owning package with a proving test) and the
+    // fixes the packages and Stage 6 batches B, F and A found. Each was checked
+    // at 036002d43 against production 36cb9b619; a fix of something only the
+    // redesign had broken is not told. D1 P2.3, D2 P4.A4, D3 P4.A1, D4 P4.F1,
+    // D5 D8 D9 P3.2, D10 D19 P2.3, D12 P3.4, D13 P4.G2, D17 P4.G1 P4.G2, D18
+    // P3.2 P4.A4 P4.F1 P4.F2, D20 P4.A2, D21 P4.D3, D30 P4.C1 P4.C2; D11, D14
+    // and D16 are told in redesign-2026-10.
+    // From Stage 6, each pre-existing in production: the Overview's movement
+    // type words and "yesterday" (batch B FX1, FX5), the New order catalog
+    // toolbar (P68-02) and the View orders width (P68-03), all three seen in the
+    // BEFORE build; the label print window's viewport and the Group and Ungroup
+    // radio names (batch F, web half).
+    // Corrected in the fact-check: Quick view and Remove already showed to the
+    // Tab key (storefront.css :focus-visible), so only touch screens are new for
+    // them; Procedures failed on the next submit once a warehouse was chosen
+    // (the hidden wh field and the select both sent wh), and its sticky header
+    // and scrolling code blocks were already there; the webhook, API key and
+    // custom field buttons already had names (title, aria-label) and now say
+    // which endpoint, key or field; the public link selection is on the link's
+    // page in Settings; the Overview card reads Today's activity.
+    // Left out on purpose: D6 (the order print page has had no link in the app
+    // since 8c4feb679), D23 and the connection time on the help desk
+    // integration page (the page's name is a word registry.test.ts FORBIDDEN
+    // refuses), D31 and the platform console (platform admins only, whom no
+    // audience can name), D15, D22 and D32 (marketing page titles, an icon for
+    // an emoji, a sign-in error fade). The Rentals items search fix is told
+    // once, in redesign-2026-10's items-books-table-fits. The Inventory value
+    // card's figure and its change over 30 days are new in the redesign
+    // (production's card had no figure and already followed the location,
+    // Cost or Retail and Compare), so they are told in redesign-2026-10's
+    // overview-and-item-pages, not here as a fix. Deferred, so not claimed:
+    // Stage 6 batches C, D, G and H.
+    // Who is told: everyone; entries for one area name its permission and
+    // module.
+    status: 'published',
+    title: 'Fixes on the web found while redrawing every page',
+    summary:
+      "While every web page was redrawn, these were fixed too: dates and times show in your own time zone where they used the server's, buttons that showed only under a mouse pointer now show on touch screens and to the keyboard, more forms ask before Refresh to update would lose your typing, and email and phone links open only for one plain address or number. Several pages now say what went wrong instead of failing or looking empty.",
+    publishedAt: '2026-10-20T15:38:00Z',
+    entries: [
+      {
+        // platform: web. From: P3.4 (D12), P4.G2 (D13), P4.F1, P5.2.
+        id: 'web-times-in-your-time-zone',
+        category: 'fixed',
+        area: 'Web app',
+        title: 'Dates and times show in your own time zone',
+        whatChanged:
+          "In an organization with more than 800 purchase orders, the Placed date on Purchase orders now shows your own day. Backups & restore and Recovery, your submissions on Support & feedback and the times in the Audit log's hover text now use your time zone too.",
+        whyItMatters:
+          "These used the server's clock, so a Placed date could be a day late for orders placed in the evening, and restore times could be hours off.",
+        howItAffectsYou:
+          'The dates and times now match your clock. On a phone, the snapshots table on Backups & restore scrolls inside its card instead of being cut off.',
+        whatToDo: 'No action needed.',
+      },
+      {
+        // platform: web (touch screens and keyboard). From: D18 (P3.2, P4.A4, P4.F2), P4.B2, P4.D1,
+        // P5.2, P3.2, P4.A1 (staged photo), P2.1 (text field size), Stage 6 batch F (label print
+        // window).
+        id: 'web-hover-only-controls',
+        category: 'fixed',
+        area: 'Web app',
+        title:
+          'Buttons that showed only under a mouse pointer now show on touch screens and to the keyboard',
+        whatChanged:
+          "A saved view's Share and Delete, a category's Archive, a tag's Edit and Delete, each day's + Add on the team calendar and Remove on a photo added to a new item now show on touch screens and when you reach them with the Tab key. Quick view and Remove on the New order page now show on touch screens too.",
+        whyItMatters:
+          'They appeared only under a mouse pointer, so a phone or tablet never showed them, and the Tab key could land on one you could not see.',
+        howItAffectsYou:
+          "On a phone, the Charters and Warehouses tables keep Edit and Archive, and the Rentals list keeps View, Mark returned and Cancel, pinned on the right while the other columns scroll. Also on a phone, the page numbers that open from the Page 1 of 5 button under a list are easier to tap, the Categories page's New category button stays on screen, New rental's plus and minus buttons and return date are larger, and printing an item's label shows it at full size before the print dialog. On an iPhone, tapping the Items search box or another box with small text no longer zooms the page in.",
+        whatToDo: 'No action needed.',
+      },
+      {
+        // platform: web. From: D20 (P4.A2), D30 (P4.C1, P4.C2), P4.C2 (delete dialog), P4.C1 (field
+        // names).
+        id: 'web-unsaved-work-protected',
+        category: 'fixed',
+        area: 'Web app',
+        title: 'More forms ask before Refresh to update would lose your typing',
+        whatChanged:
+          "New and Edit purchase order, a recurring purchase order template and Bulk ISBN import now ask before Refresh to update reloads the page over work you have not saved. Deleting a recurring purchase order template now asks in the app's own confirmation dialog, and if the delete is refused, the reason stays in the dialog.",
+        whyItMatters:
+          'Refresh to update could reload over a purchase order you were writing or a list of ISBNs you had pasted.',
+        howItAffectsYou:
+          "When it asks, choose Keep working, save your work, then refresh. Screen readers now name each line's remove button on New and Edit purchase order, and the Received now and Notes boxes when you receive a purchase order.",
+        whatToDo: 'No action needed.',
+      },
+      {
+        // platform: web (the phone half is in redesign-mobile-app-2026-10). From: P4.C2, P4.A4,
+        // owner decision 2026-10-19 (no phone numbering library, 011 stays text).
+        id: 'web-contact-links-plain-only',
+        category: 'fixed',
+        area: 'Web app',
+        title: 'Email and phone links open only for one plain address or number',
+        whatChanged:
+          "A supplier's email on Suppliers, and a warehouse's phone number and email on its page, are now links only when they hold one plain address or one number. Anything else, such as a number with an extension or two addresses, shows as plain text.",
+        whyItMatters:
+          'A link built from longer text could call or email something other than what the page showed.',
+        howItAffectsYou:
+          'The words shown are the same as before. To make one a link again, edit it to hold a single address or number.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['suppliers:read', 'locations:read'] },
+      },
+      {
+        // platform: web. From: P3.2 (D5, D8, D9), P4.A1 (D3, D7, tour, field names), P4.A2, P4.A4,
+        // P3.2 (photo viewer), Stage 6 batch F (Group and Ungroup radio names).
+        id: 'web-items-books-fixes',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'Items and Books: Select all during a search, and how to restore a record',
+        whatChanged:
+          "During a search, Select all rows on this page now ticks exactly the records you can see. The Archived view now explains how to bring a record back: select it and choose Restore. Create new book from the Books ISBN scan now fills in the ISBN. In an item's photo viewer, Remove this image? now removes the photo you chose to delete, even if an arrow key was pressed while it was open.",
+        whyItMatters:
+          'Select all could tick records other than the search results on screen, the Archived view told people to change a status the form does not have, and an arrow key pressed behind Remove this image? moved the viewer, so Remove deleted a different photo.',
+        howItAffectsYou:
+          "Screen readers now name every checkbox on Items and Books and every field on New and Edit item, Adjust stock and Transfer stock, and on the Group selected and Ungroup reviews they tell records with the same name apart, such as by their rack. The New item tour stops at Quantity on hand and Reorder point instead of skipping them. In Bulk ISBN import, removing a row while lookups run no longer puts a book's details on another ISBN. On a phone, the Export builder's column-order buttons stay on screen. New item no longer says CSV import comes in a later phase.",
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:read'] },
+      },
+      {
+        // platform: web. From: P3.5, P4.B1, P5.1b, P4.A4 (D2), Stage 6 batch B (P68-02).
+        id: 'web-orders-fixes',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'Order pages and public order links: fixes found in the redesign',
+        whatChanged:
+          "Add items no longer spills past the edge of its window when an item has a very long name. Newer and Older on the Orders list are now disabled buttons on the first and last page, so the keyboard no longer lands on a link that goes nowhere. On a phone, Save in the digital pick is as tall as the field beside it. On a tablet or in a narrow window, the New order catalog's search box now takes a row of its own, with Availability, the sort and the view buttons on the next, so nothing runs past the edge of the page.",
+        whyItMatters:
+          "A long item name could push Add items off the screen, on the first or last page the Tab key still landed on Newer or Older, a link that went nowhere, and on a tablet the New order catalog's buttons ran past the edge of the page.",
+        howItAffectsYou:
+          "On the public order page, Switch location? keeps the keyboard inside its dialog and Escape cancels it without clearing the cart. After a request is sent from a public link, screen readers read out the Check your inbox panel at once, and the filters say which options are on. New order from here on a warehouse's page now opens the new order with that warehouse picked.",
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['orders:request', 'orders:approve'], modules: ['orders'] },
+      },
+      {
+        // platform: web. From: P4.F1 (D4, D18).
+        id: 'web-ai-assistant-fixes',
+        category: 'fixed',
+        area: 'AI Assistant',
+        title: 'AI Assistant: the low-stock link opens the low-stock list',
+        whatChanged:
+          'The Open low-stock list link under an AI Assistant answer now opens Items filtered to low stock, instead of the whole list.',
+        whyItMatters:
+          'The link opened every item, so the low-stock ones had to be found again by hand.',
+        howItAffectsYou:
+          'The delete button on a saved chat now shows when you tab to it or use a touch screen, you can start a new chat on a phone-sized screen, and screen readers now name the button that sends your question.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:update'], modules: ['ai'] },
+      },
+      {
+        // platform: web. From: P4.D3 (D21).
+        id: 'web-procedures-fixes',
+        category: 'fixed',
+        area: 'Procedures',
+        title:
+          'Procedures: the warehouse filter no longer opens an error page, and All clears the category',
+        whatChanged:
+          'On the Procedures page, searching or choosing another warehouse once a warehouse is chosen no longer shows an error page, and the All category chip now clears the category filter.',
+        whyItMatters:
+          'The warehouse filter could open an error page, and All left the chosen category in place.',
+        howItAffectsYou:
+          'Procedures have the new look, with cards and category chips with colour dots. On a phone, the search box spans the screen, and wide tables in instructions scroll sideways instead of running off the page.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:update'], modules: ['procedures'] },
+      },
+      {
+        // platform: web. From: P4.E1, P4.E2, P4.A1 (item picker), Stage 6 batch B (P68-03).
+        id: 'web-reports-fixes',
+        category: 'fixed',
+        area: 'Reports',
+        title: 'Reports: lot trace and item cost history say what went wrong',
+        whatChanged:
+          'Recall / lot trace no longer gets stuck on Searching if the connection drops: it says what went wrong so you can try again. Item cost history now says when your item list could not load, instead of showing an empty picker, and when two records share a SKU and name, the arrow keys in its picker now reach both.',
+        whyItMatters:
+          'A dropped connection left the search waiting with no end, and a failed item list looked like there were no items.',
+        howItAffectsYou:
+          'Every report opens with the same header, its figures and tables sit in cards that scroll sideways on a phone, and Book Order Totals has full-size filters on phones. In a window at least 1,024 pixels wide, View orders on Book Order Totals now opens wide enough to show how many each order requested without scrolling sideways. Every number, filter and export works as before.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['reports:read'] },
+      },
+      {
+        // platform: web. From: P3.6, P3.7, P3.3, P3.1, P2.2c (empty range), Stage 6 batch B (FX1,
+        // FX5).
+        id: 'web-counts-movements-fixes',
+        category: 'fixed',
+        area: 'Inventory',
+        title:
+          'Counts and Movements say more, and Overview names each movement type as Movements does',
+        whatChanged:
+          "If posting or cancelling a count is refused, the reason now also shows inside the open dialog. On large ledgers, Movements shows how many units left for an order pick instead of a dash, and bundle movements read Bundle assembly, Bundle distribution and Bundle shortage instead of system codes. Links to an item's last physical count open with that card in view. On Overview, Today's activity and Movements · 30 days now name each movement type as Movements does, such as Receive PO, and Today's activity prints yesterday in full.",
+        whyItMatters:
+          "A refusal showed only in a passing message, some ledger rows showed a dash instead of the change or a code instead of the type's name, and Overview showed codes such as Receive_po and cut yesterday to yesterd.",
+        howItAffectsYou:
+          'When a saved layout shows Inventory value or Movements breakdown without the other, it now fills the width of the page. On phones and tablets, Save and Cancel beside a movement note are larger and farther apart. When nothing on Movements matches your filters, the count beside the filters no longer shows rows 1 to 0 of 0.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:read'] },
+      },
+      {
+        // platform: web. From: P4.G1 (D17 custom fields), P4.G2 (D17 webhooks, API keys, public
+        // link catalog), P5.2 (charters tick), P5.2 (admin refusals), P2.3 (authenticator check).
+        id: 'web-settings-and-admin-fixes',
+        category: 'fixed',
+        area: 'Settings',
+        title: 'Settings and admin pages: screen reader names and clearer selections',
+        whatChanged:
+          "Screen readers now name the Copy buttons on keys and secrets shown only once, the button that hides a new signing secret and the custom field Edit buttons, and the webhook Send test and Delete, API key Revoke and custom field move buttons now say which endpoint, key or field they act on. On a public request link's page in Settings, the Catalog's select-all box shows a partly selected look when some of the page is selected, and the selection count stays in view while you scroll.",
+        whyItMatters:
+          'Some of these buttons had no name for screen readers and others did not say which endpoint, key or field they were for, and a part selection looked the same as none.',
+        howItAffectsYou:
+          'Picking charters for a warehouse shows a tick on each one, not just a colour. If archiving, restoring or deleting a charter, warehouse, bin, vendor item mapping or unit-of-measure conversion is refused, the reason now shows inside the open dialog. When Confirm with your authenticator cannot reach the server, it now says so instead of spinning with Cancel greyed out, and if your authenticator cannot be read it no longer says none is enrolled. Your Catalog selection still carries across pages and filters, and every setting, link and confirmation works as before.',
+        whatToDo: 'No action needed.',
+        audience: {
+          anyPermission: ['organization:update', 'integrations:manage', 'public_links:manage'],
+        },
+      },
+      {
+        // platform: web. From: P4.C1, P4.D1, P5.1, P2.3 (D1, D10, D19), P4.F3, P5.1 (label page),
+        // P4.B3 (maintenance form and photos), P2.3 (theme, shortcuts).
+        id: 'web-error-and-switched-off-pages',
+        category: 'fixed',
+        area: 'Web app',
+        title: 'Switched-off features and error pages say what to do',
+        whatChanged:
+          'When PO imports or Rentals is switched off for your organization, New PO import, an import, a rental and New rental now say so, and owners and admins see how to turn it on, instead of an error. Sign out and back in on an error page now signs you out. Using a two-factor recovery code no longer also sends the authenticator code form. On a new maintenance request, screen readers now read out a problem with What is the issue? or Describe the maintenance issue when you move to that field. Try again on a maintenance photo that did not load keeps the photo viewer open.',
+        whyItMatters:
+          'These pages failed with an error instead of saying the feature was off, and Sign out and back in returned you to the dashboard still signed in.',
+        howItAffectsYou:
+          "The warehouse picker's All choice now uses your organization's own plural word for warehouses, the organization switcher shows role names instead of codes, and the top bar's search shows a purchase order's status in the Purchase orders list's words. The New PO import drop zone opens from the keyboard, and on the page a label's QR code opens, the Last one panel reads well in dark mode. If you switch between Light and Dark and then sign out, the page you land on keeps your choice. The keyboard shortcuts list now shows Command and K as keys pressed together, not one after the other.",
+        whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'ai-search-finds-every-item-2026-10',
+    revision: 1,
+    // The AI Assistant's search by meaning (#367): merged as 36cb9b619, web
+    // build 05dbc57aee63 live at 2026-10-13T23:43:11Z; migration 0401
+    // (trigger inventory_items_clear_stale_embedding) live in production at
+    // 2026-10-14T00:22:33Z; the hourly sweep's first run (00:37Z) embedded
+    // every item that was missing one (the route answered HTTP 200; 0 failed).
+    // No phone change: the mobile app's AI Assistant calls the same /api/ai/chat.
+    // The Demo Co production walk (walk-0401/WALK-0401.md, 00:39-00:40Z, PASS): a
+    // description edit on the web edit form rebuilt the item's embedding on
+    // the first poll, and the revert rebuilt it byte for byte from the
+    // original text; no other item changed. The size-run and Duplicate paths
+    // were not walked in production: those words rest on
+    // server/services/inventory.embedding-keepalive.test.ts and
+    // server/embedding-calls.guard.test.ts, and on this walk, which proved
+    // embedInBackground and keepAlive from a server action (updateItemAction).
+    // The SKU fan-out and Ungroup were not walked either: they rest on the
+    // same keepalive test (the fan-out), server/services/item-grouping.test.ts
+    // (Ungroup) and the guard test (both call sites).
+    // Claims checked against 36cb9b619:
+    // - search by meaning: searchInventorySemantic (lib/ai/tools.ts, through
+    //   match_inventory_items_by_embedding) finds only items that have an
+    //   embedding (inventory_items.embedding), and its description sends the
+    //   model to it for items described rather than named; the keyword tool,
+    //   searchInventory, matches name, SKU or barcode and never needed one
+    //   ("Searching by name or SKU always finds them"), so the titles and
+    //   howItAffectsYou say the assistant finds them "by what they are" and
+    //   "when you describe items", never as if it could not find them at all;
+    // - size runs and duplicates: InventoryService.bulkCreateSizedVariants
+    //   (the web New item form's Sizes chips and Edit item's Add more sizes,
+    //   AddSizedVariantsButton, which item-form.tsx shows only when editing,
+    //   so the words name Edit item; the phone's SIZES & QUANTITIES, through
+    //   POST /api/v1/items/sized-variants) and duplicateItem (the item page's
+    //   Duplicate, DuplicateItemDialog, web only) never embedded. Their rows
+    //   could get an embedding only later, from Settings > AI's backfill
+    //   (embedItemsBatch) or an edit of a searched field (update() re-embedded
+    //   the record before #367 too), so the words say "did not get it when
+    //   they were saved", not "never". Both now call embedInBackground
+    //   (server/services/lib/embed-in-background.ts) right after the rows are
+    //   saved, in the background, so the words say "when they are saved", not
+    //   "as soon as". The titles say "size runs", the app's word (po-form.tsx's
+    //   Add a size run, size-run-receive-grid.tsx's Size run · N sizes), as
+    //   the pages-keep-groups-whole release does, and "copied items", since
+    //   the assistant calls an item entered twice a duplicate (tools.ts's
+    //   previewBulkBookImport "flags duplicates already in inventory");
+    // - edits: update() re-embeds the record when name, sku, barcode,
+    //   description or custom_fields changed (EMBED_RELEVANT_KEYS;
+    //   itemEmbeddingSource reads only custom_fields.author), and now also the
+    //   SKU's other records its fan-out rewrote when a shared searched field
+    //   changed (SHARED_ITEM_FIELDS has name, sku, barcode and description;
+    //   the author is per record and never fanned out), so the words say
+    //   "other records of that SKU that the save also changes";
+    //   ItemGroupingService.splitSku embeds the records Ungroup gave a new
+    //   SKU. Trigger 0401 clears a row's embedding in the same UPDATE when its
+    //   searched text changed, so a re-embed that fails leaves the item for
+    //   the sweep, never stale;
+    // - the hourly check: GET /api/cron/embeddings-sweep (vercel.json
+    //   "37 * * * *") works only for organizations whose organization_modules
+    //   row for 'ai' is enabled (orgsWithAiOn). A comp lets members use the
+    //   assistant without starting it (effective-modules.ts, AUTOMATION), so
+    //   the words say "while the AI Assistant is switched on in Settings,
+    //   Modules", as the Rentals release says of its reminders and as the
+    //   Modules page tells a comped organization. At most 100 items per
+    //   organization and 150 per run (EMBEDDINGS_SWEEP), so a large import
+    //   can take a few hourly runs;
+    // - what it fills in: every live item with no embedding, whatever left it
+    //   so (embeddings-sweep.ts; embedItemsBatch reads .is('embedding', null)).
+    //   The Books page's Bulk ISBN import (up to 200 ISBNs;
+    //   bulkCreateBooksAction, then InventoryService.bulkCreate) and the
+    //   assistant's own executeBulkBookImport (BooksImportService.execute)
+    //   insert books without embedding them. The draft's "the Books import or
+    //   a bulk add" named these two; the words use the page's label and "by
+    //   the assistant". The rest is "any other item missing it", not only a
+    //   failed rebuild: a new item whose first embed failed never had one
+    //   (embed-in-background.ts), and kit assembly (ledger.assemble_bundle,
+    //   0373) inserts the kit's stock row without one;
+    // - Settings > AI's backfill and the backfillEmbeddings tool are unchanged
+    //   but for returning counts only, so the words leave them out.
+    // Who is told: whoever can use the AI Assistant: the 'ai' module (the chat
+    // route asserts it, and members of a comped organization have it) and
+    // items:update (/api/ai/chat and /dashboard/ai refuse anyone without it),
+    // the audience 'briefing-overdue-purchase-orders' uses. No link. Web and
+    // phone alike, since both chat through the same route.
+    // Re-dated by docs/whats-new-redesign-2026-10 (2026-10-20; was
+    // 2026-10-14T00:45:00Z in its parked What's New draft, a local commit on
+    // the branch docs/whats-new-ai-search-finds-every-item that was never
+    // pushed): parked by the owner on 2026-10-14 until the full-app redesign
+    // shipped, and published with it, one minute below the three redesign
+    // releases, so its T is set at publish with theirs (see the note in
+    // redesign-2026-10's comment). Its words are unchanged; the labels
+    // they name were read again at 036002d43: Sizes on New item, Add more
+    // sizes on Edit item, SIZES & QUANTITIES in the mobile app, Duplicate,
+    // Settings, Modules (now in components/settings/settings-nav.tsx) and
+    // Bulk ISBN import.
+    status: 'published',
+    title: 'The AI Assistant finds size runs and copied items by what they are',
+    summary:
+      "Items added as a run of sizes, and copies made with Duplicate, are now included when you ask the AI Assistant to find items by what they are. The assistant's search data is also kept up to date after edits, and while the AI Assistant is switched on in Settings, Modules, an hourly check fills it in for any item still missing it.",
+    publishedAt: '2026-10-20T15:37:00Z',
+    entries: [
+      {
+        id: 'ai-search-finds-sizes-and-duplicates',
+        category: 'fixed',
+        area: 'AI Assistant',
+        title: 'Size runs and copied items show up when you describe items to the AI Assistant',
+        whatChanged:
+          'Items added as a run of sizes (under Sizes on New item, Sizes & quantities in the mobile app, or Add more sizes on Edit item) and copies made with Duplicate now get search data when they are saved. The AI Assistant uses this data to find items by what they are. Before, they did not get it when they were saved, so when you asked the assistant for items by describing them rather than by name or SKU, it could leave them out.',
+        whyItMatters: 'The assistant could miss whole size runs and copied items.',
+        howItAffectsYou:
+          "When you describe items, the assistant includes these records. After you change an item's name, SKU, barcode/ISBN, description or author, the assistant searches by the new words, as it does for other records of that SKU that the save also changes, and for records Ungroup gives a new SKU. While the AI Assistant is switched on in Settings, Modules, an hourly check fills in search data for books added with Bulk ISBN import or by the assistant, and for any other item missing it, so a large import can take a few hours to be fully searchable this way. Searching by name or SKU always finds them.",
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:update'], modules: ['ai'] },
+      },
+    ],
+  },
+  {
     id: 'pages-keep-groups-whole-2026-10',
     revision: 1,
     // Phase 2 of the grouping brief (owner go 2026-10-12): #364 merged as
