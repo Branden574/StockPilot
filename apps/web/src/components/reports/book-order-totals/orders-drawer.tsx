@@ -121,8 +121,10 @@ export function bookOrdersErrorFor(
   const reason = (body as ErrorBody | null)?.details?.reason;
   if (status === 404) return { message: BOOK_REPORT_NOT_IN_SCOPE, retry: false };
   if (status === 503) return { message: BOOK_REPORT_TIMEOUT, retry: true };
-  if (status === 403 && reason === 'mfa_required') return { message: BOOK_REPORT_MFA_ENROLL, retry: false };
-  if (status === 403 && reason === 'aal2_required') return { message: BOOK_REPORT_MFA_VERIFY, retry: false };
+  if (status === 403 && reason === 'mfa_required')
+    return { message: BOOK_REPORT_MFA_ENROLL, retry: false };
+  if (status === 403 && reason === 'aal2_required')
+    return { message: BOOK_REPORT_MFA_VERIFY, retry: false };
   return { message: BOOK_REPORT_ORDERS_LOAD_ERROR, retry: true };
 }
 
@@ -264,7 +266,13 @@ export function BookOrdersDrawer({
         if (!next) close();
       }}
     >
-      <SheetContent side="right" className="flex flex-col gap-0 p-0 sm:max-w-xl md:max-w-2xl">
+      {/* 672 px from md up: lg:max-w-2xl too, or the base sheet's lg:max-w-xl
+          caps the drawer at 576 px from 1024 px up and the copies column sits
+          outside the view (P68-03). */}
+      <SheetContent
+        side="right"
+        className="flex flex-col gap-0 p-0 sm:max-w-xl md:max-w-2xl lg:max-w-2xl"
+      >
         <SheetHeader className="pr-12">
           <SheetTitle>{title}</SheetTitle>
           <SheetDescription>
@@ -438,7 +446,10 @@ function OrdersBody({
                 const href = bookReportOrderLink(row, 'web', returnTo);
                 const combined = combinedLinesText(row.lines);
                 return (
-                  <tr key={row.orderId} className="border-border hover:bg-muted border-t transition-colors">
+                  <tr
+                    key={row.orderId}
+                    className="border-border hover:bg-muted border-t transition-colors"
+                  >
                     {/* An order number is one unit: 'SO-' never sits over
                         '001494' (a browser breaks after the hyphen). A
                         narrow sheet scrolls the table inside its border. */}
@@ -461,14 +472,18 @@ function OrdersBody({
                         </span>
                       )}
                     </th>
-                    <td className="whitespace-nowrap px-3 py-2">{formatReportDate(row.orderDate)}</td>
+                    <td className="whitespace-nowrap px-3 py-2">
+                      {formatReportDate(row.orderDate)}
+                    </td>
                     {charterColumn ? (
                       <td className="min-w-32 px-3 py-2 [overflow-wrap:break-word]">
                         {bookReportOrderCharterText(row, charterLabels) ?? ''}
                       </td>
                     ) : null}
                     <td className="px-3 py-2">{row.warehouseName ?? ''}</td>
-                    <td className="px-3 py-2">{statusLabels[row.status as OrderStatusKey] ?? row.status}</td>
+                    <td className="px-3 py-2">
+                      {statusLabels[row.status as OrderStatusKey] ?? row.status}
+                    </td>
                     <td className="px-3 py-2 text-right font-mono tabular-nums">
                       {formatReportQuantity(row.copies)}
                       {combined ? (

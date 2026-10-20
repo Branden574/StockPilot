@@ -56,7 +56,10 @@ const labels = bookReportStatusLabels(null);
 const fetchMock = vi.fn();
 
 function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
 }
 
 type RangeEcho = { key: BookReportQuery['range']; from: string | null; to: string | null };
@@ -114,7 +117,13 @@ describe('View orders drawer', () => {
     await waitFor(() =>
       expect(dialog).toHaveAccessibleDescription('Copies of this book requested: 30 in 3 orders'),
     );
-    for (const name of ['Order #', 'Order date', 'Warehouse', 'Status', 'Copies of this book requested']) {
+    for (const name of [
+      'Order #',
+      'Order date',
+      'Warehouse',
+      'Status',
+      'Copies of this book requested',
+    ]) {
       expect(within(dialog).getByRole('columnheader', { name })).toBeInTheDocument();
     }
     expect(within(dialog).getByText('Recorded as fulfilled: 8 · Returned: 2')).toBeInTheDocument();
@@ -146,6 +155,19 @@ describe('View orders drawer', () => {
     expect(identity!.querySelector('[data-part="identifier"]')).toHaveClass('whitespace-nowrap');
   });
 
+  // P68-03 (DESIGN-SPEC 6.9 and 8: a table scrolls inside its box only where
+  // it must): from 1024 px up the base sheet's lg:max-w-xl capped this
+  // drawer at 576 px, narrower than on a tablet (its own md:max-w-2xl only
+  // reaches md), so each order's "Copies of this book requested" figure sat
+  // outside the view until the table was scrolled sideways, and macOS shows
+  // no scrollbar. It stays 672 px wide from md up, which holds the table.
+  it('stays 672 px wide from md up, so the copies column is in view on a desktop', async () => {
+    render(drawer());
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveClass('sm:max-w-xl', 'md:max-w-2xl', 'lg:max-w-2xl');
+    expect(dialog).not.toHaveClass('lg:max-w-xl');
+  });
+
   it('links an order only when the API says it may be opened; every other number is plain text', async () => {
     render(drawer());
     const dialog = await screen.findByRole('dialog');
@@ -168,7 +190,9 @@ describe('View orders drawer', () => {
     fetchMock.mockImplementation(async () => json(ordersJson({ organizationId: OTHER_ORG })));
     render(drawer());
     const dialog = await screen.findByRole('dialog');
-    expect(await within(dialog).findByRole('alert')).toHaveTextContent(BOOK_REPORT_ORDERS_LOAD_ERROR);
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      BOOK_REPORT_ORDERS_LOAD_ERROR,
+    );
     expect(within(dialog).queryByText('SO-000003')).not.toBeInTheDocument();
   });
 
@@ -183,7 +207,9 @@ describe('View orders drawer', () => {
     );
     render(drawer()); // the page asked for all warehouses
     const dialog = await screen.findByRole('dialog');
-    expect(await within(dialog).findByRole('alert')).toHaveTextContent(BOOK_REPORT_ORDERS_LOAD_ERROR);
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      BOOK_REPORT_ORDERS_LOAD_ERROR,
+    );
   });
 
   it('drops a late answer for the book that was open before', async () => {
@@ -191,10 +217,17 @@ describe('View orders drawer', () => {
     fetchMock.mockImplementation(async (url: string) => {
       if (url.includes(ITEM_A)) return new Promise<Response>((r) => (releaseA = r));
       return json(
-        ordersJson({
-          book: { ...(ordersJson().book as Record<string, unknown>), itemId: ITEM_B, name: 'Book B' },
-          totals: { copies: '4', orders: 1, lines: 1, fulfilled: '0', returned: '0' },
-        }, [orderRow(O1, 1, { copies: '4' })]),
+        ordersJson(
+          {
+            book: {
+              ...(ordersJson().book as Record<string, unknown>),
+              itemId: ITEM_B,
+              name: 'Book B',
+            },
+            totals: { copies: '4', orders: 1, lines: 1, fulfilled: '0', returned: '0' },
+          },
+          [orderRow(O1, 1, { copies: '4' })],
+        ),
       );
     });
     const view = render(drawer());
@@ -209,7 +242,9 @@ describe('View orders drawer', () => {
       releaseA(json(ordersJson()));
     });
     expect(dialog).toHaveAccessibleDescription('Copies of this book requested: 4 in 1 order');
-    expect(within(dialog).queryAllByText('Copies of this book requested: 30 in 3 orders')).toEqual([]);
+    expect(within(dialog).queryAllByText('Copies of this book requested: 30 in 3 orders')).toEqual(
+      [],
+    );
   });
 
   it('a hidden, non-book or missing book reads as out of scope, never an empty list', async () => {
@@ -238,11 +273,16 @@ describe('View orders drawer', () => {
   });
 
   it('words each refusal', () => {
-    expect(bookOrdersErrorFor(503, { details: { reason: 'timeout' } }).message).toBe(BOOK_REPORT_TIMEOUT);
+    expect(bookOrdersErrorFor(503, { details: { reason: 'timeout' } }).message).toBe(
+      BOOK_REPORT_TIMEOUT,
+    );
     expect(bookOrdersErrorFor(403, { details: { reason: 'aal2_required' } }).message).toBe(
       BOOK_REPORT_MFA_VERIFY,
     );
-    expect(bookOrdersErrorFor(500, null)).toEqual({ message: BOOK_REPORT_ORDERS_LOAD_ERROR, retry: true });
+    expect(bookOrdersErrorFor(500, null)).toEqual({
+      message: BOOK_REPORT_ORDERS_LOAD_ERROR,
+      retry: true,
+    });
   });
 
   it('is closed with no book in the URL and fetches nothing', () => {
@@ -253,7 +293,11 @@ describe('View orders drawer', () => {
   });
 
   it('View orders adds the book to the URL as a new history entry, keeping every report filter', async () => {
-    window.history.replaceState(null, '', '/dashboard/reports/book-order-totals?warehouse=all&q=x&vpage=4');
+    window.history.replaceState(
+      null,
+      '',
+      '/dashboard/reports/book-order-totals?warehouse=all&q=x&vpage=4',
+    );
     const push = vi.spyOn(window.history, 'pushState');
     render(<ViewOrdersButton itemId={ITEM_A} title="Book A" />);
     await userEvent.click(screen.getByRole('button', { name: 'View orders for Book A' }));
