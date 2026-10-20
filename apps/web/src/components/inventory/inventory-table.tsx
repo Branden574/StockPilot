@@ -456,6 +456,12 @@ export interface InventoryTableProps {
       On hand cell. Absent (inventory + books lists) → the On hand cell
       renders exactly as before, byte-identical. */
   reservedByItem?: Map<string, number>;
+  /** The Rentals items list (/dashboard/rentals/items), which lists rentals
+      of every type. Its server search then asks /api/items/search for the
+      same set (`rentalsOnly=1&type=all`); without it the endpoint answers
+      non-rentals only, so every typed search there came back empty. Absent
+      (every other caller) → the search request is exactly as before. */
+  rentalsOnly?: boolean;
   /** Instant mode — see InstantInventoryDataset. Absent (staff/viewer,
       over-cap orgs, every other caller) → server mode, byte-identical
       to today. */
@@ -752,6 +758,7 @@ export function InventoryTable({
   activeWarehouseId = null,
   currentUserId = null,
   reservedByItem,
+  rentalsOnly = false,
   instant,
   instantPromise,
   firstPage,
@@ -1201,10 +1208,11 @@ export function InventoryTable({
     for (const v of params.getAll('cat')) key.append('cat', v);
     for (const v of params.getAll('loc')) key.append('loc', v);
     // The books tab forces type=book below when the URL didn't set one, so
-    // it belongs in the key too.
+    // it belongs in the key too; so does the Rentals list's rentals-only set.
     if (showBookFields) key.set('books', '1');
+    if (rentalsOnly) key.set('rentals', '1');
     return key.toString();
-  }, [params, showBookFields]);
+  }, [params, showBookFields, rentalsOnly]);
 
   React.useEffect(() => {
     // Streamed default view (instantPromise pending, not yet adopted):
@@ -1271,6 +1279,14 @@ export function InventoryTable({
         // filtered out of the search results.
         if (!url.searchParams.has('type') && showBookFields) {
           url.searchParams.set('type', 'book');
+        }
+        // The Rentals items list: its page lists rentals ONLY, of every type
+        // (a rental can be a product or a book) and whatever the URL's
+        // ?type= says, so its search asks for exactly that set. Without the
+        // flag the endpoint lists non-rentals, as every other table wants.
+        if (rentalsOnly) {
+          url.searchParams.set('rentalsOnly', '1');
+          url.searchParams.set('type', 'all');
         }
         url.searchParams.set('limit', String(pageSize));
         // Each hit's display group (0400): the route reads memberships only

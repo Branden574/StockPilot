@@ -273,6 +273,9 @@ export default async function RentalItemsPage({
               activeWarehouseId={null}
               currentUserId={sessionCtx.userId}
               reservedByItem={reservedByItem}
+              // The search box asks for this page's own set: rentals of
+              // every type (the list above passes rentalsOnly too).
+              rentalsOnly
               initialView={initialView}
             />
           </ElsewhereUnavailableNotice>

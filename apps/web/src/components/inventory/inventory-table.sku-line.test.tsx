@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -775,6 +775,65 @@ describe('the SKU is still found and ordered as before', () => {
     expect(screen.queryByRole('link', { name: 'Alpha Widget' })).toBeNull();
     expect(skuLine(link.closest('tr')!)!.textContent).toBe('BG-200');
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('Rentals items: a typed SKU asks the search for rentals of every type, and the rental stays on screen', async () => {
+    // The Rentals items page lists rentals only (of any type) and runs in
+    // server mode, so its search box asks /api/items/search. Without the
+    // flag the endpoint answered non-rentals only and every search came back
+    // empty, even for a SKU on screen.
+    const user = userEvent.setup();
+    const rental = row('cam', { name: 'Camera', sku: 'RNT-PROJ-01', quantity_on_hand: 2 });
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ items: [rental], total: 1 }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    // Whatever ?type= the address carries, the page lists every type.
+    urlState.params = new URLSearchParams('type=product');
+    const { container } = renderTable({
+      basePath: '/dashboard/rentals/items',
+      rowLinkPrefix: '/dashboard/rentals/items',
+      reservedByItem: new Map([['cam', 1]]),
+      rentalsOnly: true,
+      items: [rental, row('tent', { name: 'Tent', sku: 'RNT-TENT-01' })] as never,
+      total: 60,
+    });
+    await user.type(screen.getByRole('textbox', { name: 'Search items' }), 'RNT-PROJ-01');
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const url = new URL(String((fetchMock.mock.calls.at(-1) as unknown[])[0]));
+    expect(url.pathname).toBe('/api/items/search');
+    expect(url.searchParams.get('q')).toBe('RNT-PROJ-01');
+    expect(url.searchParams.get('rentalsOnly')).toBe('1');
+    expect(url.searchParams.getAll('type')).toEqual(['all']);
+    await waitFor(() => expect(screen.queryByRole('link', { name: 'Tent' })).toBeNull());
+    const link = screen.getByRole('link', { name: 'Camera' });
+    expect(skuLine(link.closest('tr')!)!.textContent).toBe('RNT-PROJ-01');
+    expect(container.querySelector('tbody td[colspan]')).toBeNull();
+  });
+
+  it('Items and Books: the search request carries no rentals flag, exactly as before', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ items: [], total: 0 }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const items = renderTable({ total: 60 });
+    await user.type(screen.getByRole('textbox', { name: 'Search items' }), 'MP-01');
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const itemsUrl = new URL(String((fetchMock.mock.calls.at(-1) as unknown[])[0]));
+    expect(itemsUrl.searchParams.has('rentalsOnly')).toBe(false);
+    expect(itemsUrl.searchParams.has('type')).toBe(false);
+    items.unmount();
+
+    fetchMock.mockClear();
+    renderTable({ ...BOOKS, items: booksPage() as never, total: 60 });
+    await user.type(screen.getByRole('textbox', { name: 'Search items' }), 'BK-DUNE');
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const booksUrl = new URL(String((fetchMock.mock.calls.at(-1) as unknown[])[0]));
+    expect(booksUrl.searchParams.has('rentalsOnly')).toBe(false);
+    expect(booksUrl.searchParams.getAll('type')).toEqual(['book']);
   });
 
   it('the Sort menu still offers SKU (A → Z) and SKU (Z → A), and a SKU sort lists the rows by their SKU line', async () => {
