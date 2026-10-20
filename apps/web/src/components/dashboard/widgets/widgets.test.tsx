@@ -460,12 +460,14 @@ describe("Recent activity: today's activity", () => {
 });
 
 describe('Movements breakdown', () => {
-  // FX5 (DESIGN-SPEC 6.10, the movement type words): the page now hands the
-  // card the Movements page's words ("Bundle assembly", "Receive PO"), not the
-  // raw codes ("Bundle_assembly", "Receive_po") that needed a <wbr> after the
-  // underscore. The words wrap between words, never inside one; the page's
-  // mapping is pinned in dashboard/page.test.tsx.
-  it('prints each type in its words, whole, wrapping only between words', () => {
+  // The card prints each label it is handed whole, as one text node with no
+  // <wbr>. This cannot catch the raw codes coming back: these labels have no
+  // underscore, so the card before FX5 (which split a label at '_' and put a
+  // <wbr> there) drew them the same way, and this test passes on it too. The
+  // words themselves ("Receive PO" and "Bundle assembly", never "Receive_po"
+  // or "Bundle_assembly") are guarded by '/dashboard: the 30-day breakdown
+  // names each type in words (FX5)' in app/(dashboard)/dashboard/page.test.tsx.
+  it('prints each label whole, with no <wbr>', () => {
     render(
       <MovementsBreakdownWidget
         {...makeProps({
