@@ -37,6 +37,16 @@ export const RELEASES: Release[] = [
     // Web deploy and OTA (runtime 1.4.0) together: merged as <merge sha>, web
     // build <id> live at <time>; OTA group <group>, iOS launches seen at <time>;
     // Demo Co sweep (PLAN P7.4) <result>.
+    // SET AT PUBLISH: T, the publishedAt of the four releases at the top (here
+    // 12:47Z to 12:50Z on 2026-10-20), is provisional and earlier than the
+    // merge, the web build and the OTA. The publish PR sets T to the real
+    // whole-minute instant once the web build is live and the OTA's iOS
+    // launches show, sets REDESIGN_LIVE_AT in registry.test.ts, fills in the
+    // facts above and the OTA group and phone walks in
+    // redesign-mobile-app-2026-10's comment, moves the bounds and days the
+    // four "is published" tests pin, and deletes this note. Until then the
+    // publish guard in registry.test.ts fails, so this change cannot be
+    // merged with a provisional date.
     // Drafted from stage2/WHATSNEW-DRAFTS.md and fact-checked at 036002d43, each
     // "now" against production 36cb9b619 (the merge base):
     // - sections: core modules/registry.ts placements and nav.ts SECTION_LABEL
@@ -49,9 +59,19 @@ export const RELEASES: Release[] = [
     //   title, the summary and the first linked entry's link as its button
     //   (logic.ts legacyAnnouncementsFor), here items-books-grid's Open Items,
     //   which opens the app's own Items tab, and the Grid is web only (O7);
-    // - statuses: Badge draws its dot only when asked (ui/badge.tsx `dot`), and
-    //   among the status labels only the stock status asks
-    //   (stock-status-badge.tsx: In stock, Low stock, Out of stock ...);
+    // - the summary says "The web sidebar": only the web's groups fold
+    //   (sidebar.tsx aria-expanded); the phone's side menu has the same groups
+    //   and no fold (drawer-content.tsx), and a phone shows the summary;
+    // - statuses: Badge draws its dot only when asked (ui/badge.tsx `dot`); the
+    //   stock status asks (stock-status-badge.tsx: In stock, Low stock, Out of
+    //   stock ...), as do some other labels (an API key's Active and Revoked,
+    //   webhook types, integration and public link states, What's New's
+    //   Unread, the Overview's Out and Low, the customer portal's stock), so
+    //   the words give the stock status as the example, never as the only one;
+    // - top bar: production already drew the trail from 520 px (topbar.tsx
+    //   @min-[520px], Inventory / Orders); only its group names are new
+    //   (topbar-crumbs.ts SECTION_FULFILLMENT ...), so the words say the trail
+    //   uses the new groups, not that the trail is new;
     // - Density: user-menu.tsx Comfortable / Compact in the sp_density cookie;
     //   globals.css undoes Compact below 48rem, so the words say narrower than
     //   768 pixels, not "phones" (a phone held sideways is wider);
@@ -59,6 +79,10 @@ export const RELEASES: Release[] = [
     //   views row (VIEWS: All items, Low + critical, Out of stock); Rentals
     //   items passes no saved views; grid-card.tsx shows a card's check box on
     //   hover, focus within the card, a coarse pointer, or once one is ticked;
+    //   on Rentals items a card's "N avail · N out" line shows only while some
+    //   of the rental is out (inventory-table.tsx hasOnHandNotes and
+    //   OnHandNotes: reserved > 0), so the words say "while any of a rental is
+    //   checked out", not "each card";
     // - table fit: the SKU under the name (ItemCell wrapSku), Item floor 220 px
     //   (208 on Books). Measured on 7f2b43e25 (lab/tmp/items-width-measure.json,
     //   sidebar open): at 1440 the table fits, at 1280 Coverage is on screen;
@@ -78,8 +102,16 @@ export const RELEASES: Release[] = [
     //   default, near white in dark mode (globals.css .dark --primary), so
     //   "solid", not "dark"; the cart line's stepper is a fixed 108 px
     //   (storefront.css .sf-step.mini), where production's auto width let the
-    //   typed-quantity box take half the rail; the name still clamps at two
-    //   lines;
+    //   typed-quantity box take half the rail and squeeze names to one word
+    //   per line (P4.B2: also in BEFORE); the name still clamps at two lines.
+    //   The words claim no more room on an order's lines: the order page's
+    //   Item column is 208 px at 1280 (P4.B1 widened it from the redesign's
+    //   own 168 px), about what production's max-w-5xl page gave it, and at
+    //   390 it still squeezes names to their longest word, as production did;
+    // - Overview: the Inventory value card's figure and its "vs. 30 days ago"
+    //   change are new (value-chart-interactive.tsx THE FIGURE; production's
+    //   card already followed location, Cost or Retail and Compare, with no
+    //   figure), so they are told in overview-and-item-pages, not as a fix;
     // - purchase orders: po-form.tsx DetailSection "PO details" with the total,
     //   Cancel and Create PO or Save changes in its footer; Suppliers' table
     //   card has no title; po-attachments-panel.tsx wraps the file name, which
@@ -98,16 +130,22 @@ export const RELEASES: Release[] = [
     // words and "yesterday", the label print window, the View orders width and
     // the Group and Ungroup radio names. Deferred, so not claimed: Stage 6
     // batches C, D, G and H and the phone half of F.
-    // STILL TO CHECK at publish: the E9 control census for "every page, tab,
-    // filter, button, export and setting is still there" (a string scan of
-    // 36cb9b619..036002d43 found no unmapped removal).
+    // E9 control census, BEFORE 36cb9b619 against AFTER 036002d43
+    // (lab/census/diff/triage-final-2026-10-20.md, run 2026-10-20 10:08Z to
+    // 10:44Z): 11,235 missing instances, 0 unexplained; no control lost. Its
+    // 65 renames are a control's role or the name a screen reader hears
+    // (links that became tabs or buttons, Sites4 read as Sites 4, a radio's
+    // description moved out of its name, the Movements type select now
+    // chips), and its 3 removals a button nested in its own link and a test
+    // hook, so "every page, tab, filter, button, export and setting is still
+    // there, under the same name" stands.
     // Who is told: everyone (no release audience); entries that name a page
     // carry its permission and module; the admins' entry links to Settings,
     // Navigation. The word zendesk is left out (registry.test.ts FORBIDDEN).
     status: 'published',
     title: 'StockPilot has a new look, and the sidebar is sorted into groups',
     summary:
-      "StockPilot has a new look on the web, in light and dark mode, with every page, button and setting still there under the same name. The sidebar now sorts its links into Inventory, Fulfillment, Purchasing, Insights and Workspace, each group folds, and the mobile app's side menu uses the same groups. On the web, Items and Books can show your stock as photo cards, their tables show the SKU under each name so more columns fit on screen, and Settings is grouped by topic.",
+      "StockPilot has a new look on the web, in light and dark mode, with every page, button and setting still there under the same name. The web sidebar now sorts its links into Inventory, Fulfillment, Purchasing, Insights and Workspace, each group folds, and the mobile app's side menu uses the same groups. On the web, Items and Books can show your stock as photo cards, their tables show the SKU under each name so more columns fit on screen, and Settings is grouped by topic.",
     publishedAt: '2026-10-20T12:50:00Z',
     entries: [
       {
@@ -117,7 +155,7 @@ export const RELEASES: Release[] = [
         area: 'Web app',
         title: 'Every page of the web app has the new look',
         whatChanged:
-          'Every page of the web app is redrawn in the new look, in light and dark mode. Pages open with the same header, with their main actions at the right. Key figures sit in one strip, tables sit in cards that scroll sideways inside themselves on a narrow screen, and statuses are small coloured labels, with a dot before a stock status such as Low stock. On wider screens the top bar shows where you are, such as Fulfillment / Orders.',
+          'Every page of the web app is redrawn in the new look, in light and dark mode. Pages open with the same header, with their main actions at the right. Key figures sit in one strip, tables sit in cards that scroll sideways inside themselves on a narrow screen, and statuses are small coloured labels, with a dot before a stock status such as Low stock. On wider screens the trail in the top bar uses the new sidebar groups, such as Fulfillment / Orders.',
         whyItMatters:
           'Pages had grown different layouts over time. One layout on every page makes a page you open for the first time easier to find your way around.',
         howItAffectsYou:
@@ -151,7 +189,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'Some items are easier to recognise by their photo than by their name or SKU.',
         howItAffectsYou:
-          'Each list remembers Table or Grid in this browser, and Table stays the default. Filters, sorting, saved views, pages and totals are the same in both. On Rentals items, each card also shows how many are available and how many are out.',
+          'Each list remembers Table or Grid in this browser, and Table stays the default. Filters, sorting, saved views, pages and totals are the same in both. On Rentals items, while any of a rental is checked out, its card also shows how many are available and how many are out.',
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/inventory', label: 'Open Items' },
         audience: { anyPermission: ['items:read'] },
@@ -216,7 +254,7 @@ export const RELEASES: Release[] = [
           'Overview opens with a greeting and a Needs attention card with one row per thing to act on, then the 30-day trends and key figures as compact strips and the charts as flat cards. Item and book pages show the photo, name, SKU and stock status at the top with every action in one row, the on hand, value and reorder point as figures, and where the stock sits in a By location card.',
         whyItMatters: 'The figures and actions people use most were spread down the page.',
         howItAffectsYou:
-          "Every Overview widget and link is where it was, and Settings, Dashboard still chooses and orders them. When stock is reserved for open orders, an item shows the reserved and available amounts beside its on hand. Browser tabs now name item and book pages, their forms, Movements, Categories, Tags and Locations instead of saying Dashboard. Shift command's quick links now sit at most three to a row, with room for their full names.",
+          "Every Overview widget and link is where it was, and Settings, Dashboard still chooses and orders them. The Inventory value card now also shows the value of the line it draws and its change over 30 days, for the location, Cost or Retail and comparison you pick. When stock is reserved for open orders, an item shows the reserved and available amounts beside its on hand. Browser tabs now name item and book pages, their forms, Movements, Categories, Tags and Locations instead of saying Dashboard. Shift command's quick links now sit at most three to a row, with room for their full names.",
         whatToDo: 'No action needed.',
       },
       {
@@ -228,9 +266,9 @@ export const RELEASES: Release[] = [
         whatChanged:
           "On Orders, the status tabs are a row of stage tiles, and each requester's school or group shows under their name. An order's page puts its lines, returns, notes, shipping, proof of delivery and history in titled cards, with the dates and details beside them, and the order's next step is the one solid button under Manager actions. The digital pick shows every line in one card.",
         whyItMatters:
-          'The next step on an order was one button among many, and long item names on its lines wrapped a word at a time.',
+          'The next step on an order was one button among many, and in the New order cart the quantity buttons squeezed item names to one word per line.',
         howItAffectsYou:
-          "Every tab, filter, export and action works as before, and item names on an order's lines have more room. The New order page now works on a phone, with one choice per line and buttons big enough to tap, and the quantity buttons in the cart take less room, so each item's name reads on up to two lines instead of one word per line.",
+          "Every tab, filter, export and action works as before. The New order page now works on a phone, with one choice per line and buttons big enough to tap, and the quantity buttons in the cart take less room, so each item's name reads on up to two lines instead of one word per line.",
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/orders', label: 'View orders' },
         audience: { anyPermission: ['orders:request', 'orders:approve'], modules: ['orders'] },
@@ -323,8 +361,8 @@ export const RELEASES: Release[] = [
     //   Group, Ungroup and Review (count-select-bar.tsx);
     // - the Ungroup review names each Keeps SKU radio with keepsSkuRadioLabels
     //   (lib/ungroup-selected.ts) and reads ungroupOutcomeWords as its value
-    //   (batch E); the phone Group review is unchanged (batch F's phone half is
-    //   deferred), so the words name the Ungroup review only;
+    //   (batch E); the phone Group review's radio names are unchanged (batch
+    //   F's phone half is deferred), so the words name the Ungroup review only;
     // - counts: only scan to count and the AI review stop saving an empty box;
     //   on the count screen an emptied box still posts its saved count
     //   (OWNER-REVIEW-NOTES P5.9a), so the title names the two; the Counts tab's
@@ -338,8 +376,17 @@ export const RELEASES: Release[] = [
     //   for the filter and search on screen has answered;
     // - a new checkout is RENTALS · NEW CHECKOUT, opened from the + on Rentals
     //   (named New rental for VoiceOver only).
+    // Left out on purpose: batch E's F8. A link to the Group review that
+    // arrives while that review is open now starts a fresh review for the
+    // records it names (group-selected.tsx groupSelectedReviewKey), where
+    // production kept the first selection's records; production's Ungroup
+    // review already read the new ones. The app opens both reviews only from
+    // Items and Books (their select bar and Add to group), which sit beneath
+    // an open review, so only a link from outside the app reaches it.
     // STILL TO CHECK at publish: the phone walks N1-N14 and B16 on the iPhone 17
-    // Pro and iPad Pro 13.
+    // Pro and iPad Pro 13, on the final tip. Do not merge before they pass;
+    // replace this line with their result (the publish guard in
+    // registry.test.ts fails while it is here).
     // Who is told: everyone; entries for a module name its permission and
     // module. If the OTA is rolled back while the web stays, withdraw this
     // release (status 'withdrawn' and a withdrawnNote): rollback-plan.md.
@@ -565,8 +612,12 @@ export const RELEASES: Release[] = [
     // refuses), D31 and the platform console (platform admins only, whom no
     // audience can name), D15, D22 and D32 (marketing page titles, an icon for
     // an emoji, a sign-in error fade). The Rentals items search fix is told
-    // once, in redesign-2026-10's items-books-table-fits. Deferred, so not
-    // claimed: Stage 6 batches C, D, G and H.
+    // once, in redesign-2026-10's items-books-table-fits. The Inventory value
+    // card's figure and its change over 30 days are new in the redesign
+    // (production's card had no figure and already followed the location,
+    // Cost or Retail and Compare), so they are told in redesign-2026-10's
+    // overview-and-item-pages, not here as a fix. Deferred, so not claimed:
+    // Stage 6 batches C, D, G and H.
     // Who is told: everyone; entries for one area name its permission and
     // module.
     status: 'published',
@@ -720,13 +771,14 @@ export const RELEASES: Release[] = [
         id: 'web-counts-movements-fixes',
         category: 'fixed',
         area: 'Inventory',
-        title: 'Counts and Movements say more, and the Overview value card follows your choices',
+        title:
+          'Counts and Movements say more, and Overview names each movement type as Movements does',
         whatChanged:
           "If posting or cancelling a count is refused, the reason now also shows inside the open dialog. On large ledgers, Movements shows how many units left for an order pick instead of a dash, and bundle movements read Bundle assembly, Bundle distribution and Bundle shortage instead of system codes. Links to an item's last physical count open with that card in view. On Overview, Today's activity and Movements · 30 days now name each movement type as Movements does, such as Receive PO, and Today's activity prints yesterday in full.",
         whyItMatters:
           "A refusal showed only in a passing message, some ledger rows showed a dash instead of the change or a code instead of the type's name, and Overview showed codes such as Receive_po and cut yesterday to yesterd.",
         howItAffectsYou:
-          'On Overview, the Inventory value card shows the value of the line it draws and its change over 30 days, following the location, Cost or Retail and comparison you pick. When a saved layout shows Inventory value or Movements breakdown without the other, it now fills the width of the page. On phones and tablets, Save and Cancel beside a movement note are larger and farther apart. When nothing on Movements matches your filters, the count beside the filters no longer shows rows 1 to 0 of 0.',
+          'When a saved layout shows Inventory value or Movements breakdown without the other, it now fills the width of the page. On phones and tablets, Save and Cancel beside a movement note are larger and farther apart. When nothing on Movements matches your filters, the count beside the filters no longer shows rows 1 to 0 of 0.',
         whatToDo: 'No action needed.',
         audience: { anyPermission: ['items:read'] },
       },
@@ -850,9 +902,12 @@ export const RELEASES: Release[] = [
     // the audience 'briefing-overdue-purchase-orders' uses. No link. Web and
     // phone alike, since both chat through the same route.
     // Re-dated by docs/whats-new-redesign-2026-10 (2026-10-20; was
-    // 2026-10-14T00:45:00Z, 823aeb1ab): parked by the owner on 2026-10-14
-    // until the full-app redesign shipped, and published with it, one minute
-    // below the three redesign releases. Its words are unchanged; the labels
+    // 2026-10-14T00:45:00Z in its parked What's New draft, a local commit on
+    // the branch docs/whats-new-ai-search-finds-every-item that was never
+    // pushed): parked by the owner on 2026-10-14 until the full-app redesign
+    // shipped, and published with it, one minute below the three redesign
+    // releases, so its T is set at publish with theirs (see the note in
+    // redesign-2026-10's comment). Its words are unchanged; the labels
     // they name were read again at 036002d43: Sizes on New item, Add more
     // sizes on Edit item, SIZES & QUANTITIES in the mobile app, Duplicate,
     // Settings, Modules (now in components/settings/settings-nav.tsx) and

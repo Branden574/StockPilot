@@ -180,6 +180,16 @@ const redesignReads = () =>
   }));
 const redesignSeen = (): Record<string, boolean> =>
   Object.fromEntries(REDESIGN_IDS.map((id) => [id, true]));
+/**
+ * SET AT PUBLISH: the whole minute at which the redesign's web build was live
+ * on production and the OTA's first iOS launches showed (EAS
+ * update:insights), whichever came later, written like 2026-10-20T16:05:00Z.
+ * The four releases at the top (the three redesign releases and the parked
+ * ai-search-finds-every-item release, #367) were written before the redesign
+ * was merged, with a provisional T earlier than the merge: the publish guard
+ * at the end of this file fails until this is set and T is at or after it.
+ */
+const REDESIGN_LIVE_AT = 'SET-AT-PUBLISH';
 
 describe('release registry', () => {
   it('is valid against the shared schema', () => {
@@ -11184,8 +11194,10 @@ describe('the pages-keep-groups-whole release (Phase 2, #364)', () => {
 // app's AI Assistant chats through the same route.
 //
 // Re-applied by hand by docs/whats-new-redesign-2026-10 (2026-10-20) from
-// 823aeb1ab, where the owner parked it on 2026-10-14 until the full-app
-// redesign shipped. The release's words are unchanged. It is published with
+// its parked What's New draft (a local commit on the branch
+// docs/whats-new-ai-search-finds-every-item, never pushed), where the owner
+// parked it on 2026-10-14 until the full-app redesign shipped. The
+// release's words are unchanged. It is published with
 // the redesign, a minute below the three redesign releases, so its place,
 // its date and its readers' first notice are re-pinned here, and four
 // labels its words name are read where they sit at 036002d43 (New item and
@@ -11251,6 +11263,11 @@ describe('the ai-search-finds-every-item release (#367, 0401)', () => {
   // minute below the three redesign releases, which sit above it. Claim kept:
   // after the web deploy, 0401, the first hourly run and the Demo Co walk,
   // dated after every release below it, and no draft is left.
+  // Its T is the redesign releases' T less a minute, provisional until the
+  // publish PR sets it: the publish guard at the end of this file holds it at
+  // or after REDESIGN_LIVE_AT. Here the release commit is the floor and T's
+  // day (UTC) the ceiling, as earlier releases' tests pin theirs, so a
+  // publish on a later day moves this bound and the date pins with T.
   it('is published directly below the three redesign releases (published later), after the web deploy, migration 0401, the first hourly run, the Demo Co walk and the redesign release commit, dated after every release below it, and no draft is left', () => {
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
@@ -11263,6 +11280,9 @@ describe('the ai-search-finds-every-item release (#367, 0401)', () => {
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
     expect(Date.parse(release().publishedAt)).toBeGreaterThan(Date.parse('2026-10-14T00:40:00Z'));
     expect(Date.parse(release().publishedAt)).toBeGreaterThan(Date.parse('2026-10-20T09:32:39Z'));
+    expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(
+      Date.parse('2026-10-21T00:00:00Z'),
+    );
     expect(Date.parse(RELEASES[2]!.publishedAt) - Date.parse(release().publishedAt)).toBe(60_000);
     for (const r of RELEASES.slice(4)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
@@ -11321,11 +11341,11 @@ describe('the ai-search-finds-every-item release (#367, 0401)', () => {
       ).toEqual(['ai-search-finds-sizes-and-duplicates']);
       // No entry links, so an old phone build shows the title and the summary,
       // once the redesign releases above it are seen; its date is the day it
-      // is published.
+      // is published (T's day, set at publish with T).
       expect(legacyAnnouncementsFor(RELEASES, v, {})[0]?.id, v.role).toBe('redesign-2026-10');
       expect(legacyAnnouncementsFor(RELEASES, v, redesignSeen())[0], v.role).toEqual({
         id: ID,
-        date: release().publishedAt.slice(0, 10),
+        date: '2026-10-20',
         title: release().title,
         body: release().summary,
       });
@@ -11610,9 +11630,13 @@ describe('the web fixes found while redrawing every page (redesign-web-fixes-202
   const source = (rel: string) => repoFile(`apps/web/src/${rel}`);
   const entry = (id: string) => release().entries.find((e) => e.id === id)!;
 
-  // Published with the other two redesign releases once the release commit
-  // was merged; a minute after #367's release and a minute before the mobile
-  // app's.
+  // Published with the other two redesign releases at T + 1 minute, a minute
+  // after #367's release and a minute before the mobile app's. T is set at
+  // publish, once the redesign is merged, its web build is live and the OTA's
+  // iOS launches show: until then it is provisional, and the publish guard at
+  // the end of this file fails. Here the release commit (09:32:39Z) is the
+  // floor and T's day (UTC) the ceiling, as earlier releases' tests pin
+  // theirs, so a publish on a later day moves this bound and the date pin.
   it('is published directly above the ai-search-finds-every-item release, a minute after it, below the two other redesign releases, dated after every release below it, and no draft is left', () => {
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
@@ -11622,6 +11646,9 @@ describe('the web fixes found while redrawing every page (redesign-web-fixes-202
     expect(RELEASES[3]?.id).toBe('ai-search-finds-every-item-2026-10');
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
     expect(Date.parse(release().publishedAt)).toBeGreaterThan(Date.parse('2026-10-20T09:32:39Z'));
+    expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(
+      Date.parse('2026-10-21T00:00:00Z'),
+    );
     expect(Date.parse(release().publishedAt) - Date.parse(RELEASES[3]!.publishedAt)).toBe(60_000);
     for (const r of RELEASES.slice(3)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
@@ -11717,7 +11744,7 @@ describe('the web fixes found while redrawing every page (redesign-web-fixes-202
         v.role,
       ).toEqual({
         id: ID,
-        date: release().publishedAt.slice(0, 10),
+        date: '2026-10-20',
         title: release().title,
         body: release().summary,
       });
@@ -11810,6 +11837,12 @@ describe('the web fixes found while redrawing every page (redesign-web-fixes-202
     expect(entry('web-counts-movements-fixes').whatChanged).toContain(
       "On Overview, Today's activity and Movements · 30 days now name each movement type as Movements does, such as Receive PO, and Today's activity prints yesterday in full.",
     );
+    // The Inventory value card's figure is new in the redesign, not a fix: it
+    // is told in redesign-2026-10's overview-and-item-pages, never here.
+    expect(entry('web-counts-movements-fixes').title).toBe(
+      'Counts and Movements say more, and Overview names each movement type as Movements does',
+    );
+    expect(words()).not.toMatch(/value card/i);
     expect(source('components/auth/step-up-modal.tsx')).toMatch(
       />\s*Confirm with your authenticator\s*</,
     );
@@ -11855,6 +11888,10 @@ describe('the mobile app redesign release (redesign-mobile-app-2026-10)', () => 
   const phone = (rel: string) => repoFile(`apps/mobile/${rel}`);
   const entry = (id: string) => release().entries.find((e) => e.id === id)!;
 
+  // T + 2 minutes, with T set at publish (the publish guard at the end of this
+  // file fails until then); the release commit is the floor and T's day
+  // (UTC) the ceiling, so a publish on a later day moves this bound and the
+  // date pin with T.
   it('is published directly below the new look release (published a minute later) and a minute after the web fixes release, dated after every release below it, and no draft is left', () => {
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
@@ -11863,6 +11900,9 @@ describe('the mobile app redesign release (redesign-mobile-app-2026-10)', () => 
     expect(RELEASES[2]?.id).toBe('redesign-web-fixes-2026-10');
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
     expect(Date.parse(release().publishedAt)).toBeGreaterThan(Date.parse('2026-10-20T09:32:39Z'));
+    expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(
+      Date.parse('2026-10-21T00:00:00Z'),
+    );
     expect(Date.parse(release().publishedAt) - Date.parse(RELEASES[2]!.publishedAt)).toBe(60_000);
     for (const r of RELEASES.slice(2)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
@@ -11961,7 +12001,7 @@ describe('the mobile app redesign release (redesign-mobile-app-2026-10)', () => 
       expect(buildReleaseList(RELEASES, v, [newLookRead], null).latestUnread?.id, v.role).toBe(ID);
       expect(legacyAnnouncementsFor(RELEASES, v, { 'redesign-2026-10': true })[0], v.role).toEqual({
         id: ID,
-        date: release().publishedAt.slice(0, 10),
+        date: '2026-10-20',
         title: release().title,
         body: release().summary,
       });
@@ -12094,12 +12134,19 @@ describe('the new look release (redesign-2026-10)', () => {
       }).map((s) => [s.section, s.items.map((i) => i.label)]),
     );
 
+  // T + 3 minutes, with T set at publish (the publish guard at the end of this
+  // file fails until then); the release commit is the floor and T's day
+  // (UTC) the ceiling, so a publish on a later day moves this bound and the
+  // date pins with T.
   it('is published at the top, a minute after the mobile app release, dated after every release, and no draft is left', () => {
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     expect(RELEASES[0]?.id).toBe(ID);
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
     expect(Date.parse(release().publishedAt)).toBeGreaterThan(Date.parse('2026-10-20T09:32:39Z'));
+    expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(
+      Date.parse('2026-10-21T00:00:00Z'),
+    );
     expect(Date.parse(release().publishedAt) - Date.parse(RELEASES[1]!.publishedAt)).toBe(60_000);
     for (const r of RELEASES.slice(1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
@@ -12177,7 +12224,7 @@ describe('the new look release (redesign-2026-10)', () => {
     for (const v of [owner, itemsReader]) {
       expect(legacyAnnouncementsFor(RELEASES, v, {})[0], v.role).toEqual({
         id: ID,
-        date: release().publishedAt.slice(0, 10),
+        date: '2026-10-20',
         title: release().title,
         body: release().summary,
         cta: { href: '/dashboard/inventory', label: 'Open Items' },
@@ -12190,7 +12237,7 @@ describe('the new look release (redesign-2026-10)', () => {
     });
     expect(legacyAnnouncementsFor(RELEASES, member, {})[0]).toEqual({
       id: ID,
-      date: release().publishedAt.slice(0, 10),
+      date: '2026-10-20',
       title: release().title,
       body: release().summary,
     });
@@ -12250,9 +12297,31 @@ describe('the new look release (redesign-2026-10)', () => {
     expect(entry('sidebar-groups').howItAffectsYou).toContain(
       'Folded groups are remembered in this browser, and for owners and admins Admin starts folded.',
     );
+    // Only the web's groups fold: the phone's side menu has the same groups
+    // and no fold, and a phone shows the summary, so it says "The web sidebar".
+    expect(source('components/dashboard/sidebar.tsx')).toContain('aria-expanded={open}');
+    expect(repoFile('apps/mobile/src/components/drawer-content.tsx')).not.toMatch(
+      /\bexpanded\b|\bcollaps|\bfold/i,
+    );
+    expect(release().summary).toContain(
+      "The web sidebar now sorts its links into Inventory, Fulfillment, Purchasing, Insights and Workspace, each group folds, and the mobile app's side menu uses the same groups.",
+    );
     // Settings, Navigation shows the three new groups.
     expect(source('components/settings/nav-customizer.tsx')).toContain(
       "  fulfillment: 'Fulfillment',\n  purchasing: 'Purchasing',\n  insights: 'Insights',",
+    );
+    // The top bar already showed the trail on wider screens (Inventory /
+    // Orders); only its group names are new.
+    const crumbs = source('components/dashboard/topbar-crumbs.ts');
+    expect(crumbs).toContain(
+      "const SECTION_FULFILLMENT: Crumb = { label: 'Fulfillment', href: null };",
+    );
+    expect(crumbs).toContain('[/^\\/dashboard\\/orders$/, [SECTION_FULFILLMENT, ORDERS_LIST]],');
+    expect(source('components/dashboard/topbar.tsx')).toContain(
+      '<nav aria-label="Breadcrumb" className="@min-[520px]:flex hidden min-w-0">',
+    );
+    expect(entry('web-new-look').whatChanged).toMatch(
+      /On wider screens the trail in the top bar uses the new sidebar groups, such as Fulfillment \/ Orders\.$/,
     );
   });
 
@@ -12333,6 +12402,19 @@ describe('the new look release (redesign-2026-10)', () => {
     expect(entry('orders-new-layout').whatChanged).toContain(
       'the one solid button under Manager actions',
     );
+    // The cart line's quantity buttons are a fixed 108 px, where production's
+    // auto width squeezed names to one word per line. The order page's lines
+    // claim no more room than production gave them (P4.B1: 208 px at 1280,
+    // and at 390 names still squeeze to their longest word, as before).
+    expect(source('components/orders/storefront/storefront.css')).toContain(
+      '.sp-storefront .sf-step.mini {\n  height: 28px;\n  grid-template-columns: 28px minmax(0, 1fr) 28px;\n  border-radius: 6px;\n  min-width: 0;\n  width: 108px;\n}',
+    );
+    expect(entry('orders-new-layout').whyItMatters).toContain(
+      'in the New order cart the quantity buttons squeezed item names to one word per line',
+    );
+    expect(
+      `${entry('orders-new-layout').whyItMatters} ${entry('orders-new-layout').howItAffectsYou}`,
+    ).not.toMatch(/more room|a word at a time/i);
     const po = source('components/po/po-form.tsx');
     expect(po).toContain('title="PO details"');
     expect(po).toContain(
@@ -12365,6 +12447,23 @@ describe('the new look release (redesign-2026-10)', () => {
     expect(shift).not.toMatch(/grid-cols-[4-9]/);
     expect(entry('overview-and-item-pages').howItAffectsYou).toContain(
       "Shift command's quick links now sit at most three to a row, with room for their full names.",
+    );
+    // The Inventory value card's figure and its change over 30 days are new in
+    // the redesign (production's card had no figure), so they are told here,
+    // not as a fix.
+    expect(source('components/dashboard/widgets/value-chart-interactive.tsx')).toContain(
+      '<span className="text-muted-foreground">vs. 30 days ago</span>',
+    );
+    expect(entry('overview-and-item-pages').howItAffectsYou).toContain(
+      'The Inventory value card now also shows the value of the line it draws and its change over 30 days, for the location, Cost or Retail and comparison you pick.',
+    );
+    // A Rentals items card shows how many are available and out only while
+    // some of the rental is out.
+    const table = source('components/inventory/inventory-table.tsx');
+    expect(table).toContain('if ((reservedByItem?.get(item.id) ?? 0) > 0) return true;');
+    expect(table).toContain('const rentals =\n    reserved > 0 ? (');
+    expect(entry('items-books-grid').howItAffectsYou).toMatch(
+      /On Rentals items, while any of a rental is checked out, its card also shows how many are available and how many are out\.$/,
     );
     // The Rentals items search box asks for rentals of every type.
     expect(source('app/api/items/search/route.ts')).toContain(
@@ -12401,5 +12500,37 @@ describe('the new look release (redesign-2026-10)', () => {
     );
     expect(all).not.toMatch(/Clear all|\?q=|\bcrate\b|Safari|contrast|empty state/i);
     expect(all).not.toMatch(/doubled|meta line|press target/i);
+  });
+});
+
+// SET AT PUBLISH. This change was written before the redesign was merged
+// (PLAN P7.3: the What's New is merged once phones show the update), so the
+// four releases at the top carry a provisional T (12:47Z to 12:50Z on
+// 2026-10-20), earlier than the merge, the web build and the OTA, and their
+// comments hold placeholders for the merge, the web build, the OTA group, its
+// iOS launches and the Demo Co sweep, and a STILL TO CHECK line for the phone
+// walks. The plan's publishedAt was not a date so that this file failed until
+// the real instant was set; this guard keeps that safety without failing the
+// other checks of these releases. It fails on purpose until the publish PR
+// sets REDESIGN_LIVE_AT and T (a whole minute at or after it), fills in every
+// placeholder, replaces each STILL TO CHECK line with its result, deletes the
+// SET AT PUBLISH note and moves the bounds and days the four "is published"
+// tests pin. Do not merge while it fails.
+describe('the redesign publish guard (set at publish)', () => {
+  it('holds no provisional publish fact: T is at or after the instant the web build was live and the OTA reached iPhones, and no placeholder, STILL TO CHECK or SET AT PUBLISH line is left (fails on purpose until the publish PR sets them)', () => {
+    const registry = readFileSync(resolve(__dirname, 'registry.ts'), 'utf8');
+    const top = registry.slice(0, registry.indexOf("id: 'pages-keep-groups-whole-2026-10'"));
+    expect(top).toContain("id: 'ai-search-finds-every-item-2026-10'");
+    const t = RELEASES.find((r) => r.id === 'ai-search-finds-every-item-2026-10')!.publishedAt;
+    const liveSet = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/.test(REDESIGN_LIVE_AT);
+    const open = [
+      ...(liveSet ? [] : [`REDESIGN_LIVE_AT is ${REDESIGN_LIVE_AT}, so T (${t}) is provisional`]),
+      ...(liveSet && Date.parse(t) < Date.parse(REDESIGN_LIVE_AT)
+        ? [`T (${t}) is before REDESIGN_LIVE_AT (${REDESIGN_LIVE_AT})`]
+        : []),
+      ...(top.match(/<(?:merge sha|id|time|group|result)>/g) ?? []).map((p) => `placeholder ${p}`),
+      ...(top.match(/\b(?:STILL TO CHECK|SET AT PUBLISH)\b[^\n]*/g) ?? []),
+    ];
+    expect(open).toEqual([]);
   });
 });
