@@ -936,6 +936,22 @@ export function InventoryTable({
   const filters = useInstantFilters({ params, basePath, replace: replaceUrl });
   const isFilterPending = filters.isPending;
   const [q, setQ] = React.useState(initialQuery);
+  // A SAVED VIEW'S SEARCH (grouping walk 2026-10-20, W4 shared-view). The
+  // box is this table's own state (seeded once from the URL), and a view's
+  // chip only navigates, so applying "Grade 2 readers" ({q: 'Grade 2'})
+  // landed on ?q=Grade+2 with the box still empty, and the box's URL sync
+  // below then wrote its empty value back over the view's search: the address
+  // lost q and the list never narrowed. Applying a view without a search kept
+  // a typed one the same way. The chip now hands the view's search over
+  // (SavedViewChip onApply: its words, or '' for none) and the box takes it
+  // here, in the render where the view's address lands, before any effect
+  // runs; until then nothing changes, so the sync cannot write a stale
+  // address over the navigation in flight. The view's state applies whole.
+  const [viewSearch, setViewSearch] = React.useState<string | null>(null);
+  if (viewSearch !== null && (params.get('q') ?? '').trim() === viewSearch.trim()) {
+    setViewSearch(null);
+    if (q !== viewSearch) setQ(viewSearch);
+  }
   // Server-authoritative search hits — populated after a debounced
   // fetch to /api/items/search. `null` means "no server result yet,
   // fall back to localMatches"; an empty array means "server says
@@ -2712,6 +2728,7 @@ export function InventoryTable({
               scope={savedViewScope ?? (showBookFields ? 'books' : 'inventory')}
               basePath={basePath}
               isOwner={!!currentUserId && sv.ownerId === currentUserId}
+              onApply={(state) => setViewSearch(state.q ?? '')}
             />
           ))}
           {savedViewScope && (
@@ -5585,12 +5602,16 @@ function SavedViewChip({
   scope,
   basePath,
   isOwner,
+  onApply,
 }: {
   view: SavedViewSummary;
   isActive: boolean;
   scope: 'inventory' | 'books';
   basePath: string;
   isOwner: boolean;
+  /** Told the view's state as the chip navigates to it: the table hands the
+   *  view's search to its box (or empties it) once the address lands. */
+  onApply?: (state: SavedViewSummary['state']) => void;
 }) {
   const router = useRouter();
   const [deleting, setDeleting] = React.useState(false);
@@ -5599,6 +5620,7 @@ function SavedViewChip({
 
   async function apply() {
     await setActiveWarehouseAction(view.state.warehouseId ?? null);
+    onApply?.(view.state);
     const next = new URLSearchParams();
     if (view.state.q) next.set('q', view.state.q);
     if (view.state.status) next.set('status', view.state.status);
