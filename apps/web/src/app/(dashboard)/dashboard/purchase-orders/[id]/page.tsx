@@ -360,8 +360,8 @@ function receivedPercent(received: number, ordered: number): number {
 }
 
 /**
- * The PO's lines in M4's row look (DESIGN-SPEC 6.18): the photo with its hover
- * preview, the name, then the SKU with the unit cost and the line total in
+ * The PO's lines in M4's row look (DESIGN-SPEC 6.18): the 32 px photo with its
+ * hover preview, the name, then the SKU with the unit cost and the line total in
  * mono, and on the right what was received against what was ordered over a
  * thin bar drawn from those two numbers. Every value the old columns held
  * (Image, Item, SKU, Ordered, Received, Unit cost, Total) is still printed,
@@ -378,7 +378,8 @@ function LineItems({ rows }: { rows: LineRow[] }) {
     <Table scrollLabelledBy="po-line-items-heading">
       <TableHeader>
         <TableRow className="hover:bg-transparent">
-          <TableHead className="w-[46px] first:pl-[18px]">
+          {/* The 18 px gutter and the 32 px line photo (FX9). */}
+          <TableHead className="w-[50px] first:pl-[18px]">
             <span className="sr-only">Image</span>
           </TableHead>
           <TableHead className="pl-0">Item</TableHead>
@@ -398,7 +399,7 @@ function LineItems({ rows }: { rows: LineRow[] }) {
                   imageUrl={l.imageUrl}
                   previewUrl={l.previewUrl}
                   alt={l.name}
-                  size="sm"
+                  size="line"
                   itemId={l.itemId}
                 />
               </TableCell>

@@ -75,8 +75,8 @@ vi.mock('@/components/po/po-status-badge', () => ({
 }));
 vi.mock('@/components/po/po-access-denied', () => ({ PoAccessDenied: () => null }));
 vi.mock('@/components/items/item-thumb', () => ({
-  ItemThumb: ({ alt, imageUrl }: { alt: string; imageUrl: string | null }) => (
-    <span data-testid="thumb" data-alt={alt} data-src={imageUrl ?? ''} />
+  ItemThumb: ({ alt, imageUrl, size }: { alt: string; imageUrl: string | null; size?: string }) => (
+    <span data-testid="thumb" data-alt={alt} data-src={imageUrl ?? ''} data-size={size ?? ''} />
   ),
 }));
 
@@ -253,6 +253,21 @@ describe('the PO page lines', () => {
     // A since-deleted item keeps its line, named as before.
     expect(within(gone!).getByText('Unknown item')).toBeInTheDocument();
     expect((gone!.querySelector('[style]') as HTMLElement).style.width).toBe('0%');
+  });
+
+  // FX9 (DESIGN-SPEC 4 and 6.18, line rows "Thumbnail 32"): the line photo
+  // was the 28 px sm frame (radius 5) in a 46 px column. It is the 32 px line
+  // frame (radius 6) in a 50 px column: the 18 px gutter and the photo.
+  it('draws each line photo in the 32 px line frame, in a 50 px column', async () => {
+    await renderPage();
+    for (const line of screen.getAllByTestId('po-line')) {
+      expect(within(line).getByTestId('thumb')).toHaveAttribute('data-size', 'line');
+    }
+    const table = screen.getAllByTestId('po-line')[0]!.closest('table')!;
+    const imageHeader = within(table).getAllByRole('columnheader')[0]!;
+    expect(imageHeader).toHaveTextContent('Image');
+    expect(imageHeader).toHaveClass('w-[50px]');
+    expect(imageHeader).not.toHaveClass('w-[46px]');
   });
 
   it('names the lines table by the card title, once', async () => {
