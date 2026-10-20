@@ -11,6 +11,8 @@ interface StockBarProps {
 /**
  * Stock against par, drawn in the coverage-bar look (DESIGN-SPEC 6.11): a 4 px
  * track in the stronger hairline, radius 2, filled in the status colour. The
+ * fill has no radius of its own: the track (overflow hidden) rounds its start
+ * and its end is square, as the reference draws it (FX13). The
  * figure is still stock / par exactly as the caller computes it; there is no
  * days-of-cover label (the app has no such number). 72 x 4 by default, the
  * reference column's size; a caller can still pass its own width.
@@ -26,7 +28,7 @@ export function StockBar({ stock, par, status, width = 72, className }: StockBar
       style={{ width, height: 4 }}
     >
       <span
-        className={cn('block h-full rounded-[2px]', {
+        className={cn('block h-full', {
           'bg-[hsl(var(--accent))]': status === 'ok',
           'bg-[hsl(var(--warning))]': status === 'warn',
           'bg-[hsl(var(--destructive))]': status === 'crit',

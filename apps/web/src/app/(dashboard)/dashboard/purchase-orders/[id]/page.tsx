@@ -436,12 +436,15 @@ function LineItems({ rows }: { rows: LineRow[] }) {
                       <span className="sr-only"> ordered</span>
                     </span>
                   </div>
+                  {/* The fill has no radius of its own: the track rounds its
+                      start and its end is square, as the reference draws it
+                      (DESIGN-SPEC 6.11; FX13). */}
                   <div
                     aria-hidden="true"
                     className="bg-line-strong mt-1 h-1 overflow-hidden rounded-sm"
                   >
                     <div
-                      className="bg-accent h-full rounded-sm"
+                      className="bg-accent h-full"
                       style={{
                         width: `${receivedPercent(l.quantityReceived, l.quantityOrdered)}%`,
                       }}

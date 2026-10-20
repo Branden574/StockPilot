@@ -270,6 +270,19 @@ describe('the PO page lines', () => {
     expect(imageHeader).not.toHaveClass('w-[46px]');
   });
 
+  // FX13 (DESIGN-SPEC 6.11 "a 4 px bar (radius 2 ...)" and section 4 "2
+  // (bars)"): the received bar's fill drew its own rounded ends; the
+  // reference fill has none, so only the track rounds its start.
+  it('draws each line`s received fill square-ended inside its rounded track', async () => {
+    await renderPage();
+    for (const line of screen.getAllByTestId('po-line')) {
+      const fill = line.querySelector('[style]') as HTMLElement;
+      expect(fill).toHaveClass('bg-accent', 'h-full');
+      expect(fill.className).not.toMatch(/rounded/);
+      expect(fill.parentElement).toHaveClass('h-1', 'overflow-hidden', 'rounded-sm');
+    }
+  });
+
   it('names the lines table by the card title, once', async () => {
     await renderPage();
     const heading = screen.getByRole('heading', { level: 2, name: 'Line items' });
