@@ -1217,7 +1217,17 @@ export function InventoryTable({
     !!params.get('rack') ||
     (!!lifecycleParam && lifecycleParam !== 'active' && lifecycleParam !== 'all') ||
     params.get('expected') === '1';
+  // ONE PRESS OF CLEAR (review 2026-10-20). In server mode (staff and viewers
+  // on Items and Books, everyone on Rentals items) the box's search effect
+  // below answers an emptied box with its own router.replace, built from the
+  // address as it was: the search dropped, the Category kept. It ran after the
+  // clear's navigation and superseded it, so one press of "Clear all filters"
+  // on a Category and a search left the Category on. The clear marks its own
+  // emptying of the box here, and the effect run it causes navigates nowhere.
+  const clearingSearchRef = React.useRef(false);
   function clearAllFilters() {
+    // Only when the box changes: the effect then runs and takes the mark.
+    if (q !== '') clearingSearchRef.current = true;
     // The clear writes the address's search (it drops it), so the box does
     // not take it back when the navigation lands (see agreedQ above).
     setAgreedQ('');
@@ -1288,6 +1298,10 @@ export function InventoryTable({
     // instantMode flips true, this effect re-runs and early-returns, and
     // the SAME q re-derives locally over the full dataset (the search box
     // is preserved — the table never remounts).
+    // A clear's own emptying of the box (clearAllFilters), taken by the run it
+    // causes whatever the mode, so it can never outlive that run.
+    const clearing = clearingSearchRef.current;
+    clearingSearchRef.current = false;
     if (instantMode) return;
     const needle = q.trim();
     if (!needle) {
@@ -1295,6 +1309,9 @@ export function InventoryTable({
       setServerHits(null);
       setServerHitsTotal(null);
       setServerLoading(false);
+      // The clear navigates itself, without the search and without the
+      // filters: a second navigation from the old address would put them back.
+      if (clearing) return;
       // Clear the q param from the URL when the user empties the box.
       // Use router.replace (not history.replaceState) so Next.js
       // re-runs the server component and re-fetches the FULL item
