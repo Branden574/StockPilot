@@ -100,14 +100,21 @@ export default function UngroupSelectedScreen() {
   // arrives while it is on top, swapping only the params. The reload below
   // reset most of the review, but a refused Save's error (and its Review
   // again) stayed over the new records, and the old review or result showed
-  // under the new params until the reload ran. The same selection keeps its
-  // review and the person's choices.
+  // under the new params until the reload ran. The same selection, in any
+  // order or case, keeps its review and the person's choices: the review
+  // holds the params it was mounted with.
   return <UngroupSelectedReview key={ungroupSelectedReviewKey(params)} params={params} />;
 }
 
 /** The review itself. Every piece of its state belongs to the selection it
  *  was mounted for: the route mounts a new one for another selection. */
-function UngroupSelectedReview({ params }: { params: UngroupSelectedParams | null }) {
+function UngroupSelectedReview({ params: routeParams }: { params: UngroupSelectedParams | null }) {
+  // The selection the review was mounted for, kept for its whole life. The
+  // route mounts a new review for any other selection, so later params can
+  // only name this one in another order or case. Reading them ran the reload
+  // below again, which cleared the person's keeps-the-SKU choice, any result
+  // shown and its Try again (redesign Stage 6, F8 review).
+  const [params] = React.useState(routeParams);
   const router = useRouter();
   const { c } = useTheme();
   const { user } = useAuth();

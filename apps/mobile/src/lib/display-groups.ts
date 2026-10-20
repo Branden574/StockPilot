@@ -315,8 +315,9 @@ export function readGroupSelectedParams(p: {
  * items link's Pencils #2 HB and Glue Sticks. The screen mounts its review
  * under this key, so other records, another list or another target group
  * start a fresh review (records, name, choices, acknowledgement, result,
- * error), and params that name the same selection keep the person's edits.
- * Ids compare as records do: in any order and any case.
+ * error), and params that name the same selection keep the person's edits
+ * (the review holds the params it was mounted with, so they never preview
+ * the records again). Ids compare as records do: in any order and any case.
  */
 export function groupSelectedReviewKey(params: GroupSelectedParams | null): string {
   if (!params) return 'invalid';

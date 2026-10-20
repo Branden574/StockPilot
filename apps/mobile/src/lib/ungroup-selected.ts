@@ -144,8 +144,9 @@ export function readUngroupSelectedParams(p: {
  * The screen mounts its review under this key, so other records, another
  * list or another grouping a record is shown under start a fresh review (a
  * refused Save's error stayed over the new records before), and params that
- * name the same selection keep the person's choices. Ids compare as records
- * do: in any order and any case.
+ * name the same selection keep the person's choices (the review holds the
+ * params it was mounted with, so they never run its reload again). Ids
+ * compare as records do: in any order and any case.
  */
 export function ungroupSelectedReviewKey(params: UngroupSelectedParams | null): string {
   if (!params) return 'invalid';

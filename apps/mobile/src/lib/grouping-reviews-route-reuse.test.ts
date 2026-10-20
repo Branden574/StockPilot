@@ -50,7 +50,10 @@ vi.mock('./api', () => ({
  * The F8 review found that the Ungroup review a new link replaced still
  * answered for its records: a preview in flight said "2 records to review."
  * to VoiceOver for records no longer on screen, since its load effect had no
- * cleanup. Its load effect is run below from the screen's source.
+ * cleanup. Its load effect is run below from the screen's source. It also
+ * found that the same selection in another order or case, which keeps the
+ * key, ran the Ungroup review's load again and cleared the keeps-the-SKU
+ * choice: each review now holds the params it was mounted with.
  *
  * The mobile suite has no React Native renderer, so the screens are read with
  * the TypeScript parser, and the key expression is compiled from the
@@ -301,6 +304,30 @@ describe.each(SCREENS)('$name review: the route mounts the review under its key'
       if (tagOf(el, sf) === s.review) reviews.push(el);
     });
     expect(reviews).toHaveLength(1);
+  });
+
+  // F8 review: the same selection in another order or case keeps the key,
+  // so React hands the mounted review the new params. Reading them ran the
+  // review's load again: the Ungroup review cleared the person's keeps-the-
+  // SKU choice, and the Group review previewed the same records again. The
+  // review now holds the params it was mounted with. Mutation caught: the
+  // review reading its prop, or holding anything but the route's params.
+  it('the review keeps the selection it was mounted for, and reads the route params only there', () => {
+    expect(review!.parameters).toHaveLength(1);
+    expect(review!.parameters[0]!.name.getText(sf).replace(/\s+/g, ' ')).toBe(
+      '{ params: routeParams }',
+    );
+    expect(review!.body!.statements[0]!.getText(sf)).toBe(
+      'const [params] = React.useState(routeParams);',
+    );
+    expect(hookCalls(review!, sf)[0]!.text).toBe('React.useState(routeParams)');
+    const reads: string[] = [];
+    const visit = (n: ts.Node) => {
+      if (ts.isIdentifier(n) && n.text === 'routeParams') reads.push(n.parent.getText(sf));
+      ts.forEachChild(n, visit);
+    };
+    visit(review!.body!);
+    expect(reads).toEqual(['React.useState(routeParams)']);
   });
 
   // The F8 walk, through the screen's own key: the items link, then the
