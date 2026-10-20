@@ -101,30 +101,29 @@ export function ItemDetailTabs({ activeTab }: { activeTab: DetailTabId }) {
  * line's readiness cell) scrolled the card UNDER it, title and all, and Tab
  * could leave a control under it: Market price's Refresh, reached from the
  * right column's last link in the two-column grid (P68-KBD-01). This keeps the
- * header's measured height in `--item-detail-header-h` on the page, which the
- * card's scroll margin reads (with a fallback for the moment before this runs),
- * and on the scroller the header sticks to (the dashboard's main#main-content),
- * whose scroll padding reads it while focus is in the page below the header
- * (globals.css). It writes style properties only and reads no data.
+ * header's measured height in `--item-detail-header-h` on the page column that
+ * holds the header and the tab panels. The card's scroll margin reads it (with
+ * a fallback for the moment before this runs), and so does the scroll margin
+ * globals.css gives a focused control below the header, which inherits it from
+ * this column. Nothing is written on the dashboard's scroller. It writes one
+ * style property and reads no data.
  */
 function useStickyHeaderHeight(markerRef: React.RefObject<HTMLSpanElement | null>) {
   React.useEffect(() => {
     const header = markerRef.current?.closest<HTMLElement>('[data-item-detail-header]');
     const page = header?.parentElement;
     if (!header || !page || typeof ResizeObserver === 'undefined') return;
-    const scroller = header.closest<HTMLElement>('#main-content');
-    const measure = () => {
-      const height = `${Math.ceil(header.getBoundingClientRect().height)}px`;
-      page.style.setProperty('--item-detail-header-h', height);
-      scroller?.style.setProperty('--item-detail-header-h', height);
-    };
+    const measure = () =>
+      page.style.setProperty(
+        '--item-detail-header-h',
+        `${Math.ceil(header.getBoundingClientRect().height)}px`,
+      );
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(header);
     return () => {
       observer.disconnect();
       page.style.removeProperty('--item-detail-header-h');
-      scroller?.style.removeProperty('--item-detail-header-h');
     };
   }, [markerRef]);
 }

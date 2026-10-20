@@ -87,10 +87,11 @@ describe('ItemDetailTabs keeps the sticky header height for the #physical-count 
 
   // P68-KBD-01: in the two-column grid, Tab from the right column's last link
   // went back up to Market price's Refresh, which the browser left under the
-  // header. The scroller's scroll padding (globals.css) reads this height, so
-  // the dashboard's main#main-content must carry it too, and lose it on leaving
-  // so no other page is padded.
-  it('keeps the same height on the main#main-content scroller, follows resizes, and clears it on unmount', () => {
+  // header. A focused control below the header takes a scroll margin of this
+  // height (globals.css), which it inherits from the page column its tab panel
+  // shares with the header, so the dashboard's main#main-content scroller is
+  // never written: nothing on it changes, on this page or on any other.
+  it('keeps the height on the page column that holds the tab panels and never writes the main#main-content scroller', () => {
     let resize: (() => void) | null = null;
     const original = globalThis.ResizeObserver;
     globalThis.ResizeObserver = class {
@@ -109,24 +110,36 @@ describe('ItemDetailTabs keeps the sticky header height for the #physical-count 
             <div data-item-detail-header="">
               <ItemDetailTabs activeTab="overview" />
             </div>
-            <div role="tabpanel" />
+            <div role="tabpanel" data-testid="panel">
+              <button type="button">Refresh</button>
+            </div>
           </div>
         </main>,
       );
       const scroller = screen.getByTestId('scroller');
       const page = screen.getByTestId('page');
       const header = container.querySelector('[data-item-detail-header]') as HTMLElement;
+      const scrollerAttributes = scroller.getAttributeNames();
+      // The focused control inherits the height from the column it shares
+      // with the header.
+      expect(screen.getByRole('button', { name: 'Refresh' }).closest('[data-testid]')).toBe(
+        screen.getByTestId('panel'),
+      );
+      expect(screen.getByTestId('panel').parentElement).toBe(page);
+      expect(header.parentElement).toBe(page);
       header.getBoundingClientRect = () => ({ height }) as DOMRect;
       resize!();
-      expect(scroller.style.getPropertyValue('--item-detail-header-h')).toBe('214px');
       expect(page.style.getPropertyValue('--item-detail-header-h')).toBe('214px');
+      expect(scroller.getAttribute('style')).toBeNull();
       height = 318;
       resize!();
-      expect(scroller.style.getPropertyValue('--item-detail-header-h')).toBe('318px');
       expect(page.style.getPropertyValue('--item-detail-header-h')).toBe('318px');
+      expect(scroller.getAttribute('style')).toBeNull();
+      expect(scroller.getAttributeNames()).toEqual(scrollerAttributes);
       unmount();
-      expect(scroller.style.getPropertyValue('--item-detail-header-h')).toBe('');
       expect(page.style.getPropertyValue('--item-detail-header-h')).toBe('');
+      expect(scroller.getAttribute('style')).toBeNull();
+      expect(scroller.getAttributeNames()).toEqual(scrollerAttributes);
     } finally {
       globalThis.ResizeObserver = original;
     }

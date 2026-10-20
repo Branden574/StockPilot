@@ -367,10 +367,12 @@ describe('the tabs are the URL', () => {
     }
   });
 
-  it('every panel follows the sticky header as its sibling, which the main scroller keys its scroll padding on', async () => {
-    // P68-KBD-01: globals.css pads main#main-content by the header's height
-    // while focus is in `[data-item-detail-header] ~ *`, so a control reached
-    // with Tab below the header is scrolled clear of it.
+  it('every panel follows the sticky header as its sibling, which the focused control scroll margin keys on', async () => {
+    // P68-KBD-01: globals.css gives a focused control in
+    // `[data-item-detail-header] ~ *` a scroll margin of the header's height,
+    // which it inherits from the column the panel shares with the header (the
+    // tab strip keeps it there), so a control reached with Tab below the
+    // header is scrolled clear of it.
     for (const tab of [undefined, 'movements', 'activity']) {
       cleanup();
       const { container } = render(await page(tab));
