@@ -138,10 +138,15 @@ function UngroupSelectedReview({ params }: { params: UngroupSelectedParams | nul
   // result sat under the footer. 170 stays the floor.
   const [footerHeight, setFooterHeight] = React.useState<number | null>(null);
 
-  // The newest review for these records; an overtaken answer is dropped.
+  // The newest review for these records. An answer is dropped once the
+  // effect runs again (seq) or the review unmounts (live, cleared by the
+  // cleanup): a link for other records mounts a new review, and the old one
+  // must not tell VoiceOver "2 records to review." for records no longer on
+  // screen (redesign Stage 6, F8 review).
   React.useEffect(() => {
     if (!params || !activeOrgId || !user?.id) return;
     const mine = ++seq.current;
+    let live = true;
     pending.current = null;
     /* eslint-disable react-hooks/set-state-in-effect -- a new look at the records: reset, then post-await sets */
     setLoadState({ kind: 'loading' });
@@ -153,7 +158,7 @@ function UngroupSelectedReview({ params }: { params: UngroupSelectedParams | nul
     const ids = idsKey ? idsKey.split(',') : [];
     void (async () => {
       if (!(await isOnline())) {
-        if (mine === seq.current) setLoadState({ kind: 'offline' });
+        if (live && mine === seq.current) setLoadState({ kind: 'offline' });
         return;
       }
       try {
@@ -162,16 +167,19 @@ function UngroupSelectedReview({ params }: { params: UngroupSelectedParams | nul
           organizationId: activeOrgId,
           actorUserId: user.id,
         });
-        if (mine !== seq.current) return;
+        if (!live || mine !== seq.current) return;
         setLoadState({ kind: 'ready', data: r, identity: r.identity });
         announce(GROUP_COPY.reviewReady(r.review.records.length));
       } catch (e) {
-        if (mine !== seq.current) return;
+        if (!live || mine !== seq.current) return;
         const { message } = describeGroupingError(e);
         setLoadState({ kind: 'failed', message });
         announce(message);
       }
     })();
+    return () => {
+      live = false;
+    };
   }, [params, activeOrgId, user?.id, idsKey, nonce]);
 
   const data = loadState.kind === 'ready' ? loadState.data : null;

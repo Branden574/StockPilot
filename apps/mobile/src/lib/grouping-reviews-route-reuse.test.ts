@@ -4,6 +4,8 @@ import * as vm from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 
+import { GROUP_COPY, GROUPING_ERROR_WORDS } from '@stockpilot/core';
+
 import {
   attrText,
   parseTsx,
@@ -14,6 +16,7 @@ import {
 } from './__fixtures__/jsx-touch-audit';
 // vi.mock below is hoisted above every import by vitest.
 import {
+  describeGroupingError,
   groupSelectedReviewKey,
   readGroupSelectedParams,
   type GroupSelectedParams,
@@ -43,6 +46,11 @@ vi.mock('./api', () => ({
  * Each screen's route now reads its params and mounts the review under a key
  * of the selection: another selection is a new review with nothing carried
  * over, and the same selection keeps the review and the person's edits.
+ *
+ * The F8 review found that the Ungroup review a new link replaced still
+ * answered for its records: a preview in flight said "2 records to review."
+ * to VoiceOver for records no longer on screen, since its load effect had no
+ * cleanup. Its load effect is run below from the screen's source.
  *
  * The mobile suite has no React Native renderer, so the screens are read with
  * the TypeScript parser, and the key expression is compiled from the
@@ -309,5 +317,180 @@ describe.each(SCREENS)('$name review: the route mounts the review under its key'
     expect(keyOf({ ...s.items, view: 'books' })).not.toBe(first);
     expect(keyOf({ ...s.items })).toBe(first);
     expect(keyOf(s.sameItems)).toBe(first);
+  });
+});
+
+// ── The Ungroup review's load, run (F8 review) ─────────────────────────────
+
+/** The one `React.useEffect` in a function whose callback calls `callee`. */
+function effectCalling(
+  fn: ts.FunctionDeclaration,
+  sf: ts.SourceFile,
+  callee: string,
+): ts.ArrowFunction & { body: ts.Block } {
+  const found: ts.Expression[] = [];
+  const visit = (n: ts.Node) => {
+    if (
+      ts.isCallExpression(n) &&
+      n.expression.getText(sf) === 'React.useEffect' &&
+      n.arguments[0]!.getText(sf).includes(`${callee}(`)
+    )
+      found.push(n.arguments[0]!);
+    ts.forEachChild(n, visit);
+  };
+  visit(fn);
+  expect(found, `the effect that calls ${callee}`).toHaveLength(1);
+  const callback = found[0]!;
+  if (!ts.isArrowFunction(callback) || !ts.isBlock(callback.body))
+    throw new Error(`the effect that calls ${callee} is not an arrow with a body`);
+  return callback as ts.ArrowFunction & { body: ts.Block };
+}
+
+/** The initializer of `const name = ...` inside a function. */
+function initializerIn(fn: ts.Node, sf: ts.SourceFile, name: string): string {
+  let text: string | undefined;
+  const visit = (n: ts.Node) => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === name)
+      text ??= n.initializer?.getText(sf);
+    ts.forEachChild(n, visit);
+  };
+  visit(fn);
+  if (text === undefined) throw new Error(`const ${name} is not in the review`);
+  return text;
+}
+
+/** Lets every answer already given run its continuations. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+describe('Ungroup review: a review the route replaced says nothing more', () => {
+  const file = 'app/ungroup-selected.tsx';
+  const sf = parseTsx(readSource(path.join(MOBILE_ROOT, file)), file);
+  const review = functionNamed(sf, 'UngroupSelectedReview')!;
+  const load = effectCalling(review, sf, 'previewUngroupSelected');
+
+  // Mutation caught: the cleanup dropped. The answer is then judged only by
+  // the review's own seq, which nothing moves once the review is unmounted.
+  it('its load effect returns a cleanup', () => {
+    const last = load.body.statements[load.body.statements.length - 1];
+    expect(last && ts.isReturnStatement(last) ? last.expression?.kind : undefined).toBe(
+      ts.SyntaxKind.ArrowFunction,
+    );
+  });
+
+  /**
+   * One mounted review: the screen's own load effect, run with the review's
+   * own refs (a review the route replaced keeps its seq, and nothing moves
+   * it). Each preview answers when the test says.
+   */
+  function mount(link: Record<string, string>, heard: string[]) {
+    const params = readUngroupSelectedParams(link);
+    const previews: { answer: (r: unknown) => void; refuse: (e: unknown) => void }[] = [];
+    const state: string[] = [];
+    const set = (name: string) => (v: unknown) => state.push(`${name} ${JSON.stringify(v)}`);
+    const effect = run(load.getText(sf), {
+      params,
+      activeOrgId: 'eeeeeeee-0000-4000-8000-000000000001',
+      user: { id: 'eeeeeeee-0000-4000-8000-000000000002' },
+      idsKey: run(initializerIn(review, sf, 'idsKey'), { params }),
+      seq: { current: 0 },
+      pending: { current: null },
+      setLoadState: set('loadState'),
+      setOutcome: set('outcome'),
+      setRetryBody: set('retryBody'),
+      setPhase: set('phase'),
+      setAnchorBySku: set('anchorBySku'),
+      isOnline: () => Promise.resolve(true),
+      previewUngroupSelected: () =>
+        new Promise((answer, refuse) => previews.push({ answer, refuse })),
+      GROUP_COPY,
+      describeGroupingError,
+      announce: (message: string) => heard.push(message),
+    }) as () => unknown;
+    let cleanup = effect();
+    return {
+      params,
+      previews,
+      state,
+      /** The effect again (Try again): React runs the cleanup first. */
+      again: () => {
+        if (typeof cleanup === 'function') cleanup();
+        cleanup = effect();
+      },
+      unmount: () => {
+        if (typeof cleanup === 'function') cleanup();
+      },
+    };
+  }
+
+  const reviewOf = (n: number) => ({
+    review: { records: Array.from({ length: n }, (_, i) => ({ id: `r${i}` })) },
+    identity: { organizationId: 'org', actorUserId: 'actor' },
+  });
+
+  // The F8 review's walk: the link for A,B, then the link for C,D,E before
+  // the first preview answers. VoiceOver said "3 records to review." and "2
+  // records to review." in whichever order the answers came.
+  // Mutation caught: no cleanup, or a guard that reads seq and not live.
+  it.each(['the new review answers first', 'the replaced review answers first'])(
+    'another link before the first preview answers: only the new review is heard (%s)',
+    async (order) => {
+      const heard: string[] = [];
+      const ab = { ids: `${PENCILS},${GLUE}`, view: 'items', under: 'ss' };
+      const cde = { ids: `${ATLAS},${READER},${GROUP_A}`, view: 'items', under: 'sss' };
+      const first = mount(ab, heard);
+      await settle();
+      // Another selection is another key: React unmounts the first review
+      // (its cleanup) and mounts the second.
+      expect(ungroupSelectedReviewKey(readUngroupSelectedParams(cde))).not.toBe(
+        ungroupSelectedReviewKey(first.params),
+      );
+      first.unmount();
+      const second = mount(cde, heard);
+      await settle();
+      const replacedStateBefore = [...first.state];
+      if (order === 'the new review answers first') {
+        second.previews[0]!.answer(reviewOf(3));
+        await settle();
+        first.previews[0]!.answer(reviewOf(2));
+      } else {
+        first.previews[0]!.answer(reviewOf(2));
+        await settle();
+        second.previews[0]!.answer(reviewOf(3));
+      }
+      await settle();
+      expect(heard).toEqual([GROUP_COPY.reviewReady(3)]);
+      expect(first.state).toEqual(replacedStateBefore);
+      expect(second.state[second.state.length - 1]).toMatch(/^loadState \{"kind":"ready"/);
+    },
+  );
+
+  it("a replaced review's refused preview is not said either", async () => {
+    const heard: string[] = [];
+    const first = mount({ ids: `${PENCILS},${GLUE}`, view: 'items', under: 'ss' }, heard);
+    await settle();
+    first.unmount();
+    const second = mount({ ids: `${ATLAS},${READER}`, view: 'books', under: 'ss' }, heard);
+    await settle();
+    first.previews[0]!.refuse(new Error('The answer came from another organization.'));
+    second.previews[0]!.answer(reviewOf(2));
+    await settle();
+    expect(heard).toEqual([GROUP_COPY.reviewReady(2)]);
+    expect(heard).not.toContain(GROUPING_ERROR_WORDS.workspaceChanged);
+  });
+
+  // The guard it had before: within one review, Try again's newer preview
+  // wins over an older one still in flight.
+  it('within one review, only the newest preview is said', async () => {
+    const heard: string[] = [];
+    const one = mount({ ids: `${PENCILS},${GLUE}`, view: 'items', under: 'gs' }, heard);
+    await settle();
+    one.again();
+    await settle();
+    expect(one.previews).toHaveLength(2);
+    one.previews[1]!.answer(reviewOf(2));
+    await settle();
+    one.previews[0]!.refuse(new Error('The answer came from another organization.'));
+    await settle();
+    expect(heard).toEqual([GROUP_COPY.reviewReady(2)]);
   });
 });

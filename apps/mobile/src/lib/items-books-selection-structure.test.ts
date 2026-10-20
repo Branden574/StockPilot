@@ -700,6 +700,8 @@ const REVIEWS = [
     eyebrow: "view === 'books' ? 'BOOKS · GROUP' : 'ITEMS · GROUP'",
     params: 'readGroupSelectedParams({ ids: idsParam, view: viewParam, groupId: groupParam })',
     offline: 'GROUP_COPY.offline',
+    // The guard on a preview's answer: the newest look at the records.
+    current: 'mine === seq.current',
   },
   {
     name: 'Ungroup',
@@ -707,6 +709,9 @@ const REVIEWS = [
     eyebrow: "view === 'books' ? 'BOOKS · UNGROUP' : 'ITEMS · UNGROUP'",
     params: 'readUngroupSelectedParams({ ids: idsParam, view: viewParam, under: underParam })',
     offline: 'UNGROUP_COPY.selectedOffline',
+    // ...and, since the F8 review, a review still mounted (the load effect's
+    // cleanup clears live; grouping-reviews-route-reuse.test.ts runs it).
+    current: 'live && mine === seq.current',
   },
 ] as const;
 
@@ -739,8 +744,11 @@ describe.each(REVIEWS)('$name review', (r) => {
   });
 
   it('checks for a connection before the preview, says so offline, and never queues', () => {
+    const current = r.current.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     expect(code).toMatch(
-      /if \(!\(await isOnline\(\)\)\) \{\s*if \(mine === seq\.current\) setLoadState\(\{ kind: 'offline' \}\);\s*return;\s*\}/,
+      new RegExp(
+        `if \\(!\\(await isOnline\\(\\)\\)\\) \\{\\s*if \\(${current}\\) setLoadState\\(\\{ kind: 'offline' \\}\\);\\s*return;\\s*\\}`,
+      ),
     );
     expect(code).toContain(`loadState.kind === 'offline' ? ${r.offline} : loadState.message`);
     expect(code).not.toMatch(/enqueue\(/);
