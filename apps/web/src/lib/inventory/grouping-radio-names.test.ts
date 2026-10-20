@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { UNGROUP_COPY } from '@stockpilot/core';
+import { GROUP_COPY, UNGROUP_COPY } from '@stockpilot/core';
 
 import type { GroupingReviewRecord } from '@/server/services/item-grouping';
 
-import { keepsSkuRadioLabel } from './grouping-radio-names';
+import { groupChoiceRadioNames, keepsSkuRadioLabel } from './grouping-radio-names';
 
 /**
  * THE UNGROUP REVIEW'S "KEEPS THE SKU" RADIO NAMES (redesign Stage 6,
@@ -170,5 +170,98 @@ describe('keepsSkuRadioLabel: each radio is named for what tells its record apar
       expect(name.match(/WM-1/g)).toHaveLength(1);
       expect(name).not.toContain('Main');
     }
+  });
+});
+
+/**
+ * THE GROUP REVIEW'S "MOVE IT INTO THIS GROUP" AND "LEAVE IT OUT" RADIO NAMES
+ * (redesign Stage 6, GROUP-REVIEW-RADIO-NAMES).
+ *
+ * A record already in another group gets two radios, named for the record
+ * (recheck R2-5). Two records with one name that are both in another group
+ * were radios with one name. By the Ungroup radios' rule, each name now goes
+ * on with the words of the record's line that the other records with these
+ * radios and the same name do not share, and "record N of M" when two still
+ * read the same.
+ */
+describe('groupChoiceRadioNames: the Group review radios are named apart by the same rule', () => {
+  const inH = { displayGroup: { id: 'h', name: 'Old shirts', version: 3 } };
+
+  it("a record whose name is its own keeps core's words alone (R2-5)", () => {
+    const rows = [
+      rec({ id: M1, ...inH, name: 'Polo S', sku: 'P-S', placementLabel: 'A-1' }),
+      rec({ id: M2, ...inH, name: 'Polo M', sku: 'P-M', placementLabel: 'B-2' }),
+    ];
+    expect(rows.map((r) => groupChoiceRadioNames(r, rows, 'items'))).toEqual([
+      { move: GROUP_COPY.moveOneFor('Polo S'), leave: GROUP_COPY.leaveOutOneFor('Polo S') },
+      { move: GROUP_COPY.moveOneFor('Polo M'), leave: GROUP_COPY.leaveOutOneFor('Polo M') },
+    ]);
+  });
+
+  it('three Wireless Mouse records on three racks: each pair is named with its rack; another name is not compared', () => {
+    const rows = [
+      rec({ id: M1, ...inH, placementLabel: 'A-1' }),
+      rec({ id: OTHER, ...inH, name: 'Keyboard', sku: 'KB-1', warehouseName: 'Annex' }),
+      rec({ id: M2, ...inH, placementLabel: 'B-2' }),
+      rec({ id: M3, ...inH, placementLabel: 'C-3' }),
+    ];
+    expect(rows.map((r) => groupChoiceRadioNames(r, rows, 'items'))).toEqual([
+      {
+        move: 'Move it into this group: Wireless Mouse, A-1',
+        leave: 'Leave it out: Wireless Mouse, A-1',
+      },
+      { move: 'Move it into this group: Keyboard', leave: 'Leave it out: Keyboard' },
+      {
+        move: 'Move it into this group: Wireless Mouse, B-2',
+        leave: 'Leave it out: Wireless Mouse, B-2',
+      },
+      {
+        move: 'Move it into this group: Wireless Mouse, C-3',
+        leave: 'Leave it out: Wireless Mouse, C-3',
+      },
+    ]);
+  });
+
+  // Mutation caught: a name with no position, so two records whose every
+  // word reads the same are two pairs of radios with one name again.
+  it('two identical records end with where they are listed among the records with these radios', () => {
+    const rows = [rec({ id: M2, ...inH }), rec({ id: M1, ...inH })];
+    expect(rows.map((r) => groupChoiceRadioNames(r, rows, 'items'))).toEqual([
+      {
+        move: 'Move it into this group: Wireless Mouse, record 1 of 2',
+        leave: 'Leave it out: Wireless Mouse, record 1 of 2',
+      },
+      {
+        move: 'Move it into this group: Wireless Mouse, record 2 of 2',
+        leave: 'Leave it out: Wireless Mouse, record 2 of 2',
+      },
+    ]);
+  });
+
+  it("says the SKU, an ISBN or a size when it is what differs, in the line's words", () => {
+    const skus = [
+      rec({ id: M1, ...inH, sku: 'WM-1' }),
+      rec({ id: M2, ...inH, sku: 'WM-2', quantityOnHand: 0 }),
+    ];
+    expect(skus.map((r) => groupChoiceRadioNames(r, skus, 'items').move)).toEqual([
+      'Move it into this group: Wireless Mouse, SKU WM-1, 4 on hand',
+      'Move it into this group: Wireless Mouse, SKU WM-2, 0 on hand',
+    ]);
+    const editions = [
+      rec({ id: M1, ...inH, itemType: 'book', name: 'Atlas', barcode: '9780134685991' }),
+      rec({ id: M2, ...inH, itemType: 'book', name: 'Atlas', barcode: '9780321125217' }),
+    ];
+    expect(editions.map((r) => groupChoiceRadioNames(r, editions, 'books').leave)).toEqual([
+      'Leave it out: Atlas, ISBN 9780134685991',
+      'Leave it out: Atlas, ISBN 9780321125217',
+    ]);
+    const sizes = [
+      rec({ id: M1, ...inH, variantSize: 'S' }),
+      rec({ id: M2, ...inH, variantSize: 'M' }),
+    ];
+    expect(sizes.map((r) => groupChoiceRadioNames(r, sizes, 'items').move)).toEqual([
+      'Move it into this group: Wireless Mouse, Size S',
+      'Move it into this group: Wireless Mouse, Size M',
+    ]);
   });
 });

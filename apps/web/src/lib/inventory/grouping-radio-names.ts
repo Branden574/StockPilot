@@ -1,12 +1,13 @@
-import { groupingRecordLine, type GroupingRecordLineFacts } from '@stockpilot/core';
+import { GROUP_COPY, groupingRecordLine, type GroupingRecordLineFacts } from '@stockpilot/core';
 
 /**
  * RADIO NAMES THAT TELL RECORDS APART (redesign Stage 6).
  *
  * The grouping reviews name a record's radio for its record: the Ungroup
- * review's "Keeps SKU X: <name>". Records that share a name (three Wireless
- * Mouse records on three racks, all of one SKU) were radios with one name, so
- * a screen reader could not tell them apart.
+ * review's "Keeps SKU X: <name>", and the Group review's "Move it into this
+ * group: <name>" and "Leave it out: <name>". Records that share a name (three
+ * Wireless Mouse records on three racks) were radios with one name, so a
+ * screen reader could not tell them apart.
  *
  * A radio's name now goes on, after the record's name, with the parts of the
  * record's own line (core groupingRecordLine: its SKU, ISBN, size, charter,
@@ -70,4 +71,24 @@ export function keepsSkuRadioLabel(
     rows.filter((r) => withRadio.has(r.id)),
     view,
   );
+}
+
+/**
+ * The Group review's two radios for a record already in another group (Stage
+ * 6, GROUP-REVIEW-RADIO-NAMES): core's "Move it into this group: <name>" and
+ * "Leave it out: <name>", told apart, by the same rule, from the other records
+ * with these radios that have the same name. A record whose name no other
+ * such record has keeps core's words alone (recheck R2-5). `withChoice` are
+ * the review's records whose rows carry the two radios, in the order listed.
+ */
+export function groupChoiceRadioNames(
+  record: RadioRecord,
+  withChoice: readonly RadioRecord[],
+  view: 'items' | 'books',
+): { move: string; leave: string } {
+  const sameName = withChoice.filter((r) => r.name === record.name);
+  return {
+    move: recordRadioName(GROUP_COPY.moveOneFor, record, sameName, view),
+    leave: recordRadioName(GROUP_COPY.leaveOutOneFor, record, sameName, view),
+  };
 }
