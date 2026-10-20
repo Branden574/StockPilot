@@ -48,7 +48,7 @@ vi.mock('./accept-button', () => ({
 
 import InvitePage from './page';
 
-const TOKEN = 'tok_0123456789abcdef';
+const LINK_ID = 'tok_1111111111111111';
 const FUTURE = new Date(Date.now() + 86_400_000).toISOString();
 const PAST = new Date(Date.now() - 86_400_000).toISOString();
 
@@ -65,7 +65,7 @@ function makeInvite(extra: Partial<NonNullable<Invite>> = {}): Invite {
 }
 
 async function open() {
-  return render(await InvitePage({ params: Promise.resolve({ token: TOKEN }) }));
+  return render(await InvitePage({ params: Promise.resolve({ token: LINK_ID }) }));
 }
 
 beforeEach(() => {
@@ -114,7 +114,7 @@ describe('/invite/[token]', () => {
     expect(screen.getByText(/Already have an account\?/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Sign in' })).toHaveAttribute(
       'href',
-      `/signin?redirect=/invite/${TOKEN}`,
+      `/signin?redirect=/invite/${LINK_ID}`,
     );
     expect(screen.getAllByRole('link').map((a) => a.getAttribute('href'))).toContain('/');
     expect(screen.getByRole('button', { name: 'Theme' })).toBeInTheDocument();
