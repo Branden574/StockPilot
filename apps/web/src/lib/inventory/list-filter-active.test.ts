@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { itemsTypeNarrowing, listFilterActive, type ListFilterParams } from './list-filter-active';
+import {
+  itemsTypeNarrowing,
+  listFilterActive,
+  otherWarehouseHintApplies,
+  type ListFilterParams,
+} from './list-filter-active';
 
 /**
  * The Items, Books and Rentals items pages pick their empty state with this
@@ -74,4 +79,43 @@ describe("itemsTypeNarrowing: the Items list's item type", () => {
       expect(itemsTypeNarrowing(type)).toBeNull();
     },
   );
+});
+
+/**
+ * The "Nothing here in <warehouse>" hint counts, in the other warehouses, the
+ * active records of the list's type that match the search alone. The page asks
+ * for that count only where the hint can answer (review of batch D, 2026-10-20).
+ */
+describe('otherWarehouseHintApplies: where the count elsewhere answers the view', () => {
+  it.each<[string, ListFilterParams & { type?: string }]>([
+    ['no address', {}],
+    ['a search', { q: 'lanyard' }],
+    ['a search on All', { q: 'lanyard', status: 'all' }],
+    ['a search with a sort and a page', { q: 'lanyard', sort: 'name_asc', page: '2' }],
+    ['the Active view', { status: 'active' }],
+    ['every type (?type=all) or products', { type: 'all', q: 'x' }],
+  ])('Items, %s: yes', (_l, params) => {
+    expect(otherWarehouseHintApplies(params, 'items')).toBe(true);
+  });
+
+  it.each<[string, ListFilterParams & { type?: string }]>([
+    ['a Category', { cat: 'c1' }],
+    ['a search and a Location', { q: 'x', loc: 'l1' }],
+    ['a stock view', { stock: 'low' }],
+    ['the Expected chip', { expected: '1' }],
+    ['a rack', { rack: '1-A' }],
+    ['the Archived view (the count is of active records)', { status: 'archived' }],
+    ['a search on the Archived view', { status: 'archived', q: 'x' }],
+    ['Auto-archived only', { status: 'archived', auto: '1' }],
+    ['the Discontinued view', { status: 'discontinued' }],
+    ['an Asset type (the count is of products)', { type: 'asset' }],
+  ])('Items, %s: no', (_l, params) => {
+    expect(otherWarehouseHintApplies(params, 'items')).toBe(false);
+  });
+
+  it('Books read no type: the search alone answers, a Category does not', () => {
+    expect(otherWarehouseHintApplies({ q: 'x', type: 'asset' }, 'books')).toBe(true);
+    expect(otherWarehouseHintApplies({ q: 'x', cat: 'c1' }, 'books')).toBe(false);
+    expect(otherWarehouseHintApplies({ status: 'archived' }, 'books')).toBe(false);
+  });
 });

@@ -821,17 +821,24 @@ describe('Items page: a filter that leaves nothing is the table, with its filter
 
   describe('with a warehouse filter: "Nothing here in North" only when the search is the one filter', () => {
     /** A user-authed client whose HEAD count answers `count` (the count elsewhere). */
+    const countReads = vi.fn();
     function countingClient(count: number) {
       // The query is the thenable, never the client (a thenable client would
       // be adopted by createClient's own promise).
       const q: Record<string, unknown> = {};
       for (const k of ['select', 'eq', 'is', 'or']) q[k] = () => q;
       q.then = (resolve: (v: unknown) => unknown) => resolve({ count, error: null });
-      return { from: () => q };
+      return {
+        from: (table: string) => {
+          countReads(table);
+          return q;
+        },
+      };
     }
 
     afterEach(() => {
       vi.mocked(createClient).mockReset();
+      countReads.mockReset();
     });
 
     it('a search that matches only in other warehouses still says so, with the way out', async () => {
@@ -860,6 +867,50 @@ describe('Items page: a filter that leaves nothing is the table, with its filter
         expect(m.emptyStateProps).not.toHaveBeenCalled();
         expect(m.tableProps).toHaveBeenCalledTimes(1);
         expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ total: 0 });
+        // Review of batch D (2026-10-20): and no round trip for a count the
+        // page would throw away.
+        expect(countReads).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(['manager', 'staff'])(
+      '%s: the count elsewhere is asked only when the hint can answer (the search alone, Active or All)',
+      async (role) => {
+        vi.mocked(createClient).mockResolvedValue(countingClient(3) as never);
+        h.role = role;
+        h.listTotal = 0;
+        h.filter = 'wh-1';
+        h.datasetGate = Promise.resolve({ items: [ROW], placement: {} });
+        render(await callPage({ q: 'lanyard', status: 'all' }));
+        expect(countReads).toHaveBeenCalledWith('inventory_items');
+        expect(m.emptyStateProps.mock.calls[0]![0]).toMatchObject({
+          title: 'Nothing here in North',
+        });
+      },
+    );
+
+    it.each<[string, Record<string, string>, string]>([
+      ['the Archived view', { status: 'archived' }, 'No archived items'],
+      ['a search on the Archived view', { status: 'archived', q: 'lanyard' }, ''],
+      ['the Discontinued view', { status: 'discontinued' }, ''],
+      ['an Asset type', { type: 'asset' }, ''],
+    ])(
+      "staff, %s with a warehouse filter: no count (it counts active products), the view's own state",
+      async (_l, params, title) => {
+        vi.mocked(createClient).mockResolvedValue(countingClient(3) as never);
+        h.role = 'staff';
+        h.listTotal = 0;
+        h.filter = 'wh-1';
+        render(await callPage(params));
+        expect(countReads).not.toHaveBeenCalled();
+        if (title) {
+          // It used to say "Nothing here in North: 3 items match in your other
+          // warehouses" for the active ones elsewhere.
+          expect(m.emptyStateProps.mock.calls[0]![0]).toMatchObject({ title });
+        } else {
+          expect(m.emptyStateProps).not.toHaveBeenCalled();
+          expect(m.tableProps).toHaveBeenCalledTimes(1);
+        }
       },
     );
   });

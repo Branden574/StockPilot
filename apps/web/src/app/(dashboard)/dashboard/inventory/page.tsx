@@ -24,7 +24,11 @@ import {
   type InstantFirstPage,
   type PlannedServerPage,
 } from '@/lib/inventory/instant-mode';
-import { itemsTypeNarrowing, listFilterActive } from '@/lib/inventory/list-filter-active';
+import {
+  itemsTypeNarrowing,
+  listFilterActive,
+  otherWarehouseHintApplies,
+} from '@/lib/inventory/list-filter-active';
 import {
   ALL_WAREHOUSES_KEY,
   canUseSharedInventoryCaches,
@@ -623,9 +627,10 @@ async function inventoryTableSection({
       filteredWarehouseName,
       // Instant mode holds the WHOLE dataset for this warehouse only, so the
       // count of matches elsewhere comes from the server, and only when the
-      // filtered view is empty.
+      // filtered view is empty and the hint can answer it (no round trip for
+      // a count the page would throw away).
       otherWarehouseMatches:
-        derived.total === 0 && filteredWarehouseName
+        derived.total === 0 && filteredWarehouseName && otherWarehouseHintApplies(params, 'items')
           ? await countMatchesInOtherWarehouses(sessionCtx.organizationId, params, 'items')
           : 0,
     });
@@ -958,7 +963,7 @@ async function inventoryTableSection({
     scope,
     filteredWarehouseName,
     otherWarehouseMatches:
-      data.total === 0 && filteredWarehouseName
+      data.total === 0 && filteredWarehouseName && otherWarehouseHintApplies(params, 'items')
         ? await countMatchesInOtherWarehouses(sessionCtx.organizationId, params, 'items')
         : 0,
   });
@@ -1144,15 +1149,15 @@ function inventoryEmptyState({
   // "no items match" while the item sits in another warehouse, and the phone —
   // which keeps its own warehouse scope — still lists it. The two platforms
   // then disagree with nothing on screen to explain why. Only when the search
-  // is the view's one filter, if it has any: the count elsewhere applies the
-  // search and nothing else, so with a Category, a stock view or any other
-  // filter on it would count records that filter leaves out, and the page
-  // would hide the filter that emptied the view (the table below keeps it).
+  // is the view's one filter, if it has any, on the Active view or All: the
+  // count elsewhere applies the search and nothing else, to active records, so
+  // with a Category, a stock view or any other filter on it would count records
+  // that filter leaves out, and the page would hide the filter that emptied the
+  // view (the table below keeps it); see otherWarehouseHintApplies.
   if (
     filteredWarehouseName &&
     (otherWarehouseMatches ?? 0) > 0 &&
-    !listFilterActive({ ...params, q: undefined }) &&
-    !itemsTypeNarrowing(params.type)
+    otherWarehouseHintApplies(params, 'items')
   ) {
     const n = otherWarehouseMatches as number;
     return (

@@ -60,3 +60,29 @@ export function itemsTypeNarrowing(type: string | null | undefined): string | nu
     ? ITEM_TYPE_LABELS[type]
     : null;
 }
+
+/**
+ * Whether the "Nothing here in <warehouse>" hint can answer this address, so
+ * the page asks for its count at all. The count (countMatchesInOtherWarehouses)
+ * applies the search alone, to the active, received records of the list's own
+ * type in the other warehouses. So the hint fits the Active view (or All, where
+ * those records show too) with nothing but a search: with a Category, a stock
+ * view, Expected, a rack, Auto-archived only or an Items type it would count
+ * records that narrowing leaves out, and on the Archived or Discontinued view it
+ * would count active records the view does not list.
+ *
+ * Review of batch D (2026-10-20): every empty view with a warehouse filter
+ * waited for that count on the render path, though the page then threw it away
+ * whenever another narrowing was on; and an Archived view with nothing archived
+ * in the warehouse said "N items match in your other warehouses" for the active
+ * ones, instead of "No archived items".
+ */
+export function otherWarehouseHintApplies(
+  params: ListFilterParams & { type?: string },
+  view: 'items' | 'books',
+): boolean {
+  const { status } = instantStateFromPageParams(params);
+  if (status !== 'active' && status !== 'all') return false;
+  if (listFilterActive({ ...params, q: undefined })) return false;
+  return view !== 'items' || itemsTypeNarrowing(params.type) === null;
+}
