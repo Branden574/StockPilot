@@ -51,9 +51,12 @@ const DEFAULT_COLOR = '#94a3b8';
  * tabbed onto invisible buttons. Now only a fine pointer (a mouse) hides them
  * until the row is hovered or holds focus; on touch they always show. The two
  * sit 8 px apart, the gap the 44 px touch areas of 28 and 32 px buttons need.
+ * Focus in the row is the descendant selector `.group:focus-within &`, not
+ * Tailwind's group-focus-within variant, which Safari pays for on every focus
+ * change of every page (lib/group-focus-variants.guard.test.ts).
  */
 const ROW_ACTIONS =
-  'flex shrink-0 items-center gap-2 transition-opacity pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:group-focus-within:opacity-100';
+  'flex shrink-0 items-center gap-2 transition-opacity pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:[.group:focus-within_&]:opacity-100';
 
 export function TagsManager({
   initial,

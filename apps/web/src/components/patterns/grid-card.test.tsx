@@ -237,10 +237,15 @@ describe('GridCard', () => {
   it('shows the checkbox on hover or focus only, and always while selected or while anything is selected', () => {
     const { container, rerender } = render(card());
     const slot = () => container.querySelector('[data-slot="grid-card-checkbox"]')!;
+    // Focus in the card is the descendant selector `.group\/card:focus-within &`:
+    // the class keeps one backslash, and its group is the card.
     expect(slot()).toHaveClass(
       'opacity-0',
       'group-hover/card:opacity-100',
-      'group-focus-within/card:opacity-100',
+      String.raw`[.group\/card:focus-within_&]:opacity-100`,
+    );
+    expect(slot().closest(String.raw`.group\/card`)).toBe(
+      container.querySelector('[data-slot="grid-card"]'),
     );
     expect(slot().className).toContain('pointer-coarse:opacity-100');
     rerender(card({ selectionActive: true }));

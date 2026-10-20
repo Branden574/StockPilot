@@ -104,10 +104,13 @@ const PRESET_COLORS = [
  * A card's Archive button (CONFLICTS D18). It used to be opacity-0 until the
  * card was hovered, so a phone or tablet never showed it and a keyboard user
  * tabbed onto an invisible button. Now only a fine pointer (a mouse) hides it
- * until the card is hovered or holds focus; on touch it always shows.
+ * until the card is hovered or holds focus; on touch it always shows. Focus in
+ * the card is the descendant selector `.group:focus-within &`, not Tailwind's
+ * group-focus-within variant, which Safari pays for on every focus change of
+ * every page (lib/group-focus-variants.guard.test.ts).
  */
 const HOVER_REVEAL =
-  'transition-opacity pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:group-focus-within:opacity-100';
+  'transition-opacity pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:[.group:focus-within_&]:opacity-100';
 
 /**
  * Resolves what the Tracking column shows for a row (Task 12). Returns null

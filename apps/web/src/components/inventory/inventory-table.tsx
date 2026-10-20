@@ -5459,9 +5459,14 @@ function SavedViewChip({
   // The owner's share and delete controls appear on hover with a mouse, and
   // stay visible on a touch screen, below sm, and whenever keyboard focus is
   // inside the chip (CONFLICTS D18: hover-only controls could not be reached
-  // by touch or by Tab-and-see).
+  // by touch or by Tab-and-see). Focus inside the chip is the descendant
+  // selector `.group\/view:focus-within &`, not Tailwind's group-focus-within
+  // variant, which Safari pays for on every focus change of every page
+  // (lib/group-focus-variants.guard.test.ts). String.raw keeps the one
+  // backslash of the escaped "/" in the class the browser gets and in the text
+  // Tailwind scans; an ordinary '\\/' string leaves two in the scanned text.
   const ownerControl = cn(
-    'grid size-5 shrink-0 place-items-center rounded-full opacity-0 transition-opacity group-hover/view:opacity-100 group-focus-within/view:opacity-100 focus-visible:opacity-100 pointer-coarse:size-8 pointer-coarse:opacity-100 max-sm:size-8 max-sm:opacity-100',
+    String.raw`grid size-5 shrink-0 place-items-center rounded-full opacity-0 transition-opacity group-hover/view:opacity-100 [.group\/view:focus-within_&]:opacity-100 focus-visible:opacity-100 pointer-coarse:size-8 pointer-coarse:opacity-100 max-sm:size-8 max-sm:opacity-100`,
     isActive ? 'hover:bg-background/20' : 'hover:bg-foreground/10',
   );
   return (

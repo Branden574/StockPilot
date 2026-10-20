@@ -362,7 +362,11 @@ describe('CategoriesManager — header, cards and gates (redesign)', () => {
     expect(classes).not.toContain('group-hover:opacity-100');
     expect(classes).toContain('pointer-fine:opacity-0');
     expect(classes).toContain('pointer-fine:group-hover:opacity-100');
-    expect(classes).toContain('pointer-fine:group-focus-within:opacity-100');
+    // Focus anywhere in its card shows it: the descendant selector
+    // `.group:focus-within &`, whose group is the card.
+    expect(classes).toContain('pointer-fine:[.group:focus-within_&]:opacity-100');
+    expect(archive.closest('.group')).toBe(screen.getAllByTestId('category-card')[0]);
+    expect(screen.getAllByTestId('category-card')[0]).toHaveTextContent('Apparel');
   });
 
   it('Archive asks first, with the words about filters and item forms', async () => {

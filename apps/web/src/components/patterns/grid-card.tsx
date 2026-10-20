@@ -125,9 +125,13 @@ export function GridCard({
               // The checkbox's own ::before, positioned on this chip, covers
               // the chip (and 44 x 44 on phones and coarse pointers).
               "pointer-coarse:[&>[role=checkbox]]:before:-inset-[9px] [&>[role=checkbox]]:before:absolute [&>[role=checkbox]]:before:-inset-px [&>[role=checkbox]]:before:content-[''] max-sm:[&>[role=checkbox]]:before:-inset-[9px]",
+              // Focus in the card is the descendant selector, not Tailwind's
+              // group-focus-within variant, which Safari pays for on every
+              // focus change of every page (lib/group-focus-variants.guard.test.ts).
+              // String.raw keeps the one backslash of the escaped "/".
               selected || selectionActive
                 ? 'opacity-100'
-                : 'pointer-coarse:opacity-100 opacity-0 group-focus-within/card:opacity-100 group-hover/card:opacity-100',
+                : String.raw`pointer-coarse:opacity-100 opacity-0 group-hover/card:opacity-100 [.group\/card:focus-within_&]:opacity-100`,
             )}
           >
             {checkbox}
