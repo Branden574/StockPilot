@@ -221,12 +221,15 @@ function sortedBy<T>(items: readonly T[], key: (item: T, index: number) => [numb
  * link the regroup moved, a module turned off) are skipped.
  *
  * A section the regroup created has no list of its own until an admin saves
- * the editor again, so it reads the lists of the sections it came from and
- * draws its items in the order the old sidebar drew them: by old section
- * (Inventory above Workspace), then by place in that section's list, the
- * items a list does not name after the ones it names, in default order. So
- * order.inventory = [Orders, Items] puts Orders first in Fulfillment and
- * Items first in Inventory. The section's own list, once saved, always wins.
+ * the editor again, so it reads the lists of the sections it came from: its
+ * items go by old section (Inventory above Workspace), then by place in that
+ * section's list. The items a list names keep the order the old sidebar drew
+ * them in. The items it does not name come after them in today's default
+ * order (the "Five groups" preview the owner approved on 2026-10-19), which
+ * is not always the order the old sidebar drew them in. So order.inventory =
+ * [Orders, Items] puts Items first in Inventory and draws Fulfillment as
+ * Orders, Returns, Rentals, Bundles, where the old sidebar drew Orders,
+ * Rentals, Bundles, Returns. The section's own list, once saved, always wins.
  *
  * Every item's place depends only on its own href and default index, never on
  * which other items are present, so hiding items (the sidebar drops them, the
