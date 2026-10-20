@@ -3310,10 +3310,12 @@ export function Pagination({
   const adjacentPrefetch = !onNavigate && !pendingInstant;
   return (
     <div className="text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-2 text-[12.5px]">
+      {/* The figures in the ink and Prev / Next at weight 400, the
+          reference pager's (DESIGN-SPEC 6.9 and 6.2; FX8: they were 500). */}
       <span>
-        Showing <span className="text-foreground font-medium">{startRow}</span>–
-        <span className="text-foreground font-medium">{endRow}</span> of{' '}
-        <span className="text-foreground font-medium">{total}</span>
+        Showing <span className="text-foreground">{startRow}</span>–
+        <span className="text-foreground">{endRow}</span> of{' '}
+        <span className="text-foreground">{total}</span>
       </span>
       {/* 8 px between the 28 px controls: each grows a 44 px touch area below
           sm and on coarse pointers, and a later one paints over its
@@ -3324,7 +3326,7 @@ export function Pagination({
           variant="outline"
           size="sm"
           disabled={prevDisabled}
-          className={prevDisabled ? PAGER_EDGE_DISABLED : undefined}
+          className={cn('font-normal', prevDisabled && PAGER_EDGE_DISABLED)}
         >
           {prevDisabled ? (
             <span aria-disabled className="pointer-events-none">
@@ -3395,7 +3397,7 @@ export function Pagination({
           variant="outline"
           size="sm"
           disabled={nextDisabled}
-          className={nextDisabled ? PAGER_EDGE_DISABLED : undefined}
+          className={cn('font-normal', nextDisabled && PAGER_EDGE_DISABLED)}
         >
           {nextDisabled ? (
             <span aria-disabled className="pointer-events-none">
