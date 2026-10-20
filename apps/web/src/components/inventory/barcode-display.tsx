@@ -198,8 +198,13 @@ export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDispla
       : `width:100%;height:100%;`;
     const innerTransform = `translate(-50%,-50%)${rotate && known ? ' rotate(90deg)' : ''}`;
     const isSmall = known ? Math.min(widthIn!, heightIn!) < 1.4 : false;
+    // The viewport meta lays the window out at the width of the screen it
+    // opens on: without it a phone laid the 420 x 600 window out 980 css px
+    // wide and showed the label zoomed out before the print dialog. Printing
+    // does not read it; the @page size and the label box below decide what
+    // prints.
     const html = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Label</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Label</title>
 <style>
   @page { size: ${pageSize}; margin: 0; }
   html,body{margin:0;padding:0;background:#fff;}
