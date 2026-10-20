@@ -445,8 +445,12 @@ describe('UngroupSelectedDialog', () => {
     expect(within(row(1)).getByText(UNGROUP_COPY.keepsSku('PAIR'))).toBeInTheDocument();
     expect(within(row(2)).getByText(UNGROUP_COPY.getsOwnSku)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: UNGROUP_COPY.confirm(1) })).toBeInTheDocument();
+    // Re-pinned (redesign Stage 6, UNGROUP-WEB-RADIO-NAMES): the radio's name
+    // goes on with what tells its record apart from the SKU's other record.
     await userEvent.click(
-      screen.getByRole('radio', { name: `${UNGROUP_COPY.keepsSku('PAIR')}: Record 2` }),
+      screen.getByRole('radio', {
+        name: `${UNGROUP_COPY.keepsSku('PAIR')}: Record 2, 2-A, 2 on hand`,
+      }),
     );
     expect(within(row(2)).getByText(UNGROUP_COPY.keepsSku('PAIR'))).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: UNGROUP_COPY.confirm(1) }));
@@ -454,6 +458,110 @@ describe('UngroupSelectedDialog', () => {
       split: { anchorItemIds: string[] };
     };
     expect(sent.split.anchorItemIds).toEqual([id(2)]);
+  });
+
+  // Redesign Stage 6, UNGROUP-WEB-RADIO-NAMES. Each "keeps the SKU" radio was
+  // named "Keeps SKU X: <name>" and nothing more, so three Wireless Mouse
+  // records were three radios with one name. Each is now named with the words
+  // of its record's line that the SKU's other records do not share, and
+  // "record N of M" when two still read the same, as on the phone. The outcome
+  // is still heard as the radio's description, and every visible word stays.
+  // Mutation caught: the name back to "Keeps SKU X: <name>".
+  it('three Wireless Mouse records of one SKU on three racks: three radios, each named with its rack', async () => {
+    const mouse = { name: 'Wireless Mouse', sku: 'WM-1' };
+    const ids = [id(2), id(1), id(3)];
+    preview(
+      ids,
+      [
+        record(1, { ...mouse, placementLabel: 'A-1', quantityOnHand: 4 }),
+        record(2, { ...mouse, placementLabel: 'B-2', quantityOnHand: 4 }),
+        record(3, { ...mouse, placementLabel: 'C-3', quantityOnHand: 0 }),
+      ],
+      [cand(1, 'WM-1'), cand(2, 'WM-1'), cand(3, 'WM-1')],
+    );
+    render(
+      <UngroupSelectedDialog
+        open
+        itemIds={ids}
+        view="items"
+        onOpenChange={() => {}}
+        onDone={() => {}}
+      />,
+    );
+    await screen.findByTestId(`ungroup-selected-row-${id(1)}`);
+    const a1 = screen.getByRole('radio', {
+      name: 'Keeps SKU WM-1: Wireless Mouse, A-1, 4 on hand',
+    });
+    const b2 = screen.getByRole('radio', {
+      name: 'Keeps SKU WM-1: Wireless Mouse, B-2, 4 on hand',
+    });
+    const c3 = screen.getByRole('radio', {
+      name: 'Keeps SKU WM-1: Wireless Mouse, C-3, 0 on hand',
+    });
+    // Three radios, one per record, in the order listed.
+    expect(screen.getAllByRole('radio')).toEqual([b2, a1, c3]);
+    expect(within(row(1)).getByRole('radio')).toBe(a1);
+    expect(within(row(2)).getByRole('radio')).toBe(b2);
+    expect(within(row(3)).getByRole('radio')).toBe(c3);
+    // The outcome is heard as the description: the oldest keeps the SKU.
+    expect(a1).toBeChecked();
+    expect(a1).toHaveAccessibleDescription(UNGROUP_COPY.keepsSku('WM-1'));
+    expect(b2).toHaveAccessibleDescription(UNGROUP_COPY.getsOwnSku);
+    expect(c3).toHaveAccessibleDescription(UNGROUP_COPY.getsOwnSku);
+    // The visible words are the record's name and line, as before.
+    expect(within(row(1)).getByText('Wireless Mouse')).toBeInTheDocument();
+    expect(
+      within(row(1)).getByText('SKU WM-1 · No charter · A-1 · DC4 · 4 on hand'),
+    ).toBeInTheDocument();
+    expect(
+      within(row(3)).getByText('SKU WM-1 · No charter · C-3 · DC4 · 0 on hand'),
+    ).toBeInTheDocument();
+    // Choosing another record moves the check and the outcome; the names stay.
+    await userEvent.click(c3);
+    expect(c3).toBeChecked();
+    expect(c3).toHaveAccessibleDescription(UNGROUP_COPY.keepsSku('WM-1'));
+    expect(a1).toHaveAccessibleDescription(UNGROUP_COPY.getsOwnSku);
+    expect(
+      screen.getByRole('radio', { name: 'Keeps SKU WM-1: Wireless Mouse, A-1, 4 on hand' }),
+    ).toBe(a1);
+    expect(
+      screen.getByRole('radio', { name: 'Keeps SKU WM-1: Wireless Mouse, C-3, 0 on hand' }),
+    ).toBe(c3);
+  });
+
+  it('two identical records of one SKU: each radio ends with where it is listed, record 1 of 2 and record 2 of 2', async () => {
+    const twin = { name: 'Wireless Mouse', sku: 'WM-1', placementLabel: 'A-1', quantityOnHand: 4 };
+    const ids = [id(2), id(1)];
+    preview(ids, [record(1, twin), record(2, twin)], [cand(1, 'WM-1'), cand(2, 'WM-1')]);
+    render(
+      <UngroupSelectedDialog
+        open
+        itemIds={ids}
+        view="items"
+        onOpenChange={() => {}}
+        onDone={() => {}}
+      />,
+    );
+    await screen.findByTestId(`ungroup-selected-row-${id(1)}`);
+    const first = screen.getByRole('radio', {
+      name: 'Keeps SKU WM-1: Wireless Mouse, record 1 of 2',
+    });
+    const second = screen.getByRole('radio', {
+      name: 'Keeps SKU WM-1: Wireless Mouse, record 2 of 2',
+    });
+    // Listed first is record 1 of 2, whichever is older.
+    expect(screen.getAllByRole('radio')).toEqual([first, second]);
+    expect(within(row(2)).getByRole('radio')).toBe(first);
+    expect(within(row(1)).getByRole('radio')).toBe(second);
+    expect(second).toBeChecked();
+    expect(second).toHaveAccessibleDescription(UNGROUP_COPY.keepsSku('WM-1'));
+    expect(first).toHaveAccessibleDescription(UNGROUP_COPY.getsOwnSku);
+    // Both rows show the same words as before.
+    for (const n of [1, 2]) {
+      expect(
+        within(row(n)).getByText('SKU WM-1 · No charter · A-1 · DC4 · 4 on hand'),
+      ).toBeInTheDocument();
+    }
   });
 
   it('Save sends one body with a key per keyed step and the identity, then says what changed', async () => {

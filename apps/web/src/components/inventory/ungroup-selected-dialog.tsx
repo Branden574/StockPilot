@@ -40,6 +40,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { keepsSkuRadioLabel } from '@/lib/inventory/grouping-radio-names';
 import { labelsItemsHref } from '@/lib/inventory/labels-selection';
 import {
   previewUngroupSelectedAction,
@@ -375,11 +376,21 @@ export function UngroupSelectedDialog({
                     <div className="flex items-start justify-between gap-3">
                       <span className="flex min-w-0 items-start gap-2">
                         {choose && group ? (
+                          // Named for its record and for what tells it apart
+                          // from the SKU's other records, as on the phone:
+                          // three Wireless Mouse radios read the same (redesign
+                          // Stage 6). The outcome beside it is its description.
                           <input
                             type="radio"
                             name={`ungroup-selected-anchor-${group.sku}`}
                             className="mt-2"
-                            aria-label={`${UNGROUP_COPY.keepsSku(group.sku)}: ${r.name}`}
+                            aria-label={keepsSkuRadioLabel(
+                              UNGROUP_COPY.keepsSku(group.sku),
+                              r,
+                              plan.records,
+                              group.selected,
+                              view,
+                            )}
                             aria-describedby={`ungroup-selected-outcome-${rec.id}`}
                             checked={ungroupAnchorFor(group, anchorBySku) === rec.id}
                             disabled={busy}

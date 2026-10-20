@@ -35,6 +35,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { groupChoiceRadioNames } from '@/lib/inventory/grouping-radio-names';
 import { applyGroupingAction, previewGroupingAction } from '@/server/actions/item-grouping';
 import type { GroupingReview, GroupingReviewRecord } from '@/server/services/item-grouping';
 
@@ -387,6 +388,20 @@ export function GroupSelectedDialog({
     return full ? [full] : [];
   });
   const leftOutReason = new Map((plan?.leftOut ?? []).map((l) => [l.id, l.reason]));
+  // A record in another group than the target: its row asks to move it here
+  // or leave it out (P10).
+  const otherGroupOf = (r: GroupingReviewRecord) =>
+    r.displayGroup && r.displayGroup.id !== targetGroupId ? r.displayGroup : null;
+  // The rows that carry those two radios, in the order listed, and each
+  // radio's name: its record's, told apart from the other records here with
+  // the same name by the words of their lines (redesign Stage 6).
+  const withChoice = records.filter((r) => {
+    const reason = leftOutReason.get(r.id);
+    return (!reason || reason === 'chosen') && otherGroupOf(r) !== null;
+  });
+  const choiceNames = new Map(
+    withChoice.map((r) => [r.id, groupChoiceRadioNames(r, withChoice, view)]),
+  );
   const siblings = plan?.conflicts.sameSkuSiblings ?? [];
   const editions = plan?.conflicts.editions ?? null;
   const showEditions = editions !== null && (editions.editions > 1 || editions.unknown > 0);
@@ -427,8 +442,8 @@ export function GroupSelectedDialog({
             <ul className="space-y-2" aria-label="Selected records">
               {records.map((r) => {
                 const reason = leftOutReason.get(r.id);
-                const other =
-                  r.displayGroup && r.displayGroup.id !== targetGroupId ? r.displayGroup : null;
+                const other = otherGroupOf(r);
+                const names = choiceNames.get(r.id);
                 const inTarget = !!targetGroupId && r.displayGroup?.id === targetGroupId;
                 return (
                   <li
@@ -445,11 +460,13 @@ export function GroupSelectedDialog({
                     {!reason && inTarget ? (
                       <p className="text-muted-foreground text-xs">{GROUP_COPY.alreadyInTarget}</p>
                     ) : null}
-                    {(!reason || reason === 'chosen') && other ? (
+                    {names && other ? (
                       // One explicit choice per record (P10): move it here,
                       // or leave it out (not sent; it stays in its group).
                       // Each radio names its record, so two records in one
-                      // group are told apart by a screen reader (R2-5).
+                      // group are told apart by a screen reader (R2-5), and
+                      // two records with one name by the words of their
+                      // lines (redesign Stage 6).
                       <fieldset className="space-y-1 text-xs">
                         <legend>{GROUP_COPY.otherGroup(other.name)}</legend>
                         <label className="flex items-center gap-2">
@@ -459,7 +476,7 @@ export function GroupSelectedDialog({
                             checked={decisions.moveIds.has(r.id)}
                             disabled={phase === 'saving'}
                             onChange={() => choose(r.id, 'move', other.id)}
-                            aria-label={GROUP_COPY.moveOneFor(r.name)}
+                            aria-label={names.move}
                           />
                           <span>{GROUP_COPY.moveOne}</span>
                         </label>
@@ -470,7 +487,7 @@ export function GroupSelectedDialog({
                             checked={decisions.leaveOutIds.has(r.id)}
                             disabled={phase === 'saving'}
                             onChange={() => choose(r.id, 'leave', other.id)}
-                            aria-label={GROUP_COPY.leaveOutOneFor(r.name)}
+                            aria-label={names.leave}
                           />
                           <span>{GROUP_COPY.leaveOutOne}</span>
                         </label>

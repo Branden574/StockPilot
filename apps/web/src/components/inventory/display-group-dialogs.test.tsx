@@ -308,6 +308,182 @@ describe('GroupSelectedDialog', () => {
     ).not.toBeChecked();
   });
 
+  // Redesign Stage 6, GROUP-REVIEW-RADIO-NAMES. Named for the record only,
+  // two records with one name that are both already in another group were
+  // radios with one name. Each radio now goes on with the words of its
+  // record's line that the other same-named records with these radios do not
+  // share, and ends with "record N of M" when two still read the same: the
+  // rule of the Ungroup review's radios, on the web and the phone. A record
+  // whose name is its own keeps the name it had (R2-5 above), and every
+  // visible word stays. Mutation caught: the names back to the record's name.
+  it('three Wireless Mouse records on three racks, already in another group: each radio is named with its rack', async () => {
+    const D = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    const inH = { displayGroup: { id: H, name: 'Old shirts', version: 3 } };
+    const mouse = { ...inH, name: 'Wireless Mouse', sku: 'WM-1' };
+    h.preview.mockResolvedValueOnce(
+      review(
+        [A, B, C, D],
+        [
+          rec(A, { ...mouse, placementLabel: 'A-1' }),
+          rec(B, { ...mouse, placementLabel: 'B-2' }),
+          rec(C, { ...mouse, placementLabel: 'C-3' }),
+          rec(D, { ...inH, name: 'Keyboard', sku: 'KB-1', placementLabel: 'A-1' }),
+        ],
+      ),
+    );
+    render(
+      <GroupSelectedDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[A, B, C, D]}
+        view="items"
+        onDone={() => {}}
+      />,
+    );
+    await screen.findByTestId(`group-row-${A}`);
+    for (const [id, rack] of [
+      [A, 'A-1'],
+      [B, 'B-2'],
+      [C, 'C-3'],
+    ] as const) {
+      const row = screen.getByTestId(`group-row-${id}`);
+      const [move, leave] = within(row).getAllByRole('radio');
+      // One radio in the whole dialog has each name, and it is in its row.
+      expect(
+        screen.getByRole('radio', { name: `Move it into this group: Wireless Mouse, ${rack}` }),
+      ).toBe(move);
+      expect(screen.getByRole('radio', { name: `Leave it out: Wireless Mouse, ${rack}` })).toBe(
+        leave,
+      );
+      // The words on screen are the same as before.
+      expect(within(row).getByRole('group', { name: GROUP_COPY.otherGroup('Old shirts') })).toBe(
+        move!.closest('fieldset'),
+      );
+      expect(within(row).getByText(GROUP_COPY.moveOne)).toBeInTheDocument();
+      expect(within(row).getByText(GROUP_COPY.leaveOutOne)).toBeInTheDocument();
+      expect(within(row).getByText('Wireless Mouse')).toBeInTheDocument();
+      expect(
+        within(row).getByText(`SKU WM-1 · North · ${rack} · DC4 · 2 on hand`),
+      ).toBeInTheDocument();
+    }
+    // The Keyboard's name is its own: its radios are named as before.
+    const keyboard = within(screen.getByTestId(`group-row-${D}`)).getAllByRole('radio');
+    expect(screen.getByRole('radio', { name: GROUP_COPY.moveOneFor('Keyboard') })).toBe(
+      keyboard[0],
+    );
+    expect(screen.getByRole('radio', { name: GROUP_COPY.leaveOutOneFor('Keyboard') })).toBe(
+      keyboard[1],
+    );
+    // Choosing by its name decides for that record only.
+    await userEvent.click(screen.getByRole('radio', { name: 'Leave it out: Wireless Mouse, B-2' }));
+    expect(screen.getByRole('radio', { name: 'Leave it out: Wireless Mouse, B-2' })).toBeChecked();
+    expect(
+      screen.getByRole('radio', { name: 'Leave it out: Wireless Mouse, A-1' }),
+    ).not.toBeChecked();
+    expect(
+      screen.getByRole('radio', { name: 'Leave it out: Wireless Mouse, C-3' }),
+    ).not.toBeChecked();
+  });
+
+  it('two identical records already in another group: their radios end with record 1 of 2 and record 2 of 2, in the order listed', async () => {
+    const D = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    const mouse = { name: 'Wireless Mouse', sku: 'WM-1', placementLabel: 'A-1' };
+    const inH = { displayGroup: { id: H, name: 'Old shirts', version: 3 } };
+    h.preview.mockResolvedValueOnce(
+      review(
+        [B, D, A],
+        [
+          rec(A, { ...mouse, ...inH }),
+          rec(B, { ...mouse, ...inH }),
+          // The same name and line, in no group: no radios, so not counted.
+          rec(D, mouse),
+        ],
+      ),
+    );
+    render(
+      <GroupSelectedDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[B, D, A]}
+        view="items"
+        onDone={() => {}}
+      />,
+    );
+    await screen.findByTestId(`group-row-${A}`);
+    const rowB = screen.getByTestId(`group-row-${B}`);
+    const rowA = screen.getByTestId(`group-row-${A}`);
+    // B is listed first: record 1 of 2.
+    const [moveB, leaveB] = within(rowB).getAllByRole('radio');
+    const [moveA, leaveA] = within(rowA).getAllByRole('radio');
+    expect(
+      screen.getByRole('radio', { name: 'Move it into this group: Wireless Mouse, record 1 of 2' }),
+    ).toBe(moveB);
+    expect(screen.getByRole('radio', { name: 'Leave it out: Wireless Mouse, record 1 of 2' })).toBe(
+      leaveB,
+    );
+    expect(
+      screen.getByRole('radio', { name: 'Move it into this group: Wireless Mouse, record 2 of 2' }),
+    ).toBe(moveA);
+    expect(screen.getByRole('radio', { name: 'Leave it out: Wireless Mouse, record 2 of 2' })).toBe(
+      leaveA,
+    );
+    expect(within(screen.getByTestId(`group-row-${D}`)).queryAllByRole('radio')).toHaveLength(0);
+    // The three rows show the same words as before.
+    for (const id of [A, B, D]) {
+      expect(
+        within(screen.getByTestId(`group-row-${id}`)).getByText(
+          'SKU WM-1 · North · A-1 · DC4 · 2 on hand',
+        ),
+      ).toBeInTheDocument();
+    }
+  });
+
+  // Review finding (redesign Stage 6): names that differ only in letter case
+  // or spacing are said the same way by a screen reader, so they are compared
+  // as one name. Compared letter for letter, "Wireless Mouse", "Wireless
+  // mouse" and "Wireless  Mouse" kept core's words alone: three pairs of
+  // radios that sound alike, and the first and third had one computed name,
+  // since an accessible name closes up runs of spaces.
+  it('names that differ only in letter case or spacing, already in another group: each radio is named with its rack', async () => {
+    const inH = { displayGroup: { id: H, name: 'Old shirts', version: 3 } };
+    h.preview.mockResolvedValueOnce(
+      review(
+        [A, B, C],
+        [
+          rec(A, { ...inH, name: 'Wireless Mouse', sku: 'WM-1', placementLabel: 'A-1' }),
+          rec(B, { ...inH, name: 'Wireless mouse', sku: 'WM-1', placementLabel: 'B-2' }),
+          rec(C, { ...inH, name: 'Wireless  Mouse', sku: 'WM-1', placementLabel: 'C-3' }),
+        ],
+      ),
+    );
+    render(
+      <GroupSelectedDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[A, B, C]}
+        view="items"
+        onDone={() => {}}
+      />,
+    );
+    await screen.findByTestId(`group-row-${A}`);
+    for (const [id, name, rack] of [
+      [A, 'Wireless Mouse', 'A-1'],
+      [B, 'Wireless mouse', 'B-2'],
+      [C, 'Wireless  Mouse', 'C-3'],
+    ] as const) {
+      const [move, leave] = within(screen.getByTestId(`group-row-${id}`)).getAllByRole('radio');
+      // Each radio says its record's own name, then its rack.
+      expect(move).toHaveAttribute('aria-label', `Move it into this group: ${name}, ${rack}`);
+      expect(leave).toHaveAttribute('aria-label', `Leave it out: ${name}, ${rack}`);
+      // One radio in the whole dialog has each computed name (spaces closed up).
+      const spoken = name.replace(/\s+/g, ' ');
+      expect(
+        screen.getByRole('radio', { name: `Move it into this group: ${spoken}, ${rack}` }),
+      ).toBe(move);
+      expect(screen.getByRole('radio', { name: `Leave it out: ${spoken}, ${rack}` })).toBe(leave);
+    }
+  });
+
   it('a product-family member needs the confirmation (its family is never changed)', async () => {
     h.preview.mockResolvedValueOnce(
       review(
