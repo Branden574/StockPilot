@@ -275,13 +275,20 @@ export function groupSelectedHref(args: {
 
 const one = (v: string | string[] | undefined): string | undefined => (Array.isArray(v) ? v[0] : v);
 
+/** A selection the Group review can review, read from its route. */
+export interface GroupSelectedParams {
+  itemIds: string[];
+  view: 'items' | 'books';
+  groupId: string | null;
+}
+
 /** The review screen's params, or null when they are not a selection it can
  *  review (the screen then says so instead of guessing). */
 export function readGroupSelectedParams(p: {
   ids?: string | string[];
   view?: string | string[];
   groupId?: string | string[];
-}): { itemIds: string[]; view: 'items' | 'books'; groupId: string | null } | null {
+}): GroupSelectedParams | null {
   const raw = one(p.ids) ?? '';
   const ids = [
     ...new Set(
@@ -298,6 +305,26 @@ export function readGroupSelectedParams(p: {
   const gid = one(p.groupId);
   if (gid !== undefined && gid !== '' && !UUID.test(gid)) return null;
   return { itemIds: ids, view, groupId: gid ? gid : null };
+}
+
+/**
+ * Which review the route asks for (redesign Stage 6, F8). expo-router REUSES
+ * the review screen when a link to /group-selected arrives while it is on
+ * top, swapping only the params, and the review held the records it first
+ * opened with in its own state: the books link said BOOKS · GROUP over the
+ * items link's Pencils #2 HB and Glue Sticks. The screen mounts its review
+ * under this key, so other records, another list or another target group
+ * start a fresh review (records, name, choices, acknowledgement, result,
+ * error), and params that name the same selection keep the person's edits.
+ * Ids compare as records do: in any order and any case.
+ */
+export function groupSelectedReviewKey(params: GroupSelectedParams | null): string {
+  if (!params) return 'invalid';
+  return JSON.stringify([
+    params.view,
+    params.groupId?.toLowerCase() ?? null,
+    [...new Set(params.itemIds.map((id) => id.toLowerCase()))].sort(),
+  ]);
 }
 
 /**

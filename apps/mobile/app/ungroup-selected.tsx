@@ -53,7 +53,9 @@ import {
   postUngroupSelected,
   previewUngroupSelected,
   readUngroupSelectedParams,
+  ungroupSelectedReviewKey,
   type PhoneUngroupReview,
+  type UngroupSelectedParams,
 } from '@/lib/ungroup-selected';
 import { countSelection } from '@/lib/use-count-selection';
 import { useTheme } from '@/lib/use-theme';
@@ -82,10 +84,6 @@ function announce(message: string) {
 }
 
 export default function UngroupSelectedScreen() {
-  const router = useRouter();
-  const { c } = useTheme();
-  const { user } = useAuth();
-  const { activeOrgId } = useWorkspace();
   const {
     ids: idsParam,
     view: viewParam,
@@ -95,6 +93,24 @@ export default function UngroupSelectedScreen() {
     () => readUngroupSelectedParams({ ids: idsParam, view: viewParam, under: underParam }),
     [idsParam, viewParam, underParam],
   );
+  // A fresh review whenever the route names other records, another list or
+  // another grouping a record is shown under (ungroupSelectedReviewKey,
+  // redesign Stage 6 F8): expo-router REUSES this screen when a link to it
+  // arrives while it is on top, swapping only the params. The reload below
+  // reset most of the review, but a refused Save's error (and its Review
+  // again) stayed over the new records, and the old review or result showed
+  // under the new params until the reload ran. The same selection keeps its
+  // review and the person's choices.
+  return <UngroupSelectedReview key={ungroupSelectedReviewKey(params)} params={params} />;
+}
+
+/** The review itself. Every piece of its state belongs to the selection it
+ *  was mounted for: the route mounts a new one for another selection. */
+function UngroupSelectedReview({ params }: { params: UngroupSelectedParams | null }) {
+  const router = useRouter();
+  const { c } = useTheme();
+  const { user } = useAuth();
+  const { activeOrgId } = useWorkspace();
   const view = params?.view ?? 'items';
   const idsKey = params?.itemIds.join(',') ?? '';
 

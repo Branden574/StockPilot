@@ -95,17 +95,20 @@ export function ungroupSelectedHref(args: {
 
 const one = (v: string | string[] | undefined): string | undefined => (Array.isArray(v) ? v[0] : v);
 
+/** A selection the Ungroup review can review, read from its route. */
+export interface UngroupSelectedParams {
+  itemIds: string[];
+  view: 'items' | 'books';
+  shownUnder: Map<string, UngroupKind>;
+}
+
 /** The review screen's params, or null when they are not a selection it can
  *  review (the screen then says so instead of guessing). */
 export function readUngroupSelectedParams(p: {
   ids?: string | string[];
   view?: string | string[];
   under?: string | string[];
-}): {
-  itemIds: string[];
-  view: 'items' | 'books';
-  shownUnder: Map<string, UngroupKind>;
-} | null {
+}): UngroupSelectedParams | null {
   const ids = (one(p.ids) ?? '')
     .split(',')
     .map((s) => s.trim())
@@ -127,6 +130,28 @@ export function readUngroupSelectedParams(p: {
     if (k) shownUnder.set(id, k);
   });
   return { itemIds: ids, view, shownUnder };
+}
+
+/**
+ * Which review the route asks for (redesign Stage 6, F8), the Group review's
+ * rule (groupSelectedReviewKey): expo-router REUSES this screen when a link
+ * to /ungroup-selected arrives while it is on top, swapping only the params.
+ * The screen mounts its review under this key, so other records, another
+ * list or another grouping a record is shown under start a fresh review (a
+ * refused Save's error stayed over the new records before), and params that
+ * name the same selection keep the person's choices. Ids compare as records
+ * do: in any order and any case.
+ */
+export function ungroupSelectedReviewKey(params: UngroupSelectedParams | null): string {
+  if (!params) return 'invalid';
+  return JSON.stringify([
+    params.view,
+    [
+      ...new Set(
+        params.itemIds.map((id) => `${id.toLowerCase()}:${params.shownUnder.get(id) ?? '-'}`),
+      ),
+    ].sort(),
+  ]);
 }
 
 // ── The review and the Save ────────────────────────────────────────────────
