@@ -52,6 +52,27 @@ describe('PoAttachmentsList', () => {
     expect(within(unnamed!).getByRole('button', { name: 'Delete file' })).toBeInTheDocument();
   });
 
+  it('wraps a long file name instead of cutting its end, and keeps its title, name and new-tab link', () => {
+    // P68-2: in the PO page's right column at 1280 the cut name hid the slip
+    // number and ".pdf" ('Lantern Peak packing slip PS-44...').
+    const name = 'Lantern Peak packing slip PS-44812.pdf';
+    render(
+      <PoAttachmentsList
+        purchaseOrderId="po-1"
+        attachments={[{ id: 'a3', fileName: name, url: 'https://files.test/a3' }] as PoAttachment[]}
+        canManage={false}
+      />,
+    );
+    const open = screen.getByRole('link', { name });
+    expect(open).not.toHaveClass('truncate');
+    expect(open).toHaveClass('min-w-0', 'flex-1', '[overflow-wrap:anywhere]');
+    expect(open).toHaveTextContent(name);
+    expect(open).toHaveAttribute('title', name);
+    expect(open).toHaveAttribute('href', 'https://files.test/a3');
+    expect(open).toHaveAttribute('target', '_blank');
+    expect(open).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
   it('gives a reader no Delete', () => {
     render(<PoAttachmentsList purchaseOrderId="po-1" attachments={FILES} canManage={false} />);
     expect(screen.queryByRole('button', { name: /^Delete/ })).toBeNull();
