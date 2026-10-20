@@ -839,7 +839,27 @@ describe('Group review: the words, the family acknowledgement and the save', () 
   const code = codeOnly(sourceOf(GROUP));
 
   it("reads every one of core's GROUP_COPY words it read before", () => {
-    expect(copyKeys(GROUP, 'GROUP_COPY')).toEqual(
+    // The two radios of a record in another group are named with core's
+    // moveOneFor and leaveOutOneFor words (R2-5), now put together once per
+    // review by groupChoiceRadioNamesById, which the screen calls for them
+    // (redesign Stage 6, GROUP-REVIEW-RADIO-NAMES): the words it reads are
+    // the screen's own, and it reads no others.
+    expect(code).toContain('groupChoiceRadioNamesById(');
+    const lib = 'src/lib/display-groups.ts';
+    const namer = ts
+      .createSourceFile(lib, sourceOf(lib), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+      .statements.find(
+        (s): s is ts.FunctionDeclaration =>
+          ts.isFunctionDeclaration(s) && s.name?.text === 'groupChoiceRadioNamesById',
+      );
+    expect(namer, `function groupChoiceRadioNamesById in ${lib}`).toBeDefined();
+    const namerKeys = [
+      ...new Set(
+        [...codeOnly(namer!.getText()).matchAll(/\bGROUP_COPY\.(\w+)/g)].map((m) => m[1]!),
+      ),
+    ].sort();
+    expect(namerKeys).toEqual(['leaveOutOneFor', 'moveOneFor']);
+    expect([...new Set([...copyKeys(GROUP, 'GROUP_COPY'), ...namerKeys])].sort()).toEqual(
       [
         'acknowledgeFamily',
         'addSiblings',
