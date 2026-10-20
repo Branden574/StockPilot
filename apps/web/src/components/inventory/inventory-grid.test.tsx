@@ -709,6 +709,60 @@ describe('a category reads in ink 2, its colour on the dot (FX2)', () => {
   );
 });
 
+/**
+ * W5 (Phase A walk at 390, both themes): a group card's meta line was one
+ * line the card cut off mid-word: "Generic" cut after 27 of its 44 px on
+ * Redesign Lab Hoodie, hidden on Desk Set, cut after 5 px on Science Shelf.
+ * The line now wraps between whole parts (happy-dom has no layout: these pin
+ * the shape that lets it; the lab measures it).
+ */
+describe('a Grid card`s meta line wraps instead of cutting a word (W5)', () => {
+  /** Each card's meta line, as [card key, the line]. */
+  const metaLines = (container: HTMLElement) =>
+    [...container.querySelectorAll('[data-slot="grid-card"]')].map((card) => [
+      card.getAttribute('data-row-key') ?? card.getAttribute('data-group-key'),
+      card.querySelector('[data-slot="meta-line"]') as HTMLElement | null,
+    ]);
+
+  // Mutation caught: the line made one line again (no flex-wrap), a row gap
+  // added between wrapped lines, or a "·" moved to the start of the part
+  // after it (a wrapped line would start with it).
+  it('every card: the parts may wrap, each "·" stays with the part before it, the last has none', () => {
+    const { container } = renderTable({ initialView: 'grid' });
+    const lines = metaLines(container);
+    expect(lines.map(([key]) => key)).toEqual(
+      expect.arrayContaining(['plain-1', 'style-group:tee', 'display-group:grp-desk']),
+    );
+    for (const [key, line] of lines) {
+      expect(line, String(key)).not.toBeNull();
+      expect(line).toHaveClass('inline-flex', 'max-w-full', 'flex-wrap', 'gap-x-1.5');
+      expect(line).not.toHaveClass('gap-1.5');
+      expect(line!.parentElement).toHaveAttribute('data-slot', 'grid-card-meta');
+      const parts = [...line!.children];
+      parts.forEach((part, i) => {
+        const dots = [...part.children].filter((c) => c.textContent === '·');
+        if (i < parts.length - 1) {
+          expect(dots, `${key} part ${i}`).toHaveLength(1);
+          expect(part.lastElementChild, `${key} part ${i}`).toBe(dots[0]);
+          expect(dots[0]).toHaveAttribute('aria-hidden', 'true');
+        } else {
+          expect(dots, `${key} last part`).toHaveLength(0);
+        }
+      });
+    }
+  });
+
+  // The words and their order are the ones the one-line meta showed.
+  it('keeps every word in its order: a record, a size run and a named group', () => {
+    const { container } = renderTable({ initialView: 'grid' });
+    const text = (key: string) =>
+      Object.fromEntries(metaLines(container))[key]?.textContent?.replace(/\s+/g, ' ');
+    expect(text('plain-2')).toBe('Swag·Generic');
+    expect(text('style-group:tee')).toBe('Apparel·Generic');
+    expect(text('display-group:grp-desk')).toBe('2 records·Swag·Generic');
+  });
+});
+
 describe('Grid group cards: the header row, as a card', () => {
   it('a size run: its "N sizes" badge, roll-up on hand, rack summary and a drill-down named like the chevron', () => {
     const { container } = renderTable({ initialView: 'grid' });

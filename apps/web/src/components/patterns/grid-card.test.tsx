@@ -186,6 +186,20 @@ describe('GridCard', () => {
     expect(screen.getByText('SP-POM-8SZ')).toHaveClass('font-mono');
   });
 
+  // W5 (Phase A walk at 390): the meta line was one line that cut off what
+  // did not fit, mid-word ("Generic" cut after 27 of its 44 px on a group
+  // card, hidden on another). Mutation caught: truncate (overflow hidden,
+  // nowrap) back on the slot, or the last-resort break inside a word dropped.
+  it('lets the meta line wrap: nothing in it is cut off or hidden', () => {
+    const { container } = render(card({ meta: <span>2 records · Furniture · Generic</span> }));
+    const meta = container.querySelector('[data-slot="grid-card-meta"]')!;
+    expect(meta).toHaveTextContent('2 records · Furniture · Generic');
+    expect(meta).toHaveClass('[overflow-wrap:anywhere]', 'text-[12px]', 'leading-[18px]');
+    for (const clips of ['truncate', 'overflow-hidden', 'overflow-clip', 'whitespace-nowrap']) {
+      expect(meta, clips).not.toHaveClass(clips);
+    }
+  });
+
   it('clamps the name without a scroll position, so focusing a long name cannot shift it', () => {
     const { container } = render(card());
     // line-clamp is overflow: hidden, which focus could scroll by a pixel and

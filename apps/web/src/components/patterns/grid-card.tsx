@@ -38,7 +38,10 @@ import { PatternPhoto } from './photo';
  * optional meta line, the labelled quantity ("142 on hand") with the
  * placement (warehouse and rack) opposite, optional quantity notes ("12
  * awaiting put-away"), and a footer (the coverage bar, a group card's
- * drill-down).
+ * drill-down). The meta line wraps rather than cutting anything off: on a
+ * narrow card (two to a 390 px phone) "2 records · Furniture · Generic" takes
+ * two lines, every word whole (a word wider than the card, the last resort,
+ * breaks inside itself).
  *
  * `stretchLink` (default on) widens the name link's click area to the whole
  * card, as the reference's card opens the record. The checkbox, the status
@@ -177,7 +180,10 @@ export function GridCard({
             </div>
           ) : null}
           {meta != null ? (
-            <div className="text-muted-foreground mt-0.5 truncate text-[12px] leading-[18px]">
+            <div
+              data-slot="grid-card-meta"
+              className="text-muted-foreground mt-0.5 text-[12px] leading-[18px] [overflow-wrap:anywhere]"
+            >
               {meta}
             </div>
           ) : null}

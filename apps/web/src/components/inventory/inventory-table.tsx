@@ -3679,20 +3679,30 @@ function hasOnHandNotes(item: Item, reservedByItem?: Map<string, number>): boole
   return (item.staged_quantity ?? 0) + (item.unplaced_quantity ?? 0) > 0;
 }
 
-/** A grid card's one-line meta: its parts with a quiet "·" between them. */
+/**
+ * A grid card's meta: its parts with a quiet "·" between them, in order. On
+ * one line where the card has room, drawn exactly as before; where it has not
+ * (a group card's "N records · Category · Generic" on a 390 px phone, W5) it
+ * wraps between whole parts, and inside a part only between its words, so no
+ * word is cut or hidden. Each "·" stays with the part before it, so a wrapped
+ * line never starts with one, and the lines sit 18 px apart, as text does.
+ */
 function MetaLine({ children }: { children: React.ReactNode }) {
   const parts = React.Children.toArray(children);
   return (
-    <span className="inline-flex min-w-0 max-w-full items-center gap-1.5">
+    <span
+      data-slot="meta-line"
+      className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-x-1.5"
+    >
       {parts.map((part, i) => (
-        <React.Fragment key={i}>
-          {i > 0 ? (
+        <span key={i} className="inline-flex items-center gap-1.5">
+          {part}
+          {i < parts.length - 1 ? (
             <span aria-hidden className="text-muted-foreground">
               ·
             </span>
           ) : null}
-          {part}
-        </React.Fragment>
+        </span>
       ))}
     </span>
   );
