@@ -98,8 +98,7 @@ vi.mock('@/components/ui/image-hover-preview', () => ({
 }));
 
 vi.mock('@/lib/cycle-counts/use-count-selection', () => ({
-  useCountSelection: (selector: (s: { add: () => void }) => unknown) =>
-    selector({ add: vi.fn() }),
+  useCountSelection: (selector: (s: { add: () => void }) => unknown) => selector({ add: vi.fn() }),
 }));
 
 import { deriveInstantView, instantStateFromPageParams } from '@/lib/inventory/instant-mode';
@@ -111,7 +110,9 @@ import {
   type InstantDatasetItem,
 } from './inventory-table';
 
-function item(over: Partial<InstantDatasetItem> & { id: string; name: string }): InstantDatasetItem {
+function item(
+  over: Partial<InstantDatasetItem> & { id: string; name: string },
+): InstantDatasetItem {
   return {
     sku: `SKU-${over.id}`,
     status: 'active',
@@ -147,7 +148,11 @@ function renderInstant({
   initialQuery?: string;
 }) {
   getSearchParams(search);
-  window.history.replaceState(null, '', search ? `/dashboard/inventory?${search}` : '/dashboard/inventory');
+  window.history.replaceState(
+    null,
+    '',
+    search ? `/dashboard/inventory?${search}` : '/dashboard/inventory',
+  );
   return render(
     <InventoryTable
       items={items}
@@ -186,7 +191,10 @@ describe('InventoryTable Rack column: a SITE is not a rack (owner report 2026-09
       />,
     );
     const noRack = screen.getByText('No rack');
-    expect(noRack).toHaveAttribute('title', expect.stringContaining('At DC4 (the site), not on a rack'));
+    expect(noRack).toHaveAttribute(
+      'title',
+      expect.stringContaining('At DC4 (the site), not on a rack'),
+    );
     expect(screen.queryByText('DC4')).not.toBeInTheDocument();
     expect(screen.getByText('31-C')).toBeInTheDocument();
   });
@@ -202,10 +210,7 @@ describe('InventoryTable instant mode', () => {
 
   it('hydrates a ?q= deep link straight from the dataset — complete footer totals, NO "(searching…)" phase, NO search fetch', () => {
     renderInstant({
-      items: [
-        item({ id: 'a', name: 'Alpha Widget' }),
-        item({ id: 'b', name: 'Beta Gadget' }),
-      ],
+      items: [item({ id: 'a', name: 'Alpha Widget' }), item({ id: 'b', name: 'Beta Gadget' })],
       search: 'q=alpha',
       initialQuery: 'alpha',
     });
@@ -339,7 +344,10 @@ describe('InventoryTable instant mode', () => {
   it('paginates locally: Next → is a shallow history.pushState, never a router navigation', async () => {
     const user = userEvent.setup();
     const many = Array.from({ length: 35 }, (_, i) =>
-      item({ id: `i${String(i).padStart(2, '0')}`, name: `Bulk Item ${String(i).padStart(2, '0')}` }),
+      item({
+        id: `i${String(i).padStart(2, '0')}`,
+        name: `Bulk Item ${String(i).padStart(2, '0')}`,
+      }),
     );
     renderInstant({ items: many });
 
@@ -524,8 +532,20 @@ describe('InventoryTable instant mode', () => {
     getSearchParams('status=all');
     window.history.replaceState(null, '', '/dashboard/inventory?status=all');
     const rows = [
-      item({ id: 'a', name: 'Mixed Status Widget', sku: 'SKU-MIXED', status: 'active', quantity_on_hand: 100 }),
-      item({ id: 'b', name: 'Mixed Status Widget', sku: 'SKU-MIXED', status: 'discontinued', quantity_on_hand: 50 }),
+      item({
+        id: 'a',
+        name: 'Mixed Status Widget',
+        sku: 'SKU-MIXED',
+        status: 'active',
+        quantity_on_hand: 100,
+      }),
+      item({
+        id: 'b',
+        name: 'Mixed Status Widget',
+        sku: 'SKU-MIXED',
+        status: 'discontinued',
+        quantity_on_hand: 50,
+      }),
     ];
     render(
       <InventoryTable
@@ -2447,13 +2467,29 @@ describe('InventoryTable — size runs keyed on a stored product group', () => {
   // The exact case a name regex can never serve: three real variants of one
   // shoe, identically named, differing only by variant_size.
   const pegasus = (): InstantDatasetItem[] => [
-    item({ id: 'p10', name: 'Nike Pegasus 41', sku: 'PEG-10', quantity_on_hand: 20, group_id: 'grp-1', variant_size: '10' }),
-    item({ id: 'p9', name: 'Nike Pegasus 41', sku: 'PEG-9', quantity_on_hand: 32, group_id: 'grp-1', variant_size: '9' }),
+    item({
+      id: 'p10',
+      name: 'Nike Pegasus 41',
+      sku: 'PEG-10',
+      quantity_on_hand: 20,
+      group_id: 'grp-1',
+      variant_size: '10',
+    }),
+    item({
+      id: 'p9',
+      name: 'Nike Pegasus 41',
+      sku: 'PEG-9',
+      quantity_on_hand: 32,
+      group_id: 'grp-1',
+      variant_size: '9',
+    }),
   ];
 
   it('collapses identically-named variants that share a group_id, and says so in the group vocabulary', () => {
     renderGrouped({ items: pegasus() });
-    expect(screen.getByRole('button', { name: /expand nike pegasus 41 \(2 variants\)/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /expand nike pegasus 41 \(2 variants\)/i }),
+    ).toBeInTheDocument();
     // "sizes" is the weaker, name-derived claim — never used for a real group.
     expect(screen.queryByText(/2 sizes/)).not.toBeInTheDocument();
   });
@@ -2479,19 +2515,47 @@ describe('InventoryTable — size runs keyed on a stored product group', () => {
   it('shows the concrete rack in the header when every variant sits in the same one', () => {
     const { container } = renderGrouped({
       items: [
-        item({ id: 'p9', name: 'Nike Pegasus 41', sku: 'PEG-9', group_id: 'grp-1', variant_size: '9', placed_racks: ['31-B'] }),
-        item({ id: 'p10', name: 'Nike Pegasus 41', sku: 'PEG-10', group_id: 'grp-1', variant_size: '10', placed_racks: ['31-B'] }),
+        item({
+          id: 'p9',
+          name: 'Nike Pegasus 41',
+          sku: 'PEG-9',
+          group_id: 'grp-1',
+          variant_size: '9',
+          placed_racks: ['31-B'],
+        }),
+        item({
+          id: 'p10',
+          name: 'Nike Pegasus 41',
+          sku: 'PEG-10',
+          group_id: 'grp-1',
+          variant_size: '10',
+          placed_racks: ['31-B'],
+        }),
       ],
     });
 
     expect(headerRackCell(container)).toBe('31-B');
   });
 
-  it('shows a COUNT, never one variant\'s rack, when placements differ', () => {
+  it("shows a COUNT, never one variant's rack, when placements differ", () => {
     const { container } = renderGrouped({
       items: [
-        item({ id: 'p9', name: 'Nike Pegasus 41', sku: 'PEG-9', group_id: 'grp-1', variant_size: '9', placed_racks: ['31-B'] }),
-        item({ id: 'p10', name: 'Nike Pegasus 41', sku: 'PEG-10', group_id: 'grp-1', variant_size: '10', placed_racks: ['Z9'] }),
+        item({
+          id: 'p9',
+          name: 'Nike Pegasus 41',
+          sku: 'PEG-9',
+          group_id: 'grp-1',
+          variant_size: '9',
+          placed_racks: ['31-B'],
+        }),
+        item({
+          id: 'p10',
+          name: 'Nike Pegasus 41',
+          sku: 'PEG-10',
+          group_id: 'grp-1',
+          variant_size: '10',
+          placed_racks: ['Z9'],
+        }),
       ],
     });
 
@@ -2505,8 +2569,22 @@ describe('InventoryTable — size runs keyed on a stored product group', () => {
   it('counts variants with no rack separately rather than folding them into the rack count', () => {
     const { container } = renderGrouped({
       items: [
-        item({ id: 'p9', name: 'Nike Pegasus 41', sku: 'PEG-9', group_id: 'grp-1', variant_size: '9', placed_racks: ['31-B'] }),
-        item({ id: 'p10', name: 'Nike Pegasus 41', sku: 'PEG-10', group_id: 'grp-1', variant_size: '10', placed_racks: [] }),
+        item({
+          id: 'p9',
+          name: 'Nike Pegasus 41',
+          sku: 'PEG-9',
+          group_id: 'grp-1',
+          variant_size: '9',
+          placed_racks: ['31-B'],
+        }),
+        item({
+          id: 'p10',
+          name: 'Nike Pegasus 41',
+          sku: 'PEG-10',
+          group_id: 'grp-1',
+          variant_size: '10',
+          placed_racks: [],
+        }),
       ],
     });
 
@@ -2517,8 +2595,22 @@ describe('InventoryTable — size runs keyed on a stored product group', () => {
   it('shows a dash when nothing in the run is placed', () => {
     const { container } = renderGrouped({
       items: [
-        item({ id: 'p9', name: 'Nike Pegasus 41', sku: 'PEG-9', group_id: 'grp-1', variant_size: '9', placed_racks: [] }),
-        item({ id: 'p10', name: 'Nike Pegasus 41', sku: 'PEG-10', group_id: 'grp-1', variant_size: '10', placed_racks: [] }),
+        item({
+          id: 'p9',
+          name: 'Nike Pegasus 41',
+          sku: 'PEG-9',
+          group_id: 'grp-1',
+          variant_size: '9',
+          placed_racks: [],
+        }),
+        item({
+          id: 'p10',
+          name: 'Nike Pegasus 41',
+          sku: 'PEG-10',
+          group_id: 'grp-1',
+          variant_size: '10',
+          placed_racks: [],
+        }),
       ],
     });
 
@@ -2541,8 +2633,20 @@ describe('InventoryTable — size runs keyed on a stored product group', () => {
     // so the label used to come from one variant while the link went to another.
     const { container } = renderGrouped({
       items: [
-        item({ id: 'nine', name: 'Court Shoe - 9', sku: 'CS-9', group_id: 'grp-9', variant_size: '9' }),
-        item({ id: 'eight', name: 'Court Shoe - 8', sku: 'CS-8', group_id: 'grp-9', variant_size: '8' }),
+        item({
+          id: 'nine',
+          name: 'Court Shoe - 9',
+          sku: 'CS-9',
+          group_id: 'grp-9',
+          variant_size: '9',
+        }),
+        item({
+          id: 'eight',
+          name: 'Court Shoe - 8',
+          sku: 'CS-8',
+          group_id: 'grp-9',
+          variant_size: '8',
+        }),
       ],
     });
 
@@ -2636,7 +2740,9 @@ describe('InventoryTable — size runs keyed on a stored product group', () => {
         item({ id: 'xl', name: 'Pink Shirt - XL', sku: 'X' }),
       ],
     });
-    expect(screen.getByRole('button', { name: /expand pink shirt \(2 sizes\)/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /expand pink shirt \(2 sizes\)/i }),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/variants/)).not.toBeInTheDocument();
   });
 
@@ -2648,10 +2754,38 @@ describe('InventoryTable — size runs keyed on a stored product group', () => {
     getSearchParams('');
     window.history.replaceState(null, '', '/dashboard/inventory');
     const rows = [
-      item({ id: 'p9', name: 'Nike Pegasus 41', sku: 'PEG-9', quantity_on_hand: 32, group_id: 'grp-1', variant_size: '9', updated_at: '2026-01-09T00:00:00+00:00' }),
-      item({ id: 'x1', name: 'Stapler', sku: 'STP-1', quantity_on_hand: 1, updated_at: '2026-01-08T00:00:00+00:00' }),
-      item({ id: 'x2', name: 'Kettle', sku: 'KTL-1', quantity_on_hand: 1, updated_at: '2026-01-07T00:00:00+00:00' }),
-      item({ id: 'p10', name: 'Nike Pegasus 41', sku: 'PEG-10', quantity_on_hand: 20, group_id: 'grp-1', variant_size: '10', updated_at: '2026-01-06T00:00:00+00:00' }),
+      item({
+        id: 'p9',
+        name: 'Nike Pegasus 41',
+        sku: 'PEG-9',
+        quantity_on_hand: 32,
+        group_id: 'grp-1',
+        variant_size: '9',
+        updated_at: '2026-01-09T00:00:00+00:00',
+      }),
+      item({
+        id: 'x1',
+        name: 'Stapler',
+        sku: 'STP-1',
+        quantity_on_hand: 1,
+        updated_at: '2026-01-08T00:00:00+00:00',
+      }),
+      item({
+        id: 'x2',
+        name: 'Kettle',
+        sku: 'KTL-1',
+        quantity_on_hand: 1,
+        updated_at: '2026-01-07T00:00:00+00:00',
+      }),
+      item({
+        id: 'p10',
+        name: 'Nike Pegasus 41',
+        sku: 'PEG-10',
+        quantity_on_hand: 20,
+        group_id: 'grp-1',
+        variant_size: '10',
+        updated_at: '2026-01-06T00:00:00+00:00',
+      }),
     ];
     render(
       <InventoryTable
