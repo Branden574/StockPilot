@@ -223,11 +223,23 @@ describe('Shift command', () => {
 // counts in progress" with their counts at every window from about 1510 px up
 // (1600, 1680, 1920, 2560). The fast paths now stop at three to a row (3 + 2),
 // the layout 1440 already had, where every label is whole.
+//
+// The steps sit where no link is cut just past them either: "Cycle counts in
+// progress" with its count needs about 251 px and "Open purchase orders" with a
+// two-digit count about 243 px, and two to a row from a 480 px grid or three
+// from 760 px gave links of about 237 to 249 px, which cut them at windows of
+// 552 to 576, 812 to 836 (a tablet in portrait, sidebar pinned) and 1092 to
+// 1096 px. Two from 528 px and three from 792 px keep every link at least
+// (528 - 8) / 2 = 260 and (792 - 16) / 3 = 258.7 px wide.
 describe('Shift command: the fast paths on a wide screen (P68-04)', () => {
-  it('lays the five fast paths out at most three to a row', () => {
+  it('lays the five fast paths out at most three to a row, each link about 258 px or wider', () => {
     render(<ShiftCommandWidget {...makeProps()} />);
     const grid = screen.getByRole('link', { name: /Review low stock/ }).parentElement!;
-    expect(grid).toHaveClass('grid', '@min-[480px]:grid-cols-2', '@min-[760px]:grid-cols-3');
+    expect(grid).toHaveClass('grid', '@min-[528px]:grid-cols-2', '@min-[792px]:grid-cols-3');
+    expect(grid.className.match(/@min-\[\d+px\]:grid-cols-\d+/g)).toEqual([
+      '@min-[528px]:grid-cols-2',
+      '@min-[792px]:grid-cols-3',
+    ]);
     expect(grid.className).not.toMatch(/grid-cols-5/);
     expect(grid.children).toHaveLength(5);
   });

@@ -45,9 +45,15 @@ export function ShiftCommandWidget({
             stops at 1320 px, so this grid is never wider than about 1218 px,
             and five to a row (from 1180 px) cut "Open purchase orders" and
             "Cycle counts in progress" with their counts at every window from
-            about 1510 px up (P68-04). */}
+            about 1510 px up (P68-04). The steps keep every link at least
+            about 258 px wide, (528 - 8) / 2 and (792 - 16) / 3: "Cycle
+            counts in progress" with its count needs about 251 px, and two
+            from a 480 px grid or three from 760 px left links of 237 to
+            249 px just past each step, which cut it at windows of 552 to
+            576, 812 to 836 (a tablet in portrait, sidebar pinned) and 1092
+            to 1096 px. */}
         <div className="@container mt-3">
-          <div className="@min-[480px]:grid-cols-2 @min-[760px]:grid-cols-3 grid gap-2">
+          <div className="@min-[528px]:grid-cols-2 @min-[792px]:grid-cols-3 grid gap-2">
             <QuickAction
               href="/dashboard/inventory?stock=low&type=all"
               icon={AlertTriangle}
