@@ -98,10 +98,15 @@ export function ItemDetailTabs({ activeTab }: { activeTab: DetailTabId }) {
  * The item page's header (back link, title, actions and this tab strip) is
  * sticky, and its height changes with the width, the title's length and the
  * shared-SKU note (about 200 to 410 px). A link to `#physical-count` (an order
- * line's readiness cell) scrolled the card UNDER it, title and all. This keeps
- * the header's measured height in `--item-detail-header-h` on the page, which
- * the card's scroll margin reads (with a fallback for the moment before this
- * runs). It writes one style property and reads no data.
+ * line's readiness cell) scrolled the card UNDER it, title and all, and Tab
+ * could leave a control under it: Market price's Refresh, reached from the
+ * right column's last link in the two-column grid (P68-KBD-01). This keeps the
+ * header's measured height in `--item-detail-header-h` on the page column that
+ * holds the header and the tab panels. The card's scroll margin reads it (with
+ * a fallback for the moment before this runs), and so does the scroll margin
+ * globals.css gives a focused control below the header, which inherits it from
+ * this column. Nothing is written on the dashboard's scroller. It writes one
+ * style property and reads no data.
  */
 function useStickyHeaderHeight(markerRef: React.RefObject<HTMLSpanElement | null>) {
   React.useEffect(() => {

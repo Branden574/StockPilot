@@ -641,3 +641,26 @@ html[data-sp-update-card] ol[data-sonner-toaster][data-y-position='bottom'] {
 html[data-sp-update-card] #main-content {
   padding-bottom: var(--sp-update-card-offset, 0px);
 }
+
+/* ── Keyboard focus clears the item page's sticky header (P68-KBD-01) ─────────
+   The item page's header (back link, title, actions and tab strip) sticks to
+   the top of the dashboard's scroller, 200 to 410 px tall, and its tab strip
+   keeps the header's measured height in --item-detail-header-h on the page
+   column that holds the header and the tab panels (item-detail-tabs.tsx).
+   Browsers scroll a newly focused control only until it is inside the
+   scroller, so Tab could stop on a control under the header (Market price's
+   Refresh, reached from the right column's last link at 1280). A focused
+   control below the header (in a tab panel, the header's sibling) takes a
+   scroll margin of the header's height plus 12 px, which it inherits from
+   that column, so the browser scrolls it into view below the header with its
+   whole focus ring (Firefox does not apply it when focus lands on an SVG
+   element, the cost chart, and leaves that where it was, as it always has).
+   Only the focused control carries it: the header's own controls, the skip
+   link, Page Down, the #physical-count card's own margin and every other
+   page scroll as before. No rule here matches the scroller: a :has() on it
+   ran on every dashboard page, re-matching the whole page on each focus
+   change (and, in Chromium, each DOM change). */
+[data-item-detail-header] ~ :focus,
+[data-item-detail-header] ~ * :focus {
+  scroll-margin-top: calc(var(--item-detail-header-h, 0px) + 0.75rem);
+}

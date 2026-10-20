@@ -17,6 +17,7 @@ vi.mock('next/navigation', () => ({
 
 import {
   SETTINGS_NAV_GROUPS,
+  SettingsFrame,
   SettingsPanel,
   SettingsSubNav,
   activeSettingsEntry,
@@ -130,6 +131,30 @@ describe('SettingsPanel', () => {
     const regions = screen.getAllByRole('region', { name: 'Snapshots' });
     expect(regions).toHaveLength(1);
     expect(regions[0]).toBe(container.querySelector('div[role="region"]'));
+  });
+});
+
+describe('SettingsSubNav focus ring', () => {
+  // P68-KBD-02: from 1280 px the rail is a 248 px scroller with no right
+  // padding, and its links run to that edge, so the ring drawn outside a link
+  // lost its right side. Each link now draws it inside its own edge, as the
+  // settings index rows do, and the rail keeps its width and padding.
+  it('draws every link ring inside the link, and the rail keeps its 248 px and no right padding', () => {
+    const { container } = render(
+      <SettingsFrame nav={<SettingsSubNav access={everything} />}>
+        <p>Page</p>
+      </SettingsFrame>,
+    );
+    const nav = screen.getByRole('navigation', { name: 'Settings' });
+    const links = within(nav).getAllByRole('link');
+    expect(links.map((a) => a.textContent)).toContain('All settings');
+    expect(links).toHaveLength(22);
+    for (const link of links) {
+      expect(link).toHaveClass('focus-visible:ring-inset', 'focus-visible:ring-offset-0');
+    }
+    const rail = container.querySelector('[data-slot="settings-frame"] > div') as HTMLElement;
+    expect(rail).toContainElement(nav);
+    expect(rail).toHaveClass('xl:w-[248px]', 'xl:overflow-y-auto', 'xl:pr-0');
   });
 });
 

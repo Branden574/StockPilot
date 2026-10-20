@@ -336,7 +336,10 @@ export function SettingsIndex({ access }: { access: SettingsNavAccess }) {
  * A left rail from 1280 px up; below that, one 44 px "Settings" button that
  * opens the same grouped list over the page's top. The current destination
  * carries `aria-current="page"`. It is a `<nav>` with no heading, so `main`
- * keeps the page's single h1.
+ * keeps the page's single h1. Each link draws its focus ring inside its own
+ * edge (ring-inset), as the settings index rows do: the rail is a 248 px
+ * scroller whose links run to its right edge, and it cut the right side off
+ * the ring drawn outside the link (P68-KBD-02).
  */
 export function SettingsSubNav({ access }: { access: SettingsNavAccess }) {
   const groups = visibleSettingsGroups(access);
@@ -410,7 +413,7 @@ export function SettingsSubNav({ access }: { access: SettingsNavAccess }) {
                       aria-current={active ? 'page' : undefined}
                       onClick={() => setOpen(false)}
                       className={cn(
-                        'flex min-h-8 items-center rounded-md px-2.5 py-1.5 text-[13.5px] leading-5 transition-colors max-xl:min-h-11 [@media(pointer:coarse)]:min-h-11',
+                        'flex min-h-8 items-center rounded-md px-2.5 py-1.5 text-[13.5px] leading-5 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-xl:min-h-11 [@media(pointer:coarse)]:min-h-11',
                         active
                           ? 'bg-muted text-foreground font-medium'
                           : 'text-ink-2 hover:bg-muted hover:text-foreground',
@@ -435,7 +438,7 @@ function SettingsHubLink({ onNavigate }: { onNavigate: () => void }) {
     <IntentLink
       href={SETTINGS_HUB_HREF}
       onClick={onNavigate}
-      className="text-ink-2 hover:bg-muted hover:text-foreground flex min-h-8 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[13.5px] leading-5 transition-colors max-xl:min-h-11 [@media(pointer:coarse)]:min-h-11"
+      className="text-ink-2 hover:bg-muted hover:text-foreground flex min-h-8 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[13.5px] leading-5 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-xl:min-h-11 [@media(pointer:coarse)]:min-h-11"
     >
       All settings
     </IntentLink>

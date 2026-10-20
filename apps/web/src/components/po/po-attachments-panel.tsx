@@ -8,10 +8,7 @@ import { toast } from 'sonner';
 import { DetailSection } from '@/components/patterns/detail-section';
 import { Button } from '@/components/ui/button';
 import { createClient } from '@/lib/supabase/client';
-import {
-  addPoAttachmentAction,
-  deletePoAttachmentAction,
-} from '@/server/actions/po-attachments';
+import { addPoAttachmentAction, deletePoAttachmentAction } from '@/server/actions/po-attachments';
 import type { PoAttachment } from '@/server/services/po-attachments';
 
 const BUCKET = 'po-attachments';
@@ -144,7 +141,10 @@ export function PoAttachmentsList({
 
   // A card on the PO's page (DESIGN-SPEC 6.7): the title in its header, the
   // sentence under it, then one hairline row per file with the open link and
-  // two 32 px icon buttons (each with the 44 px touch area, 6 px apart).
+  // two 32 px icon buttons (each with the 44 px touch area, 6 px apart). The
+  // file name wraps rather than being cut with an ellipsis: in the right column
+  // at 1280 (358 px) a cut name lost its end, the slip number and ".pdf"
+  // (P68-2). A name with no spaces breaks anywhere, so it never runs wider.
   return (
     <DetailSection title="Attachments" flush>
       <p className="text-muted-foreground px-[18px] py-3 text-[12.5px] leading-[18.75px]">
@@ -158,7 +158,7 @@ export function PoAttachmentsList({
               href={a.url ?? '#'}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-foreground min-w-0 flex-1 truncate text-[13.5px] hover:underline"
+              className="text-foreground min-w-0 flex-1 text-[13.5px] [overflow-wrap:anywhere] hover:underline"
               title={a.fileName ?? 'File'}
             >
               {a.fileName ?? 'File'}
