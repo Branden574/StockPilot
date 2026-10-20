@@ -95,6 +95,7 @@ vi.mock('@/components/inventory/bulk-actions', () => ({
   },
 }));
 
+import { textActionTouchGapY } from '@/components/patterns/touch-target';
 import { ELSEWHERE_PLACEMENT_KIND, ELSEWHERE_PLACEMENT_LABEL } from '@/lib/placements';
 
 import {
@@ -830,6 +831,54 @@ describe('Grid group cards: the header row, as a card', () => {
     renderTable({ initialView: 'grid', items: items as never });
     expect(screen.queryByRole('button', { name: /^Rename group/ })).toBeNull();
     expect(screen.getByRole('button', { name: 'Remove from group Desk Set' })).toBeInTheDocument();
+  });
+
+  // W8 (Phase A walk at 390): on a phone the two actions wrap onto two lines
+  // 4 px apart, and each one's 44 px target reaches 13 px past it, so a tap
+  // at the centre of "Rename group" landed on "Remove from group" (the later
+  // target paints over). Where the target is on, wrapped actions now keep the
+  // 14 px the Item cell keeps (textActionTouchGapY); a fine pointer keeps
+  // 4 px. Mutation caught: the class dropped, or the fine-pointer gap changed.
+  it('Rename and Remove keep 14 px between them wherever their 44 px targets are on', () => {
+    const { container } = renderTable({
+      initialView: 'grid',
+      items: [
+        row('g1', { name: 'Desk Lamp', ...inGroup('grp-desk', 'Desk Set') }),
+        row('g2', { name: 'Desk Tray', ...inGroup('grp-desk', 'Desk Set') }),
+      ] as never,
+      canRenameGroups: true,
+    });
+    const card = container.querySelector(
+      '[data-group-key="display-group:grp-desk"]',
+    )! as HTMLElement;
+    const rename = within(card).getByRole('button', { name: 'Rename group Desk Set' });
+    const remove = within(card).getByRole('button', { name: 'Remove from group Desk Set' });
+    const row_ = rename.parentElement!;
+    expect(row_).toHaveAttribute('data-slot', 'grid-card-actions');
+    expect(remove.parentElement).toBe(row_);
+    expect(textActionTouchGapY.split(' ')).toEqual([
+      'max-sm:gap-y-3.5',
+      'pointer-coarse:gap-y-3.5',
+    ]);
+    expect(row_).toHaveClass(
+      'flex',
+      'flex-wrap',
+      'gap-x-3',
+      'gap-y-1',
+      'max-sm:gap-y-3.5',
+      'pointer-coarse:gap-y-3.5',
+    );
+    // Each action keeps the shared 44 px target, on exactly where the room is.
+    for (const action of [rename, remove]) {
+      expect(action).toHaveClass(
+        'relative',
+        'before:min-h-11',
+        'before:min-w-11',
+        "max-sm:before:content-['']",
+        "pointer-coarse:before:content-['']",
+        'text-[12px]',
+      );
+    }
   });
 
   it('a named group under a filter says "N matching"', () => {
