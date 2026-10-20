@@ -965,6 +965,38 @@ export function InventoryTable({
   // is already on screen.
   const [serverHitsTotal, setServerHitsTotal] = React.useState<number | null>(null);
   const [serverLoading, setServerLoading] = React.useState(false);
+  // A SEARCH SOMETHING ELSE PUT IN THE ADDRESS (review 2026-10-20). The box
+  // writes the address itself (the instant-mode sync and the server search
+  // below), and it used to ignore every other change of the address's search:
+  // Books' scan shortcut (router.push('/dashboard/books?q=<ISBN>') when an ISBN
+  // names several records), Back and Forward, a link to the list with a search.
+  // The box stayed as it was, its sync then wrote its old value back over the
+  // new address (instant mode) or the search was never run (server mode): the
+  // search was lost and the list did not narrow. Now the box takes the
+  // address's search whenever it changes to something the box did not write and
+  // does not already hold. `agreedQ` is the search the box and the address last
+  // agreed on: set just BEFORE the box writes the address, and when the box
+  // takes the address's search. Only a change of the address acts (`seenQ`),
+  // never `agreedQ` running ahead of an address that is still landing, so the
+  // box never takes back a search it has just replaced. Both are state, read
+  // here in render. The saved-view handshake above stays for the one case this
+  // cannot see: a view without a search, applied while a typed search has not
+  // reached the address yet (the address's search does not change then).
+  const addressQ = params.get('q') ?? '';
+  const [seenQ, setSeenQ] = React.useState(addressQ.trim());
+  const [agreedQ, setAgreedQ] = React.useState(addressQ.trim());
+  if (addressQ.trim() !== seenQ) {
+    setSeenQ(addressQ.trim());
+    if (addressQ.trim() !== agreedQ) {
+      setAgreedQ(addressQ.trim());
+      if (addressQ.trim() !== q.trim()) {
+        setQ(addressQ);
+        // The last search's server answer is not this search's.
+        setServerHits(null);
+        setServerHitsTotal(null);
+      }
+    }
+  }
 
   // Instant local filter on every keystroke. Substring match against
   // name / sku / barcode of the rows already on this page. Renders
@@ -1186,6 +1218,9 @@ export function InventoryTable({
     (!!lifecycleParam && lifecycleParam !== 'active' && lifecycleParam !== 'all') ||
     params.get('expected') === '1';
   function clearAllFilters() {
+    // The clear writes the address's search (it drops it), so the box does
+    // not take it back when the navigation lands (see agreedQ above).
+    setAgreedQ('');
     setQ('');
     // One navigation clears the three filter keys (the override) plus
     // sort + q, so two navigations can't race each other.
@@ -1283,6 +1318,8 @@ export function InventoryTable({
         next.delete('page');
         const qs = next.toString();
         const newUrl = qs ? `${basePath}?${qs}` : basePath;
+        // The box writes the address's search (see agreedQ).
+        setAgreedQ('');
         router.replace(newUrl, { scroll: false });
       }
       return;
@@ -1340,6 +1377,8 @@ export function InventoryTable({
         next.set('q', needle);
         next.delete('page');
         const newUrl = `${basePath}?${next.toString()}`;
+        // The box writes the address's search (see agreedQ).
+        setAgreedQ(needle);
         window.history.replaceState(null, '', newUrl);
       } catch (e) {
         if ((e as Error).name !== 'AbortError') {
@@ -1382,7 +1421,11 @@ export function InventoryTable({
     next.delete('page');
     const qs = next.toString();
     const newUrl = qs ? `${basePath}?${qs}` : basePath;
-    const timer = setTimeout(() => shallowReplace(newUrl), 150);
+    const timer = setTimeout(() => {
+      // The box writes the address's search (see agreedQ).
+      setAgreedQ(needle);
+      shallowReplace(newUrl);
+    }, 150);
     return () => clearTimeout(timer);
   }, [q, instantMode, params, basePath, shallowReplace]);
 

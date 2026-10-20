@@ -136,6 +136,15 @@ const BOOKS = [
 ];
 const GRADE_2 = BOOKS.slice(0, 2);
 
+/** One title on two racks (one ISBN, a record per rack) and a book without it. */
+const SHARED_ISBN = '9780140328721';
+const ISBN_BOOKS = [
+  row({ id: 'mat-1', name: 'Matilda', barcode: SHARED_ISBN, item_type: 'book' }),
+  row({ id: 'mat-2', name: 'Matilda (Rack 4-B)', barcode: SHARED_ISBN, item_type: 'book' }),
+  row({ id: 'atlas', name: 'World Atlas', barcode: '9780000000002', item_type: 'book' }),
+];
+const MATILDAS = ISBN_BOOKS.slice(0, 2);
+
 const SCIENCE = 'cat-science';
 const ITEMS = [
   row({ id: 'beaker', name: 'Beaker Set 250 mL', category_id: SCIENCE }),
@@ -184,9 +193,12 @@ const BASE: Record<List, string> = { books: '/dashboard/books', items: '/dashboa
 function tableFor(
   list: List,
   mode: 'instant' | 'server',
-  { items, initialQuery = '' }: { items: InstantDatasetItem[]; initialQuery?: string },
+  {
+    items,
+    initialQuery = '',
+    dataset = list === 'books' ? BOOKS : ITEMS,
+  }: { items: InstantDatasetItem[]; initialQuery?: string; dataset?: InstantDatasetItem[] },
 ) {
-  const dataset = list === 'books' ? BOOKS : ITEMS;
   return (
     <InventoryTable
       items={items}
@@ -270,12 +282,15 @@ beforeEach(() => {
     });
   }
   // The server-mode search box asks /api/items/search: answer with the
-  // records whose name holds the words (what the endpoint matches on).
+  // records whose name or barcode holds the words (what the endpoint matches on).
   fetchSpy = vi.fn(async (input: string | URL) => {
     const u = new URL(String(input), window.location.origin);
     const needle = (u.searchParams.get('q') ?? '').toLowerCase();
-    const pool = u.searchParams.get('type') === 'book' ? BOOKS : ITEMS;
-    const items = pool.filter((r) => r.name.toLowerCase().includes(needle));
+    const pool = u.searchParams.get('type') === 'book' ? [...BOOKS, ...ISBN_BOOKS] : ITEMS;
+    const items = pool.filter(
+      (r) =>
+        r.name.toLowerCase().includes(needle) || (r.barcode ?? '').toLowerCase().includes(needle),
+    );
     return { ok: true, json: async () => ({ items, total: items.length }) } as Response;
   });
   vi.stubGlobal('fetch', fetchSpy);
@@ -433,5 +448,119 @@ describe('Typing still drives the box and the address as before', () => {
     );
     expect(shownNames()).toEqual(['Dune']);
     expect(routerMock.replace).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A SEARCH ANOTHER NAVIGATION PUTS IN THE ADDRESS (review 2026-10-20). The
+ * saved-view chip was one way to change the address's search while the list
+ * is open; the box ignored every other. Books' scan shortcut, when an ISBN
+ * names several records (lookupBookByIsbnAction lists one per record carrying
+ * it, so a title on two racks qualifies), calls
+ * router.push('/dashboard/books?q=<ISBN>'): the box stayed empty and its sync
+ * wrote the address back without q (instant mode), or the address kept q with
+ * an empty box (server mode). Back and Forward did the same. The box now takes
+ * the address's search whenever it changes to one the box did not write.
+ */
+describe('A search another navigation puts in the address: the box takes it and the list narrows', () => {
+  const scanned = `/dashboard/books?q=${SHARED_ISBN}`;
+
+  it("Books, instant mode: the scan shortcut's router.push keeps q, fills the box and narrows the list", async () => {
+    setAddress('/dashboard/books');
+    render(tableFor('books', 'instant', { items: ISBN_BOOKS, dataset: ISBN_BOOKS }));
+    expect(shownNames()).toHaveLength(3);
+
+    // router.push lands: the address moves (the same mounted table).
+    await land(scanned);
+    await settle();
+    expect(searchBox()).toHaveValue(SHARED_ISBN);
+    expect(window.location.search).toBe(`?q=${SHARED_ISBN}`);
+    // Nothing wrote the address back without the search (it used to be /dashboard/books).
+    expect(tableWrites).toEqual([]);
+    expect(shownNames()).toEqual(MATILDAS.map((b) => b.name));
+  });
+
+  it("Books, server mode: the scan shortcut's router.push keeps q, fills the box and lists the matches", async () => {
+    setAddress('/dashboard/books');
+    const view = render(tableFor('books', 'server', { items: ISBN_BOOKS }));
+
+    await land(scanned, () =>
+      view.rerender(tableFor('books', 'server', { items: MATILDAS, initialQuery: SHARED_ISBN })),
+    );
+    await settle();
+    expect(searchBox()).toHaveValue(SHARED_ISBN);
+    // The box ran the search (its matches on other pages too) and kept the address.
+    const searched = fetchSpy.mock.calls.map(
+      (c) => new URL(String(c[0]), window.location.origin).searchParams.get('q') as string,
+    );
+    expect(searched).toEqual([SHARED_ISBN]);
+    expect(routerMock.replace).not.toHaveBeenCalled();
+    expect(window.location.search).toBe(`?q=${SHARED_ISBN}`);
+    expect(shownNames()).toEqual(MATILDAS.map((b) => b.name));
+  });
+
+  it('a pushed search with a sort keeps both (the view of "?q=Grade+2&sort=name_asc" in the review)', async () => {
+    setAddress('/dashboard/books');
+    render(tableFor('books', 'instant', { items: BOOKS }));
+    await land('/dashboard/books?q=Grade+2&sort=name_asc');
+    await settle();
+    expect(searchBox()).toHaveValue('Grade 2');
+    expect(window.location.search).toBe('?q=Grade+2&sort=name_asc');
+    expect(tableWrites).toEqual([]);
+    expect(shownNames()).toEqual(GRADE_2.map((b) => b.name));
+  });
+
+  it('Back to an earlier search: the box takes it and nothing writes the later one back', async () => {
+    setAddress('/dashboard/books');
+    render(tableFor('books', 'instant', { items: BOOKS }));
+    const user = userEvent.setup();
+    await user.type(searchBox(), 'Dune');
+    await settle();
+    expect(window.location.search).toBe('?q=Dune');
+
+    tableWrites = [];
+    await land('/dashboard/books?q=Grade+2');
+    await settle();
+    expect(searchBox()).toHaveValue('Grade 2');
+    expect(tableWrites).toEqual([]);
+    expect(window.location.search).toBe('?q=Grade+2');
+    expect(shownNames()).toEqual(GRADE_2.map((b) => b.name));
+
+    // And to the list without a search: the box empties.
+    await land('/dashboard/books');
+    await settle();
+    expect(searchBox()).toHaveValue('');
+    expect(tableWrites).toEqual([]);
+    expect(shownNames()).toHaveLength(4);
+  });
+
+  it('the box never takes back its own search: what is typed stays as typed while the address catches up', async () => {
+    setAddress('/dashboard/books');
+    render(tableFor('books', 'instant', { items: BOOKS }));
+    const user = userEvent.setup();
+    // A trailing space: the address gets the trimmed search, the box keeps the space.
+    await user.type(searchBox(), 'Grade 2 ');
+    await settle();
+    expect(window.location.search).toBe('?q=Grade+2');
+    expect(searchBox()).toHaveValue('Grade 2 ');
+    await user.type(searchBox(), 'R');
+    await settle();
+    expect(searchBox()).toHaveValue('Grade 2 R');
+    expect(window.location.search).toBe('?q=Grade+2+R');
+  });
+
+  it('server mode: emptying the box still clears the search from the address once', async () => {
+    setAddress('/dashboard/books?q=Dune');
+    render(tableFor('books', 'server', { items: [BOOKS[3]!], initialQuery: 'Dune' }));
+    await settle();
+    await userEvent.setup().clear(searchBox());
+    await settle();
+    expect(routerMock.replace).toHaveBeenCalledTimes(1);
+    expect(routerMock.replace).toHaveBeenCalledWith('/dashboard/books', { scroll: false });
+    // The navigation lands without the search: the box stays empty.
+    await land('/dashboard/books');
+    await settle();
+    expect(searchBox()).toHaveValue('');
+    expect(routerMock.replace).toHaveBeenCalledTimes(1);
   });
 });
