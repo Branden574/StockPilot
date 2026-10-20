@@ -198,12 +198,16 @@ export function RecentActivityWidget({
                   // Pre-0231 transfer rows have none → no number, never "0".
                   const isTransfer = m.movement_type === 'transfer';
                   const moved = m.moved_quantity == null ? null : Number(m.moved_quantity);
+                  // Units shorten as whole words only ("2 days" reads "2 d"):
+                  // a bare /days?/ also matched inside "yesterday" and printed
+                  // "yesterd" (FX1). "yesterday", "last week" and "now" print
+                  // in full.
                   const when = formatRelative(m.created_at)
                     .replace(' ago', '')
-                    .replace(/seconds?/, 's')
-                    .replace(/minutes?/, 'm')
-                    .replace(/hours?/, 'h')
-                    .replace(/days?/, 'd');
+                    .replace(/\bseconds?\b/, 's')
+                    .replace(/\bminutes?\b/, 'm')
+                    .replace(/\bhours?\b/, 'h')
+                    .replace(/\bdays?\b/, 'd');
                   return (
                     <TimelineRow
                       key={m.id}

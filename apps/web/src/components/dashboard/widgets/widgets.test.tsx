@@ -347,6 +347,33 @@ describe("Recent activity: today's activity", () => {
     expect(second).toHaveTextContent('-2');
   });
 
+  // FX1 (DESIGN-SPEC 6.16, the activity row's second line: name · time): a
+  // movement from a day ago printed "yesterd", because the unit shortening
+  // /days?/ also matched inside "yesterday". Units are shortened as whole
+  // words only, so the relative words print in full.
+  it('prints yesterday, last week and now in full, and shortens only whole unit words', () => {
+    const HOUR = 3_600_000;
+    const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+    render(
+      <RecentActivityWidget
+        {...makeProps({
+          recentMovements: [
+            movement({ id: 'yesterday', created_at: ago(24 * HOUR) }),
+            movement({ id: 'two-days', created_at: ago(48 * HOUR) }),
+            movement({ id: 'three-hours', created_at: ago(3 * HOUR) }),
+            movement({ id: 'last-week', created_at: ago(7 * 24 * HOUR) }),
+            movement({ id: 'now', created_at: ago(0) }),
+          ],
+        })}
+      />,
+    );
+    const times = screen
+      .getAllByRole('listitem')
+      .map((li) => within(li).getByText(/Dana Whitcombe/).lastElementChild?.textContent);
+    expect(times).toEqual(['yesterday', '2 d', '3 h', 'last week', 'now']);
+    expect(screen.queryByText(/yesterd(?!ay)/)).toBeNull();
+  });
+
   it('shows a transfer by the quantity moved, and nothing (never 0) before migration 0231', () => {
     render(
       <RecentActivityWidget
