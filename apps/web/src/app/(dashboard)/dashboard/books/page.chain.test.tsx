@@ -40,6 +40,8 @@ const h = vi.hoisted(() => ({
   planRows: null as null | { rows: unknown[]; total: number; valueOnHand: number },
   /** The request's cookies (the Table / Grid choice, redesign P3.2). */
   cookies: {} as Record<string, string>,
+  /** The warehouse filter (the switcher's cookie), null for all warehouses. */
+  filter: null as string | null,
 }));
 
 const m = vi.hoisted(() => ({
@@ -61,6 +63,7 @@ const m = vi.hoisted(() => ({
   notEnabledProps: vi.fn(),
   toggleProps: vi.fn(),
   emptyStateProps: vi.fn(),
+  getWarehousesForRequest: vi.fn(),
 }));
 
 vi.mock('next/link', async () => {
@@ -100,6 +103,9 @@ vi.mock('@/components/ui/empty-state', () => ({
 vi.mock('@/components/perf/perf-useful', () => ({
   PerfUseful: ({ children }: { children: unknown }) => children,
 }));
+vi.mock('@/components/inventory/clear-warehouse-filter-button', () => ({
+  ClearWarehouseFilterButton: () => null,
+}));
 vi.mock('@/components/books/books-inventory-table', () => ({
   BooksInventoryTable: (props: Record<string, unknown>) => {
     m.tableProps(props);
@@ -119,7 +125,15 @@ vi.mock('next/headers', () => ({
 }));
 vi.mock('@/server/services/context', () => ({ withContext: m.withContext }));
 vi.mock('@/lib/nav-labels', () => ({ effectiveNavLabel: vi.fn(async () => 'Books') }));
-vi.mock('@/lib/warehouse-filter', () => ({ getActiveWarehouseFilter: vi.fn(async () => null) }));
+vi.mock('@/lib/warehouse-filter', () => ({
+  getActiveWarehouseFilter: vi.fn(async () => h.filter),
+}));
+vi.mock('@/lib/dashboard/request-cache', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/dashboard/request-cache')>()),
+  getWarehousesForRequest: m.getWarehousesForRequest,
+}));
+// The count elsewhere's user-authed client (the warehouse hint's tests set it).
+vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn() }));
 
 vi.mock('@/server/loaders/inventory-list', async () => {
   const core = await import('@stockpilot/core');
@@ -185,6 +199,9 @@ vi.mock('@/server/services/lib/display-groups', async (importOriginal) => ({
 
 import { ELSEWHERE_UNAVAILABLE_NOTE } from '@stockpilot/core';
 
+import { ClearWarehouseFilterButton } from '@/components/inventory/clear-warehouse-filter-button';
+import { createClient } from '@/lib/supabase/server';
+
 import BooksPage from './page';
 
 const BOOK = {
@@ -222,6 +239,13 @@ beforeEach(() => {
   h.datasetGate = null;
   h.savedViewsError = null;
   h.liveExtra = null;
+  h.filter = null;
+  m.getWarehousesForRequest.mockImplementation(() =>
+    logged('warehouses', async () => [
+      { id: 'wh-1', name: 'North' },
+      { id: 'wh-2', name: 'South' },
+    ]),
+  );
 
   m.checkModuleAccess.mockImplementation((id: string) =>
     logged(`module:${id}`, async () => {
@@ -555,6 +579,179 @@ describe('Books page: a filter that leaves nothing is the table, with its filter
       description: 'Nothing here yet. Books you archive will show up in this view.',
       cta: { label: 'Back to active books', href: '/dashboard/books' },
     });
+  });
+});
+
+/**
+ * Review of batch D (2026-10-20): the Books list and its instant dataset are
+ * narrowed to the warehouse filter (the switcher's cookie, or a saved view's
+ * warehouse), and when that alone left the view empty the page said "No books
+ * yet" and offered to add a first book, with nothing naming the warehouse. As
+ * on the Items page, it now says "Nothing here in North" and how many match in
+ * the other warehouses, with "Search all warehouses", whenever the count can
+ * answer the view (the search alone, if any, on Active or All). The count is
+ * asked only then, of books, through the user's own client (RLS decides).
+ */
+describe('Books page: a warehouse filter that empties the view says so, as on the Items page', () => {
+  const countReads = vi.fn();
+  const countFilters = vi.fn();
+  /** A user-authed client whose HEAD count answers `count`. */
+  function countingClient(count: number) {
+    // The query is the thenable, never the client (a thenable client would
+    // be adopted by createClient's own promise).
+    const q: Record<string, unknown> = {};
+    for (const k of ['select', 'is', 'or']) q[k] = () => q;
+    q.eq = (column: string, value: unknown) => {
+      countFilters(column, value);
+      return q;
+    };
+    q.then = (resolve: (v: unknown) => unknown) => resolve({ count, error: null });
+    return {
+      from: (table: string) => {
+        countReads(table);
+        return q;
+      },
+    };
+  }
+
+  const emptyDataset = () =>
+    m.loadInventoryDataset.mockImplementation(() =>
+      logged('dataset', async () => ({ items: [], placement: {} })),
+    );
+
+  beforeEach(() => {
+    vi.mocked(createClient).mockReset();
+    vi.mocked(createClient).mockResolvedValue(countingClient(3) as never);
+    countReads.mockReset();
+    countFilters.mockReset();
+    h.filter = 'wh-1';
+  });
+
+  function expectHint(description: string) {
+    expect(m.tableProps).not.toHaveBeenCalled();
+    expect(m.emptyStateProps).toHaveBeenCalledTimes(1);
+    const props = m.emptyStateProps.mock.calls[0]![0] as {
+      title: string;
+      description: string;
+      action: { type: unknown; props: { label: string } };
+      cta?: unknown;
+    };
+    expect(props).toMatchObject({ title: 'Nothing here in North', description });
+    expect(props.action.type).toBe(ClearWarehouseFilterButton);
+    expect(props.action.props).toEqual({ label: 'Search all warehouses' });
+    // No "Add your first book" with it.
+    expect(props.cta).toBeUndefined();
+  }
+
+  it('manager (instant mode), nothing in the warehouse: "Nothing here in North", with the way out', async () => {
+    emptyDataset();
+    render(await callPage());
+    expect(m.loadInventoryDataset.mock.calls[0]!.slice(1)).toEqual(['wh-1', 'books']);
+    expectHint('3 items match in your other warehouses. This view is filtered to North.');
+    // Books, counted as the list counts them: active, received, not rentals.
+    expect(countReads).toHaveBeenCalledWith('inventory_items');
+    expect(countFilters.mock.calls).toEqual(
+      expect.arrayContaining([
+        ['organization_id', 'org-1'],
+        ['status', 'active'],
+        ['item_type', 'book'],
+        ['is_rental', false],
+        ['awaiting_first_receipt', false],
+      ]),
+    );
+  });
+
+  it('manager (instant mode), a search that matches only elsewhere: the same, on All too', async () => {
+    render(await callPage({ q: 'lanyard', status: 'all' }));
+    expectHint('3 items match in your other warehouses. This view is filtered to North.');
+  });
+
+  it.each(['staff', 'viewer'])(
+    '%s (server mode), nothing in the warehouse: "Nothing here in North", one book elsewhere',
+    async (role) => {
+      h.role = role;
+      h.liveExtra = { items: [], total: 0, valueOnHand: 0 };
+      vi.mocked(createClient).mockResolvedValue(countingClient(1) as never);
+      render(await callPage());
+      expectHint('1 item matches in your other warehouses. This view is filtered to North.');
+    },
+  );
+
+  it('staff, a search that matches only elsewhere: the same', async () => {
+    h.role = 'staff';
+    h.liveExtra = { items: [], total: 0, valueOnHand: 0 };
+    render(await callPage({ q: 'lanyard' }));
+    expectHint('3 items match in your other warehouses. This view is filtered to North.');
+  });
+
+  it('nothing elsewhere either: "No books yet" and its add action, as before', async () => {
+    emptyDataset();
+    vi.mocked(createClient).mockResolvedValue(countingClient(0) as never);
+    render(await callPage());
+    expect(countReads).toHaveBeenCalledTimes(1);
+    expect(m.emptyStateProps.mock.calls[0]![0]).toMatchObject({
+      title: 'No books yet',
+      cta: { label: 'Add your first book', href: '/dashboard/books/new' },
+    });
+  });
+
+  it.each<[string, Record<string, string>]>([
+    ['a Category', { cat: 'cat-empty' }],
+    ['a search and a stock view', { q: 'lanyard', stock: 'low' }],
+    ['the Expected chip', { expected: '1' }],
+    ['a rack', { rack: '9-Z' }],
+  ])(
+    '%s: the table and its filters, and no count (it would leave that filter out)',
+    async (_l, params) => {
+      emptyDataset();
+      render(await callPage(params));
+      expect(m.emptyStateProps).not.toHaveBeenCalled();
+      expect(m.tableProps).toHaveBeenCalledTimes(1);
+      expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ total: 0 });
+      expect(countReads).not.toHaveBeenCalled();
+      expect(m.getWarehousesForRequest).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each<[string, Record<string, string>, string]>([
+    ['the Archived view', { status: 'archived' }, 'No archived books'],
+    ['the Discontinued view', { status: 'discontinued' }, ''],
+  ])(
+    "staff, %s with nothing in the warehouse: no count (it counts active books), the view's own state",
+    async (_l, params, title) => {
+      h.role = 'staff';
+      h.liveExtra = { items: [], total: 0, valueOnHand: 0 };
+      render(await callPage(params));
+      expect(countReads).not.toHaveBeenCalled();
+      if (title) {
+        expect(m.emptyStateProps.mock.calls[0]![0]).toMatchObject({ title });
+      } else {
+        expect(m.emptyStateProps).not.toHaveBeenCalled();
+        expect(m.tableProps).toHaveBeenCalledTimes(1);
+      }
+    },
+  );
+
+  it('books in the warehouse: the table, and neither the count nor the names are read', async () => {
+    render(await callPage());
+    expect(m.tableProps).toHaveBeenCalledTimes(1);
+    expect(countReads).not.toHaveBeenCalled();
+    expect(m.getWarehousesForRequest).not.toHaveBeenCalled();
+  });
+
+  it('no warehouse filter: "No books yet" for an empty list, and no count', async () => {
+    h.filter = null;
+    emptyDataset();
+    render(await callPage());
+    expect(countReads).not.toHaveBeenCalled();
+    expect(m.emptyStateProps.mock.calls[0]![0]).toMatchObject({ title: 'No books yet' });
+  });
+
+  it('a failed count is not "0 elsewhere": the ordinary empty state', async () => {
+    emptyDataset();
+    vi.mocked(createClient).mockRejectedValue(new Error('auth down'));
+    render(await callPage());
+    expect(m.emptyStateProps.mock.calls[0]![0]).toMatchObject({ title: 'No books yet' });
   });
 });
 

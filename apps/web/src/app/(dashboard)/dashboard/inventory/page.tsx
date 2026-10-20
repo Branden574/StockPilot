@@ -75,7 +75,7 @@ import {
 import { ScopedWarehouseNotice } from '@/components/dashboard/scoped-warehouse-notice';
 import { ClearWarehouseFilterButton } from '@/components/inventory/clear-warehouse-filter-button';
 import { createClient } from '@/lib/supabase/server';
-import { inventoryViewPredicate, type InventoryListView } from '@stockpilot/core';
+import { countMatchesInOtherWarehouses } from '@/server/services/lib/other-warehouse-matches';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { TourSampleItem } from '@/components/onboarding/tour-sample-item';
 import { ITEMS_PAGE_TOUR } from '@/lib/onboarding/tours';
@@ -1048,48 +1048,6 @@ async function inventoryTableSection({
       {table}
     </ElsewhereUnavailableNotice>
   );
-}
-
-/**
- * How many rows the CURRENT query matches once the warehouse filter is lifted.
- *
- * Runs only when the filtered view came back empty, so it costs one HEAD count
- * on a path that was already rendering nothing. Deliberately the USER-authed
- * client, not the service role the cached loaders use: this number is shown to
- * a person, so row level security decides what it may count — warehouse
- * assignments and category restrictions included. A scoped user therefore never
- * sees "3 items match elsewhere" for rows they could not open.
- */
-async function countMatchesInOtherWarehouses(
-  organizationId: string,
-  params: InventorySearchParams,
-  view: InventoryListView,
-): Promise<number> {
-  try {
-    const { itemType, isRental } = inventoryViewPredicate(view);
-    const supabase = await createClient();
-    let q = supabase
-      .from('inventory_items')
-      .select('id', { count: 'exact', head: true })
-      .eq('organization_id', organizationId)
-      .is('deleted_at', null)
-      .eq('status', 'active')
-      .eq('item_type', itemType)
-      .eq('is_rental', isRental)
-      .eq('awaiting_first_receipt', false);
-    const term = params.q?.trim();
-    if (term) {
-      const safe = term.replace(/[%,()]/g, ' ').trim();
-      if (safe) q = q.or(`name.ilike.*${safe}*,sku.ilike.*${safe}*,barcode.ilike.*${safe}*`);
-    }
-    const { count, error } = await q;
-    // A failed count must not turn into "0 elsewhere", which would read as a
-    // confident "it is nowhere" — fall through to the ordinary empty state.
-    if (error) return 0;
-    return count ?? 0;
-  } catch {
-    return 0;
-  }
 }
 
 /**
