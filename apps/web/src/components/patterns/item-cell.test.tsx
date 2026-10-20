@@ -16,6 +16,7 @@ vi.mock('next/link', () => ({
 
 import { ItemCell } from './item-cell';
 import { SizeBadge } from './size-badge';
+import { textActionTouchGapY, textActionTouchMarginTop } from './touch-target';
 
 describe('ItemCell', () => {
   it('prints the name (the page`s own link), the size badge, the chip and the mono SKU line', () => {
@@ -89,6 +90,78 @@ describe('ItemCell', () => {
     // After the SKU line and outside it: the SKU's block holds the SKU alone.
     expect(sku.textContent).toBe('Multiple');
     expect(sku.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('keeps wrapped actions clear of each other and of the SKU: 6 px apart, 14 px where the touch target is on', () => {
+    const { container } = render(
+      <ItemCell
+        name="Desk Set"
+        sku="Multiple"
+        actions={
+          <>
+            <button type="button">Rename group</button>
+            <button type="button">Remove from group</button>
+          </>
+        }
+      />,
+    );
+    const actions = container.querySelector('[data-slot="item-cell-actions"]')!;
+    // An action is 18 px tall. On a fine pointer two wrapped actions sit 6 px
+    // apart, so the 24 px circle around one never reaches the other (WCAG 2.2
+    // 2.5.8: (24 - 18) / 2 = 3 px past each, 6 between them).
+    expect(actions).toHaveClass('gap-y-1.5');
+    expect(actions).not.toHaveClass('gap-y-0.5');
+    // Below sm and on a coarse pointer each action's target is 44 px tall and
+    // reaches (44 - 18) / 2 = 13 px past it: the lines keep 14 px from each
+    // other and from the SKU above them, so a tap on Rename never lands on
+    // Remove and a long-press on the SKU selects it.
+    expect(actions).toHaveClass(textActionTouchGapY, textActionTouchMarginTop);
+    expect(textActionTouchGapY.split(' ')).toEqual([
+      'max-sm:gap-y-3.5',
+      'pointer-coarse:gap-y-3.5',
+    ]);
+    expect(textActionTouchMarginTop.split(' ')).toEqual(['max-sm:mt-3.5', 'pointer-coarse:mt-3.5']);
+    // The SKU line itself does not move for a header's actions.
+    expect(container.querySelector('[data-slot="item-cell-sku"]')).not.toHaveClass('max-sm:mt-3.5');
+  });
+
+  it('gives a chip`s action 14 px of room from the SKU and from a wrapped name where the touch target is on', () => {
+    const chip = (
+      <span>
+        <span>Same SKU as records in Pads</span>
+        <button type="button">Add to group</button>
+      </span>
+    );
+    const { container, rerender } = render(
+      <ItemCell name="Pad C" sku="PAD-9" chip={chip} chipAction />,
+    );
+    const nameLine = () => container.querySelector('[data-slot="item-cell-name"]')!.parentElement!;
+    const sku = () => container.querySelector('[data-slot="item-cell-sku"]')!;
+    expect(nameLine()).toHaveClass('gap-y-0.5', 'max-sm:gap-y-3.5', 'pointer-coarse:gap-y-3.5');
+    expect(sku()).toHaveClass('max-sm:mt-3.5', 'pointer-coarse:mt-3.5');
+    // The SKU line is still the SKU alone (selectable and copied as it is).
+    expect(sku().textContent).toBe('PAD-9');
+
+    // A chip with no action (or no chip) changes nothing.
+    rerender(<ItemCell name="Pad C" sku="PAD-9" chip={<span>In group Pads</span>} />);
+    expect(nameLine()).not.toHaveClass('max-sm:gap-y-3.5');
+    expect(nameLine()).not.toHaveClass('pointer-coarse:gap-y-3.5');
+    expect(sku()).not.toHaveClass('max-sm:mt-3.5');
+    expect(sku()).not.toHaveClass('pointer-coarse:mt-3.5');
+  });
+
+  it('keeps the SKU on one line, and with wrapSku (a table column) lets it wrap anywhere inside it', () => {
+    const long = 'Number Stories for Little Learners-MABCD-001WXYZ';
+    const { container, rerender } = render(<ItemCell name="Number Stories" sku={long} />);
+    const sku = () => container.querySelector('[data-slot="item-cell-sku"]')!;
+    expect(sku()).toHaveClass('whitespace-nowrap');
+    expect(sku()).not.toHaveClass('[overflow-wrap:anywhere]');
+
+    rerender(<ItemCell name="Number Stories" sku={long} wrapSku />);
+    expect(sku()).toHaveClass('[overflow-wrap:anywhere]', 'font-mono', 'text-[11.5px]');
+    expect(sku()).not.toHaveClass('whitespace-nowrap');
+    // A soft wrap adds no character: the block still holds exactly the SKU.
+    expect(sku().textContent).toBe(long);
   });
 
   it('prints no actions line when the page passes none', () => {

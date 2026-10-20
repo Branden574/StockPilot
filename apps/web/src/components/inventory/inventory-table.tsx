@@ -2019,13 +2019,18 @@ export function InventoryTable({
         name={groupNames.get(chip.groupId) ?? DISPLAY_GROUP_FALLBACK_NAME}
         recordName={item.name}
         onAddToGroup={
-          canUngroup && chip.kind === 'same-sku'
+          rowChipHasAction(entry)
             ? () => setGroupAction({ kind: 'add', ids: [item.id], groupId: chip.groupId })
             : undefined
         }
         wrapAction={wrapAction}
       />
     );
+  }
+
+  /** The row's chip carries Add to group: a same-SKU chip, for a viewer who may group. */
+  function rowChipHasAction(entry: Extract<RenderEntry, { kind: 'row' }>): boolean {
+    return canUngroup && entry.chip?.kind === 'same-sku';
   }
 
   /** A named group's header facts: its name, count rule and its gated actions. */
@@ -2922,7 +2927,7 @@ export function InventoryTable({
                       label="Select all rows on this page"
                     />
                   </th>
-                  {TABLE_COLUMNS(showBookFields).map(([label, align], i, all) => (
+                  {TABLE_COLUMNS(showBookFields).map(([label, align]) => (
                     <th
                       key={label}
                       className={cn(
@@ -2931,7 +2936,7 @@ export function InventoryTable({
                         // "· qty"); every other label stays on one.
                         label === '14-day' ? 'py-1' : 'whitespace-nowrap',
                         align === 'right' ? 'text-right' : 'text-left',
-                        i === all.length - 1 ? 'pl-3 pr-4' : columnPad(label, showBookFields),
+                        columnPad(label, showBookFields),
                       )}
                     >
                       {label === '14-day' ? (
@@ -3043,7 +3048,8 @@ export function InventoryTable({
                   // Bulk actions still collapse back to distinct item ids (see
                   // selectedItemIds).
                   const isSelected = selected.has(item.rowKey ?? item.id);
-                  const cell = 'px-3 py-[var(--row-py)]';
+                  // Each body cell pads like its column's header cell (columnPad).
+                  const td = (label: string) => columnTd(label, showBookFields);
 
                   return (
                     <tr
@@ -3062,11 +3068,13 @@ export function InventoryTable({
                       )}
                     >
                       <td className="w-10 py-[var(--row-py)] pl-4 pr-0">{recordCheckbox(item)}</td>
-                      <td className={ITEM_TD}>
+                      <td className={itemTd(showBookFields)}>
                         {/* The SKU is the Item cell's second line, plain text
                             outside the name link and alone in its block, so it
                             is still selected and copied on its own (owner
-                            decision 2026-10-19: SKU stacked under the item name). */}
+                            decision 2026-10-19: SKU stacked under the item name).
+                            It wraps inside the column, so a long SKU never
+                            widens the table. */}
                         <ItemCell
                           nested={!!entry.nested}
                           // A member's thumb sits under its header's, which
@@ -3088,18 +3096,20 @@ export function InventoryTable({
                           }
                           name={itemLink(item, ITEM_NAME_LINK)}
                           chip={entry.nested ? null : rowChip(entry, item, { wrapAction: true })}
+                          chipAction={!entry.nested && rowChipHasAction(entry)}
                           sku={item.sku}
+                          wrapSku
                         />
                       </td>
-                      <td className={cell}>
+                      <td className={td('Category')}>
                         <CategoryLabel category={facts.category} wrap />
                       </td>
-                      <td className={cn(cell, 'whitespace-nowrap text-[13px]')}>
+                      <td className={cn(td('Charter'), 'whitespace-nowrap text-[13px]')}>
                         <CharterLabel item={item} lookups={lookups} />
                       </td>
-                      <td className={cn(cell, LOCATION_TD)}>{facts.location?.name ?? '—'}</td>
+                      <td className={locationTd(showBookFields)}>{facts.location?.name ?? '—'}</td>
                       {!showBookFields && (
-                        <td className={cn(cell, RACK_TD)}>
+                        <td className={cn(td('Rack'), RACK_TD)}>
                           <ItemsRackContent item={item} />
                         </td>
                       )}
@@ -3110,18 +3120,18 @@ export function InventoryTable({
                             <>
                               <td
                                 className={cn(
-                                  BOOK_STORAGE_TD,
+                                  td('Grade'),
                                   'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]',
                                 )}
                               >
                                 <BookGradeLabel grade={storage.grade} />
                               </td>
-                              <td className={cn(BOOK_STORAGE_TD, RACK_TD)}>
+                              <td className={cn(td('Rack'), RACK_TD)}>
                                 <BookRackContent item={item} />
                               </td>
                               <td
                                 className={cn(
-                                  BOOK_STORAGE_TD,
+                                  td('Crate'),
                                   'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]',
                                 )}
                               >
@@ -3133,7 +3143,7 @@ export function InventoryTable({
                             </>
                           );
                         })()}
-                      <td className={cn(ON_HAND_TD, 'text-right')}>
+                      <td className={cn(td('On hand'), 'text-right')}>
                         {/* Only the figure is mono: the notes under it read in
                             the body face, as on a Grid card. */}
                         <span className={ON_HAND_FIGURE}>
@@ -3146,17 +3156,17 @@ export function InventoryTable({
                           table
                         />
                       </td>
-                      <td className={cell}>
+                      <td className={td('Coverage')}>
                         <StockBar
                           stock={facts.availableForStatus}
                           par={facts.par}
                           status={facts.status}
                         />
                       </td>
-                      <td className={cn(TREND_TD, 'text-right')}>
+                      <td className={cn(td('14-day'), 'text-right')}>
                         <Sparkline data={series} width={56} height={18} />
                       </td>
-                      <td className={cn(STATUS_TD, STATUS_WRAP)}>
+                      <td className={cn(td('Status'), STATUS_WRAP)}>
                         <StockStatusBadge
                           quantity={facts.availableForStatus}
                           reorderPoint={item.reorder_point}
@@ -3166,7 +3176,10 @@ export function InventoryTable({
                         />
                       </td>
                       <td
-                        className="text-muted-foreground whitespace-nowrap py-[var(--row-py)] pl-3 pr-4 text-right text-[12.5px]"
+                        className={cn(
+                          td('Updated'),
+                          'text-muted-foreground whitespace-nowrap text-right text-[12.5px]',
+                        )}
                         // `formatRelative` reads `new Date()` at call time, so
                         // the string produced during server SSR ("15 minutes
                         // ago") can shift by the time the client hydrates ("16
@@ -4520,56 +4533,63 @@ function HeaderChevron({
   );
 }
 
-/** The body cells of a header row pad like the rows (`--row-py`, 16 / 12). */
-const HEADER_TD = 'px-3 py-[var(--row-py)]';
+/** Body cells pad top and bottom by the density's row padding (`--row-py`, 16 / 12). */
+const ROW_PY = 'py-[var(--row-py)]';
 
 /**
- * The side padding of the three columns that hug their content (owner
- * decision 2026-10-19: no extra space in On hand, 14-day and Status). On hand
- * and 14-day are right-aligned, so 4 px on the left is enough beside the
- * column before them; Status keeps its 12 px from the trend and gives 4 px to
- * Updated, which pads its own left. Every row kind and the header cell use the
- * same, so a label stays over its figures.
+ * Each column's side padding. The header cell and the body cell of every row
+ * kind take it from here, so a label always stands over its figures.
+ *
+ * Items: 12 px a side inside the table (DESIGN-SPEC 6.9), with On hand,
+ * 14-day and Status trimmed to what they hold (owner decision 2026-10-19: no
+ * extra space there). On hand and 14-day are right-aligned, so 4 px on their
+ * left is enough beside the column before them; Status keeps its 12 px from
+ * the trend and gives 4 px to Updated, which pads its own left 12 and keeps
+ * 16 at the table's edge.
+ *
+ * Books shows two more columns (Grade, Rack and Crate where Items has Rack),
+ * so every inner column there pads 8 px a side, 16 px between neighbours, and
+ * the trimmed columns keep their 4 px sides. With the Item and Location floors
+ * below, that keeps the Books table inside a 1440 screen with every column,
+ * word and state on it (owner decision 2026-10-19), Out of stock and "59
+ * seconds ago" in the same row and the 14-day toggle on "moves" included. The
+ * Item cell pads 12 and Updated 12 and 16 on both.
  */
-const ON_HAND_PAD = 'pl-1 pr-3';
-const TREND_PAD = 'pl-1 pr-3';
-const STATUS_PAD = 'pl-3 pr-1';
-const COLUMN_PAD: Readonly<Record<string, string>> = {
-  'On hand': ON_HAND_PAD,
-  '14-day': TREND_PAD,
-  Status: STATUS_PAD,
-};
-const ON_HAND_TD = `${ON_HAND_PAD} py-[var(--row-py)]`;
-const TREND_TD = `${TREND_PAD} py-[var(--row-py)]`;
-const STATUS_TD = `${STATUS_PAD} py-[var(--row-py)]`;
-
-/**
- * Books' Grade, Rack and Crate: three short columns side by side, so they pad
- * 8 px a side (16 px between them) where the other inner columns pad 12. The
- * Books table has two more columns than Items, and this keeps it inside a
- * 1440 screen (owner decision 2026-10-19). The Items Rack keeps 12.
- */
-const BOOK_STORAGE_PAD = 'px-2';
-const BOOK_STORAGE_TD = `${BOOK_STORAGE_PAD} py-[var(--row-py)]`;
-
-/** A header cell's side padding: always the same as the body cells under it. */
-function columnPad(label: string, showBookFields: boolean): string {
-  if (showBookFields && (label === 'Grade' || label === 'Rack' || label === 'Crate')) {
-    return BOOK_STORAGE_PAD;
+function columnPad(label: string, books: boolean): string {
+  switch (label) {
+    case 'Item':
+      return 'px-3';
+    case 'On hand':
+    case '14-day':
+      return books ? 'pl-1 pr-2' : 'pl-1 pr-3';
+    case 'Status':
+      return books ? 'pl-2 pr-1' : 'pl-3 pr-1';
+    case 'Updated':
+      return 'pl-3 pr-4';
+    default:
+      return books ? 'px-2' : 'px-3';
   }
-  return COLUMN_PAD[label] ?? 'px-3';
+}
+
+/** A body cell of the `label` column, in every row kind: its side padding and the row padding. */
+function columnTd(label: string, books: boolean): string {
+  return `${columnPad(label, books)} ${ROW_PY}`;
 }
 
 /**
  * The Item cell of every row kind (DESIGN-SPEC 6.9 Item recipe; owner decision
  * 2026-10-19): the thumb, the name with its badge and chip, then the SKU on a
- * mono line of its own. The 220 px floor leaves about 150 px beside the thumb
- * for the name, so a name of up to about 44 characters takes two lines at
- * most there; the column grows past the floor when the screen has room. What
- * cannot break (a size badge, a chip, an action, the SKU) can still make the
- * column wider, as before.
+ * mono line of its own. On Items the 220 px floor leaves about 150 px beside
+ * the thumb for the name, so a name of up to about 44 characters takes two
+ * lines at most there; Books, with two more columns, has a 208 px floor
+ * (about 138 px, some 40 characters in two lines). The column grows past the
+ * floor when the screen has room. The name and the SKU (wrapSku) wrap inside
+ * the column; what cannot break (a size badge, a chip, an action) can still
+ * make it wider.
  */
-const ITEM_TD = 'min-w-[220px] py-[var(--row-py)] pl-3 pr-3';
+function itemTd(books: boolean): string {
+  return cn(books ? 'min-w-[208px]' : 'min-w-[220px]', columnTd('Item', books));
+}
 
 /**
  * A row's or a header's name. It wraps between words and is never cut: every
@@ -4578,8 +4598,18 @@ const ITEM_TD = 'min-w-[220px] py-[var(--row-py)] pl-3 pr-3';
  */
 const ITEM_NAME_LINK = 'text-foreground font-medium hover:underline [overflow-wrap:anywhere]';
 
-/** Location: a site name wraps between its words; the floor keeps the header word whole. */
-const LOCATION_TD = 'min-w-[88px] text-[13px] text-[var(--ed-ink-2)]';
+/**
+ * Location: a site name wraps between its words. The floor keeps 64 px for
+ * the name inside the column's padding on both tables (88 on Items, 80 on
+ * Books), so a short site name such as "North DC" stays on one line.
+ */
+function locationTd(books: boolean): string {
+  return cn(
+    columnTd('Location', books),
+    books ? 'min-w-[80px]' : 'min-w-[88px]',
+    'text-[13px] text-[var(--ed-ink-2)]',
+  );
+}
 
 /**
  * Rack (Items and Books): the cell may wrap between words ("+3 in other
@@ -4687,6 +4717,8 @@ function SkuGroupHeaderRow({
       ? GROUP_PARTIAL_TITLE
       : SKU_PARTIAL_TITLE
     : undefined;
+  // Each body cell pads like its column's header cell (columnPad).
+  const td = (label: string) => columnTd(label, showBookFields);
 
   return (
     <tr
@@ -4696,12 +4728,13 @@ function SkuGroupHeaderRow({
     >
       {/* Not selectable — no checkbox (bulk actions target placements). */}
       <td className="w-10 py-[var(--row-py)] pl-4 pr-0" />
-      <td className={ITEM_TD}>
+      <td className={itemTd(showBookFields)}>
         {/* The header's name, then its SKU line: the shared SKU on a SKU
             header; on a named group's, the SKU its records share or "Multiple"
             (they keep their own). Rename and Remove come last, on a line that
             may wrap between them. */}
         <ItemCell
+          wrapSku
           thumb={
             <>
               <HeaderChevron
@@ -4778,14 +4811,14 @@ function SkuGroupHeaderRow({
           }
         />
       </td>
-      <td className={HEADER_TD}>
+      <td className={td('Category')}>
         {f.categoryRollup.kind === 'multiple' ? (
           <MultipleLabel title="Placements span multiple categories — expand to see each" />
         ) : (
           <CategoryLabel category={f.category} wrap />
         )}
       </td>
-      <td className={cn(HEADER_TD, 'whitespace-nowrap text-[13px]')}>
+      <td className={cn(td('Charter'), 'whitespace-nowrap text-[13px]')}>
         <HeaderCharterContent
           first={first}
           distinctCharterIds={f.distinctCharterIds}
@@ -4793,7 +4826,7 @@ function SkuGroupHeaderRow({
           multipleTitle="Placements span multiple charters — expand to see each"
         />
       </td>
-      <td className={cn(HEADER_TD, LOCATION_TD)}>
+      <td className={locationTd(showBookFields)}>
         {f.locationRollup.kind === 'multiple' ? (
           <MultipleLabel title="Placements span multiple sites — expand to see each" />
         ) : (
@@ -4803,7 +4836,7 @@ function SkuGroupHeaderRow({
         )}
       </td>
       {!showBookFields && (
-        <td className={cn(HEADER_TD, RACK_TD)}>
+        <td className={cn(td('Rack'), RACK_TD)}>
           <ItemsHeaderRackContent items={items} distinctItems={distinctItems} table />
         </td>
       )}
@@ -4814,16 +4847,16 @@ function SkuGroupHeaderRow({
             <>
               <td
                 className={cn(
-                  BOOK_STORAGE_TD,
+                  td('Grade'),
                   'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]',
                 )}
               >
                 {books.gradeContent}
               </td>
-              <td className={cn(BOOK_STORAGE_TD, RACK_TD)}>{books.rackContent}</td>
+              <td className={cn(td('Rack'), RACK_TD)}>{books.rackContent}</td>
               <td
                 className={cn(
-                  BOOK_STORAGE_TD,
+                  td('Crate'),
                   'whitespace-nowrap text-[12.5px] text-[var(--ed-ink-2)]',
                 )}
               >
@@ -4833,7 +4866,7 @@ function SkuGroupHeaderRow({
           );
         })()}
       <td
-        className={cn(ON_HAND_TD, 'text-right')}
+        className={cn(td('On hand'), 'text-right')}
         // A named group's records are not placements of one SKU: its own
         // words, as its hover card already said (they used to read "of this
         // SKU" here too).
@@ -4849,13 +4882,13 @@ function SkuGroupHeaderRow({
           )}
         </span>
       </td>
-      <td className={HEADER_TD}>
+      <td className={td('Coverage')}>
         <StockBar stock={f.healthQuantity} par={f.par} status={f.status} />
       </td>
-      <td className={cn(TREND_TD, 'text-right')}>
+      <td className={cn(td('14-day'), 'text-right')}>
         <Sparkline data={series} width={56} height={18} />
       </td>
-      <td className={cn(STATUS_TD, STATUS_WRAP)}>
+      <td className={cn(td('Status'), STATUS_WRAP)}>
         <StockStatusBadge
           quantity={f.healthQuantity}
           reorderPoint={f.groupReorderPoint}
@@ -4864,9 +4897,7 @@ function SkuGroupHeaderRow({
           awaitingFirstReceipt={f.allAwaitingFirstReceipt}
         />
       </td>
-      <td className="text-muted-foreground py-[var(--row-py)] pl-3 pr-4 text-right text-[12.5px]">
-        —
-      </td>
+      <td className={cn(td('Updated'), 'text-muted-foreground text-right text-[12.5px]')}>—</td>
     </tr>
   );
 }
@@ -4996,6 +5027,9 @@ function StyleGroupHeaderRow({
 }) {
   const f = styleHeaderFacts(group, items, lookups, { table: true });
   const { first } = f;
+  // Size runs are an Items-only row kind (Books lists draw none), so the cells
+  // pad as the Items columns do.
+  const td = (label: string) => columnTd(label, false);
   return (
     <tr
       data-row-kind="header"
@@ -5004,8 +5038,9 @@ function StyleGroupHeaderRow({
     >
       {/* Not selectable — no checkbox (bulk actions target the member rows). */}
       <td className="w-10 py-[var(--row-py)] pl-4 pr-0" />
-      <td className={ITEM_TD}>
+      <td className={itemTd(false)}>
         <ItemCell
+          wrapSku
           thumb={
             <>
               <HeaderChevron
@@ -5036,10 +5071,10 @@ function StyleGroupHeaderRow({
           sku={<span className="font-sans text-[12px] italic">—</span>}
         />
       </td>
-      <td className={HEADER_TD}>
+      <td className={td('Category')}>
         <CategoryLabel category={f.category} wrap />
       </td>
-      <td className={cn(HEADER_TD, 'whitespace-nowrap text-[13px]')}>
+      <td className={cn(td('Charter'), 'whitespace-nowrap text-[13px]')}>
         <HeaderCharterContent
           first={first}
           distinctCharterIds={f.distinctCharterIds}
@@ -5047,25 +5082,23 @@ function StyleGroupHeaderRow({
           multipleTitle="Sizes span multiple charters — expand to see each"
         />
       </td>
-      <td className={cn(HEADER_TD, LOCATION_TD)}>{f.location?.name ?? '—'}</td>
-      <td className={cn(HEADER_TD, RACK_TD)}>{f.rackContent}</td>
-      <td className={cn(ON_HAND_TD, 'text-right')}>
+      <td className={locationTd(false)}>{f.location?.name ?? '—'}</td>
+      <td className={cn(td('Rack'), RACK_TD)}>{f.rackContent}</td>
+      <td className={cn(td('On hand'), 'text-right')}>
         <span className={ON_HAND_FIGURE}>{formatNumber(group.total)}</span>
       </td>
-      <td className={HEADER_TD}>
+      <td className={td('Coverage')}>
         <StockBar stock={group.total} par={f.par} status={f.status} />
       </td>
-      <td className={cn(TREND_TD, 'text-muted-foreground text-right text-[12px]')}>—</td>
-      <td className={cn(STATUS_TD, STATUS_WRAP)}>
+      <td className={cn(td('14-day'), 'text-muted-foreground text-right text-[12px]')}>—</td>
+      <td className={cn(td('Status'), STATUS_WRAP)}>
         <StockStatusBadge
           quantity={group.total}
           reorderPoint={first.reorder_point}
           itemStatus={f.rolledUpStatus}
         />
       </td>
-      <td className="text-muted-foreground py-[var(--row-py)] pl-3 pr-4 text-right text-[12.5px]">
-        —
-      </td>
+      <td className={cn(td('Updated'), 'text-muted-foreground text-right text-[12.5px]')}>—</td>
     </tr>
   );
 }

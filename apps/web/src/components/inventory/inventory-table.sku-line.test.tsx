@@ -348,12 +348,15 @@ describe('the SKU line under the name', () => {
       expect(line).not.toBeNull();
       expect(itemCell).toContainElement(line);
       expect(line!.tagName).toBe('DIV');
+      // It may wrap inside the column (anywhere in a long run), so a long SKU
+      // never widens the table.
       expect(line).toHaveClass(
         'text-muted-foreground',
-        'whitespace-nowrap',
+        '[overflow-wrap:anywhere]',
         'font-mono',
         'text-[11.5px]',
       );
+      expect(line).not.toHaveClass('whitespace-nowrap');
       // Not a link and nothing to press: a drag or a triple-click copies
       // exactly the SKU, as it did from its own column.
       expect(line!.closest('a')).toBeNull();
@@ -412,6 +415,41 @@ describe('the SKU line under the name', () => {
     expect(skuLine(headerRow(container, 'sku-group:BK-ALG'))!.textContent).toBe('BK-ALG');
     expect(skuLine(headerRow(container, 'display-group:grp-sci'))!.textContent).toBe('Multiple');
     expect(skuLine(recordRow(container, 'chem'))!.textContent).toBe('BK-CHEM');
+  });
+
+  it('a long SKU wraps inside the Item cell in every row kind, and the line still holds exactly the SKU', async () => {
+    // The app allows 64-character SKUs, and the books import mints one from a
+    // title (spaces and all). Each wraps in its line instead of widening the
+    // column and the table; a soft wrap adds no character, so copying the line
+    // still gives exactly the SKU, and the search and the Sort menu read
+    // `item.sku` as before.
+    const sku64 = 'ABCDEFGHJKLMNPQRSTUVWXYZ0123456789-ABCDEFGHJKLMNPQRSTUVWXYZ01234';
+    const titleSku = 'Number Stories for Little Learners-MABCD-001WXYZ';
+    expect(sku64).toHaveLength(64);
+    const user = userEvent.setup();
+    const { container } = renderTable({
+      items: [
+        row('long', { name: 'Long SKU', sku: sku64 }),
+        row('t1', { name: 'Number Stories', sku: titleSku }),
+        row('t2', { name: 'Number Stories', sku: titleSku }),
+        row('g1', { name: 'Lamp', sku: sku64, ...inGroup('grp-long', 'Long Set') }),
+        row('g2', { name: 'Tray', sku: sku64, ...inGroup('grp-long', 'Long Set') }),
+      ] as never,
+    });
+    await expandAll(user);
+    const lines = [
+      skuLine(recordRow(container, 'long'))!,
+      skuLine(headerRow(container, `sku-group:${titleSku}`))!,
+      skuLine(recordRow(container, 't1'))!,
+      skuLine(headerRow(container, 'display-group:grp-long'))!,
+      skuLine(recordRow(container, 'g2'))!,
+    ];
+    expect(lines.map((l) => l.textContent)).toEqual([sku64, titleSku, titleSku, sku64, sku64]);
+    for (const line of lines) {
+      expect(line).toHaveClass('[overflow-wrap:anywhere]');
+      expect(line).not.toHaveClass('whitespace-nowrap');
+      expect(line.closest('.whitespace-nowrap')).toBeNull();
+    }
   });
 
   it('Rentals items rows print it too', () => {
@@ -574,6 +612,27 @@ describe('the Item cell may wrap between pieces, never inside one', () => {
     expect(sku.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it('wrapped Rename and Remove keep clear of each other and of the SKU (touch targets, WCAG 2.5.8)', () => {
+    const { container } = renderTable();
+    const header = headerRow(container, 'display-group:grp-desk');
+    const rename = within(header).getByRole('button', { name: 'Rename group Desk Set' });
+    // Both carry the shared 44 px touch target, so on a phone or a coarse
+    // pointer the line keeps 14 px from the SKU line and between its own
+    // lines ((44 - 18) / 2 = 13): a tap on Rename's centre is Rename's, and a
+    // long-press on the SKU selects the SKU. On a fine pointer two wrapped
+    // actions sit 6 px apart, outside each other's 24 px circle.
+    for (const name of ['Rename group Desk Set', 'Remove from group Desk Set']) {
+      expect(within(header).getByRole('button', { name })).toHaveClass('before:min-h-11');
+    }
+    expect(rename.parentElement).toHaveClass(
+      'gap-y-1.5',
+      'max-sm:gap-y-3.5',
+      'pointer-coarse:gap-y-3.5',
+      'max-sm:mt-3.5',
+      'pointer-coarse:mt-3.5',
+    );
+  });
+
   it('Add to group may drop under its chip in the table, and stays on one line', () => {
     const { container } = renderTable();
     const tr = recordRow(container, 'p3');
@@ -581,6 +640,122 @@ describe('the Item cell may wrap between pieces, never inside one', () => {
     const add = within(tr).getByRole('button', { name: 'Add to group Pads: Pad C' });
     expect(add).toHaveClass('whitespace-nowrap');
     expect(add.closest('.flex-wrap')).not.toBeNull();
+  });
+
+  it('a row whose chip offers Add to group keeps 14 px around it where the touch target is on; other rows do not move', async () => {
+    const user = userEvent.setup();
+    const { container } = renderTable();
+    await expandAll(user);
+    const nameLine = (tr: Element) =>
+      tr.querySelector('[data-slot="item-cell-name"]')!.parentElement!;
+    // Pad C shares Pads' SKU outside the group: its chip offers Add to group,
+    // whose 44 px target would otherwise cover most of the SKU line under it
+    // (or the name above a wrapped chip) on a phone or a tablet.
+    const p3 = recordRow(container, 'p3');
+    expect(within(p3).getByRole('button', { name: 'Add to group Pads: Pad C' })).toHaveClass(
+      'before:min-h-11',
+    );
+    expect(skuLine(p3)).toHaveClass('max-sm:mt-3.5', 'pointer-coarse:mt-3.5');
+    expect(nameLine(p3)).toHaveClass('max-sm:gap-y-3.5', 'pointer-coarse:gap-y-3.5');
+    // A group member's "In group" chip has no action, and a plain row no chip.
+    for (const key of ['g1', 'plain']) {
+      const tr = recordRow(container, key);
+      expect(within(tr).queryByRole('button', { name: /^Add to group/ })).toBeNull();
+      expect(skuLine(tr)).not.toHaveClass('max-sm:mt-3.5');
+      expect(nameLine(tr)).not.toHaveClass('max-sm:gap-y-3.5');
+    }
+  });
+
+  it('without the right to group, the same chip has no action and its row keeps the plain spacing', () => {
+    const { container } = renderTable({ canUngroup: false });
+    const p3 = recordRow(container, 'p3');
+    expect(within(p3).getByText('Same SKU as records in Pads')).toBeInTheDocument();
+    expect(within(p3).queryByRole('button', { name: /^Add to group/ })).toBeNull();
+    expect(skuLine(p3)).not.toHaveClass('max-sm:mt-3.5');
+    expect(skuLine(p3)).not.toHaveClass('pointer-coarse:mt-3.5');
+  });
+});
+
+describe('each column pads alike in its header cell and in every row kind', () => {
+  /** A cell's side padding, as pl-* and pr-* (px-N reads as pl-N pr-N). */
+  const sides = (el: Element) => {
+    const out: string[] = [];
+    for (const c of Array.from(el.classList)) {
+      const m = /^(px|pl|pr)-(.+)$/.exec(c);
+      if (!m) continue;
+      if (m[1] === 'px') out.push(`pl-${m[2]}`, `pr-${m[2]}`);
+      else out.push(c);
+    }
+    return out.sort().join(' ');
+  };
+
+  async function columnsOf(over: Partial<Props>) {
+    const user = userEvent.setup();
+    const { container } = renderTable(over);
+    await expandAll(user);
+    const heads = Array.from(container.querySelectorAll('thead th'));
+    const labels = headerLabels(container).map((l) => (l.startsWith('14-day') ? '14-day' : l));
+    for (const tr of bodyRows(container)) {
+      Array.from(tr.children).forEach((td, i) => {
+        expect(sides(td), `${tr.dataset.rowKey ?? tr.dataset.groupKey} ${labels[i]}`).toBe(
+          sides(heads[i]!),
+        );
+      });
+    }
+    return Object.fromEntries(labels.map((l, i) => [l, sides(heads[i]!)]));
+  }
+
+  it('Items: 12 px inside the table, the trimmed On hand, 14-day and Status, 16 at the edges', async () => {
+    const pads = await columnsOf({});
+    expect(pads).toEqual({
+      '': 'pl-4 pr-0',
+      Item: 'pl-3 pr-3',
+      Category: 'pl-3 pr-3',
+      Charter: 'pl-3 pr-3',
+      Location: 'pl-3 pr-3',
+      Rack: 'pl-3 pr-3',
+      'On hand': 'pl-1 pr-3',
+      Coverage: 'pl-3 pr-3',
+      '14-day': 'pl-1 pr-3',
+      Status: 'pl-3 pr-1',
+      Updated: 'pl-3 pr-4',
+    });
+  });
+
+  it('Books: 8 px a side for every inner column, so its two extra columns fit a 1440 screen', async () => {
+    const pads = await columnsOf({ ...BOOKS, items: booksPage() as never });
+    expect(pads).toEqual({
+      '': 'pl-4 pr-0',
+      Item: 'pl-3 pr-3',
+      Category: 'pl-2 pr-2',
+      Charter: 'pl-2 pr-2',
+      Location: 'pl-2 pr-2',
+      Grade: 'pl-2 pr-2',
+      Rack: 'pl-2 pr-2',
+      Crate: 'pl-2 pr-2',
+      'On hand': 'pl-1 pr-2',
+      Coverage: 'pl-2 pr-2',
+      '14-day': 'pl-1 pr-2',
+      Status: 'pl-2 pr-1',
+      Updated: 'pl-3 pr-4',
+    });
+  });
+
+  it('the Item and Location floors: 220 and 88 on Items, 208 and 80 on Books (64 px for a site name on both)', () => {
+    const items = renderTable();
+    const itemsRow = recordRow(items.container, 'plain');
+    expect(itemsRow.children[1]).toHaveClass('min-w-[220px]');
+    expect(itemsRow.children[4]).toHaveClass('min-w-[88px]');
+    items.unmount();
+
+    const books = renderTable({ ...BOOKS, items: booksPage() as never });
+    const booksRow = recordRow(books.container, 'dune');
+    expect(booksRow.children[1]).toHaveClass('min-w-[208px]');
+    expect(booksRow.children[1]).not.toHaveClass('min-w-[220px]');
+    expect(booksRow.children[4]).toHaveClass('min-w-[80px]');
+    const header = headerRow(books.container, 'sku-group:BK-ALG');
+    expect(header.children[1]).toHaveClass('min-w-[208px]');
+    expect(header.children[4]).toHaveClass('min-w-[80px]');
   });
 });
 
