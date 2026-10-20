@@ -74,19 +74,29 @@ export function keepsSkuRadioLabel(
 }
 
 /**
+ * A name as a screen reader says it: letter case, runs of spaces and how an
+ * accented letter is stored make no difference, so "Wireless Mouse",
+ * "Wireless mouse" and "Wireless  Mouse" are one name.
+ */
+const spokenName = (name: string) =>
+  name.normalize('NFC').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+
+/**
  * The Group review's two radios for a record already in another group (Stage
  * 6, GROUP-REVIEW-RADIO-NAMES): core's "Move it into this group: <name>" and
  * "Leave it out: <name>", told apart, by the same rule, from the other records
- * with these radios that have the same name. A record whose name no other
- * such record has keeps core's words alone (recheck R2-5). `withChoice` are
- * the review's records whose rows carry the two radios, in the order listed.
+ * with these radios whose names a screen reader says the same way (spokenName),
+ * each still in its record's own words. A record whose name no other such
+ * record has keeps core's words alone (recheck R2-5). `withChoice` are the
+ * review's records whose rows carry the two radios, in the order listed.
  */
 export function groupChoiceRadioNames(
   record: RadioRecord,
   withChoice: readonly RadioRecord[],
   view: 'items' | 'books',
 ): { move: string; leave: string } {
-  const sameName = withChoice.filter((r) => r.name === record.name);
+  const spoken = spokenName(record.name);
+  const sameName = withChoice.filter((r) => spokenName(r.name) === spoken);
   return {
     move: recordRadioName(GROUP_COPY.moveOneFor, record, sameName, view),
     leave: recordRadioName(GROUP_COPY.leaveOutOneFor, record, sameName, view),

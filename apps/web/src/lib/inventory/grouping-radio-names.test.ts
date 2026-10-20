@@ -222,6 +222,47 @@ describe('groupChoiceRadioNames: the Group review radios are named apart by the 
     ]);
   });
 
+  // A screen reader says names that differ only in letter case, spacing or
+  // how an accent is stored the same way, so they are one name here, as the
+  // Ungroup radios (which compare every record of the SKU) already tell such
+  // records apart. Each radio still says its record's own name. Mutation
+  // caught: the names compared letter for letter again, so each pair keeps
+  // core's words alone and the three pairs sound alike.
+  it('names a screen reader says the same way are one name: case, spacing and accents as stored', () => {
+    const rows = [
+      rec({ id: M1, ...inH, name: 'Wireless Mouse', placementLabel: 'A-1' }),
+      rec({ id: M2, ...inH, name: 'Wireless mouse', placementLabel: 'B-2' }),
+      rec({ id: OTHER, ...inH, name: 'Keyboard', sku: 'KB-1', placementLabel: 'A-1' }),
+      rec({ id: M3, ...inH, name: 'Wireless  Mouse', placementLabel: 'C-3' }),
+    ];
+    expect(rows.map((r) => groupChoiceRadioNames(r, rows, 'items'))).toEqual([
+      {
+        move: 'Move it into this group: Wireless Mouse, A-1',
+        leave: 'Leave it out: Wireless Mouse, A-1',
+      },
+      {
+        move: 'Move it into this group: Wireless mouse, B-2',
+        leave: 'Leave it out: Wireless mouse, B-2',
+      },
+      // A name no other record here is said as keeps core's words (R2-5).
+      { move: GROUP_COPY.moveOneFor('Keyboard'), leave: GROUP_COPY.leaveOutOneFor('Keyboard') },
+      {
+        move: 'Move it into this group: Wireless  Mouse, C-3',
+        leave: 'Leave it out: Wireless  Mouse, C-3',
+      },
+    ]);
+    // One accented letter stored as one character, and as a letter and its
+    // accent: they look and sound the same.
+    const mugs = [
+      rec({ id: M1, ...inH, name: 'Caf\u00e9 Mug', placementLabel: 'A-1' }),
+      rec({ id: M2, ...inH, name: 'Cafe\u0301 Mug', placementLabel: 'B-2' }),
+    ];
+    expect(mugs.map((r) => groupChoiceRadioNames(r, mugs, 'items').move)).toEqual([
+      'Move it into this group: Caf\u00e9 Mug, A-1',
+      'Move it into this group: Cafe\u0301 Mug, B-2',
+    ]);
+  });
+
   // Mutation caught: a name with no position, so two records whose every
   // word reads the same are two pairs of radios with one name again.
   it('two identical records end with where they are listed among the records with these radios', () => {

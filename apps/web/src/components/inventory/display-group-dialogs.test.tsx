@@ -438,6 +438,52 @@ describe('GroupSelectedDialog', () => {
     }
   });
 
+  // Review finding (redesign Stage 6): names that differ only in letter case
+  // or spacing are said the same way by a screen reader, so they are compared
+  // as one name. Compared letter for letter, "Wireless Mouse", "Wireless
+  // mouse" and "Wireless  Mouse" kept core's words alone: three pairs of
+  // radios that sound alike, and the first and third had one computed name,
+  // since an accessible name closes up runs of spaces.
+  it('names that differ only in letter case or spacing, already in another group: each radio is named with its rack', async () => {
+    const inH = { displayGroup: { id: H, name: 'Old shirts', version: 3 } };
+    h.preview.mockResolvedValueOnce(
+      review(
+        [A, B, C],
+        [
+          rec(A, { ...inH, name: 'Wireless Mouse', sku: 'WM-1', placementLabel: 'A-1' }),
+          rec(B, { ...inH, name: 'Wireless mouse', sku: 'WM-1', placementLabel: 'B-2' }),
+          rec(C, { ...inH, name: 'Wireless  Mouse', sku: 'WM-1', placementLabel: 'C-3' }),
+        ],
+      ),
+    );
+    render(
+      <GroupSelectedDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[A, B, C]}
+        view="items"
+        onDone={() => {}}
+      />,
+    );
+    await screen.findByTestId(`group-row-${A}`);
+    for (const [id, name, rack] of [
+      [A, 'Wireless Mouse', 'A-1'],
+      [B, 'Wireless mouse', 'B-2'],
+      [C, 'Wireless  Mouse', 'C-3'],
+    ] as const) {
+      const [move, leave] = within(screen.getByTestId(`group-row-${id}`)).getAllByRole('radio');
+      // Each radio says its record's own name, then its rack.
+      expect(move).toHaveAttribute('aria-label', `Move it into this group: ${name}, ${rack}`);
+      expect(leave).toHaveAttribute('aria-label', `Leave it out: ${name}, ${rack}`);
+      // One radio in the whole dialog has each computed name (spaces closed up).
+      const spoken = name.replace(/\s+/g, ' ');
+      expect(
+        screen.getByRole('radio', { name: `Move it into this group: ${spoken}, ${rack}` }),
+      ).toBe(move);
+      expect(screen.getByRole('radio', { name: `Leave it out: ${spoken}, ${rack}` })).toBe(leave);
+    }
+  });
+
   it('a product-family member needs the confirmation (its family is never changed)', async () => {
     h.preview.mockResolvedValueOnce(
       review(
