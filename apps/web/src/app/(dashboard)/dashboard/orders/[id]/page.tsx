@@ -139,6 +139,7 @@ import {
   type ReturnStatus,
 } from '@/server/services/returns';
 import { trackingForOrder } from '@/server/services/returns-requester';
+import { actionsPanelOffersReads } from '@/lib/orders/actions-panel-reads';
 import { formatNeededBy } from '@/lib/orders/needed-by-format';
 import { neededByChangeView } from '@/lib/orders/needed-by-change';
 import type { ShortfallPoOffer } from '@/lib/orders/shortfall-po';
@@ -362,16 +363,23 @@ export default async function OrderDetailPage({
   // manager+ → pick/complete/reassign/release).
   const isPickingStatus =
     request.status === 'pick_slip_generated' || request.status === 'picking_in_progress';
-  // Slice E: an approver outside the order's warehouse has nothing in the
-  // panel (every approval step and the notes ask write access, and the
-  // warehouse slip and the hand-over follow the same rule), so it is not
-  // shown to them for being an approver; the picking phase and the driver's
-  // own steps still show it. Inside it, the steps follow approverWritesHere
-  // (the panel's canApprove, below); a viewer granted orders:approve keeps
-  // the panel of their own warehouse as before, with no step in it.
+  // Slice E: an approver outside the order's warehouse is offered none of the
+  // panel's steps (every approval step and the notes ask write access; the
+  // hand-over follows the same rule), so the panel is not shown to them for
+  // being an approver, except where it carries a READ (slice E review,
+  // lib/orders/actions-panel-reads): Print pick slip at picking complete,
+  // and from the packing slips on Print customer slip and View signature,
+  // which ask no warehouse (the signature route admits any approver, and the
+  // phone offers View signature to them too). There they see the panel with
+  // no step in it and without Print warehouse slip (canPrintWarehouseSlip,
+  // the hand-over rule). The picking phase and the driver's own steps still
+  // show it. Inside the warehouse the steps follow approverWritesHere (the
+  // panel's canApprove, below); a viewer granted orders:approve keeps the
+  // panel of their own warehouse as before, with no step in it.
   const showActionsPanel =
     request.status !== 'pending_confirmation' &&
     (approverReadsHere ||
+      (canApprove && actionsPanelOffersReads(request.status)) ||
       isPickingStatus ||
       (isAssignedDriver && ['staged_for_delivery', 'in_transit'].includes(request.status)));
 
@@ -1167,9 +1175,12 @@ export default async function OrderDetailPage({
     approverWarehouseAccess && !isAssignedDriver
       ? await approverWarehouseAccess.catch(() => null)
       : null;
+  // The same answer decides the panel's Print warehouse slip: its QR hands
+  // the order over, and its route asks this rule (mayHandOverOrder).
+  const viewerMayHandOver = handOverAllowed(ctx, request, handOverWarehouseAccess);
   const wantsHandOverLink = handOverLinkWanted({
     showActionsPanel,
-    viewerMayHandOver: handOverAllowed(ctx, request, handOverWarehouseAccess),
+    viewerMayHandOver,
     mfaBlocked: !handOverMfaState.known || handOverMfa !== null,
     status: request.status,
     signatureTokenColumn: request.signature_token,
@@ -1928,7 +1939,9 @@ export default async function OrderDetailPage({
               // none of the manager-only controls. Slice E: an approver
               // only in a warehouse they write to (approverWritesHere); one
               // outside it sees in the picking phase what any other member
-              // sees there, and none of the approver's steps.
+              // sees there, from picking complete on only the panel's reads
+              // (no Print warehouse slip: canPrintWarehouseSlip), and none
+              // of the approver's steps.
               <ManagerActionsPanel
                 canApprove={approverWritesHere}
                 canAssignDelivery={canAssignDelivery}
@@ -1950,6 +1963,7 @@ export default async function OrderDetailPage({
                   handOverMfa ? handOverMfaPanelMessage(handOverMfa.reason) : null
                 }
                 hasSignature={hasCapturedSignature(request)}
+                canPrintWarehouseSlip={viewerMayHandOver}
                 signedByName={request.signed_by_name}
                 signedAt={request.signed_at}
                 drivers={drivers}

@@ -86,6 +86,7 @@ import { ApprovePartialDialog } from '@/components/orders/approve-partial-dialog
 import { focusOrderLine } from '@/components/orders/focus-order-line';
 import { ReleaseEarlyDialog } from '@/components/returns/exchange-panel';
 import { releaseReturnReplacementAction } from '@/server/actions/returns';
+import { DOWNSTREAM_PACKING_STATUSES } from '@/lib/orders/actions-panel-reads';
 import { formatNeededBy } from '@/lib/orders/needed-by-format';
 import { physicalSignatureRecordedMessage } from '@/lib/orders/sign-outcome';
 import type { OrderRequestStatus } from '@/server/services/order-requests';
@@ -113,6 +114,15 @@ interface Props {
    *  actual data-URL blob is fetched lazily on dialog-open (see the sig
    *  dialog) instead of shipped in the RSC payload. */
   hasSignature: boolean;
+  /** Whether to offer "Print warehouse slip". Its QR completes the hand-over
+   *  with no sign-in, so its route asks the hand-over rule (mayHandOverOrder:
+   *  the assigned driver, an approver of manager rank, or an approver with
+   *  write access to the order's warehouse; never a viewer) and the page
+   *  passes that rule's answer (handOverAllowed). Required, so no caller can
+   *  offer it by leaving it out (slice E review: a viewer granted
+   *  orders:approve, and an approver outside the warehouse who keeps the
+   *  panel's reads, were offered it and refused). */
+  canPrintWarehouseSlip: boolean;
   signedByName: string | null;
   signedAt: string | null;
   drivers: DriverOption[];
@@ -247,13 +257,6 @@ const NO_STOCK_GATES: OrderStockGates = {
   canRetry: false,
 };
 
-const DOWNSTREAM_PACKING_STATUSES: OrderRequestStatus[] = [
-  'packing_slip_generated',
-  'staged_for_pickup',
-  'staged_for_delivery',
-  'completed',
-];
-
 export function ManagerActionsPanel({
   orderId,
   status,
@@ -266,6 +269,7 @@ export function ManagerActionsPanel({
   signatureToken,
   handOverMfaMessage = null,
   hasSignature,
+  canPrintWarehouseSlip,
   signedByName,
   signedAt,
   drivers,
@@ -959,10 +963,12 @@ export function ManagerActionsPanel({
               <Printer className="h-3.5 w-3.5" />
               Print customer slip
             </Button>
-            <Button variant="outline" onClick={printWarehouseSlip} disabled={busy !== null}>
-              <Printer className="h-3.5 w-3.5" />
-              Print warehouse slip
-            </Button>
+            {canPrintWarehouseSlip && (
+              <Button variant="outline" onClick={printWarehouseSlip} disabled={busy !== null}>
+                <Printer className="h-3.5 w-3.5" />
+                Print warehouse slip
+              </Button>
+            )}
             {hasSignature && (
               <Button variant="outline" onClick={() => setSigOpen(true)} disabled={busy !== null}>
                 <PenLine className="h-3.5 w-3.5" />

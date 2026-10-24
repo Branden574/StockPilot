@@ -703,6 +703,77 @@ describe("orders/[id]: an approver outside the order's warehouse (security slice
     expect(lastPanel()?.pickers).toEqual([]);
   });
 
+  // Slice E review: the panel's READS ask no warehouse (Print pick slip and
+  // Print customer slip are any member's who can open the order; the
+  // signature image is any approver's, which the phone offers them too), so
+  // an approver outside the order's warehouse keeps the panel where it has
+  // one (lib/orders/actions-panel-reads), with no step in it and without
+  // Print warehouse slip, whose QR hands the order over (the hand-over rule).
+  // Mutations caught: the read term dropped from showActionsPanel (no panel
+  // at these statuses), canPrintWarehouseSlip passed as true.
+  it.each(['picking_complete', 'packing_slip_generated', 'staged_for_pickup', 'staged_for_delivery', 'completed'])(
+    'at %s they keep the panel for its reads, with no step and no Print warehouse slip',
+    async (status) => {
+      asStaffApprover();
+      orderAt(status, { signature_method: 'digital', signed_at: '2026-08-02T10:00:00Z' });
+      worksIn(['wh-other']);
+      await renderPage();
+      expect(lastPanel()).toMatchObject({
+        status,
+        canApprove: false,
+        canPrintWarehouseSlip: false,
+        signatureToken: null,
+        hasSignature: true,
+      });
+      expect(cancelButtonProps).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['pending_approval', 'approved', 'in_transit', 'backordered', 'denied', 'cancelled'])(
+    'at %s the panel has no read for them, so it is not shown',
+    async (status) => {
+      asStaffApprover();
+      orderAt(status);
+      worksIn(['wh-other']);
+      await renderPage();
+      expect(managerActionsProps).not.toHaveBeenCalled();
+    },
+  );
+
+  it('Print warehouse slip follows the hand-over rule: in their own warehouse, a manager, the assigned driver; never a viewer granted orders:approve', async () => {
+    asStaffApprover();
+    orderAt('completed');
+    worksIn(['wh-1']);
+    const own = await renderPage();
+    expect(lastPanel()).toMatchObject({ canApprove: true, canPrintWarehouseSlip: true });
+    own.unmount();
+
+    vi.clearAllMocks();
+    ctxHolder.current = { role: 'viewer', permissions: new Set(['orders:read', 'orders:approve']) };
+    orderAt('completed');
+    getWarehouseAccessMock.mockResolvedValue({
+      hasAllAccess: false,
+      readableIds: ['wh-1'],
+      writableIds: [],
+    });
+    const viewer = await renderPage();
+    expect(lastPanel()).toMatchObject({ canApprove: false, canPrintWarehouseSlip: false });
+    viewer.unmount();
+
+    vi.clearAllMocks();
+    ctxHolder.current = { role: 'manager', permissions: new Set(['orders:read', 'orders:approve']) };
+    orderAt('completed');
+    const manager = await renderPage();
+    expect(lastPanel()?.canPrintWarehouseSlip).toBe(true);
+    manager.unmount();
+
+    vi.clearAllMocks();
+    ctxHolder.current = { role: 'staff', permissions: new Set(['orders:read']) };
+    orderAt('staged_for_delivery', { fulfillment_type: 'delivery', assigned_delivery_user_id: 'u1' });
+    await renderPage();
+    expect(lastPanel()?.canPrintWarehouseSlip).toBe(true);
+  });
+
   it('a failed read of their warehouses offers nothing (fail closed)', async () => {
     asStaffApprover();
     orderAt('approved');
@@ -837,8 +908,9 @@ describe('orders/[id]: the Collect signature link (migration 0389)', () => {
   });
 
   // Since security slice E (0405) an approver outside the order's warehouse
-  // is not shown the actions panel at all at these statuses, so the link is
-  // not even a prop; the raw token is still never read for them.
+  // sees the actions panel at staged for pickup only for its reads (Print
+  // customer slip; slice E review), with no step, no link and no Print
+  // warehouse slip; the raw token is still never read for them.
   it("review 1: a staff approver gets the link only for an order in a warehouse they may write to (the mint's rule)", async () => {
     ctxHolder.current = { role: 'staff', permissions: new Set(['orders:read', 'orders:approve']) };
     orderGet.mockResolvedValue(
@@ -852,7 +924,9 @@ describe('orders/[id]: the Collect signature link (migration 0389)', () => {
       writableIds: ['wh-other'],
     });
     await renderPage();
-    expect(panelProps()).toBeUndefined();
+    expect(panelProps()?.signatureToken).toBeNull();
+    expect(panelProps()?.canApprove).toBe(false);
+    expect(panelProps()?.canPrintWarehouseSlip).toBe(false);
     expect(sideReads()).toBe(0);
 
     getWarehouseAccessMock.mockResolvedValue({
@@ -862,6 +936,7 @@ describe('orders/[id]: the Collect signature link (migration 0389)', () => {
     });
     await renderPage();
     expect(panelProps()?.signatureToken).toBe(RAW);
+    expect(panelProps()?.canPrintWarehouseSlip).toBe(true);
   });
 
   it('review 1: a failed warehouse access read gives a staff approver no link (fail closed)', async () => {

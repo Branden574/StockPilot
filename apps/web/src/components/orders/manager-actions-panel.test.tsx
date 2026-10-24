@@ -88,6 +88,7 @@ function baseProps(overrides: Partial<PanelProps> = {}): PanelProps {
     assignedDeliveryUserId: null,
     signatureToken: null,
     hasSignature: false,
+    canPrintWarehouseSlip: true,
     signedByName: null,
     signedAt: null,
     drivers: [],
@@ -1047,6 +1048,49 @@ describe('ManagerActionsPanel — a viewer is never offered an approval-class ac
     r2.unmount();
     render(<ManagerActionsPanel {...baseProps({ status: 'in_transit', fulfillmentType: 'delivery', assignedDeliveryUserId: 'driver-2', canApprove: true, viewerRole: 'staff' })} />);
     expect(screen.getByRole('button', { name: /Collect signature/ })).toBeInTheDocument();
+  });
+});
+
+// Security slice E review (0405): an approver outside the order's warehouse
+// keeps the panel's READS (the page shows them the panel from picking
+// complete on with canApprove false): Print pick slip, Print customer slip
+// and View signature ask no warehouse. Print warehouse slip's QR hands the
+// order over, so it follows the hand-over rule the page passes
+// (canPrintWarehouseSlip, the route's mayHandOverOrder); a viewer granted
+// orders:approve was offered it and refused too. Mutation caught: the
+// canPrintWarehouseSlip gate dropped (the button shown to everyone again).
+describe('ManagerActionsPanel — the reads after picking, and Print warehouse slip by the hand-over rule (slice E review)', () => {
+  const STEPS = [
+    /Generate packing slips/, /Reopen picking/, /Mark staged for/, /(Assign|Reassign) delivery/,
+    /Mark in transit/, /Collect signature/, /Physical signature/,
+  ];
+  const outside = { canApprove: false, viewerRole: 'staff' as const, viewerCanPick: false, canPrintWarehouseSlip: false };
+
+  it.each(['packing_slip_generated', 'staged_for_pickup', 'staged_for_delivery', 'completed'] as const)(
+    '%s: Print customer slip and View signature, no step, and no Print warehouse slip for someone who may not hand the order over',
+    (status) => {
+      render(
+        <ManagerActionsPanel
+          {...baseProps({ ...outside, status, hasSignature: true, fulfillmentType: status === 'staged_for_delivery' ? 'delivery' : 'pickup' })}
+        />,
+      );
+      expect(screen.getByRole('button', { name: 'Print customer slip' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'View signature' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Print warehouse slip' })).toBeNull();
+      for (const name of STEPS) expect(screen.queryByRole('button', { name }), `${status}: ${name}`).toBeNull();
+    },
+  );
+
+  it('picking complete: Print pick slip and no step', () => {
+    render(<ManagerActionsPanel {...baseProps({ ...outside, status: 'picking_complete' })} />);
+    expect(screen.getByRole('button', { name: 'Print pick slip' })).toBeInTheDocument();
+    for (const name of STEPS) expect(screen.queryByRole('button', { name })).toBeNull();
+  });
+
+  it('Print warehouse slip for someone who may hand the order over, beside the same reads', () => {
+    render(<ManagerActionsPanel {...baseProps({ status: 'completed', canApprove: true, viewerRole: 'staff', canPrintWarehouseSlip: true })} />);
+    expect(screen.getByRole('button', { name: 'Print warehouse slip' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Print customer slip' })).toBeInTheDocument();
   });
 });
 
