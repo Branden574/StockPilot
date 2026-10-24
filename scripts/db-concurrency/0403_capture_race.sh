@@ -32,6 +32,8 @@
 # image: booleans, counts and statuses. Exit status 0 = every check passed.
 #
 # Usage: bash scripts/db-concurrency/0403_capture_race.sh
+#        CONTAINER=supabase_db_spmig bash scripts/db-concurrency/0403_capture_race.sh
+#        (the migration scratch stack; run it holding that stack's slot)
 
 set -uo pipefail
 
