@@ -641,9 +641,10 @@ describe("orders/[id]: an approver outside the order's warehouse (security slice
   });
 
   // Slice E review: the service's line edits (loadEditableOrderHeader) ask
-  // read access to the order's warehouse of the person who placed it too, and
-  // the line insert policy refuses the same caller, so being the requester
-  // does not stand in for it. Mutation caught: `approverReadsHere ||
+  // read access to the order's warehouse of the person who placed it too (the
+  // line insert policy also refuses a raw insert of any item of that warehouse
+  // they cannot read), so being the requester does not stand in for it.
+  // Mutation caught: `approverReadsHere ||
   // isOwnRequest` put back for the lines (every assertion on the lines here).
   it("their own order in a warehouse they don't work in offers no line control, no Add items and no short-line note; the requester's Cancel request stays", async () => {
     asStaffApprover();
@@ -685,7 +686,7 @@ describe("orders/[id]: an approver outside the order's warehouse (security slice
     expect(addItemsProps).toHaveBeenCalled();
   });
 
-  it('a requester who does not approve keeps their own order\'s lines, with no warehouse read paid for it (the service answers the rest)', async () => {
+  it("a requester who does not approve keeps their own order's lines, with no warehouse read paid for it (the service answers the rest)", async () => {
     ctxHolder.current = { role: 'staff', permissions: new Set(['orders:read', 'orders:request']) };
     orderAt('pending_approval', { requester_user_id: 'u1' });
     await renderPage();
@@ -711,7 +712,13 @@ describe("orders/[id]: an approver outside the order's warehouse (security slice
   // Print warehouse slip, whose QR hands the order over (the hand-over rule).
   // Mutations caught: the read term dropped from showActionsPanel (no panel
   // at these statuses), canPrintWarehouseSlip passed as true.
-  it.each(['picking_complete', 'packing_slip_generated', 'staged_for_pickup', 'staged_for_delivery', 'completed'])(
+  it.each([
+    'picking_complete',
+    'packing_slip_generated',
+    'staged_for_pickup',
+    'staged_for_delivery',
+    'completed',
+  ])(
     'at %s they keep the panel for its reads, with no step and no Print warehouse slip',
     async (status) => {
       asStaffApprover();
@@ -761,7 +768,10 @@ describe("orders/[id]: an approver outside the order's warehouse (security slice
     viewer.unmount();
 
     vi.clearAllMocks();
-    ctxHolder.current = { role: 'manager', permissions: new Set(['orders:read', 'orders:approve']) };
+    ctxHolder.current = {
+      role: 'manager',
+      permissions: new Set(['orders:read', 'orders:approve']),
+    };
     orderAt('completed');
     const manager = await renderPage();
     expect(lastPanel()?.canPrintWarehouseSlip).toBe(true);
@@ -769,7 +779,10 @@ describe("orders/[id]: an approver outside the order's warehouse (security slice
 
     vi.clearAllMocks();
     ctxHolder.current = { role: 'staff', permissions: new Set(['orders:read']) };
-    orderAt('staged_for_delivery', { fulfillment_type: 'delivery', assigned_delivery_user_id: 'u1' });
+    orderAt('staged_for_delivery', {
+      fulfillment_type: 'delivery',
+      assigned_delivery_user_id: 'u1',
+    });
     await renderPage();
     expect(lastPanel()?.canPrintWarehouseSlip).toBe(true);
   });
