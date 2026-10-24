@@ -739,6 +739,19 @@ PGTAP_TESTS=(
   # family; the INVOKER preview never names item_stock_levels (INV-33). The
   # two-session proofs are scripts/db-concurrency/0400_item_display_groups_races.sh.
   supabase/tests/0400_item_display_groups.test.sql
+  # Kit checks (0404, docket S4 with S9's component organization check):
+  # assemble_bundle and distribute_bundle build no kit from a bundle with no
+  # required component and refuse a component of another organization, whoever
+  # can see it; a distribution's event must be the kit organization's (its one
+  # distribution slot cannot be taken from outside); distribute_bundle refuses
+  # a direct call without bundles:distribute unless it is the Schedule's
+  # completion of a completed event naming that kit, quantity and warehouse;
+  # bundle_components_write needs the item in the bundle's organization and
+  # bundles:manage; the bundle write policies follow bundles:manage;
+  # bundle_distributions takes no raw API write (ledger-only guard). Each fix
+  # is removed in an undone subtransaction to show its probe pass again, and
+  # the migration's own preflight is replayed from the recorded statements.
+  supabase/tests/0404_bundle_component_checks.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -1184,6 +1197,15 @@ WEB_TESTS=(
   src/server/services/db-guard-refusal.wiring.test.ts
   src/server/services/order-requests.db-guard.test.ts
   src/server/services/inventory.db-guard.test.ts
+  # 0404: the kit refusals (no required component, another organization's
+  # item or event, a missing bundles:distribute) reach the Bundles page, the
+  # phone and the Schedule's completion as sentences; a component set with no
+  # required component is refused when it is saved, before anything is
+  # written; the Schedule hands out only the kit the event was saved with.
+  src/server/services/bundles.rpc-refusals.test.ts
+  src/server/services/bundles.save.test.ts
+  src/server/services/schedule.batching.test.ts
+  src/server/actions/bundles.test.ts
   # 0395 review: an approver's cancel asks write access to the order's
   # warehouse, as every other approver action does, and every refusal outside
   # the caller's warehouses (and a failed read of their own access) reads one
