@@ -39,6 +39,25 @@
 --      or delete bundles and change their components through REST, which the
 --      app refuses (it asserts bundles:manage before every one of those
 --      writes).
+--   5. A kit's own item (bundles.phantom_item_id, the item its pre-assembled
+--      kits are counted on) was a free pointer. The app never writes it: only
+--      assemble_bundle sets it, to the kit item it creates. But a signed-in
+--      user may write the column, and the bundle policies asked for nothing
+--      more than the role. So a manager could point a kit at any item of the
+--      organization, and the kit functions never checked it: assembling then
+--      credited that item (drawing the kit's components) and distributing
+--      drained it as pre-assembled kits (drawing none), so a manager whose
+--      stock:adjust is revoked raised or lowered any item's stock (review
+--      probes 2026-10-24, rolled back). Pointed at one of the kit's own
+--      components, or with the kit's own item added as a component (a raw
+--      insert the component policy allowed), assembly made kits from nothing
+--      again: it reads the kit item before the component loop and, after the
+--      loop, writes that copy plus the kits, which wipes out the loop's draw
+--      on the same row (on-hand rose by the kits, the holdings did not move).
+--   6. A manager of two organizations could move a bundle into the other one
+--      (bundles.organization_id is writable and no trigger refused the
+--      change), taking its component rows, distributions and events across
+--      organizations with it.
 --
 -- ── WHAT THIS MIGRATION DOES ───────────────────────────────────────────────
 --   1. ledger.assemble_bundle and ledger.distribute_bundle (SECURITY INVOKER,
@@ -65,7 +84,21 @@
 --          idempotency key: a named event must belong to the kit's
 --          organization, else P0002 schedule_event_not_found (read under the
 --          caller's row security; a manager reads every event of their
---          organization).
+--          organization);
+--        * where the kit has its own item, as soon as that item is read and
+--          before anything is drawn or added: refuse (P0001
+--          phantom_not_kit_item) an item that is not this kit's own: one
+--          outside the kit's organization (item_in_org), one that is not a
+--          kit item (is_bundle false), or one another bundle of the
+--          organization also names. In distribute_bundle this comes before
+--          any pre-assembled kit is drained;
+--        * inside the component loop: refuse (P0001 component_is_kit_item) a
+--          component that is the kit's own item. With that refused, nothing
+--          in the loop writes the kit item's row (the loop updates component
+--          rows only, apply_level_delta_for writes holdings only, and the
+--          inventory_items triggers it fires touch only their own row), so
+--          the copy assemble_bundle read before the loop is still the kit
+--          item's on-hand when the kits are added to it.
 --   2. public.distribute_bundle (the 0359 wrapper, SECURITY INVOKER) gets the
 --      0395 L8 gate, lines tagged '-- 0404': an API role's direct call
 --      (current_user authenticated or anon, not inside another ledger call of
@@ -87,11 +120,13 @@
 --      that manager and still let one whose bundles:distribute is revoked
 --      through, so the gate names bundles:distribute (pgTAP K1-K6).
 --   3. bundle_components_write: WITH CHECK also requires the component's item
---      to belong to the bundle's organization (public.item_in_org), and USING
---      and WITH CHECK both require bundles:manage. USING keeps no item term,
---      so a component row that already names another organization's item can
---      still be deleted by a manager (and only deleted: any update of it must
---      pass WITH CHECK).
+--      to belong to the bundle's organization (public.item_in_org) and not to
+--      be the bundle's own kit item, and USING and WITH CHECK both require
+--      bundles:manage. USING keeps no item term, so a component row that
+--      already names another organization's item, or the kit's own, can still
+--      be deleted by a manager (and only deleted: any update of it must pass
+--      WITH CHECK). Another kit's item is not refused here: the picker never
+--      offers one, and drawing one draws real stock.
 --   4. bundles_insert and bundles_update (WITH CHECK) and bundles_delete
 --      (USING) also require bundles:manage. bundles_update USING is left on
 --      the manager role on purpose: distribute_bundle reads its bundle with
@@ -104,6 +139,16 @@
 --      user's insert, update or delete is refused (42501 ledger_only) unless
 --      it runs inside a ledger RPC, which only distribute_bundle's body does.
 --      Its insert policy stays, because that body writes the row as the user.
+--   6. bundles gets its own guard (new public.tg_bundles_guard(),
+--      trg_zz_bundles_guard, modelled on 0359's tg_inventory_items_guard):
+--      for a signed-in user a bundle never moves to another organization,
+--      an insert names no kit item, and an update changes the kit item only
+--      inside a ledger RPC, which only assemble_bundle's body does (when it
+--      creates the kit item; pgTAP G3). Each is refused with 42501. Foreign
+--      key actions (the kit item's delete sets it null) run as the table
+--      owner and service_role is not held. SECURITY INVOKER, as 0359's
+--      guards are (a DEFINER trigger sees postgres and never enforces); no
+--      role gets EXECUTE, because a trigger function fires without it.
 --
 -- Every role floor stays: the bodies still require a manager, the policies
 -- still require a manager (an admin to delete a bundle), and each permission
@@ -115,17 +160,20 @@
 -- PR's release steps: bundles with no required component (they can no longer
 -- be assembled or handed out from components), component rows naming another
 -- organization's item (they now refuse their kit until removed),
--- distributions naming another organization's event, and permission overrides
--- that revoke bundles:distribute or bundles:manage.
+-- distributions naming another organization's event, permission overrides
+-- that revoke bundles:distribute or bundles:manage, component rows naming
+-- their own kit's item, kits whose own item is not theirs, and rows a bundle
+-- moved across organizations left behind.
 --
 -- ── LOCKS ──────────────────────────────────────────────────────────────────
 -- The preflight (its policy read undone, see there), the functions (plpgsql,
--- which resolves names at run time) and the comment lock no table, so they
--- come first. ALTER POLICY takes ACCESS EXCLUSIVE on
+-- which resolves names at run time), their comments and the guard's REVOKE
+-- lock no table, so they come first. ALTER POLICY takes ACCESS EXCLUSIVE on
 -- its table (bundles, bundle_components) and, on this image, supautils 3.4.0
 -- takes ACCESS EXCLUSIVE on every table supautils.policy_grants lists for the
 -- role (auth, storage, realtime); CREATE TRIGGER takes SHARE ROW EXCLUSIVE on
--- bundle_distributions. A running distribution holds the bundle row, then
+-- bundle_distributions and on bundles (which the prelude already holds in
+-- ACCESS EXCLUSIVE mode). A running distribution holds the bundle row, then
 -- reads bundle_components and inserts into bundle_distributions, so waiting
 -- for one of these while holding another could deadlock. As in 0390 and 0395,
 -- one prelude takes them all at once, NOWAIT, inside a subtransaction that
@@ -138,18 +186,21 @@
 --
 -- ── ERRORS ─────────────────────────────────────────────────────────────────
 -- The functions raise 42501 (forbidden hint permission, component_not_in_org),
--- P0001 (bundle_no_required_components) and P0002 (schedule_event_not_found);
--- the guard raises 42501 ledger_only; the policies refuse with 42501. The push
--- raises 55000 (drift: nothing applied) or 55P03 (busy: nothing applied).
--- Never 40001 or 40P01 (PostgREST retries those forever, 0367).
+-- P0001 (bundle_no_required_components, phantom_not_kit_item,
+-- component_is_kit_item) and P0002 (schedule_event_not_found); the
+-- distributions guard raises 42501 ledger_only and the bundles guard 42501
+-- with a sentence; the policies refuse with 42501. The push raises 55000
+-- (drift: nothing applied) or 55P03 (busy: nothing applied). Never 40001 or
+-- 40P01 (PostgREST retries those forever, 0367).
 
 set lock_timeout = '900ms';
 
 -- ═══ 0. Preflight ══════════════════════════════════════════════════════════
 -- Every body restated below must be the exact live text and header it was
 -- built from, the two helpers it relies on must be the ones it was written
--- against, and the four policies must be the 0140 text. Anything else is
--- drift (or a second run): stop before changing anything.
+-- against, the four policies must be the 0140 text, and neither guard nor the
+-- new guard function may exist yet. Anything else is drift (or a second run):
+-- stop before changing anything.
 do $pre404$
 declare
   v_bad text := '';
@@ -213,6 +264,14 @@ begin
                 and t.tgname = 'trg_zz_bundle_distributions_guard') then
     v_bad := v_bad || ' trg_zz_bundle_distributions_guard already exists;';
   end if;
+  if exists (select 1 from pg_trigger t
+              where t.tgrelid = 'public.bundles'::regclass
+                and t.tgname = 'trg_zz_bundles_guard') then
+    v_bad := v_bad || ' trg_zz_bundles_guard already exists;';
+  end if;
+  if to_regprocedure('public.tg_bundles_guard()') is not null then
+    v_bad := v_bad || ' public.tg_bundles_guard() already exists;';
+  end if;
 
   if v_bad <> '' then
     raise exception 'bundle_checks_preflight:%', v_bad
@@ -223,8 +282,9 @@ $pre404$;
 
 -- ═══ 1. Functions (plpgsql only: no table lock is taken here) ═════════════
 -- 1a. ledger.assemble_bundle: restated from 0373_draw_provenance.sql; md5(prosrc)
--- a2967a282fbdf76c10c2808f35760973 -> e19c6fcd92ee9edd4846f9fc12ab60f5. The
--- 0404 lines refuse a component of another organization and a kit with no
+-- a2967a282fbdf76c10c2808f35760973 -> 0002b48757da651a90a38dd50eb7df15. The
+-- 0404 lines refuse a kit item that is not the kit's own, a component of
+-- another organization, the kit's own item as a component, and a kit with no
 -- required component.
 CREATE OR REPLACE FUNCTION ledger.assemble_bundle(p_bundle_id uuid, p_quantity numeric, p_warehouse_id uuid, p_notes text DEFAULT NULL::text)
  RETURNS TABLE(phantom_item_id uuid, phantom_qty numeric)
@@ -279,6 +339,13 @@ begin
     select * into v_phantom
     from public.inventory_items
     where id = v_bundle.phantom_item_id for update;
+    -- 0404: the kit's item is this kit's own: a kit item of its organization no other bundle names.
+    if not public.item_in_org(v_bundle.phantom_item_id, v_org)  -- 0404
+       or v_phantom.is_bundle is false  -- 0404
+       or exists (select 1 from public.bundles x  -- 0404
+                   where x.organization_id = v_org and x.phantom_item_id = v_bundle.phantom_item_id and x.id <> p_bundle_id) then  -- 0404
+      raise exception 'phantom_not_kit_item' using errcode = 'P0001';  -- 0404
+    end if;  -- 0404
     if v_phantom.warehouse_id is not null and v_phantom.warehouse_id <> p_warehouse_id then
       raise exception 'phantom_warehouse_mismatch' using errcode = 'P0001';
     end if;
@@ -329,6 +396,10 @@ begin
     -- 0404: every component is an item of the kit's own organization.
     if not public.item_in_org(v_component.item_id, v_org) then  -- 0404
       raise exception 'component_not_in_org' using errcode = '42501';  -- 0404
+    end if;  -- 0404
+    -- 0404: and never the kit's own item (the copy in v_phantom must stay its on-hand).
+    if v_component.item_id = v_bundle.phantom_item_id then  -- 0404
+      raise exception 'component_is_kit_item' using errcode = 'P0001';  -- 0404
     end if;  -- 0404
     if not v_component.is_optional then  -- 0404
       v_required := v_required + 1;  -- 0404
@@ -405,9 +476,10 @@ end;
 $function$;
 
 -- 1b. ledger.distribute_bundle: restated from 0373_draw_provenance.sql;
--- md5(prosrc) d78bf6b0471c49981b6a8df064e6b895 -> 71515ab72a12abc128b82fe2bf684d5c.
--- The 0404 lines refuse an event of another organization, a component of
--- another organization and kits made from components with no required one.
+-- md5(prosrc) d78bf6b0471c49981b6a8df064e6b895 -> ebe22d594c11813464c7d50accae54a7.
+-- The 0404 lines refuse an event of another organization, a kit item that is
+-- not the kit's own, a component of another organization, the kit's own item
+-- as a component and kits made from components with no required one.
 CREATE OR REPLACE FUNCTION ledger.distribute_bundle(p_bundle_id uuid, p_quantity numeric, p_warehouse_id uuid, p_allow_shortage boolean, p_schedule_event_id uuid DEFAULT NULL::uuid, p_notes text DEFAULT NULL::text, p_idempotency_key text DEFAULT NULL::text)
  RETURNS uuid
  LANGUAGE plpgsql
@@ -504,6 +576,14 @@ begin
       into v_phantom_qty, v_phantom_wh, v_phantom_deleted
     from public.inventory_items
     where id = v_bundle.phantom_item_id for update;
+    -- 0404: the kit's item is this kit's own: a kit item of its organization no other bundle names.
+    if not public.item_in_org(v_bundle.phantom_item_id, v_org)  -- 0404
+       or exists (select 1 from public.inventory_items i  -- 0404
+                   where i.id = v_bundle.phantom_item_id and not i.is_bundle)  -- 0404
+       or exists (select 1 from public.bundles x  -- 0404
+                   where x.organization_id = v_org and x.phantom_item_id = v_bundle.phantom_item_id and x.id <> p_bundle_id) then  -- 0404
+      raise exception 'phantom_not_kit_item' using errcode = 'P0001';  -- 0404
+    end if;  -- 0404
     v_phantom_qty := greatest(0, coalesce(v_phantom_qty, 0));
     -- 0365: pre-assembled kits in another warehouse (or on a deleted kit item)
     -- are not here. They are left alone and this distribution is built from
@@ -564,6 +644,10 @@ begin
       -- 0404: every component is an item of the kit's own organization.
       if not public.item_in_org(v_component.item_id, v_org) then  -- 0404
         raise exception 'component_not_in_org' using errcode = '42501';  -- 0404
+      end if;  -- 0404
+      -- 0404: and never the kit's own item.
+      if v_component.item_id = v_bundle.phantom_item_id then  -- 0404
+        raise exception 'component_is_kit_item' using errcode = 'P0001';  -- 0404
       end if;  -- 0404
       if not v_component.is_optional then  -- 0404
         v_required := v_required + 1;  -- 0404
@@ -705,13 +789,60 @@ $function$;
 comment on function public.distribute_bundle(uuid, numeric, uuid, boolean, uuid, text, text) is
   'Stock-ledger RPC (0359 wrapper): raises stockpilot.ledger for the call, runs ledger.distribute_bundle as the caller, then restores the previous value. Name, signature, return type, INVOKER and grants are frozen: installed phones call it. Since 0404 an API role''s direct call needs bundles:distribute, or, for the Schedule''s completion of an event that hands out this kit, schedule:manage with the Schedule module on and a completed event naming this kit, quantity and warehouse (42501 forbidden, hint permission); a call made inside another ledger call of the same transaction is not asked again.';
 
+-- 1d. public.tg_bundles_guard(): new; the trigger that runs it is created in
+-- section 6, after the prelude. Modelled on 0359's tg_inventory_items_guard.
+-- The kit's own item (phantom_item_id) is the ledger's: assemble_bundle's body
+-- sets it, inside its ledger call, to the kit item it has just created, and
+-- nothing else may set or change it through the API (it decides which item
+-- kits are added to and drained from). organization_id never changes.
+create function public.tg_bundles_guard()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public
+as $$
+begin
+  -- See tg_ledger_only_guard for why only the API roles are checked.
+  if current_user not in ('authenticated', 'anon') then
+    return new;
+  end if;
+
+  if tg_op = 'INSERT' then
+    if new.phantom_item_id is not null then
+      raise exception 'A bundle''s kit item is set only by assembling kits.'
+        using errcode = '42501';
+    end if;
+    return new;
+  end if;
+
+  if new.organization_id is distinct from old.organization_id then
+    raise exception 'A bundle cannot be moved to another organization.'
+      using errcode = '42501';
+  end if;
+  if new.phantom_item_id is distinct from old.phantom_item_id and not ledger.active() then
+    raise exception 'A bundle''s kit item is set only by assembling kits.'
+      using errcode = '42501';
+  end if;
+  return new;
+end;
+$$;
+
+comment on function public.tg_bundles_guard() is
+  'BEFORE INSERT OR UPDATE guard on bundles (0404): for an API role a bundle never moves to another organization, an insert names no kit item (phantom_item_id), and an update changes the kit item only inside a ledger RPC (assemble_bundle''s body, when it creates the kit item). Foreign key actions run as the table owner and service_role is not held. SECURITY INVOKER on purpose (a DEFINER trigger sees postgres and never enforces).';
+
+-- Grants: no role needs EXECUTE. A trigger function fires without it, and
+-- none of the API roles may call it (the 2026-10-30 default-privilege change
+-- leaves functions as they are, so this is said here rather than inherited).
+revoke all on function public.tg_bundles_guard() from public, anon, authenticated, service_role;
+
 -- ═══ 2. The lock prelude (see LOCKS above) ═══════════════════════════════
--- Every table lock the four ALTER POLICY statements and the trigger take, at
--- once and without waiting. Inside DO because the CLI batch is not a
+-- Every table lock the four ALTER POLICY statements and the two triggers
+-- take, at once and without waiting. Inside DO because the CLI batch is not a
 -- transaction block (a top-level LOCK TABLE refuses there, 0373); the locks
 -- last until the batch commits.
 --   * bundles and bundle_components: ACCESS EXCLUSIVE (ALTER POLICY; the
---     component policy's expression also reads bundles).
+--     component policy's expression also reads bundles). It covers the
+--     SHARE ROW EXCLUSIVE that CREATE TRIGGER takes on bundles.
 --   * bundle_distributions: SHARE ROW EXCLUSIVE (CREATE TRIGGER).
 --   * every existing table supautils.policy_grants lists for this role, the
 --     parent only of a partitioned one (supautils 3.4.0 takes ACCESS EXCLUSIVE
@@ -753,8 +884,9 @@ begin
 end $lock404$;
 
 -- ═══ 3. bundle_components_write: the item's organization, and bundles:manage ═══
--- 0140's text with two terms added. USING gets the permission only, so a row
--- that already names another organization's item can still be deleted.
+-- 0140's text with three terms added. USING gets the permission only, so a row
+-- that already names another organization's item, or the kit's own item, can
+-- still be deleted.
 alter policy bundle_components_write on public.bundle_components
   using (
     exists (
@@ -774,6 +906,8 @@ alter policy bundle_components_write on public.bundle_components
         and (SELECT public.has_permission(b.organization_id, 'bundles:manage'))
         -- 0404: the component is an item of the bundle's own organization.
         and (SELECT public.item_in_org(bundle_components.item_id, b.organization_id))
+        -- 0404: and not the bundle's own kit item (its pre-assembled kits).
+        and bundle_components.item_id is distinct from b.phantom_item_id
     )
   );
 
@@ -806,5 +940,12 @@ alter policy bundles_delete on public.bundles
 create or replace trigger trg_zz_bundle_distributions_guard
   before insert or update or delete on public.bundle_distributions
   for each row execute function public.tg_ledger_only_guard();
+
+-- ═══ 6. bundles: the kit's own item is the ledger's; no organization moves ══
+-- No column list: a change made by an earlier BEFORE trigger is still seen,
+-- and 'zz' sorts it after bundles_set_updated_at (as 0359's guards are).
+create or replace trigger trg_zz_bundles_guard
+  before insert or update on public.bundles
+  for each row execute function public.tg_bundles_guard();
 
 reset lock_timeout;

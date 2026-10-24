@@ -1140,11 +1140,12 @@ select is(
   -- substituted gives 1c283e93|18, equal to the local stack (2026-10-05).
   -- Re-pinned by 0404 (kit checks; was 1c283e932202295a91e5c118f0873689|18):
   -- ledger.assemble_bundle and ledger.distribute_bundle gained their tagged
-  -- organization and required-component lines (header, owner and ACL
-  -- unchanged). F2-5's function calls neither. 0404's pgTAP R3 takes those two
-  -- bodies back to their pre-0404 text and gets 1c283e93|18 exactly, so
-  -- nothing else in ledger moved.
-  'ledger.*|50660ce2baefc2f2d345a9468b42fc46|18\n'
+  -- organization, required-component and kit item lines (header, owner and
+  -- ACL unchanged; 50660ce2 before the review's kit item checks). F2-5's
+  -- function calls neither. 0404's pgTAP R3 takes those two bodies back to
+  -- their pre-0404 text and gets 1c283e93|18 exactly, so nothing else in
+  -- ledger moved.
+  'ledger.*|cfc031524c8052a69fceab91be550768|18\n'
   -- Re-pinned by 0390 (was a85d7406f48ad916cb5fcdb2193fa201|8): order_requests_update
   -- (USING and WITH CHECK) and order_requests_insert lost the has_org_role
   -- manager term; every other term and both schedule_events policies are

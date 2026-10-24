@@ -747,10 +747,15 @@ PGTAP_TESTS=(
   # a direct call without bundles:distribute unless it is the Schedule's
   # completion of a completed event naming that kit, quantity and warehouse;
   # bundle_components_write needs the item in the bundle's organization and
-  # bundles:manage; the bundle write policies follow bundles:manage;
-  # bundle_distributions takes no raw API write (ledger-only guard). Each fix
-  # is removed in an undone subtransaction to show its probe pass again, and
-  # the migration's own preflight is replayed from the recorded statements.
+  # bundles:manage and refuses the bundle's own kit item; the bundle write
+  # policies follow bundles:manage; bundle_distributions takes no raw API write
+  # (ledger-only guard). Review fixes: both bodies refuse a component that is
+  # the kit's own item (no kit made from nothing through the stale kit-item
+  # copy) and a kit item that is not the kit's own (another organization's,
+  # not a kit item, or named by a second bundle); the bundles guard stops a
+  # raw API write of phantom_item_id and a move to another organization. Each
+  # fix is removed in an undone subtransaction to show its probe pass again,
+  # and the migration's own preflight is replayed from the recorded statements.
   supabase/tests/0404_bundle_component_checks.test.sql
 
   # AI read scoping.

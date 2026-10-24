@@ -6,7 +6,9 @@
 # (bundle_components, bundles), and on this image (supautils 3.4.0) supautils
 # also takes ACCESS EXCLUSIVE on every table supautils.policy_grants lists for
 # the role (auth, storage, realtime); CREATE TRIGGER takes SHARE ROW EXCLUSIVE
-# on bundle_distributions. A running distribution holds its bundle row, then
+# on bundle_distributions and on bundles (held ACCESS EXCLUSIVE already). The
+# bundles guard's function, its comment and its REVOKE lock no table. A
+# running distribution holds its bundle row, then
 # reads bundle_components and inserts into bundle_distributions, so a file
 # that waited for one of these while holding another could deadlock with it.
 # The file takes every lock in one NOWAIT prelude (`do $lock404$ ... end
@@ -14,13 +16,15 @@
 # proves:
 #
 #   1a. Before the prelude the file holds no lock on any table outside the
-#       catalogs (the preflight, the functions and the comment lock nothing).
+#       catalogs (the preflight, the functions, the comments and the guard
+#       function's REVOKE lock nothing).
 #   1b. The prelude takes ACCESS EXCLUSIVE on bundles and bundle_components,
 #       SHARE ROW EXCLUSIVE on bundle_distributions, and ACCESS EXCLUSIVE on
 #       every existing table in supautils.policy_grants for the role, and
 #       nothing else.
 #   1c. No statement after the prelude locks a table the prelude did not lock
-#       (so the file can never wait while holding one).
+#       (so the file can never wait while holding one): the policies and both
+#       triggers, the bundles guard on bundles included.
 #   2.  The hold, from the prelude to the end of the file, is under 100 ms.
 #   3.  A holder with an open transaction on bundles (a distribution holding
 #       its bundle row), on bundle_components (a reader), on
@@ -118,7 +122,10 @@ STATE_SQL="select md5(string_agg(x, '|' order by x)) from (
   select tablename || '.' || policyname || ':' || coalesce(qual, '') || '|' || coalesce(with_check, '') from pg_policies
    where schemaname = 'public' and tablename in ('bundles', 'bundle_components', 'bundle_distributions')
   union all
-  select tgname from pg_trigger where tgrelid = 'public.bundle_distributions'::regclass and not tgisinternal) s"
+  select tgrelid::regclass::text || '.' || tgname from pg_trigger
+   where tgrelid in ('public.bundle_distributions'::regclass, 'public.bundles'::regclass) and not tgisinternal
+  union all
+  select 'tg_bundles_guard:' || (to_regprocedure('public.tg_bundles_guard()') is not null)::text) s"
 echo "local head $HEAD_NOW; 0404 guard trigger present: $HAS_GUARD; file $(basename "$MIG")"
 if [ "$HAS_GUARD" != "0" ]; then
   echo "needs the pre-0404 head (supabase db reset --local --version <the migration before it>)"
@@ -184,7 +191,7 @@ else
   END="$(sed -n 's/^END|//p' "$TMP/1.out")"
   POLICY_GRANT_TABLES="$(printf '%s' "$EXPECTED" | tr ',' '\n' | grep -vc '^public\.')"
   if [ "$BEFORE" = "none" ]; then
-    ok "1a: the preflight, the functions and the comment lock no table"
+    ok "1a: the preflight, the functions, the comments and the guard function's REVOKE lock no table"
   else
     bad "1a: before the prelude the file already holds: $BEFORE"
   fi
@@ -372,7 +379,7 @@ HEAD_AFTER="$(q "select max(version) from supabase_migrations.schema_migrations"
 STATE_AFTER="$(q "$STATE_SQL")"
 LEFT="$(q "select count(*) from public.bundle_distributions where organization_id = '$ORG'")"
 if [ "$HEAD_AFTER" = "$HEAD_NOW" ] && [ "$STATE_AFTER" = "$STATE_BEFORE" ] && [ "$LEFT" = "0" ]; then
-  ok "the stack is unchanged (head $HEAD_NOW; the kit functions, the bundle policies and the distribution triggers as before; no distribution written)"
+  ok "the stack is unchanged (head $HEAD_NOW; the kit functions, the bundle policies, the bundle and distribution triggers and the absent bundles guard as before; no distribution written)"
 else
   bad "the stack changed under the script (head $HEAD_AFTER, state changed: $([ "$STATE_AFTER" = "$STATE_BEFORE" ] && echo no || echo yes), distributions left: $LEFT)"
 fi
