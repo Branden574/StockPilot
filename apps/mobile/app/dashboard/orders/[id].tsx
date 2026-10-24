@@ -1,14 +1,16 @@
 import { Redirect, useLocalSearchParams } from 'expo-router';
 
 /**
- * Deep-link redirect shim. Push notifications carry the WEB path
+ * Deep-link redirect shim. Notifications carry the WEB path
  * `/dashboard/orders/{id}` (the same `notifications` row also links the web
- * app). The native order screen is `/order/{id}`. On a COLD start (app killed
- * → notification tap), expo-router's `getInitialURL` hands the router this raw
- * web path WITHOUT routing it through `+native-intent`'s `redirectSystemPath`,
- * so without a matching route it dead-ends on "Unmatched Route". This shim
- * makes the web path a real route that immediately redirects to the native
- * screen — covering cold start, warm start, and universal links alike.
+ * app). The native order screen is `/order/{id}`. A push tap no longer
+ * reaches the router as a URL, cold start included: notification-link.ts
+ * parses it and the notification host opens `/order/{id}` inside the app. A
+ * raw web URL that does reach the router (a `stockpilot:///dashboard/...`
+ * link) goes through `+native-intent`'s `redirectSystemPath` on this
+ * expo-router, the initial URL included. This shim is the belt for one that
+ * ever arrives unrewritten: it makes the web path a real route that
+ * immediately redirects to the native screen.
  */
 export default function OrderDeepLinkRedirect() {
   const { id } = useLocalSearchParams<{ id: string }>();

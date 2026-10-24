@@ -827,7 +827,13 @@ describe('Notifications (M-WS-06)', () => {
 
   it('a tap marks read and routes through the shared rewriter; web-only links open the sheet', () => {
     const open = functionBody(NOTIFICATIONS, 'open');
-    expect(open).toMatch(/\.update\(\{ read_at: new Date\(\)\.toISOString\(\) \}\)/);
+    // 2026-10-24 (Phase 3 push tap, rebased onto this redesign): the tap
+    // still marks the row read, with one timestamp for the server and the
+    // screen, but no longer waits for the answer before opening (brief §13;
+    // the fire-and-forget form is pinned in notification-intent-wiring.test.ts
+    // section 8). Was: .update({ read_at: new Date().toISOString() }).
+    expect(open).toContain('const readAt = new Date().toISOString();');
+    expect(open).toMatch(/\.update\(\{ read_at: readAt \}\)/);
     expect(open).toContain('const native = notif.link ? rewriteWebPath(notif.link) : null;');
     expect(open).toMatch(
       /if \(native && native !== '\/' && native !== '\/notifications'\) \{\s*router\.push\(native as never\);\s*\} else \{\s*setDetail\(notif\);/,

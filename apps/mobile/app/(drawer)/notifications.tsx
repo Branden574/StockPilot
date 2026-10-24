@@ -151,15 +151,23 @@ export default function NotificationsScreen() {
     setRefreshing(false);
   }
 
-  async function open(notif: NotificationRow) {
+  function open(notif: NotificationRow) {
     if (!notif.read_at) {
-      await supabase
+      const readAt = new Date().toISOString();
+      // Fire-and-forget (brief §13): a mark-read that hangs must never hold up
+      // opening the notification. `.then()` is what SENDS a supabase-js
+      // builder (it is lazy: `void builder` alone sends nothing); nothing
+      // waits for the answer, and a failure only leaves the row unread on the
+      // server, as a failed await did before.
+      void supabase
         .from('notifications')
-        .update({ read_at: new Date().toISOString() })
-        .eq('id', notif.id);
-      setRows((prev) =>
-        prev.map((r) => (r.id === notif.id ? { ...r, read_at: new Date().toISOString() } : r)),
-      );
+        .update({ read_at: readAt })
+        .eq('id', notif.id)
+        .then(
+          () => undefined,
+          () => undefined,
+        );
+      setRows((prev) => prev.map((r) => (r.id === notif.id ? { ...r, read_at: readAt } : r)));
     }
     // Notification links are WEB paths — translate through the ONE shared
     // rewriter (the in-app inbox is the third deep-link door; raw
