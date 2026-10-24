@@ -209,8 +209,10 @@ data-processing register.
 
 ### V9 — Communication — **Met**
 
-TLS throughout, HSTS with preload, CSP using `strict-dynamic`, hardened response
-headers. Certificate expiry monitored daily. Every server-side fetch of a
+TLS throughout, HSTS with preload, hardened response headers, and a CSP that
+names the origins scripts, images, media, requests and frames may use (it still
+allows inline and eval'd scripts: see the V14 gap). Certificate expiry monitored
+daily. Every server-side fetch of a
 user-supplied URL passes the SSRF guard, which classifies IP literals and
 re-resolves on each redirect hop so a redirect to a private or metadata address is
 refused.
@@ -303,6 +305,13 @@ confirmation, the Vercel Node.js major version (which must not be an
 end-of-life 20.x), and the Supabase backup tier. `SECURITY.md` and
 [`framework-patch-verification.md`](framework-patch-verification.md) both flag
 these as owner-verify items, and they remain owner-verify.
+
+_Gap_: the CSP's `script-src` still allows `'unsafe-inline'` and `'unsafe-eval'`
+(`apps/web/next.config.ts`), because Next.js's inline bootstrap script carries no
+nonce, so the policy does not stop an injected inline script from running. It is
+not a `strict-dynamic` policy: adding that directive on its own makes browsers
+ignore `'unsafe-inline'`, which blocked the bootstrap script and broke the
+dashboard. A per-request nonce policy is planned.
 
 ## 2. Summary
 
