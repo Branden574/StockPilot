@@ -1234,6 +1234,14 @@ WEB_TESTS=(
   'src/app/returns/request/[token]/page.test.tsx'
   'src/app/(dashboard)/dashboard/orders/[id]/page.returns.test.tsx'
 
+  # The catalog photo maps: /api/v1/public/catalog-thumbnails is rate limited
+  # per IP before the link token is looked up, closed on a limiter outage,
+  # with a 429 the CDN never caches; /api/orders/catalog-thumbnails per user
+  # before any read, and it answers only the New rental page's rentalsOnly=1
+  # (the two old shapes that signed every orderable item are refused).
+  src/app/api/v1/public/catalog-thumbnails/route.test.ts
+  src/app/api/orders/catalog-thumbnails/route.test.ts
+
   # The Security Scan's dependency audit (scripts/dependency-audit): a
   # critical advisory in a production dependency fails the job unless the
   # allow-list dismisses it by advisory id and package until its review date;
