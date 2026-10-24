@@ -260,6 +260,8 @@ describe('7. the host and the notice only read and navigate', () => {
         '@/lib/use-theme',
         'react',
         'react-native',
+        // 2026-10-24 (review 4): the card is bounded by the safe area.
+        'react-native-safe-area-context',
       ].sort(),
     );
   });
@@ -497,6 +499,44 @@ describe('7. the host and the notice only read and navigate', () => {
     expect(flat(notice)).toMatch(
       /Animated\.timing\(fade, \{ toValue: 1, duration: NOTICE_FADE_MS, useNativeDriver: true, \}\)/,
     );
+  });
+
+  // 2026-10-24 (review 4): the card had no height limit. Its heading (the
+  // push's own title, uncapped Body 16) sat outside a 320 pt ScrollView, with
+  // the buttons below, centred in the window: at the largest text size on an
+  // iPhone SE a three-line title made it about 749 pt in a 619 pt box, with
+  // half of Close off the bottom and the title under the status bar.
+  it('the card never outgrows the screen: bounded by the window and the safe area, the heading scrolls with the text, the buttons stay (review 4)', () => {
+    const { nodes, tag, attr } = noticeTree();
+    const scrolls = nodes.filter((n) => tag(n.el) === 'ScrollView');
+    expect(scrolls).toHaveLength(1);
+    const scroll = scrolls[0]!.el;
+    expect(attr(scroll, 'style')).toMatch(/flexShrink: 1/);
+    const heading = nodes.filter((n) => attr(n.el, 'accessibilityRole') === 'header');
+    expect(heading).toHaveLength(1);
+    expect(heading[0]!.ancestors).toContain(scroll);
+    const buttons = nodes.filter((n) => tag(n.el) === 'Button');
+    expect(buttons.length).toBeGreaterThan(0);
+    for (const b of buttons) expect(b.ancestors).not.toContain(scroll);
+    const cards = nodes.filter((n) => tag(n.el) === 'Card');
+    expect(cards).toHaveLength(1);
+    expect(attr(cards[0]!.el, 'style')).toBe('{ maxHeight: cardMaxHeight }');
+    const code = flat(notice);
+    expect(code).toContain('const { height: winH } = useWindowDimensions();');
+    expect(code).toContain('const insets = useSafeAreaInsets();');
+    expect(code).toContain(
+      'const cardMaxHeight = Math.max(200, winH - insets.top - insets.bottom - 2 * NOTICE_EDGE);',
+    );
+    // The box the card is centred in keeps to the safe area by the same edge.
+    expect(code).toMatch(
+      /paddingTop: insets\.top \+ NOTICE_EDGE, paddingBottom: insets\.bottom \+ NOTICE_EDGE,/,
+    );
+    // The buttons' row never shrinks; only the scroll area does.
+    expect(code).toContain('<View style={{ marginTop: 16, gap: 8, flexShrink: 0 }}>');
+  });
+
+  it('a banner tapped while typing: the notice puts the keyboard away when it first shows (review 4)', () => {
+    expect(flat(notice)).toContain('React.useEffect(() => { Keyboard.dismiss(); }, []);');
   });
 
   it('the notice is a modal sheet VoiceOver treats as one, and announces itself', () => {

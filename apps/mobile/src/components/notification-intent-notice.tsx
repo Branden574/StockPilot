@@ -3,13 +3,16 @@ import {
   AccessibilityInfo,
   ActivityIndicator,
   Animated,
+  Keyboard,
   Modal,
   Pressable,
   ScrollView,
   StyleSheet,
   useAnimatedValue,
+  useWindowDimensions,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -46,6 +49,12 @@ import { useTheme } from '@/lib/use-theme';
  * Modal presented before it asks and never asks again, so a notice that
  * faded out with UIKit left What's New, a tour or the next notice presented
  * into its fade-out and never seen. Closing is instant.
+ *
+ * The card is never taller than the screen (review 4), as the tour's and
+ * What's New's are not: it is bounded by the window and the safe area, the
+ * heading (the push's own title, uncapped) scrolls with the lines, and the
+ * buttons stay pinned below, so Close is always on screen at every text
+ * size. A banner tapped while typing puts the keyboard away.
  */
 export function NotificationIntentNotice({
   notice,
@@ -60,11 +69,21 @@ export function NotificationIntentNotice({
   onAction: (id: NoticeActionId) => void;
 }) {
   const { c, mode } = useTheme();
+  const { height: winH } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  // The box the card is centred in keeps NOTICE_EDGE inside the safe area,
+  // and the card may fill it but never more (the tour's floor of 200 pt).
+  const cardMaxHeight = Math.max(200, winH - insets.top - insets.bottom - 2 * NOTICE_EDGE);
   const content = noticeContent(notice, { offline, busy });
   const { announcement } = content;
   React.useEffect(() => {
     AccessibilityInfo.announceForAccessibility(announcement);
   }, [announcement]);
+  // A banner tapped while typing: the keyboard would cover the card's lower
+  // half, buttons and all.
+  React.useEffect(() => {
+    Keyboard.dismiss();
+  }, []);
   const fade = useAnimatedValue(0);
   // Once, when the sheet first shows: its content fades in. The fade starts
   // at once, so the sheet can never stay invisible over the app; with Reduce
@@ -110,31 +129,42 @@ export function NotificationIntentNotice({
             accessibilityRole="button"
             accessibilityLabel={dismissAction?.label ?? 'Close'}
           />
-          <View style={{ flex: 1, justifyContent: 'center', padding: 24 }} pointerEvents="box-none">
-            <Card padding={18}>
+          <View
+            style={{
+              flex: 1,
+              justifyContent: 'center',
+              paddingHorizontal: NOTICE_EDGE,
+              paddingTop: insets.top + NOTICE_EDGE,
+              paddingBottom: insets.bottom + NOTICE_EDGE,
+            }}
+            pointerEvents="box-none"
+          >
+            <Card padding={18} style={{ maxHeight: cardMaxHeight }}>
               {content.progress ? (
                 <ActivityIndicator
                   color={c.ink}
                   style={{ alignSelf: 'flex-start', marginBottom: 12 }}
                 />
               ) : null}
-              {content.heading ? (
-                <Body
-                  size={16}
-                  color={c.ink}
-                  accessibilityRole="header"
-                  style={{ fontFamily: FONT.display }}
-                >
-                  {content.heading}
-                </Body>
-              ) : null}
-              <ScrollView style={{ maxHeight: 320, marginTop: content.heading ? 8 : 0 }}>
+              {/* The only part that yields when the card reaches its bound:
+                  the heading scrolls with the lines, the buttons stay. */}
+              <ScrollView style={{ flexShrink: 1, maxHeight: 320 }}>
+                {content.heading ? (
+                  <Body
+                    size={16}
+                    color={c.ink}
+                    accessibilityRole="header"
+                    style={{ fontFamily: FONT.display }}
+                  >
+                    {content.heading}
+                  </Body>
+                ) : null}
                 {content.lines.map((line, i) => (
                   <Body
                     key={`${i}:${line}`}
                     size={14}
                     color={c.ink2}
-                    style={i > 0 ? { marginTop: 8 } : undefined}
+                    style={i > 0 || content.heading ? { marginTop: 8 } : undefined}
                   >
                     {line}
                   </Body>
@@ -146,7 +176,7 @@ export function NotificationIntentNotice({
                 ) : null}
               </ScrollView>
               {content.actions.length > 0 ? (
-                <View style={{ marginTop: 16, gap: 8 }}>
+                <View style={{ marginTop: 16, gap: 8, flexShrink: 0 }}>
                   {content.actions.map((a) => (
                     <Button
                       key={a.id}
@@ -170,3 +200,6 @@ export function NotificationIntentNotice({
 
 /** The sheet's fade-in, as What's New's and the tours' cards fade in. */
 const NOTICE_FADE_MS = 180;
+
+/** The card's distance from the screen's safe edges, in points. */
+const NOTICE_EDGE = 24;
