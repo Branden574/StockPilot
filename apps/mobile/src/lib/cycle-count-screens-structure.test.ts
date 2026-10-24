@@ -837,7 +837,8 @@ describe('count picker: the shared selection, as checkbox rows', () => {
     'Search items to count',
     'Clear search',
     'Couldn&rsquo;t load',
-    '. Check your connection and pull back in.',
+    '. Check your connection and try again.',
+    'Try again',
     'on hand',
     'Load more (',
     'remaining)',
@@ -905,6 +906,36 @@ describe('count picker: the shared selection, as checkbox rows', () => {
     expect(code).not.toContain("console.warn('count picker', error);");
   });
 
+  // B4(c): a failed read told the person to "pull back in", but the screen
+  // had no pull-to-refresh and no button, so the only way to read again was
+  // to leave and come back. Try again now runs the page-1 read again for the
+  // same tab, search and workspace. Mutations caught: the button's press not
+  // bumping the attempt, or the attempt missing from the read's dependencies.
+  it('a failed read offers Try again, which runs the page-1 read again', () => {
+    const { sf, els } = elements(
+      PICKER,
+      (el, s) => tagOf(el, s) === 'Button' && textOf(el, s) === 'Try again',
+    );
+    expect(els).toHaveLength(1);
+    const retry = els[0]!;
+    // The shared small Button, which frames itself at 44pt (P2.5c).
+    expect(attrText(retry, 'size', sf)).toBe('sm');
+    expect(attrText(retry, 'variant', sf)).toBe('outline');
+    expect(attrText(retry, 'onPress', sf)).toBe('() => setAttempt((n) => n + 1)');
+    // Only on the failed read, under its sentence.
+    expect(code).toMatch(
+      /status === 'failed' \? \(\s*<View style=\{styles\.failed\}>\s*<Body muted size=\{13\} style=\{styles\.failedText\}>\s*Couldn&rsquo;t load \{noun\}\. Check your connection and try again\.\s*<\/Body>\s*<Button variant="outline" size="sm" onPress=\{\(\) => setAttempt\(\(n\) => n \+ 1\)\}>\s*Try again\s*<\/Button>\s*<\/View>\s*\) : rows\.length === 0/,
+    );
+    // The bump runs the page-1 read again: the effect that shows the spinner
+    // and reads page 1 depends on it.
+    expect(code).toContain('const [attempt, setAttempt] = React.useState(0);');
+    expect(code).toMatch(
+      /setStatus\('loading'\);\s*const t = setTimeout\(\(\) => \{\s*void \(async \(\) => \{\s*const res = await fetchPage\(0\);[\s\S]*?\}, \[fetchPage, activeOrgId, attempt\]\);/,
+    );
+    // Nothing offers a pull the screen does not have.
+    expect(wordsOf(PICKER).join(' ')).not.toMatch(/\bpull\b/i);
+  });
+
   it('the tabs are tabs (role and selected state), 44pt segments on a recessed track', () => {
     const { sf, els } = elements(
       PICKER,
@@ -922,9 +953,9 @@ describe('count picker: the shared selection, as checkbox rows', () => {
   // (it was a pressable on the ink colour with no role).
   it('Start count is the shared ink Button, off with no picks or while starting', () => {
     const { sf, els } = elements(PICKER, (el, s) => tagOf(el, s) === 'Button');
-    expect(els).toHaveLength(1);
-    const start = els[0]!;
-    expect(textOf(start, sf)).toBe('Start count');
+    // Start count, and Try again on a failed read (below).
+    expect(els.map((el) => textOf(el, sf))).toEqual(['Start count', 'Try again']);
+    const start = els.find((el) => textOf(el, sf) === 'Start count')!;
     expect(attrText(start, 'variant', sf)).toBeUndefined();
     expect(attrText(start, 'onPress', sf)).toBe('start');
     expect(attrText(start, 'disabled', sf)).toBe('busy || picks.length === 0');
