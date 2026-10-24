@@ -38,6 +38,7 @@ import { StockStatusBadge } from '@/components/inventory/stock-status-badge';
 import { chipActionClass, filterChipClass, MetaChip } from '@/components/patterns/chip';
 import { FilterTrigger } from '@/components/patterns/filter-bar';
 import { ItemCell } from '@/components/patterns/item-cell';
+import { MissingPhoto } from '@/components/patterns/missing-photo';
 import { SegmentedTabs } from '@/components/patterns/segmented-tabs';
 import { SizeBadge } from '@/components/patterns/size-badge';
 import { StatePanel } from '@/components/patterns/state-panel';
@@ -4049,6 +4050,16 @@ function hasPhoto(photo: Item | null): photo is Item {
  * uncropped in the card's fixed square, with the row's hover preview and
  * loading rules (ListThumb above). No photo: null, and the card draws the
  * missing-photo hatch.
+ *
+ * A photo that fails to load (an expired signed address, a deleted file, an
+ * imported cover whose host is down) shows that same hatch, with no hover
+ * preview, exactly as a card with no photo does. Before R8 it left the
+ * square empty: a blank card. The failed address is remembered, so a new
+ * one (a refresh signs the photos again) gets a fresh attempt without an
+ * effect resetting state. Because next/image is given an onError, it sets
+ * the address once more after hydration, so a cover that failed before the
+ * page came alive (the first cards fetch with the HTML) reports its error
+ * too. Which photos go through the optimizer is unchanged (ListThumb's rule).
  */
 function CardPhoto({
   photo,
@@ -4063,8 +4074,10 @@ function CardPhoto({
   meta: React.ReactNode;
   priority?: boolean;
 }) {
+  const [failedSrc, setFailedSrc] = React.useState<string | null>(null);
   const thumbSrc = photo ? (photo.image_thumb_url ?? photo.image_url) : null;
   if (!photo || !thumbSrc) return null;
+  if (failedSrc === thumbSrc) return <MissingPhoto className="absolute inset-0" />;
   return (
     <ImageHoverPreview
       src={photo.image_url ?? null}
@@ -4087,6 +4100,7 @@ function CardPhoto({
         priority={priority}
         placeholder={photo.image_lqip ? 'blur' : 'empty'}
         blurDataURL={photo.image_lqip ?? undefined}
+        onError={() => setFailedSrc(thumbSrc)}
         style={{ objectFit: 'contain' }}
         className="h-full w-full object-contain"
       />

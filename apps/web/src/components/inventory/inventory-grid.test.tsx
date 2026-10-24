@@ -36,13 +36,20 @@ vi.mock('next/link', () => ({
   },
 }));
 vi.mock('next/image', () => ({
-  default: (props: { src: string; alt?: string; priority?: boolean; unoptimized?: boolean }) => (
+  default: (props: {
+    src: string;
+    alt?: string;
+    priority?: boolean;
+    unoptimized?: boolean;
+    onError?: React.ReactEventHandler<HTMLImageElement>;
+  }) => (
     // eslint-disable-next-line @next/next/no-img-element
     <img
       src={props.src}
       alt={props.alt ?? ''}
       data-priority={props.priority ? 'true' : 'false'}
       data-unoptimized={props.unoptimized ? 'true' : 'false'}
+      onError={props.onError}
     />
   ),
 }));
@@ -647,6 +654,127 @@ describe('Grid card content: what the row shows, nothing else', () => {
     const card = container.querySelector('[data-row-key="plain-2"]')!;
     expect(card.querySelector('img')).toBeNull();
     expect(card.querySelector('[data-slot="missing-photo"]')).not.toBeNull();
+  });
+});
+
+/**
+ * R8: a card whose photo fails to load (an expired signed address, a deleted
+ * file, an imported cover whose host is down) left its square empty: a blank
+ * card, where a record with no photo shows the hatch. The card now draws that
+ * same hatch, with no hover preview of the broken photo. Mutation caught: the
+ * onError dropped (the img stays), the hatch drawn another way, or the hover
+ * preview kept around it.
+ */
+describe('a Grid photo that fails to load (R8)', () => {
+  const mediaOf = (container: HTMLElement, selector: string) =>
+    container.querySelector(`${selector} [data-slot="grid-card-media"]`)! as HTMLElement;
+
+  it('a record card shows the hatch a card with no photo shows, without a hover preview', () => {
+    const { container } = renderTable({ initialView: 'grid' });
+    const media = mediaOf(container, '[data-row-key="plain-1"]');
+    const img = media.querySelector('img')!;
+    expect(img).toHaveAttribute('src', 'https://img.test/bp-thumb.webp');
+    expect(media.querySelector('[data-testid="hover-preview"]')).not.toBeNull();
+
+    fireEvent.error(img);
+
+    expect(media.querySelector('img')).toBeNull();
+    expect(media.querySelector('[data-testid="hover-preview"]')).toBeNull();
+    const hatch = media.querySelector('[data-slot="missing-photo"]');
+    expect(hatch).not.toBeNull();
+    // Drawn exactly as the hatch on Mousepad's card, which has no photo.
+    const noPhoto = mediaOf(container, '[data-row-key="plain-2"]');
+    expect(hatch!.outerHTML).toBe(noPhoto.querySelector('[data-slot="missing-photo"]')!.outerHTML);
+    // Only the photo changed: the name link and the checkbox are still there.
+    const card = media.closest('[data-slot="grid-card"]') as HTMLElement;
+    expect(within(card).getByRole('link', { name: 'Laptop Backpack' })).toBeInTheDocument();
+    expect(
+      within(card).getByRole('checkbox', { name: 'Select Laptop Backpack' }),
+    ).toBeInTheDocument();
+  });
+
+  it('a size run, a SKU family and a named group card each show the hatch when their cover fails', () => {
+    const photo = (id: string) => ({ image_thumb_url: `https://img.test/${id}.webp` });
+    const { container } = renderTable({
+      initialView: 'grid',
+      items: [
+        row('tee-s', { name: 'Tee - S', sku: 'TEE-S', ...photo('tee-s') }),
+        row('tee-m', { name: 'Tee - M', sku: 'TEE-M', ...photo('tee-m') }),
+        row('tee-l', { name: 'Tee - L', sku: 'TEE-L', ...photo('tee-l') }),
+        {
+          ...row('split', { name: 'Chromebook', sku: 'CB-1', ...photo('cb') }),
+          rowKey: 'split:L1',
+          line_quantity: 4,
+        },
+        {
+          ...row('split', { name: 'Chromebook', sku: 'CB-1', ...photo('cb') }),
+          rowKey: 'split:L2',
+          line_quantity: 6,
+        },
+        row('g1', { name: 'Desk Lamp', sku: 'LAMP-1', ...inGroup('grp-desk', 'Desk Set') }),
+        row('g2', {
+          name: 'Desk Tray',
+          sku: 'TRAY-1',
+          ...inGroup('grp-desk', 'Desk Set'),
+          ...photo('tray'),
+        }),
+      ] as never,
+    });
+    for (const key of ['style-group:tee', 'sku-group:CB-1', 'display-group:grp-desk']) {
+      const media = mediaOf(container, `[data-group-key="${key}"]`);
+      fireEvent.error(media.querySelector('img')!);
+      expect(media.querySelector('img'), key).toBeNull();
+      expect(media.querySelector('[data-testid="hover-preview"]'), key).toBeNull();
+      expect(media.querySelector('[data-slot="missing-photo"]'), key).not.toBeNull();
+    }
+  });
+
+  it('the failed address is not asked for again, but a new one is (a refresh signs photos again)', () => {
+    const table = (thumb: string) => (
+      <InventoryTable
+        items={[row('bp', { name: 'Backpack', image_thumb_url: thumb })] as never}
+        lookups={LOOKUPS}
+        total={1}
+        initialQuery=""
+        pageSize={30}
+        canUngroup
+        initialView="grid"
+      />
+    );
+    const { container, rerender } = render(table('https://img.test/bp.webp?v=1'));
+    const media = () => mediaOf(container, '[data-row-key="bp"]');
+    fireEvent.error(media().querySelector('img')!);
+    expect(media().querySelector('img')).toBeNull();
+
+    rerender(table('https://img.test/bp.webp?v=1'));
+    expect(media().querySelector('img')).toBeNull();
+    expect(media().querySelector('[data-slot="missing-photo"]')).not.toBeNull();
+
+    rerender(table('https://img.test/bp.webp?v=2'));
+    expect(media().querySelector('img')).toHaveAttribute('src', 'https://img.test/bp.webp?v=2');
+    expect(media().querySelector('[data-slot="missing-photo"]')).toBeNull();
+  });
+
+  // The optimizer rule is not R8's to change (B30 decides it): a pre-sized
+  // thumb is served as it is, and only a photo without one (a legacy master,
+  // an imported book cover) goes through the image optimizer, as in the rows.
+  it('leaves the optimizer rule as it was: a thumb is served as it is, a master-only photo is optimized', () => {
+    const { container } = renderTable({
+      initialView: 'grid',
+      items: [
+        row('thumbed', {
+          image_url: 'https://img.test/thumbed-master.jpg',
+          image_thumb_url: 'https://img.test/thumbed-thumb.webp',
+        }),
+        row('legacy', { image_url: 'https://img.test/legacy-master.jpg', image_thumb_url: null }),
+      ] as never,
+    });
+    const thumbed = mediaOf(container, '[data-row-key="thumbed"]').querySelector('img')!;
+    expect(thumbed).toHaveAttribute('src', 'https://img.test/thumbed-thumb.webp');
+    expect(thumbed).toHaveAttribute('data-unoptimized', 'true');
+    const legacy = mediaOf(container, '[data-row-key="legacy"]').querySelector('img')!;
+    expect(legacy).toHaveAttribute('src', 'https://img.test/legacy-master.jpg');
+    expect(legacy).toHaveAttribute('data-unoptimized', 'false');
   });
 });
 
