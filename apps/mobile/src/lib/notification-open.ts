@@ -17,7 +17,9 @@
  *   5. a link the app cannot open: the notice with the push's own words;
  *   6. any page but an order or a return with an id: open it now, unless it
  *      is already the screen in front (its screen loads its own workspace);
- *   7. an order or a return with an id: wait while the workspace is loading;
+ *   7. an order or a return with an id: wait while the FIRST workspace load
+ *      for this account runs (nothing on screen yet); a reload keeps the
+ *      workspace on screen, and the steps below decide from it;
  *   8. then, for a user in more than one workspace, read its organization
  *      first (resolveTargetWorkspace);
  *   9. otherwise open it, unless it is already the screen in front.
@@ -108,6 +110,10 @@ export interface OpenStepInput {
   segments: readonly string[];
   pathname: string;
   workspace: WorkspaceView;
+  /** use-workspace.ts workspaceShownForAccount(): a workspace chosen for the
+   *  account signed in now is on screen. A reload keeps it there while
+   *  `workspace.loading` is true; only a first load has none yet. */
+  workspaceShown: boolean;
 }
 
 const AUTH_GROUP = '(auth)';
@@ -148,7 +154,7 @@ export function focusedStackRoute(rootState: unknown): string | null {
 }
 
 /** The kinds whose organization is read for a multi-workspace user, and so
- *  the only ones that wait for the workspace to load (with an id). */
+ *  the only ones that wait for the first workspace load (with an id). */
 const RESOLVED_KINDS: Record<string, ResolveTable> = {
   order: 'order_requests',
   returns: 'returns',
@@ -189,7 +195,15 @@ export function nextOpenStep(input: OpenStepInput): OpenStep {
   // on main, and its screen loads its own workspace under RLS.
   const table = RESOLVED_KINDS[target.routeKind];
   if (!table || !target.resourceId) return openOrStay(target.native, input.pathname);
-  if (input.workspace.loading) return { kind: 'wait', reason: 'workspace-loading' };
+  // An order or a return needs this account's workspaces to decide. Its first
+  // load (a cold start, or right after signing in) has none on screen yet:
+  // wait for it. A reload (review round 3) keeps the workspace on screen, and
+  // the order screen reads with it while the reload runs: decide from it now,
+  // as main opened the order at once, so no screen's reload holds the tap
+  // with nothing on screen and no deadline.
+  if (input.workspace.loading && !input.workspaceShown) {
+    return { kind: 'wait', reason: 'workspace-loading' };
+  }
   if (input.workspace.orgs.length > 1) return { kind: 'resolve', table, id: target.resourceId };
   return openOrStay(target.native, input.pathname);
 }

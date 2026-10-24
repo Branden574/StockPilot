@@ -482,6 +482,23 @@ export function getWorkspaceSnapshot(): WorkspaceState {
 }
 
 /**
+ * True while a workspace chosen for the account signed in now is on screen.
+ *
+ * A reload keeps it there: every screen that mounts useWorkspace() (useOrg,
+ * useRole) publishes loading:true and loads the workspace again, but the one
+ * on screen stays published, and screens go on reading with it. Only a first
+ * load (a cold start, or right after signing in) has nothing to show yet. A
+ * workspace chosen for an account that has since signed out or changed never
+ * counts: its account epoch has ended, the same test hydrate() applies before
+ * it keeps a workspace through a failed read. The notification host reads
+ * this to tell a reload, which need not hold a tapped order or return, from a
+ * first load, which must (notification-open.ts nextOpenStep). Reads nothing.
+ */
+export function workspaceShownForAccount(): boolean {
+  return cached.activeOrgId !== null && shownEpoch === accountEpoch();
+}
+
+/**
  * React hook. The published workspace WITHOUT loading it. useWorkspace()
  * hydrates on every mount (three reads) and publishes loading:true to every
  * screen while it does; a component that only needs to know which workspace

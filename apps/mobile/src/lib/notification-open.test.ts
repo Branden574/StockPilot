@@ -86,6 +86,8 @@ const TWO: WorkspaceView = {
   activeOrgId: 'org-b',
   activeOrgName: 'Ledger QA Co',
 };
+/** Before the first workspace load for this account has answered. */
+const COLD: WorkspaceView = { loading: true, orgs: [], activeOrgId: null, activeOrgName: null };
 
 function input(over: Partial<OpenStepInput> = {}): OpenStepInput {
   return {
@@ -97,6 +99,8 @@ function input(over: Partial<OpenStepInput> = {}): OpenStepInput {
     segments: ['(drawer)', '(tabs)'],
     pathname: '/',
     workspace: ONE,
+    // ONE is on screen for the account signed in (workspaceShownForAccount).
+    workspaceShown: true,
     ...over,
   };
 }
@@ -123,9 +127,12 @@ describe('nextOpenStep waits on real signals', () => {
       },
       'binding',
     ],
+    // 2026-10-24 (review 3): only the first load for this account waits; a
+    // reload decides from the workspace on screen (see 'a reload never holds
+    // an order or a return'). Was { workspace: { ...ONE, loading: true } }.
     [
-      'the workspace is loading, for an order with an id',
-      { workspace: { ...ONE, loading: true } },
+      'the first workspace load for this account, for an order with an id',
+      { workspace: COLD, workspaceShown: false },
       'workspace-loading',
     ],
   ])('%s', (_label, over, reason) => {
@@ -354,7 +361,7 @@ describe('nextOpenStep decides', () => {
       activeOrgId: null,
       activeOrgName: null,
     };
-    expect(nextOpenStep(input({ workspace: none }))).toEqual({
+    expect(nextOpenStep(input({ workspace: none, workspaceShown: false }))).toEqual({
       kind: 'navigate',
       path: `/order/${ORDER}`,
     });
@@ -371,11 +378,18 @@ describe('nextOpenStep decides', () => {
  * main, and its screen loads its own workspace, under RLS.
  */
 describe('only an order or a return with an id waits for the workspace to load', () => {
-  const COLD: WorkspaceView = { loading: true, orgs: [], activeOrgId: null, activeOrgName: null };
-  const LOADING: [string, WorkspaceView][] = [
-    ['one workspace, loading again', { ...ONE, loading: true }],
-    ['two workspaces, loading again', { ...TWO, loading: true }],
-    ['a cold start, before the first load', COLD],
+  // Each view with whether a workspace is on screen for this account
+  // (workspaceShownForAccount): a reload keeps it, a cold start has none yet.
+  const LOADING: [string, Pick<OpenStepInput, 'workspace' | 'workspaceShown'>][] = [
+    [
+      'one workspace, loading again',
+      { workspace: { ...ONE, loading: true }, workspaceShown: true },
+    ],
+    [
+      'two workspaces, loading again',
+      { workspace: { ...TWO, loading: true }, workspaceShown: true },
+    ],
+    ['a cold start, before the first load', { workspace: COLD, workspaceShown: false }],
   ];
 
   it.each<[string, string, string]>([
@@ -393,36 +407,109 @@ describe('only an order or a return with an id waits for the workspace to load',
     ['the returns list', '/dashboard/returns', '/returns'],
     ['a new order', '/dashboard/orders/new', '/order/new'],
   ])('%s opens at once', (_label, link, path) => {
-    for (const [view, workspace] of LOADING) {
-      expect(nextOpenStep(input({ workspace, take: ready(link) })), view).toEqual({
+    for (const [view, loading] of LOADING) {
+      expect(nextOpenStep(input({ ...loading, take: ready(link) })), view).toEqual({
         kind: 'navigate',
         path,
       });
       // Already the screen in front: stay (no second card).
-      expect(nextOpenStep(input({ workspace, take: ready(link), pathname: path })), view).toEqual({
+      expect(nextOpenStep(input({ ...loading, take: ready(link), pathname: path })), view).toEqual({
         kind: 'stay',
       });
     }
   });
 
+  // 2026-10-24 (review 3): the wait is for the first load only. Was: every
+  // LOADING view waits, the two reloads included.
   it.each<[string, string]>([
     ['an order', `/dashboard/orders/${ORDER}`],
     ['a replacement order', `/dashboard/orders/${REPLACEMENT}`],
     ['an order from the hand-over (https)', `https://stockpilotusa.com/dashboard/orders/${ORDER}`],
     ['a return (the dual link)', `/dashboard/returns/${RMA}?order=/dashboard/orders/${ORDER}`],
-  ])('%s waits, then opens for one workspace and is checked for two', (_label, link) => {
-    for (const [view, workspace] of LOADING) {
-      expect(nextOpenStep(input({ workspace, take: ready(link) })), view).toEqual({
-        kind: 'wait',
-        reason: 'workspace-loading',
-      });
-    }
-    expect(nextOpenStep(input({ workspace: ONE, take: ready(link) }))).toMatchObject({
+  ])(
+    '%s waits for the first load only, then opens for one workspace and is checked for two',
+    (_label, link) => {
+      expect(
+        nextOpenStep(input({ workspace: COLD, workspaceShown: false, take: ready(link) })),
+      ).toEqual({ kind: 'wait', reason: 'workspace-loading' });
+      for (const [workspace, shown] of [
+        [ONE, true],
+        [{ ...ONE, loading: true }, true],
+      ] as const) {
+        expect(
+          nextOpenStep(input({ workspace, workspaceShown: shown, take: ready(link) })),
+        ).toMatchObject({ kind: 'navigate' });
+      }
+      for (const [workspace, shown] of [
+        [TWO, true],
+        [{ ...TWO, loading: true }, true],
+      ] as const) {
+        expect(
+          nextOpenStep(input({ workspace, workspaceShown: shown, take: ready(link) })),
+        ).toMatchObject({ kind: 'resolve' });
+      }
+    },
+  );
+});
+
+/**
+ * Review round 3 (2026-10-13), MEDIUM: an order or a return tapped while ANY
+ * screen was loading the workspace again waited for that reload, with nothing
+ * on screen and no deadline. useWorkspace() publishes loading:true and loads
+ * again on every mount (useOrg in 35 files, useRole in 31, the order screen
+ * itself), and its membership and default-organization reads have no deadline;
+ * one that throws leaves loading true until another screen mounts. A warm tap
+ * on main opened the order at once, and the order screen reads with the
+ * workspace already on screen. A reload keeps that workspace published, so the
+ * tap decides from it now: one workspace opens the order, two check it first
+ * (a read bounded at 15 seconds, with the Checking notice after 400 ms). Only
+ * the first load for this account, with nothing on screen yet, still holds an
+ * order or a return; a workspace chosen for an account that is gone never
+ * counts (use-workspace.ts workspaceShownForAccount).
+ */
+describe('a reload never holds an order or a return: the workspace on screen decides', () => {
+  const RETURN_LINK = `/dashboard/returns/${RMA}?order=/dashboard/orders/${ORDER}`;
+
+  it('one workspace on screen, loading again: the order opens at once, with no read', () => {
+    expect(nextOpenStep(input({ workspace: { ...ONE, loading: true } }))).toEqual({
       kind: 'navigate',
+      path: `/order/${ORDER}`,
     });
-    expect(nextOpenStep(input({ workspace: TWO, take: ready(link) }))).toMatchObject({
+    expect(
+      nextOpenStep(input({ workspace: { ...ONE, loading: true }, take: ready(RETURN_LINK) })),
+    ).toEqual({ kind: 'navigate', path: `/returns/${RMA}` });
+  });
+
+  it('two workspaces on screen, loading again: checked at once, never held', () => {
+    expect(nextOpenStep(input({ workspace: { ...TWO, loading: true } }))).toEqual({
       kind: 'resolve',
+      table: 'order_requests',
+      id: ORDER,
     });
+    expect(
+      nextOpenStep(input({ workspace: { ...TWO, loading: true }, take: ready(RETURN_LINK) })),
+    ).toEqual({ kind: 'resolve', table: 'returns', id: RMA });
+  });
+
+  it('already on that order while the workspace reloads: stay (no second card)', () => {
+    expect(
+      nextOpenStep(input({ workspace: { ...ONE, loading: true }, pathname: `/order/${ORDER}` })),
+    ).toEqual({ kind: 'stay' });
+  });
+
+  it("the first load for this account waits, even with another account's workspace still published", () => {
+    expect(nextOpenStep(input({ workspace: COLD, workspaceShown: false }))).toEqual({
+      kind: 'wait',
+      reason: 'workspace-loading',
+    });
+    // Signed out and another account in: the previous one's workspace is
+    // still published while the new account's first load runs. Never decide
+    // from it.
+    for (const stale of [ONE, TWO]) {
+      expect(
+        nextOpenStep(input({ workspace: { ...stale, loading: true }, workspaceShown: false })),
+      ).toEqual({ kind: 'wait', reason: 'workspace-loading' });
+    }
   });
 });
 

@@ -360,6 +360,20 @@ describe('7. the host and the notice only read and navigate', () => {
     expect(code).toContain('navigation.isReady()');
   });
 
+  it('tells a reload from a first load by the workspace on screen for this account (review 3)', () => {
+    const code = codeOnly(host);
+    expect(code).toMatch(
+      /import \{[^}]*\bworkspaceShownForAccount,[^}]*\} from '@\/lib\/use-workspace';/,
+    );
+    const callAt = code.indexOf('const step = nextOpenStep({');
+    expect(callAt).toBeGreaterThan(-1);
+    const call = code.slice(callAt, code.indexOf('});', callAt));
+    // Read from use-workspace.ts each time the open effect runs, never a
+    // literal: true would decide from another account's workspace, false
+    // would hold every order and return through every reload again.
+    expect(call).toMatch(/^\s*workspaceShown: workspaceShownForAccount\(\),$/m);
+  });
+
   it("reads the workspace without loading it, and switches only through the drawer's own switch", () => {
     const code = codeOnly(host);
     expect(code).toContain('useWorkspaceSnapshot()');

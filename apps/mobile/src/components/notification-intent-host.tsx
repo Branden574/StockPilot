@@ -36,6 +36,7 @@ import {
   retryWorkspace,
   setActiveOrg,
   useWorkspaceSnapshot,
+  workspaceShownForAccount,
 } from '@/lib/use-workspace';
 
 /** The interruption lock (tour-targets.ts): What's New waits while it shows. */
@@ -79,9 +80,11 @@ function routeKindOf(path: string): string {
  * the Stack, so never over MFA, the Face ID lock or a disabled account.
  * Every wait is a real signal (notification-open.ts nextOpenStep): MFA still
  * being checked after a password sign-in, the navigator and its live route,
- * the sign-in group, whose tap it is, the workspace. Nothing is consumed
- * before the final step, so a gate that unmounts this (and the navigator)
- * cannot lose the destination: it is opened when the shell comes back.
+ * the sign-in group, whose tap it is, and, for an order or a return, the
+ * first workspace load for this account (a reload keeps the workspace on
+ * screen, and the tap decides from it). Nothing is consumed before the final
+ * step, so a gate that unmounts this (and the navigator) cannot lose the
+ * destination: it is opened when the shell comes back.
  *
  * It opens with router.push, over Home on a cold start (Back goes Home) and
  * over the current screen otherwise; the order screen's own RLS-scoped read
@@ -184,6 +187,9 @@ export function NotificationIntentHost() {
       segments,
       pathname,
       workspace,
+      // Read now, not at render: a reload keeps this account's workspace on
+      // screen, so an order or a return decides from it at once (review 3).
+      workspaceShown: workspaceShownForAccount(),
     });
     // Every branch acts on the tap take() handed over, which nextOpenStep
     // has matched to this render's: a newer tap captured since is idle here
