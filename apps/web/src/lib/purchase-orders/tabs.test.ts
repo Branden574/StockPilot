@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ALL_NON_CANCELLED_STATUSES,
   isPoTab,
+  OVERDUE_PO_ATTENTION_DETAIL,
   OVERDUE_PO_STATUSES,
   statusesForTab,
   TAB_LABELS,
@@ -93,5 +94,16 @@ describe('the Overdue view (small fixes slice 8)', () => {
   it('a copy: a caller changing it cannot change the list', () => {
     statusesForTab('overdue').push('draft');
     expect(OVERDUE_PO_STATUSES).not.toContain('draft');
+  });
+});
+
+// The dashboard's overdue line said "Chase your suppliers or update the
+// ETA.", but an ordered purchase order's expected date cannot be changed:
+// update() edits drafts only, and the only other writer of expected_at is a
+// PO import creating a new one (slice 8 review).
+describe("the dashboard's overdue line", () => {
+  it('gives only advice someone can follow', () => {
+    expect(OVERDUE_PO_ATTENTION_DETAIL).toBe('Expected receipt date has passed. Chase your suppliers.');
+    expect(OVERDUE_PO_ATTENTION_DETAIL).not.toMatch(/ETA|update/i);
   });
 });

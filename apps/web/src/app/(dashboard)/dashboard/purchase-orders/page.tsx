@@ -372,7 +372,7 @@ export default async function PurchaseOrdersPage({
         {overdueTotal === 1
           ? '1 purchase order is overdue'
           : `${overdueTotal} purchase orders are overdue`}
-        : not fully received, with an expected date before today,{' '}
+        : ordered or in transit and not fully received, with an expected date before today,{' '}
         {formatCalendarDate(`${overdueAsOf}T00:00:00.000Z`)}, in your organization&apos;s time
         zone.
       </p>

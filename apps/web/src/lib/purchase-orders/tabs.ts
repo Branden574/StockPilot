@@ -33,6 +33,15 @@ export const TAB_LABELS: Record<PoTab, string> = {
  */
 export const OVERDUE_PO_STATUSES: readonly string[] = ['expected_inbound', 'ordered', 'partially_received'];
 
+/**
+ * The dashboard's overdue line under its count. It said "Chase your suppliers
+ * or update the ETA.", but an ordered purchase order's expected date cannot
+ * be changed (PurchaseOrdersService.update edits drafts only; the only other
+ * writer of expected_at is a PO import creating a new one), so only the
+ * advice someone can follow (small fixes slice 8 review).
+ */
+export const OVERDUE_PO_ATTENTION_DETAIL = 'Expected receipt date has passed. Chase your suppliers.';
+
 export const TAB_STATUSES: Record<Exclude<PoTab, 'all' | 'overdue'>, string[]> = {
   draft: ['draft'],
   ordered: ['ordered'],

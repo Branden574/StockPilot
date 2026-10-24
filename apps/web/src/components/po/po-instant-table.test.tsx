@@ -17,7 +17,7 @@
  * for Oct 10) on every render; read in UTC it is the picked day on the server
  * and in the browser alike, as on the PO's page and PDF.
  */
-import { within } from '@testing-library/react';
+import { render as renderDom, within } from '@testing-library/react';
 import type * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -121,5 +121,22 @@ describe("PoInstantTable prints the organization's day, whoever views it", () =>
     } finally {
       run.unmount();
     }
+  });
+});
+
+// The zone comes from the server, which checked it with ITS Intl. A browser
+// that does not know it threw a RangeError from new Intl.DateTimeFormat during
+// render, and the list fell to its error boundary; core's rule is that a
+// stored zone never throws out of a render (formatOrgDate checks it again and
+// falls back to the documented default). Slice 8 review.
+describe('PoInstantTable with a zone this runtime does not know', () => {
+  it('prints the Placed day in the default zone instead of throwing', () => {
+    const view = renderDom(
+      <PoInstantTable rows={[ROWS[0]!]} supplierNames={{}} timeZone="Not/AZone" />,
+    );
+    const row = within(view.container).getByText('PO-DEMO-002').closest('tr') as HTMLElement;
+    // 7:30 PM on Oct 5 in Los Angeles (the documented default zone).
+    expect(within(row).getByText('Oct 5')).toBeInTheDocument();
+    view.unmount();
   });
 });

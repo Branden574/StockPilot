@@ -18,7 +18,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { poMatchesSearch } from '@/lib/purchase-orders/list-search';
-import { cn, formatCurrency, formatDateShort } from '@/lib/utils';
+import { formatOrgDate } from '@/lib/timezone';
+import { cn, formatCurrency } from '@/lib/utils';
 
 import { formatCalendarDate } from '@stockpilot/core';
 
@@ -84,7 +85,13 @@ export function PoListTable({
   // and then the viewer's, and React threw error #418. A fixed zone prints the
   // same text on the server and in the browser, so it needs no hydration gate,
   // and a viewer outside the organization's zone sees the organization's day.
-  const placedDay = (iso: string | null) => formatDateShort(iso, 'en-US', timeZone);
+  //
+  // formatOrgDate, not Intl directly: the zone was checked by the SERVER's
+  // Intl, and a browser that lacks it would throw during render; formatOrgDate
+  // checks it again here and falls back to the documented default (core's
+  // rule: a stored zone never throws out of a render).
+  const placedDay = (iso: string | null) =>
+    iso ? formatOrgDate(iso, { month: 'short', day: 'numeric' }, timeZone) : '—';
   // Expected is a DAY the buyer picked, stored as that day's UTC midnight
   // (po-form sends new Date('YYYY-MM-DD')). Read in UTC it is the picked day on
   // the server and in every browser, as on the PO's page, its PDF

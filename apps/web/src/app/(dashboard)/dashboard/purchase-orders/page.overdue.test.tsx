@@ -117,7 +117,7 @@ describe('the purchase orders list has the Overdue view the dashboard links to',
     // The count and the rule, as the dashboard counts them.
     expect(
       screen.getByText(
-        "2 purchase orders are overdue: not fully received, with an expected date before today, Oct 11, in your organization's time zone.",
+        "2 purchase orders are overdue: ordered or in transit and not fully received, with an expected date before today, Oct 11, in your organization's time zone.",
       ),
     ).toBeInTheDocument();
   });
