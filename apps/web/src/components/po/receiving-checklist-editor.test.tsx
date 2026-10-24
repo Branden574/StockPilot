@@ -351,6 +351,61 @@ describe('ReceivingChecklistEditor', () => {
     expect(busy.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
   });
 
+  // Review 2026-10-24 (WCAG 3.3.2): a new step's text field was an empty box
+  // named only for screen readers. It has the phone's visible "Step N" label.
+  it('names each step field with a visible "Step N" label, as the phone does', async () => {
+    const user = userEvent.setup();
+    render(<ReceivingChecklistEditor editor={editor()} />);
+    await user.click(screen.getByRole('button', { name: C.startBlank }));
+    await user.click(screen.getByRole('button', { name: new RegExp(C.addStep) }));
+    for (const n of [1, 2]) {
+      const field = screen.getByRole('textbox', { name: `${C.stepLabel} ${n}` });
+      const label = screen.getByText(`${C.stepLabel} ${n}`, { selector: 'label' });
+      expect(label.getAttribute('for')).toBe(field.id);
+      expect(field.getAttribute('aria-label')).toBeNull();
+    }
+  });
+
+  // Review 2026-10-24, measured at 390 px in Chromium on a coarse pointer:
+  // the step's field column was 222 px, the Answer select kept its own 244 px
+  // and ran under the Move down and Remove buttons and out of the card, and
+  // the three 32 px icon buttons were stacked 4 px apart, so each 44 px touch
+  // area covered the edge of the one before it (a tap on the foot of Move
+  // down pressed Remove, which asks nothing). Now the buttons sit in a row in
+  // the step's header, 44 px on phones and coarse pointers, so the fields
+  // take the card's whole width, and below sm the word sits over a select
+  // that fills the row. The geometry needs a layout engine; these pin the
+  // classes that make it, and the PR records the 390, 375 and 360 px
+  // measurements.
+  it('at phone width the step buttons are 44 px in a row over the fields, and the select fills its row', async () => {
+    const user = userEvent.setup();
+    render(<ReceivingChecklistEditor editor={editor()} />);
+    await user.click(screen.getByRole('button', { name: C.startSuggested }));
+    const step = screen.getByRole('textbox', { name: `${C.stepLabel} 2` }).closest('li')!;
+    const buttons = [C.moveStepUp(2), C.moveStepDown(2), C.removeStep(2)].map((name) =>
+      within(step).getByRole('button', { name }),
+    );
+    const classes = (el: Element) => el.className.split(/\s+/);
+    for (const b of buttons) {
+      expect(classes(b)).toEqual(
+        expect.arrayContaining(['max-sm:size-11', 'pointer-coarse:size-11']),
+      );
+    }
+    const row = buttons[0]!.parentElement!;
+    expect(buttons.every((b) => b.parentElement === row)).toBe(true);
+    expect(classes(row)).toEqual(expect.arrayContaining(['flex', 'gap-1.5']));
+    expect(classes(row)).not.toContain('flex-col');
+    // The row comes before the step's fields, not beside them.
+    const field = within(step).getByRole('textbox', { name: `${C.stepLabel} 2` });
+    expect(row.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(row.contains(field)).toBe(false);
+    const select = within(step).getByRole('combobox');
+    expect(classes(select)).toEqual(expect.arrayContaining(['min-w-0', 'max-sm:w-full']));
+    expect(classes(select.closest('label')!)).toEqual(
+      expect.arrayContaining(['max-sm:w-full', 'max-sm:flex-col', 'max-sm:items-stretch']),
+    );
+  });
+
   // The row helpers themselves (checklistEditorStepsFrom, moveChecklistStep,
   // checklistPublishPayload) are tested in core, where the phone uses them too.
 });

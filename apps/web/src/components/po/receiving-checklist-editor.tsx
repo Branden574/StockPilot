@@ -55,6 +55,13 @@ const SELECT =
   'bg-card text-foreground flex h-8 rounded-md border border-[var(--ed-line-strong)] px-2.5 text-[13px] transition-colors focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:h-11 max-sm:text-base';
 
 /**
+ * A step's Move up, Move down and Remove: 32 px icon buttons, 44 px on phones
+ * and coarse pointers, so no button's touch area covers its neighbour (the
+ * Button primitive's rule for a dense group).
+ */
+const STEP_ACTION = 'max-sm:size-11 pointer-coarse:size-11';
+
+/**
  * The receiving checklist editor (F4-1): the live version read only, "Start
  * from suggested steps" or "Start blank" when there is none, a staged draft
  * (title, steps added, removed and moved, kind, required and help per step,
@@ -324,27 +331,71 @@ export function ReceivingChecklistEditor({ editor }: { editor: ChecklistEditorVi
             />
           </div>
           <ol className="space-y-3">
-            {steps.map((s, i) => (
-              <li
-                key={s.uid}
-                className={`bg-card rounded-lg border p-3 ${error?.step === i + 1 ? 'border-destructive' : 'border-border'}`}
-              >
-                <div className="flex items-start gap-2">
-                  <span className="text-muted-foreground mt-1.5 w-6 font-mono text-[12.5px] tabular-nums">
-                    {i + 1}.
-                  </span>
-                  <div className="min-w-0 flex-1 space-y-2">
+            {steps.map((s, i) => {
+              const fieldId = `checklist-${s.uid}`;
+              return (
+                <li
+                  key={s.uid}
+                  className={`bg-card rounded-lg border p-3 ${error?.step === i + 1 ? 'border-destructive' : 'border-border'}`}
+                >
+                  {/* The step's visible name (the phone's "Step N"), with its
+                      Move up, Move down and Remove beside it, so the fields
+                      below take the card's whole width: at 390 px a column
+                      of buttons beside them left 222 px, and the Answer
+                      select ran under the buttons and out of the card. */}
+                  <div className="flex items-center justify-between gap-2">
+                    <Label htmlFor={fieldId}>{`${C.stepLabel} ${i + 1}`}</Label>
+                    <div className="flex items-center gap-1.5">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className={STEP_ACTION}
+                        aria-label={C.moveStepUp(i + 1)}
+                        disabled={i === 0}
+                        onClick={() => setSteps((l) => moveChecklistStep(l, i, -1))}
+                      >
+                        <ArrowUp />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className={STEP_ACTION}
+                        aria-label={C.moveStepDown(i + 1)}
+                        disabled={i === steps.length - 1}
+                        onClick={() => setSteps((l) => moveChecklistStep(l, i, 1))}
+                      >
+                        <ArrowDown />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className={STEP_ACTION}
+                        aria-label={C.removeStep(i + 1)}
+                        disabled={steps.length <= 1}
+                        onClick={() => setSteps((l) => l.filter((x) => x.uid !== s.uid))}
+                      >
+                        <Trash2 />
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="mt-2 space-y-2">
                     <Input
-                      aria-label={`${C.stepLabel} ${i + 1}`}
+                      id={fieldId}
                       value={s.label}
                       maxLength={CHECKLIST_LIMITS.label}
                       onChange={(e) => update(s.uid, { label: e.target.value })}
                     />
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-                      <label className="flex items-center gap-2">
+                      {/* Below sm the word sits over a select that fills the
+                          row: the longest answer is wider than a phone leaves
+                          beside the word. */}
+                      <label className="flex min-w-0 items-center gap-2 max-sm:w-full max-sm:flex-col max-sm:items-stretch max-sm:gap-1.5">
                         <span className="text-muted-foreground text-[12.5px]">{C.stepKind}</span>
                         <select
-                          className={SELECT}
+                          className={`${SELECT} min-w-0 max-sm:w-full`}
                           value={s.kind}
                           onChange={(e) =>
                             update(s.uid, { kind: e.target.value as ChecklistStepKind })
@@ -375,41 +426,9 @@ export function ReceivingChecklistEditor({ editor }: { editor: ChecklistEditorVi
                       onChange={(e) => update(s.uid, { help: e.target.value })}
                     />
                   </div>
-                  <div className="flex flex-col gap-1">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      aria-label={C.moveStepUp(i + 1)}
-                      disabled={i === 0}
-                      onClick={() => setSteps((l) => moveChecklistStep(l, i, -1))}
-                    >
-                      <ArrowUp />
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      aria-label={C.moveStepDown(i + 1)}
-                      disabled={i === steps.length - 1}
-                      onClick={() => setSteps((l) => moveChecklistStep(l, i, 1))}
-                    >
-                      <ArrowDown />
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      aria-label={C.removeStep(i + 1)}
-                      disabled={steps.length <= 1}
-                      onClick={() => setSteps((l) => l.filter((x) => x.uid !== s.uid))}
-                    >
-                      <Trash2 />
-                    </Button>
-                  </div>
-                </div>
-              </li>
-            ))}
+                </li>
+              );
+            })}
           </ol>
           <Button
             type="button"
