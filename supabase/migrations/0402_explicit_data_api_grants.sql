@@ -32,9 +32,9 @@
 -- without them.
 -- Measured (migration scratch stack, the two statements run before 0001,
 -- then 0001-0401): 1237 of production's 2852 table-level privileges were
--- missing, on 132 of the 145 relations; 74 of the 136 tables had no SELECT,
--- INSERT, UPDATE or DELETE for any of the three roles. Column grants were all
--- explicit already.
+-- missing, on 132 of the 145 relations; on 74 of the 136 tables the three
+-- roles held no SELECT, INSERT, UPDATE or DELETE at all, where production
+-- grants them some. Column grants were all explicit already.
 --
 -- ── WHAT ──────────────────────────────────────────────────────────────────
 -- One group per relation, sorted by name: its table-level grants (one
