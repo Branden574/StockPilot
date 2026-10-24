@@ -7,8 +7,9 @@ import * as React from 'react';
 
 import { Button } from '@/components/ui/button';
 import { formatOrgDate, formatOrgTime } from '@/lib/timezone';
-import { useHydrated } from '@/lib/use-hydrated';
 import { cn } from '@/lib/utils';
+
+import { orgDayOf, plainSpaces } from '@stockpilot/core';
 
 interface CalendarEvent {
   id: string;
@@ -31,6 +32,18 @@ interface Props {
       Defaults to false (fail closed); the server page passes the real
       value. */
   canManage?: boolean;
+  /**
+   * The organization's zone (organizations.timezone, resolved): each event
+   * sits on its start day there and prints its time there. Defaults to the
+   * documented default zone (core ORG_TIMEZONE_DEFAULT); the page passes the
+   * organization's.
+   */
+  timeZone?: string;
+  /**
+   * The organization's today, "YYYY-MM-DD", as the page worked it out: the
+   * cell that is marked today. Null marks none.
+   */
+  todayYmd?: string | null;
 }
 
 const WEEK_HEADERS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -55,70 +68,83 @@ const STATUS_LABEL: Record<CalendarEvent['status'], string> = {
   cancelled: 'Cancelled',
 };
 
-function formatHeader(year: number, month: number): string {
+function formatHeader(year: number, month: number, timeZone: string | undefined): string {
   // Use noon UTC on the 15th so neither local-tz nor org-tz shifts
   // the rendered month (DST transitions can shift a midnight date by
   // ±1 day; noon-on-15 is safely inside the target calendar month).
-  return formatOrgDate(new Date(Date.UTC(year, month - 1, 15, 12)), {
-    month: 'long',
-    year: 'numeric',
-  });
-}
-
-function startOfMonthGrid(year: number, month: number): Date {
-  const first = new Date(year, month - 1, 1);
-  const day = first.getDay(); // 0 = Sunday
-  return new Date(year, month - 1, 1 - day);
-}
-
-function isSameDay(a: Date, b: Date): boolean {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
+  return formatOrgDate(
+    new Date(Date.UTC(year, month - 1, 15, 12)),
+    { month: 'long', year: 'numeric' },
+    timeZone,
   );
 }
 
-function ymd(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+/** One cell of the 6-week grid: a calendar day, with no time and no zone. */
+interface GridDay {
+  /** "YYYY-MM-DD". */
+  ymd: string;
+  /** Day of the month. */
+  day: number;
+  /** Inside the month being viewed. */
+  inMonth: boolean;
 }
 
-export function ScheduleCalendar({ year, month, events, canManage = false }: Props) {
+/**
+ * The 42 days of a month's grid, Sunday before the 1st onward: calendar
+ * arithmetic in UTC, so the same days on the server and in any browser.
+ * Module-private: this is a 'use client' module, and a plain function a
+ * server component imported from it would be a client reference (recurring
+ * pattern #8); the schedule page works its range out from the same rule.
+ */
+function monthGridDays(year: number, month: number): GridDay[] {
+  const firstWeekday = new Date(Date.UTC(year, month - 1, 1)).getUTCDay(); // 0 = Sunday
+  const days: GridDay[] = [];
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(Date.UTC(year, month - 1, 1 - firstWeekday + i));
+    days.push({
+      ymd: d.toISOString().slice(0, 10),
+      day: d.getUTCDate(),
+      inMonth: d.getUTCMonth() === month - 1,
+    });
+  }
+  return days;
+}
+
+export function ScheduleCalendar({
+  year,
+  month,
+  events,
+  canManage = false,
+  timeZone,
+  todayYmd = null,
+}: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const today = React.useMemo(() => new Date(), []);
-  // Which cell an event sits in, and which is today, come from the clock's
-  // LOCAL day: the server's (UTC on Vercel) while it renders, the viewer's in
-  // the browser. An evening event is the next day in UTC, so the server drew
-  // it in another cell (React error #418), and the server's today stayed
-  // marked. Both are drawn once hydrated; the grid itself is the same on both.
-  const hydrated = useHydrated();
 
-  // Bucket events by ymd of start date (events spanning multiple days
-  // currently render only on their start day — keeps the cells uncluttered;
-  // multi-day rendering is a polish-pass concern).
+  // Each event sits in the cell of its start day in the ORGANIZATION's zone,
+  // and today is the organization's today (small fixes slice 8). Both used to
+  // come from the clock's local day, the server's (UTC on Vercel) and then the
+  // viewer's, drawn once hydrated (#331): a viewer outside the organization's
+  // zone saw events on other days, and could open the organization's month
+  // with their own today outside its grid, with no Today mark. Fixed props
+  // draw the same calendar on the server and in the browser.
+  //
+  // Events spanning multiple days render only on their start day (keeps the
+  // cells uncluttered; multi-day rendering is a polish-pass concern).
   const byDay = React.useMemo(() => {
     const m = new Map<string, CalendarEvent[]>();
     for (const ev of events) {
-      const key = ymd(new Date(ev.startsAt));
+      const key = orgDayOf(ev.startsAt, timeZone);
+      if (key === null) continue;
       const list = m.get(key) ?? [];
       list.push(ev);
       m.set(key, list);
     }
     return m;
-  }, [events]);
+  }, [events, timeZone]);
 
-  const gridStart = startOfMonthGrid(year, month);
-  const cells: Date[] = [];
-  for (let i = 0; i < 42; i++) {
-    const d = new Date(gridStart);
-    d.setDate(gridStart.getDate() + i);
-    cells.push(d);
-  }
+  const cells = monthGridDays(year, month);
 
   function navMonth(delta: number) {
     const next = new Date(year, month - 1 + delta, 1);
@@ -161,7 +187,7 @@ export function ScheduleCalendar({ year, month, events, canManage = false }: Pro
           </Button>
         </div>
         <h2 className="text-foreground font-display text-[20px] font-medium leading-[30px] tracking-[-0.02em]">
-          {formatHeader(year, month)}
+          {formatHeader(year, month, timeZone)}
         </h2>
         {canManage && (
           <Button asChild variant="gradient">
@@ -188,9 +214,9 @@ export function ScheduleCalendar({ year, month, events, canManage = false }: Pro
             </div>
             <div className="grid grid-cols-7">
               {cells.map((d, i) => {
-                const inMonth = d.getMonth() === month - 1;
-                const isToday = hydrated && isSameDay(d, today);
-                const dayEvents = hydrated ? (byDay.get(ymd(d)) ?? []) : [];
+                const inMonth = d.inMonth;
+                const isToday = d.ymd === todayYmd;
+                const dayEvents = byDay.get(d.ymd) ?? [];
                 const visible = dayEvents.slice(0, 3);
                 const overflow = dayEvents.length - visible.length;
                 return (
@@ -214,16 +240,16 @@ export function ScheduleCalendar({ year, month, events, canManage = false }: Pro
                               : 'text-muted-foreground',
                         )}
                       >
-                        {d.getDate()}
+                        {d.day}
                       </span>
                       {canManage && (
                         // Revealed on hover, and always when it or anything in
                         // its day holds the keyboard focus, and on touch
                         // screens, where there is no hover (CONFLICTS D18).
                         <Link
-                          href={`/dashboard/schedule/new?date=${ymd(d)}`}
+                          href={`/dashboard/schedule/new?date=${d.ymd}`}
                           className="text-muted-foreground hover:text-foreground focus-visible:ring-ring rounded px-1 text-[11px] leading-6 opacity-0 transition-opacity focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 group-focus-within:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100"
-                          aria-label={`Add event on ${ymd(d)}`}
+                          aria-label={`Add event on ${d.ymd}`}
                         >
                           + Add
                         </Link>
@@ -231,12 +257,19 @@ export function ScheduleCalendar({ year, month, events, canManage = false }: Pro
                     </div>
                     <div className="mt-1 space-y-1">
                       {visible.map((ev) => {
+                        // Plain spaces: this text is rendered on the server and
+                        // again in the browser, and newer ICU (and Hermes) put a
+                        // narrow no-break space before AM/PM, so an engine that
+                        // does it on one side only would not hydrate.
                         const time = ev.allDay
                           ? null
-                          : formatOrgTime(new Date(ev.startsAt), {
-                              hour: 'numeric',
-                              minute: '2-digit',
-                            });
+                          : plainSpaces(
+                              formatOrgTime(
+                                new Date(ev.startsAt),
+                                { hour: 'numeric', minute: '2-digit' },
+                                timeZone,
+                              ),
+                            );
                         return (
                           <Link
                             key={ev.id}
@@ -259,7 +292,7 @@ export function ScheduleCalendar({ year, month, events, canManage = false }: Pro
                       })}
                       {overflow > 0 ? (
                         <Link
-                          href={`/dashboard/schedule?m=${year}-${String(month).padStart(2, '0')}&day=${ymd(d)}`}
+                          href={`/dashboard/schedule?m=${year}-${String(month).padStart(2, '0')}&day=${d.ymd}`}
                           className="text-muted-foreground hover:text-foreground block px-1.5 text-[11px] leading-4"
                         >
                           +{overflow} more

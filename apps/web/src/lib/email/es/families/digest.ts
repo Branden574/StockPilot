@@ -81,41 +81,57 @@ const DIGEST_PREVIEW_DEF = esEmailById('digest-preview');
 export const DIGEST_FROM = DIGEST_DEF.from;
 
 /**
- * Subject dateline format, unchanged from the legacy template
- * ("Monday, July 20, 2026") so cron subjects stay byte-identical
- * across the redesign.
+ * The digest's days are the ORGANIZATION's (small fixes slice 8): its
+ * subject's dateline, the "As of" pill, the plain text's dateline and a cycle
+ * count's "started" day. They were formatted with no zone, so in the
+ * server's (UTC on Vercel): the Monday 14:00 UTC run is already Tuesday from
+ * UTC+10 east, and a preview sent after 5 PM in Los Angeles is tomorrow in
+ * UTC. The zone goes through resolveOrgTimezone like every org-time surface:
+ * unset or unknown, it is the documented default.
  */
-export const DIGEST_DATE_FMT = new Intl.DateTimeFormat('en-US', {
-  weekday: 'long',
-  month: 'long',
-  day: 'numeric',
-  year: 'numeric',
-});
-
-const MONTH_DAY_FMT = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-});
-
-export function weeklyDigestSubject(now: Date = new Date()): string {
-  // Accept an explicit `now` so callers can lock the subject to the
-  // cron-start time even if rendering individual emails takes a long
-  // time. Default to the current wall clock for preview / one-shot use.
-  return DIGEST_DEF.subject({ date: DIGEST_DATE_FMT.format(now) });
+function formatInOrgZone(
+  at: Date,
+  opts: Intl.DateTimeFormatOptions,
+  timeZone: string | null | undefined,
+): string {
+  return new Intl.DateTimeFormat('en-US', { ...opts, timeZone: resolveOrgTimezone(timeZone) }).format(at);
 }
 
-export function weeklyDigestPreviewSubject(now: Date = new Date()): string {
-  return DIGEST_PREVIEW_DEF.subject({ date: DIGEST_DATE_FMT.format(now) });
+/**
+ * Subject dateline ("Monday, July 20, 2026"), the legacy template's words, in
+ * the organization's zone.
+ */
+function digestDateline(now: Date, timeZone: string | null | undefined): string {
+  return formatInOrgZone(now, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }, timeZone);
+}
+
+/** "Jun 15", in the organization's zone. */
+function digestMonthDay(at: Date, timeZone: string | null | undefined): string {
+  return formatInOrgZone(at, { month: 'short', day: 'numeric' }, timeZone);
+}
+
+/**
+ * The Monday digest's subject. Accept an explicit `now` so callers can lock
+ * the subject to the cron-start time even if rendering individual emails
+ * takes a long time; `timeZone` is the organization's.
+ */
+export function weeklyDigestSubject(now: Date = new Date(), timeZone?: string | null): string {
+  return DIGEST_DEF.subject({ date: digestDateline(now, timeZone) });
+}
+
+export function weeklyDigestPreviewSubject(now: Date = new Date(), timeZone?: string | null): string {
+  return DIGEST_PREVIEW_DEF.subject({ date: digestDateline(now, timeZone) });
 }
 
 /**
  * Pill label: the day the digest's numbers were read ("As of Jun 15"), on the
- * same clock as the subject's dateline. The registry badge is the design's
- * date range ("Jun 8 – 14"); the payload is current state, not a week of
- * activity, so a range would say something the email does not show.
+ * same clock and in the same zone as the subject's dateline. The registry
+ * badge is the design's date range ("Jun 8 – 14"); the payload is current
+ * state, not a week of activity, so a range would say something the email
+ * does not show.
  */
-export function digestAsOfLabel(now: Date = new Date()): string {
-  return `As of ${MONTH_DAY_FMT.format(now)}`;
+export function digestAsOfLabel(now: Date = new Date(), timeZone?: string | null): string {
+  return `As of ${digestMonthDay(now, timeZone)}`;
 }
 
 /**
@@ -171,7 +187,8 @@ export interface WeeklyDigestRenderOptions {
   preview?: boolean;
   /** Injectable clock for deterministic subjects/ranges in tests. */
   now?: Date;
-  /** organizations.timezone, for the send time the footer states. */
+  /** organizations.timezone: the days the email prints (its title, the "As
+   *  of" pill, a count's "started" day) and the send time the footer states. */
   timeZone?: string | null;
 }
 
@@ -270,7 +287,7 @@ export function renderWeeklyDigestHtml(
     .slice(0, IN_PROGRESS_ROW_CAP)
     .map((cc) => ({
       titleHtml: `Cycle count${cycleCountRefSuffix(cc.countNumber)} — ${escapeHtml(cc.scopeLabel)}`,
-      detailHtml: `${cc.countedLines}/${cc.totalLines} counted &middot; started ${MONTH_DAY_FMT.format(new Date(cc.startedAt))}`,
+      detailHtml: `${cc.countedLines}/${cc.totalLines} counted &middot; started ${digestMonthDay(new Date(cc.startedAt), opts.timeZone)}`,
     }));
   if (cycleCounts.length > IN_PROGRESS_ROW_CAP) {
     progressRows.push({
@@ -312,8 +329,8 @@ export function renderWeeklyDigestHtml(
       : 'All clear — nothing needs your attention this week.';
 
   const subject = preview
-    ? weeklyDigestPreviewSubject(now)
-    : weeklyDigestSubject(now);
+    ? weeklyDigestPreviewSubject(now, opts.timeZone)
+    : weeklyDigestSubject(now, opts.timeZone);
 
   // ── Compose ────────────────────────────────────────────────────────
   const rows: string[] = [];
@@ -325,7 +342,7 @@ export function renderWeeklyDigestHtml(
       [
         statusPill({
           variant: 'info',
-          label: digestAsOfLabel(now),
+          label: digestAsOfLabel(now, opts.timeZone),
           dot: false,
         }),
         headline({
@@ -424,6 +441,10 @@ export interface WeeklyDigestTextOptions {
   orgName: string;
   appUrl: string;
   settingsUrl: string;
+  /** The moment the digest was built (the cron's start); default now. */
+  now?: Date;
+  /** organizations.timezone: the days the text prints. */
+  timeZone?: string | null;
 }
 
 export function weeklyDigestText(
@@ -431,7 +452,7 @@ export function weeklyDigestText(
   opts: WeeklyDigestTextOptions,
 ): string {
   const { orgName, appUrl, settingsUrl } = opts;
-  const date = DIGEST_DATE_FMT.format(new Date());
+  const date = digestDateline(opts.now ?? new Date(), opts.timeZone);
   const blocks: string[] = [`StockPilot weekly digest`, `${orgName} · ${date}`, ''];
 
   if (payload.lowStock.length > 0) {
@@ -469,7 +490,11 @@ export function weeklyDigestText(
   if (payload.openCycleCounts.length > 0) {
     blocks.push('CYCLE COUNTS IN PROGRESS');
     for (const cc of payload.openCycleCounts) {
-      const started = new Date(cc.startedAt).toLocaleDateString('en-US');
+      const started = formatInOrgZone(
+        new Date(cc.startedAt),
+        { year: 'numeric', month: 'numeric', day: 'numeric' },
+        opts.timeZone,
+      );
       const wh = cc.scopeLabel;
       const ref = formatCycleCountNumber(cc.countNumber);
       const pct =

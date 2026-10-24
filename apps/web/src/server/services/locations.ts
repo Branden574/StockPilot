@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { isSiteLocation, isSystemLocation } from '@/lib/locations/groups';
 
 import { audit } from './audit';
+import { fetchAllRows } from './lib/paginate';
 import {
   assertAnyPermission,
   assertPermission,
@@ -130,25 +131,32 @@ export class LocationsService {
    *                       location / a PO's receiving destination should offer.
    *   - `excludeSystem` → only drops staging/unplaced (kept for callers that
    *                       still want racks in the list, e.g. put-away flows).
+   *
+   * Every row, page by page (fetchAllRows), ordered by name and then id so the
+   * pages are stable. It was one read, capped at PostgREST's 1000 rows of
+   * EVERY kind before the sites were picked out, so an organization with more
+   * than 1000 locations lost each site whose name sorts past them: the
+   * purchase order pickers could not offer it, and Edit purchase order named
+   * such a destination as one you can't pick (small fixes slice 8 review). One
+   * request still answers an organization under 1000 locations.
    */
   async list(opts: { includeArchived?: boolean; excludeSystem?: boolean; sitesOnly?: boolean } = {}) {
-    let query = this.ctx.supabase
-      .from('locations')
-      // rack_number/rack_row/crate_color/crate_number are FIRST-CLASS columns
-      // (migration 0188). They travel with every list() row so a caller can
-      // show what a rack/crate actually is without re-fetching — and, more
-      // importantly, without parsing metadata back out of `name`. "Blue #42"
-      // is a DEDUPE KEY, not a data source; never reverse-engineer a crate
-      // from it while these columns exist.
-      .select('id, parent_id, name, type, kind, notes, warehouse_id, rack_number, rack_row, crate_color, crate_number, deleted_at, created_at, updated_at')
-      .eq('organization_id', this.ctx.organizationId)
-      .order('name', { ascending: true });
-    query = opts.includeArchived
-      ? query.not('deleted_at', 'is', null)
-      : query.is('deleted_at', null);
-    const { data, error } = await query;
-    if (error) throw new ServiceError('internal_error', error.message);
-    const rows = data ?? [];
+    const rows = await fetchAllRows((from, to) => {
+      const query = this.ctx.supabase
+        .from('locations')
+        // rack_number/rack_row/crate_color/crate_number are FIRST-CLASS columns
+        // (migration 0188). They travel with every list() row so a caller can
+        // show what a rack/crate actually is without re-fetching — and, more
+        // importantly, without parsing metadata back out of `name`. "Blue #42"
+        // is a DEDUPE KEY, not a data source; never reverse-engineer a crate
+        // from it while these columns exist.
+        .select('id, parent_id, name, type, kind, notes, warehouse_id, rack_number, rack_row, crate_color, crate_number, deleted_at, created_at, updated_at')
+        .eq('organization_id', this.ctx.organizationId);
+      return (opts.includeArchived ? query.not('deleted_at', 'is', null) : query.is('deleted_at', null))
+        .order('name', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to);
+    });
     if (opts.sitesOnly) return rows.filter(isSiteLocation);
     return opts.excludeSystem ? rows.filter(isUserFacingLocation) : rows;
   }

@@ -53,6 +53,8 @@ const EMPTY: RecurringRunSummary = {
   linesLeftOff: 0,
   templatesWithLinesLeftOff: [],
   templatesWithNothingOrderable: [],
+  templatesSkipped: [],
+  templatesSendFailed: [],
 };
 
 function run(summary: RecurringRunSummary) {
@@ -111,5 +113,118 @@ describe('GET /api/cron/recurring-pos — admin notification', () => {
   it('stays quiet when nothing was created and nothing was left off', async () => {
     await run(EMPTY);
     expect(createNotification).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A template whose purchase order the save refused (its destination deleted
+ * after it was saved, ...) or could not make: the run names it with why
+ * (templatesSkipped, recurring-pos.run-skips.test.ts). The cron tells the
+ * organization's owners and admins, as for every notice, AND the template's
+ * creator, who may be a manager: the person who set the template up is the
+ * one who will fix it. Each person once; a creator who is no longer an
+ * accepted member of the organization is not told.
+ */
+describe('GET /api/cron/recurring-pos — a skipped template is told to its creator too', () => {
+  const MEMBERS = [
+    { user_id: 'admin-1', role: 'owner', accepted: true },
+    { user_id: 'manager-1', role: 'manager', accepted: true },
+    { user_id: 'left-1', role: 'manager', accepted: false },
+  ];
+
+  /** organization_members as each read asks: by role (owners and admins),
+   *  or by user id (the creators), accepted members only. */
+  function members(call: { methods: string[]; args: unknown[][] }) {
+    const ins = call.methods
+      .map((m, i) => (m === 'in' ? (call.args[i] as [string, string[]]) : null))
+      .filter((x): x is [string, string[]] => x !== null);
+    const byRole = ins.find(([col]) => col === 'role')?.[1];
+    const byUser = ins.find(([col]) => col === 'user_id')?.[1];
+    const rows = MEMBERS.filter(
+      (m) => m.accepted && (!byRole || byRole.includes(m.role)) && (!byUser || byUser.includes(m.user_id)),
+    ).map((m) => ({ user_id: m.user_id, role: m.role }));
+    return { data: rows, error: null };
+  }
+
+  function runWith(summary: RecurringRunSummary) {
+    summaryHolder.summary = summary;
+    adminHolder.client = makeSupabaseStub({
+      'organization_modules.select': { data: [{ organization_id: 'org-1', module_id: 'purchase_orders' }], error: null },
+      'organizations.select': { data: { plan: 'pro' }, error: null },
+      'organization_members.select': members,
+    }).client;
+    return GET(
+      new Request('https://test.local/api/cron/recurring-pos', {
+        headers: { authorization: 'Bearer test-cron-secret' },
+      }),
+    );
+  }
+
+  const skipped = (createdBy: string | null) => ({
+    ...EMPTY,
+    failures: 1,
+    templatesSkipped: [
+      {
+        templateId: 'tpl-1',
+        name: 'Annex Paper',
+        reason: 'Its destination, "Old Annex", was deleted. Edit the template and choose another destination.',
+        createdBy,
+      },
+    ],
+  });
+
+  const told = () => createNotification.mock.calls.map(([a]) => (a as { userId: string }).userId).sort();
+
+  it('tells the owners and admins and the template creator, with the reason, and reports the skip in the run total', async () => {
+    const res = await runWith(skipped('manager-1'));
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ posCreated: 0, failures: 1, templatesSkipped: 1 });
+    expect(told()).toEqual(['admin-1', 'manager-1']);
+    for (const [args] of createNotification.mock.calls) {
+      expect(args).toEqual(
+        expect.objectContaining({
+          organizationId: 'org-1',
+          title: 'Recurring purchase orders need attention',
+          body: '"Annex Paper" created no purchase order. Its destination, "Old Annex", was deleted. Edit the template and choose another destination.',
+          link: '/dashboard/purchase-orders',
+        }),
+      );
+    }
+  });
+
+  // The notice names three skipped templates and counts the rest, so the
+  // creator of the fourth was told "1 more template" without its name. Each
+  // creator's notice names every template of theirs first (slice 8 review).
+  it("a creator is told their own template's name, even past the first three", async () => {
+    await runWith({
+      ...EMPTY,
+      failures: 4,
+      templatesSkipped: ['A', 'B', 'C', 'D'].map((name) => ({
+        templateId: `tpl-${name}`,
+        name,
+        reason: 'An unexpected error stopped it. It runs again on its next date.',
+        createdBy: name === 'D' ? 'manager-1' : 'admin-1',
+      })),
+    });
+    const bodyFor = (userId: string) =>
+      (createNotification.mock.calls.find(([a]) => (a as { userId: string }).userId === userId)?.[0] as { body: string })
+        .body;
+    expect(bodyFor('manager-1')).toMatch(/^"D" created no purchase order\./);
+    expect(bodyFor('admin-1')).not.toContain('"D"');
+    expect(bodyFor('admin-1')).toContain('1 more template created no purchase order.');
+  });
+
+  it('a creator who is also an owner or admin is told once', async () => {
+    await runWith(skipped('admin-1'));
+    expect(told()).toEqual(['admin-1']);
+  });
+
+  it('a creator who is no longer an accepted member, or none recorded, is not told', async () => {
+    await runWith(skipped('left-1'));
+    expect(told()).toEqual(['admin-1']);
+    createNotification.mockClear();
+    await runWith(skipped(null));
+    expect(told()).toEqual(['admin-1']);
   });
 });

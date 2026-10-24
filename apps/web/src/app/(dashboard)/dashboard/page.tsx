@@ -41,6 +41,7 @@ import { ReportsService } from '@/server/services/reports';
 import { requireOrgContext } from '@/lib/auth/session';
 import { movementTypeLabel } from '@/lib/movements/movement-type';
 import { ORDERS_AWAITING_SIGNATURE_HREF } from '@/lib/orders/export';
+import { OVERDUE_PO_ATTENTION_DETAIL } from '@/lib/purchase-orders/tabs';
 import { orSessionEnded } from '@/lib/auth/session-ended';
 import {
   getMfaFactorsForRequest,
@@ -443,7 +444,7 @@ async function DashboardBody({
     attentionItems.push({
       id: 'po-overdue',
       title: `${poOverdueCount} overdue purchase order${poOverdueCount === 1 ? '' : 's'}`,
-      detail: 'Expected receipt date has passed. Chase your suppliers or update the ETA.',
+      detail: OVERDUE_PO_ATTENTION_DETAIL,
       href: '/dashboard/purchase-orders?status=overdue',
       rank: 2,
       tone: 'warn',

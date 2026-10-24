@@ -54,6 +54,9 @@ const ROWS: PoInstantRow[] = [
   },
 ];
 
+/** The organization's zone the page passes: the Placed day is its day. */
+const ORG_ZONE = 'America/Los_Angeles';
+
 const previousZone = process.env.TZ;
 beforeEach(() => {
   process.env.TZ = 'America/Los_Angeles';
@@ -70,7 +73,11 @@ function rowOf(poNumber: string): HTMLElement {
 describe('PoListTable', () => {
   it('keeps the eight columns and their words', () => {
     const { container } = render(
-      <PoListTable rows={ROWS} supplierNames={{ 'sup-1': 'Lantern Peak School Supply' }} />,
+      <PoListTable
+        rows={ROWS}
+        supplierNames={{ 'sup-1': 'Lantern Peak School Supply' }}
+        timeZone={ORG_ZONE}
+      />,
     );
     const headers = Array.from(container.querySelectorAll('th')).map(
       (th) => th.textContent || th.getAttribute('aria-label'),
@@ -95,7 +102,7 @@ describe('PoListTable', () => {
   });
 
   it('gives each row its two links to the PO and nothing else to click', () => {
-    render(<PoListTable rows={ROWS} supplierNames={{}} />);
+    render(<PoListTable rows={ROWS} supplierNames={{}} timeZone={ORG_ZONE} />);
     const row = rowOf('PO-2026-0029');
     const links = within(row).getAllByRole('link');
     expect(links.map((l) => l.getAttribute('href'))).toEqual([
@@ -107,7 +114,13 @@ describe('PoListTable', () => {
   });
 
   it('folds the supplier and the dates under the number, and the line count under the total', () => {
-    render(<PoListTable rows={ROWS} supplierNames={{ 'sup-1': 'Lantern Peak School Supply' }} />);
+    render(
+      <PoListTable
+        rows={ROWS}
+        supplierNames={{ 'sup-1': 'Lantern Peak School Supply' }}
+        timeZone={ORG_ZONE}
+      />,
+    );
     const ordered = rowOf('PO-2026-0029');
     const folded = within(ordered).getByText('Expected Oct 22').closest('p');
     expect(folded).toHaveTextContent(
@@ -129,6 +142,7 @@ describe('PoListTable', () => {
       <PoListTable
         rows={ROWS}
         supplierNames={{}}
+        timeZone={ORG_ZONE}
         footer={<div data-testid="pager">Page 1 of 2</div>}
       />,
     );

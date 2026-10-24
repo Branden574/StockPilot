@@ -233,15 +233,22 @@ export class ScheduleService {
    * List events whose [starts_at, ends_at) intersects [from, to). Open-
    * ended events (ends_at is null) are treated as ending at starts_at
    * for filtering purposes — they always show on their start day.
+   *
+   * So an open-ended event is read only when it STARTS in the range. The
+   * filter was `ends_at is null or ends_at >= from`, which read every
+   * open-ended event that ever started before `to` (31 of production's 36
+   * events, 2026-10-11), oldest first under the cap below, so an organization
+   * with 500 of them saw none of this month's (small fixes slice 8 review).
    */
   async listInRange(from: Date, to: Date): Promise<ScheduleEventRow[]> {
     assertModuleEnabled(this.ctx, 'schedule');
+    const fromIso = from.toISOString();
     const { data, error } = await this.ctx.supabase
       .from('schedule_events')
       .select(SELECT_COLUMNS)
       .eq('organization_id', this.ctx.organizationId)
       .lt('starts_at', to.toISOString())
-      .or(`ends_at.is.null,ends_at.gte.${from.toISOString()}`)
+      .or(`and(ends_at.is.null,starts_at.gte.${fromIso}),ends_at.gte.${fromIso}`)
       .order('starts_at', { ascending: true })
       // Hard cap so a runaway month doesn't OOM the calendar page.
       // If we ever legitimately hit this, the WARN below tells us to

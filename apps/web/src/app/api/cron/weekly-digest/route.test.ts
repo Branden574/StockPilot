@@ -535,3 +535,59 @@ describe('GET /api/cron/weekly-digest — overdue in the organization zone', () 
     }
   });
 });
+
+describe("GET /api/cron/weekly-digest — each organization's own date (small fixes slice 8)", () => {
+  // The subject was built ONCE per run, in the server's zone (UTC on Vercel):
+  // the Monday 14:00 UTC run is already Tuesday from UTC+10 east, so such an
+  // organization's digest arrived dated the day before. Now each
+  // organization's subject, HTML and text carry its own date, as of the run's
+  // start.
+  it("dates each organization's subject and text in that organization's zone, as of the run's start", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-10-12T14:00:00.000Z'));
+      const sydneyRow = {
+        ...recipientRow('user-b', 'b@harbour.test'),
+        organization_members: [
+          {
+            organization_id: 'org-2',
+            accepted_at: '2026-01-01T00:00:00Z',
+            organizations: { id: 'org-2', name: 'Harbour', timezone: 'Australia/Sydney' },
+          },
+        ],
+      };
+      const stub = makeSupabaseStub({
+        'user_profiles.select': { data: [recipientRow('user-a', 'a@acme.test'), sydneyRow], error: null },
+        'user_profiles.select.maybeSingle': { data: { email_digest_optin: true, disabled_at: null }, error: null },
+        'organization_members.select.maybeSingle': {
+          data: { user_id: 'whichever', accepted_at: '2026-01-01T00:00:00Z', role: 'owner' },
+          error: null,
+        },
+      });
+      adminHolder.client = stub.client;
+      const digest = await import('@/lib/email/es/families/digest');
+      vi.mocked(digest.weeklyDigestSubject).mockImplementation(
+        (_now?: Date, timeZone?: string | null) => `digest for ${timeZone}`,
+      );
+
+      await GET(buildRequest('Bearer test-cron-secret'));
+
+      const at = new Date('2026-10-12T14:00:00.000Z');
+      expect(vi.mocked(digest.weeklyDigestSubject).mock.calls).toEqual([
+        [at, 'America/Los_Angeles'],
+        [at, 'Australia/Sydney'],
+      ]);
+      const sent = sendEmailMock.mock.calls.map(([args]) => [args.to, args.subject]);
+      expect(sent).toEqual([
+        ['a@acme.test', 'digest for America/Los_Angeles'],
+        ['b@harbour.test', 'digest for Australia/Sydney'],
+      ]);
+      expect(digest.weeklyDigestText).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ orgName: 'Harbour', now: at, timeZone: 'Australia/Sydney' }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

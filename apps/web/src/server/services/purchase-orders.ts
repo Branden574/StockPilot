@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 import { assertWarehouseAccess, getWarehouseAccess } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
+import { OVERDUE_PO_STATUSES } from '@/lib/purchase-orders/tabs';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { mapWithConcurrency } from '@/lib/supabase/in-filter';
 import { createNotification } from './notifications';
@@ -66,6 +67,45 @@ const PO_NUMBER_TAKEN = 'po_number_taken';
 
 function isPoNumberTaken(e: unknown): boolean {
   return e instanceof ServiceError && e.code === 'conflict' && e.details?.reason === PO_NUMBER_TAKEN;
+}
+
+/** resolveDestinationWarehouseId's refusals of a destination, by reason. */
+const DESTINATION_DELETED = 'destination_deleted';
+const DESTINATION_NO_WAREHOUSE = 'destination_no_warehouse';
+
+/**
+ * The destination a save refused (resolveDestinationWarehouseId): deleted, or
+ * linked to no warehouse, with the location's name as it read it (null when
+ * it has none); null when `e` is any other error. The recurring run says a
+ * template's refused destination in the template's words with this.
+ */
+export function refusedDestination(
+  e: unknown,
+): { why: 'deleted' | 'no_warehouse'; locationName: string | null } | null {
+  if (!(e instanceof ServiceError)) return null;
+  const reason = e.details?.reason;
+  if (reason !== DESTINATION_DELETED && reason !== DESTINATION_NO_WAREHOUSE) return null;
+  const name = e.details?.locationName;
+  return {
+    why: reason === DESTINATION_DELETED ? 'deleted' : 'no_warehouse',
+    locationName: typeof name === 'string' && name.trim() ? name.trim() : null,
+  };
+}
+
+/** The refusal of a deleted destination, by name: the save's and the order's. */
+function deletedDestinationError(rawName: string | null | undefined): ServiceError {
+  const locationName = (rawName ?? '').trim() || null;
+  return new ServiceError(
+    'validation_error',
+    `${locationName ? `"${locationName}"` : 'The destination location'} was deleted, so a purchase order can't go there. Choose another destination.`,
+    { reason: DESTINATION_DELETED, locationName },
+  );
+}
+
+/** refusedDestination, for a deleted destination only. */
+export function refusedDeletedDestination(e: unknown): { locationName: string | null } | null {
+  const refused = refusedDestination(e);
+  return refused?.why === 'deleted' ? { locationName: refused.locationName } : null;
 }
 
 /**
@@ -304,39 +344,129 @@ export class PurchaseOrdersService {
    * (pastExpectedDayCutoff). The zone is read alongside the warehouse access.
    */
   async overdueCount(params: { warehouseId?: string } = {}): Promise<number> {
-    const [access, timeZone] = await Promise.all([
-      getWarehouseAccess(this.ctx),
-      orgTimeZoneFor(this.ctx, 'purchase-orders.overdue_count.org_timezone'),
-    ]);
-    const needsScope = !access.hasAllAccess || !!params.warehouseId;
-    if (!access.hasAllAccess && access.readableIds.length === 0) return 0;
-    // Null only when this runtime cannot name the organization's day: count
-    // nothing rather than guess.
-    const cutoff = pastExpectedDayCutoff(new Date(), timeZone);
-    if (cutoff === null) return 0;
+    const overdue = await this.overdueFilter(params, 'purchase-orders.overdue_count.org_timezone');
+    if (overdue === null) return 0;
 
-    const destEmbed = needsScope
-      ? 'destination:locations!destination_location_id!inner (warehouse_id)'
-      : 'destination:locations!destination_location_id (warehouse_id)';
-
-    let query = this.ctx.supabase
-      .from('purchase_orders')
-      .select(`id, ${destEmbed}`, { count: 'exact', head: true })
-      .eq('organization_id', this.ctx.organizationId)
-      .in('status', ['expected_inbound', 'ordered', 'partially_received'])
-      .not('expected_at', 'is', null)
-      .lt('expected_at', cutoff);
-
-    if (!access.hasAllAccess) {
-      // in-list-bound: the caller's readable warehouses (an org's handful of sites)
-      query = query.in('destination.warehouse_id', access.readableIds);
-    } else if (params.warehouseId) {
-      query = query.eq('destination.warehouse_id', params.warehouseId);
-    }
+    const query = overdue.apply(
+      this.ctx.supabase
+        .from('purchase_orders')
+        .select(`id, ${overdue.destEmbed}`, { count: 'exact', head: true }),
+    );
 
     const { count, error } = await query;
     if (error) throw new ServiceError('internal_error', error.message);
     return count ?? 0;
+  }
+
+  /**
+   * The overdue purchase orders themselves: the rows overdueCount counts, for
+   * the purchase orders list's Overdue view (the dashboard's overdue line
+   * links there; until 2026-10-11 the list had no such view and showed All).
+   * The same filter as the count (overdueFilter), so the view lists exactly
+   * what the dashboard counts for the same warehouse. Newest first, as the
+   * list's other views, every row (paged past PostgREST's 1000-row cap), in
+   * the list's row shape. `asOfDay` is the organization's day the rule was
+   * applied on ("YYYY-MM-DD"), for the view to say; null when nothing can be
+   * overdue for this caller (no readable warehouse, or the runtime cannot
+   * name the day). A failed read throws (the page shows its retry banner).
+   */
+  async listOverdue(
+    params: { warehouseId?: string } = {},
+  ): Promise<{ rows: PoPageRow[]; asOfDay: string | null }> {
+    assertModuleEnabled(this.ctx, 'purchase_orders');
+    const overdue = await this.overdueFilter(params, 'purchase-orders.list_overdue.org_timezone');
+    if (overdue === null) return { rows: [], asOfDay: null };
+
+    type OverdueRow = Omit<PoPageRow, 'line_count'> & {
+      destination?: unknown;
+      purchase_order_items?: Array<{ count: number }>;
+    };
+    const rows = await fetchAllRows<OverdueRow>(
+      (from, to) =>
+        overdue
+          .apply(
+            this.ctx.supabase
+              .from('purchase_orders')
+              .select(
+                `id, po_number, status, supplier_id, destination_location_id, expected_at, ordered_at, received_at, total, created_at, updated_at, ${overdue.destEmbed}, purchase_order_items(count)`,
+              ),
+          )
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: true })
+          .range(from, to) as unknown as PromiseLike<{
+          data: OverdueRow[] | null;
+          error: { message: string } | null;
+        }>,
+    );
+    return {
+      rows: rows.map(({ destination: _destination, purchase_order_items, ...row }) => ({
+        ...row,
+        line_count: Array.isArray(purchase_order_items) ? (purchase_order_items[0]?.count ?? 0) : 0,
+      })),
+      asOfDay: overdue.asOfDay,
+    };
+  }
+
+  /**
+   * THE overdue filter, once, for overdueCount and listOverdue: receivable
+   * (ordered, in transit or partly received), with an expected date before
+   * the organization's today at midnight UTC (pastExpectedDayCutoff, #338's
+   * rule), in this organization, scoped by the destination's warehouse as
+   * list() scopes (a warehouse-scoped member: their readable warehouses, the
+   * header's pick ignored; an all-access member: the header's pick, if any).
+   * Null when nothing can be overdue for this caller: no readable warehouse,
+   * or the runtime cannot name the organization's day (nothing is called
+   * overdue on a guess).
+   */
+  private async overdueFilter(
+    params: { warehouseId?: string },
+    timeZoneTag: string,
+  ): Promise<{
+    asOfDay: string;
+    destEmbed: string;
+    apply: <Q>(query: Q) => Q;
+  } | null> {
+    const [access, timeZone] = await Promise.all([
+      getWarehouseAccess(this.ctx),
+      orgTimeZoneFor(this.ctx, timeZoneTag),
+    ]);
+    if (!access.hasAllAccess && access.readableIds.length === 0) return null;
+    const now = new Date();
+    const cutoff = pastExpectedDayCutoff(now, timeZone);
+    if (cutoff === null) return null;
+    const needsScope = !access.hasAllAccess || !!params.warehouseId;
+    const organizationId = this.ctx.organizationId;
+
+    type Filters = {
+      eq(column: string, value: string): Filters;
+      in(column: string, values: readonly string[]): Filters;
+      not(column: string, operator: string, value: null): Filters;
+      lt(column: string, value: string): Filters;
+    };
+    // The destination's embed, for the count's and the list's select on
+    // purchase_orders (inner when the rows are scoped by its warehouse).
+    // postgrest-from: purchase_orders
+    const destEmbed = needsScope
+      ? 'destination:locations!destination_location_id!inner (warehouse_id)'
+      : 'destination:locations!destination_location_id (warehouse_id)';
+    return {
+      asOfDay: cutoff.slice(0, 10),
+      destEmbed,
+      apply: <Q>(query: Q): Q => {
+        let q = (query as unknown as Filters)
+          .eq('organization_id', organizationId)
+          .in('status', OVERDUE_PO_STATUSES)
+          .not('expected_at', 'is', null)
+          .lt('expected_at', cutoff);
+        if (!access.hasAllAccess) {
+          // in-list-bound: the caller's readable warehouses (an org's handful of sites)
+          q = q.in('destination.warehouse_id', access.readableIds);
+        } else if (params.warehouseId) {
+          q = q.eq('destination.warehouse_id', params.warehouseId);
+        }
+        return q as unknown as Q;
+      },
+    };
   }
 
   async list(params: { warehouseId?: string } = {}) {
@@ -628,34 +758,77 @@ export class PurchaseOrdersService {
    * recovery card (which only fires when destination is null), stranding the PO
    * in a dead-end. Rejecting it at write time keeps that state from ever forming.
    *
+   * A DELETED location is refused too, by name (small fixes slice 8). Deleted
+   * locations stay readable and the database checks only the organization
+   * (save_purchase_order_draft, location_in_org), so until 2026-10-11 a
+   * purchase order could be saved to one, and a recurring template whose
+   * destination was deleted after it was saved created purchase orders to a
+   * place that no longer exists, every period. The refusal carries
+   * `details.reason = 'destination_deleted'` (and the name), which is how the
+   * recurring run tells it apart from other refusals and says it in the
+   * template's words (refusedDeletedDestination; RecurringPoTemplatesService.
+   * runDueTemplates). Every
+   * caller: create (the New purchase order form, the recurring run; the
+   * reorder and AI drafts pass no destination), update (Edit purchase order)
+   * and the recurring-template save, which refuses a deleted destination
+   * itself first, in its own words.
+   *
    * Not checked here: the location's kind (a staging area is linked to its
-   * warehouse, so it passes) and whether it was deleted (deleted locations stay
-   * readable). The recurring-template save calls this too
+   * warehouse, so it passes). The recurring-template save calls this too
    * (RecurringPoTemplatesService), so a template is held to the destination
    * rule of the purchase orders its daily run saves through create().
+   *
+   * A failed read refuses the save as an error: "could not read" is neither
+   * "not found" nor a pass.
    */
   async resolveDestinationWarehouseId(
     destinationLocationId: string | null | undefined,
   ): Promise<string | null> {
     if (!destinationLocationId) return null;
-    const { data: loc } = await this.ctx.supabase
+    const { data: loc, error } = await this.ctx.supabase
       .from('locations')
-      .select('warehouse_id')
+      .select('warehouse_id, name, deleted_at')
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', destinationLocationId)
       .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
     if (!loc) {
       throw new ServiceError('validation_error', 'The selected destination location was not found.');
     }
-    const wh = (loc as { warehouse_id?: string | null }).warehouse_id ?? null;
+    const location = loc as { warehouse_id?: string | null; name?: string | null; deleted_at?: string | null };
+    if (location.deleted_at) throw deletedDestinationError(location.name);
+    const wh = location.warehouse_id ?? null;
     if (!wh) {
+      // Tagged (and named) like a deleted one, so the recurring run can say it
+      // in the template's words; the form shows this message as it is.
       throw new ServiceError(
         'validation_error',
         "That destination location isn't linked to a warehouse, so received stock would have nowhere to go. Pick a warehouse-backed location.",
+        { reason: DESTINATION_NO_WAREHOUSE, locationName: (location.name ?? '').trim() || null },
       );
     }
     await assertWarehouseAccess(wh, 'write', this.ctx);
     return wh;
+  }
+
+  /**
+   * Refuses a deleted destination by name, as resolveDestinationWarehouseId
+   * does (same words, same `details.reason`), for an order that is not being
+   * saved: updateStatus committing a draft. Only the deleted rule: the
+   * warehouse rule and its write check stay with the save. A failed read
+   * refuses as an error.
+   */
+  private async assertDestinationNotDeleted(destinationLocationId: string | null): Promise<void> {
+    if (!destinationLocationId) return;
+    const { data, error } = await this.ctx.supabase
+      .from('locations')
+      .select('name, deleted_at')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', destinationLocationId)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    const location = data as { name?: string | null; deleted_at?: string | null } | null;
+    if (location?.deleted_at) throw deletedDestinationError(location.name);
   }
 
   /**
@@ -1350,6 +1523,13 @@ export class PurchaseOrdersService {
       // zod-rejects those states so the UI's real set (draft/ordered/cancelled)
       // is the only thing a client can send; this is the defense-in-depth twin.
       await this.assertApprovalThreshold(Number((po as { total?: unknown }).total ?? 0));
+      // A draft whose destination was deleted (saved before the save refused
+      // one, or deleted since) is not ordered there: it would become a
+      // receivable purchase order to a place that no longer exists, with
+      // nobody editing it (slice 8 review). Edit it to choose another.
+      await this.assertDestinationNotDeleted(
+        (po as { destination_location_id?: string | null }).destination_location_id ?? null,
+      );
     }
     const { data: row, error } = await this.ctx.supabase
       .from('purchase_orders')
