@@ -41,6 +41,10 @@ vi.mock('@/lib/supabase/server', () => ({ createClient: () => createClient() }))
 vi.mock('@/lib/warehouse-filter', () => ({
   getActiveWarehouseFilter: () => getActiveWarehouseFilter(),
 }));
+// The organization's zone, for the Placed day (page.placed-date.test.tsx).
+vi.mock('@/lib/dashboard/request-cache', () => ({
+  getOrgRowForRequest: vi.fn(async () => ({ timezone: 'America/Los_Angeles' })),
+}));
 vi.mock('@/server/services/purchase-orders', () => ({
   PurchaseOrdersService: {
     forCurrentUser: vi.fn(async () => ({ listStats, listPage, listOverdue })),

@@ -18,7 +18,6 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { poMatchesSearch } from '@/lib/purchase-orders/list-search';
-import { useHydrated } from '@/lib/use-hydrated';
 import { cn, formatCurrency, formatDateShort } from '@/lib/utils';
 
 import { formatCalendarDate } from '@stockpilot/core';
@@ -66,21 +65,26 @@ function linesLabel(count: number): string {
 export function PoListTable({
   rows,
   supplierNames,
+  timeZone,
   footer,
 }: {
   rows: readonly PoInstantRow[];
   supplierNames: Record<string, string>;
+  /** The organization's zone (organizations.timezone, resolved): the Placed day is its day. */
+  timeZone: string;
   /** Under the rows, inside the card (the server-paged list's pager). */
   footer?: React.ReactNode;
 }) {
-  // Placed is an instant, shown as a day in the VIEWER's zone, which the server
-  // (UTC on Vercel) does not have: an evening order is the next day there, and
-  // hydrating that day threw React error #418. So it is printed once hydrated;
-  // a missing date is a dash at once. The server-paged list printed the
-  // server's day (CONFLICTS D12: a day late for an evening order west of UTC);
-  // it draws this table now, so it waits for the viewer's zone too.
-  const hydrated = useHydrated();
-  const placedDay = (iso: string | null) => (iso && !hydrated ? null : formatDateShort(iso));
+  // Placed is an instant: the day it fell on in the ORGANIZATION's zone, in
+  // both lists (they draw this table) and as every instant in the app prints
+  // (core org-timezone; small fixes slice 8). The server-paged list printed
+  // the server's day (UTC on Vercel; CONFLICTS D12: a day late for an evening
+  // order west of UTC), and #331 had the instant list print the viewer's day
+  // once hydrated, because a day with no fixed zone came out as the server's
+  // and then the viewer's, and React threw error #418. A fixed zone prints the
+  // same text on the server and in the browser, so it needs no hydration gate,
+  // and a viewer outside the organization's zone sees the organization's day.
+  const placedDay = (iso: string | null) => formatDateShort(iso, 'en-US', timeZone);
   // Expected is a DAY the buyer picked, stored as that day's UTC midnight
   // (po-form sends new Date('YYYY-MM-DD')). Read in UTC it is the picked day on
   // the server and in every browser, as on the PO's page, its PDF
@@ -113,9 +117,8 @@ export function PoListTable({
             const placedText = placedDay(placed);
             const expectedText = expectedDay(po.expected_at);
             const supplier = supplierName(po.supplier_id);
-            // The Placed day joins the line once the viewer's zone is known,
-            // like the column. A date never breaks across two lines; a long
-            // supplier name may wrap.
+            // A date never breaks across two lines; a long supplier name may
+            // wrap.
             const folded = [
               supplier === '—' ? null : { text: supplier, keep: false },
               placed && placedText ? { text: `Placed ${placedText}`, keep: true } : null,
@@ -227,6 +230,7 @@ export function PoInstantTable({
   supplierNames,
   leading,
   caption,
+  timeZone,
 }: {
   rows: PoInstantRow[];
   supplierNames: Record<string, string>;
@@ -234,6 +238,8 @@ export function PoInstantTable({
   leading?: React.ReactNode;
   /** Under the filter row, above the rows: the Overdue view's count line. */
   caption?: React.ReactNode;
+  /** The organization's zone (organizations.timezone, resolved): the Placed day is its day. */
+  timeZone: string;
 }) {
   const [q, setQ] = React.useState('');
 
@@ -289,7 +295,7 @@ export function PoInstantTable({
           description="Try a different PO number or supplier, or clear the search."
         />
       ) : (
-        <PoListTable rows={filtered} supplierNames={supplierNames} />
+        <PoListTable rows={filtered} supplierNames={supplierNames} timeZone={timeZone} />
       )}
     </>
   );

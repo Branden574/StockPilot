@@ -3,6 +3,8 @@ import Link from 'next/link';
 
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { requireOrgContext } from '@/lib/auth/session';
+import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
+import { reportError } from '@/lib/error-reporter';
 import { effectiveNavLabel } from '@/lib/nav-labels';
 import { createClient } from '@/lib/supabase/server';
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
@@ -32,7 +34,7 @@ import {
   type PoTab,
 } from '@/lib/purchase-orders/tabs';
 
-import { formatCalendarDate } from '@stockpilot/core';
+import { formatCalendarDate, resolveOrgTimezone } from '@stockpilot/core';
 
 export const metadata = { title: 'Purchase orders' };
 
@@ -95,6 +97,21 @@ export default async function PurchaseOrdersPage({
       () => 'Purchase orders',
     ),
   ]);
+
+  // The Placed column prints a day, and whose day it is matters: in the
+  // server's zone (UTC on Vercel) an evening order in California lands on the
+  // next date, a morning one in Sydney on the day before. So the
+  // organization's zone, from the request-cached org row the layout reads
+  // (normally already in hand from the membership bundle), in both tables
+  // (small fixes slice 8). Started before the list reads; an unreadable row
+  // is the documented default zone, reported, never an error page
+  // (getOrgRowForRequest throws on a read error).
+  const timeZoneRead = getOrgRowForRequest(orgCtx.organizationId)
+    .then((org) => resolveOrgTimezone(org?.timezone))
+    .catch((e: unknown) => {
+      void reportError(e, { tag: 'purchase_orders.list.org_timezone_failed', level: 'warning' });
+      return resolveOrgTimezone(null);
+    });
 
   // Approval-threshold panel (owner/admin only). Read fails SOFT to "panel
   // shows 0" — the enforcement read in the service is the fail-closed one.
@@ -215,9 +232,10 @@ export default async function PurchaseOrdersPage({
     loadFailed = true;
   }
 
-  // The table is a client component (its Placed day waits for the viewer's
-  // zone), so the rows cross the wire: only the columns it prints, and only
-  // the names of the suppliers these rows name, never the whole lookup list.
+  // The table is a client component (the instant list searches in the
+  // browser, and both lists draw the same table), so the rows cross the wire:
+  // only the columns it prints, and only the names of the suppliers these
+  // rows name, never the whole lookup list.
   const tableRows: PoInstantRow[] = visible.map((po) => ({
     id: po.id,
     po_number: po.po_number,
@@ -234,6 +252,7 @@ export default async function PurchaseOrdersPage({
     const name = po.supplier_id ? supplierMap.get(po.supplier_id) : undefined;
     if (po.supplier_id && name !== undefined) supplierNames[po.supplier_id] = name;
   }
+  const timeZone = await timeZoneRead;
 
   const avgLead = stats.avgLeadDays != null ? Math.round(stats.avgLeadDays) : null;
 
@@ -421,6 +440,7 @@ export default async function PurchaseOrdersPage({
         <PoInstantTable
           rows={tableRows}
           supplierNames={supplierNames}
+          timeZone={timeZone}
           leading={statusTabs}
           caption={overdueLine}
         />
@@ -460,6 +480,7 @@ export default async function PurchaseOrdersPage({
         <PoListTable
           rows={tableRows}
           supplierNames={supplierNames}
+          timeZone={timeZone}
           footer={showPager ? pager(true) : undefined}
         />
       </>
