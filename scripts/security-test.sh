@@ -1291,6 +1291,15 @@ MOBILE_TESTS=(
   src/lib/sync.snapshot-removals.test.ts
   src/lib/draft-debouncer.test.ts
 
+  # A sign-out and an account eviction clear the photo caches (expo-image's
+  # memory and disk caches, and the item-photo links held in memory) after the
+  # SQLite wipe, so a shared phone keeps no photo the leaving account saw. A
+  # stored file's one-hour link (proof of delivery, purchase order files) is
+  # signed again at the tap once it is about to expire, never opened stale.
+  src/lib/photo-cache-wipe.test.ts
+  src/lib/photo-links-wiring.test.ts
+  src/lib/stored-file-link.test.ts
+
   # S4 review — WHO holds the session is read from the stored session, never
   # from getSession(), which answers "no session" offline once the access token
   # has expired while auth-js keeps it: a sign-out that failed offline must not

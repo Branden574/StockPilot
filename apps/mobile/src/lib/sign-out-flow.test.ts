@@ -311,7 +311,10 @@ describe('auth-context wiring', () => {
   it('signOut runs the sequence, with the outbox-keeping wipe as its cache wipe', () => {
     const body = fn('signOut');
     expect(body).toContain('runSignOutFlow(');
-    expect(body).toContain('wipeCache: wipeForSignOut');
+    // The SQLite cache, then the photos this account saw (photo-cache-wipe.ts).
+    expect(body).toMatch(
+      /wipeCache: async \(\) => \{\s*await wipeForSignOut\(\);\s*await clearPhotoCaches\(\);\s*\},/,
+    );
     // The keys an eviction removes (account-eviction.ts accountScopedStorageKeys).
     expect(body).toMatch(
       /clearAccountStorage: async \(\) => \{\s*const keys = accountScopedStorageKeys\(await AsyncStorage\.getAllKeys\(\)\);\s*if \(keys\.length > 0\) await AsyncStorage\.multiRemove\(keys\);\s*\},/,

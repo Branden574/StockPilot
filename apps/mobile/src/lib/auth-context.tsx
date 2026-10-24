@@ -25,6 +25,7 @@ import {
 import { totalPendingCount } from './cycle-count-cache';
 import { cycleCountSync } from './cycle-count-sync';
 import { wipeForSignOut } from './db';
+import { clearPhotoCaches } from './photo-cache-wipe';
 import { adoptLegacyRows, discardUnsyncedFor } from './queue';
 import {
   getRememberedIdentity,
@@ -481,8 +482,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           discardUnsynced: async () => {
             if (userId) await discardUnsyncedFor(userId);
           },
-          // The cache only: the outbox stays, held for this account.
-          wipeCache: wipeForSignOut,
+          // The cache only: the outbox stays, held for this account. The
+          // photos this account saw go with it (photo-cache-wipe.ts).
+          wipeCache: async () => {
+            await wipeForSignOut();
+            await clearPhotoCaches();
+          },
           // The saved workspace belongs to this account, not the device: the
           // same keys an eviction removes (use-account-gate.ts).
           clearAccountStorage: async () => {
