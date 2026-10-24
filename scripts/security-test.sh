@@ -867,6 +867,18 @@ WEB_TESTS=(
   # policy still requires AAL2, so a stolen password alone cannot pass the gates.
   # context.mfa.test.ts below is the web twin — keep the pair together.
   src/lib/auth/api-context.mfa.test.ts
+  # Cross-site cookie writes (docket S14, INV-E5): the one rule (a write with
+  # no Bearer token is refused when Sec-Fetch-Site is not same-origin or Origin
+  # names another host), withApiContext's cookie path refusing it before the
+  # session is read, the sweep that holds every route that can write to it or
+  # to a reviewed exemption, and two routes end to end through Next's route
+  # module. auth/confirm/route.test.ts below carries the login-CSRF half (a
+  # confirmation link posted from another site never signs this browser in).
+  src/lib/auth/cross-site-request.test.ts
+  src/lib/auth/api-context.cross-site.test.ts
+  src/test/cookie-write-routes.guard.test.ts
+  'src/app/api/v1/cycle-counts/[id]/lines/[lineId]/record/route.cross-site.test.ts'
+  src/app/api/v1/me/release-state/route.cross-site.test.ts
   src/lib/auth/platform-admin.test.ts
   src/lib/auth/platform-passphrase.test.ts
   src/lib/auth/api-key.test.ts

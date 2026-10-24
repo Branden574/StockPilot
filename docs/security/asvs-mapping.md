@@ -285,9 +285,20 @@ The rate limiter itself is the Postgres atomic counter added in migration 0048,
 whose `increment_rate_limit` function was closed to anon by 0318 — see
 `supabase/tests/0318_secdef_grants.test.sql`.
 
+A cookie-authenticated write that a browser sent from another origin is refused
+(anti-CSRF on route handlers, INV-E5): `withApiContext` answers it as signed out
+before the session is read, and a sweep holds every route that can write to that
+rule or to a reviewed exemption.
+
+_Evidence_ (INV-E5): `apps/web/src/lib/auth/cross-site-request.test.ts`,
+`apps/web/src/lib/auth/api-context.cross-site.test.ts`,
+`apps/web/src/test/cookie-write-routes.guard.test.ts`.
+
 _Gap_: no generic sweep asserting that **every** route is gated — coverage is
-per-route. A sweep over the cron routes specifically is feasible and is listed as a
-follow-up in the [`README`](README.md). No formal API schema or contract test.
+per-route (the INV-E5 sweep checks only that a write route reaches
+`withApiContext`, not what it permits). A sweep over the cron routes specifically
+is feasible and is listed as a follow-up in the [`README`](README.md). No formal API
+schema or contract test.
 
 ### V14 — Configuration — **Partial**
 

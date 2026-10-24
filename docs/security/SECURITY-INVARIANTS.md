@@ -24,7 +24,11 @@
      INV-B4, INV-C3 and INV-C4 were added with their assertions INV-31..36.
      The catalog facts quoted in those entries were read out of a local
      Postgres at migration 0371; the assertion count in section 10 was
-     re-derived from `select plan(36)`. -->
+     re-derived from `select plan(36)`.
+
+     AMENDED 2026-10-24 (docket S14): INV-E5 added, with a row in section 8.
+     The route counts quoted in it were read by its sweep test on that date;
+     the counts in section 10 were not re-derived. -->
 
 # Security invariants
 
@@ -1405,6 +1409,65 @@ application structure.
   (`ORDER_PHOTO_URL_TTL_SECONDS` and the web loader's
   `THUMB_SIGNED_URL_TTL_SEC`).
 
+### INV-E5 — a cookie-authenticated write that a browser sent from another origin is refused
+
+- **Invariant**: every route handler under `apps/web/src/app` that exports
+  `POST`, `PUT`, `PATCH` or `DELETE` either builds its context through
+  `withApiContext`, whose cookie path answers null (the route's own signed-out
+  answer) for a write that carries no Bearer token and whose `Sec-Fetch-Site`
+  is present and not `same-origin`, or whose `Origin` is present and names no
+  host the request was addressed to; or it is on the reviewed exemption list in
+  [`cookie-write-routes.guard.test.ts`](../../apps/web/src/test/cookie-write-routes.guard.test.ts),
+  with how it authenticates and why it needs no cookie rule, and it imports no
+  cookie-session reader.
+- **Why it matters**: a browser attaches the session cookie to a request
+  whatever page made it. The cookies are `SameSite=Lax`, which stops a page on
+  another site from posting with them but not a page on a sibling subdomain
+  (the same site), and Next.js checks `Origin` before a server action, never
+  before a route handler. Found 2026-10-24 by the automated push review of the
+  cycle-count clear route and confirmed as a class: 96 of the 150 route files
+  that use `withApiContext` handled a write with the cookie session and no
+  check. Only the order sign route and `/api/v1/me/release-state` refused a
+  cross-site post, each with its own copy of the rule, and both skipped any
+  `Authorization` header although `withApiContext` reads the cookie for anything
+  but `Bearer <token>`. The same inventory found `/auth/confirm` verifying an
+  emailed token posted from any site and setting the session from it, so a page
+  holding a link for its own account could sign a visitor's browser into that
+  account (login CSRF).
+- **Enforced by**: `refusesCrossSiteCookieWrite` in
+  [`cross-site-request.ts`](../../apps/web/src/lib/auth/cross-site-request.ts),
+  called at the top of `withApiContext`'s cookie path, before `getUser`, and by
+  the sign and release-state routes before they build a context (each keeps
+  its own answer: the one 404, and 403). `/auth/confirm` calls
+  `fetchSiteIsElsewhere` before `verifyOtp`: its page is `no-referrer`, so its
+  own form posts `Origin: null` and only `Sec-Fetch-Site` can be read. Never
+  judged: a Bearer caller (the phone), `GET`, `HEAD` and `OPTIONS`, and a
+  request with neither header (not a browser a page could drive). The `Origin`
+  host is compared with the request URL's host, the `Host` header and the first
+  `X-Forwarded-Host`: on Vercel all three name the public host, and under
+  `next dev` the URL says `localhost` whatever the browser typed.
+- **Tested at**:
+  [`cross-site-request.test.ts`](../../apps/web/src/lib/auth/cross-site-request.test.ts)
+  (the rule: every method, both headers, `null` and malformed origins, Bearer
+  and other `Authorization` schemes, local and proxied hosts);
+  [`api-context.cross-site.test.ts`](../../apps/web/src/lib/auth/api-context.cross-site.test.ts)
+  (the real `withApiContext` refuses before the session is read, and a
+  same-origin, a Bearer and a header-less write still resolve);
+  [`cookie-write-routes.guard.test.ts`](../../apps/web/src/test/cookie-write-routes.guard.test.ts)
+  (the allowlist sweep over the route files' syntax trees, with a self-test;
+  on 2026-10-24 it read 224 route files: 114 write handlers covered, 13 exempt,
+  one re-export); the record route's and release-state's `route.cross-site.test.ts`
+  (end to end through Next's App Route module); and
+  [`auth/confirm/route.test.ts`](../../apps/web/src/app/auth/confirm/route.test.ts)
+  (login CSRF).
+- **Not covered by this rule**: a `GET` that changes state. A link from another
+  site is a `GET` the browser sends with the cookie, so such a route would need
+  its own defence. None was found on 2026-10-24: the `GET` handlers that write
+  are the cron jobs (behind `CRON_SECRET`) and the two accounting OAuth
+  callbacks, which match their `state` against the pending connection row under
+  RLS. Server actions are covered by Next's own `Origin` check, not by this
+  rule.
+
 ---
 
 ## 6. The recurring bug patterns, as invariants
@@ -1700,6 +1763,7 @@ everything is machine-checked is itself a form of overclaiming.
 | INV-F3 (pattern #23)                            | Client-library behaviour in TypeScript, invisible to Postgres; a lint rule needs column-nullability type analysis           | Behavioural tests on affected paths, review                                                 |
 | INV-F4 (pattern #2)                             | Same                                                                                                                        | Guarded-write tests, review                                                                 |
 | Cron-route secret gating (INV-E3)               | No sweep exists yet; one is feasible and is listed as a follow-up                                                           | Per-route gate tests                                                                        |
+| A `GET` that changes state (INV-E5)             | Whether a `GET` writes depends on the services it calls, which a sweep over route files cannot read                         | The 2026-10-24 inventory in INV-E5, review                                                  |
 
 Also worth stating: `authenticated` holds table-level `INSERT`/`UPDATE`/`DELETE`
 on essentially every table in `public`, because that is the Supabase default
