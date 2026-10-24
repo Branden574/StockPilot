@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Two-session proof for migration 0393's capture trigger
+# Two-session proof for migration 0403's capture trigger
 # (trg_order_requests_signature_image_capture). confirm_order_signature
 # (frozen) still writes the image onto the order row; the trigger moves it to
 # order_request_secrets before the row is stored, and resume_fulfillment's
@@ -26,12 +26,12 @@
 #      check it.)
 #   4. No session ever sees 40001 or 40P01.
 #
-# LOCAL stack only (docker container supabase_db_stockpilot) with 0393
-# applied. Fixtures are committed under the 03933333-... namespace and removed
+# LOCAL stack only (docker container supabase_db_stockpilot) with 0403
+# applied. Fixtures are committed under the 04033333-... namespace and removed
 # at the start, at the end and by the EXIT trap. Never prints a token or an
 # image: booleans, counts and statuses. Exit status 0 = every check passed.
 #
-# Usage: bash scripts/db-concurrency/0393_capture_race.sh
+# Usage: bash scripts/db-concurrency/0403_capture_race.sh
 
 set -uo pipefail
 
@@ -39,15 +39,15 @@ CONTAINER="${CONTAINER:-supabase_db_stockpilot}"
 PSQL=(docker exec -i "$CONTAINER" psql -U postgres -X -q -v ON_ERROR_STOP=1 -At)
 TMP="$(mktemp -d)"
 
-ORG='03933333-0000-0000-0000-00000000000a'
-MGR='03933333-0000-0000-0000-0000000000a1'
-REQ='03933333-0000-0000-0000-0000000000a2'
-WH='03933333-0000-0000-0000-0000000000b1'
-ITEM='03933333-0000-0000-0000-0000000000c1'
-O1='03933333-0000-0000-0000-0000000000d1'
-O2='03933333-0000-0000-0000-0000000000d2'
-O3='03933333-0000-0000-0000-0000000000d3'
-L2='03933333-0000-0000-0000-0000000000e2'
+ORG='04033333-0000-0000-0000-00000000000a'
+MGR='04033333-0000-0000-0000-0000000000a1'
+REQ='04033333-0000-0000-0000-0000000000a2'
+WH='04033333-0000-0000-0000-0000000000b1'
+ITEM='04033333-0000-0000-0000-0000000000c1'
+O1='04033333-0000-0000-0000-0000000000d1'
+O2='04033333-0000-0000-0000-0000000000d2'
+O3='04033333-0000-0000-0000-0000000000d3'
+L2='04033333-0000-0000-0000-0000000000e2'
 
 FAILS=0
 ok()   { printf 'ok     %s\n' "$*"; }
@@ -99,19 +99,19 @@ cleanup() {
 trap cleanup EXIT
 
 HAS="$(q "select count(*) from pg_trigger where tgname = 'trg_order_requests_signature_image_capture'")"
-[ "$HAS" = "1" ] || { echo "needs 0393 on the local stack"; exit 1; }
+[ "$HAS" = "1" ] || { echo "needs 0403 on the local stack"; exit 1; }
 cleanup_rows
 "${PSQL[@]}" >/dev/null <<SQL
 insert into auth.users (id, email, raw_user_meta_data) values
-  ('$MGR', '0393-race-mgr@test.local', '{}'::jsonb),
-  ('$REQ', '0393-race-req@test.local', '{}'::jsonb);
-insert into public.organizations (id, name, slug) values ('$ORG', '0393 Race Org', '0393-race');
+  ('$MGR', '0403-race-mgr@test.local', '{}'::jsonb),
+  ('$REQ', '0403-race-req@test.local', '{}'::jsonb);
+insert into public.organizations (id, name, slug) values ('$ORG', '0403 Race Org', '0403-race');
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values
   ('$ORG', '$MGR', 'manager', now()),
   ('$ORG', '$REQ', 'staff', now());
-insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0393 Race Main', 'WH-0393-RC', 'active');
+insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0403 Race Main', 'WH-0403-RC', 'active');
 insert into public.inventory_items (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type)
-  values ('$ITEM', '$ORG', '$WH', '0393-RACE', 'Race item', 30, 'active', 'none');
+  values ('$ITEM', '$ORG', '$WH', '0403-RACE', 'Race item', 30, 'active', 'none');
 -- Each signable order is shaped as 0389's mint leaves it: the column holds
 -- sha256 of the side table's raw token.
 insert into public.order_requests
@@ -133,17 +133,17 @@ insert into public.order_request_lines (id, order_request_id, item_id, quantity_
 SQL
 
 handover() { # handover <label> <order> <raw pair> <image char> <hold seconds>
-  printf "set application_name = '0393-race-%s';\nbegin;\nset local role service_role;\nselect 'H=' || coalesce(public.confirm_order_signature('%s', encode(extensions.digest(repeat('%s', 32), 'sha256'), 'hex'), 'Pat Signer', 'pat@example.com', 'data:image/png;base64,' || repeat('%s', 200))::text, 'null');\nselect pg_sleep(%s);\ncommit;\n" \
+  printf "set application_name = '0403-race-%s';\nbegin;\nset local role service_role;\nselect 'H=' || coalesce(public.confirm_order_signature('%s', encode(extensions.digest(repeat('%s', 32), 'sha256'), 'hex'), 'Pat Signer', 'pat@example.com', 'data:image/png;base64,' || repeat('%s', 200))::text, 'null');\nselect pg_sleep(%s);\ncommit;\n" \
     "$1" "$2" "$3" "$4" "$5" | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/$1.out" 2>&1
 }
 
 # ── 1. Two hand-overs of one order with one token ────────────────────────
 handover 1a "$O1" 6a A 2 &
 P1=$!
-if wait_sleeping 0393-race-1a; then
+if wait_sleeping 0403-race-1a; then
   handover 1b "$O1" 6a B 0 &
   P2=$!
-  if wait_blocked 0393-race-1b; then ok "1: the second hand-over waits on the first's row lock"; else bad "1: the second hand-over never waited"; fi
+  if wait_blocked 0403-race-1b; then ok "1: the second hand-over waits on the first's row lock"; else bad "1: the second hand-over never waited"; fi
   wait "$P1"; wait "$P2"
   check "1: the first records the hand-over" "$(grep -c "^H=$ORG$" "$TMP/1a.out")" "1"
   check "1: the second finds the order signed and records nothing" "$(grep -c '^H=null$' "$TMP/1b.out")" "1"
@@ -157,11 +157,11 @@ fi
 # ── 2. A backordering hand-over holding while resume_fulfillment waits ───
 handover 2a "$O2" 6b C 2 &
 P1=$!
-if wait_sleeping 0393-race-2a; then
-  printf "set application_name = '0393-race-2b';\nbegin;\nset local role authenticated;\nset local \"request.jwt.claim.role\" to 'authenticated';\nset local \"request.jwt.claim.sub\" to '%s';\nselect 'R=' || r.status from public.resume_fulfillment('%s') r;\ncommit;\n" "$MGR" "$O2" \
+if wait_sleeping 0403-race-2a; then
+  printf "set application_name = '0403-race-2b';\nbegin;\nset local role authenticated;\nset local \"request.jwt.claim.role\" to 'authenticated';\nset local \"request.jwt.claim.sub\" to '%s';\nselect 'R=' || r.status from public.resume_fulfillment('%s') r;\ncommit;\n" "$MGR" "$O2" \
     | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/2b.out" 2>&1 &
   P2=$!
-  if wait_blocked 0393-race-2b; then ok "2: resume_fulfillment waits on the hand-over's row lock"; else bad "2: resume_fulfillment never waited"; fi
+  if wait_blocked 0403-race-2b; then ok "2: resume_fulfillment waits on the hand-over's row lock"; else bad "2: resume_fulfillment never waited"; fi
   wait "$P1"; wait "$P2"
   check "2: the hand-over recorded a partial hand-over" "$(grep -c "^H=$ORG$" "$TMP/2a.out")" "1"
   check "2: resume then reopened the pick" "$(grep -c '^R=pick_slip_generated$' "$TMP/2b.out")" "1"
@@ -174,11 +174,11 @@ fi
 # ── 3. The return prompt's mint while a hand-over holds the side row ─────
 handover 3a "$O3" 6c D 2 &
 P1=$!
-if wait_sleeping 0393-race-3a; then
-  printf "set application_name = '0393-race-3b';\nset role service_role;\nselect 'E=' || (public.order_return_token_ensure('%s') is not null)::text;\n" "$O3" \
+if wait_sleeping 0403-race-3a; then
+  printf "set application_name = '0403-race-3b';\nset role service_role;\nselect 'E=' || (public.order_return_token_ensure('%s') is not null)::text;\n" "$O3" \
     | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/3b.out" 2>&1 &
   P2=$!
-  if wait_blocked 0393-race-3b; then ok "3: the return-token mint waits on the hand-over's side row"; else bad "3: the return-token mint never waited"; fi
+  if wait_blocked 0403-race-3b; then ok "3: the return-token mint waits on the hand-over's side row"; else bad "3: the return-token mint never waited"; fi
   wait "$P1"; wait "$P2"
   check "3: the hand-over recorded the order" "$(grep -c "^H=$ORG$" "$TMP/3a.out")" "1"
   check "3: the return-token mint then answered a token" "$(grep -c '^E=true$' "$TMP/3b.out")" "1"

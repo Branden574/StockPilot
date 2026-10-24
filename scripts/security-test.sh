@@ -739,7 +739,7 @@ PGTAP_TESTS=(
   # family; the INVOKER preview never names item_stock_levels (INV-33). The
   # two-session proofs are scripts/db-concurrency/0400_item_display_groups_races.sh.
   supabase/tests/0400_item_display_groups.test.sql
-  # Order signature images (0393, owner decision O1): the data block, replayed
+  # Order signature images (0403, owner decision O1): the data block, replayed
   # from the recorded statements, copies every stored image to the side table
   # byte for byte BEFORE it nulls the row, and each abort check raises on a
   # planted mismatch with nothing applied; the capture trigger (SECURITY
@@ -747,9 +747,9 @@ PGTAP_TESTS=(
   # signed_at) moves an image confirm_order_signature writes before the row
   # is stored, so no member (a viewer included) reads it, and clears it when
   # resume_fulfillment resets the hand-over. The two-session proofs are
-  # scripts/db-concurrency/0393_capture_race.sh; the lock footprint is
-  # scripts/db-concurrency/0393_migration_lock_footprint.sh.
-  supabase/tests/0393_order_signature_images.test.sql
+  # scripts/db-concurrency/0403_capture_race.sh; the lock footprint is
+  # scripts/db-concurrency/0403_migration_lock_footprint.sh.
+  supabase/tests/0403_order_signature_images.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
