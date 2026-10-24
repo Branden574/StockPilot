@@ -1263,7 +1263,10 @@ WEB_TESTS=(
   # off: the error reporter (security alerts), dispatchEvent (the security
   # feed to Slack, Teams and webhooks), the audit writers and the realtime
   # broadcasts keep their own work alive, and every other `void` call is
-  # reviewed.
+  # reviewed. Every module that can run on the server is scanned, Server
+  # Component pages and modules without the 'server-only' marker included;
+  # the few browser-only modules skipped are checked to be imported only from
+  # client code.
   src/server/fire-and-forget.guard.test.ts
 )
 
