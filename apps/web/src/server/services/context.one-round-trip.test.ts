@@ -153,6 +153,12 @@ vi.mock('@/lib/supabase/server', () => ({
         // legacy-reads test), and the MFA gate reads the session's `aal` from
         // them (lib/auth/verified-claims). A local check, not a round trip.
         getClaims: async () => ({ data: { claims: { sub: 'u1', aal: state.aal } }, error: null }),
+        // The stored session, whose access token the MFA gate hands to
+        // getClaims(). Read from the cookie, not a round trip.
+        getSession: async () => ({
+          data: { session: { access_token: 'stored.token' } },
+          error: null,
+        }),
         mfa: {
           listFactors: async () => {
             calls.listFactors += 1;

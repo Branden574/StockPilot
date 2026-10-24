@@ -20,8 +20,11 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
  *  - a valid token's claims, verified locally: no request to the Auth server,
  *    and the key set fetched at most once;
  *  - a forged token (payload edited, or signed with another key under the
- *    project's key id), an unsigned one and an expired one: null;
- *  - when the key set cannot be fetched, the Auth server decides instead.
+ *    project's key id or under one the key set does not list), an unsigned
+ *    one and an expired one: null;
+ *  - when the key set cannot be fetched, the Auth server decides instead;
+ *  - how many requests each case costs: a verdict on the token is never
+ *    asked for twice, and the session is loaded (and refreshed) once.
  */
 
 let jar = new Map<string, string>();
@@ -186,17 +189,48 @@ describe('readVerifiedSessionClaims', () => {
     expect(server.calls['/user']).toBeUndefined();
   });
 
-  it('an unsigned token (alg none): null', async () => {
+  it('an unsigned token (alg none): null, after one Auth request', async () => {
     const forgedClaims = sessionClaims({ aal: 'aal2' });
     await signIn(forgedClaims, unsignedToken(forgedClaims));
     expect(await readVerifiedSessionClaims(await createClient())).toBeNull();
+    // No key id, so getClaims() cannot check it locally and asks the Auth
+    // server, which refuses it. That refusal is final: it is not asked again.
+    expect(server.calls['/user']).toBe(1);
   });
 
-  it('an expired token whose refresh fails: null', async () => {
+  it('a token under a key id the key set does not list: null, after one Auth request', async () => {
+    const forgedClaims = sessionClaims({ aal: 'aal2' });
+    await signIn(forgedClaims, await signAccessToken(attackerKey, forgedClaims));
+    expect(await readVerifiedSessionClaims(await createClient())).toBeNull();
+    // getClaims() fetches the key set again for the unknown key id, finds no
+    // such key, and asks the Auth server, which refuses the token.
+    expect(server.calls['/user']).toBe(1);
+  });
+
+  it('an expired token whose refresh fails: null, after one refresh', async () => {
     await signIn(sessionClaims({ aal: 'aal2', expiresIn: -120 }));
     expect(await readVerifiedSessionClaims(await createClient())).toBeNull();
-    // The session was offered for refresh and the Auth server said no.
-    expect(server.calls['/token']).toBeGreaterThanOrEqual(1);
+    // The session was offered for refresh once and the Auth server said no.
+    // With no session there is no token to ask about.
+    expect(server.calls['/token']).toBe(1);
+    expect(server.calls['/user']).toBeUndefined();
+  });
+
+  it('a session that cannot be loaded is no session: loaded once, nothing else asked', async () => {
+    // A refresh the Auth server could not answer (an outage) comes back as no
+    // session with an error. auth-js retries a refresh for up to 30 s, so the
+    // session is loaded once per read and never again for a second opinion.
+    const getSession = vi.fn(async () => ({
+      data: { session: null },
+      error: { name: 'AuthRetryableFetchError', status: 503 },
+    }));
+    const getClaims = vi.fn();
+    const getUser = vi.fn();
+    const client = { auth: { getSession, getClaims, getUser } };
+    expect(await readVerifiedSessionClaims(client as never)).toBeNull();
+    expect(getSession).toHaveBeenCalledTimes(1);
+    expect(getClaims).not.toHaveBeenCalled();
+    expect(getUser).not.toHaveBeenCalled();
   });
 
   it('no session cookie: null, and no request', async () => {
@@ -244,5 +278,17 @@ describe('readVerifiedSessionClaims', () => {
       },
     };
     await expect(readVerifiedSessionClaims(broken as never)).resolves.toBeNull();
+    const brokenChecks = {
+      auth: {
+        getSession: async () => ({ data: { session: { access_token: 'a.b.c' } }, error: null }),
+        getClaims: async () => {
+          throw new Error('no WebCrypto');
+        },
+        getUser: async () => {
+          throw new Error('network down');
+        },
+      },
+    };
+    await expect(readVerifiedSessionClaims(brokenChecks as never)).resolves.toBeNull();
   });
 });
