@@ -178,6 +178,13 @@ export function NotificationIntentHost() {
       userId ? { id: userId, email: userEmail } : null,
       Date.now(),
     );
+    // The workspace and whether it is this account's, read from the store at
+    // the same moment (review 4). The render's `workspace` may be older: a
+    // publish between this render and its effect (the first load answering)
+    // would pair its empty workspace with "shown", and open an order for a
+    // member of two workspaces without its workspace check. The render's
+    // snapshot stays a dependency below, so each publish runs this again.
+    const live = getWorkspaceSnapshot();
     const step = nextOpenStep({
       take,
       forSeq: intent.seq,
@@ -186,9 +193,9 @@ export function NotificationIntentHost() {
       stackRoute: liveStackRoute(navigation),
       segments,
       pathname,
-      workspace,
-      // Read now, not at render: a reload keeps this account's workspace on
-      // screen, so an order or a return decides from it at once (review 3).
+      // A reload keeps this account's workspace on screen, so an order or a
+      // return decides from it at once (review 3).
+      workspace: live,
       workspaceShown: workspaceShownForAccount(),
     });
     // Every branch acts on the tap take() handed over, which nextOpenStep

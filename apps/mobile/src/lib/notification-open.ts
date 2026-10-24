@@ -112,7 +112,9 @@ export interface OpenStepInput {
   workspace: WorkspaceView;
   /** use-workspace.ts workspaceShownForAccount(): a workspace chosen for the
    *  account signed in now is on screen. A reload keeps it there while
-   *  `workspace.loading` is true; only a first load has none yet. */
+   *  `workspace.loading` is true; only a first load has none yet. Read at the
+   *  same moment as `workspace` (review 4), and counted only when `workspace`
+   *  has an active workspace in it. */
   workspaceShown: boolean;
 }
 
@@ -201,7 +203,12 @@ export function nextOpenStep(input: OpenStepInput): OpenStep {
   // the order screen reads with it while the reload runs: decide from it now,
   // as main opened the order at once, so no screen's reload holds the tap
   // with nothing on screen and no deadline.
-  if (input.workspace.loading && !input.workspaceShown) {
+  // "Shown" counts only with a workspace in the view itself (review 4): a view
+  // taken before the first load answered has none, whatever the store says by
+  // the time this runs, and deciding from its empty list would open an order
+  // without its workspace check.
+  const shown = input.workspaceShown && input.workspace.activeOrgId !== null;
+  if (input.workspace.loading && !shown) {
     return { kind: 'wait', reason: 'workspace-loading' };
   }
   if (input.workspace.orgs.length > 1) return { kind: 'resolve', table, id: target.resourceId };

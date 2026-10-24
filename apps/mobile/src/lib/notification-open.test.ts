@@ -497,6 +497,25 @@ describe('a reload never holds an order or a return: the workspace on screen dec
     ).toEqual({ kind: 'stay' });
   });
 
+  // 2026-10-24 (review 4): the host read "shown" when its effect ran but the
+  // workspace when it rendered. The first load answering in between paired the
+  // render's empty workspace with the store's "shown", and an order for a
+  // member of two workspaces opened without its workspace check (the 404
+  // case). A view with no workspace in it now waits, whatever "shown" says.
+  it('a view taken before the first load answered waits, even when the store already says shown (review 4)', () => {
+    for (const link of [
+      `/dashboard/orders/${ORDER}`,
+      `/dashboard/orders/${REPLACEMENT}`,
+      `https://stockpilotusa.com/dashboard/orders/${ORDER}`,
+      RETURN_LINK,
+    ]) {
+      expect(
+        nextOpenStep(input({ workspace: COLD, workspaceShown: true, take: ready(link) })),
+        link,
+      ).toEqual({ kind: 'wait', reason: 'workspace-loading' });
+    }
+  });
+
   it("the first load for this account waits, even with another account's workspace still published", () => {
     expect(nextOpenStep(input({ workspace: COLD, workspaceShown: false }))).toEqual({
       kind: 'wait',

@@ -374,6 +374,28 @@ describe('7. the host and the notice only read and navigate', () => {
     expect(call).toMatch(/^\s*workspaceShown: workspaceShownForAccount\(\),$/m);
   });
 
+  // 2026-10-24 (review 4): the workspace and whether it is this account's are
+  // read from the store at the same moment, inside the open effect. Was: the
+  // workspace from the render (`workspace,`) beside "shown" read when the
+  // effect ran, so a publish in between (the first load answering) paired an
+  // empty workspace with "shown", and a member of two workspaces had the
+  // order opened without its workspace check.
+  it("reads the workspace and whether it is this account's at the same moment, in the open effect (review 4)", () => {
+    const code = codeOnly(host);
+    const callAt = code.indexOf('const step = nextOpenStep({');
+    expect(callAt).toBeGreaterThan(-1);
+    const effectAt = code.lastIndexOf('React.useEffect(() => {', callAt);
+    expect(effectAt).toBeGreaterThan(-1);
+    expect(code.slice(effectAt, callAt)).toContain('const live = getWorkspaceSnapshot();');
+    const call = code.slice(callAt, code.indexOf('});', callAt));
+    expect(call).toMatch(/^\s*workspace: live,\s*workspaceShown: workspaceShownForAccount\(\),$/m);
+    expect(call).not.toMatch(/^\s*workspace,$/m);
+    // The render's snapshot stays a dependency, so each publish runs it again.
+    const depsAt = code.indexOf('}, [', callAt);
+    const deps = code.slice(depsAt, code.indexOf(']);', depsAt));
+    expect(deps).toMatch(/^\s*workspace,$/m);
+  });
+
   it("reads the workspace without loading it, and switches only through the drawer's own switch", () => {
     const code = codeOnly(host);
     expect(code).toContain('useWorkspaceSnapshot()');
