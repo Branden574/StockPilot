@@ -737,8 +737,9 @@ describe('getRun', () => {
 
   it('builds the run, the receipt and "About this delivery"', async () => {
     const view = await new ReceivingChecklistService(ctxFor(base().client)).getRun(RUN);
+    // Review 2026-10-24 (CONFLICTS P6): no quantity total across the lines,
+    // which can be in different counting units (was: unitsReceived: 5).
     expect(view.about).toEqual({
-      unitsReceived: 5,
       lineCount: 2,
       warehouse: { kind: 'ok', value: 'Main' },
       stockOwner: { kind: 'ok', value: [] },

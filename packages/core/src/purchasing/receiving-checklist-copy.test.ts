@@ -100,9 +100,14 @@ describe('the words', () => {
     expect(c.runChanged).toBe(
       'Someone else saved this checklist after you opened it. Your answers are still on screen. Reload to see the saved version.',
     );
-    expect(c.receivedOnReceipt(48, 3)).toBe('Received on this receipt: 48 units on 3 lines.');
-    expect(c.receivedOnReceipt(1, 1)).toBe('Received on this receipt: 1 unit on 1 line.');
-    expect(c.receivedOnReceipt(2.5, 1)).toBe('Received on this receipt: 2.5 units on 1 line.');
+    // Review 2026-10-24 (redesign CONFLICTS P6): the lines of one receipt can
+    // be in different counting units (pairs and eaches), so the line says how
+    // many lines were received and never adds their quantities into one
+    // "units" total (was: "48 units on 3 lines"). Each line's own quantity is
+    // listed under it, on the web and the phone.
+    expect(c.receivedOnReceipt(3)).toBe('Received on this receipt: 3 lines.');
+    expect(c.receivedOnReceipt(1)).toBe('Received on this receipt: 1 line.');
+    expect(c.receivedOnReceipt(1200)).toBe('Received on this receipt: 1,200 lines.');
     expect(c.keepsVersion(3, 2)).toBe(
       "Version 3 was published after this checklist was started. This one keeps version 2's steps.",
     );
@@ -204,7 +209,6 @@ describe('times in the organization zone', () => {
 describe("a run's About and status lines (one set for the web and the phone)", () => {
   const C = RECEIVING_CHECKLIST_COPY;
   const about = {
-    unitsReceived: 48,
     lineCount: 3,
     warehouse: { kind: 'ok' as const, value: 'Main' as string | null },
     stockOwner: { kind: 'ok' as const, value: ['North Charter'] },
@@ -214,12 +218,21 @@ describe("a run's About and status lines (one set for the web and the phone)", (
 
   it('says what is known, the stock owner and the bill-to apart', () => {
     expect(receivingRunAboutLines(about, false).map((l) => l.text)).toEqual([
-      C.receivedOnReceipt(48, 3),
+      C.receivedOnReceipt(3),
       C.receivedInto('Main'),
       C.stockOwner(['North Charter']),
       C.billTo('South Charter'),
       C.stillToCome(2),
     ]);
+  });
+
+  // Review 2026-10-24 (CONFLICTS P6: never an unlabeled cross-unit sum).
+  // Mutation caught: the first line adding the receipt's quantities into one
+  // "units" total across lines that can be pairs and eaches.
+  it('names how many lines were received, never a quantity total across them', () => {
+    const lines = receivingRunAboutLines(about, true);
+    expect(lines[0]).toEqual({ text: 'Received on this receipt: 3 lines.', tone: 'plain' });
+    expect(lines.filter((l) => /\bunits?\b/.test(l.text))).toEqual([]);
   });
 
   // pattern #28: a failed read says it did not load, never "none" and never nothing.
@@ -236,7 +249,7 @@ describe("a run's About and status lines (one set for the web and the phone)", (
     ).map((l) => l.text);
     // Desk check F10(d): the warehouse that did not load is said too.
     expect(lines).toEqual([
-      C.receivedOnReceipt(48, 3),
+      C.receivedOnReceipt(3),
       C.receivedIntoUnavailable,
       C.stockOwnerUnavailable,
       C.billToUnavailable,

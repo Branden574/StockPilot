@@ -23,11 +23,6 @@ function count(n: number): string {
   return Number.isFinite(n) ? Math.round(n).toLocaleString('en-US') : '0';
 }
 
-/** A received quantity as people read it (base units may carry decimals). */
-function qty(n: number): string {
-  return Number.isFinite(n) ? n.toLocaleString('en-US', { maximumFractionDigits: 4 }) : '0';
-}
-
 export const RECEIVING_CHECKLIST_COPY = {
   // ── Posted panel (web) and Posted alert (phone) ──
   postedTitle: (receiptNumber: string) => `Receipt ${receiptNumber} posted.`,
@@ -59,8 +54,13 @@ export const RECEIVING_CHECKLIST_COPY = {
   honesty:
     'This records what a person checked for this receipt. It does not change stock, the receipt or the purchase order.',
   aboutHeading: 'About this delivery',
-  receivedOnReceipt: (units: number, lines: number) =>
-    `Received on this receipt: ${qty(units)} ${plural(units, 'unit', 'units')} on ${count(lines)} ${plural(lines, 'line', 'lines')}.`,
+  /**
+   * How many lines the receipt received. Never a quantity total: the lines can
+   * be in different counting units (pairs and eaches), and each line's own
+   * quantity is listed under it (redesign CONFLICTS P6, review 2026-10-24).
+   */
+  receivedOnReceipt: (lines: number) =>
+    `Received on this receipt: ${count(lines)} ${plural(lines, 'line', 'lines')}.`,
   receivedInto: (warehouse: string) => `Received into: Staging at ${warehouse}.`,
   receivedIntoUnavailable: "Warehouse didn't load",
   stockOwner: (names: readonly string[]) => `Stock owner on these items now: ${names.join(', ')}`,
@@ -202,7 +202,6 @@ type Claim<T> = { kind: 'ok'; value: T } | { kind: 'unavailable' };
  */
 export function receivingRunAboutLines(
   about: {
-    unitsReceived: number;
     lineCount: number;
     /** The receipt's warehouse; ok null = none named (no line, no claim). */
     warehouse: Claim<string | null>;
@@ -213,9 +212,7 @@ export function receivingRunAboutLines(
   anyFailedCheck: boolean,
 ): ReceivingRunLine[] {
   const c = RECEIVING_CHECKLIST_COPY;
-  const out: ReceivingRunLine[] = [
-    { text: c.receivedOnReceipt(about.unitsReceived, about.lineCount), tone: 'plain' },
-  ];
+  const out: ReceivingRunLine[] = [{ text: c.receivedOnReceipt(about.lineCount), tone: 'plain' }];
   if (about.warehouse.kind === 'unavailable') {
     out.push({ text: c.receivedIntoUnavailable, tone: 'plain' });
   } else if (about.warehouse.value) {
@@ -527,8 +524,8 @@ export function receivingChecklistCopySamples(): string[] {
     c.runHeading('R-1001', 'PO-2026-0052', 'Acme Supply'),
     c.runHeading('R-1001', 'PO-2026-0052', null),
     c.versionLine(2, 'Delivery checks'),
-    c.receivedOnReceipt(48, 3),
-    c.receivedOnReceipt(1, 1),
+    c.receivedOnReceipt(3),
+    c.receivedOnReceipt(1),
     c.receivedInto('Main warehouse'),
     c.stockOwner(['North Charter', 'South Charter']),
     c.billTo('North Charter'),

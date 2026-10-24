@@ -65,7 +65,6 @@ function view(
     },
     po: { id: 'po-1', poNumber: 'PO-1', supplierName: 'Acme' },
     about: {
-      unitsReceived: 48,
       lineCount: 3,
       warehouse: { kind: 'ok', value: 'Main' },
       stockOwner: { kind: 'ok', value: ['North Charter'] },
@@ -98,7 +97,7 @@ describe('ReceivingCheckForm', () => {
   it('says what it records, and what it knows about the delivery, with the stock owner and the bill-to apart', () => {
     render(<ReceivingCheckForm view={view()} />);
     expect(screen.getByText(C.honesty)).toBeTruthy();
-    expect(screen.getByText(C.receivedOnReceipt(48, 3))).toBeTruthy();
+    expect(screen.getByText(C.receivedOnReceipt(3))).toBeTruthy();
     expect(screen.getByText(C.receivedInto('Main'))).toBeTruthy();
     expect(screen.getByText(C.stockOwner(['North Charter']))).toBeTruthy();
     expect(screen.getByText(C.billTo('South Charter'))).toBeTruthy();

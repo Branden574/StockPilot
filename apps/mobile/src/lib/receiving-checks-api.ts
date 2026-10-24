@@ -90,7 +90,6 @@ export interface PhoneReceivingRun {
   };
   po: { id: string; poNumber: string; supplierName: string | null };
   about: {
-    unitsReceived: number;
     lineCount: number;
     warehouse: AboutClaim<string | null>;
     stockOwner: AboutClaim<string[]>;
@@ -268,7 +267,6 @@ export function parseReceivingRun(res: unknown): PhoneReceivingRun {
     },
     po: { id: str(po.id), poNumber: str(po.poNumber), supplierName: strOrNull(po.supplierName) },
     about: {
-      unitsReceived: num(about.unitsReceived),
       lineCount: num(about.lineCount),
       warehouse: claim(about.warehouse, strOrNull),
       stockOwner: claim(about.stockOwner, (x) => list(x).map(str)),

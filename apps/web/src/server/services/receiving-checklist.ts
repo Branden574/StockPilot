@@ -163,7 +163,11 @@ export interface ReceivingRunView {
   };
   po: { id: string; poNumber: string; supplierName: string | null };
   about: {
-    unitsReceived: number;
+    /**
+     * How many lines the receipt received. No quantity total across them: the
+     * lines can be in different counting units (CONFLICTS P6); each line's
+     * own quantity is in `lines`.
+     */
     lineCount: number;
     /** The receipt's warehouse name; ok null = none could be named. */
     warehouse: AboutClaim<string | null>;
@@ -630,7 +634,6 @@ export class ReceivingChecklistService {
       },
       po: { id: po.id, poNumber: po.po_number, supplierName },
       about: {
-        unitsReceived: receiptLines.reduce((s, l) => s + Number(l.qty_received_base || 0), 0),
         lineCount: receiptLines.length,
         warehouse,
         stockOwner,

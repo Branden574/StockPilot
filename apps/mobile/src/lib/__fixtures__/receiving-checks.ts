@@ -119,7 +119,6 @@ export function runAnswer() {
       },
       po: { id: IDS.po, poNumber: 'PO-2026-0052', supplierName: 'Acme Supply' },
       about: {
-        unitsReceived: 48,
         lineCount: 3,
         warehouse: { kind: 'ok', value: 'Main' },
         stockOwner: { kind: 'ok', value: ['North Charter'] },
