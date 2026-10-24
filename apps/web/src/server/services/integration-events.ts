@@ -14,6 +14,7 @@ import {
   withContext,
   type ServiceContext,
 } from './context';
+import { keepAlive } from './lib/defer';
 
 /**
  * Outbound event delivery — the engine behind generic webhooks + Slack/Teams
@@ -437,10 +438,29 @@ async function finalize(
  * hiccuped. Persists a pending delivery row per endpoint (durable), then fires
  * an immediate attempt; the cron retries anything still pending.
  *
- * Call via `after(() => dispatchEvent(...))` (or `void`) so it's off the
- * response path.
+ * KEPT ALIVE PAST THE RESPONSE. Nearly every caller writes `void
+ * dispatchEvent(...)` (39 call sites on 2026-10-24) just before its action
+ * returns. The work starts here, as it always did, and is handed to after()
+ * (lib/defer.ts keepAlive), so the platform keeps the invocation running until
+ * it settles, as #352 did for audit rows. Without it, Vercel could suspend the
+ * instance once the response was sent, with the endpoint read or the delivery
+ * INSERT in flight: an event whose rows were never inserted was lost for good
+ * (the cron retries only rows that exist), and an inserted row's immediate
+ * attempt waited for the cron. The returned promise is the same work, so a
+ * caller that awaits sees no change; outside a request keepAlive does nothing.
  */
-export async function dispatchEvent(
+export function dispatchEvent(
+  organizationId: string,
+  eventType: IntegrationEventType,
+  data: Record<string, unknown>,
+): Promise<void> {
+  const work = dispatchEventNow(organizationId, eventType, data);
+  keepAlive(work);
+  return work;
+}
+
+/** The body of `dispatchEvent()`. Never rejects. */
+async function dispatchEventNow(
   organizationId: string,
   eventType: IntegrationEventType,
   data: Record<string, unknown>,

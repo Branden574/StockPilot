@@ -28,6 +28,12 @@ export type AuditEvent =
   | 'user.reactivated'
   | 'user.password.changed'
   | 'security.session_revoked'
+  /**
+   * The shared export budget refused a caller (lib/export-rate-limit.ts):
+   * one row per refusal, no entity, read by the hourly audit-anomaly cron
+   * (security/monitors.ts) to spot a sustained export-abuse pattern.
+   */
+  | 'security.export_rate_limited'
   | 'inventory.item.created'
   | 'inventory.item.updated'
   | 'inventory.item.duplicated'

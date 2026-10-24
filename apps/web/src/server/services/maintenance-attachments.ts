@@ -19,6 +19,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
 import { assertModuleEnabled, assertPermission, ServiceError, type ServiceContext } from './context';
+import { keepAlive } from './lib/defer';
 import { notifyMaintenanceEvent } from './maintenance-notify';
 
 /** Bucket id from migration 0315 — private, org-prefixed, no select policy.
@@ -257,27 +258,31 @@ export class MaintenanceAttachmentsService {
 
   /** Task 21: fire-and-forget photo_rejected notification to the uploader.
    *  Never awaited by finalize() — a notify failure must never delay or
-   *  fail the (already-decided) invalid_image throw that follows it. */
+   *  fail the (already-decided) invalid_image throw that follows it. Kept
+   *  alive past the response (lib/defer.ts keepAlive): the throw answers the
+   *  request at once, and a bare `void` held nothing after it. */
   private notifyPhotoRejected(
     requestId: string,
     parent: { requestNumber: number | null; createdAt: string | null; subject: string | null },
   ): void {
     const requestHandle =
       formatMaintenanceRequestNumber(parent.requestNumber, parent.createdAt) ?? `MR-${requestId.slice(0, 8)}`;
-    void notifyMaintenanceEvent({
-      organizationId: this.ctx.organizationId,
-      event: 'photo_rejected',
-      requestId,
-      requestHandle,
-      subject: parent.subject ?? '',
-      actorUserId: this.ctx.userId,
-      targetUserId: this.ctx.userId,
-    }).catch((err) => {
-      void reportError(err instanceof Error ? err : new Error(String(err)), {
-        tag: 'maintenance_notify.emit_failed',
-        extra: { event: 'photo_rejected', requestId },
-      });
-    });
+    keepAlive(
+      notifyMaintenanceEvent({
+        organizationId: this.ctx.organizationId,
+        event: 'photo_rejected',
+        requestId,
+        requestHandle,
+        subject: parent.subject ?? '',
+        actorUserId: this.ctx.userId,
+        targetUserId: this.ctx.userId,
+      }).catch((err) => {
+        void reportError(err instanceof Error ? err : new Error(String(err)), {
+          tag: 'maintenance_notify.emit_failed',
+          extra: { event: 'photo_rejected', requestId },
+        });
+      }),
+    );
   }
 
   /** The storage paths recorded under this upload's NAME: its uuid with any

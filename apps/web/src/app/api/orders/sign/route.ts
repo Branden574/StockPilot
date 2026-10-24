@@ -34,6 +34,7 @@ import {
 import { insertAuditRowReported } from '@/server/services/audit';
 import { isModuleEnabled, mfaGateError, type ServiceContext } from '@/server/services/context';
 import { dispatchEvent } from '@/server/services/integration-events';
+import { keepAlive } from '@/server/services/lib/defer';
 import { syncOrderScheduleEvent } from '@/server/services/order-requests';
 
 // Why a route handler instead of a Server Action: the public sign page
@@ -484,8 +485,10 @@ export async function POST(req: NextRequest) {
   // an order that crosses multiple completion paths gets exactly ONE prompt.
   // Best-effort: never throws, never fails the sign.
   if (isCompleted) {
-    // Close the linked auto-created Schedule event (order fulfilled).
-    void syncOrderScheduleEvent(order.id, 'completed', order.organization_id);
+    // Close the linked auto-created Schedule event (order fulfilled). Kept
+    // alive past the response (lib/defer.ts keepAlive): a bare `void` held
+    // nothing once the sign answered, and the event stayed scheduled.
+    keepAlive(syncOrderScheduleEvent(order.id, 'completed', order.organization_id));
     await maybeSendReturnPrompt(admin, order.id, { appUrl: env.NEXT_PUBLIC_APP_URL });
   }
 

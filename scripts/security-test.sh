@@ -1250,6 +1250,19 @@ WEB_TESTS=(
   # expression and no install. The file carries the "Security invariant"
   # marker.
   src/test/dependency-audit.guard.test.ts
+
+  # The export budget's trip row (security.export_rate_limited, which the
+  # hourly audit-anomaly cron counts to spot sustained export abuse) is
+  # written through insertAuditRowReported: kept alive past the 429 and
+  # reported when lost. A service client that cannot be made never turns the
+  # 429 into a 500.
+  src/lib/export-rate-limit.test.ts
+  # Server code leaves nothing running with `void` that the response can cut
+  # off: the error reporter (security alerts), dispatchEvent (the security
+  # feed to Slack, Teams and webhooks), the audit writers and the realtime
+  # broadcasts keep their own work alive, and every other `void` call is
+  # reviewed.
+  src/server/fire-and-forget.guard.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

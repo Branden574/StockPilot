@@ -23,7 +23,9 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { reportError } from '@/lib/error-reporter';
+// The isomorphic reporter: this module is in a browser bundle, and
+// @/lib/error-reporter is server-only (see error-reporter-core.ts).
+import { reportError } from '@/lib/error-reporter-core';
 import { recordMaintenanceDraftOpenedAction } from '@/server/actions/maintenance-requests';
 
 import { useMaintenanceShareLink } from './share-link-context';
