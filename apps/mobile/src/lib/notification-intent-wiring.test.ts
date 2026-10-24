@@ -390,6 +390,21 @@ describe('7. the host and the notice only read and navigate', () => {
     expect(notice).toContain('AccessibilityInfo.announceForAccessibility(');
     expect(notice).toContain('onAccessibilityEscape=');
   });
+
+  // 2026-10-24, rebased onto the redesign (#369): the notice follows the
+  // app's sheet rule (sheet-a11y-structure.test.ts) as the inbox's detail
+  // sheet now does. The card covers the scrim's centre, where VoiceOver's
+  // double-tap would land, so the scrim calls the dismiss handler itself; and
+  // the scrim darkens per mode.
+  it("the notice keeps the redesign's sheet rule: a per-mode scrim whose VoiceOver double-tap dismisses", () => {
+    const code = codeOnly(notice);
+    expect(code).toContain('const { c, mode } = useTheme();');
+    expect(flat(notice)).toMatch(
+      /<Pressable style=\{\[ StyleSheet\.absoluteFill, \{ backgroundColor: mode === 'dark' \? 'rgba\(0,0,0,0\.55\)' : 'rgba\(14,15,13,0\.35\)' \}, \]\} onPress=\{dismiss\} onAccessibilityTap=\{dismiss\}/,
+    );
+    expect(code).toContain('onAccessibilityEscape={dismiss}');
+    expect(code).toContain('accessibilityRole="button"');
+  });
 });
 
 describe('8. the inbox opens a notification before its mark-read answers (brief §13)', () => {

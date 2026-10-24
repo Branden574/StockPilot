@@ -27,9 +27,12 @@ import { useTheme } from '@/lib/use-theme';
  * this phone. The words and buttons come from notification-open.ts
  * noticeContent, where they are tested.
  *
- * Built like the inbox's detail sheet (app/(drawer)/notifications.tsx): the
- * backdrop is a sibling behind a plain card, and closes. VoiceOver treats it
- * as a modal, can dismiss it with the escape gesture, and hears it announced.
+ * Built like the inbox's detail sheet (app/(drawer)/notifications.tsx), in
+ * the redesign's sheet rule (sheet-a11y-structure.test.ts): the backdrop is a
+ * sibling behind a plain card, darkens per mode, and closes. VoiceOver treats
+ * it as a modal, hears it announced, and dismisses it with the escape gesture
+ * or a double-tap on the backdrop's "Close" (onAccessibilityTap: the card
+ * covers the backdrop's centre, where VoiceOver would otherwise tap).
  * Offline the switch is disabled with the drawer switcher's own line, the
  * same rule its sheet applies. While the switch it started runs, the sheet
  * says "Switching to <Org>." with a spinner and nothing to press: a switch
@@ -47,7 +50,7 @@ export function NotificationIntentNotice({
   offline: boolean;
   onAction: (id: NoticeActionId) => void;
 }) {
-  const { c } = useTheme();
+  const { c, mode } = useTheme();
   const content = noticeContent(notice, { offline, busy });
   const { announcement } = content;
   React.useEffect(() => {
@@ -61,8 +64,12 @@ export function NotificationIntentNotice({
     <Modal transparent animationType="fade" onRequestClose={dismiss}>
       <View style={{ flex: 1 }} accessibilityViewIsModal onAccessibilityEscape={dismiss}>
         <Pressable
-          style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.55)' }]}
+          style={[
+            StyleSheet.absoluteFill,
+            { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+          ]}
           onPress={dismiss}
+          onAccessibilityTap={dismiss}
           disabled={content.dismiss === null}
           accessible={content.dismiss !== null}
           accessibilityRole="button"
