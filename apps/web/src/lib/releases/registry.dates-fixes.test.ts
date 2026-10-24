@@ -633,13 +633,18 @@ describe('the dates fixes release says what a reader saw, in every US zone', () 
     // events. "today's events were a month away" was not true at most
     // month-ends (Sep 30 2026 opened October, whose grid starts Sun Sep 27).
     const calendar = source('apps/web/src/components/schedule/schedule-calendar.tsx');
-    expect(calendar).toContain('return new Date(year, month - 1, 1 - day);');
+    // Re-pinned by small fixes slice 8 (the calendar in the organization's time
+    // zone): the grid is still the 42 days from the Sunday on or before the
+    // 1st, now counted in UTC calendar days, and the page still reads events
+    // for the whole grid (its range now padded two days each side), so the
+    // claim this line was checked against still holds.
+    expect(calendar).toContain('const d = new Date(Date.UTC(year, month - 1, 1 - firstWeekday + i));');
     expect(calendar).toContain('for (let i = 0; i < 42; i++) {');
     // The out-of-month shade moved to the redesign's sunk token (P4.F2, W-WS-04); the
     // day is still only shaded, never hidden, so its events still show.
     expect(calendar).toContain("!inMonth && 'bg-sunk',");
     const page = source('apps/web/src/app/(dashboard)/dashboard/schedule/page.tsx');
-    expect(page).toContain('const events = await svc.listInRange(gridStart, gridEnd);');
+    expect(page).toContain('const events = await svc.listInRange(rangeFrom, rangeTo);');
     expect(entry('calendar-current-month').whyItMatters).toBe(
       'Late that day, the calendar opened on the next month instead of the current one.',
     );
