@@ -106,6 +106,8 @@ import {
   type SigningKey,
 } from '@/test/auth-session-fixture';
 
+import { getMfaFactorsForRequest } from '@/lib/dashboard/request-cache';
+
 import DashboardLayout from './layout';
 
 const TO_CHALLENGE = 'REDIRECT:/signin/mfa?redirect=%2Fdashboard%2Fpurchase-orders';
@@ -173,5 +175,55 @@ describe('DashboardLayout — the enrolled member AAL2 gate reads a verified lev
   it('an expired AAL2 token that cannot be refreshed is sent to the MFA challenge', async () => {
     await signIn(sessionClaims({ aal: 'aal2', expiresIn: -120 }));
     await expect(DashboardLayout({ children: null })).rejects.toThrow(TO_CHALLENGE);
+  });
+});
+
+/**
+ * Page renders run in their own server function, apart from the proxy, so
+ * they keep their own key set: auth-js caches it per instance for 10 minutes.
+ * The first read in an instance (and the first after the cache expires)
+ * fetches it from the Auth server. That fetch must run alongside the layout's
+ * batch of reads, which already waits on the factor list's GoTrue round trip,
+ * not after the batch, where it would add one more Supabase call in series.
+ * A key id no client here has cached stands in for a cold cache: getClaims()
+ * has to fetch the key set for it.
+ */
+describe('DashboardLayout — the verified claims read starts with the batch, not after it', () => {
+  it('a cold key-set fetch is under way while the factor list is still pending', async () => {
+    const coldKey = await makeSigningKey('project-kid-cold-layout');
+    server = fakeAuthServer([projectKey, coldKey]);
+    vi.stubGlobal('fetch', server.fetch);
+    let answerFactors!: (factors: Array<{ status: string }>) => void;
+    vi.mocked(getMfaFactorsForRequest).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answerFactors = resolve;
+        }),
+    );
+    const claims = sessionClaims({ aal: 'aal2' });
+    await signIn(claims, await signAccessToken(coldKey, claims));
+
+    const rendering = DashboardLayout({ children: null });
+    await vi.waitFor(() =>
+      expect(server.calls['/.well-known/jwks.json']).toBeGreaterThanOrEqual(1),
+    );
+    // Only now does the factor list answer: the key set was already on its way.
+    answerFactors([{ status: 'verified' }]);
+    await expect(rendering).resolves.toBeTruthy();
+    expect(server.calls['/.well-known/jwks.json']).toBe(1);
+    expect(server.calls['/user']).toBeUndefined();
+  });
+
+  it('a member with no authenticator is never held by it, even when the key set never answers', async () => {
+    const heldKey = await makeSigningKey('project-kid-held-layout');
+    server = fakeAuthServer([projectKey, heldKey]);
+    server.jwksGate = new Promise(() => {});
+    vi.stubGlobal('fetch', server.fetch);
+    vi.mocked(getMfaFactorsForRequest).mockResolvedValueOnce([]);
+    const claims = sessionClaims({ aal: 'aal1' });
+    await signIn(claims, await signAccessToken(heldKey, claims));
+
+    // The gate applies to enrolled members only; nothing else awaits the read.
+    await expect(DashboardLayout({ children: null })).resolves.toBeTruthy();
   });
 });

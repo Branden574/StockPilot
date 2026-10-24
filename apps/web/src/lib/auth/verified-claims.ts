@@ -1,6 +1,9 @@
 import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { cache } from 'react';
+
+import { createClient } from '@/lib/supabase/server';
 
 /**
  * What the server may read from this request's cookie session: the claims of
@@ -137,3 +140,34 @@ export async function readVerifiedSessionClaims(
     return null;
   }
 }
+
+/**
+ * This request's verified session claims (readVerifiedSessionClaims on the
+ * cookie session), read ONCE per page render and shared through React
+ * cache().
+ *
+ * WHY ONE READ, STARTED EARLY. Page renders run in their own server function,
+ * apart from the proxy, so they keep their own key set: auth-js caches it per
+ * server instance for 10 minutes, and the first read in an instance (or after
+ * that cache expires) fetches it from the Auth server, a Supabase round trip.
+ * The dashboard layout starts this read first thing, beside the factor list,
+ * so that fetch runs alongside the layout's batch of reads instead of after
+ * it. The page's withContext() and the Security page take the same read
+ * instead of starting their own: auth-js does not share a key-set fetch that
+ * is already in flight, so a second read on a cold cache would fetch again.
+ *
+ * Inside a Server Action or a Route Handler cache() does not memoize, so each
+ * call reads again (a local check once the key set is cached).
+ *
+ * Never rejects: the layout awaits it only at its enrolled-member gate, and a
+ * client that cannot be made is as unverified as a forged token (null).
+ */
+export const getVerifiedSessionClaimsForRequest = cache(
+  async (): Promise<VerifiedSessionClaims | null> => {
+    try {
+      return await readVerifiedSessionClaims(await createClient());
+    } catch {
+      return null;
+    }
+  },
+);

@@ -15,6 +15,30 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
  * list (their own suites cover them) are stubbed.
  */
 
+// ── One page render ─────────────────────────────────────────────────────────
+// Inside a real RSC render React `cache()` shares one answer per request.
+// Outside one, as in these tests and in a Server Action, it does not memoize.
+// The render case is modelled on request (pass.render), as module-gate.test.ts
+// does: every cache()d function then holds one answer per argument list. The
+// other cases run as a Server Action does, with no sharing.
+const pass = vi.hoisted(() => ({ render: false, memo: new Map<unknown, Map<string, unknown>>() }));
+vi.mock('react', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react')>();
+  return {
+    ...actual,
+    cache:
+      <A extends unknown[], R>(fn: (...args: A) => R) =>
+      (...args: A): R => {
+        if (!pass.render) return fn(...args);
+        let byArgs = pass.memo.get(fn);
+        if (!byArgs) pass.memo.set(fn, (byArgs = new Map()));
+        const key = JSON.stringify(args);
+        if (!byArgs.has(key)) byArgs.set(key, fn(...args));
+        return byArgs.get(key) as R;
+      },
+  };
+});
+
 let jar = new Map<string, string>();
 vi.mock('next/headers', async () => {
   const { cookieStoreOver } = await import('@/test/auth-session-fixture');
@@ -69,6 +93,8 @@ import {
   type SigningKey,
 } from '@/test/auth-session-fixture';
 
+import { getVerifiedSessionClaimsForRequest } from '@/lib/auth/verified-claims';
+
 import { assertCurrentAal2, ServiceError, withContext } from './context';
 
 let projectKey: SigningKey;
@@ -91,6 +117,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  pass.render = false;
+  pass.memo.clear();
 });
 
 async function signIn(claims: Record<string, unknown>, token?: string) {
@@ -180,5 +208,42 @@ describe('assertCurrentAal2 — the step-up before security changes', () => {
     const refusal = await stepUpRefusal();
     expect(refusal?.code).toBe('forbidden');
     expect(refusal?.details).toEqual({ reason: 'aal2_required' });
+  });
+});
+
+/**
+ * In a page render the dashboard layout starts the verified claims read first
+ * thing (getVerifiedSessionClaimsForRequest). withContext() must take that
+ * same read, not start its own: page renders keep their own key set, and on a
+ * cold cache a second read would fetch it again (auth-js does not share a
+ * key-set fetch in flight), one more Supabase call after the factor list.
+ */
+describe('withContext — in a page render, the claims read the layout started', () => {
+  it('answers the gate from the same read: one key-set fetch for the layout and the page', async () => {
+    pass.render = true;
+    const coldKey = await makeSigningKey('project-kid-cold-render');
+    server = fakeAuthServer([projectKey, coldKey]);
+    let answerKeySet!: () => void;
+    server.jwksGate = new Promise((resolve) => {
+      answerKeySet = resolve;
+    });
+    vi.stubGlobal('fetch', server.fetch);
+    const claims = sessionClaims({ aal: 'aal2' });
+    await signIn(claims, await signAccessToken(coldKey, claims));
+
+    // The layout's read, then the page's context, while the key set is held.
+    const layoutRead = getVerifiedSessionClaimsForRequest();
+    const pageContext = withContext();
+    await vi.waitFor(() =>
+      expect(server.calls['/.well-known/jwks.json']).toBeGreaterThanOrEqual(1),
+    );
+    // Time for withContext() to reach its gate before the key set answers.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    answerKeySet();
+
+    expect((await pageContext).mfaSatisfied).toBe(true);
+    expect((await layoutRead)?.aal).toBe('aal2');
+    expect(server.calls['/.well-known/jwks.json']).toBe(1);
+    expect(server.calls['/user']).toBeUndefined();
   });
 });

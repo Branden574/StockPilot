@@ -28,9 +28,16 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
  */
 
 let jar = new Map<string, string>();
+/** cookies() throws, as it does outside a request scope. */
+let cookiesUnavailable = false;
 vi.mock('next/headers', async () => {
   const { cookieStoreOver } = await import('@/test/auth-session-fixture');
-  return { cookies: async () => cookieStoreOver(jar) };
+  return {
+    cookies: async () => {
+      if (cookiesUnavailable) throw new Error('cookies() was called outside a request scope');
+      return cookieStoreOver(jar);
+    },
+  };
 });
 vi.mock('@/lib/env', async () => {
   const f = await import('@/test/auth-session-fixture');
@@ -63,7 +70,7 @@ import {
   type SigningKey,
 } from '@/test/auth-session-fixture';
 
-import { readVerifiedSessionClaims } from './verified-claims';
+import { getVerifiedSessionClaimsForRequest, readVerifiedSessionClaims } from './verified-claims';
 
 let projectKey: SigningKey;
 /**
@@ -96,6 +103,7 @@ beforeEach(() => {
   serve([projectKey]);
   warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
   jar = new Map();
+  cookiesUnavailable = false;
 });
 
 afterEach(() => {
@@ -324,5 +332,36 @@ describe('readVerifiedSessionClaims', () => {
       },
     };
     await expect(readVerifiedSessionClaims(brokenChecks as never)).resolves.toBeNull();
+  });
+});
+
+/**
+ * The read a page render shares (React cache(); a pass-through here, as in a
+ * Server Action). The dashboard layout starts it before anything else and
+ * awaits it only at its enrolled-member gate, so it must never reject: a
+ * rejection nobody awaits would surface as an unhandled one.
+ */
+describe('getVerifiedSessionClaimsForRequest', () => {
+  it("reads this request's cookie session, verified like readVerifiedSessionClaims()", async () => {
+    await signIn(sessionClaims({ aal: 'aal2' }));
+    expect(await getVerifiedSessionClaimsForRequest()).toMatchObject({
+      userId: FIXTURE_USER_ID,
+      sessionId: FIXTURE_SESSION_ID,
+      aal: 'aal2',
+    });
+    expect(server.calls['/user']).toBeUndefined();
+    expect(insecureWarnings()).toBe(0);
+  });
+
+  it('a forged token: null', async () => {
+    const real = await signAccessToken(projectKey, sessionClaims({ aal: 'aal1' }));
+    const forgedClaims = sessionClaims({ aal: 'aal2' });
+    await signIn(forgedClaims, withEditedPayload(real, forgedClaims));
+    expect(await getVerifiedSessionClaimsForRequest()).toBeNull();
+  });
+
+  it('never rejects, even when no client can be made', async () => {
+    cookiesUnavailable = true;
+    await expect(getVerifiedSessionClaimsForRequest()).resolves.toBeNull();
   });
 });

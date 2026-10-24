@@ -3,7 +3,10 @@ import 'server-only';
 import { cache } from 'react';
 
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
-import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
+import {
+  getVerifiedSessionClaimsForRequest,
+  readVerifiedSessionClaims,
+} from '@/lib/auth/verified-claims';
 import {
   heldMembership,
   modulesFromMembership,
@@ -97,7 +100,6 @@ export interface ServiceContext {
  * awaited inside the try: either one failing lands in the catch and fails closed.
  */
 async function resolveMfaState(
-  supabase: Awaited<ReturnType<typeof createClient>>,
   role: Role,
   readOrgRow: () => OrgRow | null | Promise<OrgRow | null>,
   factorsRead: Promise<MfaFactor[]>,
@@ -137,8 +139,11 @@ async function resolveMfaState(
     // ES256 check, no Auth round trip), never the cookie decoded unchecked:
     // getAuthenticatorAssuranceLevel() did that and read the stored user
     // object, which auth-js logs as insecure on a server client. An
-    // unverifiable token is not AAL2.
-    const claims = await readVerifiedSessionClaims(supabase);
+    // unverifiable token is not AAL2. Request-cached: in a page render this
+    // is the read the dashboard layout started first thing, so a cold key
+    // set is fetched once, alongside the layout's reads, not again here after
+    // the factor list. In a Server Action it reads afresh.
+    const claims = await getVerifiedSessionClaimsForRequest();
     return {
       mfaRequired: true,
       mfaSatisfied: claims?.aal === 'aal2',
@@ -199,7 +204,6 @@ export const withContext = cache(async (): Promise<ServiceContext> => {
   // empty set = core-only nav, never a wider entitlement than the org has).
   const [{ mfaRequired, mfaSatisfied, mfaEnrolled }, enabledModules] = await Promise.all([
     resolveMfaState(
-      supabase,
       ctx.role,
       () => orgRowFromMembership(held) ?? getOrgRowForRequest(ctx.organizationId),
       factorsRead,

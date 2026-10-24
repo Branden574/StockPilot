@@ -198,6 +198,11 @@ export interface FakeAuthServer {
   calls: Record<string, number>;
   /** Make the JWKS endpoint fail (a transient Auth outage for key discovery only). */
   failJwks: boolean;
+  /**
+   * While set, the JWKS endpoint answers only once this settles: a slow or
+   * cold key-set fetch, held so a test can see what else runs meanwhile.
+   */
+  jwksGate: Promise<void> | null;
   /** The legacy HS256 secret GoTrue still accepts tokens under, if any. */
   legacySecret: CryptoKey | null;
   /**
@@ -263,6 +268,7 @@ export function fakeAuthServer(projectKeys: SigningKey | SigningKey[]): FakeAuth
   const server: FakeAuthServer = {
     calls: {},
     failJwks: false,
+    jwksGate: null,
     legacySecret: null,
     revokedSessions: new Set(),
     fetch: async (input, init) => {
@@ -275,6 +281,7 @@ export function fakeAuthServer(projectKeys: SigningKey | SigningKey[]): FakeAuth
       const path = url.pathname.slice(new URL(AUTH_BASE).pathname.length);
       server.calls[path] = (server.calls[path] ?? 0) + 1;
       if (path === '/.well-known/jwks.json') {
+        if (server.jwksGate) await server.jwksGate;
         if (server.failJwks) return json(503, { code: 'unavailable', msg: 'try again' });
         return json(200, { keys: keys.map((k) => k.publicJwk) });
       }

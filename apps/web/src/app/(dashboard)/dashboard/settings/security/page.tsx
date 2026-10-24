@@ -11,7 +11,7 @@ import { SettingsPage, SettingsPanel } from '@/components/settings/settings-nav'
 import { Button } from '@/components/ui/button';
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
 import { requireOrgContext } from '@/lib/auth/session';
-import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
+import { getVerifiedSessionClaimsForRequest } from '@/lib/auth/verified-claims';
 import { createClient } from '@/lib/supabase/server';
 import { getMfaRecoveryCodeStatus } from '@/server/actions/mfa-recovery';
 import { withContext } from '@/server/services/context';
@@ -31,14 +31,20 @@ export default async function SecuritySettingsPage({
 
   // This device's session id and its assurance level both come from the
   // access token once its signature checks out (lib/auth/verified-claims: a
-  // local ES256 check, no Auth round trip). They used to come from the cookie
-  // unchecked: getSession()'s token for the id, and
-  // getAuthenticatorAssuranceLevel(), which also read the cookie's stored user
-  // object (auth-js logs that as insecure on a server client). A token that
-  // does not verify marks no session as this one and is not AAL2.
-  const claims = await readVerifiedSessionClaims(supabase);
+  // local ES256 check, no Auth round trip once the key set is cached). They
+  // used to come from the cookie unchecked: getSession()'s token for the id,
+  // and getAuthenticatorAssuranceLevel(), which also read the cookie's stored
+  // user object (auth-js logs that as insecure on a server client). A token
+  // that does not verify marks no session as this one and is not AAL2.
+  // The read is the one the dashboard layout started (request-cached), and
+  // the service context starts beside it: on a cold key set, the key-set
+  // fetch must not hold up the context's own round trips.
+  const [claims, serviceContext] = await Promise.all([
+    getVerifiedSessionClaimsForRequest(),
+    withContext(),
+  ]);
   const currentSessionId = claims?.sessionId ?? null;
-  const activeSessions = await new SessionsService(await withContext())
+  const activeSessions = await new SessionsService(serviceContext)
     .list(currentSessionId)
     .catch(() => []);
 

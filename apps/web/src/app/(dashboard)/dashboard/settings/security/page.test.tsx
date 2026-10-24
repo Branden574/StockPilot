@@ -69,18 +69,22 @@ let verifiedClaims: { sub: string; session_id: string; aal: 'aal1' | 'aal2' } | 
  * claims, so a page that reads them again fails here.
  */
 let unverifiedAal: { data: unknown; error: unknown };
+/** getClaims() answers only once this settles (a cold key-set fetch, held). */
+let claimsGate: Promise<void> = Promise.resolve();
 const STORED_PAYLOAD = { sub: 'u1', session_id: 'sess-stored', aal: 'aal2' };
 const STORED_ACCESS = `h.${Buffer.from(JSON.stringify(STORED_PAYLOAD)).toString('base64url')}.s`;
 vi.mock('@/lib/supabase/server', () => ({
   createClient: async () => ({
     auth: {
-      getClaims: async () =>
-        verifiedClaims
+      getClaims: async () => {
+        await claimsGate;
+        return verifiedClaims
           ? { data: { claims: verifiedClaims }, error: null }
           : {
               data: null,
               error: { name: 'AuthInvalidJwtError', message: 'Invalid JWT signature' },
-            },
+            };
+      },
       getSession: async () => ({ data: { session: { access_token: STORED_ACCESS } }, error: null }),
       // Only the fallback asks GoTrue about a token; it refuses an unverifiable one.
       getUser: async () => ({
@@ -101,6 +105,8 @@ vi.mock('@/lib/supabase/server', () => ({
   }),
 }));
 
+import { withContext } from '@/server/services/context';
+
 import SecuritySettingsPage from './page';
 
 async function renderPage(enroll?: string) {
@@ -108,6 +114,7 @@ async function renderPage(enroll?: string) {
 }
 
 beforeEach(() => {
+  claimsGate = Promise.resolve();
   factorsAnswer = { data: { all: [] }, error: null };
   verifiedClaims = { sub: 'u1', session_id: 'sess-verified', aal: 'aal2' };
   unverifiedAal = { data: { currentLevel: 'aal2', nextLevel: 'aal2' }, error: null };
@@ -212,5 +219,23 @@ describe('Security page: what it reads from the session', () => {
     verifiedClaims = null;
     await renderPage();
     expect(listedWith).toHaveBeenLastCalledWith(null);
+  });
+});
+
+describe('Security page: the claims read does not hold up the service context', () => {
+  it('withContext() is already under way while the verified claims are still on their way', async () => {
+    // A cold key set: getClaims() waits on the Auth server's key-set fetch.
+    // Reading the claims first and only then starting withContext() put that
+    // fetch in series ahead of the context's own Supabase round trips.
+    let answerClaims!: () => void;
+    claimsGate = new Promise((resolve) => {
+      answerClaims = resolve;
+    });
+    vi.mocked(withContext).mockClear();
+    const rendering = renderPage();
+    await vi.waitFor(() => expect(withContext).toHaveBeenCalledTimes(1));
+    answerClaims();
+    await rendering;
+    expect(listedWith).toHaveBeenLastCalledWith('sess-verified');
   });
 });
