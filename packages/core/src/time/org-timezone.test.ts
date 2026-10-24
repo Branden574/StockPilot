@@ -373,7 +373,7 @@ describe('formatOrgDateTime: the same words on the web and the phone', () => {
  * formatOrgDateTime built both formatters on every call, and building an
  * Intl.DateTimeFormat costs far more than formatting with one. The web
  * Movements page formats every row of its instant ledger on the server, up to
- * 1,000: 2,000 formatters and about 50 to 70 ms per visit, measured on a Mac
+ * 1,000: 2,000 formatters and about 50 to 80 ms per visit, measured on a Mac
  * (50 rows, the page the browser showed before, took about 3 ms). The
  * formatters are now kept per zone and options, for the Intl.DateTimeFormat
  * that built them.

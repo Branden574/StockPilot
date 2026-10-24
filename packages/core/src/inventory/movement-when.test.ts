@@ -98,7 +98,7 @@ describe('the phone item cards and home rows in the organization zone (L7, F2)',
 /**
  * Slice 3 review (2026-10-24): the web Movements page formats every row of its
  * instant ledger on the server, up to 1,000, through formatMovementWhen. It
- * built two Intl formatters per row (about 50 to 70 ms per visit, measured);
+ * built two Intl formatters per row (about 50 to 80 ms per visit, measured);
  * the formatters are now built once per zone (core formatOrgDateTime).
  */
 describe('a whole ledger builds its formatters once (slice 3 review, 2026-10-24)', () => {

@@ -210,7 +210,7 @@ function splitDateTimeOptions(
  * formatting with one, and formatOrgDateTime built two on every call, so a
  * list that prints each row's time paid for them per row: the web Movements
  * page formats every row of its instant ledger on the server, up to 1,000,
- * which took about 50 to 70 ms per visit (measured on a Mac; the 50 rows the
+ * which took about 50 to 80 ms per visit (measured on a Mac; the 50 rows the
  * browser printed before took about 3 ms). A formatter never changes once
  * built, so one serves every call with the same options.
  *

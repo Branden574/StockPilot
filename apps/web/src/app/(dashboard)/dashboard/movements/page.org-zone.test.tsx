@@ -202,7 +202,7 @@ describe('Movements page: From and To cut days in the organization zone (F4)', (
 
 // Slice 3 review (2026-10-24): the page formats every row of the instant
 // ledger here, on the server, up to MOVEMENTS_INSTANT_CAP (1,000) rows. Core
-// built two Intl formatters for every row (about 50 to 70 ms per visit,
+// built two Intl formatters for every row (about 50 to 80 ms per visit,
 // measured on a Mac); it now builds them once per zone and options. Before
 // this branch the browser formatted only the 50 rows on screen.
 describe('Movements page: a full instant ledger without two formatters per row', () => {
