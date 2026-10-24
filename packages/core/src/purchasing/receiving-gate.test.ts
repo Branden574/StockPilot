@@ -134,9 +134,10 @@ describe('receivingGate', () => {
 
   it('says who posts in plain words', () => {
     expect(RECEIVE_MANAGER_POSTS_COPY).toBe('A manager posts receipts.');
-    expect(RECEIVE_POST_MANAGER_ONLY_COPY).toBe(
-      'Only a manager can post a receipt. A manager posts receipts.',
-    );
+    // Review 2026-10-24: the refusal said the same thing twice ("Only a
+    // manager can post a receipt. A manager posts receipts.").
+    expect(RECEIVE_POST_MANAGER_ONLY_COPY).toBe('Only a manager can post a receipt.');
+    expect(RECEIVE_POST_MANAGER_ONLY_COPY).not.toContain(RECEIVE_MANAGER_POSTS_COPY);
     expect(RECEIVE_GATE_CHECKING_COPY).toBe('Checking who can post receipts…');
     // Desk check F10(c): shown to anyone offline with nothing remembered, a
     // manager included, so it never says who posts.

@@ -122,17 +122,15 @@ describe('POST /api/v1/po/[id]/receipts', () => {
   // the server's sentence and keeps its key (the default arm).
   it('answers the manager refusal as a 403 with its sentence and reason', async () => {
     postReceipt.mockRejectedValue(
-      new ServiceError(
-        'forbidden',
-        'Only a manager can post a receipt. A manager posts receipts.',
-        { reason: 'manager_posts' },
-      ),
+      new ServiceError('forbidden', 'Only a manager can post a receipt.', {
+        reason: 'manager_posts',
+      }),
     );
     const res = await post(validBody);
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({
       error: 'forbidden',
-      message: 'Only a manager can post a receipt. A manager posts receipts.',
+      message: 'Only a manager can post a receipt.',
       details: { reason: 'manager_posts' },
     });
   });

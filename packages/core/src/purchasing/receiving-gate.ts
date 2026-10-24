@@ -54,8 +54,7 @@ export function receivingGate(input: ReceivingGateInput): ReceivingGate {
 export const RECEIVE_MANAGER_POSTS_COPY = 'A manager posts receipts.';
 
 /** The service's refusal when someone below manager tries to post. */
-export const RECEIVE_POST_MANAGER_ONLY_COPY =
-  'Only a manager can post a receipt. A manager posts receipts.';
+export const RECEIVE_POST_MANAGER_ONLY_COPY = 'Only a manager can post a receipt.';
 
 /** The phone footer before it knows who may post. It never guesses. */
 export const RECEIVE_GATE_CHECKING_COPY = 'Checking who can post receipts…';
