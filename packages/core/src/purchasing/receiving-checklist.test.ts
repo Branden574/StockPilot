@@ -111,9 +111,11 @@ describe('text rules match the SQL', () => {
   });
 
   it('counts characters as Postgres does (code points)', () => {
-    expect(checklistTextLength('📦'.repeat(80))).toBe(80);
-    expect(normalizeChecklistTitle('📦'.repeat(80)).ok).toBe(true);
-    expect(normalizeChecklistTitle('📦'.repeat(81))).toEqual({
+    // U+1D400: one code point, two UTF-16 units (JavaScript's length says 2).
+    expect('𝐀'.length).toBe(2);
+    expect(checklistTextLength('𝐀'.repeat(80))).toBe(80);
+    expect(normalizeChecklistTitle('𝐀'.repeat(80)).ok).toBe(true);
+    expect(normalizeChecklistTitle('𝐀'.repeat(81))).toEqual({
       ok: false,
       detail: { field: 'title', reason: 'title_too_long' },
     });
