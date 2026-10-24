@@ -1,4 +1,4 @@
--- 0393_order_signature_images.sql
+-- 0403_order_signature_images.sql
 --
 -- SECURITY (slice C step 4, owner decision O1, default yes): a customer's
 -- captured signature image leaves the member-readable order row.
@@ -77,7 +77,7 @@
 
 set lock_timeout = '900ms';
 
-do $c393_lock$
+do $c403_lock$
 declare
   v_try integer := 0;
 begin
@@ -101,9 +101,9 @@ begin
     end;
     perform pg_sleep(0.05 + random() * 0.1);
   end loop;
-end $c393_lock$;
+end $c403_lock$;
 
-do $c393_move$
+do $c403_move$
 declare
   v_other_before text;
   v_other_after  text;
@@ -262,7 +262,7 @@ exception
             detail  = format('SQLSTATE %s (table %s, column %s, constraint %s); nothing was changed. The message and detail are withheld: they can carry a token or an image.',
                              v_e_state, coalesce(nullif(v_e_table, ''), '-'), coalesce(nullif(v_e_column, ''), '-'),
                              coalesce(nullif(v_e_constraint, ''), '-'));
-end $c393_move$;
+end $c403_move$;
 
 create or replace function public.tg_order_requests_signature_image_capture()
 returns trigger
@@ -294,7 +294,7 @@ end;
 $$;
 
 comment on function public.tg_order_requests_signature_image_capture() is
-  'BEFORE UPDATE OF signature_data_url, signed_at on order_requests (0393): moves a captured signature '
+  'BEFORE UPDATE OF signature_data_url, signed_at on order_requests (0403): moves a captured signature '
   'image into order_request_secrets before the row is stored (confirm_order_signature keeps writing '
   'the column), and clears the side copy when a hand-over is reset (signed_at back to null, '
   'resume_fulfillment). SECURITY INVOKER: its callers are the order RPCs (postgres) and the admin '
@@ -307,7 +307,7 @@ create or replace trigger trg_order_requests_signature_image_capture
   for each row execute function public.tg_order_requests_signature_image_capture();
 
 comment on column public.order_requests.signature_data_url is
-  'Always null since 0393: the captured signature image lives in order_request_secrets.signature_data_url, '
+  'Always null since 0403: the captured signature image lives in order_request_secrets.signature_data_url, '
   'moved there by trg_order_requests_signature_image_capture before the row is stored. Read through '
   '/api/orders/<id>/signature (an approver or the order''s driver).';
 

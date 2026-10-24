@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# Lock footprint of migration 0393 (order signature images). The push runs the
+# Lock footprint of migration 0403 (order signature images). The push runs the
 # whole file as one batch, so every lock is held until the file commits. The
 # file's data block rewrites the order rows that hold an image, so before
 # anything else touches a table it takes, in one NOWAIT prelude (`do
-# $c393_lock$ ... end $c393_lock$;`), EXCLUSIVE on order_requests (critique
+# $c403_lock$ ... end $c403_lock$;`), EXCLUSIVE on order_requests (critique
 # K3) and order_request_secrets, and FOR KEY SHARE on the organizations its
 # side-table inserts reference; it never waits holding a lock. Its CREATE OR
 # REPLACE TRIGGER takes SHARE ROW EXCLUSIVE on order_requests after the
@@ -51,23 +51,23 @@
 # (docker container supabase_db_stockpilot). Exit status 0 = every check
 # passed.
 #
-# Usage: bash scripts/db-concurrency/0393_migration_lock_footprint.sh
+# Usage: bash scripts/db-concurrency/0403_migration_lock_footprint.sh
 
 set -uo pipefail
 
 CONTAINER="${CONTAINER:-supabase_db_stockpilot}"
 PSQL=(docker exec -i "$CONTAINER" psql -U postgres -X -q -v ON_ERROR_STOP=1 -At)
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
-MIG="$REPO/supabase/migrations/0393_order_signature_images.sql"
+MIG="$REPO/supabase/migrations/0403_order_signature_images.sql"
 TMP="$(mktemp -d)"
 BG=()
 
-ORG='03934444-0000-0000-0000-00000000000a'
-REQ='03934444-0000-0000-0000-0000000000a1'
-WH='03934444-0000-0000-0000-0000000000c1'
-LIVE='03934444-0000-0000-0000-0000000000d1'
-IMG2='03934444-0000-0000-0000-0000000000d2'
-SIDEX='03934444-0000-0000-0000-0000000000d4'
+ORG='04034444-0000-0000-0000-00000000000a'
+REQ='04034444-0000-0000-0000-0000000000a1'
+WH='04034444-0000-0000-0000-0000000000c1'
+LIVE='04034444-0000-0000-0000-0000000000d1'
+IMG2='04034444-0000-0000-0000-0000000000d2'
+SIDEX='04034444-0000-0000-0000-0000000000d4'
 
 FAILS=0
 ok()   { printf 'ok     %s\n' "$*"; }
@@ -116,10 +116,10 @@ if [ "$OTHERS" != "0" ]; then
 fi
 
 "${PSQL[@]}" >/dev/null <<SQL
-insert into auth.users (id, email, raw_user_meta_data) values ('$REQ', '0393-lock-req@test.local', '{}'::jsonb);
-insert into public.organizations (id, name, slug) values ('$ORG', '0393 Lock Org', '0393-lock');
+insert into auth.users (id, email, raw_user_meta_data) values ('$REQ', '0403-lock-req@test.local', '{}'::jsonb);
+insert into public.organizations (id, name, slug) values ('$ORG', '0403 Lock Org', '0403-lock');
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values ('$ORG', '$REQ', 'staff', now());
-insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0393 Lock Main', 'WH-0393-LK', 'active');
+insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0403 Lock Main', 'WH-0403-LK', 'active');
 insert into public.order_requests
   (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type,
    signed_at, signature_method, signature_data_url) values
@@ -134,10 +134,10 @@ FIXTURE_SQL="select md5(coalesce(string_agg(to_jsonb(o)::text, '' order by o.id)
 FIXTURE_BEFORE="$(q "$FIXTURE_SQL")"
 
 # The file in three parts: before the prelude, the prelude, the rest.
-# shellcheck disable=SC2016  # a literal $c393_lock$ dollar tag, not an expansion
-P0="$(grep -n '^do \$c393_lock\$$' "$MIG" | head -n 1 | cut -d: -f1)"
+# shellcheck disable=SC2016  # a literal $c403_lock$ dollar tag, not an expansion
+P0="$(grep -n '^do \$c403_lock\$$' "$MIG" | head -n 1 | cut -d: -f1)"
 # shellcheck disable=SC2016  # the same literal tag
-P1="$(grep -n '^end \$c393_lock\$;$' "$MIG" | head -n 1 | cut -d: -f1)"
+P1="$(grep -n '^end \$c403_lock\$;$' "$MIG" | head -n 1 | cut -d: -f1)"
 [ -n "$P0" ] && [ -n "$P1" ] || { echo "no lock prelude in $MIG"; exit 1; }
 head -n $((P0 - 1)) "$MIG" > "$TMP/part1.sql"
 sed -n "${P0},${P1}p" "$MIG" > "$TMP/prelude.sql"
@@ -204,16 +204,16 @@ LOCKS_OF_SLEEPING_FILE="select count(*) filter (where a.wait_event = 'PgSleep'):
   left join pg_locks l on l.pid = a.pid and l.locktype = 'relation' and l.granted
    and l.relation in (select c.oid from pg_class c join pg_namespace n on n.oid = c.relnamespace
                        where c.relkind in ('r', 'p') and n.nspname not in ('pg_catalog', 'pg_toast', 'information_schema'))
- where a.application_name like '0393-lock-file-%'"
+ where a.application_name like '0403-lock-file-%'"
 run_behind() { # run_behind <label> <holder sql> <holder seconds> <expect: fail|apply>
-  local label="$1" holder="$2" secs="$3" expect="$4" app="0393-lock-holder-$1"
+  local label="$1" holder="$2" secs="$3" expect="$4" app="0403-lock-holder-$1"
   printf "set application_name = '%s';\nbegin;\n%s\nselect pg_sleep(%s);\nrollback;\n" "$app" "$holder" "$secs" \
     | "${PSQL[@]}" > "$TMP/3-$label.h.out" 2>&1 &
   local hp=$!
   if ! wait_sleeping "$app"; then bad "3 $label: the holder never reached pg_sleep"; wait "$hp"; return; fi
   local t0 t1 rc
   t0="$(now_ms)"
-  { echo "set application_name = '0393-lock-file-$label';"; echo "begin;"; cat "$MIG"; echo "rollback;"; } \
+  { echo "set application_name = '0403-lock-file-$label';"; echo "begin;"; cat "$MIG"; echo "rollback;"; } \
     | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/3-$label.m.out" 2> "$TMP/3-$label.m.err" &
   local mp=$!
   local samples=0 sleeping=0 held=0 r
@@ -254,10 +254,10 @@ run_behind 3c-org-for-update "select 1 from public.organizations where id = '$OR
 run_behind 3d-short-order-write "update public.order_requests set internal_notes = internal_notes where id = '$SIDEX';" 0.6 apply
 
 # ── 4. A plain reader does not hold the file up ──────────────────────────
-printf "set application_name = '0393-lock-reader';\nbegin;\nselect count(*) from public.order_requests;\nselect pg_sleep(6);\ncommit;\n" \
+printf "set application_name = '0403-lock-reader';\nbegin;\nselect count(*) from public.order_requests;\nselect pg_sleep(6);\ncommit;\n" \
   | "${PSQL[@]}" > "$TMP/4r.out" 2>&1 &
 BG+=("$!")
-if ! wait_sleeping 0393-lock-reader; then
+if ! wait_sleeping 0403-lock-reader; then
   bad "4: the reader never reached pg_sleep"
 else
   t0="$(now_ms)"
@@ -274,10 +274,10 @@ for p in "${BG[@]}"; do wait "$p" 2> /dev/null; done
 BG=()
 
 # ── 5. The row writer shape already holding its row ───────────────────────
-printf "set application_name = '0393-lock-writer';\nbegin;\nselect 1 from public.order_requests where id = '%s' for update;\nselect pg_sleep(1.5);\nupdate public.order_requests set internal_notes = 'handed over' where id = '%s';\nrollback;\nselect 'SHAPE_DONE';\n" "$LIVE" "$LIVE" \
+printf "set application_name = '0403-lock-writer';\nbegin;\nselect 1 from public.order_requests where id = '%s' for update;\nselect pg_sleep(1.5);\nupdate public.order_requests set internal_notes = 'handed over' where id = '%s';\nrollback;\nselect 'SHAPE_DONE';\n" "$LIVE" "$LIVE" \
   | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/5.s.out" 2>&1 &
 sp=$!
-if ! wait_sleeping 0393-lock-writer; then
+if ! wait_sleeping 0403-lock-writer; then
   bad "5: the row writer never reached pg_sleep"
   wait "$sp"
 else
@@ -304,14 +304,14 @@ fi
 
 # ── 6. While the file holds its locks ────────────────────────────────────
 {
-  echo "set application_name = '0393-lock-migration-6';"
+  echo "set application_name = '0403-lock-migration-6';"
   echo "begin;"
   cat "$MIG"
   echo "select pg_sleep(1);"
   echo "rollback;"
 } | "${PSQL[@]}" > "$TMP/6m.out" 2> "$TMP/6m.err" &
 BG+=("$!")
-if ! wait_sleeping 0393-lock-migration-6; then
+if ! wait_sleeping 0403-lock-migration-6; then
   bad "6: the migration session never reached pg_sleep: $(tr '\n' ' ' < "$TMP/6m.err")"
 else
   t0="$(now_ms)"
@@ -338,13 +338,13 @@ if grep -q . "$TMP/6m.err"; then bad "6: the migration session reported: $(tr '\
 # ── 7. CONTROL: without the prelude the row writer shape deadlocks ────────
 sed -e "${P0},${P1}d" -e "s/^set lock_timeout = '900ms';$/set lock_timeout = '5s';/" "$MIG" > "$TMP/no-prelude.sql"
 # shellcheck disable=SC2016  # the same literal tag
-if grep -q 'do \$c393_lock\$' "$TMP/no-prelude.sql" || ! grep -q "^set lock_timeout = '5s';$" "$TMP/no-prelude.sql"; then
+if grep -q 'do \$c403_lock\$' "$TMP/no-prelude.sql" || ! grep -q "^set lock_timeout = '5s';$" "$TMP/no-prelude.sql"; then
   bad "7: could not build the no-prelude control file"
 else
-  printf "set application_name = '0393-lock-control';\nbegin;\nselect 1 from public.order_requests where id = '%s' for update;\nselect pg_sleep(1.5);\nupdate public.order_requests set internal_notes = 'handed over' where id = '%s';\nrollback;\nselect 'SHAPE_DONE';\n" "$LIVE" "$LIVE" \
+  printf "set application_name = '0403-lock-control';\nbegin;\nselect 1 from public.order_requests where id = '%s' for update;\nselect pg_sleep(1.5);\nupdate public.order_requests set internal_notes = 'handed over' where id = '%s';\nrollback;\nselect 'SHAPE_DONE';\n" "$LIVE" "$LIVE" \
     | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/7.s.out" 2>&1 &
   sp=$!
-  if wait_sleeping 0393-lock-control; then
+  if wait_sleeping 0403-lock-control; then
     { echo "begin;"; cat "$TMP/no-prelude.sql"; echo "rollback;"; } | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/7.m.out" 2> "$TMP/7.m.err"
     wait "$sp"
     S40="$(grep -c '40P01' "$TMP/7.s.out" || true)"
