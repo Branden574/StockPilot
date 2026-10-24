@@ -27,6 +27,8 @@ vi.mock('next/link', async () => {
 });
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+
 import { ReceivingCheckForm } from './receiving-check-form';
 
 import type { ReceivingRunView } from '@/server/services/receiving-checklist';
@@ -130,6 +132,33 @@ describe('ReceivingCheckForm', () => {
     render(<ReceivingCheckForm view={view()} />);
     const region = screen.getByRole('region', { name: C.aboutHeading });
     expect(region.textContent).toContain(C.receivedOnReceipt(3));
+  });
+
+  // Review 2026-10-24 (CONFLICTS W4: the shared Checkbox, Switch and Radio are
+  // the one control set). Mutation caught: a local copy of the card radio,
+  // which had drifted (a fill and a heavier word when chosen, smaller
+  // corners, 40 px options on a phone). The options are the shared card
+  // RadioGroup's, 44 px tall (p-3 around an 18 px line), exactly as it draws
+  // them chosen and not.
+  it('answers with the shared card radios, drawn exactly as the shared group draws them', () => {
+    render(<ReceivingCheckForm view={view()} />);
+    const shared = render(
+      <RadioGroup variant="card" value="pass" aria-label="Shared">
+        <RadioGroupItem value="pass" label="Shared pass" />
+        <RadioGroupItem value="fail" label="Shared fail" />
+      </RadioGroup>,
+    );
+    const card = (name: string | RegExp) =>
+      screen.getAllByRole('radio', { name })[0]!.closest('label')!.className;
+    expect(card(C.pass)).toBe(card('Shared pass'));
+    expect(card(C.fail)).toBe(card('Shared fail'));
+    expect(card(C.fail)).toMatch(/(^|\s)p-3(\s|$)/);
+    expect(card(C.fail)).not.toMatch(/min-h-10/);
+    const group = screen.getAllByRole('radiogroup', {
+      name: 'Packing slip matches this purchase order',
+    })[0]!;
+    expect(group.className).toMatch(/(^|\s)flex-wrap(\s|$)/);
+    shared.unmount();
   });
 
   it('labels Pass, Fail and Not applicable as radios with words', () => {

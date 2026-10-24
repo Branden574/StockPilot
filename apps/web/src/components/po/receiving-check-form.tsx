@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Textarea } from '@/components/ui/textarea';
 import { useUnsavedWork } from '@/lib/unsaved-work';
 import { saveReceivingCheckAction } from '@/server/actions/receiving-checklist';
@@ -43,14 +44,6 @@ import {
 import type { ReceivingRunView } from '@/server/services/receiving-checklist';
 
 const C = RECEIVING_CHECKLIST_COPY;
-
-/**
- * The shared radio's dot (components/ui/radio-group): a faint-ink ring that
- * fills with an ink centre when chosen; the browser's own radio comes back in
- * forced colors.
- */
-const RADIO_DOT =
-  'bg-card checked:border-foreground checked:bg-foreground mt-px size-4 shrink-0 appearance-none rounded-full border border-[var(--ed-ink-4)] transition-colors checked:shadow-[inset_0_0_0_3px_hsl(var(--card))] focus-visible:outline-none disabled:cursor-not-allowed forced-colors:appearance-auto';
 
 type Draft = ChecklistAnswerDraft;
 type Drafts = ChecklistAnswerDrafts;
@@ -341,36 +334,22 @@ export function ReceivingCheckForm({ view }: { view: ReceivingRunView }) {
                 )}
                 <div className="mt-3">
                   {s.kind === 'check' && (
-                    <div role="radiogroup" aria-label={s.label} className="flex flex-wrap gap-2">
-                      {(
-                        [
-                          ['pass', C.pass],
-                          ['fail', C.fail],
-                          ['na', C.notApplicable],
-                        ] as const
-                      ).map(([v, label]) => (
-                        // The shared card radio's look: the chosen answer is
-                        // the ink edge and the ink dot, never a colour alone.
-                        <label
-                          key={v}
-                          className={`has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-offset-background flex min-h-10 cursor-pointer items-center gap-2 rounded-md border px-3 text-[13px] transition-colors has-[:disabled]:cursor-not-allowed has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-offset-2 ${
-                            d.value === v
-                              ? 'border-foreground bg-sunk font-medium shadow-[0_0_0_1px_hsl(var(--foreground))]'
-                              : 'border-border bg-card hover:border-[var(--ed-line-strong)]'
-                          }`}
-                        >
-                          <input
-                            type="radio"
-                            name={`answer-${s.key}`}
-                            value={v}
-                            checked={d.value === v}
-                            onChange={() => setDraft(s.key, { value: v })}
-                            className={RADIO_DOT}
-                          />
-                          {label}
-                        </label>
-                      ))}
-                    </div>
+                    // The shared card radios (CONFLICTS W4): the chosen
+                    // answer is the ink edge and the ink dot, never a colour
+                    // alone, and each option is 44 px tall.
+                    <RadioGroup
+                      variant="card"
+                      name={`answer-${s.key}`}
+                      aria-label={s.label}
+                      value={d.value}
+                      onValueChange={(v) => setDraft(s.key, { value: v })}
+                      disabled={readOnly || busy !== null}
+                      className="flex flex-wrap gap-2"
+                    >
+                      <RadioGroupItem value="pass" label={C.pass} />
+                      <RadioGroupItem value="fail" label={C.fail} />
+                      <RadioGroupItem value="na" label={C.notApplicable} />
+                    </RadioGroup>
                   )}
                   {s.kind === 'count' && (
                     <Input
