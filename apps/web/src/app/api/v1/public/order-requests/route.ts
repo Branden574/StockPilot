@@ -41,7 +41,20 @@ const lineSchema = z.object({
   // I14: integer-only quantities here too. Mirrors the internal create
   // schema so the public surface can't slip a fractional order past
   // the internal validators.
-  quantity: z.coerce.number().int().positive().max(10_000),
+  //
+  // Only a JSON number or a short string reaches the coercion. zod 3's
+  // z.coerce.number() calls Number(input) before it checks the type, and this
+  // body is unauthenticated and validated before the rate limiter. Number() on
+  // an array joins every nested element into one string: a deep nest of short
+  // arrays passes the over-long-array check, its cost grows faster than its
+  // size, and past a few thousand levels the join overflows the stack. Number()
+  // on an object whose valueOf and toString are not functions throws a
+  // TypeError. Either error escaped safeParse, and the route answered 500. The
+  // public cart sends a number (public-cart-rail.tsx); a numeric string still
+  // works, as it did with the plain coercion.
+  quantity: z
+    .union([z.number(), z.string().max(12)])
+    .pipe(z.coerce.number().int().positive().max(10_000)),
   notes: z.string().max(500).nullish(),
 });
 
@@ -124,13 +137,25 @@ export async function POST(req: NextRequest) {
   // safeParse. The form (public-cart-rail.tsx) sends no array but `lines`.
   // The words are the ones zod gives an over-long `lines`, which is what the
   // form shows today for a cart of more than 100 items.
-  if (hasArrayLongerThan(raw, MAX_LINES)) {
-    return NextResponse.json(
-      { error: `Array must contain at most ${MAX_LINES} element(s)` },
-      { status: 400 },
-    );
+  //
+  // Checking a body must never answer 500: this runs before the rate limiter,
+  // for anyone. The check walks without recursion and the schema hands
+  // Number() only a number or a short string (see `quantity`), so nothing here
+  // is known to throw. If a later change makes it throw, the body is refused
+  // like any other invalid body. Nothing is reported, because a report sent
+  // from here would be one per anonymous request, before any limit.
+  let parsed: ReturnType<typeof bodySchema.safeParse>;
+  try {
+    if (hasArrayLongerThan(raw, MAX_LINES)) {
+      return NextResponse.json(
+        { error: `Array must contain at most ${MAX_LINES} element(s)` },
+        { status: 400 },
+      );
+    }
+    parsed = bodySchema.safeParse(raw);
+  } catch {
+    return NextResponse.json({ error: 'validation_error' }, { status: 400 });
   }
-  const parsed = bodySchema.safeParse(raw);
   if (!parsed.success) {
     return NextResponse.json(
       { error: parsed.error.issues[0]?.message ?? 'validation_error' },

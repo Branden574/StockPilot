@@ -102,14 +102,20 @@ export async function POST(req: NextRequest) {
   // any array longer than MAX_LINES, at any depth, is refused before
   // safeParse, with the same 400 as any other malformed body. The return
   // form (requester-return-form.tsx) sends no array but `lines`.
-  if (hasArrayLongerThan(raw, MAX_LINES)) {
-    return answer(
-      { error: 'validation_error', message: 'Check the items and quantities, then try again.' },
-      { status: 400 },
-    );
+  //
+  // Checking a body must never answer 500: this runs before the rate limiter,
+  // for anyone. The check walks without recursion and the schema converts
+  // nothing (no coercion; `exchange` is passed through untouched), so nothing
+  // here is known to throw. If a later change makes it throw, the body gets
+  // the same 400. Nothing is reported, because a report sent from here would
+  // be one per anonymous request, before any limit.
+  let parsed: ReturnType<typeof bodySchema.safeParse> | null;
+  try {
+    parsed = hasArrayLongerThan(raw, MAX_LINES) ? null : bodySchema.safeParse(raw);
+  } catch {
+    parsed = null;
   }
-  const parsed = bodySchema.safeParse(raw);
-  if (!parsed.success) {
+  if (!parsed?.success) {
     return answer(
       { error: 'validation_error', message: 'Check the items and quantities, then try again.' },
       { status: 400 },
