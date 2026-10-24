@@ -32,8 +32,25 @@
 -- route's side-only read ships in the same pull request and must reach
 -- production only after this file is pushed: before the push the images
 -- are still on the rows and a side-only route would show none of them. No
--- phone update is needed. Migration order: 0402 (explicit grants) before
--- this file, or the CLI refuses 0402 afterwards without --include-all.
+-- phone update is needed.
+--
+-- MIGRATION PUSH ORDER (set 2026-10-24): 0402 (explicit grants, #376),
+-- then this file (#372), 0404 (bundle component checks), 0405 (order
+-- functions' warehouse scope), 0406 (receiving checklist, #377). The CLI
+-- refuses a push when a version already applied has no file in the
+-- checkout, and refuses an older pending file once a newer one is applied
+-- (unless --include-all), so each migration branch is rebased onto main
+-- after the one before it merges. For this file: once 0402 is merged and
+-- pushed, rebase this branch onto origin/main (this file's statements stay
+-- unchanged), let CI re-run, and push from the rebased head, where
+-- supabase migration list --linked and supabase db push --linked --dry-run
+-- must show exactly 0403 pending. If the CLI suggests supabase migration
+-- repair or supabase db pull, run neither. Squash-merge right after the
+-- post-push checks pass: once this file is applied the CLI refuses any
+-- checkout without it, so the next migration push waits for that merge.
+-- 0405 restates resume_fulfillment and reopen_picking, whose md5s the
+-- preflight's P4 and the 0403 suite's P5 pin (2e2d5aab, 14e49293): this
+-- file goes before 0405, and 0405's branch re-pins P5 when it rebases.
 --
 -- GRANTS (Supabase stops auto-granting on 2026-10-30). This file creates no
 -- table, view or sequence. The capture function's EXECUTE is revoked from
