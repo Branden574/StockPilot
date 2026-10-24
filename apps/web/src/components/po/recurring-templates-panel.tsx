@@ -27,6 +27,12 @@ import {
   updateRecurringTemplateAction,
 } from '@/server/actions/recurring-pos';
 import type { RecurringPoSeed } from '@/lib/purchase-orders/recurring-seed';
+import {
+  unofferedDestinationNote as unofferedDestinationNoteFor,
+  unofferedSupplierNote,
+  type UnofferedDestination,
+  type UnofferedSupplier,
+} from '@/lib/purchase-orders/unoffered-choice';
 import { useUnsavedWork } from '@/lib/unsaved-work';
 import { cn, formatCurrency, formatRelative } from '@/lib/utils';
 
@@ -151,6 +157,83 @@ interface Props {
    * It decides the seeded destination (see seededForm); read with `seed`.
    */
   seedDestination?: RecurringSeedDestination | null;
+  /**
+   * The destinations, by location id, that templates hold and `locations`
+   * does not offer (deleted since, a staging area, ...), as the page read
+   * them (small fixes slice 8). The form keeps none of them and names each;
+   * the list says when a template creates no purchase order because of one.
+   */
+  unofferedDestinations?: Record<string, UnofferedDestination>;
+  /**
+   * The suppliers, by id, that templates or the Make recurring purchase
+   * order hold and `suppliers` does not offer (archived), as the page read
+   * them. The form keeps none of them and names each; the list names them.
+   */
+  unofferedSuppliers?: Record<string, UnofferedSupplier>;
+}
+
+/** What the form needs to judge a template's or a seed's values. */
+interface FormChoices {
+  locations: LocationOption[];
+  suppliers: SupplierOption[];
+  unofferedDestinations: Record<string, UnofferedDestination>;
+  unofferedSuppliers: Record<string, UnofferedSupplier>;
+}
+
+/**
+ * A template's supplier and destination as the form may hold them: kept when
+ * the selects offer them; otherwise none, with a note naming what the
+ * template holds (small fixes slice 8). Radix shows a value no option has as
+ * a blank box while the save sends it, so a destination deleted after the
+ * template was saved, or an archived supplier, read blank in Edit and went
+ * back unseen (the deleted destination then refused by a name the form
+ * never showed).
+ */
+function templateChoices(
+  t: Pick<RecurringTemplateRow, 'supplier_id' | 'destination_location_id'>,
+  choices: FormChoices,
+): Pick<FormState, 'supplierId' | 'locationId' | 'supplierNote' | 'destinationNote'> {
+  const supplierId = t.supplier_id ?? '';
+  const locationId = t.destination_location_id ?? '';
+  const supplierOffered = !supplierId || choices.suppliers.some((s) => s.id === supplierId);
+  const locationOffered = !locationId || choices.locations.some((l) => l.id === locationId);
+  return {
+    supplierId: supplierOffered ? supplierId : '',
+    locationId: locationOffered ? locationId : '',
+    supplierNote: supplierOffered ? null : unofferedSupplierNote('template', choices.unofferedSuppliers[supplierId]),
+    destinationNote: locationOffered
+      ? null
+      : unofferedDestinationNoteFor('template', choices.unofferedDestinations[locationId]),
+  };
+}
+
+/**
+ * The list's word for a template whose destination stops its purchase
+ * orders: deleted after the template was saved, or no longer linked to a
+ * warehouse. The daily run skips such a template and says why
+ * (RecurringPoTemplatesService.runDueTemplates); this says it before the run
+ * does. Null for any other template (a staging area is accepted, and an
+ * unread destination is not guessed at).
+ */
+function destinationBlocksRuns(destination: UnofferedDestination | undefined): string | null {
+  if (!destination || (destination.why !== 'deleted' && destination.why !== 'no_warehouse')) return null;
+  const subject = destination.name ? `Its destination, "${destination.name}",` : 'Its destination';
+  return destination.why === 'deleted'
+    ? `${subject} was deleted, so it creates no purchase order. Edit it to choose another destination.`
+    : `${subject} isn't linked to a warehouse, so it creates no purchase order. Edit it to choose another destination.`;
+}
+
+/** The list's supplier label for a template: archived ones by name. */
+function supplierLabel(
+  supplierId: string | null,
+  choices: Pick<FormChoices, 'suppliers' | 'unofferedSuppliers'>,
+): string {
+  if (!supplierId) return 'No supplier';
+  const offered = choices.suppliers.find((s) => s.id === supplierId);
+  if (offered) return offered.name;
+  const unoffered = choices.unofferedSuppliers[supplierId];
+  if (unoffered?.why === 'archived' && unoffered.name) return `${unoffered.name} (archived)`;
+  return unoffered?.why === 'archived' ? 'Archived supplier' : 'Supplier not available';
 }
 
 // ── Template form ────────────────────────────────────────────────────────────
@@ -166,29 +249,33 @@ interface FormState {
   lines: Line[];
   notes: string;
   /**
-   * Why the destination Make recurring brought over was not kept; shown under
-   * Destination until the buyer picks one.
+   * Why the destination Make recurring brought over, or the template holds,
+   * was not kept; shown under Destination until the buyer picks one.
    */
   destinationNote: string | null;
+  /** The same for the supplier, shown under Supplier. */
+  supplierNote: string | null;
 }
 
-function defaultForm(templates?: RecurringTemplateRow[], editId?: string): FormState {
+function defaultForm(
+  templates?: RecurringTemplateRow[],
+  editId?: string,
+  choices?: FormChoices,
+): FormState {
   // If editing an existing template, find it.
-  if (editId && templates) {
+  if (editId && templates && choices) {
     const t = templates.find((tpl) => tpl.id === editId);
     if (t) {
       const rawLines = Array.isArray(t.line_items) ? (t.line_items as Line[]) : [];
       return {
         name: t.name,
-        supplierId: t.supplier_id ?? '',
-        locationId: t.destination_location_id ?? '',
+        ...templateChoices(t, choices),
         cadence: (t.cadence as Cadence) || 'monthly',
         customDays: t.custom_days ?? 30,
         sendMode: (t.send_mode as SendMode) || 'draft',
         capDollars: t.max_auto_send_cents != null ? (t.max_auto_send_cents / 100).toFixed(2) : '',
         lines: rawLines,
         notes: t.notes ?? '',
-        destinationNote: null,
       };
     }
   }
@@ -203,6 +290,7 @@ function defaultForm(templates?: RecurringTemplateRow[], editId?: string): FormS
     lines: [],
     notes: '',
     destinationNote: null,
+    supplierNote: null,
   };
 }
 
@@ -223,17 +311,24 @@ function defaultForm(templates?: RecurringTemplateRow[], editId?: string): FormS
  */
 function seededForm(
   seed: RecurringPoSeed,
-  locations: LocationOption[],
+  choices: FormChoices,
   fromPo: RecurringSeedDestination | null | undefined,
 ): FormState {
   const destinationId = fromPo ? fromPo.locationId : seed.destinationLocationId;
-  const offered = destinationId !== null && locations.some((l) => l.id === destinationId);
+  const offered = destinationId !== null && choices.locations.some((l) => l.id === destinationId);
+  // The supplier the same way (small fixes slice 8): an archived one is not
+  // offered, and was kept out of sight like the destination.
+  const supplierId = seed.supplierId ?? '';
+  const supplierOffered = !supplierId || choices.suppliers.some((s) => s.id === supplierId);
   return {
     ...defaultForm(),
-    supplierId: seed.supplierId ?? '',
+    supplierId: supplierOffered ? supplierId : '',
     locationId: offered ? destinationId : '',
     lines: seed.lineItems,
     destinationNote: destinationId !== null && !offered ? unofferedDestinationNote(fromPo) : null,
+    supplierNote: supplierOffered
+      ? null
+      : unofferedSupplierNote('purchase_order', choices.unofferedSuppliers[supplierId]),
   };
 }
 
@@ -248,7 +343,15 @@ export function RecurringTemplatesPanel({
   seed,
   seedDestination,
   lineLabels,
+  unofferedDestinations,
+  unofferedSuppliers,
 }: Props) {
+  const choices: FormChoices = {
+    locations,
+    suppliers,
+    unofferedDestinations: unofferedDestinations ?? {},
+    unofferedSuppliers: unofferedSuppliers ?? {},
+  };
   const [templates, setTemplates] = React.useState<RecurringTemplateRow[]>(initial);
   const listedIds = React.useMemo(() => new Set(items.map((i) => i.id)), [items]);
   const lineLabelById = React.useMemo(
@@ -258,7 +361,7 @@ export function RecurringTemplatesPanel({
   // null = list view; 'new' = new form; '<id>' = editing that template
   const [formMode, setFormMode] = React.useState<null | 'new' | string>(seed ? 'new' : null);
   const [form, setForm] = React.useState<FormState>(() =>
-    seed ? seededForm(seed, locations, seedDestination) : defaultForm(),
+    seed ? seededForm(seed, choices, seedDestination) : defaultForm(),
   );
   const [submitting, setSubmitting] = React.useState(false);
   const [toggling, setToggling] = React.useState<string | null>(null);
@@ -331,7 +434,7 @@ export function RecurringTemplatesPanel({
   }
 
   function openEdit(tpl: RecurringTemplateRow) {
-    const next = defaultForm(templates, tpl.id);
+    const next = defaultForm(templates, tpl.id, choices);
     openedAs.current = JSON.stringify(next);
     setForm(next);
     setFormMode(tpl.id);
@@ -520,8 +623,14 @@ export function RecurringTemplatesPanel({
           ) : (
             <ul className="border-border divide-border divide-y border-t">
               {templates.map((tpl) => {
-                const supplier = suppliers.find((s) => s.id === tpl.supplier_id);
                 const isBusy = toggling === tpl.id || deleting === tpl.id;
+                const destinationProblem =
+                  tpl.destination_location_id &&
+                  !locations.some((l) => l.id === tpl.destination_location_id)
+                    ? destinationBlocksRuns(
+                        choices.unofferedDestinations[tpl.destination_location_id],
+                      )
+                    : null;
                 const rawLines = Array.isArray(tpl.line_items)
                   ? (tpl.line_items as Array<{
                       itemId: string;
@@ -557,7 +666,7 @@ export function RecurringTemplatesPanel({
                         {tpl.name}
                       </p>
                       <p className="text-muted-foreground mt-0.5 text-[12.5px] leading-[18px]">
-                        {supplier?.name ?? 'No supplier'} ·{' '}
+                        {supplierLabel(tpl.supplier_id, choices)} ·{' '}
                         {CADENCE_LABELS[tpl.cadence as Cadence] ?? tpl.cadence}
                         {tpl.cadence === 'custom' && tpl.custom_days
                           ? ` (${tpl.custom_days}d)`
@@ -580,6 +689,11 @@ export function RecurringTemplatesPanel({
                         {formatCurrency(tplTotal)} · next {formatRelative(tpl.next_run_at)}
                         {tpl.last_run_at ? ` · last ran ${formatRelative(tpl.last_run_at)}` : ''}
                       </p>
+                      {destinationProblem ? (
+                        <p className="text-warning mt-0.5 text-[12.5px] font-medium leading-[18px]">
+                          {destinationProblem}
+                        </p>
+                      ) : null}
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
                       <Button
@@ -644,10 +758,15 @@ export function RecurringTemplatesPanel({
                 </Label>
                 <Select
                   value={form.supplierId || '__none'}
-                  onValueChange={(v) => patchForm({ supplierId: v === '__none' ? '' : v })}
+                  onValueChange={(v) =>
+                    patchForm({ supplierId: v === '__none' ? '' : v, supplierNote: null })
+                  }
                   disabled={submitting}
                 >
-                  <SelectTrigger id="rpt-supplier">
+                  <SelectTrigger
+                    id="rpt-supplier"
+                    aria-describedby={form.supplierNote ? 'rpt-supplier-note' : undefined}
+                  >
                     <SelectValue placeholder="No supplier" />
                   </SelectTrigger>
                   <SelectContent>
@@ -659,6 +778,14 @@ export function RecurringTemplatesPanel({
                     ))}
                   </SelectContent>
                 </Select>
+                {form.supplierNote ? (
+                  <p
+                    id="rpt-supplier-note"
+                    className="text-warning text-[12px] font-medium leading-[18px]"
+                  >
+                    {form.supplierNote}
+                  </p>
+                ) : null}
               </div>
 
               {/* Destination */}

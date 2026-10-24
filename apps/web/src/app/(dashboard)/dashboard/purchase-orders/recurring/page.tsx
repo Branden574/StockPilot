@@ -12,6 +12,7 @@ import { purchaseOrderItemTypes } from '@/lib/purchase-orders/item-types';
 import { InventoryService } from '@/server/services/inventory';
 import { reportDegradedRead } from '@/server/services/lib/fetch-by-ids';
 import { fetchAllRows } from '@/server/services/lib/paginate';
+import { readUnofferedDestinations, readUnofferedSuppliers } from '@/server/services/lib/unoffered-choices';
 import { LocationsService } from '@/server/services/locations';
 import { RecurringPoTemplatesService } from '@/server/services/recurring-pos';
 import { SuppliersService } from '@/server/services/suppliers';
@@ -113,39 +114,47 @@ export default async function RecurringPosPage({
   // there. Read here (the caller's organization, through RLS), not taken from
   // the seed, which sat in the browser: the form then opens with no
   // destination and says where the purchase order went. A failed read means
-  // no name, never an error page.
-  const fromPoDestination = async (): Promise<RecurringSeedDestination | null> => {
-    if (!fromPoId) return null;
+  // no name, never an error page. The same read gives its supplier, which the
+  // form may not offer either (archived since; small fixes slice 8): it is
+  // read with the templates' suppliers below.
+  const fromPoDestination = async (): Promise<{
+    destination: RecurringSeedDestination | null;
+    supplierId: string | null;
+  }> => {
+    if (!fromPoId) return { destination: null, supplierId: null };
     try {
       const { data, error } = await supabase
         .from('purchase_orders')
         .select(
-          'destination_location_id, destination:locations!destination_location_id (name, deleted_at)',
+          'destination_location_id, supplier_id, destination:locations!destination_location_id (name, deleted_at)',
         )
         .eq('organization_id', ctx.organizationId)
         .eq('id', fromPoId)
         .maybeSingle();
       if (error) throw error;
-      if (!data) return null;
-      const locationId = (data as { destination_location_id: string | null })
-        .destination_location_id;
-      if (!locationId) return { locationId: null, name: null, deleted: false };
+      if (!data) return { destination: null, supplierId: null };
+      const supplierId = (data as { supplier_id?: string | null }).supplier_id ?? null;
+      const locationId = (data as { destination_location_id: string | null }).destination_location_id;
+      if (!locationId) return { destination: { locationId: null, name: null, deleted: false }, supplierId };
       // A many-to-one embed: one row (typed as a list), as PurchaseOrdersService.get reads it.
       const embedded = (data as { destination?: unknown }).destination;
       const location = (Array.isArray(embedded) ? embedded[0] : embedded) as
         { name?: string | null; deleted_at?: string | null } | null | undefined;
       return {
-        locationId,
-        name: location?.name?.trim() || null,
-        deleted: location?.deleted_at != null,
+        destination: {
+          locationId,
+          name: location?.name?.trim() || null,
+          deleted: location?.deleted_at != null,
+        },
+        supplierId,
       };
     } catch (err) {
       reportDegradedRead('recurring_pos.page.seed_destination', err, { from: true });
-      return null;
+      return { destination: null, supplierId: null };
     }
   };
 
-  const [inventory, suppliers, locations, seedItemIds, seedDestination] = await Promise.all([
+  const [inventory, suppliers, locations, seedItemIds, fromPo] = await Promise.all([
     // expected:'any' (mig 0277): recurring-PO templates are inbound
     // ordering — the picker must offer items still awaiting their first
     // receipt so a template can reference them instead of inviting a
@@ -189,6 +198,45 @@ export default async function RecurringPosPage({
       ...seedItemIds,
     ]),
   ].filter((id) => UUID_RE.test(id) && !listedIds.has(id));
+  // What the form offers: sites linked to a warehouse, and the active
+  // suppliers. Every purchase order a template creates is saved like a
+  // hand-made one, and that save refuses a location linked to no warehouse
+  // (so does the template save).
+  const locationOptions = locations
+    .filter((l) => Boolean((l as { warehouse_id?: string | null }).warehouse_id))
+    .map((l) => ({ id: l.id as string, name: l.name as string }));
+  const offeredLocationIds = new Set(locationOptions.map((l) => l.id));
+  const offeredSupplierIds = new Set(suppliers.map((s) => s.id as string));
+
+  // Templates can hold a destination or supplier the form does not offer: a
+  // destination deleted after the template was saved (its save is refused by
+  // that name since #334, and the daily run now skips it), or an archived
+  // supplier, and so can the purchase order Make recurring starts from. The
+  // form showed those blank; it now keeps none of them and names each (small
+  // fixes slice 8, items B and D), so read what they are, in this
+  // organization through RLS. Labels only: a failed read names nothing,
+  // never an error page.
+  const unofferedDestinationIds = templates
+    .map((t) => t.destination_location_id)
+    .filter((id): id is string => Boolean(id) && !offeredLocationIds.has(id as string));
+  const seedDestination = fromPo.destination;
+  const unofferedSupplierIds = [...templates.map((t) => t.supplier_id), fromPo.supplierId].filter(
+    (id): id is string => Boolean(id) && !offeredSupplierIds.has(id as string),
+  );
+  const [unofferedDestinations, unofferedSuppliers] = await Promise.all([
+    readUnofferedDestinations(
+      supabase,
+      ctx.organizationId,
+      unofferedDestinationIds,
+      'recurring_pos.page.unoffered_destinations',
+    ),
+    readUnofferedSuppliers(
+      (ids) => suppliersSvc.namesByIds(ids),
+      unofferedSupplierIds,
+      'recurring_pos.page.unoffered_suppliers',
+    ),
+  ]);
+
   let lineLabels: RecurringLineLabel[] = [];
   if (unlistedIds.length > 0) {
     try {
@@ -225,17 +273,18 @@ export default async function RecurringPosPage({
           sku: i.sku,
           unit_cost: i.unit_cost,
         }))}
-        suppliers={suppliers.map((s) => ({ id: s.id as string, name: s.name as string }))}
-        // What the purchase order form offers: sites linked to a warehouse.
-        // Every purchase order a template creates is saved like a hand-made
-        // one, and that save refuses a location linked to no warehouse (so
-        // does the template save).
-        locations={locations
-          .filter((l) => Boolean((l as { warehouse_id?: string | null }).warehouse_id))
-          .map((l) => ({ id: l.id as string, name: l.name as string }))}
+        // A supplier still active that the list lacks only because the
+        // Suppliers module is off is offered after all, so a template keeps it.
+        suppliers={[
+          ...suppliers.map((s) => ({ id: s.id as string, name: s.name as string })),
+          ...unofferedSuppliers.fold,
+        ]}
+        locations={locationOptions}
         entitled={entitled}
         lineLabels={lineLabels}
         seedDestination={seedDestination}
+        unofferedDestinations={Object.fromEntries(unofferedDestinations)}
+        unofferedSuppliers={Object.fromEntries(unofferedSuppliers.unoffered)}
       />
     </div>
   );
