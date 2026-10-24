@@ -86,13 +86,17 @@ type Phase =
  * A box the person emptied holds no number, so nothing is written for it:
  * Number('') is 0, and an emptied box used to record a count of 0, which a
  * post then applies as the loss of every one expected (the count scanner's
- * fix, P3.8; the count screen never saves an empty box either).
+ * fix, P3.8).
+ *
+ * The typed number is written as typed, decimals and all, as the count screen
+ * saves it (counted_quantity keeps four decimal places). It used to be rounded
+ * down: 2.7 was written as 2, and 0.5 as a count of 0.
  */
 function lineCountToWrite(rl: ReviewLine): number | null {
   if (rl.override !== null) {
     if (rl.override.trim() === '') return null;
     const n = Number(rl.override);
-    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+    return Number.isFinite(n) && n >= 0 ? n : null;
   }
   if (rl.result && rl.result.confidence >= AI_CONFIDENCE_THRESHOLD) return rl.result.count;
   return null;

@@ -1227,17 +1227,40 @@ describe('AI shelf scan: every word, name and step survives the restyle', () => 
     expect(write(null, sure)).toBe(5);
     expect(write(null, unsure)).toBeNull();
     expect(write(null)).toBeNull();
-    // Typed: the person's number wins, whole units as before.
+    // Typed: the person's number wins, as typed.
     expect(write('7', unsure)).toBe(7);
     expect(write('0', sure)).toBe(0);
     expect(write(' 3 ')).toBe(3);
-    expect(write('2.9')).toBe(2);
+    // B4(b): decimals are kept, as the count screen keeps them (they were
+    // rounded down: 2.7 wrote 2, and 0.5 wrote a count of 0).
+    expect(write('2.7', sure)).toBe(2.7);
+    expect(write('2.9')).toBe(2.9);
+    expect(write('0.5')).toBe(0.5);
+    expect(write('.25')).toBe(0.25);
+    expect(write('12.5', unsure)).toBe(12.5);
     // Emptied, or not a count: nothing at all, never 0 and never the AI's.
     expect(write('', sure)).toBeNull();
     expect(write('   ', unsure)).toBeNull();
     expect(write('', undefined)).toBeNull();
     expect(write('-1', sure)).toBeNull();
     expect(write('abc')).toBeNull();
+  });
+
+  // B4(b): the review writes a typed number as the count screen saves the
+  // same box. Both screens' own rules, run on the same words. Mutation
+  // caught: any rounding (Math.floor, Math.round, toFixed) on the review.
+  it('a typed number is written as the count screen saves it, decimals and all', () => {
+    const { lineCountToWrite } = screenFunctions(
+      AI_SCAN,
+      ['lineCountToWrite'],
+      ['AI_CONFIDENCE_THRESHOLD'],
+    );
+    const { countFromBox } = screenFunctions(COUNT, ['countFromBox']);
+    for (const raw of ['0', '1', '2.7', '0.5', '.25', '12.5', '3.1416', ' 4.2 ', '1000000']) {
+      const written = lineCountToWrite!({ line: { id: 'l1' }, override: raw });
+      expect(written, raw).toBe(countFromBox!(raw));
+      expect(written, raw).toBe(Number(raw));
+    }
   });
 
   it('Confirm counts is the one ink Button, off while saving', () => {
