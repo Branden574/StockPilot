@@ -207,7 +207,8 @@ export function nextOpenStep(input: OpenStepInput): OpenStep {
   // taken before the first load answered has none, whatever the store says by
   // the time this runs, and deciding from its empty list would open an order
   // without its workspace check.
-  const shown = input.workspaceShown && input.workspace.activeOrgId !== null;
+  const { activeOrgId } = input.workspace;
+  const shown = input.workspaceShown && activeOrgId !== null;
   if (input.workspace.loading && !shown) {
     return { kind: 'wait', reason: 'workspace-loading' };
   }
