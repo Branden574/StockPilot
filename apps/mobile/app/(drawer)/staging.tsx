@@ -24,6 +24,7 @@ import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { api } from '@/lib/api';
 import { knownZoneFor, nextKnownOrgZone, type KnownOrgZone } from '@/lib/known-org-zone';
 import { canMintPlacementDestination } from '@/lib/move-stock-form';
+import { createNewestRead } from '@/lib/newest-read';
 import { readOrgTimeZone } from '@/lib/order-readiness';
 import {
   canPlaceStagingRow,
@@ -60,6 +61,13 @@ import { useOrg } from '@/lib/use-org';
 import { useRole } from '@/lib/use-role';
 import { useTheme } from '@/lib/use-theme';
 import { useWorkspace } from '@/lib/use-workspace';
+
+/** The display facts read beside the worklist: warehouse names (null when the
+ *  read failed) and the organization's zone (null when unset or unread). */
+interface StagingDisplayFacts {
+  names: Record<string, string> | null;
+  zone: string | null;
+}
 
 /**
  * Staging — the native twin of the web /dashboard/inventory/staging page.
@@ -171,34 +179,49 @@ export default function StagingScreen() {
   // and the org's zone below), never the worklist — the worklist must stay the
   // shared service's answer.
   const [warehouseNames, setWarehouseNames] = React.useState<Record<string, string>>({});
-  // The organization's time zone, read once beside the names: the history
-  // sheet prints movement times in it (L7, owner decision Q1), like counts and
+  // The organization's time zone, read beside the names: the history sheet
+  // prints movement times in it (L7, owner decision Q1), like counts and
   // orders. Null until it arrives, when unset, or when the read fails: core's
   // default zone. Kept per organization (nextKnownOrgZone), so a workspace
   // switch never prints in the previous organization's zone.
   const [knownZone, setKnownZone] = React.useState<KnownOrgZone | null>(null);
   const orgTimeZone = knownZoneFor(knownZone, orgId);
+  // Both are read when the screen opens or the workspace changes, and again
+  // on every refresh: they were read only on opening, so one failed first read
+  // (offline) kept the default zone, and truncated warehouse ids for names,
+  // until the screen was opened again (slice 3 review, 2026-10-24). A failed
+  // read keeps what is shown. Only the newest read's answer lands
+  // (createNewestRead), so a late answer for the previous workspace never
+  // replaces the current one's.
+  const [displayFacts] = React.useState(() =>
+    createNewestRead<string, StagingDisplayFacts>(
+      async (forOrg) => {
+        const [{ data, error }, zone] = await Promise.all([
+          supabase
+            .from('warehouses')
+            .select('id, name, status')
+            .eq('organization_id', forOrg)
+            .eq('status', 'active')
+            .order('name', { ascending: true }),
+          readOrgTimeZone(supabase, forOrg),
+        ]);
+        return {
+          names: error || !data ? null : stagingWarehouseNameMap(data as StagingWarehouseOption[]),
+          zone,
+        };
+      },
+      (forOrg, facts) => {
+        if (facts.names) setWarehouseNames(facts.names);
+        setKnownZone((prev) => nextKnownOrgZone(prev, forOrg, facts.zone));
+      },
+      { names: null, zone: null },
+    ),
+  );
   React.useEffect(() => {
     if (!orgId) return;
-    let cancelled = false;
-    void (async () => {
-      const [{ data }, zone] = await Promise.all([
-        supabase
-          .from('warehouses')
-          .select('id, name, status')
-          .eq('organization_id', orgId)
-          .eq('status', 'active')
-          .order('name', { ascending: true }),
-        readOrgTimeZone(supabase, orgId),
-      ]);
-      if (cancelled) return;
-      setWarehouseNames(stagingWarehouseNameMap((data ?? []) as StagingWarehouseOption[]));
-      setKnownZone((prev) => nextKnownOrgZone(prev, orgId, zone));
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [orgId]);
+    void displayFacts.read(orgId);
+    return () => displayFacts.cancel();
+  }, [orgId, displayFacts]);
 
   // Gates the sheet's DEFAULT path — placing into the crate the book's label
   // names, which for a label-only crate means minting the row. The server does
@@ -257,8 +280,12 @@ export default function StagingScreen() {
 
   async function refresh() {
     setRefreshing(true);
-    await load();
-    setRefreshing(false);
+    try {
+      // The names and the zone are read again beside the worklist.
+      await Promise.all([load(), orgId ? displayFacts.read(orgId) : null]);
+    } finally {
+      setRefreshing(false);
+    }
   }
 
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();

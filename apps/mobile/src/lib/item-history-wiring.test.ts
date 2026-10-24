@@ -119,8 +119,8 @@ describe('the staging row opens it', () => {
     expect(screen).toContain('onOpenHistory={() => setViewingHistory(item)}');
     expect(screen).toContain('<ItemHistorySheet');
     expect(screen).toContain('itemId={viewingHistory.itemId}');
-    // L7: the organization's zone, read once with the screen's display map.
-    expect(screen).toContain('readOrgTimeZone(supabase, orgId)');
+    // L7: the organization's zone, read with the screen's display map.
+    expect(screen).toContain('readOrgTimeZone(supabase, forOrg)');
     expect(screen).toContain('timeZone={orgTimeZone}');
     // Outside the canPlace/disabledReason branch — a row that cannot be placed
     // is precisely the row whose provenance is being questioned.
@@ -141,5 +141,50 @@ describe('the staging row opens it', () => {
     // movement rows — that is exactly what the second reverted attempt did.
     expect(screenCode).not.toContain('itemHistoryPath');
     expect(screenCode).not.toContain('formatHistoryMovement');
+  });
+});
+
+/**
+ * Slice 3 review (2026-10-24): Staging read the organization's zone, and the
+ * warehouse names beside it, only when it opened, and refresh() read neither.
+ * One failed first read (offline) kept the History sheet in core's default
+ * zone, and the rows on truncated warehouse ids, until the screen was opened
+ * again. Both are now read again on every refresh, through createNewestRead
+ * (tested in newest-read.test.ts), so a late answer for the previous
+ * workspace never replaces the current one's.
+ */
+describe('Staging: the names and the zone are read again on a refresh', () => {
+  function between(src: string, start: string, end: string): string {
+    const at = src.indexOf(start);
+    expect(at, `${start} not found`).toBeGreaterThan(-1);
+    const stop = src.indexOf(end, at + start.length);
+    expect(stop, `${end} not found after ${start}`).toBeGreaterThan(at);
+    return src.slice(at, stop);
+  }
+
+  it('reads them through a newest-read when the screen opens or the workspace changes, and drops what is still out when it leaves', () => {
+    expect(screenCode).toMatch(
+      /const \[displayFacts\] = React\.useState\(\(\) =>\s*createNewestRead<string, StagingDisplayFacts>\(/,
+    );
+    expect(screenCode).toContain("import { createNewestRead } from '@/lib/newest-read';");
+    expect(screenCode).toMatch(
+      /React\.useEffect\(\(\) => \{\s*if \(!orgId\) return;\s*void displayFacts\.read\(orgId\);\s*return \(\) => displayFacts\.cancel\(\);\s*\}, \[orgId, displayFacts\]\);/,
+    );
+  });
+
+  it('every refresh reads them again beside the worklist, and always ends', () => {
+    const refresh = between(screenCode, 'async function refresh() {', '\n  }\n');
+    expect(refresh).toContain('await Promise.all([load(), orgId ? displayFacts.read(orgId) : null]);');
+    expect(refresh).toMatch(/finally \{\s*setRefreshing\(false\);\s*\}/);
+  });
+
+  it('a failed read keeps what is shown: the names already read, and the zone already read for this organization', () => {
+    expect(screenCode).toContain(
+      'names: error || !data ? null : stagingWarehouseNameMap(data as StagingWarehouseOption[]),',
+    );
+    expect(screenCode).toContain('if (facts.names) setWarehouseNames(facts.names);');
+    expect(screenCode).toContain('setKnownZone((prev) => nextKnownOrgZone(prev, forOrg, facts.zone));');
+    // A failed read used to set the names to an empty map.
+    expect(screenCode).not.toContain('(data ?? []) as StagingWarehouseOption[]');
   });
 });

@@ -222,6 +222,11 @@ export default function Home() {
     }, [refreshUnread]),
   );
 
+  // Only the newest load may land (a Refresh, or a workspace switch while a
+  // load is out): a late answer for the previous workspace must never put its
+  // figures, its movements or its zone on this one (slice 3 review,
+  // 2026-10-24), as the Movements list and Receive POs already guard.
+  const seqRef = React.useRef(0);
   const load = React.useCallback(async () => {
     // Scope to the ACTIVE workspace org — NOT the first membership row. This
     // screen queries Supabase directly (RLS-scoped), so it must read
@@ -231,6 +236,7 @@ export default function Home() {
     // because activeOrgId is in this callback's deps.
     if (!user || !activeOrgId) return;
     const orgId = activeOrgId;
+    const seq = ++seqRef.current;
 
     try {
       const [items, out, valueRpc, lowRpc, flaggedLow, movements, zone] = await Promise.all([
@@ -278,6 +284,7 @@ export default function Home() {
         // Never rejects: null on any failure (the default zone then).
         readOrgTimeZone(supabase, orgId),
       ]);
+      if (seq !== seqRef.current) return;
       // A failed read on a refresh keeps the zone already read (nextKnownOrgZone).
       setKnownZone((prev) => nextKnownOrgZone(prev, orgId, zone));
 
@@ -315,6 +322,7 @@ export default function Home() {
               .in('id', legacyRefIds.return)
           : Promise.resolve({ data: [] as { id: string; return_number: string | null }[] }),
       ]);
+      if (seq !== seqRef.current) return;
       const refLabelById = new Map([
         ...orderNumberLabels((orders.data ?? []) as { id: string; order_number: number | null }[]),
         ...returnNumberLabels((returns.data ?? []) as { id: string; return_number: string | null }[]),
@@ -338,10 +346,11 @@ export default function Home() {
     } catch {
       // The reads answer their errors rather than throwing; anything that
       // still throws is a failed read too, and must not leave the spinner on.
+      if (seq !== seqRef.current) return;
       setSummary(null);
       setRecentFailed(true);
     } finally {
-      setLoading(false);
+      if (seq === seqRef.current) setLoading(false);
     }
   }, [user, activeOrgId]);
 

@@ -161,6 +161,7 @@ import {
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { actorText, isRowPersonDeleted } from '@/lib/deleted-user-labels';
 import { knownZoneFor, nextKnownOrgZone, type KnownOrgZone } from '@/lib/known-org-zone';
+import { createNewestRead } from '@/lib/newest-read';
 import { readOrgTimeZone } from '@/lib/order-readiness';
 import { supabase } from '@/lib/supabase';
 import { FONT, SHADOW, TYPE_CEILING, capTo } from '@/lib/theme';
@@ -1434,26 +1435,38 @@ export default function ItemDetail() {
   // every date and time in (L7, owner decision Q1; slice 3 review F2), like the
   // Movements list, counts and orders. It was the device's zone, so with the
   // zones apart this screen and the Movements list showed two different times
-  // for one movement. Read ONCE per organization, the first time a feed tab
-  // shows (Overview never pays for it); null until then, when unset, or when
-  // the read fails, prints core's documented default zone, never the
-  // device's. Kept per organization (nextKnownOrgZone, the Receive POs rule),
-  // so a workspace switch never prints in the previous organization's zone.
+  // for one movement. Read when a feed tab shows and this organization's zone
+  // is not known yet (Overview never pays for it), which includes after a
+  // failed read, and again on every pull-to-refresh while a feed tab shows:
+  // it was read once per screen, so one failed first read (offline) kept the
+  // default zone for the screen's whole life (slice 3 review, 2026-10-24).
+  // Null until it arrives, when unset, or when the read fails, prints core's
+  // documented default zone, never the device's. Only the newest read's answer
+  // lands (createNewestRead), so a late answer for the previous workspace
+  // never replaces the current one's zone, and each answer is kept per
+  // organization (nextKnownOrgZone, the Receive POs rule): a failed refresh
+  // keeps the zone already read.
   const [knownZone, setKnownZone] = React.useState<KnownOrgZone | null>(null);
   const orgTimeZone = knownZoneFor(knownZone, orgId);
-  const zoneReadFor = React.useRef<string | null>(null);
+  const [zoneRead] = React.useState(() =>
+    createNewestRead(
+      (forOrg: string) => readOrgTimeZone(supabase, forOrg),
+      (forOrg, zone) => setKnownZone((prev) => nextKnownOrgZone(prev, forOrg, zone)),
+      null,
+    ),
+  );
   const feedTabShown = tab === 'movements' || tab === 'activity';
   React.useEffect(() => {
-    if (!feedTabShown || !orgId || zoneReadFor.current === orgId) return;
-    zoneReadFor.current = orgId;
-    void readOrgTimeZone(supabase, orgId).then((zone) => {
-      setKnownZone((prev) => nextKnownOrgZone(prev, orgId, zone));
-    });
-  }, [feedTabShown, orgId]);
+    if (!feedTabShown || !orgId || orgTimeZone !== null || zoneRead.pendingFor() === orgId) return;
+    void zoneRead.read(orgId);
+  }, [feedTabShown, orgId, orgTimeZone, zoneRead]);
 
   /** Pull-to-refresh: re-runs the item load plus whichever tab is active. */
   async function onRefresh() {
     setRefreshing(true);
+    // A feed tab's zone is read again beside the item and the feed: a failed
+    // first read recovers here, and a failed refresh keeps the zone it had.
+    const zoneRefresh = feedTabShown && orgId ? zoneRead.read(orgId) : null;
     try {
       // Adjustments queued offline for this item: try to send them first, so
       // the read below can include them (a no-op while still offline).
@@ -1466,6 +1479,7 @@ export default function ItemDetail() {
       await load();
       if (tab === 'movements') await loadMovements();
       if (tab === 'activity') await loadActivity();
+      await zoneRefresh;
     } finally {
       setRefreshing(false);
     }
