@@ -9,6 +9,7 @@ import { SESSION_HEADER_USER_EMAIL } from '@/lib/supabase/middleware';
 import { createClient } from '@/lib/supabase/server';
 
 import { requireSession, type ServerSession } from './session';
+import { readVerifiedSessionClaims, type VerifiedSessionClaims } from './verified-claims';
 
 /**
  * Platform-admin gate. Distinct from org-scoped roles (owner/admin/manager) —
@@ -81,15 +82,18 @@ export async function currentUserIsPlatformAdminFromRequestHeader(): Promise<boo
 }
 
 /**
- * Whether the current session is at AAL2 (the user has completed an MFA
- * challenge this session). Returns false when there's no factor or the
- * check fails — fail-closed.
+ * The current session's claims, its access token verified (a local ES256
+ * check, no Auth round trip; see lib/auth/verified-claims), or null.
+ *
+ * The AAL2 and step-up checks below read `aal` and `amr` from THESE claims.
+ * They used to read them from the cookie unchecked:
+ * getAuthenticatorAssuranceLevel() decoded the stored token and read its
+ * stored user object (auth-js logs that as insecure on a server client), and
+ * the step-up read getSession()'s token and decoded `amr` from it. A cookie
+ * whose token does not verify now reads as no session: not AAL2, no step-up.
  */
-async function currentSessionIsAal2(): Promise<boolean> {
-  const supabase = await createClient();
-  const { data, error } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-  if (error || !data) return false;
-  return data.currentLevel === 'aal2';
+async function currentVerifiedClaims(): Promise<VerifiedSessionClaims | null> {
+  return readVerifiedSessionClaims(await createClient());
 }
 
 /**
@@ -100,42 +104,33 @@ async function currentSessionIsAal2(): Promise<boolean> {
 const STEP_UP_MAX_AGE_SECONDS = 15 * 60;
 
 /**
- * Pure: seconds since the most recent SECOND-FACTOR (totp/mfa) assertion encoded
- * in a JWT's `amr` claim, relative to `nowSec`; null when it can't be
- * determined (no token, no MFA entry, malformed). `amr` timestamps reflect when
+ * Pure: seconds since the most recent SECOND-FACTOR (totp/mfa) assertion in a
+ * verified token's `amr` claim, relative to `nowSec`; null when it can't be
+ * determined (no claim, no MFA entry, malformed). `amr` timestamps reflect when
  * the factor was ACTUALLY asserted and are NOT bumped by token refresh, so this
  * is true step-up freshness rather than "ever reached AAL2". Exported for tests.
  */
-export function mfaAssertionAgeFromToken(token: string, nowSec: number): number | null {
-  try {
-    const payload = JSON.parse(
-      Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8'),
-    ) as { amr?: Array<{ method?: string; timestamp?: number }> };
-    if (!Array.isArray(payload.amr)) return null;
-    const ts = payload.amr
-      .filter(
-        (e) => e && (e.method === 'totp' || e.method === 'mfa') && typeof e.timestamp === 'number',
-      )
-      .map((e) => e.timestamp as number);
-    if (ts.length === 0) return null;
-    return nowSec - Math.max(...ts);
-  } catch {
-    return null;
-  }
+export function mfaAssertionAgeFromAmr(amr: unknown, nowSec: number): number | null {
+  if (!Array.isArray(amr)) return null;
+  const ts = (amr as Array<{ method?: unknown; timestamp?: unknown } | null>)
+    .filter(
+      (e) => e && (e.method === 'totp' || e.method === 'mfa') && typeof e.timestamp === 'number',
+    )
+    .map((e) => e!.timestamp as number);
+  if (ts.length === 0) return null;
+  return nowSec - Math.max(...ts);
 }
 
 /**
- * Whether the current session's MFA step-up is FRESH (asserted within
- * STEP_UP_MAX_AGE_SECONDS). Fail-closed: an unknown/stale age returns false, so
- * the caller must re-authenticate. This is what makes the dangerous-action gate
- * a *fresh* step-up rather than "the session reached AAL2 at some point".
+ * Whether the session's MFA step-up is FRESH (asserted within
+ * STEP_UP_MAX_AGE_SECONDS). Fail-closed: no verified claims, or an unknown or
+ * stale age, returns false, so the caller must re-authenticate. This is what
+ * makes the dangerous-action gate a *fresh* step-up rather than "the session
+ * reached AAL2 at some point".
  */
-async function currentStepUpFresh(): Promise<boolean> {
-  const supabase = await createClient();
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
-  if (!token) return false;
-  const age = mfaAssertionAgeFromToken(token, Math.floor(Date.now() / 1000));
+function stepUpIsFresh(claims: VerifiedSessionClaims | null): boolean {
+  if (!claims) return false;
+  const age = mfaAssertionAgeFromAmr(claims.amr, Math.floor(Date.now() / 1000));
   return age !== null && age <= STEP_UP_MAX_AGE_SECONDS;
 }
 
@@ -152,7 +147,7 @@ async function currentStepUpFresh(): Promise<boolean> {
 export async function requirePlatformAdmin(): Promise<ServerSession> {
   const session = await requireSession();
   if (!(await currentUserIsPlatformAdmin())) notFound();
-  if (!(await currentSessionIsAal2())) notFound();
+  if ((await currentVerifiedClaims())?.aal !== 'aal2') notFound();
   return session;
 }
 
@@ -179,9 +174,11 @@ export async function checkPlatformAdmin(
   if (opts.requireStepUp) {
     // Dangerous actions need a FRESH step-up: AAL2 must be present AND the MFA
     // assertion recent (not just "reached AAL2 at login hours ago"). A stale
-    // step-up returns aal2_required; re-authenticating refreshes it.
-    if (!(await currentSessionIsAal2())) return { ok: false, reason: 'aal2_required' };
-    if (!(await currentStepUpFresh())) return { ok: false, reason: 'aal2_required' };
+    // step-up returns aal2_required; re-authenticating refreshes it. Both are
+    // read from ONE verified set of claims.
+    const claims = await currentVerifiedClaims();
+    if (claims?.aal !== 'aal2') return { ok: false, reason: 'aal2_required' };
+    if (!stepUpIsFresh(claims)) return { ok: false, reason: 'aal2_required' };
   }
   return { ok: true, session };
 }

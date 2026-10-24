@@ -1,0 +1,184 @@
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+/**
+ * Security invariant: the service context's MFA gate (resolveMfaState in
+ * withContext) and the security-settings step-up (assertCurrentAal2) read the
+ * session's level from an access token whose signature has been checked.
+ *
+ * Both called auth.mfa.getAuthenticatorAssuranceLevel() on a server client
+ * that had not run getUser(): an unchecked decode of the cookie's token plus a
+ * read of the cookie's stored user object, which auth-js logged as "could be
+ * insecure" on every page and Server Action of a member with an
+ * authenticator. Here the session is read by the REAL server client and
+ * auth-js against the fixture's ES256 keys and Auth server
+ * (src/test/auth-session-fixture.ts); only the org context and the factor
+ * list (their own suites cover them) are stubbed.
+ */
+
+let jar = new Map<string, string>();
+vi.mock('next/headers', async () => {
+  const { cookieStoreOver } = await import('@/test/auth-session-fixture');
+  return { cookies: async () => cookieStoreOver(jar) };
+});
+vi.mock('@/lib/env', async () => {
+  const f = await import('@/test/auth-session-fixture');
+  return {
+    env: {
+      NEXT_PUBLIC_SUPABASE_URL: f.FIXTURE_SUPABASE_URL,
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: f.FIXTURE_ANON_KEY,
+    },
+  };
+});
+vi.mock('@/lib/auth/session', () => ({
+  requireOrgContext: vi.fn(async () => ({
+    userId: '11111111-1111-4111-8111-111111111111',
+    email: 'member@example.com',
+    fullName: null,
+    avatarUrl: null,
+    defaultOrganizationId: 'org-1',
+    organizationId: 'org-1',
+    organizationName: 'Acme',
+    role: 'staff',
+  })),
+}));
+// An enrolled member under the 'optional' policy: enrollment alone requires
+// AAL2 (HI-6), so the level is read.
+vi.mock('@/lib/dashboard/request-cache', () => ({
+  getMfaFactorsForRequest: vi.fn(async () => [{ status: 'verified' }]),
+  getModulesForRequest: vi.fn(async () => new Set(['orders'])),
+  getOrgRowForRequest: vi.fn(async () => ({
+    terminology: null,
+    mfa_policy: 'optional',
+    logo_url: null,
+    timezone: null,
+    nav_overrides: null,
+    dashboard_layout: null,
+    order_status_config: null,
+  })),
+}));
+
+import {
+  INSECURE_USER_WARNING,
+  fakeAuthServer,
+  makeSigningKey,
+  sessionClaims,
+  sessionCookies,
+  signAccessToken,
+  withEditedPayload,
+  type FakeAuthServer,
+  type SigningKey,
+} from '@/test/auth-session-fixture';
+
+import { assertCurrentAal2, ServiceError, withContext } from './context';
+
+let projectKey: SigningKey;
+let attackerKey: SigningKey;
+let server: FakeAuthServer;
+let warn: ReturnType<typeof vi.spyOn>;
+
+beforeAll(async () => {
+  projectKey = await makeSigningKey('project-kid-1');
+  attackerKey = await makeSigningKey('attacker-kid');
+});
+
+beforeEach(() => {
+  server = fakeAuthServer(projectKey);
+  vi.stubGlobal('fetch', server.fetch);
+  warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  jar = new Map();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+async function signIn(claims: Record<string, unknown>, token?: string) {
+  jar = sessionCookies(token ?? (await signAccessToken(projectKey, claims)), claims);
+}
+
+async function forgedAal2() {
+  const real = await signAccessToken(projectKey, sessionClaims({ aal: 'aal1' }));
+  const forged = sessionClaims({ aal: 'aal2' });
+  await signIn(forged, withEditedPayload(real, forged));
+}
+
+const insecureWarnings = () =>
+  warn.mock.calls.filter((c: unknown[]) => INSECURE_USER_WARNING.test(String(c[0]))).length;
+
+async function stepUpRefusal(): Promise<ServiceError | null> {
+  try {
+    await assertCurrentAal2(await withContext());
+    return null;
+  } catch (e) {
+    return e as ServiceError;
+  }
+}
+
+describe('withContext — an enrolled member is satisfied only by a verified AAL2', () => {
+  it('a verified AAL2 session satisfies the gate, with no warning and no Auth round trip', async () => {
+    await signIn(sessionClaims({ aal: 'aal2' }));
+    const ctx = await withContext();
+    expect(ctx.mfaRequired).toBe(true);
+    expect(ctx.mfaSatisfied).toBe(true);
+    expect(insecureWarnings()).toBe(0);
+    expect(server.calls['/user']).toBeUndefined();
+  });
+
+  it('a verified AAL1 session does not', async () => {
+    await signIn(sessionClaims({ aal: 'aal1' }));
+    expect((await withContext()).mfaSatisfied).toBe(false);
+  });
+
+  it('a token edited to claim AAL2 does not', async () => {
+    await forgedAal2();
+    const ctx = await withContext();
+    expect(ctx.mfaRequired).toBe(true);
+    expect(ctx.mfaSatisfied).toBe(false);
+  });
+
+  it("a token signed with another key under the project's key id does not", async () => {
+    const forged = sessionClaims({ aal: 'aal2' });
+    await signIn(forged, await signAccessToken(attackerKey, forged, projectKey.kid));
+    expect((await withContext()).mfaSatisfied).toBe(false);
+  });
+
+  it('an expired AAL2 token that cannot be refreshed does not', async () => {
+    await signIn(sessionClaims({ aal: 'aal2', expiresIn: -120 }));
+    expect((await withContext()).mfaSatisfied).toBe(false);
+  });
+});
+
+describe('assertCurrentAal2 — the step-up before security changes', () => {
+  it('passes a verified AAL2 session, with no warning', async () => {
+    await signIn(sessionClaims({ aal: 'aal2' }));
+    expect(await stepUpRefusal()).toBeNull();
+    expect(insecureWarnings()).toBe(0);
+  });
+
+  it('refuses a verified AAL1 session', async () => {
+    await signIn(sessionClaims({ aal: 'aal1' }));
+    const refusal = await stepUpRefusal();
+    expect(refusal).toBeInstanceOf(ServiceError);
+    expect(refusal?.code).toBe('forbidden');
+    expect(refusal?.details).toEqual({ reason: 'aal2_required' });
+    expect(refusal?.message).toBe('Re-authenticate with MFA before changing security settings.');
+  });
+
+  it('refuses a token edited to claim AAL2, as unverifiable', async () => {
+    await forgedAal2();
+    const refusal = await stepUpRefusal();
+    expect(refusal?.code).toBe('forbidden');
+    expect(refusal?.details).toEqual({ reason: 'aal2_required' });
+    expect(refusal?.message).toBe(
+      'Could not verify your two-factor authentication state. Sign in again and try once more.',
+    );
+  });
+
+  it('refuses an expired AAL2 token that cannot be refreshed', async () => {
+    await signIn(sessionClaims({ aal: 'aal2', expiresIn: -120 }));
+    const refusal = await stepUpRefusal();
+    expect(refusal?.code).toBe('forbidden');
+    expect(refusal?.details).toEqual({ reason: 'aal2_required' });
+  });
+});

@@ -40,10 +40,21 @@ vi.mock('@/lib/dashboard/request-cache', () => ({
 // faithful baseline. After the refactor the same inputs flow through the
 // request-cached helpers; the outcomes are identical, so the test is
 // unchanged across the refactor.
+//
+// The level is the VERIFIED one: `getClaims()` answers `aalLevel` (the
+// access token's `aal` claim once its signature checks out). The two
+// unverified reads answer AAL2 whatever the case, as a forged cookie would:
+// getAuthenticatorAssuranceLevel() decodes the stored token unchecked, and
+// getSession() hands the stored session back. Every AAL1 case below
+// therefore fails if the gate reads either of them again (it read the first
+// until 2026-10, and auth-js logged it as insecure on every request).
 let aalLevel: 'aal1' | 'aal2' = 'aal1';
 let aalCalls = 0;
+/** getClaims() cannot verify the token (forged or expired), and GoTrue refuses it. */
+let tokenUnverifiable = false;
 let supabasePolicy: OrgRow['mfa_policy'] = 'optional';
 let supabaseOrgThrows = false;
+const UNVERIFIED_AAL2 = { data: { currentLevel: 'aal2', nextLevel: 'aal2' }, error: null };
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(async () => {
     const stub = makeSupabaseStub({
@@ -53,10 +64,26 @@ vi.mock('@/lib/supabase/server', () => ({
       },
       'organization_modules.select': { data: [{ module_id: 'orders' }], error: null },
     });
-    stub.client.auth.mfa.getAuthenticatorAssuranceLevel = vi.fn(async () => {
+    stub.client.auth.getClaims = vi.fn(async () => {
       aalCalls += 1;
-      return { data: { currentLevel: aalLevel }, error: null };
+      if (tokenUnverifiable) {
+        return {
+          data: null,
+          error: { name: 'AuthInvalidJwtError', message: 'Invalid JWT signature' },
+        };
+      }
+      return { data: { claims: { sub: 'u-1', aal: aalLevel, session_id: 's-1' } }, error: null };
     });
+    stub.client.auth.getSession = vi.fn(async () => ({
+      data: { session: { access_token: 'stored.token.value', user: { id: 'u-1' } } },
+      error: null,
+    }));
+    // GoTrue refuses the token getClaims() could not verify.
+    stub.client.auth.getUser = vi.fn(async () => ({
+      data: { user: null },
+      error: { name: 'AuthApiError', message: 'invalid JWT' },
+    }));
+    stub.client.auth.mfa.getAuthenticatorAssuranceLevel = vi.fn(async () => UNVERIFIED_AAL2);
     return stub.client;
   }),
 }));
@@ -128,6 +155,7 @@ describe('withContext / resolveMfaState — fail-closed MFA gate', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     aalCalls = 0;
+    tokenUnverifiable = false;
     supabaseOrgThrows = false;
   });
 
@@ -152,6 +180,18 @@ describe('withContext / resolveMfaState — fail-closed MFA gate', () => {
     arrange({ policy: 'all_required', verifiedFactor: true, aal: 'aal2' });
     await withContext();
     expect(aalCalls).toBe(1);
+  });
+
+  // The cookie claims AAL2 (both unverified reads say so), but its token does
+  // not verify: getClaims() refuses it and so does GoTrue. Before 2026-10 the
+  // gate decoded the cookie unchecked and passed this session.
+  it('(h) a token that does not verify is NOT AAL2, whatever the cookie claims', async () => {
+    arrange({ policy: 'optional', verifiedFactor: true, aal: 'aal2' });
+    tokenUnverifiable = true;
+    const ctx = await withContext();
+    expect(ctx.mfaRequired).toBe(true);
+    expect(ctx.mfaSatisfied).toBe(false);
+    expect(ctx.mfaEnrolled).toBe(true);
   });
 
   it('(b) policy required + verified factor + AAL2 -> required=true, satisfied=true', async () => {

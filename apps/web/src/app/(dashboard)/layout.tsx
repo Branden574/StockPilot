@@ -25,6 +25,7 @@ import {
 } from '@/lib/dashboard/request-cache';
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
 import { orSessionEnded } from '@/lib/auth/session-ended';
+import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
 import { userMenuRoleLabel } from '@/lib/auth/user-menu-role';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
@@ -186,12 +187,15 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   // 'optional' policy. Same challenge flow policy-required users get:
   // /signin/mfa (outside this layout, exempt in the middleware's
   // signed-in bounce, and renders fine at AAL1 — so no redirect loop).
-  // getAuthenticatorAssuranceLevel() decodes the session JWT locally;
-  // an unreadable AAL fails CLOSED into the challenge page, which
-  // itself skips straight to /dashboard when the session is really AAL2.
+  // The level is the access token's `aal` claim, read only once the token's
+  // signature checks out (lib/auth/verified-claims: a local ES256 check, no
+  // Auth round trip), not getAuthenticatorAssuranceLevel()'s unchecked decode
+  // of the cookie. An unverifiable token fails CLOSED into the challenge
+  // page, which itself skips straight to /dashboard when the session is
+  // really AAL2.
   if (hasVerifiedFactor) {
-    const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-    if (aal?.currentLevel !== 'aal2') {
+    const claims = await readVerifiedSessionClaims(supabase);
+    if (claims?.aal !== 'aal2') {
       const h = await headers();
       const pathname = h.get('x-pathname') ?? '';
       const qs = pathname.startsWith('/dashboard')
