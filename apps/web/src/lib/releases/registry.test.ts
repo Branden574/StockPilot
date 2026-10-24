@@ -12317,8 +12317,10 @@ describe('the new look release (redesign-2026-10)', () => {
       "const SECTION_FULFILLMENT: Crumb = { label: 'Fulfillment', href: null };",
     );
     expect(crumbs).toContain('[/^\\/dashboard\\/orders$/, [SECTION_FULFILLMENT, ORDERS_LIST]],');
-    expect(source('components/dashboard/topbar.tsx')).toContain(
-      '<nav aria-label="Breadcrumb" className="@min-[520px]:flex hidden min-w-0">',
+    // From a 520 px bar, where it has the room: the whole trail, else the
+    // current page alone, else none (P68-01, topbar-trail-fit.ts).
+    expect(source('components/dashboard/topbar.tsx')).toMatch(
+      /<nav\s+aria-label="Breadcrumb"\s+data-slot=\{TRAIL_SLOT\}\s+className="@min-\[520px\]:flex hidden min-w-0"\s*>/,
     );
     expect(entry('web-new-look').whatChanged).toMatch(
       /On wider screens the trail in the top bar uses the new sidebar groups, such as Fulfillment \/ Orders\.$/,
