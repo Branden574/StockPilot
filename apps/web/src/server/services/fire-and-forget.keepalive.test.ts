@@ -132,6 +132,14 @@ describe('a `void reportError()` as a route answers', () => {
 
   it('the isomorphic core, which browser modules use, is not held: why the server reporter exists', async () => {
     vi.stubEnv('ERROR_WEBHOOK_URL', 'https://hooks.example.test/report');
+    // A POST slower than the harness can ever be, so a loaded machine cannot
+    // finish the unheld POST before the harness returns.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string | URL) =>
+        later(`POST ${new URL(String(url)).host}`, new Response('ok'), 40 * LATENCY_MS),
+      ),
+    );
     await runRouteThroughNext(
       {
         GET: async () => {
