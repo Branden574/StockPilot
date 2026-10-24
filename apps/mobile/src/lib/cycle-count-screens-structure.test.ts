@@ -331,6 +331,8 @@ describe('count screen: every word, name and role survives the restyle', () => {
     'Could not post',
     'Posted',
     'Variance adjustments applied.',
+    // B4(a): a box that holds something that is not a count.
+    'Check the counts',
   ])('says "%s"', (word) => {
     expect(words).toContain(word);
   });
@@ -421,17 +423,22 @@ describe('count screen: offline capture and the Post rule', () => {
   // Post is refused offline, then while THIS count has unsynced edits (a
   // count still waiting for its save among them), and only then asks to
   // confirm and posts.
-  it('Post is blocked offline and while this count has unsynced edits', () => {
+  it('Post is blocked offline, while a box holds something that is not a count, and while this count has unsynced edits', () => {
     const body = functionBody(COUNT, 'postCount');
     const offline = body.indexOf("if (syncSnapshot.status === 'offline') {");
-    const unsaved = body.indexOf('const unsaved = hasUnsavedCount(draft);');
+    const notCount = body.indexOf('const notCounts = linesNotACount(draft, lines);');
+    const unsaved = body.indexOf('const unsaved = hasUnsavedCount(draft, lines);');
     const flush = body.indexOf('if (unsaved) lineSaver.flushAll();');
     const read = body.indexOf('pending = await pendingCountFor(header.id);');
     const pending = body.indexOf('if (unsaved || pending > 0) {');
     const confirm = body.indexOf("'Post cycle count?'");
     const post = body.indexOf('await postCycleCount(header.id);');
     expect(offline).toBeGreaterThan(-1);
-    expect(unsaved).toBeGreaterThan(offline);
+    expect(notCount).toBeGreaterThan(offline);
+    expect(body).toMatch(
+      /if \(notCounts\.length > 0\) \{\s*Alert\.alert\('Check the counts', notACountMessage\(notCounts\.map\(\(l\) => l\.itemName\)\)\);\s*return;\s*\}/,
+    );
+    expect(unsaved).toBeGreaterThan(notCount);
     expect(flush).toBeGreaterThan(unsaved);
     expect(read).toBeGreaterThan(flush);
     expect(pending).toBeGreaterThan(read);
@@ -450,8 +457,13 @@ describe('count screen: offline capture and the Post rule', () => {
   // the server before that line's count, which then posted without it and
   // had its queued count refused. The screen's own rule, run: which boxes
   // hold a count, and whether one is still waiting for its save.
-  it('a count still waiting for its save blocks Post; an emptied box or a lone minus does not', () => {
+  //
+  // B4(a): an emptied box over a saved count is waiting too, since its save
+  // is the clear. An emptied box over a line with no count has nothing to
+  // save, and a lone minus is never saved (Post names it instead, below).
+  it('a count or a clear still waiting for its save blocks Post; an emptied box over no count, or a lone minus, does not', () => {
     const { countFromBox, hasUnsavedCount } = screenFunctions(COUNT, [
+      'isEmptyBox',
       'countFromBox',
       'hasUnsavedCount',
     ]);
@@ -473,11 +485,79 @@ describe('count screen: offline capture and the Post rule', () => {
       abc: null,
       '.': null,
     });
-    expect(hasUnsavedCount!({})).toBe(false);
-    expect(hasUnsavedCount!({ l1: '' })).toBe(false);
-    expect(hasUnsavedCount!({ l1: '', l2: '-' })).toBe(false);
-    expect(hasUnsavedCount!({ l1: '', l2: '7' })).toBe(true);
-    expect(hasUnsavedCount!({ l1: '0' })).toBe(true);
+    // l1 has a saved count, l2 has none.
+    const lines = [
+      { id: 'l1', counted: 5 },
+      { id: 'l2', counted: null },
+    ];
+    expect(hasUnsavedCount!({}, lines)).toBe(false);
+    // An emptied box: waiting for its clear where the line has a count,
+    // nothing to save where it has none.
+    expect(hasUnsavedCount!({ l1: '' }, lines)).toBe(true);
+    expect(hasUnsavedCount!({ l1: '   ' }, lines)).toBe(true);
+    expect(hasUnsavedCount!({ l2: '' }, lines)).toBe(false);
+    // A lone minus is never saved, over a count or not.
+    expect(hasUnsavedCount!({ l1: '-' }, lines)).toBe(false);
+    expect(hasUnsavedCount!({ l2: '', l1: '-' }, lines)).toBe(false);
+    // A count is always waiting.
+    expect(hasUnsavedCount!({ l2: '', l1: '7' }, lines)).toBe(true);
+    expect(hasUnsavedCount!({ l2: '7' }, lines)).toBe(true);
+    expect(hasUnsavedCount!({ l1: '0' }, lines)).toBe(true);
+    // A line the screen does not hold has no saved count to clear.
+    expect(hasUnsavedCount!({ gone: '' }, lines)).toBe(false);
+  });
+
+  // B4(a): a box holding something that is not a count saves nothing, so its
+  // line kept the count saved before and Post applied a number the box did
+  // not show (emptying a box and then tapping the point key left it that
+  // way). Post now names those lines and waits. The screen's own rules, run.
+  it('Post names the boxes that hold something that is not a count, and says what to do', () => {
+    const { linesNotACount, notACountMessage } = screenFunctions(COUNT, [
+      'isEmptyBox',
+      'countFromBox',
+      'linesNotACount',
+      'notACountMessage',
+    ]);
+    const lines = [
+      { id: 'l1', itemName: 'Pencils', counted: 5 },
+      { id: 'l2', itemName: 'Erasers', counted: null },
+      { id: 'l3', itemName: 'Rulers', counted: 2 },
+    ];
+    const named = (draft: Record<string, string>) =>
+      (linesNotACount!(draft, lines) as { id: string }[]).map((l) => l.id);
+    // A count, an emptied box and an untouched box: nothing to name.
+    expect(named({ l1: '7', l2: '', l3: ' ' })).toEqual([]);
+    expect(named({})).toEqual([]);
+    // A stray point, a lone minus, a negative number, words: named, in the
+    // screen's order.
+    expect(named({ l3: '-', l1: '.' })).toEqual(['l1', 'l3']);
+    expect(named({ l2: '-4', l1: 'abc' })).toEqual(['l1', 'l2']);
+    expect(notACountMessage!(['Pencils'])).toBe(
+      'The count box for Pencils does not hold a number. Type the count, or empty the box to leave the line uncounted.',
+    );
+    expect(notACountMessage!(['Pencils', 'Erasers'])).toBe(
+      'The count boxes for Pencils and Erasers do not hold a number. Type each count, or empty a box to leave its line uncounted.',
+    );
+    expect(notACountMessage!(['A', 'B', 'C'])).toBe(
+      'The count boxes for A, B and C do not hold a number. Type each count, or empty a box to leave its line uncounted.',
+    );
+    expect(notACountMessage!(['A', 'B', 'C', 'D', 'E'])).toBe(
+      'The count boxes for A, B, C and 2 more do not hold a number. Type each count, or empty a box to leave its line uncounted.',
+    );
+  });
+
+  // A finished save used to drop its box's draft unconditionally, so a box
+  // typed in again while the save ran (emptied right after a count was
+  // saved, say) flicked back to the older value until the newer save
+  // landed, and did not count as unsaved meanwhile.
+  it("a finished save drops its box's draft only while the box still holds what was saved", () => {
+    const { withoutSavedDraft } = screenFunctions(COUNT, ['withoutSavedDraft']);
+    const draft = { l1: '5', l2: '9' };
+    expect(withoutSavedDraft!(draft, 'l1', '5')).toEqual({ l2: '9' });
+    // Typed again while the save ran: the newer text stays, the same object.
+    expect(withoutSavedDraft!(draft, 'l1', '')).toBe(draft);
+    expect(withoutSavedDraft!({ l1: '' }, 'l1', '')).toEqual({});
+    expect(withoutSavedDraft!({}, 'l1', '5')).toEqual({});
   });
 
   // The live variance reads a box by the same rule, so a negative number
@@ -491,9 +571,26 @@ describe('count screen: offline capture and the Post rule', () => {
 
   it('a typed count is saved on the phone first and queued, never posted from the box', () => {
     expect(codeOnly(src)).toMatch(
-      /createDraftDebouncer\(SAVE_DEBOUNCE_MS, \(lineId, raw\) => \{[\s\S]*?const num = countFromBox\(raw\);\s*if \(num === null\) return;\s*await updateLocalLine\(lineId, num\);[\s\S]*?void cycleCountSync\.forceSync\(\);/,
+      /createDraftDebouncer\(SAVE_DEBOUNCE_MS, \(lineId, raw\) => \{[\s\S]*?const num = countFromBox\(raw\);\s*if \(num === null\) \{[\s\S]*?return;\s*\}\s*await updateLocalLine\(lineId, num\);\s*setLines\([\s\S]*?\);\s*setDraft\(\(d\) => withoutSavedDraft\(d, lineId, raw\)\);\s*await cycleCountSync\.refreshPendingCount\(\);\s*void cycleCountSync\.forceSync\(\);/,
     );
     expect(codeOnly(src)).toContain('onChangeText={(v) => setDraftValue(l.id, v)}');
+  });
+
+  // B4(a): an emptied box kept the line's saved count (the saver returned
+  // on it), and Post applied that count while the box showed nothing. The
+  // saver now clears it, as the web count screen does: clearLocalLine writes
+  // the line uncounted and unsynced and queues the clear in one transaction
+  // (only when there is a count to clear), and the clear syncs like a count.
+  // Anything else that is not a count still saves nothing.
+  it("an emptied box clears the line's saved count, which syncs like a count; a lone minus saves nothing", () => {
+    expect(importsFrom(COUNT, '@/lib/cycle-count-cache')).toContain('clearLocalLine');
+    expect(codeOnly(src)).toMatch(
+      /const num = countFromBox\(raw\);\s*if \(num === null\) \{\s*if \(!isEmptyBox\(raw\)\) return;\s*const cleared = await clearLocalLine\(lineId\);\s*if \(cleared\) \{\s*setLines\(\(curr\) =>\s*curr\.map\(\(l\) =>\s*l\.id === lineId\s*\? \{ \.\.\.l, counted: null, localDirty: true, offlineCapturedAt: null \}\s*: l,\s*\),\s*\);\s*\}\s*setDraft\(\(d\) => withoutSavedDraft\(d, lineId, raw\)\);\s*if \(!cleared\) return;\s*await cycleCountSync\.refreshPendingCount\(\);\s*void cycleCountSync\.forceSync\(\);\s*return;\s*\}/,
+    );
+    // The box then shows the line's saved count, which is none.
+    expect(codeOnly(src)).toMatch(
+      /const display = isDrafting\s*\? draftVal\s*: l\.counted !== null\s*\? String\(l\.counted\)\s*: '';/,
+    );
   });
 
   // Every box that holds a count is saved before the confirm, so the lines
@@ -1320,7 +1417,7 @@ describe('AI shelf scan: every word, name and step survives the restyle', () => 
       ['lineCountToWrite'],
       ['AI_CONFIDENCE_THRESHOLD'],
     );
-    const { countFromBox } = screenFunctions(COUNT, ['countFromBox']);
+    const { countFromBox } = screenFunctions(COUNT, ['isEmptyBox', 'countFromBox']);
     for (const raw of ['0', '1', '2.7', '0.5', '.25', '12.5', '3.1416', ' 4.2 ', '1000000']) {
       const written = lineCountToWrite!({ line: { id: 'l1' }, override: raw });
       expect(written, raw).toBe(countFromBox!(raw));
