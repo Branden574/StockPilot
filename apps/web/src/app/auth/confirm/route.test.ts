@@ -34,12 +34,12 @@ function getReq(qs: string): NextRequest {
   return new NextRequest(`${BASE}/auth/confirm?${qs}`);
 }
 
-function postReq(fields: Record<string, string>): NextRequest {
+function postReq(fields: Record<string, string>, headers: Record<string, string> = {}): NextRequest {
   const form = new URLSearchParams(fields);
   return new NextRequest(`${BASE}/auth/confirm`, {
     method: 'POST',
     body: form.toString(),
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    headers: { 'content-type': 'application/x-www-form-urlencoded', ...headers },
   });
 }
 
@@ -109,6 +109,78 @@ describe('POST /auth/confirm', () => {
     const res = await POST(postReq({ token_hash: 'abc', type: 'signup', next: '/x' }));
     expect(verifyOtp).not.toHaveBeenCalled();
     expect(res.status).toBe(303);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// A POST FROM ANOTHER SITE (login CSRF, docket S14). The token in the form is
+// the credential and the answer SETS the session cookie, so a page on another
+// site posting a token it holds (its own account's recovery link) would sign
+// this browser into that account. The page this route renders posts to
+// itself, so its form is always same-origin. Its Origin is `null` (the page's
+// own no-referrer policy), so only Sec-Fetch-Site can say where a post came
+// from; a browser without it is judged as before.
+// ─────────────────────────────────────────────────────────────────────────
+describe('POST /auth/confirm from another site', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each(['cross-site', 'same-site', 'none'])(
+    'Sec-Fetch-Site %s: the failure answer, and the token is not spent',
+    async (site) => {
+      verifyOtp.mockResolvedValue({ error: null });
+      const res = await POST(
+        postReq(
+          { token_hash: 'held-by-another-page', type: 'recovery', next: '/reset/complete' },
+          { 'sec-fetch-site': site, origin: 'https://evil.example' },
+        ),
+      );
+      expect(res.status).toBe(303);
+      expect(res.headers.get('location')).toBe(`${BASE}/reset?error=link_expired`);
+      expect(verifyOtp).not.toHaveBeenCalled();
+    },
+  );
+
+  it('an invite or a sign-in link from another site: the /signin bounce, never a session', async () => {
+    verifyOtp.mockResolvedValue({ error: null });
+    for (const type of ['invite', 'magiclink']) {
+      const res = await POST(
+        postReq({ token_hash: 'held', type, next: '/dashboard' }, { 'sec-fetch-site': 'cross-site' }),
+      );
+      expect(res.headers.get('location'), type).toBe(`${BASE}/signin?error=auth_callback_failed`);
+    }
+    expect(verifyOtp).not.toHaveBeenCalled();
+  });
+
+  it('an email change from another site: its own expired page, and nothing changes', async () => {
+    const res = await POST(
+      postReq({ token_hash: 'side-b', type: 'email_change' }, { 'sec-fetch-site': 'same-site' }),
+    );
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('Nothing about your account has changed');
+    expect(verifyOtp).not.toHaveBeenCalled();
+    expect(completeEmailChange).not.toHaveBeenCalled();
+  });
+
+  it("this route's own page (same-origin, Origin null by its no-referrer policy): verified as before", async () => {
+    verifyOtp.mockResolvedValue({ error: null });
+    const res = await POST(
+      postReq(
+        { token_hash: 'abc123', type: 'recovery', next: '/reset/complete' },
+        { 'sec-fetch-site': 'same-origin', origin: 'null' },
+      ),
+    );
+    expect(verifyOtp).toHaveBeenCalledWith({ type: 'recovery', token_hash: 'abc123' });
+    expect(res.headers.get('location')).toBe(`${BASE}/reset/complete`);
+  });
+
+  it('a browser that sends no Sec-Fetch-Site: verified as before', async () => {
+    verifyOtp.mockResolvedValue({ error: null });
+    const res = await POST(
+      postReq({ token_hash: 'abc123', type: 'recovery', next: '/reset/complete' }, { origin: 'null' }),
+    );
+    expect(verifyOtp).toHaveBeenCalledTimes(1);
+    expect(res.headers.get('location')).toBe(`${BASE}/reset/complete`);
   });
 });
 

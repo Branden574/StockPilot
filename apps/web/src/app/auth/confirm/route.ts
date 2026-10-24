@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
+import { fetchSiteIsElsewhere } from '@/lib/auth/cross-site-request';
 import { safeRedirectPath } from '@/lib/auth/safe-redirect';
 import { reportError } from '@/lib/error-reporter';
 import { createClient } from '@/lib/supabase/server';
@@ -122,6 +123,17 @@ function statusPage(args: { title: string; heading: string; body: string; linkLa
   return new NextResponse(html, { status: 200, headers: PAGE_HEADERS });
 }
 
+/** An email-change link that cannot be used: nothing about the account changed. */
+function emailChangeExpiredPage(): NextResponse {
+  return statusPage({
+    title: 'Link expired',
+    heading: 'This link has expired or was already used',
+    body: 'Nothing about your account has changed. Open Settings → Profile to send a fresh verification.',
+    linkLabel: 'Go to Settings → Profile',
+    linkHref: EMAIL_CHANGE_RETURN_PATH,
+  });
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url);
   const tokenHash = searchParams.get('token_hash');
@@ -171,6 +183,18 @@ export async function POST(request: NextRequest) {
   const type = (form?.get('type') as string | null) ?? null;
   const next = safeRedirectPath((form?.get('next') as string | null) ?? null);
 
+  // A post from another site (login CSRF, docket S14). The token in the form is
+  // the credential and this answer SETS the session cookie, so a page on another
+  // site posting a token it holds (its own account's recovery link) would sign
+  // this browser into that account. The page GET renders posts to itself, so
+  // its form is always same-origin; its Origin is `null` by the page's own
+  // no-referrer policy, so only Sec-Fetch-Site can say where a post came from
+  // (lib/auth/cross-site-request.ts). Refused with the answer an unusable link
+  // gets, before verifyOtp, so the token is not spent.
+  if (fetchSiteIsElsewhere(request)) {
+    return type === 'email_change' ? emailChangeExpiredPage() : failureRedirect(origin, type);
+  }
+
   if (tokenHash && type && ALLOWED_TYPES.has(type as EmailOtpType)) {
     const supabase = await createClient();
     const { data, error } = await supabase.auth.verifyOtp({
@@ -179,15 +203,7 @@ export async function POST(request: NextRequest) {
     });
 
     if (type === 'email_change') {
-      if (error) {
-        return statusPage({
-          title: 'Link expired',
-          heading: 'This link has expired or was already used',
-          body: 'Nothing about your account has changed. Open Settings → Profile to send a fresh verification.',
-          linkLabel: 'Go to Settings → Profile',
-          linkHref: EMAIL_CHANGE_RETURN_PATH,
-        });
-      }
+      if (error) return emailChangeExpiredPage();
       if (data?.session) {
         // Second of two confirmations: GoTrue has applied the change and the
         // database trigger has synced the profile. Repair + notify is
