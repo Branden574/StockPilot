@@ -1093,6 +1093,40 @@ describe('Counts tab: words, the filters and the offline view', () => {
     expect(styleBlock(COUNTS_TAB, 'filterChip')).toMatch(/minHeight: MIN_TAP\b/);
   });
 
+  // B4(d): the prompt offered Pick books with no module check, so in an
+  // organization without the Books module it opened a Books screen that is
+  // not in its tab bar: a dead end. Books is offered, and named in the empty
+  // list's hint, only where the module is on, read from the module set the
+  // tab bar and the side menu gate with. The screen's own helpers, run.
+  it('Start a cycle count offers Books only where the Books module is on', () => {
+    const { startCountChoices, startCountHint } = screenFunctions(COUNTS_TAB, [
+      'startCountChoices',
+      'startCountHint',
+    ]);
+    expect(startCountChoices!(true)).toEqual([
+      { text: 'Pick items', path: '/inventory' },
+      { text: 'Pick books', path: '/books' },
+    ]);
+    expect(startCountChoices!(false)).toEqual([{ text: 'Pick items', path: '/inventory' }]);
+    expect(startCountHint!(true)).toBe(
+      'Tap ＋ to start a count — pick items or books, tap Select, then Review. Or start one from the web.',
+    );
+    expect(startCountHint!(false)).toBe(
+      'Tap ＋ to start a count — pick items, tap Select, then Review. Or start one from the web.',
+    );
+    // The prompt and the hint both follow the Books module, read from the
+    // module set the tab bar gates with.
+    expect(importsFrom(COUNTS_TAB, '@/lib/enabled-modules')).toEqual(['useEnabledModules']);
+    expect(code).toContain("const booksOn = useEnabledModules().has('books');");
+    expect(code).toMatch(
+      /Alert\.alert\('Start a cycle count', 'Pick what you want to count, then tap Select\.', \[\s*\.\.\.startCountChoices\(booksOn\)\.map\(\(choice\) => \(\{\s*text: choice\.text,\s*onPress: \(\) => router\.push\(choice\.path\),\s*\}\)\),\s*\{ text: 'Cancel', style: 'cancel' \},\s*\]\)/,
+    );
+    expect(code).toContain('const startHint = startCountHint(booksOn);');
+    expect(code).toMatch(/: canStartCount\s*\? startHint\s*:/);
+    // No other way from this tab to the Books screen.
+    expect(code).not.toMatch(/router\.push\('\/books'\)/);
+  });
+
   // P5.4b: the shared small Button now frames itself at 44pt, so a button
   // whose 44pt was for the target alone draws at 36pt in that frame; the
   // error card's full-width Try again keeps its drawn 44pt (TAP).
