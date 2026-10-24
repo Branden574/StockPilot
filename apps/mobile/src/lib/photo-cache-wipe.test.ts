@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * Signing out, or an account eviction, forgets the photos the leaving account
- * saw: expo-image's memory and disk caches (which keep a photo under its
- * storage path for up to a week) and the in-memory item-photo links. Before,
- * a sign-out cleared the SQLite cache only.
+ * Signing out, an account eviction, or a pull for another account forgets the
+ * photos the leaving account saw: expo-image's memory and disk caches (which
+ * keep a photo under its storage path for up to a week) and the in-memory
+ * item-photo links. Before, a sign-out cleared the SQLite cache only.
  */
 
 const { image, createSignedUrl } = vi.hoisted(() => ({
@@ -67,5 +67,45 @@ describe('clearPhotoCaches', () => {
       '[auth] could not clear the photo disk cache',
       expect.any(Error),
     );
+  });
+});
+
+/**
+ * The sign-out, the eviction and a pull for another account run their SQLite
+ * wipe through wipeWithPhotoCaches. Before, the sign-out and the eviction ran
+ * `await wipe(); await clearPhotoCaches();`: a SQLite wipe that threw was
+ * reported and the sign-out completed, with every photo left in place.
+ */
+describe('wipeWithPhotoCaches', () => {
+  it('clears the photo caches after the SQLite wipe', async () => {
+    const { wipeWithPhotoCaches } = await import('./photo-cache-wipe');
+    const order: string[] = [];
+    image.clearDiskCache.mockImplementation(async () => {
+      order.push('photos');
+      return true;
+    });
+    await wipeWithPhotoCaches(async () => {
+      order.push('sqlite');
+    });
+    expect(order).toEqual(['sqlite', 'photos']);
+    expect(image.clearMemoryCache).toHaveBeenCalledTimes(1);
+  });
+
+  // Mutation caught: the photo wipe run only when the SQLite wipe succeeds.
+  it('a SQLite wipe that fails still clears the photos, and its failure is passed on', async () => {
+    const { signItemImage } = await import('./image-cache');
+    const { wipeWithPhotoCaches } = await import('./photo-cache-wipe');
+    const first = await signItemImage('org/item/master.webp');
+
+    await expect(
+      wipeWithPhotoCaches(async () => {
+        throw new Error('database is locked');
+      }),
+    ).rejects.toThrow('database is locked');
+
+    expect(image.clearMemoryCache).toHaveBeenCalledTimes(1);
+    expect(image.clearDiskCache).toHaveBeenCalledTimes(1);
+    // The links this session signed are forgotten too.
+    expect(await signItemImage('org/item/master.webp')).not.toBe(first);
   });
 });

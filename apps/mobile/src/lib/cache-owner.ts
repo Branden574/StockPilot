@@ -12,7 +12,8 @@
  * only swept on FULL pulls), usable offline for scan lookups.
  *
  * So each pull records the account it pulled for (meta `cache_user_id`), and a
- * pull for any OTHER account first clears the cache and pulls in full. Checked
+ * pull for any OTHER account first clears the cache, and the photo caches with
+ * it (photo-cache-wipe.ts), and pulls in full. Checked
  * in the pull itself, which every path into a new session reaches, rather than
  * patched into each way a session can end.
  */

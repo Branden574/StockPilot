@@ -84,6 +84,12 @@ vi.mock('./warehouse-scope', () => ({
   WAREHOUSE_SCOPE_META_KEY: 'warehouse_scope',
   refreshWarehouseScope: vi.fn(),
 }));
+// photo-cache-wipe.ts pulls in expo-image (native). The drain never resets the
+// cache (getMeta records no owner), so the wipe is only passed through; the
+// reset is tested in sync.snapshot-removals.test.ts.
+vi.mock('./photo-cache-wipe', () => ({
+  wipeWithPhotoCaches: async (wipe: () => Promise<void>) => wipe(),
+}));
 
 type Row = {
   id: number;

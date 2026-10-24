@@ -16,8 +16,8 @@ import { describe, expect, it } from 'vitest';
  *   2. Both sign their lists for STORED_FILE_LINK_SECONDS and record when.
  *   3. The purchase order card no longer tells anyone to pull to refresh: its
  *      screen has no pull to refresh.
- *   4. A sign-out and an account eviction clear the photo caches after the
- *      SQLite wipe.
+ *   4. A sign-out and an account eviction clear the photo caches with the
+ *      SQLite wipe, whether or not that wipe succeeds.
  */
 
 const MOBILE_ROOT = path.resolve(__dirname, '../..');
@@ -33,6 +33,7 @@ const ORDER = flat(read('app/order/[id].tsx'));
 const PO_CARD = flat(read('src/components/po-attachments.tsx'));
 const AUTH = flat(read('src/lib/auth-context.tsx'));
 const GATE = flat(read('src/lib/use-account-gate.ts'));
+const SYNC = flat(read('src/lib/sync.ts'));
 
 function between(src: string, start: string, end: string): string {
   const a = src.indexOf(start);
@@ -101,23 +102,34 @@ describe('the purchase order card opens files through a fresh link', () => {
 
 describe('the photo caches go when the account leaves the device', () => {
   // Mutation caught: a sign-out or an eviction that wipes SQLite and leaves
-  // the photo caches.
-  it('sign-out: after the SQLite wipe, in the cache wipe that runs once the session is gone', () => {
+  // the photo caches, or clears them only when the SQLite wipe succeeds
+  // (wipeWithPhotoCaches runs the photo wipe in a finally;
+  // photo-cache-wipe.test.ts). A pull for another account is executed in
+  // sync.snapshot-removals.test.ts.
+  it('sign-out: with the SQLite wipe, in the cache wipe that runs once the session is gone', () => {
     const signOut = between(
       AUTH,
       "const signOut: AuthState['signOut']",
       "const signOutToFallback: AuthState['signOutToFallback']",
     );
-    expect(signOut).toContain(
-      'wipeCache: async () => { await wipeForSignOut(); await clearPhotoCaches(); },',
+    expect(signOut).toContain('wipeCache: () => wipeWithPhotoCaches(wipeForSignOut),');
+  });
+
+  it('eviction: with the eviction wipe', () => {
+    const clearCaches = between(GATE, 'clearCaches: async', 'clearAccountStorage:');
+    expect(clearCaches).toContain(
+      'await wipeWithPhotoCaches(() => wipeForEviction(evictedUserId));',
     );
   });
 
-  it('eviction: after the eviction wipe', () => {
-    const clearCaches = between(GATE, 'clearCaches: async', 'clearAccountStorage:');
-    const wipe = clearCaches.indexOf('await wipeForEviction(evictedUserId);');
-    const photos = clearCaches.indexOf('await clearPhotoCaches();');
-    expect(wipe).toBeGreaterThan(-1);
-    expect(photos).toBeGreaterThan(wipe);
+  it('no wipe site clears the photos as a step of its own after a wipe that can throw', () => {
+    for (const [name, src] of [
+      ['auth-context.tsx', AUTH],
+      ['use-account-gate.ts', GATE],
+      ['sync.ts', SYNC],
+    ] as const) {
+      expect(src, name).not.toContain('clearPhotoCaches(');
+      expect(src, name).toContain('wipeWithPhotoCaches(');
+    }
   });
 });

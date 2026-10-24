@@ -24,7 +24,7 @@ import { endAccountEpoch } from './account-epoch';
 import { holdDeviceOrderSends } from './order-storefront/services';
 import { wipeForEviction } from './db';
 import { ACCOUNT_DISABLED_REJECTION } from './drain-failure';
-import { clearPhotoCaches } from './photo-cache-wipe';
+import { wipeWithPhotoCaches } from './photo-cache-wipe';
 import { rejectAllPending } from './queue';
 import { getRememberedIdentity } from './remembered-identity';
 import { abortAllInFlight } from './request-cancellation';
@@ -275,9 +275,9 @@ export function useAccountGate(options: { onEvicted: () => void }): AccountGate 
           } catch (e) {
             console.warn('[account-gate] could not park the offline outbox', e);
           }
-          await wipeForEviction(evictedUserId);
-          // The photos the disabled account saw (photo-cache-wipe.ts).
-          await clearPhotoCaches();
+          // The photos the disabled account saw go with it, even when the
+          // SQLite wipe fails (photo-cache-wipe.ts).
+          await wipeWithPhotoCaches(() => wipeForEviction(evictedUserId));
         },
         clearAccountStorage: async () => {
           // Before the keys go: a workspace load or switch still running for

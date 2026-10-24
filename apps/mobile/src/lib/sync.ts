@@ -33,6 +33,7 @@ import {
   refreshEffectivePermissions,
 } from './use-effective-permissions';
 import { OutboxSessionChangedError, outboxSendDecision } from './outbox-scope';
+import { wipeWithPhotoCaches } from './photo-cache-wipe';
 import { listPending, markFailed, markHeld, markOk, markRejected, markSending } from './queue';
 import { liveOutboxScope } from './session-scope';
 import { unconfirmedStock } from './unconfirmed-stock';
@@ -250,7 +251,9 @@ export async function pullSnapshot(
   // delta-pulled from their cursor.
   const { userId: liveUserId } = await liveOutboxScope();
   if (cacheOwnerAction(await getMeta(CACHE_USER_META_KEY), liveUserId) === 'reset') {
-    await deleteOrgData();
+    // The previous account's photos go with its rows (photo-cache-wipe.ts):
+    // the ways a session ends without a wipe all reach this pull.
+    await wipeWithPhotoCaches(deleteOrgData);
     force = true;
     // The live readers still hold the previous account's modules, permissions
     // and warehouse banner in memory; the persisted values are gone, so they

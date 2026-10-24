@@ -84,6 +84,17 @@ vi.mock('./warehouse-scope', () => ({
   WAREHOUSE_SCOPE_META_KEY: 'warehouse_scope',
   refreshWarehouseScope: vi.fn(),
 }));
+// The photo caches a reset clears: photo-cache-wipe.ts runs for real, over
+// expo-image's two caches and the in-memory photo links.
+const photos = vi.hoisted(() => ({
+  clearMemoryCache: vi.fn(async () => true),
+  clearDiskCache: vi.fn(async () => true),
+  forgetSignedImageUrls: vi.fn(),
+}));
+vi.mock('expo-image', () => ({
+  Image: { clearMemoryCache: photos.clearMemoryCache, clearDiskCache: photos.clearDiskCache },
+}));
+vi.mock('./image-cache', () => ({ forgetSignedImageUrls: photos.forgetSignedImageUrls }));
 
 /** Verbatim from db.ts SCHEMA_SQL (the tables the pull writes). */
 const DDL = `
@@ -219,6 +230,9 @@ beforeEach(() => {
     isConnected: true,
     isInternetReachable: true,
   });
+  photos.clearMemoryCache.mockClear();
+  photos.clearDiskCache.mockClear();
+  photos.forgetSignedImageUrls.mockClear();
 
   // What the phone cached on an earlier pull: two bundles, two items, two
   // open counts — one of which the operator has edited offline.
@@ -593,6 +607,50 @@ describe('whose cache: a pull for another account resets it first (#242 follow-u
 
     expect(await pullSnapshot()).toBeNull();
     expect(ids('select id from items')).toEqual([]);
+    expect(apiMock.api).not.toHaveBeenCalled();
+    // Its photos too.
+    expect(photos.clearDiskCache).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The photos follow the rows. The four ways a session ends without a wipe
+   * also left the previous account's item and delivery photos in the image
+   * cache on disk and its signed photo links in memory; the deliberate
+   * sign-out and the eviction were the only paths that cleared them.
+   */
+  // Mutation caught: a reset that clears the rows and leaves the photos.
+  it("another account's cache takes the previous account's photos with it", async () => {
+    meta.store.set('cache_user_id', 'u0');
+    await deltaPull(emptySnap({ items: [item('i-mine')] }));
+
+    expect(photos.clearMemoryCache).toHaveBeenCalledTimes(1);
+    expect(photos.clearDiskCache).toHaveBeenCalledTimes(1);
+    expect(photos.forgetSignedImageUrls).toHaveBeenCalledTimes(1);
+  });
+
+  it("this account's own cache, and one with no recorded owner, keep their photos", async () => {
+    meta.store.set('cache_user_id', 'u1');
+    await deltaPull(emptySnap());
+    meta.store.delete('cache_user_id');
+    await deltaPull(emptySnap());
+
+    expect(apiMock.api).toHaveBeenCalledTimes(2);
+    expect(photos.clearMemoryCache).not.toHaveBeenCalled();
+    expect(photos.clearDiskCache).not.toHaveBeenCalled();
+    expect(photos.forgetSignedImageUrls).not.toHaveBeenCalled();
+  });
+
+  // Mutation caught: the photo wipe run only when the SQLite wipe succeeds.
+  it('a SQLite wipe that fails still clears the photos, and the pull fails as before', async () => {
+    const { deleteOrgData } = await import('./db');
+    vi.mocked(deleteOrgData).mockRejectedValueOnce(new Error('database is locked'));
+    meta.store.set('cache_user_id', 'u0');
+
+    await expect(pullSnapshot()).rejects.toThrow('database is locked');
+
+    expect(photos.clearMemoryCache).toHaveBeenCalledTimes(1);
+    expect(photos.clearDiskCache).toHaveBeenCalledTimes(1);
+    expect(photos.forgetSignedImageUrls).toHaveBeenCalledTimes(1);
     expect(apiMock.api).not.toHaveBeenCalled();
   });
 });
