@@ -81,8 +81,10 @@ const CHECKS: ReceiptChecklists = {
   ],
 };
 
+// Re-pinned by the rebase onto the redesign (was: the card's .rounded-xl):
+// each receipt is a timeline entry now.
 function cardOf(number: string) {
-  return screen.getByText(number).closest('.rounded-xl') as HTMLElement;
+  return screen.getByText(number).closest('[data-slot="timeline-entry"]') as HTMLElement;
 }
 
 function renderHistory(checklists: ReceiptChecklists | undefined, canRecordChecklist: boolean) {

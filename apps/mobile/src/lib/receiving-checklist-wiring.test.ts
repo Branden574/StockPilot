@@ -62,9 +62,11 @@ describe('the PO screen (1-3)', () => {
   const po = codeOnly(read(PO));
 
   // Mutation caught: the gate read on a draft (F2-5's review mode asks
-  // nothing), or on every render offline.
+  // nothing), or on every render offline. Re-pinned by the rebase onto the
+  // small fixes slice 2 (was: !reviewOnly): nor for a reader without
+  // stock:adjust, whose screen is read only before any gate answer.
   it('asks the gate only for a receivable PO on screen, online', () => {
-    expect(po).toContain('const gateWanted = header !== null && !reviewOnly;');
+    expect(po).toContain('const gateWanted = header !== null && !readOnly;');
     expect(po).toContain(
       'if (!gateWanted || !userId || !orgId || gateKey === null || offline) return;',
     );
@@ -137,8 +139,10 @@ describe('the PO screen (1-3)', () => {
     expect(po).toMatch(/setGateAnswer\(null\);\s*setGateNonce\(\(n\) => n \+ 1\);/);
   });
 
+  // Re-pinned by the rebase onto the redesign (was: retryTap): the
+  // redesigned screen's Retry beside the footer's words is its partRetry.
   it('the new controls are 44 pt', () => {
-    for (const style of ['retryTap', 'checkAction', 'gateRow']) {
+    for (const style of ['partRetry', 'checkAction', 'gateRow']) {
       expect(po).toMatch(new RegExp(`${style}: \\{[^}]*minHeight: 44,`));
     }
   });

@@ -88,8 +88,7 @@ const CHECKLIST_CHIP_BADGE: Record<'ok' | 'warn' | 'muted', ReceiptBadgeTone> = 
 
 /** The org's checklist versions and this PO's runs (F4-1); ok false = the read failed. */
 export type ReceiptChecklists =
-  | { ok: true; versions: ChecklistVersionLite[]; runs: ChecklistRunLite[] }
-  | { ok: false };
+  { ok: true; versions: ChecklistVersionLite[]; runs: ChecklistRunLite[] } | { ok: false };
 
 interface ReceiptHistoryProps {
   receipts: ReceiptRow[];

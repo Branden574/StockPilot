@@ -776,16 +776,19 @@ export default function PoReceiveScreen() {
     let failure: unknown = null;
     let posted: { receiptId?: unknown; receiptNumber?: unknown } | null = null;
     try {
-      posted = await api<{ receiptId: string; receiptNumber: string }>(`/api/v1/po/${id}/receipts`, {
-        method: 'POST',
-        body: {
-          warehouseId: header.destination_warehouse_id,
-          idempotencyKey,
-          lines: payloadLines,
-          // The optional note (L21); left out when nothing was typed.
-          notes: receiptNotesForPost(notes),
+      posted = await api<{ receiptId: string; receiptNumber: string }>(
+        `/api/v1/po/${id}/receipts`,
+        {
+          method: 'POST',
+          body: {
+            warehouseId: header.destination_warehouse_id,
+            idempotencyKey,
+            lines: payloadLines,
+            // The optional note (L21); left out when nothing was typed.
+            notes: receiptNotesForPost(notes),
+          },
         },
-      });
+      );
     } catch (e) {
       failure = e;
     }

@@ -313,7 +313,10 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
                       receivable={canReceive}
                       checklist={
                         liveChecklist
-                          ? { versionNumber: liveChecklist.versionNumber, title: liveChecklist.title }
+                          ? {
+                              versionNumber: liveChecklist.versionNumber,
+                              title: liveChecklist.title,
+                            }
                           : null
                       }
                       canRecordChecklist={gate.canRecordChecklist}

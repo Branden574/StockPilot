@@ -107,15 +107,33 @@ vi.mock('@/server/services/inventory', () => ({
   InventoryService: { forCurrentUser: vi.fn(async () => ({ byIds: inventoryByIds })) },
 }));
 // F4-1: the page also reads the receiving checklist (never throws) and asks
-// core receivingGate who may post; an owner may.
-vi.mock('@/server/services/receiving-checklist', () => ({
-  ReceivingChecklistService: {
-    forCurrentUser: vi.fn(async () => ({
-      forPurchaseOrder: vi.fn(async () => ({ ok: true, versions: [], runs: [] })),
-      gate: () => ({ canPostReceipt: true, canRecordChecklist: true, canPublishChecklist: true, canAddPoFile: true }),
-    })),
-  },
-}));
+// core receivingGate who may post. The gate here is the real service's
+// (receivingGateFor), worked out from the context the page was just given, so
+// a caller's role and permissions decide Receive exactly as in production.
+vi.mock('@/server/services/receiving-checklist', async () => {
+  const { can, receivingGate } = await import('@stockpilot/core');
+  const { requireOrgContext } = await import('@/lib/auth/session');
+  return {
+    ReceivingChecklistService: {
+      forCurrentUser: vi.fn(async () => {
+        const ctx = (await vi.mocked(requireOrgContext).mock.results.at(-1)!.value) as Parameters<
+          typeof can
+        >[0];
+        const gate = receivingGate({
+          role: ctx.role,
+          canAdjust: can(ctx, 'stock:adjust'),
+          canReadPo: can(ctx, 'purchase_orders:read'),
+          canManagePo: can(ctx, 'purchase_orders:manage'),
+          receivingOn: true,
+        });
+        return {
+          forPurchaseOrder: vi.fn(async () => ({ ok: true, versions: [], runs: [] })),
+          gate: () => gate,
+        };
+      }),
+    },
+  };
+});
 vi.mock('@/server/services/size-run-display', () => ({
   loadSizeRunGroups: (...args: unknown[]) => loadSizeRunGroups(...(args as [])),
 }));

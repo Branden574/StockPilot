@@ -430,7 +430,9 @@ export function PoReceiveDialog({
         {posted ? (
           <>
             <DialogHeader>
-              <DialogTitle>{RECEIVING_CHECKLIST_COPY.postedTitle(posted.receiptNumber)}</DialogTitle>
+              <DialogTitle>
+                {RECEIVING_CHECKLIST_COPY.postedTitle(posted.receiptNumber)}
+              </DialogTitle>
               <DialogDescription>{RECEIVING_CHECKLIST_COPY.postedBody}</DialogDescription>
             </DialogHeader>
             {startError && (
@@ -461,8 +463,8 @@ export function PoReceiveDialog({
               <DialogTitle>Receive {poNumber}</DialogTitle>
               <DialogDescription>
                 Enter how many you received for each line — the variance shows what&apos;s still
-                outstanding. Receiving in parts is fine: post a receipt each time more arrives, until
-                the variance reaches zero.
+                outstanding. Receiving in parts is fine: post a receipt each time more arrives,
+                until the variance reaches zero.
               </DialogDescription>
             </DialogHeader>
             {/* The lines scroll inside the dialog; 2 px each side keep the
@@ -556,7 +558,11 @@ export function PoReceiveDialog({
                             size="sm"
                             className="shrink-0"
                             onClick={() =>
-                              setField(l.id, { received: remaining, accepted: remaining, rejected: 0 })
+                              setField(l.id, {
+                                received: remaining,
+                                accepted: remaining,
+                                rejected: 0,
+                              })
                             }
                           >
                             All

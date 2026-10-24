@@ -410,6 +410,9 @@ describe('root layout: RootGate keeps its order, its hooks and its timing', () =
     ['exceptions/[id]', "{ presentation: 'card' }"],
     ['returns/[id]', "{ presentation: 'card' }"],
     ['location/[id]', "{ presentation: 'card' }"],
+    // The receiving checklist (F4-1): one receipt's run, and the editor.
+    ['receiving-check/[id]', "{ presentation: 'card' }"],
+    ['receiving-checklist', "{ presentation: 'card' }"],
     ['reports/book-order-totals/index', "{ presentation: 'card' }"],
     ['reports/book-order-totals/[itemId]', "{ presentation: 'card' }"],
     ['schedule/new', "{ presentation: 'card' }"],
@@ -424,9 +427,10 @@ describe('root layout: RootGate keeps its order, its hooks and its timing', () =
     expect(attrText(els[0]!, 'options', sf) ?? null).toBe(options);
   });
 
+  // Re-pinned by F4-1 (was: 24): the receiving checklist's two screens.
   it('registers no other screen', () => {
     const { els } = elements(ROOT_LAYOUT, (el, s) => tagOf(el, s) === 'Stack.Screen');
-    expect(els).toHaveLength(24);
+    expect(els).toHaveLength(26);
   });
 });
 

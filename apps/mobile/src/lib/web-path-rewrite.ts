@@ -92,7 +92,10 @@ const REWRITES: { re: RegExp; to: (m: RegExpMatchArray) => string }[] = [
     re: new RegExp(`/dashboard/purchase-orders/receiving-checks/${UUID}`),
     to: (m) => `/receiving-check/${m[1]}`,
   },
-  { re: /\/dashboard\/purchase-orders\/receiving-checklist(\?.*)?$/, to: () => '/receiving-checklist' },
+  {
+    re: /\/dashboard\/purchase-orders\/receiving-checklist(\?.*)?$/,
+    to: () => '/receiving-checklist',
+  },
   { re: new RegExp(`/dashboard/purchase-orders/${UUID}`), to: (m) => `/po/${m[1]}` },
   // The auto-reorder and recurring-po crons notify with the BARE list path
   // '/dashboard/purchase-orders' (no id — they create N drafts at once), so

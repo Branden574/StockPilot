@@ -110,14 +110,23 @@ describe('POST /api/v1/po/[id]/receipts', () => {
     postReceipt.mockResolvedValue({ id: 'r1', receipt_number: 'RCV-1', status: 'posted' });
     const res = await post(validBody);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ receiptId: 'r1', receiptNumber: 'RCV-1', receiptStatus: 'posted', lineCount: 2 });
+    expect(await res.json()).toEqual({
+      receiptId: 'r1',
+      receiptNumber: 'RCV-1',
+      receiptStatus: 'posted',
+      lineCount: 2,
+    });
   });
 
   // F4-1: below manager the service refuses before the RPC; the phone shows
   // the server's sentence and keeps its key (the default arm).
   it('answers the manager refusal as a 403 with its sentence and reason', async () => {
     postReceipt.mockRejectedValue(
-      new ServiceError('forbidden', 'Only a manager can post a receipt. A manager posts receipts.', { reason: 'manager_posts' }),
+      new ServiceError(
+        'forbidden',
+        'Only a manager can post a receipt. A manager posts receipts.',
+        { reason: 'manager_posts' },
+      ),
     );
     const res = await post(validBody);
     expect(res.status).toBe(403);

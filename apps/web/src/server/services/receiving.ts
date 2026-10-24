@@ -16,7 +16,11 @@ import {
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import { receivingGateFor } from './lib/receiving-gate';
 
-import { DELETED_USER_LABEL, isDeletedPerson, RECEIVE_POST_MANAGER_ONLY_COPY } from '@stockpilot/core';
+import {
+  DELETED_USER_LABEL,
+  isDeletedPerson,
+  RECEIVE_POST_MANAGER_ONLY_COPY,
+} from '@stockpilot/core';
 import type {
   PostReceiptInput,
   ReverseReceiptInput,
@@ -225,7 +229,9 @@ export class ReceivingService {
     // RPC and read "You cannot post receipts for this PO." The same predicate
     // hides Receive and Post receipt on the web page and the phone.
     if (!receivingGateFor(this.ctx).canPostReceipt) {
-      throw new ServiceError('forbidden', RECEIVE_POST_MANAGER_ONLY_COPY, { reason: 'manager_posts' });
+      throw new ServiceError('forbidden', RECEIVE_POST_MANAGER_ONLY_COPY, {
+        reason: 'manager_posts',
+      });
     }
 
     const requestHash = hashReceiptRequest(input);

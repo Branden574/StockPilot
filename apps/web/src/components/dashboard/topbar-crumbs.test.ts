@@ -178,7 +178,7 @@ describe('fixed pages have their own crumb, never a catch-all Detail', () => {
     ]);
   });
 
-  it('the receiving checklist and one receipt\'s checklist sit under Purchase orders (F4-1)', () => {
+  it("the receiving checklist and one receipt's checklist sit under Purchase orders (F4-1)", () => {
     expect(
       crumbsForPathname('/dashboard/purchase-orders/receiving-checklist').map((c) => c.label),
     ).toEqual(['Purchasing', 'Purchase orders', 'Receiving checklist']);
