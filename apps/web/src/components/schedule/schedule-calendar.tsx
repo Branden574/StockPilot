@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { formatOrgDate, formatOrgTime } from '@/lib/timezone';
 import { cn } from '@/lib/utils';
 
-import { orgDayOf } from '@stockpilot/core';
+import { orgDayOf, plainSpaces } from '@stockpilot/core';
 
 interface CalendarEvent {
   id: string;
@@ -257,12 +257,18 @@ export function ScheduleCalendar({
                     </div>
                     <div className="mt-1 space-y-1">
                       {visible.map((ev) => {
+                        // Plain spaces: this text is rendered on the server and
+                        // again in the browser, and newer ICU (and Hermes) put a
+                        // narrow no-break space before AM/PM, so an engine that
+                        // does it on one side only would not hydrate.
                         const time = ev.allDay
                           ? null
-                          : formatOrgTime(
-                              new Date(ev.startsAt),
-                              { hour: 'numeric', minute: '2-digit' },
-                              timeZone,
+                          : plainSpaces(
+                              formatOrgTime(
+                                new Date(ev.startsAt),
+                                { hour: 'numeric', minute: '2-digit' },
+                                timeZone,
+                              ),
                             );
                         return (
                           <Link
