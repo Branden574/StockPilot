@@ -739,6 +739,22 @@ PGTAP_TESTS=(
   # family; the INVOKER preview never names item_stock_levels (INV-33). The
   # two-session proofs are scripts/db-concurrency/0400_item_display_groups_races.sh.
   supabase/tests/0400_item_display_groups.test.sql
+  # Approver warehouse scope (0405, security slice E): approve_order_request,
+  # approve_partial, close_partial, resume_fulfillment and reopen_picking
+  # refuse a caller without write access to the order's warehouse
+  # (user_can_access_warehouse 'write', the order update policy's term;
+  # 42501 forbidden, hint warehouse_write), so a staff member granted
+  # orders:approve acts only where they work and a viewer granted it
+  # nowhere; owners, admins and managers are unaffected. cancel_order_request
+  # asks it on the approver's path only, decided on the row it locks (the
+  # requester's own pending cancel asks no warehouse), and an order with no
+  # requester account (a public link, a deleted account) is nobody's own
+  # order, so only an approver cancels it. Every restated body is
+  # production's with its added blocks removed, and taking each block out
+  # lets the refused call through. The two-session proofs are
+  # scripts/db-concurrency/0405_cancel_scope_race.sh; the lock footprint is
+  # scripts/db-concurrency/0405_migration_lock_footprint.sh.
+  supabase/tests/0405_order_functions_warehouse_scope.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
