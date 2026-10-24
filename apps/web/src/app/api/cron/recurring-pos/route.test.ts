@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makeSupabaseStub } from '@/test/supabase-mock';
+import { reportError } from '@/lib/error-reporter';
+import { makeSupabaseStub, servedLikePostgrest, type QueryResult } from '@/test/supabase-mock';
 
 import type { RecurringRunSummary } from '@/server/services/recurring-pos';
 
@@ -130,7 +131,19 @@ describe('GET /api/cron/recurring-pos — a skipped template is told to its crea
     { user_id: 'admin-1', role: 'owner', accepted: true },
     { user_id: 'manager-1', role: 'manager', accepted: true },
     { user_id: 'left-1', role: 'manager', accepted: false },
+    { user_id: 'staff-1', role: 'staff', accepted: true },
+    { user_id: 'viewer-1', role: 'viewer', accepted: true },
   ];
+
+  /** The organization's permission overrides for this run (none by default). */
+  const overrides: {
+    role: QueryResult | null;
+    user: QueryResult | null;
+  } = { role: null, user: null };
+  beforeEach(() => {
+    overrides.role = null;
+    overrides.user = null;
+  });
 
   /** organization_members as each read asks: by role (owners and admins),
    *  or by user id (the creators), accepted members only. */
@@ -148,10 +161,18 @@ describe('GET /api/cron/recurring-pos — a skipped template is told to its crea
 
   function runWith(summary: RecurringRunSummary) {
     summaryHolder.summary = summary;
+    const served = (result: QueryResult | null) =>
+      result === null
+        ? servedLikePostgrest([])
+        : result.error
+          ? () => result
+          : servedLikePostgrest(result.data as Array<Record<string, unknown>>);
     adminHolder.client = makeSupabaseStub({
       'organization_modules.select': { data: [{ organization_id: 'org-1', module_id: 'purchase_orders' }], error: null },
       'organizations.select': { data: { plan: 'pro' }, error: null },
       'organization_members.select': members,
+      'role_permission_overrides.select': served(overrides.role),
+      'user_permission_overrides.select': served(overrides.user),
     }).client;
     return GET(
       new Request('https://test.local/api/cron/recurring-pos', {
@@ -226,5 +247,81 @@ describe('GET /api/cron/recurring-pos — a skipped template is told to its crea
     createNotification.mockClear();
     await runWith(skipped(null));
     expect(told()).toEqual(['admin-1']);
+  });
+
+  // A template is edited only with purchase_orders:manage (every
+  // RecurringPoTemplatesService action and the Recurring page check it). A
+  // creator moved to staff or viewer, or whose permission was taken away,
+  // was still sent the organization's whole run notice and told to edit a
+  // template they cannot open (slice 8 review). The creator is told only
+  // while they hold it: role defaults, then the organization's role
+  // overrides, then their own (the owner always), as the gate resolves it.
+  describe('only while the creator can still edit templates (purchase_orders:manage)', () => {
+    it('a creator moved to staff or viewer is not told', async () => {
+      await runWith(skipped('staff-1'));
+      expect(told()).toEqual(['admin-1']);
+      createNotification.mockClear();
+      await runWith(skipped('viewer-1'));
+      expect(told()).toEqual(['admin-1']);
+    });
+
+    it('a manager whose permission was taken away is not told; a staff member granted it is', async () => {
+      overrides.user = {
+        data: [
+          { organization_id: 'org-1', user_id: 'manager-1', permission: 'purchase_orders:manage', granted: false },
+          { organization_id: 'org-1', user_id: 'staff-1', permission: 'purchase_orders:manage', granted: true },
+          // Another organization's override never applies.
+          { organization_id: 'org-2', user_id: 'viewer-1', permission: 'purchase_orders:manage', granted: true },
+        ],
+        error: null,
+      };
+      await runWith({
+        ...EMPTY,
+        failures: 3,
+        templatesSkipped: [
+          { templateId: 'tpl-1', name: 'Annex Paper', reason: 'Its destination was deleted.', createdBy: 'manager-1' },
+          { templateId: 'tpl-2', name: 'Dock Tape', reason: 'Its destination was deleted.', createdBy: 'staff-1' },
+          { templateId: 'tpl-3', name: 'Labels', reason: 'Its destination was deleted.', createdBy: 'viewer-1' },
+        ],
+      });
+      expect(told()).toEqual(['admin-1', 'staff-1']);
+    });
+
+    it("an organization's role override that takes it from managers stops a manager creator", async () => {
+      overrides.role = {
+        data: [
+          { organization_id: 'org-1', role: 'manager', permission: 'purchase_orders:manage', granted: false },
+          // Another organization's override never applies.
+          { organization_id: 'org-2', role: 'staff', permission: 'purchase_orders:manage', granted: true },
+        ],
+        error: null,
+      };
+      await runWith({
+        ...EMPTY,
+        failures: 2,
+        templatesSkipped: [
+          { templateId: 'tpl-1', name: 'Annex Paper', reason: 'Its destination was deleted.', createdBy: 'manager-1' },
+          { templateId: 'tpl-2', name: 'Dock Tape', reason: 'Its destination was deleted.', createdBy: 'staff-1' },
+        ],
+      });
+      expect(told()).toEqual(['admin-1']);
+    });
+
+    it("a failed override read falls back to the role's defaults, and is reported", async () => {
+      overrides.user = { data: null, error: { message: 'permission overrides unavailable' } };
+      await runWith({
+        ...EMPTY,
+        failures: 2,
+        templatesSkipped: [
+          { templateId: 'tpl-1', name: 'Annex Paper', reason: 'Its destination was deleted.', createdBy: 'manager-1' },
+          { templateId: 'tpl-2', name: 'Dock Tape', reason: 'Its destination was deleted.', createdBy: 'staff-1' },
+        ],
+      });
+      expect(told()).toEqual(['admin-1', 'manager-1']);
+      expect(reportError).toHaveBeenCalledWith(
+        expect.any(Error),
+        expect.objectContaining({ tag: 'cron.recurring-pos.creator_permissions' }),
+      );
+    });
   });
 });

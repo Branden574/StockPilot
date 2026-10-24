@@ -14,7 +14,14 @@ import {
 } from '@/server/services/recurring-pos';
 import type { ServiceContext } from '@/server/services/context';
 
-import { planAllowsRecurringPos, type ModuleId, type OrgBillingState } from '@stockpilot/core';
+import {
+  effectivePermissions,
+  planAllowsRecurringPos,
+  type ModuleId,
+  type OrgBillingState,
+  type PermissionOverride,
+  type Role,
+} from '@stockpilot/core';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -98,8 +105,9 @@ export async function GET(req: Request) {
         // that created nothing because no line could be ordered, and about
         // every template whose purchase order the save refused or could not
         // make (its destination deleted after it was saved, ...), with why.
-        // A skipped template's creator is told too: whoever set the template
-        // up is the one who fixes it, and may be a manager.
+        // A skipped template's creator is told too, while they can still
+        // edit templates: whoever set the template up is the one who fixes
+        // it, and may be a manager.
         if (recurringRunNotice(summary)) {
           await notifyAdmins(admin, orgId, summary);
         }
@@ -174,12 +182,15 @@ async function buildSystemContext(
   };
 }
 
+/** The permission every recurring template action and the Recurring page check. */
+const EDITS_TEMPLATES = 'purchase_orders:manage';
+
 /**
  * Notify the org's owners/admins about a recurring-PO run, and the creators
  * of the templates the run skipped who are still accepted members of the
- * org. Each person once, with the notice for them (recurringRunNotice with
- * `recipientId`: the templates they created named first, every one).
- * Best-effort.
+ * org and can still edit templates. Each person once, with the notice for
+ * them (recurringRunNotice with `recipientId`: the templates they created
+ * named first, every one). Best-effort.
  */
 async function notifyAdmins(
   admin: ReturnType<typeof createAdminClient>,
@@ -200,15 +211,9 @@ async function notifyAdmins(
     (id) => !recipients.has(id),
   );
   if (creatorIds.length > 0) {
-    const { data: members } = await admin
-      .from('organization_members')
-      .select('user_id')
-      .eq('organization_id', orgId)
-      // in-list-bound: the distinct creators of this run's skipped templates, at most the org's members
-      .in('user_id', creatorIds)
-      .not('accepted_at', 'is', null)
-      .is('impersonation_expires_at', null);
-    for (const m of (members ?? []) as Array<{ user_id: string }>) recipients.add(m.user_id);
+    for (const userId of await creatorsWhoEditTemplates(admin, orgId, creatorIds)) {
+      recipients.add(userId);
+    }
   }
 
   for (const userId of recipients) {
@@ -223,4 +228,72 @@ async function notifyAdmins(
       link: '/dashboard/purchase-orders',
     });
   }
+}
+
+/**
+ * Of `creatorIds`, the accepted members (not impersonation sessions) who can
+ * still edit recurring templates: the effective purchase_orders:manage, as
+ * the gate resolves it (role defaults, then the organization's role
+ * overrides, then the member's own; the owner always; core
+ * effectivePermissions). A creator later moved to staff or viewer, or whose
+ * permission was taken away, cannot open the template the notice tells them
+ * to edit, and the notice names the organization's other skipped templates
+ * too, so they are not told (slice 8 review). A failed override read falls
+ * back to the role defaults, as the request gate does
+ * (loadEffectivePermissions), and is reported.
+ */
+async function creatorsWhoEditTemplates(
+  admin: ReturnType<typeof createAdminClient>,
+  orgId: string,
+  creatorIds: string[],
+): Promise<string[]> {
+  const [membersRes, roleOvRes, userOvRes] = await Promise.all([
+    admin
+      .from('organization_members')
+      .select('user_id, role')
+      .eq('organization_id', orgId)
+      // in-list-bound: the distinct creators of this run's skipped templates, at most the org's members
+      .in('user_id', creatorIds)
+      .not('accepted_at', 'is', null)
+      .is('impersonation_expires_at', null),
+    admin
+      .from('role_permission_overrides')
+      .select('role, permission, granted')
+      .eq('organization_id', orgId)
+      .eq('permission', EDITS_TEMPLATES),
+    admin
+      .from('user_permission_overrides')
+      .select('user_id, permission, granted')
+      .eq('organization_id', orgId)
+      .eq('permission', EDITS_TEMPLATES)
+      // in-list-bound: the same creators
+      .in('user_id', creatorIds),
+  ]);
+  const members = (membersRes.data ?? []) as Array<{ user_id: string; role: Role }>;
+  let roleOv: Array<PermissionOverride & { role: Role }> = [];
+  let userOv: Array<PermissionOverride & { user_id: string }> = [];
+  const overridesError = roleOvRes.error ?? userOvRes.error;
+  if (overridesError) {
+    void reportError(new Error(overridesError.message), {
+      tag: 'cron.recurring-pos.creator_permissions',
+      level: 'warning',
+      extra: { orgId },
+    });
+  } else {
+    roleOv = (roleOvRes.data ?? []) as typeof roleOv;
+    userOv = (userOvRes.data ?? []) as typeof userOv;
+  }
+  return members
+    .filter((m) =>
+      effectivePermissions(
+        m.role,
+        roleOv
+          .filter((o) => o.role === m.role)
+          .map(({ permission, granted }) => ({ permission, granted })),
+        userOv
+          .filter((o) => o.user_id === m.user_id)
+          .map(({ permission, granted }) => ({ permission, granted })),
+      ).has(EDITS_TEMPLATES),
+    )
+    .map((m) => m.user_id);
 }
