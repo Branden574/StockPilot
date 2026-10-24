@@ -9,18 +9,53 @@
 -- approver or the order's driver may view it
 -- (app/api/orders/[id]/signature/route.ts).
 --
--- SHIPS SEPARATELY FROM 0392, ON PURPOSE (critique K6). Phones read the
--- image straight from the order row until they run slice B's update
--- (EAS group f0a24abc, published 2026-10-04 04:27Z), which reads it through
--- GET /api/v1/orders/<id>/signature instead. Push this file only when, at
--- push time, at least 95% of the production channel's 1.4.0 launches run
--- that update or a later one (`eas channel:insights`), or 7 days have passed
--- since 04:27Z (the exception-confirm R2 rule). Record the number in R0.
--- A phone that has not updated, and every phone on a native runtime older
--- than 1.4.0 (which never receives the update), shows the signer's name and
--- time without the image until it updates; nothing errors (the dialog's
--- empty branch). If the gate is not met, 0392 ships alone and this file
--- follows in a later push; nothing in 0392 depends on it.
+-- HISTORY: written as 0393 on fix/order-signature-images-0393 (2026-10-04)
+-- to ship after 0392 (critique K6), and never pushed; 0393 then shipped as
+-- the account deletion, so this file is 0403. Its statements are unchanged.
+--
+-- THE PHONE GATE (met). Phones read the image straight from the order row
+-- until they run slice B's update (EAS group f0a24abc, published 2026-10-04
+-- 04:27Z), which reads it through GET /api/v1/orders/[id]/signature, the
+-- web route's alias with the same gate. The rule was: push only once 95% of
+-- the production channel's 1.4.0 launches run that update or a later one,
+-- or 7 days after its publish. The 7 days passed on 2026-10-11 04:27Z, and
+-- every update published since (07d19d8b, the redesign, 2026-10-20, among
+-- them) reads through the route; the app is still on runtime 1.4.0. A
+-- phone that has not loaded an update since 2026-10-04, and every phone on
+-- a native version older than 1.4.0 (which never receives one), shows the
+-- signer's name and time without the image until it updates; nothing errors
+-- (the dialog's empty branch).
+--
+-- RELEASE ORDER. This file first, the web change second. The web route in
+-- production reads order_request_secrets first and the order column second
+-- (since 0389), so it serves every image before and after this push. The
+-- route's side-only read ships in the same pull request and must reach
+-- production only after this file is pushed: before the push the images
+-- are still on the rows and a side-only route would show none of them. No
+-- phone update is needed. Migration order: 0402 (explicit grants) before
+-- this file, or the CLI refuses 0402 afterwards without --include-all.
+--
+-- GRANTS (Supabase stops auto-granting on 2026-10-30). This file creates no
+-- table, view or sequence. The capture function's EXECUTE is revoked from
+-- public, anon, authenticated and service_role below: a trigger function
+-- needs no EXECUTE to fire, and nobody may call it. Table privileges are
+-- unchanged and deliberate: authenticated keeps SELECT on order_requests
+-- (the column it reads is null from now on) and holds no UPDATE on
+-- signature_data_url or signed_at (0387) and nothing on
+-- order_request_secrets (0389); anon holds nothing on either table;
+-- service_role keeps SELECT, INSERT, UPDATE and DELETE on
+-- order_request_secrets, which the trigger needs when the admin client
+-- writes an image (SECURITY INVOKER).
+--
+-- CHECKED AGAINST MAIN AT 0401 (since the file was written): 0393 validated
+-- order_requests_delivery_target_chk, so no NOT VALID check on order_requests
+-- can stop the null-out; 0395 restated confirm_physical_signature (still
+-- writes no image) and reopen_picking (refuses a signed order); 0396's
+-- replacement triggers are WHEN-gated on columns this file does not write,
+-- and both notify triggers return at once when the status is unchanged, so
+-- the move writes no notification for an ordinary or a replacement order.
+-- confirm_order_signature (0248) and resume_fulfillment (0390) are the
+-- bodies this file was written against.
 --
 -- WHAT IT DOES
 --   1. Every stored image is copied to order_request_secrets.signature_data_url
@@ -57,9 +92,10 @@
 -- order_secrets_images_unexpected_error with its SQLSTATE and object names
 -- only. Only order_requests_set_updated_at is disabled, inside the
 -- block and only around the writes; the 0387 guard is never disabled (the
--- block runs as postgres). Expected at the 2026-10-04 census: 35 images
--- (all on completed, digitally signed orders; the longest 92,574 characters,
--- 1,394,930 in all).
+-- block runs as postgres). At the 2026-10-04 census: 35 images (all on
+-- completed, digitally signed orders; the longest 92,574 characters,
+-- 1,394,930 in all); the read-only preflight before the push records the
+-- count, the lengths and the checksum this block must reproduce.
 --
 -- LOCKS: the 0392 prelude, for the same reasons (critique K3 and the side
 -- table's foreign-key deadlock): order_requests and order_request_secrets

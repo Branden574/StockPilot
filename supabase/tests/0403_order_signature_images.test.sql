@@ -15,14 +15,16 @@
 --    side image moved, (test stage) a side image changed after its row was
 --    nulled. Every one of the data block's 10 raise sites is covered: 9 by a
 --    planted mismatch here, the trigger-state check (which cannot be planted
---    without editing the block) by the mutation driver (mutate-0392.py I7).
+--    without editing the block) by the mutation driver (I7 below).
 --    (Review stage) X10: an error the block does not foresee (a NOT VALID
 --    check) aborts with its SQLSTATE and constraint name and never prints the
 --    side row's tokens or the image.
 --    X0: the fixtures are byte for byte as before.
 -- D. The move: every image lands in the side table byte for byte (an order
 --    with no side row, one whose side row holds link tokens, one whose side
---    row already holds the same image), the rows are null, every other
+--    row already holds the same image, and (port to 0403) a 0396 replacement
+--    order, whose guards and notify trigger the move passes untouched), the
+--    rows are null, every other
 --    column (updated_at included) is unchanged, an order without an image
 --    and a side image of an order without one on its row are untouched, the
 --    updated_at trigger is on again, no notification is written.
@@ -38,12 +40,17 @@
 --    nothing; comments; the data block raises P0001 only and logs nothing;
 --    the frozen bodies keep their md5.
 --
--- Mutation table (sec-orders/mutate-0392.py --db, the 0403 rows):
+-- Mutation table (proved for this file as 0393 by sec-orders/mutate-0392.py
+-- --db; re-run for 0403 on the migration scratch stack by
+-- stockpilot-work/docket-2026-10-24/s1-tools/mutate-0403.py):
 --   I1 the capture trigger without its reset branch          -> C3
 --   I2 the capture trigger leaves the image on the row        -> C1, C2
 --   I3 the capture trigger SECURITY DEFINER                  -> P1
---   I4 the move nulls the rows before the byte check          -> X3 (no raise: the check is gone)
+--   I4 the move without its byte check and image checksum     -> X3 (no raise: the check is gone)
 --   I5 the updated_at trigger left enabled during the move    -> R2 (other_columns_changed raises; nothing applied)
+--   I6 the move without its too-long precheck                 -> X1 (the side CHECK raises 23514 instead)
+--   I7 the updated_at trigger not enabled again               -> R2 (trigger_state raises; nothing applied)
+--   I8 the image checksum after the null-out dropped          -> X9
 --   I9 the unexpected-error wrapper re-raises every error     -> X10 (review stage)
 --
 -- Roles: fixtures as the test superuser; attempts through pg_temp.attempt
@@ -64,6 +71,8 @@ select plan(31);
 \set iSame    '\'04030000-0000-0000-0000-000000000103\''
 \set iNone    '\'04030000-0000-0000-0000-000000000104\''
 \set iSideOnly '\'04030000-0000-0000-0000-000000000105\''
+\set iRepl   '\'04030000-0000-0000-0000-000000000106\''
+\set rRepl   '\'04030000-0000-0000-0000-000000000401\''
 \set iSign    '\'04030000-0000-0000-0000-000000000201\''
 \set iResume  '\'04030000-0000-0000-0000-000000000202\''
 \set iPhys    '\'04030000-0000-0000-0000-000000000203\''
@@ -97,7 +106,8 @@ insert into img values
   ('I3', 'data:image/png;base64,' || repeat('C3', 300)),
   ('IS', 'data:image/png;base64,' || repeat('D4', 200)),
   ('IR', 'data:image/png;base64,' || repeat('E5', 100)),
-  ('POST', 'data:image/png;base64,' || repeat('F6', 150));
+  ('POST', 'data:image/png;base64,' || repeat('F6', 150)),
+  ('IP', 'data:image/png;base64,' || repeat('G7', 250));
 create function pg_temp.img(p text) returns text language sql stable as $$ select v from img where n = p $$;
 create function pg_temp.sha(p text) returns text language sql immutable as $$
   select encode(extensions.digest(p, 'sha256'), 'hex')
@@ -128,6 +138,18 @@ insert into public.order_requests
 insert into public.order_request_lines
   (id, order_request_id, item_id, quantity_requested, quantity_fulfilled, quantity_picked) values
   (:lResume, :iResume, :itR, 10, 5, null);
+-- (Port to 0403.) A replacement order (0396), handed over digitally with its
+-- image still on the row: the shape 0396's triggers (the replacement header
+-- guard, the link guard, the replacement notify trigger) see when the move
+-- nulls its image. Its return is for iDone1 and has been received.
+insert into public.returns (id, organization_id, order_request_id, status, source, requested_by)
+  values (:rRepl, :orgA, :iDone1, 'received', 'internal', :mgr);
+insert into public.order_requests
+  (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type,
+   approved_by, approved_at, signed_at, signed_by_name, signature_method, signature_data_url,
+   replacement_for_return_id, updated_at) values
+  (:iRepl, :orgA, :whA, 'completed', 'internal', :req, 'pickup', :mgr, now(), now(), 'Gus', 'digital', pg_temp.img('IP'),
+   :rRepl, now() - interval '5 days');
 -- The side rows earlier slices left: link tokens moved by 0392 (iDone2), the
 -- same image already copied (iSame), an image of an order whose row holds
 -- none (iSideOnly), a 0389 mint (iSign), the image of a backordered
@@ -141,7 +163,7 @@ insert into public.order_request_secrets
   (:iResume,   :orgA, null,               null,              pg_temp.img('IR'));
 
 create temp table data_ids (id uuid primary key);
-insert into data_ids values (:iDone1), (:iDone2), (:iSame), (:iNone), (:iSideOnly);
+insert into data_ids values (:iDone1), (:iDone2), (:iSame), (:iNone), (:iSideOnly), (:iRepl);
 
 -- ══ Helpers (the 0387 shapes) ═════════════════════════════════════════════
 create function pg_temp.hint(p_hint text) returns text language sql immutable as $$
@@ -386,8 +408,8 @@ select is(
      join public.order_requests o on o.id = b.id
      left join public.order_request_secrets s on s.order_request_id = b.id
     where b.image is not null),
-  'true,true,true',
-  'D1: every stored image is in the side table byte for byte (no side row before; a side row holding link tokens; the same image already there) and its row is null');
+  'true,true,true,true',
+  'D1: every stored image is in the side table byte for byte (no side row before; a side row holding link tokens; the same image already there; a replacement order) and its row is null');
 select is(
   (select (s.return_token is not null)::text from public.order_request_secrets s where s.order_request_id = :iDone2)
   || '/' || (select (s.signature_data_url = pg_temp.img('IS'))::text from public.order_request_secrets s where s.order_request_id = :iSideOnly),
@@ -487,9 +509,15 @@ select is(
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'public'
       and p.proname in ('confirm_order_signature', 'confirm_physical_signature', 'resume_fulfillment', 'reopen_picking')),
+  -- Re-pinned for the port to 0403: 0395 restated confirm_physical_signature
+  -- (was f7a14a46d2c70f635c3da844c786ce67; still writes no image) and
+  -- reopen_picking (was 293ce0e76d195bb13105cfd1c067de82; still refuses a
+  -- signed order), the values the 0395 suite pins as its new bodies;
+  -- confirm_order_signature and resume_fulfillment are the bodies this file
+  -- was written against.
   E'confirm_order_signature(uuid,text,text,text,text)|8afdbb68f11dd4e8dcff3283b42f3b13\n'
-  'confirm_physical_signature(uuid,text)|f7a14a46d2c70f635c3da844c786ce67\n'
-  'reopen_picking(uuid,text)|293ce0e76d195bb13105cfd1c067de82\n'
+  'confirm_physical_signature(uuid,text)|c0d1c11d31dd86e072f05b72f299535c\n'
+  'reopen_picking(uuid,text)|14e49293fa670dc2e05a1c1b6930bce5\n'
   'resume_fulfillment(uuid)|2e2d5aab1db5392250879bfa9ff4bccd',
   'P5: the frozen hand-over and reset bodies keep their md5 (the trigger does the move; no body changed)');
 
