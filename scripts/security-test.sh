@@ -1203,7 +1203,8 @@ WEB_TESTS=(
   src/server/services/order-requests.db-guard.test.ts
   src/server/services/inventory.db-guard.test.ts
   # 0404: the kit refusals (no required component, another organization's
-  # item or event, a missing bundles:distribute) reach the Bundles page, the
+  # item or event, a missing bundles:distribute, a component that is the kit's
+  # own item, a kit item that is not the kit's own) reach the Bundles page, the
   # phone and the Schedule's completion as sentences; a component set with no
   # required component is refused when it is saved, before anything is
   # written; the Schedule hands out only the kit the event was saved with.

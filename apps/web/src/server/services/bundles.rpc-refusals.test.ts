@@ -101,9 +101,11 @@ describe('BundlesService.distribute — 0365 refusals', () => {
 
 /**
  * 0404: no kit from nothing, nor from another organization's item, nor
- * against another organization's event; and distribute_bundle refuses a direct
- * call without bundles:distribute itself (42501 forbidden, hint permission).
- * Each arrives as a sentence the modal and the phone show, never the code.
+ * against another organization's event, nor with the kit's own item as a
+ * component or a kit item that is not the kit's own; and distribute_bundle
+ * refuses a direct call without bundles:distribute itself (42501 forbidden,
+ * hint permission). Each arrives as a sentence the modal and the phone show,
+ * never the code.
  */
 describe('0404 refusals', () => {
   const sentences = {
@@ -111,11 +113,17 @@ describe('0404 refusals', () => {
       "This kit has no required component, so it can't be built from components. Edit the bundle and mark at least one component as required.",
     component_not_in_org:
       "A component of this kit is an item of another organization, so the kit can't be built. Edit the bundle and remove that component.",
+    component_is_kit_item:
+      "A component of this kit is the kit's own pre-assembled stock, so the kit can't be built from it. Edit the bundle and remove that component.",
+    phantom_not_kit_item:
+      "This kit's pre-assembled stock is linked to an item that isn't this kit's own kit item, so nothing was assembled or handed out. Contact support to repair the bundle.",
   };
 
   it.each([
     ['bundle_no_required_components', 'P0001'],
     ['component_not_in_org', '42501'],
+    ['component_is_kit_item', 'P0001'],
+    ['phantom_not_kit_item', 'P0001'],
   ] as const)('assemble maps %s to a validation_error sentence', async (raised, code) => {
     rpc.mockResolvedValue({ data: null, error: { message: raised, code, hint: null } });
     await expect(service().assemble('b-1', 2, 'wh-1')).rejects.toMatchObject({
@@ -127,6 +135,8 @@ describe('0404 refusals', () => {
   it.each([
     ['bundle_no_required_components', 'P0001'],
     ['component_not_in_org', '42501'],
+    ['component_is_kit_item', 'P0001'],
+    ['phantom_not_kit_item', 'P0001'],
   ] as const)('distribute maps %s to a validation_error sentence', async (raised, code) => {
     rpc.mockResolvedValue({ data: null, error: { message: raised, code, hint: null } });
     await expect(

@@ -218,6 +218,17 @@ export const BUNDLE_COMPONENT_NOT_IN_ORG =
  *  to one deleted meanwhile) is refused before anything is drawn. */
 export const BUNDLE_SCHEDULE_EVENT_NOT_FOUND =
   "The linked schedule event wasn't found in this organization, so nothing was distributed. Link another event, or none.";
+/** 0404: a component naming the kit's own item (the item its pre-assembled
+ *  kits are counted on) is refused when kits are built from components;
+ *  assembling one used to count kits that were never put together. */
+export const BUNDLE_COMPONENT_IS_KIT_ITEM =
+  "A component of this kit is the kit's own pre-assembled stock, so the kit can't be built from it. Edit the bundle and remove that component.";
+/** 0404: a kit whose pre-assembled stock is recorded on an item that is not
+ *  its own kit item (another organization's, a regular item, or one another
+ *  bundle names) is refused before anything moves. Only the database links a
+ *  kit item, so only support can repair one. */
+export const BUNDLE_PHANTOM_NOT_KIT_ITEM =
+  "This kit's pre-assembled stock is linked to an item that isn't this kit's own kit item, so nothing was assembled or handed out. Contact support to repair the bundle.";
 
 /**
  * The refusals assemble_bundle() and distribute_bundle() raise by name (0365,
@@ -238,6 +249,12 @@ export function kitRefusal(message: string): ServiceError | null {
   }
   if (message.includes('schedule_event_not_found')) {
     return new ServiceError('not_found', BUNDLE_SCHEDULE_EVENT_NOT_FOUND);
+  }
+  if (message.includes('component_is_kit_item')) {
+    return new ServiceError('validation_error', BUNDLE_COMPONENT_IS_KIT_ITEM);
+  }
+  if (message.includes('phantom_not_kit_item')) {
+    return new ServiceError('validation_error', BUNDLE_PHANTOM_NOT_KIT_ITEM);
   }
   return null;
 }
@@ -903,8 +920,9 @@ export class BundlesService {
       if (msg.includes('phantom_deleted')) {
         throw new ServiceError('validation_error', BUNDLE_PHANTOM_DELETED);
       }
-      // 0365 component_not_visible; 0404 bundle_no_required_components and
-      // component_not_in_org (a 42501 with no hint, so before 'forbidden').
+      // 0365 component_not_visible; 0404 bundle_no_required_components,
+      // component_is_kit_item, phantom_not_kit_item and component_not_in_org
+      // (a 42501 with no hint, so before 'forbidden').
       const named = kitRefusal(msg);
       if (named) throw named;
       if (msg.includes('forbidden')) {
@@ -973,8 +991,9 @@ export class BundlesService {
       }
       // 0365: a required component the caller's inventory view cannot see
       // used to be skipped, and the kit went out without it. 0404: a bundle
-      // with no required component, a component of another organization and
-      // an event outside this organization are refused by name.
+      // with no required component, a component of another organization, the
+      // kit's own item as a component, a kit item that is not the kit's own
+      // and an event outside this organization are refused by name.
       const named = kitRefusal(msg);
       if (named) throw named;
       if (msg.includes('forbidden')) {

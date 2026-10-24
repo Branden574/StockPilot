@@ -354,6 +354,14 @@ describe('ScheduleService distributed flag', () => {
         { message: 'component_not_in_org', code: '42501' },
         "A component of this kit is an item of another organization, so the kit can't be built. Edit the bundle and remove that component",
       ],
+      [
+        { message: 'phantom_not_kit_item', code: 'P0001' },
+        "This kit's pre-assembled stock is linked to an item that isn't this kit's own kit item, so nothing was assembled or handed out. Contact support to repair the bundle",
+      ],
+      [
+        { message: 'component_is_kit_item', code: 'P0001' },
+        "A component of this kit is the kit's own pre-assembled stock, so the kit can't be built from it. Edit the bundle and remove that component",
+      ],
     ])('names a %o refusal in words', async (error, sentence) => {
       const { run } = completeWith({ data: null, error });
       const err = (await run().catch((e: unknown) => e)) as { code: string; message: string };
