@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { reportError } from '@/lib/error-reporter';
+import { hasArrayLongerThan } from '@/lib/oversized-array';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { publicRequestIp, returnTokenBucketKey } from '@/lib/returns/public-limits';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -49,6 +50,9 @@ export const dynamic = 'force-dynamic';
  * until staff approve, receive and process it.
  */
 
+/** The most lines one return may carry; the longest array the body accepts. */
+const MAX_LINES = 100;
+
 const lineSchema = z.object({
   orderRequestLineId: z.string().uuid(),
   quantity: z.number().int().positive().max(10_000),
@@ -60,7 +64,7 @@ const bodySchema = z.object({
   token: z.string().uuid(),
   reasonCode: z.enum(['damaged', 'wrong_item', 'end_of_year', 'overage', 'other']).optional(),
   notes: z.string().max(2000).nullish(),
-  lines: z.array(lineSchema).min(1).max(100),
+  lines: z.array(lineSchema).min(1).max(MAX_LINES),
   idempotencyKey: z.string().uuid().optional(),
   hp: z.string().max(500).optional(),
 });
@@ -92,6 +96,17 @@ export async function POST(req: NextRequest) {
     raw = await req.json();
   } catch {
     return answer({ error: 'invalid_json', message: 'Check the form and try again.' }, { status: 400 });
+  }
+  // GHSA-mrhx-c7xc-m3w5: zod 3 still parses every element of an over-long
+  // array, one issue per bad element (lib/oversized-array.ts), so a body with
+  // any array longer than MAX_LINES, at any depth, is refused before
+  // safeParse, with the same 400 as any other malformed body. The return
+  // form (requester-return-form.tsx) sends no array but `lines`.
+  if (hasArrayLongerThan(raw, MAX_LINES)) {
+    return answer(
+      { error: 'validation_error', message: 'Check the items and quantities, then try again.' },
+      { status: 400 },
+    );
   }
   const parsed = bodySchema.safeParse(raw);
   if (!parsed.success) {
