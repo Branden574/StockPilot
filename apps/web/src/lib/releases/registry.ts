@@ -51,9 +51,16 @@ export const RELEASES: Release[] = [
     //   - the purchase orders list's Placed day, now the organization's in
     //     both lists (item H), said in the Overdue view's line: the instant
     //     list printed the viewer's day, a different one for a viewer outside
-    //     the organization's zone in the evening (slice 8 review);
+    //     the organization's zone in the evening (slice 8 review). This
+    //     reverses the published redesign-web-fixes-2026-10 entry
+    //     web-times-in-your-time-zone (2026-10-20: "the Placed date on
+    //     Purchase orders now shows your own day"), so the line is worded as a
+    //     change from that note ("not your own"); owner question 1 in the PR;
     //   - New and Edit event taking their times in the organization's zone
-    //     (slice 8 review), in the calendar line;
+    //     (slice 8 review), in the calendar line; and an unchanged Edit event
+    //     save keeping the event's time in the hour the clocks go back (a
+    //     wall clock that happens twice; production's form moved it an hour
+    //     too), in the same line;
     //   - ordering a draft to a deleted location refused, in the Edit
     //     purchase order line; a send-mode template whose purchase order
     //     could not be sent named, in the run line.
@@ -93,7 +100,7 @@ export const RELEASES: Release[] = [
         area: 'Purchase orders',
         title: 'The purchase orders list has an Overdue view',
         whatChanged:
-          "The dashboard's overdue purchase orders line opened the purchase orders list on All. The list now has an Overdue view, next to All: the purchase orders that are ordered or in transit and not fully received, with an expected date before today in your organization's time zone, the same ones the dashboard counts. Search and Export work on it too. The list's Placed date is now the day in your organization's time zone.",
+          "The dashboard's overdue purchase orders line opened the purchase orders list on All. The list now has an Overdue view, next to All: the purchase orders that are ordered or in transit and not fully received, with an expected date before today in your organization's time zone, the same ones the dashboard counts. Search and Export work on it too. The list's Placed date now shows the day in your organization's time zone, not your own, so everyone sees the same date.",
         whyItMatters:
           "From the dashboard, the overdue purchase orders were mixed in with every other purchase order.",
         howItAffectsYou:
@@ -113,8 +120,12 @@ export const RELEASES: Release[] = [
           "When a draft purchase order went to a location you can't pick as its destination, such as a staging area or a location deleted since, or its supplier was archived, Edit purchase order showed an empty box and saved the draft with that destination or supplier anyway. It now opens on None or No supplier, with a note under the box naming what the draft had. Saving a purchase order to a deleted location, or ordering a draft that goes to one, is refused, naming the location.",
         whyItMatters:
           'A draft could be ordered to a destination or a supplier nobody could see on the form.',
+        // Said plainly (slice 8 review): the purchase order save accepts an
+        // archived supplier, but the form cannot offer one, so any save that
+        // does not choose a supplier, even one made to change something else,
+        // removes it. Owner question 7 in the PR asks whether to keep it.
         howItAffectsYou:
-          'Choose a destination or supplier from the list. If you save without choosing, the draft is saved with none, as the box shows.',
+          "Choose a destination or supplier from the list. If you save without choosing, even to change something else, the draft is saved with none, as the box shows. An archived supplier isn't in the list, so saving the draft removes it.",
         whatToDo: 'No action needed.',
         audience: { anyPermission: ['purchase_orders:manage'], modules: ['purchase_orders'] },
       },
@@ -130,7 +141,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'A template whose destination was deleted showed an empty Destination box, and nothing on the page said where it was ordering to.',
         howItAffectsYou:
-          'Choose another destination or supplier from the list and save the template.',
+          "Choose another destination or supplier from the list and save the template. If you save it without choosing, even to change something else, it is saved with none. An archived supplier isn't in the list, so saving the template removes it.",
         whatToDo:
           'If a template in the list says it creates no purchase order, edit it and choose another destination.',
         link: { href: '/dashboard/purchase-orders/recurring', label: 'Open recurring purchase orders' },
@@ -138,16 +149,17 @@ export const RELEASES: Release[] = [
       },
       {
         // RecurringPoTemplatesService.runDueTemplates (templatesSkipped) and
-        // the cron's notice: owners and admins, and the template's creator.
+        // the cron's notice: owners and admins, and the template's creator
+        // while they hold purchase_orders:manage (slice 8 review).
         id: 'recurring-run-says-why',
         category: 'fixed',
         area: 'Recurring purchase orders',
         title: 'A recurring template that cannot create its purchase order says why',
         whatChanged:
-          "When a recurring template's purchase order could not be saved, the daily run created nothing and told nobody, and a template whose destination was deleted after it was saved still created purchase orders to that location. The run no longer creates a purchase order to a deleted location. When it creates none for a template, its Recurring purchase orders notification names the template and why. It also names a template set to send whose purchase order could not be sent, kept as a draft. The notification goes to your organization's owners and admins and to the person who created the template.",
+          "When a recurring template's purchase order could not be saved, the daily run created nothing and told nobody, and a template whose destination was deleted after it was saved still created purchase orders to that location. The run no longer creates a purchase order to a deleted location. When it creates none for a template, its Recurring purchase orders notification names the template and why. It also names a template set to send whose purchase order could not be sent, kept as a draft.",
         whyItMatters: 'A template could stop ordering, period after period, without anyone knowing.',
         howItAffectsYou:
-          'If the notification names a template, edit that template on the web, in Recurring POs: for a deleted destination, choose another. If it names a purchase order that could not be sent, open it and send it.',
+          "The notification goes to your organization's owners and admins and to the person who created the template, if they can still edit templates. If it names a template, edit that template on the web, in Recurring POs: for a deleted destination, choose another. If it names a purchase order that could not be sent, open it and send it.",
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/purchase-orders/recurring', label: 'Open recurring purchase orders' },
         audience: { anyPermission: ['purchase_orders:manage'], modules: ['purchase_orders'] },
@@ -160,7 +172,7 @@ export const RELEASES: Release[] = [
         area: 'Schedule',
         title: 'The team calendar shows events late in the day on its last date',
         whatChanged:
-          "Events starting late in the day on the last date the team calendar shows, from 5 PM Pacific time (4 PM in winter), were left off it. They now show. The calendar also places each event on its date and prints its time in your organization's time zone, as an event's own page does, and marks your organization's today. New event and Edit event take the date and time in that time zone too, and say which, so an event added from a date on the calendar lands on that date.",
+          "Events starting late in the day on the last date the team calendar shows, from 5 PM Pacific time (4 PM in winter), were left off it. They now show. The calendar also places each event on its date and prints its time in your organization's time zone, as an event's own page does, and marks your organization's today. New event and Edit event take the date and time in that time zone too, and say which, so an event added from a date on the calendar lands on that date. In the hour the clocks go back, saving Edit event without changing its time no longer moves the event by an hour.",
         whyItMatters: 'An evening event on the calendar\'s last date was on the schedule but not on the calendar.',
         howItAffectsYou: 'Every event on a date the calendar shows is on it.',
         whatToDo: 'No action needed.',

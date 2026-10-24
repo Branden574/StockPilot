@@ -180,8 +180,10 @@ describe('the small fixes slice 8 release', () => {
     expect(text).not.toMatch(/email sent|emailed|automatically sent|guarantee/i);
     // The run says why; it does not fix the template by itself.
     expect(entry('recurring-run-says-why').whatChanged).toContain('names the template and why');
-    expect(entry('recurring-run-says-why').whatChanged).toContain(
-      "The notification goes to your organization's owners and admins and to the person who created the template.",
+    // A creator is told only while they hold purchase_orders:manage (the
+    // cron's creatorsWhoEditTemplates, slice 8 review).
+    expect(entry('recurring-run-says-why').howItAffectsYou).toContain(
+      "The notification goes to your organization's owners and admins and to the person who created the template, if they can still edit templates.",
     );
     // The past is told as it was: a deleted destination's template DID create
     // purchase orders (the run line says so), so the template line does not
@@ -197,9 +199,45 @@ describe('the small fixes slice 8 release', () => {
     expect(entry('recurring-template-names-unoffered-choices').whatChanged).toContain(
       'Make recurring names an archived supplier the same way',
     );
-    // Saving with no choice keeps none, as the box shows: said plainly.
+    // Saving with no choice keeps none, as the box shows: said plainly,
+    // including a save made for something else, which removes an archived
+    // supplier the purchase order and template saves would accept (slice 8
+    // review; owner question 7).
     expect(entry('po-edit-names-unoffered-choices').howItAffectsYou).toContain(
-      'If you save without choosing, the draft is saved with none, as the box shows.',
+      'If you save without choosing, even to change something else, the draft is saved with none, as the box shows.',
+    );
+    expect(entry('po-edit-names-unoffered-choices').howItAffectsYou).toContain(
+      "An archived supplier isn't in the list, so saving the draft removes it.",
+    );
+    expect(entry('recurring-template-names-unoffered-choices').howItAffectsYou).toContain(
+      'If you save it without choosing, even to change something else, it is saved with none.',
+    );
+    expect(entry('recurring-template-names-unoffered-choices').howItAffectsYou).toContain(
+      "An archived supplier isn't in the list, so saving the template removes it.",
+    );
+  });
+
+  // The redesign's published fixes told every web user on 2026-10-20 that
+  // "the Placed date on Purchase orders now shows your own day". This branch
+  // prints the organization's day in both lists (owner question 1), so its
+  // line is worded as a change from that note, not as news (slice 8 review).
+  it("words the Placed date as a change from the redesign's published note", () => {
+    const published = RELEASES.find((r) => r.id === 'redesign-web-fixes-2026-10');
+    expect(published?.status).toBe('published');
+    expect(
+      published?.entries.find((e) => e.id === 'web-times-in-your-time-zone')?.whatChanged,
+    ).toContain('the Placed date on Purchase orders now shows your own day');
+    expect(entry('po-list-overdue-view').whatChanged).toContain(
+      "The list's Placed date now shows the day in your organization's time zone, not your own, so everyone sees the same date.",
+    );
+  });
+
+  // Edit event kept a wall clock and converted it back on every save, so an
+  // event at the other occurrence of the repeated hour moved an hour
+  // unchanged (production's form too). Told in the calendar line.
+  it('says that an unchanged Edit event save no longer moves an event in the hour the clocks go back', () => {
+    expect(entry('calendar-last-evening-and-zone').whatChanged).toContain(
+      'In the hour the clocks go back, saving Edit event without changing its time no longer moves the event by an hour.',
     );
   });
 });
