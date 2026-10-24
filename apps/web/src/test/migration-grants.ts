@@ -6,7 +6,11 @@
  * and sequence the file creates in schema public, with the privileges that
  * Supabase's 2026-10-30 change takes out of the default privileges (see
  * requiredPrivileges) and that no later GRANT or REVOKE in the same file
- * names for anon, authenticated or service_role. The guard's header has the
+ * names for anon, authenticated or service_role. It also reports the blanket
+ * statements the guard refuses whatever else the file holds (see
+ * blanketStatements): a GRANT or REVOKE ... ON ALL TABLES, SEQUENCES,
+ * FUNCTIONS, PROCEDURES or ROUTINES IN SCHEMA that can reach public, and
+ * ALTER DEFAULT PRIVILEGES ... GRANT in any form. The guard's header has the
  * rules, the evidence behind them and what to do when it fails.
  *
  * How it reads SQL, so that prose never counts as a statement:
@@ -18,10 +22,13 @@
  *   - a DO block's body runs at migration time, so it is scanned as code, one
  *     PL/pgSQL statement after another; a function or procedure body runs
  *     later, if ever, and stays a string;
+ *   - a GRANT element of CREATE SCHEMA runs as written (after the schema's
+ *     other elements), so a schema-wide one counts;
  *   - a statement EXPLAIN ANALYZE runs is read like the statement itself, and a
  *     parenthesized SELECT like the bare one;
- *   - SQL inside a string (EXECUTE 'create table ...') is not seen. Dynamic
- *     SQL is the one creation form this scanner cannot check.
+ *   - SQL inside a string (EXECUTE 'create table ...', EXECUTE 'grant ... on
+ *     all tables in schema public ...') is not seen. Dynamic SQL is the one
+ *     form of creation or blanket statement this scanner cannot check.
  *
  * Names follow Postgres: an unquoted identifier folds to lower case (ASCII
  * only, as in a UTF8 database), a quoted one keeps its case, both are cut to
@@ -119,13 +126,51 @@ export interface Finding {
   missing: RoleGap[];
 }
 
+/** The objects a GRANT or REVOKE ... ON ALL <kind> IN SCHEMA names. */
+type SchemaWideKind = 'TABLES' | 'SEQUENCES' | 'FUNCTIONS' | 'PROCEDURES' | 'ROUTINES';
+
+const SCHEMA_WIDE_KINDS: readonly SchemaWideKind[] = [
+  'TABLES',
+  'SEQUENCES',
+  'FUNCTIONS',
+  'PROCEDURES',
+  'ROUTINES',
+];
+
+/** What each form reaches in a schema when it runs (REL_17_6 aclchk.c,
+ *  objectsInSchemaToOids: relkinds r, v, m, f and p for TABLES; S for
+ *  SEQUENCES; prokind other than p for FUNCTIONS, p for PROCEDURES, any for
+ *  ROUTINES). */
+const SCHEMA_WIDE_REACH: Record<SchemaWideKind, string> = {
+  TABLES: 'table, view, materialized view and foreign table',
+  SEQUENCES: 'sequence',
+  FUNCTIONS: 'function and aggregate',
+  PROCEDURES: 'procedure',
+  ROUTINES: 'function, aggregate and procedure',
+};
+
+/**
+ * A statement the guard refuses in a checked file, whatever else the file
+ * holds: a GRANT or REVOKE ... ON ALL ... IN SCHEMA that can reach public
+ * objects, or an ALTER DEFAULT PRIVILEGES ... GRANT (blanketStatements).
+ */
+export interface BlanketStatement {
+  file: string;
+  /** The line of the GRANT, REVOKE or ALTER keyword. */
+  line: number;
+  /** The statement's form, e.g. `GRANT ... ON ALL TABLES IN SCHEMA public`. */
+  statement: string;
+  /** What it reaches, and what to write instead. */
+  reason: string;
+}
+
 export interface FileScan {
   file: string;
   objects: CreatedObject[];
   findings: Finding[];
-  /** The file has a GRANT or REVOKE ... ON ALL TABLES|SEQUENCES IN SCHEMA,
-   *  which names no object and so decides nothing here. */
-  schemaWideGrant: boolean;
+  /** The blanket statements in the file, in line order. Each fails on its
+   *  own, and none of them decides anything for an object. */
+  blanket: BlanketStatement[];
 }
 
 export class MigrationScanError extends Error {
@@ -777,10 +822,25 @@ interface Tracked {
   named: Map<ApiRole, Set<string>>;
 }
 
+/** A GRANT or REVOKE ... ON ALL <kind> IN SCHEMA <schemas>. */
+interface SchemaWideUse {
+  line: number;
+  verb: 'GRANT' | 'REVOKE';
+  kind: SchemaWideKind;
+  /** The schema names as Postgres reads them; null when the guard cannot
+   *  read the list. */
+  schemas: string[] | null;
+}
+
 /** What a file's statements have built so far (newScanState). */
 export interface ScanState {
   objects: Map<string, Tracked>;
-  schemaWideGrant: boolean;
+  schemaWide: SchemaWideUse[];
+  /** Lines of ALTER DEFAULT PRIVILEGES ... GRANT. */
+  defaultPrivilegeGrants: number[];
+  /** Lines of ALTER ... SET SCHEMA (any object) and ALTER SCHEMA ... RENAME
+   *  TO: after either, another schema can hold a public object. */
+  schemaChanges: number[];
 }
 type State = ScanState;
 
@@ -876,9 +936,33 @@ const skipIfNotExists = (stmt: Lexeme[], at: number): { next: number; present: b
 const skipIfExists = (stmt: Lexeme[], at: number): number =>
   isWord(stmt[at], 'IF') && isWord(stmt[at + 1], 'EXISTS') ? at + 2 : at;
 
+/** CREATE SCHEMA ... [element ...]. Its CREATE elements make objects in the
+ *  new schema only (Postgres refuses any other). Its GRANT elements run as
+ *  written, after the others (REL_17_6 parse_utilcmd.c,
+ *  transformCreateSchemaStmtElements), so a schema-wide one reaches what it
+ *  names. Their relation names resolve in the new schema first, so a GRANT
+ *  element decides nothing here. */
+function onCreateSchema(stmt: Lexeme[], at: number, state: State): void {
+  const starts: number[] = [];
+  let depth = 0;
+  for (let k = at + 2; k < stmt.length; k += 1) {
+    if (isOpen(stmt[k])) depth += 1;
+    else if (isClose(stmt[k])) depth -= 1;
+    else if (depth === 0 && isWord(stmt[k], 'CREATE', 'GRANT')) starts.push(k);
+  }
+  starts.forEach((start, i) => {
+    if (!isWord(stmt[start], 'GRANT')) return;
+    onPrivileges(stmt.slice(start, starts[i + 1] ?? stmt.length), 0, state, false, false);
+  });
+}
+
 /** CREATE [OR REPLACE] [GLOBAL|LOCAL] [TEMP|TEMPORARY|UNLOGGED] [RECURSIVE]
  *  {TABLE|VIEW|MATERIALIZED VIEW|SEQUENCE|FOREIGN TABLE} [IF NOT EXISTS] name */
 function onCreate(stmt: Lexeme[], at: number, state: State): void {
+  if (isWord(stmt[at + 1], 'SCHEMA')) {
+    onCreateSchema(stmt, at, state);
+    return;
+  }
   let k = at + 1;
   let orReplace = false;
   if (isWord(stmt[k], 'OR') && isWord(stmt[k + 1], 'REPLACE')) {
@@ -999,11 +1083,53 @@ function tablePrivileges(stmt: Lexeme[], from: number, to: number): Set<string> 
   return named;
 }
 
+/** A comma-separated list of names at `from` (Postgres's name_list and
+ *  role_list): the names, folded and cut as Postgres reads them, and the
+ *  index after the list. */
+function nameList(stmt: Lexeme[], from: number): { names: string[]; end: number } {
+  const names: string[] = [];
+  let k = from;
+  for (;;) {
+    const name = identOf(stmt[k]);
+    if (name === null) break;
+    names.push(name);
+    k += 1;
+    if (!isPunct(stmt[k], ',')) break;
+    k += 1;
+  }
+  return { names, end: k };
+}
+
+/** `ALL <kind> IN SCHEMA name [, ...]` at `at`, after a GRANT's or REVOKE's
+ *  ON: Postgres's privilege_target for a whole schema (REL_17_6 gram.y). The
+ *  schemas are null when the list is missing or unreadable. */
+function schemaWideAt(
+  stmt: Lexeme[],
+  at: number,
+): { kind: SchemaWideKind; schemas: string[] | null } | null {
+  if (!isWord(stmt[at], 'ALL')) return null;
+  const kind = SCHEMA_WIDE_KINDS.find((k) => isWord(stmt[at + 1], k));
+  if (!kind) return null;
+  if (!isWord(stmt[at + 2], 'IN') || !isWord(stmt[at + 3], 'SCHEMA')) {
+    return { kind, schemas: null };
+  }
+  const { names } = nameList(stmt, at + 4);
+  return { kind, schemas: names.length > 0 ? names : null };
+}
+
 /** GRANT privileges ON [TABLE|SEQUENCE] names TO roles, and REVOKE [GRANT
  *  OPTION FOR] privileges ON ... FROM roles: each named role now has a
  *  decided value for each table-level privilege listed. REVOKE GRANT OPTION
- *  FOR decides nothing: it leaves the privilege. */
-function onPrivileges(stmt: Lexeme[], at: number, state: State, revoke: boolean): void {
+ *  FOR decides nothing: it leaves the privilege. ON ALL ... IN SCHEMA names
+ *  no object, so it decides nothing either; it is kept for
+ *  blanketStatements. `decide` false reads the statement for that only. */
+function onPrivileges(
+  stmt: Lexeme[],
+  at: number,
+  state: State,
+  revoke: boolean,
+  decide = true,
+): void {
   let k = at + 1;
   let grantOptionOnly = false;
   if (
@@ -1027,10 +1153,16 @@ function onPrivileges(stmt: Lexeme[], at: number, state: State, revoke: boolean)
   if (k >= stmt.length) return;
   const privileges = tablePrivileges(stmt, listStart, k);
   k += 1;
-  if (isWord(stmt[k], 'ALL') && isWord(stmt[k + 1], 'TABLES', 'SEQUENCES')) {
-    state.schemaWideGrant = true;
+  const schemaWide = schemaWideAt(stmt, k);
+  if (schemaWide) {
+    state.schemaWide.push({
+      line: stmt[at]!.line,
+      verb: revoke ? 'REVOKE' : 'GRANT',
+      ...schemaWide,
+    });
     return;
   }
+  if (!decide) return;
   if (kindWordAt(stmt, k, 'TABLE', 'SEQUENCE')) {
     k += 1;
   } else if (
@@ -1221,6 +1353,46 @@ function onAlter(stmt: Lexeme[], at: number, state: State): void {
   if (relation.kind === 'table') onTableActions(stmt, k, ref, state);
 }
 
+/** ALTER DEFAULT PRIVILEGES [IN SCHEMA names | FOR {ROLE|USER} roles ...]
+ *  {GRANT|REVOKE} ... (REL_17_6 gram.y, AlterDefaultPrivilegesStmt). The
+ *  options are read as lists of names, so a schema or role named revoke (an
+ *  unreserved keyword) is a name. Any action but REVOKE counts as a GRANT. */
+function onDefaultPrivileges(stmt: Lexeme[], at: number, state: State): void {
+  let k = at + 3;
+  for (;;) {
+    if (isWord(stmt[k], 'IN') && isWord(stmt[k + 1], 'SCHEMA')) k = nameList(stmt, k + 2).end;
+    else if (isWord(stmt[k], 'FOR') && isWord(stmt[k + 1], 'ROLE', 'USER')) {
+      k = nameList(stmt, k + 2).end;
+    } else break;
+  }
+  if (!isWord(stmt[k], 'REVOKE')) state.defaultPrivilegeGrants.push(stmt[at]!.line);
+}
+
+/** ALTER ... SET SCHEMA name, for any kind of object (SET SCHEMA 'value', a
+ *  string, sets a search_path instead), and ALTER SCHEMA name RENAME TO: the
+ *  file moves objects between schemas or renames one. */
+function noteSchemaChange(stmt: Lexeme[], at: number, state: State): void {
+  if (isWord(stmt[at + 1], 'SCHEMA') && isWord(stmt[at + 3], 'RENAME')) {
+    state.schemaChanges.push(stmt[at]!.line);
+    return;
+  }
+  let depth = 0;
+  for (let k = at + 1; k < stmt.length; k += 1) {
+    if (isOpen(stmt[k])) depth += 1;
+    else if (isClose(stmt[k])) depth -= 1;
+    else if (
+      depth === 0 &&
+      isWord(stmt[k], 'SET') &&
+      isWord(stmt[k + 1], 'SCHEMA') &&
+      stmt[k + 2] !== undefined &&
+      stmt[k + 2]!.kind !== 'string'
+    ) {
+      state.schemaChanges.push(stmt[at]!.line);
+      return;
+    }
+  }
+}
+
 /** A top-level SELECT ... INTO [TEMP|UNLOGGED] [TABLE] name creates a table.
  *  `start` is the SELECT (or WITH) after any opening brackets, since
  *  `(select ... into t)` creates t too; the INTO belongs to that first
@@ -1332,7 +1504,12 @@ function onStatement(stmt: Lexeme[], at: number, state: State, topLevel: boolean
       onDrop(stmt, at, state);
       break;
     case 'ALTER':
-      onAlter(stmt, at, state);
+      noteSchemaChange(stmt, at, state);
+      if (isWord(stmt[at + 1], 'DEFAULT') && isWord(stmt[at + 2], 'PRIVILEGES')) {
+        onDefaultPrivileges(stmt, at, state);
+      } else {
+        onAlter(stmt, at, state);
+      }
       break;
     case 'DO':
       onDo(stmt, at, state);
@@ -1371,7 +1548,7 @@ function scanStatements(statements: Lexeme[][], state: State, plpgsql: boolean):
 /** The state a file's statements build. Pass the same state to several
  *  files to follow objects across them (the guard's history check). */
 export function newScanState(): ScanState {
-  return { objects: new Map(), schemaWideGrant: false };
+  return { objects: new Map(), schemaWide: [], defaultPrivilegeGrants: [], schemaChanges: [] };
 }
 
 export function scanInto(state: ScanState, sql: string): void {
@@ -1405,8 +1582,75 @@ export function createdObjects(state: ScanState): CreatedObject[] {
     .sort((a, b) => a.line - b.line || (a.qualified < b.qualified ? -1 : 1));
 }
 
-/** One migration file: what it creates in public, and each object with a
- *  required privilege no GRANT or REVOKE names for some of the three roles. */
+/**
+ * The blanket statements a file's statements hold, each with what it reaches:
+ *   - every ALTER DEFAULT PRIVILEGES ... GRANT, in any schema, database-wide
+ *     or FOR ROLE: it gives privileges to objects not created yet;
+ *   - every GRANT or REVOKE ... ON ALL ... IN SCHEMA whose list names public,
+ *     or that the guard cannot read: it reaches every object of its kind in
+ *     public when it runs;
+ *   - one on another schema only when the file also moves an object between
+ *     schemas or renames a schema (schemaChanges), anywhere in it: Postgres
+ *     changes what is in the named schema when the statement runs, which is
+ *     never a public object unless one was moved there or public renamed.
+ */
+function blanketStatements(state: ScanState, file: string): BlanketStatement[] {
+  const blanket: BlanketStatement[] = [];
+  const changes = [...new Set(state.schemaChanges)].sort((a, b) => a - b);
+  const changeLines = changes.length === 1 ? `line ${changes[0]}` : `lines ${changes.join(', ')}`;
+  for (const use of state.schemaWide) {
+    const fix = `${use.verb.toLowerCase()} on each object by name`;
+    const reach = SCHEMA_WIDE_REACH[use.kind];
+    const form = `${use.verb} ... ON ALL ${use.kind}`;
+    if (use.schemas === null) {
+      blanket.push({
+        file,
+        line: use.line,
+        statement: form,
+        reason: `names no schema the guard can read, so it may reach every ${reach} in public; ${fix}`,
+      });
+      continue;
+    }
+    const list = use.schemas.map(displayIdent).join(', ');
+    const statement = `${form} IN SCHEMA ${list}`;
+    if (use.schemas.includes('public')) {
+      const undo =
+        use.verb === 'GRANT'
+          ? 'put back what earlier migrations revoked'
+          : 'take away what earlier migrations granted';
+      blanket.push({
+        file,
+        line: use.line,
+        statement,
+        reason: `reaches every ${reach} in public, so it would ${undo}; ${fix}`,
+      });
+    } else if (changes.length > 0) {
+      blanket.push({
+        file,
+        line: use.line,
+        statement,
+        reason:
+          `reaches every ${reach} in ${list} when it runs, and this file moves objects between ` +
+          `schemas or renames one (${changeLines}), which can put public objects there; ${fix}`,
+      });
+    }
+  }
+  for (const line of state.defaultPrivilegeGrants) {
+    blanket.push({
+      file,
+      line,
+      statement: 'ALTER DEFAULT PRIVILEGES ... GRANT',
+      reason:
+        'gives privileges to objects not created yet, out of sight of the statements that ' +
+        'create them; grant on each object by name after creating it',
+    });
+  }
+  return blanket.sort((a, b) => a.line - b.line);
+}
+
+/** One migration file: what it creates in public, each object with a
+ *  required privilege no GRANT or REVOKE names for some of the three roles,
+ *  and its blanket statements. */
 export function scanMigration(sql: string, file: string): FileScan {
   const state = newScanState();
   scanInto(state, sql);
@@ -1421,7 +1665,7 @@ export function scanMigration(sql: string, file: string): FileScan {
       ...(o.serial ? { serial: o.serial } : {}),
       missing: o.missing,
     }));
-  return { file, objects, findings, schemaWideGrant: state.schemaWideGrant };
+  return { file, objects, findings, blanket: blanketStatements(state, file) };
 }
 
 /** `file:line: <kind> <object> leaves to the default privileges: <privileges>
@@ -1439,14 +1683,18 @@ export function formatFinding(f: Finding): string {
   return `${f.file}:${f.line}: ${what} leaves to the default privileges: ${gaps.join('; ')}`;
 }
 
-/** What the guard prints for one file: a line per finding, and a pointer
- *  when the file has a schema-wide grant, which names no object. */
+/** `file:line: <statement> <reason>` */
+export function formatBlanket(b: BlanketStatement): string {
+  return `${b.file}:${b.line}: ${b.statement} ${b.reason}`;
+}
+
+/** What the guard prints for one file, in line order: a line per finding and
+ *  a line per blanket statement, each of which fails the file on its own. */
 export function reportLines(scan: FileScan): string[] {
-  const lines = scan.findings.map(formatFinding);
-  if (lines.length > 0 && scan.schemaWideGrant) {
-    lines.push(
-      `${scan.file}: a GRANT or REVOKE ... ON ALL TABLES|SEQUENCES IN SCHEMA names no object, so it decides nothing here`,
-    );
-  }
-  return lines;
+  return [
+    ...scan.findings.map((f) => ({ line: f.line, text: formatFinding(f) })),
+    ...scan.blanket.map((b) => ({ line: b.line, text: formatBlanket(b) })),
+  ]
+    .sort((a, b) => a.line - b.line)
+    .map((l) => l.text);
 }

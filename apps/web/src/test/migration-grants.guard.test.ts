@@ -38,12 +38,53 @@
  * defaults, 0230 left anon's SELECT, and 0394 service_role's INSERT, UPDATE
  * and DELETE.
  * Not a decision: a column-level GRANT or REVOKE (it leaves the table-level
- * privilege the defaults set), GRANT ... ON ALL TABLES IN SCHEMA (it names no
- * object, and it would re-grant what earlier migrations revoked, 0368's and
- * 0384's column grants included), TO PUBLIC or FROM PUBLIC (not one of the
- * three roles), REVOKE GRANT OPTION FOR (it leaves the privilege), ALTER
- * DEFAULT PRIVILEGES (later objects only), and anything in a comment, a
- * string or a function body.
+ * privilege the defaults set), a schema-wide GRANT or REVOKE (it names no
+ * object, and fails on its own: BLANKET STATEMENTS), TO PUBLIC or FROM PUBLIC
+ * (not one of the three roles), REVOKE GRANT OPTION FOR (it leaves the
+ * privilege), ALTER DEFAULT PRIVILEGES (later objects only; its GRANT form
+ * fails on its own), and anything in a comment, a string or a function body.
+ *
+ * BLANKET STATEMENTS. In a checked file these fail whatever else the file
+ * holds, each with its own file:line message:
+ *   - GRANT or REVOKE (REVOKE GRANT OPTION FOR too) ... ON ALL TABLES, ALL
+ *     SEQUENCES, ALL FUNCTIONS, ALL PROCEDURES or ALL ROUTINES IN SCHEMA, when
+ *     the list names public in any spelling Postgres reads as public: public,
+ *     PUBLIC, "public", U&"publi\0063" ("Public" in quotes is another schema);
+ *   - ALTER DEFAULT PRIVILEGES ... GRANT in every form: IN SCHEMA any schema,
+ *     no IN SCHEMA (database-wide, which covers public too), FOR ROLE or FOR
+ *     USER, on any kind of object.
+ * Why. A schema-wide statement reaches every object of its kind in public
+ * when it runs (REL_17_6 aclchk.c, objectsInSchemaToOids), so neither a
+ * review nor this guard can see which privileges it changes. A GRANT puts
+ * back what the migrations' 512 REVOKEs took away and makes the column grants
+ * (0311, 0368 and 0369, 0384 and 0388) moot, since a table-level SELECT
+ * covers every column; a REVOKE takes away what they granted, and the column
+ * grants of the same privilege with it (checked on 17.6). ALTER DEFAULT
+ * PRIVILEGES ... GRANT gives privileges to objects not created yet, out of
+ * sight of the statements that create them, and in public it puts back what
+ * Supabase's change takes away. An earlier version of this guard reported a
+ * schema-wide statement only in a file that had another finding, so a file
+ * whose one defect was such a statement passed (automated security review,
+ * 2026-10-24); none of fail/16 to fail/22 has any other defect.
+ * Still allowed:
+ *   - ALTER DEFAULT PRIVILEGES ... REVOKE, in any form: it only takes from
+ *     what later objects get, each of which a checked file decides by name,
+ *     and the deferred follow-up (option (a)) needs the changelog's two
+ *     revokes (pass/17);
+ *   - a schema-wide GRANT or REVOKE whose schemas are all other than public
+ *     (pass/19). Postgres reads each name as that one schema
+ *     (LookupExplicitNamespace, no search_path) and changes only what is in
+ *     it when the statement runs, so no public object is in reach: on 17.6
+ *     the public tables, sequences and functions came out untouched. A public
+ *     object gets there only by being moved there or by public being renamed
+ *     (a public table moved out, granted on all tables there and moved back
+ *     came out granted, and so did one under a renamed public), so in a file
+ *     with an ALTER ... SET SCHEMA or ALTER SCHEMA ... RENAME TO anywhere in
+ *     it, such a statement fails too (fail/22).
+ * They are read where Postgres runs them: at the top level, in a DO block
+ * (its static statements), and as a GRANT element of CREATE SCHEMA, which
+ * Postgres runs as written. In a comment, a string or a function body they
+ * run nothing and are not read (pass/18).
  *
  * HELD TO POSTGRES. Every fixture below was applied, on the migration scratch
  * server (Postgres 17.6, 2026-10-24), to a fresh database with the old
@@ -53,10 +94,12 @@
  * the two databases are exactly the scanner's findings, identity sequences
  * aside. Two differences are deliberate: a schema-wide grant (fail/08) and a
  * GRANT run by EXECUTE (fail/09) do settle a privilege in Postgres, and are
- * still not accepted as decisions. On the history, a scratch replay of
- * 0001-0401 under the changelog's defaults agrees: of the 17 objects an
- * earlier version of this rule counted as decided, the 4 it now flags are the
- * 4 whose privileges came out different from production's.
+ * still not accepted as decisions. Every public object in the blanket
+ * fixtures (fail/16 to fail/22, pass/17 to pass/19) comes out the same under
+ * both, so a blanket statement is all that fails them. On the history, a
+ * scratch replay of 0001-0401 under the changelog's defaults agrees: of the
+ * 17 objects an earlier version of this rule counted as decided, the 4 it now
+ * flags are the 4 whose privileges came out different from production's.
  *
  * SEQUENCES. Under the changelog's defaults a new sequence keeps UPDATE, so
  * nextval() and serial inserts keep working after 2026-10-30. It loses USAGE
@@ -93,12 +136,18 @@
  * production's schema (2026-10-24).
  *
  * NOT SEEN: SQL run from a string (EXECUTE, or a function the migration
- * calls), objects CREATE EXTENSION or IMPORT FOREIGN SCHEMA makes, a
- * search_path or standard_conforming_strings the file sets, and a serial
- * sequence whose name clashes with an object this file did not create in
- * public. Do not create public objects those ways. One case errs the other
- * way: an object that only DROP ... CASCADE removes, through a dependency (a
- * view on a dropped table), is still listed; drop it by name.
+ * calls), a CREATE and a blanket statement alike: a DO block's EXECUTE 'grant
+ * select on all tables in schema public to anon' runs, and its text cannot be
+ * read statically. Nor objects CREATE EXTENSION or IMPORT FOREIGN SCHEMA
+ * makes, a search_path or standard_conforming_strings the file sets, and a
+ * serial sequence whose name clashes with an object this file did not create
+ * in public. Nor, across files, an object an earlier file moved out of public
+ * (0359 moved functions into ledger) that a schema-wide statement reaches
+ * there and a later file moves back: each file is read alone, and the later
+ * file's SET SCHEMA public names the object. Do not create public objects or
+ * grant those ways. One case errs the other way: an object that only DROP ...
+ * CASCADE removes, through a dependency (a view on a dropped table), is still
+ * listed; drop it by name.
  *
  * IF THIS FAILS, the message names the file, the line, the object and, for
  * each role, the privileges nothing names. After the CREATE, in the same
@@ -108,7 +157,10 @@
  * For a serial column's sequence, the same on sequence <name> (grant usage,
  * select), or make the column an identity column. CREATE OR REPLACE VIEW of a
  * view an earlier migration made keeps that view's grants, but this guard
- * reads one file at a time: restate them. There is no allowlist.
+ * reads one file at a time: restate them. For a blanket statement, grant or
+ * revoke on each object by name instead; to take privileges out of what later
+ * objects get, ALTER DEFAULT PRIVILEGES ... REVOKE is allowed. There is no
+ * allowlist.
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -117,6 +169,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createdObjects,
+  formatBlanket,
   formatFinding,
   isCheckedMigration,
   LAST_EXEMPT_MIGRATION,
@@ -140,6 +193,8 @@ const IF_THIS_FAILS =
   'Name each privilege listed above for its role in the same migration, after the CREATE: ' +
   '`revoke all on <object> from anon, authenticated, service_role;` and then ' +
   '`grant <privileges> on <object> to <role>;` for each role that needs some. ' +
+  'Replace a schema-wide GRANT or REVOKE, or an ALTER DEFAULT PRIVILEGES ... GRANT, with a ' +
+  'GRANT or REVOKE on each object by name. ' +
   'The local stack and CI still grant them by default; production stops on 2026-10-30 ' +
   '(see the header of apps/web/src/test/migration-grants.guard.test.ts).';
 
@@ -264,6 +319,9 @@ const PASSING: Record<string, string[]> = {
     'partitioned table public.events_by_kind',
     'partition public.events_kind_a',
   ],
+  'pass/17-default-privileges-revoke.sql': ['table public.after_revokes'],
+  'pass/18-blanket-words-in-prose.sql': [],
+  'pass/19-schema-wide-elsewhere.sql': ['table public.visible_rows'],
 };
 
 const ALL_ROLES = 'anon, authenticated, service_role';
@@ -271,6 +329,31 @@ const LEFT = 'leaves to the default privileges:';
 /** Every privilege the changelog takes out of the defaults, by kind. */
 const EVERY_TABLE = 'SELECT, INSERT, UPDATE, DELETE';
 const EVERY_SEQUENCE = 'USAGE, SELECT';
+
+/** What a schema-wide statement reaches, by the kind it names. */
+const REACHES = {
+  TABLES: 'table, view, materialized view and foreign table',
+  SEQUENCES: 'sequence',
+  FUNCTIONS: 'function and aggregate',
+  PROCEDURES: 'procedure',
+  ROUTINES: 'function, aggregate and procedure',
+} as const;
+
+/** The line for a schema-wide GRANT or REVOKE whose list names public. */
+const inPublic = (
+  at: string,
+  verb: 'GRANT' | 'REVOKE',
+  kind: keyof typeof REACHES,
+  schemas = 'public',
+): string =>
+  `${at}: ${verb} ... ON ALL ${kind} IN SCHEMA ${schemas} reaches every ${REACHES[kind]} in public, ` +
+  `so it would ${verb === 'GRANT' ? 'put back what earlier migrations revoked' : 'take away what earlier migrations granted'}; ` +
+  `${verb.toLowerCase()} on each object by name`;
+
+/** The line for an ALTER DEFAULT PRIVILEGES ... GRANT. */
+const defaultsGrant = (at: string): string =>
+  `${at}: ALTER DEFAULT PRIVILEGES ... GRANT gives privileges to objects not created yet, ` +
+  'out of sight of the statements that create them; grant on each object by name after creating it';
 
 /** Each failing fixture: exactly what the guard prints for it. */
 const FAILING: Record<string, string[]> = {
@@ -315,10 +398,12 @@ const FAILING: Record<string, string[]> = {
   ],
   'fail/08-not-a-decision.sql': [
     `fail/08-not-a-decision.sql:2: table public.broad ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
+    inPublic('fail/08-not-a-decision.sql:4', 'GRANT', 'TABLES'),
+    inPublic('fail/08-not-a-decision.sql:5', 'GRANT', 'SEQUENCES'),
     `fail/08-not-a-decision.sql:7: table public.via_public ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
     `fail/08-not-a-decision.sql:12: table public.option_only ${LEFT} ${EVERY_TABLE} for service_role`,
     `fail/08-not-a-decision.sql:18: table public.defaults_only ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
-    `fail/08-not-a-decision.sql: a GRANT or REVOKE ... ON ALL TABLES|SEQUENCES IN SCHEMA names no object, so it decides nothing here`,
+    defaultsGrant('fail/08-not-a-decision.sql:19'),
   ],
   'fail/09-do-block.sql': [
     `fail/09-do-block.sql:6: table public.lazy_table ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
@@ -355,7 +440,69 @@ const FAILING: Record<string, string[]> = {
     `fail/15-unusual-forms.sql:8: table public.escaped_rows ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
     `fail/15-unusual-forms.sql:11: table public.round_trip ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
   ],
+  // The blanket statements: each fixture's objects are all decided, so these
+  // lines are all that fails them.
+  'fail/16-grant-on-all-tables.sql': [
+    'fail/16-grant-on-all-tables.sql:9: GRANT ... ON ALL TABLES IN SCHEMA public reaches every table, ' +
+      'view, materialized view and foreign table in public, so it would put back what earlier ' +
+      'migrations revoked; grant on each object by name',
+  ],
+  'fail/17-revoke-on-all-sequences.sql': [
+    'fail/17-revoke-on-all-sequences.sql:8: REVOKE ... ON ALL SEQUENCES IN SCHEMA public reaches ' +
+      'every sequence in public, so it would take away what earlier migrations granted; revoke on ' +
+      'each object by name',
+  ],
+  'fail/18-grant-on-all-functions.sql': [
+    'fail/18-grant-on-all-functions.sql:12: GRANT ... ON ALL FUNCTIONS IN SCHEMA public reaches every ' +
+      'function and aggregate in public, so it would put back what earlier migrations revoked; grant ' +
+      'on each object by name',
+  ],
+  'fail/19-alter-default-privileges-grant.sql': [
+    'fail/19-alter-default-privileges-grant.sql:10: ALTER DEFAULT PRIVILEGES ... GRANT gives privileges ' +
+      'to objects not created yet, out of sight of the statements that create them; grant on each ' +
+      'object by name after creating it',
+  ],
+  'fail/20-schema-wide-forms.sql': [
+    ...[5, 6, 7, 8, 9].map((line) =>
+      inPublic(`fail/20-schema-wide-forms.sql:${line}`, 'GRANT', 'TABLES'),
+    ),
+    inPublic('fail/20-schema-wide-forms.sql:11', 'GRANT', 'TABLES', 'd1_other, public'),
+    inPublic('fail/20-schema-wide-forms.sql:12', 'GRANT', 'SEQUENCES'),
+    inPublic('fail/20-schema-wide-forms.sql:13', 'GRANT', 'PROCEDURES'),
+    inPublic('fail/20-schema-wide-forms.sql:14', 'GRANT', 'ROUTINES'),
+    inPublic('fail/20-schema-wide-forms.sql:15', 'REVOKE', 'TABLES'),
+    inPublic('fail/20-schema-wide-forms.sql:16', 'REVOKE', 'FUNCTIONS'),
+    inPublic('fail/20-schema-wide-forms.sql:17', 'REVOKE', 'TABLES'),
+    inPublic('fail/20-schema-wide-forms.sql:18', 'REVOKE', 'ROUTINES'),
+    inPublic('fail/20-schema-wide-forms.sql:22', 'GRANT', 'TABLES'),
+    inPublic('fail/20-schema-wide-forms.sql:26', 'REVOKE', 'SEQUENCES'),
+    inPublic('fail/20-schema-wide-forms.sql:29', 'GRANT', 'TABLES'),
+  ],
+  'fail/21-default-privileges-forms.sql': [7, 8, 9, 10, 12, 13, 14, 15, 18].map((line) =>
+    defaultsGrant(`fail/21-default-privileges-forms.sql:${line}`),
+  ),
+  'fail/22-schema-wide-after-a-move.sql': [
+    'fail/22-schema-wide-after-a-move.sql:10: GRANT ... ON ALL TABLES IN SCHEMA d1_stash reaches every ' +
+      'table, view, materialized view and foreign table in d1_stash when it runs, and this file moves ' +
+      'objects between schemas or renames one (lines 9, 11, 13, 15), which can put public objects ' +
+      'there; grant on each object by name',
+    'fail/22-schema-wide-after-a-move.sql:14: REVOKE ... ON ALL SEQUENCES IN SCHEMA d1_public_renamed ' +
+      'reaches every sequence in d1_public_renamed when it runs, and this file moves objects between ' +
+      'schemas or renames one (lines 9, 11, 13, 15), which can put public objects there; revoke on ' +
+      'each object by name',
+  ],
 };
+
+/** The fixtures whose only defects are blanket statements. */
+const BLANKET_ONLY = [
+  'fail/16-grant-on-all-tables.sql',
+  'fail/17-revoke-on-all-sequences.sql',
+  'fail/18-grant-on-all-functions.sql',
+  'fail/19-alter-default-privileges-grant.sql',
+  'fail/20-schema-wide-forms.sql',
+  'fail/21-default-privileges-forms.sql',
+  'fail/22-schema-wide-after-a-move.sql',
+];
 
 const fixture = (name: string): string => readFileSync(path.join(FIXTURES_DIR, name), 'utf8');
 const fixturesIn = (group: string): string[] =>
@@ -385,6 +532,24 @@ describe('the scanner, on fixtures', () => {
       expect(reportLines(scanMigration(fixture(name), name))).toEqual(lines);
     },
   );
+
+  // The gap the 2026-10-24 security review found: a blanket statement used to
+  // be reported only in a file that had another finding.
+  it.each(BLANKET_ONLY)(
+    '%s: every object decided, so its blanket statements alone fail it',
+    (name) => {
+      const scan = scanMigration(fixture(name), name);
+      expect(scan.findings).toEqual([]);
+      expect(scan.blanket.length).toBeGreaterThan(0);
+      expect(reportLines(scan)).toEqual(scan.blanket.map(formatBlanket));
+    },
+  );
+
+  it('cannot read a blanket statement run from a string, which Postgres runs (NOT SEEN in the header)', () => {
+    const dynamic =
+      "do $$ begin execute 'grant select on all tables in schema public to anon'; end $$;";
+    expect(scanMigration(dynamic, 'dynamic.sql').blanket).toEqual([]);
+  });
 });
 
 describe("the names Postgres gives a serial column's sequence", () => {
@@ -446,6 +611,11 @@ describe('history (0001-0401), which the guard exempts', () => {
       'vw_warehouse_inbound',
     ]);
     expect(objects).toHaveLength(144);
+  });
+
+  it('holds no blanket statement: no schema-wide GRANT or REVOKE, no ALTER DEFAULT PRIVILEGES ... GRANT', () => {
+    const blanket = history.flatMap((file) => scanMigration(readMigration(file), file).blanket);
+    expect(blanket.map(formatBlanket)).toEqual([]);
   });
 
   it('would fail the rule 132 times in 145 creations: the rule has teeth on real SQL', () => {
