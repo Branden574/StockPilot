@@ -9,9 +9,9 @@ import { MfaPolicyEditor } from '@/components/settings/mfa-policy-editor';
 import { MfaRecoveryCodes } from '@/components/settings/mfa-recovery-codes';
 import { SettingsPage, SettingsPanel } from '@/components/settings/settings-nav';
 import { Button } from '@/components/ui/button';
-import { sessionIdFromJwt } from '@/lib/auth/api-context';
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
 import { requireOrgContext } from '@/lib/auth/session';
+import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
 import { createClient } from '@/lib/supabase/server';
 import { getMfaRecoveryCodeStatus } from '@/server/actions/mfa-recovery';
 import { withContext } from '@/server/services/context';
@@ -29,19 +29,23 @@ export default async function SecuritySettingsPage({
   const ctx = await requireOrgContext();
   const supabase = await createClient();
 
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  const currentSessionId = session?.access_token ? sessionIdFromJwt(session.access_token) : null;
+  // This device's session id and its assurance level both come from the
+  // access token once its signature checks out (lib/auth/verified-claims: a
+  // local ES256 check, no Auth round trip). They used to come from the cookie
+  // unchecked: getSession()'s token for the id, and
+  // getAuthenticatorAssuranceLevel(), which also read the cookie's stored user
+  // object (auth-js logs that as insecure on a server client). A token that
+  // does not verify marks no session as this one and is not AAL2.
+  const claims = await readVerifiedSessionClaims(supabase);
+  const currentSessionId = claims?.sessionId ?? null;
   const activeSessions = await new SessionsService(await withContext())
     .list(currentSessionId)
     .catch(() => []);
 
-  const [factorsRes, orgRow, recoveryStatus, aalRes] = await Promise.all([
+  const [factorsRes, orgRow, recoveryStatus] = await Promise.all([
     supabase.auth.mfa.listFactors(),
     supabase.from('organizations').select('mfa_policy').eq('id', ctx.organizationId).maybeSingle(),
     getMfaRecoveryCodeStatus(),
-    supabase.auth.mfa.getAuthenticatorAssuranceLevel(),
   ]);
 
   // Display only (every action on this page re-checks server-side), but an
@@ -69,14 +73,14 @@ export default async function SecuritySettingsPage({
   // (e.g. signed in before enrolling, or session loaded from a remember-me
   // cookie that didn't go through the MFA challenge), don't show the form
   // — show a step-up CTA pointing at /signin/mfa instead.
-  // With the factor list unreadable, "no verified factors" is not known, so
-  // the session's own assurance data decides (nextLevel is aal2 exactly when
-  // the user has a verified factor): an enrolled user at AAL1 must not be
-  // shown a form the action will refuse.
-  const hasVerifiedFactor = factorsUnreadable
-    ? aalRes.data?.nextLevel === 'aal2'
-    : verifiedFactors.length > 0;
-  const passwordChangeBlockedByMfa = hasVerifiedFactor && aalRes.data?.currentLevel !== 'aal2';
+  // With the factor list unreadable, "no verified factors" is not known, and
+  // an enrolled user at AAL1 must not be shown a form the action will refuse,
+  // so only a verified AAL2 session gets the form. (The session's own
+  // `nextLevel` used to decide here; it came from the cookie's stored user
+  // object, which nothing verifies. The action itself refuses while the list
+  // is unreadable either way.)
+  const hasVerifiedFactor = factorsUnreadable || verifiedFactors.length > 0;
+  const passwordChangeBlockedByMfa = hasVerifiedFactor && claims?.aal !== 'aal2';
 
   return (
     <SettingsPage>

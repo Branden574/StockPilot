@@ -45,21 +45,6 @@ export function aalFromJwt(token: string): 'aal1' | 'aal2' | null {
   }
 }
 
-/** Reads the `session_id` claim from a Supabase access token (already validated
- *  upstream). Used to identify the caller's CURRENT auth.sessions row. */
-export function sessionIdFromJwt(token: string): string | null {
-  try {
-    const part = token.split('.')[1];
-    if (!part) return null;
-    const payload = JSON.parse(Buffer.from(part, 'base64url').toString('utf8')) as {
-      session_id?: unknown;
-    };
-    return typeof payload.session_id === 'string' ? payload.session_id : null;
-  } catch {
-    return null;
-  }
-}
-
 async function resolveApiMfaState(
   supabase: any,
   organizationId: string,
@@ -139,6 +124,10 @@ async function mfaFromPolicy(
         // Bearer/API path: trust the verified token's own AAL claim.
         mfaSatisfied = bearerAal === 'aal2';
       } else {
+        // Cookie path: withApiContext() ran auth.getUser() on THIS client
+        // first, so the stored token decoded here is one the Auth server just
+        // accepted (the bearer path's rule), and auth-js does not log its
+        // insecure-user warning after a successful getUser().
         const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
         mfaSatisfied = data?.currentLevel === 'aal2';
       }

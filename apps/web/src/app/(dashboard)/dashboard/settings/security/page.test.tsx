@@ -40,9 +40,12 @@ vi.mock('@/lib/auth/session', () => ({
   requireOrgContext: vi.fn(async () => ({ organizationId: 'org-1', userId: 'u1', role: 'staff' })),
 }));
 vi.mock('@/server/services/context', () => ({ withContext: vi.fn(async () => ({})) }));
+/** The session id the page marks as "this device". */
+const listedWith = vi.fn();
 vi.mock('@/server/services/sessions', () => ({
   SessionsService: class {
-    async list() {
+    async list(currentSessionId: string | null) {
+      listedWith(currentSessionId);
       return [];
     }
   },
@@ -52,17 +55,41 @@ vi.mock('@/server/actions/mfa-recovery', () => ({
 }));
 
 let factorsAnswer: { data: unknown; error: unknown };
-let aalAnswer: { data: unknown; error: unknown } = {
-  data: { currentLevel: 'aal2', nextLevel: 'aal2' },
-  error: null,
-};
+/**
+ * The VERIFIED claims: what getClaims() returns once the access token's
+ * signature checks out. null = the token does not verify (forged or expired),
+ * and GoTrue refuses it too.
+ */
+let verifiedClaims: { sub: string; session_id: string; aal: 'aal1' | 'aal2' } | null;
+/**
+ * What the cookie CLAIMS, unverified. The page used to read these: the
+ * stored session's token (for the session id) and
+ * getAuthenticatorAssuranceLevel() (its decode, and the stored user object's
+ * factors as nextLevel). Each case sets them to disagree with the verified
+ * claims, so a page that reads them again fails here.
+ */
+let unverifiedAal: { data: unknown; error: unknown };
+const STORED_PAYLOAD = { sub: 'u1', session_id: 'sess-stored', aal: 'aal2' };
+const STORED_ACCESS = `h.${Buffer.from(JSON.stringify(STORED_PAYLOAD)).toString('base64url')}.s`;
 vi.mock('@/lib/supabase/server', () => ({
   createClient: async () => ({
     auth: {
-      getSession: async () => ({ data: { session: null } }),
+      getClaims: async () =>
+        verifiedClaims
+          ? { data: { claims: verifiedClaims }, error: null }
+          : {
+              data: null,
+              error: { name: 'AuthInvalidJwtError', message: 'Invalid JWT signature' },
+            },
+      getSession: async () => ({ data: { session: { access_token: STORED_ACCESS } }, error: null }),
+      // Only the fallback asks GoTrue about a token; it refuses an unverifiable one.
+      getUser: async () => ({
+        data: { user: null },
+        error: { name: 'AuthApiError', message: 'invalid JWT' },
+      }),
       mfa: {
         listFactors: async () => factorsAnswer,
-        getAuthenticatorAssuranceLevel: async () => aalAnswer,
+        getAuthenticatorAssuranceLevel: async () => unverifiedAal,
       },
     },
     from: () => {
@@ -82,7 +109,8 @@ async function renderPage(enroll?: string) {
 
 beforeEach(() => {
   factorsAnswer = { data: { all: [] }, error: null };
-  aalAnswer = { data: { currentLevel: 'aal2', nextLevel: 'aal2' }, error: null };
+  verifiedClaims = { sub: 'u1', session_id: 'sess-verified', aal: 'aal2' };
+  unverifiedAal = { data: { currentLevel: 'aal2', nextLevel: 'aal2' }, error: null };
 });
 
 describe('Security page: the authenticator card', () => {
@@ -100,15 +128,25 @@ describe('Security page: the authenticator card', () => {
 
   it('an unreadable list for an enrolled user at AAL1 offers the step-up, not the password form', async () => {
     factorsAnswer = { data: null, error: { message: 'upstream timeout', status: 503 } };
-    // The session's own assurance data: a verified factor exists (nextLevel aal2).
-    aalAnswer = { data: { currentLevel: 'aal1', nextLevel: 'aal2' }, error: null };
+    verifiedClaims = { sub: 'u1', session_id: 'sess-verified', aal: 'aal1' };
     await renderPage();
     expect(screen.getByText(/Verify it.s you first/)).toBeTruthy();
   });
 
-  it('an unreadable list for a user with no factor still shows the password form', async () => {
+  it('an unreadable list at AAL1 offers the step-up even when the stored user object lists no factor', async () => {
+    // Enrollment is unknown, and the cookie's stored user object (nextLevel
+    // aal1 here) is not evidence: nothing signs it. Only a verified AAL2
+    // session is shown the form; the action refuses while the list is
+    // unreadable either way.
     factorsAnswer = { data: null, error: { message: 'upstream timeout', status: 503 } };
-    aalAnswer = { data: { currentLevel: 'aal1', nextLevel: 'aal1' }, error: null };
+    verifiedClaims = { sub: 'u1', session_id: 'sess-verified', aal: 'aal1' };
+    unverifiedAal = { data: { currentLevel: 'aal1', nextLevel: 'aal1' }, error: null };
+    await renderPage();
+    expect(screen.getByText(/Verify it.s you first/)).toBeTruthy();
+  });
+
+  it('an unreadable list at a verified AAL2 session still shows the password form', async () => {
+    factorsAnswer = { data: null, error: { message: 'upstream timeout', status: 503 } };
     await renderPage();
     expect(screen.queryByText(/Verify it.s you first/)).toBeNull();
   });
@@ -141,5 +179,38 @@ describe('Security page: the authenticator card', () => {
     expect(screen.getByTestId('mfa-enrollment').textContent).toBe('enrolled:1');
     expect(screen.getByTestId('recovery-codes')).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+describe('Security page: what it reads from the session', () => {
+  const ENROLLED = {
+    data: { all: [{ id: 'f1', status: 'verified', friendly_name: 'Phone' }] },
+    error: null,
+  };
+
+  it('a verified AAL2 session with a verified factor gets the password form', async () => {
+    factorsAnswer = ENROLLED;
+    await renderPage();
+    expect(screen.queryByText(/Verify it.s you first/)).toBeNull();
+  });
+
+  it('a token that does not verify is not AAL2, whatever the cookie claims: the step-up, not the form', async () => {
+    factorsAnswer = ENROLLED;
+    verifiedClaims = null;
+    // The cookie's own decode says AAL2; the page used to believe it.
+    unverifiedAal = { data: { currentLevel: 'aal2', nextLevel: 'aal2' }, error: null };
+    await renderPage();
+    expect(screen.getByText(/Verify it.s you first/)).toBeTruthy();
+  });
+
+  it("marks this device by the VERIFIED session id, never the stored token's", async () => {
+    await renderPage();
+    expect(listedWith).toHaveBeenLastCalledWith('sess-verified');
+  });
+
+  it('a token that does not verify marks no session as this device', async () => {
+    verifiedClaims = null;
+    await renderPage();
+    expect(listedWith).toHaveBeenLastCalledWith(null);
   });
 });

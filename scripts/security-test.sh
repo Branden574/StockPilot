@@ -881,6 +881,23 @@ WEB_TESTS=(
   src/server/actions/mfa-recovery.test.ts
   src/server/services/platform/sessions.test.ts
   src/server/services/team.remove-member-sessions.test.ts
+  # Server session reads are verified (2026-10): the AAL2 gates (dashboard
+  # layout, withContext, assertCurrentAal2, recovery-code minting, the
+  # platform console and its fresh step-up) and the current session id ("sign
+  # out other devices", change password, the Security page) come from the
+  # access token's claims once its signature checks out
+  # (lib/auth/verified-claims), never from the auth cookie as stored. The
+  # suites run the real server client and auth-js against generated ES256
+  # keys: a forged, re-signed, unsigned or expired token is refused. The guard
+  # lists every server-side getSession() and no-argument
+  # getAuthenticatorAssuranceLevel() call that remains, with why it is safe.
+  src/lib/auth/verified-claims.test.ts
+  src/lib/auth/server-session-reads.guard.test.ts
+  src/lib/auth/platform-admin.gates.test.ts
+  src/server/services/context.verified-aal.test.ts
+  src/server/actions/sessions.test.ts
+  src/server/actions/mfa-recovery.generate.test.ts
+  'src/app/(dashboard)/layout.aal.test.tsx'
 
   # Output safety and information leakage.
   src/server/services/service-error.test.ts
