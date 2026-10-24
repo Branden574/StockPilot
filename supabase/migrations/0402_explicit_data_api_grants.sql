@@ -1,10 +1,11 @@
 -- 0402_explicit_data_api_grants.sql
 --
--- GRANTS ONLY. Restates, object by object, every privilege the Data API roles
--- (anon, authenticated, service_role) held in production on 2026-10-24 on
--- each public table, view and sequence, table-level and column-level, so the
--- migrations stop relying on Supabase's default privileges for them. No
--- REVOKE, no DDL, no data change.
+-- GRANTS ONLY, after one statement that caps how long they may wait for a
+-- lock (LOCKS below). Restates, object by object, every privilege the Data
+-- API roles (anon, authenticated, service_role) held in production on
+-- 2026-10-24 on each public table, view and sequence, table-level and
+-- column-level, so the migrations stop relying on Supabase's default
+-- privileges for them. No REVOKE, no DDL, no data change.
 --
 -- ── WHY (Supabase changelog 45329, "Breaking Change: Tables not exposed to
 --    Data and GraphQL API automatically", published 2026-04-28) ─────────────
@@ -26,6 +27,9 @@
 -- 2026-05-30), and a local or CI stack once the CLI turns them on: the pinned
 -- CLI 2.117.0 already has [api] auto_expose_new_tables, whose `false` revokes
 -- the same defaults plus EXECUTE on functions from the same three roles.
+-- supabase/config.toml sets it to true (CLI 2.117.0 treats unset the same),
+-- so the local stack and CI keep the old defaults until the chain below builds
+-- without them.
 -- Measured (migration scratch stack, the two statements run before 0001,
 -- then 0001-0401): 1237 of production's 2852 table-level privileges were
 -- missing, on 132 of the 145 relations; 74 of the 136 tables had no SELECT,
@@ -68,9 +72,11 @@
 -- stock_movements, and 0398's post-check requires service_role to hold
 -- INSERT, UPDATE or DELETE on returns and return_lines; only the old defaults
 -- gave those (the proof wrapped the two files in a scratch-only shim that
--- granted them for the file and revoked them after). Until that is fixed, a
--- fresh database needs the old defaults to build: do not bump the CLI or
--- turn auto_expose_new_tables off.
+-- granted them for the file and revoked them after). Until that is fixed (a
+-- 0000 migration that replays the old defaults on an empty database, plus a
+-- later one that adopts the new defaults: the follow-up named in PR #376), a
+-- fresh database needs the old defaults to build: keep config.toml's
+-- auto_expose_new_tables = true and do not bump the CLI.
 -- Functions are not restated here: the platform change leaves their
 -- defaults alone. The CLI's auto_expose_new_tables = false does revoke them,
 -- and then service_role lacks EXECUTE on 116 functions whose grant came only
@@ -82,17 +88,39 @@
 -- production's ACLs, the file changed no relacl and no attacl.
 --
 -- ── LOCKS ─────────────────────────────────────────────────────────────────
--- None on any table: a GRANT on activity_logs finished in 9 ms while another
+-- No table lock: a GRANT on activity_logs finished in 9 ms while another
 -- session held ACCESS EXCLUSIVE on it, and after the whole file in one
--- transaction the session held no relation lock. Each GRANT rewrites the
+-- transaction the session held no relation lock. But each GRANT rewrites the
 -- relation's pg_class row (pg_attribute rows for a column grant) even when it
--- changes nothing, so other sessions reload that relation's cache entry once.
+-- changes nothing, so other sessions reload that relation's cache entry once,
+-- and the GRANT waits for any open transaction with an uncommitted change to
+-- the same row: a GRANT, REVOKE or other DDL on that relation in another
+-- session, or another migration. If that transaction commits, this file
+-- fails with "tuple concurrently updated". While it waits it holds the rows it
+-- already rewrote, so VACUUM, ANALYZE and DDL on those relations wait behind
+-- it (and reads of a table wait behind such DDL). CLI 2.117.0 sets no
+-- lock_timeout for a migration (only for creating its history table), and it
+-- sends the whole file and its history row as one batch, which the server
+-- runs to the end even if the CLI is killed. So the statement below caps every
+-- lock wait in this file's transaction at 4 seconds: a longer wait fails the
+-- file, the whole batch rolls back with nothing applied (history row
+-- included), and the push can be run again once the other session has ended.
+-- Measured on a copy of production's schema, the file sent as the CLI sends
+-- it (2026-10-24): while another session held an uncommitted GRANT on
+-- locations, the file without the cap waited until that session ended (and
+-- failed with "tuple concurrently updated" when it committed); with the cap
+-- it failed after 4.1 s and changed nothing; with no other session it applied
+-- in under 0.1 s, printed no warning, and left lock_timeout at its default
+-- once the batch ended.
 --
 -- ── ORDER ─────────────────────────────────────────────────────────────────
 -- Push this before any later migration that revokes a privilege restated
 -- here: applied after one, it would grant that privilege back. Every
--- migration from 0403 on that creates a public table, view or sequence grants
--- it explicitly in the same file.
+-- migration from 0403 on that creates a public table, view or sequence names
+-- each of its privileges for the three roles in the same file
+-- (apps/web/src/test/migration-grants.guard.test.ts).
+
+select set_config('lock_timeout', '4s', true);
 
 -- BEGIN GENERATED: scripts/gen-explicit-grants-sql.mjs from a census (scripts/explicit-grants/census.sql). Do not edit by hand.
 -- 145 relations in public (1 sequence, 136 tables, 8 views).
