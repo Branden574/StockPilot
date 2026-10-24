@@ -12,7 +12,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
   eventInputFromInstant,
-  eventInstantFromInput,
+  eventInstantsFromInputs,
   nextHalfHourInput,
 } from '@/lib/schedule/event-wall-clock';
 import { formatOrgDateTime } from '@/lib/timezone';
@@ -94,7 +94,10 @@ interface Props {
  * a calendar date saved an event the calendar drew on the day before or
  * after, and Edit opened on a time the event's page did not print. A time
  * that never happens there (the spring-forward hour) is refused with a field
- * error; new Date() moved it an hour unseen.
+ * error; new Date() moved it an hour unseen. A field left as it opened saves
+ * the stored instant, so an event in the hour the clocks go back (a wall
+ * clock that happens twice) is not moved by an unchanged save
+ * (eventInstantsFromInputs).
  */
 
 /** Clamp datetime-local input to a sane civilian range. */
@@ -170,6 +173,9 @@ export function ScheduleEventForm({
   const [startError, setStartError] = React.useState<string | null>(null);
   const [endError, setEndError] = React.useState<string | null>(null);
   const bundleLocked = Boolean(defaults?.bundleAlreadyDistributed);
+  // The event as Edit opened it: a field still showing it saves it as stored.
+  const storedStart = defaults?.startsAt ?? null;
+  const storedEnd = defaults?.endsAt ?? null;
 
   // Overlap warning: any other non-cancelled/non-completed event in the
   // same warehouse whose [start, end] window intersects ours triggers
@@ -179,11 +185,15 @@ export function ScheduleEventForm({
   // running parallel jobs at the same dock).
   const conflicts = React.useMemo(() => {
     if (!warehouseId || !startsAtLocal) return [] as ConflictCandidate[];
-    // The fields are the organization's wall clock, as the save reads them.
-    const myStartIso = eventInstantFromInput(startsAtLocal, zone);
+    // The fields are the organization's wall clock, read as the save reads them.
+    const mine = eventInstantsFromInputs({ startsAt: startsAtLocal, endsAt: endsAtLocal }, zone, {
+      startsAt: storedStart,
+      endsAt: storedEnd,
+    });
+    const myStartIso = mine.startsAt;
     const myStart = myStartIso ? Date.parse(myStartIso) : Number.NaN;
     if (!Number.isFinite(myStart)) return [];
-    const myEndIso = endsAtLocal ? eventInstantFromInput(endsAtLocal, zone) : myStartIso;
+    const myEndIso = endsAtLocal ? mine.endsAt : myStartIso;
     const myEnd = myEndIso ? Date.parse(myEndIso) : Number.NaN;
     if (!Number.isFinite(myEnd) || myEnd < myStart) return [];
     return conflictCandidates.filter((c) => {
@@ -196,7 +206,7 @@ export function ScheduleEventForm({
       // ends exactly when the other starts → no real overlap).
       return cStart < myEnd && myStart < cEnd;
     });
-  }, [conflictCandidates, warehouseId, startsAtLocal, endsAtLocal, zone]);
+  }, [conflictCandidates, warehouseId, startsAtLocal, endsAtLocal, zone, storedStart, storedEnd]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -206,9 +216,13 @@ export function ScheduleEventForm({
       return;
     }
     // Read in the organization's zone, strictly: a time the clocks skip there
-    // is said under its field, and nothing is saved.
-    const startsAtIso = eventInstantFromInput(startsAtLocal, zone);
-    const endsAtIso = endsAtLocal ? eventInstantFromInput(endsAtLocal, zone) : null;
+    // is said under its field, and nothing is saved. A field left as it
+    // opened sends the stored instant.
+    const { startsAt: startsAtIso, endsAt: endsAtIso } = eventInstantsFromInputs(
+      { startsAt: startsAtLocal, endsAt: endsAtLocal },
+      zone,
+      { startsAt: storedStart, endsAt: storedEnd },
+    );
     const nextStartError = startsAtIso
       ? null
       : startsAtLocal
