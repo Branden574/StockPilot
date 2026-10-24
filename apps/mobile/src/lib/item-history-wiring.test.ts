@@ -146,10 +146,10 @@ describe('the staging row opens it', () => {
 
 /**
  * Slice 3 review (2026-10-24): Staging read the organization's zone, and the
- * warehouse names beside it, only when it opened, and refresh() read neither.
- * One failed first read (offline) kept the History sheet in core's default
- * zone, and the rows on truncated warehouse ids, until the screen was opened
- * again. Both are now read again on every refresh, through createNewestRead
+ * warehouse names beside it, only when it opened or the workspace changed,
+ * and refresh() read neither. One failed first read (offline) kept the
+ * History sheet in core's default zone, and the rows on truncated warehouse
+ * ids, even after a refresh. Both are now read again on every refresh, through createNewestRead
  * (tested in newest-read.test.ts), so a late answer for the previous
  * workspace never replaces the current one's.
  */

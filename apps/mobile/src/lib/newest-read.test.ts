@@ -8,7 +8,7 @@ import { createNewestRead } from './newest-read';
  * zone once per screen and never again, so one failed first read (offline)
  * kept its MOVEMENTS and ACTIVITY cards in core's default zone for the
  * screen's whole life, even after a pull-to-refresh; Staging read it only when
- * it opened. Nor did the item screen drop a late answer, so a workspace switch
+ * it opened or the workspace changed. Nor did the item screen drop a late answer, so a workspace switch
  * while its read was out could put the previous workspace's zone in place of
  * the current one's. Both screens now read through createNewestRead, and read
  * again on a refresh.

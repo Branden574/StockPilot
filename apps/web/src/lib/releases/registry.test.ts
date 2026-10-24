@@ -12646,11 +12646,13 @@ describe('the small fixes release (slice 3)', () => {
     }
   });
 
-  it("carries the plan's three lines, and nothing else", () => {
+  it("carries the plan's three lines and the review's two phone fixes, and nothing else", () => {
     expect(release().entries.map((e) => [e.id, e.category, e.area])).toEqual([
       ['put-staged-stock-back-on-site', 'improved', 'Inventory'],
       ['app-order-status-names', 'fixed', 'Orders'],
       ['movement-times-org-time-zone', 'improved', 'Inventory'],
+      ['app-staging-refresh-warehouse-names', 'fixed', 'Mobile app'],
+      ['app-home-workspace-switch', 'fixed', 'Mobile app'],
     ]);
   });
 
@@ -12669,7 +12671,12 @@ describe('the small fixes release (slice 3)', () => {
     // Movements page.
     expect(ids('viewer', ['items:read'], [])).toContain('movement-times-org-time-zone');
     expect(ids('viewer', ['activity_logs:read'], [])).toContain('movement-times-org-time-zone');
-    expect(ids('viewer', [], [])).toEqual([]);
+    // Staging's refresh: whoever can open Staging (items:read, Inventory).
+    expect(ids('viewer', ['items:read'], ['inventory'])).toContain('app-staging-refresh-warehouse-names');
+    expect(ids('viewer', ['items:read'], [])).not.toContain('app-staging-refresh-warehouse-names');
+    expect(ids('viewer', ['activity_logs:read'], ['inventory'])).not.toContain('app-staging-refresh-warehouse-names');
+    // The home screen is every member's.
+    expect(ids('viewer', [], [])).toEqual(['app-home-workspace-switch']);
   });
 
   it('links Placing to the Staging page, which the audience can open', () => {
@@ -12686,6 +12693,35 @@ describe('the small fixes release (slice 3)', () => {
   it('never says "book" for the recorded quantity, and no exclamation or claim it cannot stand behind', () => {
     const text = JSON.stringify(release()).toLowerCase();
     expect(text).not.toMatch(/\bbook\b/);
+  });
+
+  // Slice 3 review (2026-10-24): the two phone fixes found beside the zone
+  // re-read say only what the code does.
+  it("says what Staging's refresh and the home screen's newest load do, as the code does it", () => {
+    const staging = entry('app-staging-refresh-warehouse-names');
+    expect(staging.whatChanged).toContain(
+      "pulling down to refresh Staging also reads the warehouse names and your organization's time zone again",
+    );
+    expect(staging.whyItMatters).toContain("the start of its warehouse's id in place of the warehouse's name");
+    const stagingScreen = read('../../../../mobile/app/(drawer)/staging.tsx');
+    expect(stagingScreen).toContain('<RefreshControl refreshing={refreshing} onRefresh={refresh}');
+    expect(stagingScreen).toContain('await Promise.all([load(), orgId ? displayFacts.read(orgId) : null]);');
+    expect(stagingScreen).toContain('readOrgTimeZone(supabase, forOrg)');
+    expect(stagingScreen).toContain('if (facts.names) setWarehouseNames(facts.names);');
+    // What a row shows without the name: the start of the warehouse's id.
+    expect(read('../../../../mobile/src/lib/staging-worklist.ts')).toContain('return `${warehouseId.slice(0, 8)}…`;');
+    expect(staging.audience).toEqual({ anyPermission: ['items:read'], modules: ['inventory'] });
+
+    const home = entry('app-home-workspace-switch');
+    expect(home.whatChanged).toContain("no longer lets the previous organization's figures and recent movements replace the new organization's");
+    expect(home.audience).toBeUndefined();
+    const homeScreen = read('../../../../mobile/app/(drawer)/(tabs)/index.tsx');
+    expect(homeScreen).toContain('const seq = ++seqRef.current;');
+    expect(homeScreen.split('if (seq !== seqRef.current) return;')).toHaveLength(4);
+    expect(homeScreen).toContain('onRefresh={onRefresh}');
+    // Neither entry has a link: the screens are the mobile app's.
+    expect(staging.link).toBeUndefined();
+    expect(home.link).toBeUndefined();
   });
 
   // L121: the words the lists show, and the label the code keeps.

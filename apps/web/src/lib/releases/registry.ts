@@ -52,6 +52,13 @@ export const RELEASES: Release[] = [
     // by the Site's name, which is what skipping the label stamp guarantees;
     // a book's crate and rack summary still follows its stock, as on every
     // placement, after the confirmation it already asks.
+    //
+    // The last two entries are phone fixes from the slice 3 review
+    // (2026-10-24), found beside the zone re-read it asked for: a refresh of
+    // Staging now reads the warehouse names again (only the start of each
+    // warehouse's id showed after a failed first read, stagingWarehouseLabel),
+    // told to the people who can open Staging (items:read, Inventory); and the
+    // home screen keeps only its newest load, told to every member.
     status: 'draft',
     title: 'Staged stock back on a Site, your status names in the app, and movement times in your time zone',
     summary:
@@ -102,6 +109,34 @@ export const RELEASES: Release[] = [
         whatToDo:
           'No action needed. In the mobile app, close the app completely and open it again to load the latest update.',
         audience: { anyPermission: ['items:read', 'activity_logs:read'] },
+      },
+      {
+        id: 'app-staging-refresh-warehouse-names',
+        category: 'fixed',
+        area: 'Mobile app',
+        title: 'Refreshing Staging in the mobile app brings back the warehouse names',
+        whatChanged:
+          "In the mobile app, after the latest update, pulling down to refresh Staging also reads the warehouse names and your organization's time zone again.",
+        whyItMatters:
+          "If the warehouse names could not be read when Staging opened, for example without a connection, each row showed the start of its warehouse's id in place of the warehouse's name, even after a refresh.",
+        howItAffectsYou: 'Once the connection is back, a refresh shows the warehouse names.',
+        whatToDo:
+          'No action needed. In the mobile app, close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['items:read'], modules: ['inventory'] },
+      },
+      {
+        id: 'app-home-workspace-switch',
+        category: 'fixed',
+        area: 'Mobile app',
+        title: 'The home screen in the mobile app stays on the organization you switched to',
+        whatChanged:
+          "In the mobile app, after the latest update, switching organizations while the home screen is still loading no longer lets the previous organization's figures and recent movements replace the new organization's.",
+        whyItMatters:
+          'The home screen showed whichever load answered last, so a slow load for the organization you had left could put its figures back on the screen until the next refresh.',
+        howItAffectsYou:
+          'Once the home screen has loaded after a switch, its figures and recent movements are those of the organization you are in.',
+        whatToDo:
+          'No action needed. In the mobile app, close the app completely and open it again to load the latest update.',
       },
     ],
   },

@@ -187,10 +187,10 @@ export default function StagingScreen() {
   const [knownZone, setKnownZone] = React.useState<KnownOrgZone | null>(null);
   const orgTimeZone = knownZoneFor(knownZone, orgId);
   // Both are read when the screen opens or the workspace changes, and again
-  // on every refresh: they were read only on opening, so one failed first read
+  // on every refresh: refresh() read neither, so one failed first read
   // (offline) kept the default zone, and truncated warehouse ids for names,
-  // until the screen was opened again (slice 3 review, 2026-10-24). A failed
-  // read keeps what is shown. Only the newest read's answer lands
+  // even after a refresh (slice 3 review, 2026-10-24). A failed read keeps
+  // what is shown. Only the newest read's answer lands
   // (createNewestRead), so a late answer for the previous workspace never
   // replaces the current one's.
   const [displayFacts] = React.useState(() =>
