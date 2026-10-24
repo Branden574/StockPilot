@@ -1244,7 +1244,9 @@ WEB_TESTS=(
 
   # The Security Scan's dependency audit (scripts/dependency-audit): a
   # critical advisory in a production dependency fails the job unless the
-  # allow-list dismisses it by advisory id and package until its review date;
+  # allow-list dismisses it by advisory id and package until its review date,
+  # and only as it was reviewed (at or below the severity the entry records,
+  # and for an untilPatched entry only while no patched version is listed);
   # unreadable audit output or a malformed allow-list entry fails it closed;
   # registry text cannot form a runner command; the job holds no secret, no
   # expression and no install. The file carries the "Security invariant"

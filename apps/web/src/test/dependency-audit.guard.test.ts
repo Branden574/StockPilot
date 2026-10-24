@@ -13,6 +13,9 @@
  *   - a critical advisory fails the job unless allow-list.json dismisses it
  *     by its advisory id AND package, with a reason and a review date that
  *     has not passed; high ones are reported and never fail it;
+ *   - an entry dismisses only what was reviewed: an advisory at or below the
+ *     severity the entry records (one re-scored higher fails the job), and,
+ *     for an `untilPatched` entry, only while no patched version is listed;
  *   - it fails closed: an audit the registry did not answer, unreadable
  *     output, or an allow-list entry missing any field fails the job with
  *     the reason (exit 2) instead of passing with nothing checked;
@@ -48,6 +51,8 @@ interface Advisory {
 interface AllowEntry {
   advisory: string;
   package: string;
+  severity: string;
+  untilPatched: boolean;
   reason: string;
   reviewBy: string;
   alert: string | null;
@@ -57,6 +62,8 @@ interface Row extends Advisory {
   entry: AllowEntry | null;
   dismissed: boolean;
   expired: boolean;
+  rescored: boolean;
+  fixListed: boolean;
 }
 
 interface Result {
@@ -68,6 +75,8 @@ interface Result {
 }
 
 interface ReportLib {
+  SEVERITIES: readonly string[];
+  NO_PATCHED_VERSION: string;
   AuditInputError: new (message: string) => Error;
   oneLine: (value: unknown, max?: number) => string;
   parseAudit: (text: string) => Advisory[];
@@ -128,6 +137,7 @@ function allowJson(...entries: Array<Record<string, unknown>>): string {
 const ENTRY = {
   advisory: 'GHSA-2222-3333-4444',
   package: 'left-pad',
+  severity: 'critical',
   reason: 'No fixed release exists and the package runs only at build time.',
   reviewBy: '2026-12-31',
 };
@@ -218,24 +228,27 @@ describe('parseAudit reads the pnpm report', () => {
 // -- parseAllowlist ----------------------------------------------------------
 
 describe('the allow-list', () => {
-  it('the committed allow-list parses, and every entry names an advisory, a package, a reason and a review date', () => {
+  it('the committed allow-list parses, and every entry names an advisory, a package, a severity, a reason and a review date', () => {
     const entries = lib.parseAllowlist(readFileSync(path.join(ROOT, ALLOW_LIST), 'utf8'));
     expect(entries.length).toBeGreaterThan(0);
     for (const e of entries) {
       expect(e.advisory).toMatch(/^GHSA(-[23456789cfghjmpqrvwx]{4}){3}$/);
       expect(e.package.length).toBeGreaterThan(0);
+      expect(lib.SEVERITIES).toContain(e.severity);
       expect(e.reason.length).toBeGreaterThanOrEqual(20);
       expect(e.reviewBy).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     }
-    // Dependabot #112: node-forge has no patched release.
-    expect(entries.map((e) => `${e.package} ${e.advisory}`)).toContain(
-      'node-forge GHSA-86w9-cpqp-85rv',
+    // Dependabot #112: node-forge has no patched release. Reviewed at high,
+    // and its reason holds only while no fixed version exists.
+    const forge = entries.find(
+      (e) => `${e.package} ${e.advisory}` === 'node-forge GHSA-86w9-cpqp-85rv',
     );
+    expect(forge).toMatchObject({ severity: 'high', untilPatched: true });
   });
 
   // Mutation caught: a lenient parser that skips a malformed entry or
   // matches by package alone, so a typo could dismiss a real advisory.
-  it('an entry missing its advisory id, package, reason or review date is refused, never skipped', () => {
+  it('an entry missing its advisory id, package, severity, reason or review date is refused, never skipped', () => {
     const broken: Array<[Record<string, unknown>, RegExp]> = [
       [{ ...ENTRY, advisory: undefined }, /no GitHub advisory id/],
       [{ ...ENTRY, advisory: 'GHSA-2222-3333-444' }, /no GitHub advisory id/],
@@ -244,6 +257,11 @@ describe('the allow-list', () => {
       [{ ...ENTRY, advisory: 'GHSA-2222-3333-4444 ' }, /no GitHub advisory id/],
       [{ ...ENTRY, package: '' }, /names no package/],
       [{ ...ENTRY, package: undefined }, /names no package/],
+      [{ ...ENTRY, severity: undefined }, /gives no severity/],
+      [{ ...ENTRY, severity: 'Critical' }, /gives no severity/],
+      [{ ...ENTRY, severity: 'urgent' }, /gives no severity/],
+      [{ ...ENTRY, untilPatched: 'yes' }, /untilPatched that is not true or false/],
+      [{ ...ENTRY, untilPatched: 1 }, /untilPatched that is not true or false/],
       [{ ...ENTRY, reason: 'no fix' }, /gives no reason/],
       [{ ...ENTRY, reason: undefined }, /gives no reason/],
       [{ ...ENTRY, reviewBy: undefined }, /no review date/],
@@ -337,6 +355,91 @@ describe('the verdict', () => {
     expect(lib.evaluate(critical(), otherAdvisory, TODAY).passed).toBe(false);
   });
 
+  // Mutation caught: matching an entry by advisory id and package alone, so
+  // an entry reviewed at high dismissed the advisory once it was re-scored
+  // critical, which nobody reviewed.
+  it('an entry dismisses only at or below the severity it was reviewed at', () => {
+    const atHigh = lib.parseAllowlist(allowJson({ ...ENTRY, severity: 'high' }));
+    const rescored = lib.evaluate(critical(), atHigh, TODAY);
+    expect(rescored.passed).toBe(false);
+    expect(rescored.failing.map((r) => r.id)).toEqual(['GHSA-2222-3333-4444']);
+    expect(rescored.rows[0]).toMatchObject({ dismissed: false, rescored: true, expired: false });
+    expect(lib.renderReport(rescored)).toContain(
+      'allow-list entry covers high and the advisory is now critical: review it',
+    );
+    // At or below: a critical entry still covers the advisory reported high.
+    const high = lib.parseAudit(auditJson(raw({ id: 1, severity: 'high' })));
+    expect(lib.evaluate(high, atHigh, TODAY).rows[0]).toMatchObject({ dismissed: true });
+    expect(lib.evaluate(high, lib.parseAllowlist(allowJson(ENTRY)), TODAY).rows[0]).toMatchObject({
+      dismissed: true,
+    });
+  });
+
+  it('the committed node-forge entry does not dismiss its advisory re-scored critical', () => {
+    const committed = lib.parseAllowlist(readFileSync(path.join(ROOT, ALLOW_LIST), 'utf8'));
+    const forge = (severity: string) =>
+      lib.parseAudit(
+        auditJson(
+          raw({
+            id: 1,
+            module_name: 'node-forge',
+            severity,
+            github_advisory_id: 'GHSA-86w9-cpqp-85rv',
+            vulnerable_versions: '<=1.4.0',
+            patched_versions: '<0.0.0',
+          }),
+        ),
+      );
+    expect(lib.evaluate(forge('high'), committed, TODAY).rows[0]).toMatchObject({
+      dismissed: true,
+    });
+    const rescored = lib.evaluate(forge('critical'), committed, TODAY);
+    expect(rescored.passed).toBe(false);
+    expect(rescored.failing.map((r) => `${r.package} ${r.id}`)).toEqual([
+      'node-forge GHSA-86w9-cpqp-85rv',
+    ]);
+  });
+
+  // Mutation caught: an entry whose reason is "no fixed version exists" that
+  // kept dismissing after a fix was published.
+  it('an untilPatched entry lapses once the advisory lists a patched version', () => {
+    const untilPatched = lib.parseAllowlist(allowJson({ ...ENTRY, untilPatched: true }));
+    const withPatched = (patched: unknown) =>
+      lib.evaluate(
+        lib.parseAudit(auditJson(raw({ id: 1, patched_versions: patched }))),
+        untilPatched,
+        TODAY,
+      );
+    expect(withPatched(lib.NO_PATCHED_VERSION).rows[0]).toMatchObject({
+      dismissed: true,
+      fixListed: false,
+    });
+    const fixed = withPatched('>=1.3.0');
+    expect(fixed.passed).toBe(false);
+    expect(fixed.rows[0]).toMatchObject({ dismissed: false, fixListed: true });
+    expect(lib.renderReport(fixed)).toContain(
+      'allow-list entry holds only while no fixed version exists, and the advisory now lists >=1.3.0: review it',
+    );
+    // Not stated is not "no fix": it fails closed.
+    expect(withPatched(undefined).passed).toBe(false);
+    // Without the flag, an entry dismisses whether or not a fix is listed.
+    expect(lib.evaluate(critical(), lib.parseAllowlist(allowJson(ENTRY)), TODAY).passed).toBe(true);
+  });
+
+  it('every reason an entry no longer applies is named', () => {
+    const entry = lib.parseAllowlist(allowJson({ ...ENTRY, severity: 'high', untilPatched: true }));
+    const result = lib.evaluate(critical(), entry, '2027-01-01');
+    expect(result.rows[0]).toMatchObject({
+      dismissed: false,
+      rescored: true,
+      fixListed: true,
+      expired: true,
+    });
+    expect(lib.renderReport(result)).toContain(
+      'allow-list entry covers high and the advisory is now critical; allow-list entry holds only while no fixed version exists, and the advisory now lists >=1.3.0; allow-list review date 2026-12-31 has passed: review it',
+    );
+  });
+
   it('an entry that matches no advisory any more is reported for removal', () => {
     const result = lib.evaluate([], lib.parseAllowlist(allowJson(ENTRY)), TODAY);
     expect(result.passed).toBe(true);
@@ -371,6 +474,15 @@ describe('main decides the job', () => {
     });
     expect(dismissed.code).toBe(0);
     expect(dismissed.printed).toContain('Every critical advisory is dismissed on the allow-list.');
+
+    const rescored = run({
+      'audit.json': auditJson(raw({ id: 1 })),
+      'allow.json': allowJson({ ...ENTRY, severity: 'high' }),
+    });
+    expect(rescored.code).toBe(1);
+    expect(rescored.printed).toContain(
+      'Result: FAILED. 1 critical advisory is not dismissed: left-pad GHSA-2222-3333-4444.',
+    );
   });
 
   // Mutation caught: exiting 0 when an input could not be read.
@@ -388,6 +500,10 @@ describe('main decides the job', () => {
       [
         { 'audit.json': auditJson(), 'allow.json': allowJson({ ...ENTRY, reason: '' }) },
         /gives no reason/,
+      ],
+      [
+        { 'audit.json': auditJson(), 'allow.json': allowJson({ ...ENTRY, severity: undefined }) },
+        /gives no severity/,
       ],
       [{ 'allow.json': allowJson() }, /could not read the input \(ENOENT\)/],
       [{ 'audit.json': auditJson() }, /could not read the input \(ENOENT\)/],

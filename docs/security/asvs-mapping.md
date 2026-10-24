@@ -232,9 +232,12 @@ version-scoped `pnpm.overrides`. `--frozen-lockfile` in CI. A dependency audit
 in the Security Scan (job "Dependency audit": `pnpm audit --prod` read by
 `scripts/dependency-audit/report.mjs`) on every push and pull request to main,
 weekly and by hand: it fails on a critical advisory in a production dependency
-unless `scripts/dependency-audit/allow-list.json` dismisses it with a reason and
-a review date, reports high ones, and fails closed when the registry does not
-answer. The job holds no secret and installs nothing. It is not a required
+unless `scripts/dependency-audit/allow-list.json` dismisses it with the severity
+it was reviewed at, a reason and a review date, reports high ones, and fails
+closed when the registry does not answer. An entry dismisses only what was
+reviewed: an advisory re-scored above the entry's severity fails the job again,
+and an entry whose reason is that no fixed version exists lapses once the
+advisory lists one. The job holds no secret and installs nothing. It is not a required
 check, so a new advisory against an unchanged dependency does not block a merge.
 
 _Gap, and it is the top open supply-chain item_: **pnpm 9.12.3 executes package

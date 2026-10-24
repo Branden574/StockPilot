@@ -1,11 +1,12 @@
 {
-  "_about": "Advisories the weekly dependency audit (scripts/dependency-audit/report.mjs) treats as dismissed. Only a critical advisory fails the job, and only until its reviewBy date: after that date the entry dismisses nothing until someone reviews it again. Each entry needs the GitHub advisory id, the package, a reason and a review date (YYYY-MM-DD). Remove an entry when the audit stops reporting it.",
+  "_about": "Advisories the weekly dependency audit (scripts/dependency-audit/report.mjs) treats as dismissed. Only a critical advisory fails the job. Each entry needs the GitHub advisory id, the package, the severity it was reviewed at, a reason and a review date (YYYY-MM-DD). An entry dismisses the advisory only as it was reviewed: at or below that severity (a re-scored advisory fails the job again), only until the review date, and, with \"untilPatched\": true (the reason is that no fixed version exists), only while the advisory lists no patched version. Remove an entry when the audit stops reporting it.",
   "dismissed": [
     {
       "advisory": "GHSA-86w9-cpqp-85rv",
       "package": "node-forge",
       "alert": "Dependabot #112",
       "severity": "high",
+      "untilPatched": true,
       "reason": "No fixed version exists: every node-forge release up to 1.4.0 is affected and none is patched. It is reached only through Expo's command-line tools in apps/mobile (expo > @expo/cli and @expo/code-signing-certificates), which run on a developer machine or the EAS build server; it is not in the phone app's bundle or on the web server.",
       "dismissedOn": "2026-10-24",
       "reviewBy": "2027-01-24"

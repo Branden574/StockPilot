@@ -16,6 +16,11 @@
  *   - the job FAILS on a critical advisory unless allow-list.json dismisses
  *     it with a reason and a review date that has not passed; high and lower
  *     never fail the job, they are reported;
+ *   - an entry dismisses the advisory only as it was reviewed: at or below
+ *     the severity the entry records, so a high advisory re-scored critical
+ *     fails the job until someone reviews it again, and, for an entry marked
+ *     `untilPatched` (its reason is that no fixed version exists), only while
+ *     the advisory still lists no patched version;
  *   - it fails CLOSED: an audit that did not answer (registry down, an error
  *     object, unreadable JSON) or an allow-list that does not parse fails the
  *     job with the reason, never passes it with nothing checked.
@@ -48,6 +53,9 @@ const REPORTED = new Set(['high', 'critical']);
 
 const GHSA_ID = /^GHSA(-[23456789cfghjmpqrvwx]{4}){3}$/;
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** The patched range the registry gives an advisory with no fixed version. */
+export const NO_PATCHED_VERSION = '<0.0.0';
 
 export class AuditInputError extends Error {}
 
@@ -131,10 +139,13 @@ export function parseAudit(text) {
 }
 
 /**
- * The allow-list: `{ "dismissed": [ { advisory, package, reason, reviewBy, ... } ] }`.
- * Every entry names one GitHub advisory id and its package, says why in a
- * sentence, and carries a review date (YYYY-MM-DD). An entry missing any of
- * them is an AuditInputError, so a typo can never dismiss anything.
+ * The allow-list: `{ "dismissed": [ { advisory, package, severity, reason, reviewBy, ... } ] }`.
+ * Every entry names one GitHub advisory id and its package, the severity it
+ * was reviewed at (the highest it dismisses), says why in a sentence, and
+ * carries a review date (YYYY-MM-DD). `untilPatched: true` says the reason is
+ * that no fixed version exists. An entry missing any of them, or with a value
+ * of the wrong kind, is an AuditInputError, so a typo can never dismiss
+ * anything.
  */
 export function parseAllowlist(text) {
   let data;
@@ -156,6 +167,16 @@ export function parseAllowlist(text) {
     if (typeof entry.package !== 'string' || entry.package.trim() === '') {
       throw new AuditInputError(`${where} (${entry.advisory}) names no package.`);
     }
+    if (typeof entry.severity !== 'string' || !SEVERITIES.includes(entry.severity)) {
+      throw new AuditInputError(
+        `${where} (${entry.advisory}) gives no severity (the highest it dismisses: ${SEVERITIES.join(', ')}).`,
+      );
+    }
+    if (entry.untilPatched !== undefined && typeof entry.untilPatched !== 'boolean') {
+      throw new AuditInputError(
+        `${where} (${entry.advisory}) has an untilPatched that is not true or false.`,
+      );
+    }
     if (typeof entry.reason !== 'string' || entry.reason.trim().length < 20) {
       throw new AuditInputError(`${where} (${entry.advisory}) gives no reason.`);
     }
@@ -169,6 +190,8 @@ export function parseAllowlist(text) {
     return {
       advisory: entry.advisory,
       package: entry.package.trim(),
+      severity: entry.severity,
+      untilPatched: entry.untilPatched === true,
       reason: entry.reason.trim(),
       reviewBy: entry.reviewBy,
       alert: typeof entry.alert === 'string' ? entry.alert : null,
@@ -178,8 +201,11 @@ export function parseAllowlist(text) {
 
 /**
  * Decide the job. `today` is YYYY-MM-DD (UTC). An entry dismisses an advisory
- * when its advisory id and package both match and its review date is today
- * or later; after that date it dismisses nothing until someone reviews it.
+ * when its advisory id and package both match, the advisory is still at or
+ * below the severity the entry records, its review date is today or later,
+ * and, for an `untilPatched` entry, the advisory still lists no patched
+ * version. Otherwise it dismisses nothing until someone reviews it: a
+ * re-scored advisory or a new fix is a change nobody has reviewed.
  */
 export function evaluate(advisories, allowlist, today) {
   const rows = advisories
@@ -187,7 +213,14 @@ export function evaluate(advisories, allowlist, today) {
     .map((a) => {
       const entry = allowlist.find((e) => e.advisory === a.id && e.package === a.package) ?? null;
       const expired = entry !== null && entry.reviewBy < today;
-      return { ...a, entry, dismissed: entry !== null && !expired, expired };
+      const rescored =
+        entry !== null && SEVERITIES.indexOf(a.severity) > SEVERITIES.indexOf(entry.severity);
+      const fixListed =
+        entry !== null &&
+        entry.untilPatched &&
+        (typeof a.patched !== 'string' || a.patched.trim() !== NO_PATCHED_VERSION);
+      const dismissed = entry !== null && !expired && !rescored && !fixListed;
+      return { ...a, entry, dismissed, expired, rescored, fixListed };
     })
     .sort(
       (x, y) =>
@@ -213,7 +246,21 @@ function statusOf(row) {
   if (row.dismissed) {
     return `dismissed until ${row.entry.reviewBy}${row.entry.alert ? ` (${row.entry.alert})` : ''}: ${row.entry.reason}`;
   }
-  if (row.expired) return `allow-list review date ${row.entry.reviewBy} has passed: review it`;
+  if (row.entry) {
+    const why = [];
+    if (row.rescored) {
+      why.push(
+        `allow-list entry covers ${row.entry.severity} and the advisory is now ${row.severity}`,
+      );
+    }
+    if (row.fixListed) {
+      why.push(
+        `allow-list entry holds only while no fixed version exists, and the advisory now lists ${oneLine(row.patched, 60) || 'no patched range'}`,
+      );
+    }
+    if (row.expired) why.push(`allow-list review date ${row.entry.reviewBy} has passed`);
+    return `${why.join('; ')}: review it`;
+  }
   return row.severity === 'critical' ? 'FAILS the scan' : 'reported';
 }
 
@@ -235,7 +282,7 @@ export function renderReport(result) {
     lines.push(
       `Result: FAILED. ${failing.length} critical ${failing.length === 1 ? 'advisory is' : 'advisories are'} not dismissed: ` +
         failing.map((r) => `${cell(r.package, 60)} ${cell(r.id, 40)}`).join(', ') +
-        '. Upgrade the package (a pnpm override for a transitive one), or dismiss it in scripts/dependency-audit/allow-list.json with a reason and a review date.',
+        '. Upgrade the package (a pnpm override for a transitive one), or dismiss it in scripts/dependency-audit/allow-list.json with its severity, a reason and a review date.',
     );
   }
   lines.push('');
