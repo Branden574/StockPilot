@@ -129,6 +129,18 @@ interface Props {
 /** The count tables' edge cells pad 18 (DESIGN-SPEC 6.9). */
 const EDGE = 'first:pl-[18px] last:pr-[18px]';
 
+/** A count-line column shown from sm up; below sm its value is in the Item cell. */
+const FOLDED = 'hidden sm:table-cell';
+
+/** What Expected means, for the Expected column's help (and the Counted column's below sm). */
+const EXPECTED_HELP = (
+  <p>
+    The system quantity when the line was counted (the quantity at session start until then).
+    Variance is counted minus expected, and posting applies that variance on top of the current
+    stock — stock that moved after a line was counted is kept, never counted twice.
+  </p>
+);
+
 /** The line filters, in the order they always had. */
 const LINE_FILTERS: Array<{ id: CycleCountLineFilter; label: string }> = [
   { id: 'all', label: 'All' },
@@ -513,26 +525,32 @@ export function CycleCountDetail({
               />
             </div>
 
-            <Table scrollLabelledBy={titleId} className="min-w-[600px]">
+            {/* From sm up the line is six columns, at least 600 px. Below sm the
+                SKU, Expected and Variance columns fold into the Item cell
+                (FOLDED), so a phone shows the item, its count box and Clear
+                count side by side: at 390 px the six columns needed 600 to 647
+                px, and the count box started past the screen's edge. */}
+            <Table scrollLabelledBy={titleId} className="sm:min-w-[600px]">
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
                   <TableHead className={EDGE}>Item</TableHead>
-                  <TableHead>SKU</TableHead>
-                  <TableHead className="text-right">
+                  <TableHead className={FOLDED}>SKU</TableHead>
+                  <TableHead className={cn(FOLDED, 'text-right')}>
                     <span className="inline-flex items-center gap-1.5">
                       Expected
-                      <HelpTip label="the Expected quantity">
-                        <p>
-                          The system quantity when the line was counted (the quantity at session
-                          start until then). Variance is counted minus expected, and posting applies
-                          that variance on top of the current stock — stock that moved after a line
-                          was counted is kept, never counted twice.
-                        </p>
-                      </HelpTip>
+                      <HelpTip label="the Expected quantity">{EXPECTED_HELP}</HelpTip>
                     </span>
                   </TableHead>
-                  <TableHead className="text-right">Counted</TableHead>
-                  <TableHead className="text-right">Variance</TableHead>
+                  <TableHead className="text-right">
+                    <span className="inline-flex items-center gap-1.5">
+                      Counted
+                      {/* The Expected column's help, here while that column is folded. */}
+                      <span className="inline-flex sm:hidden">
+                        <HelpTip label="the Expected quantity">{EXPECTED_HELP}</HelpTip>
+                      </span>
+                    </span>
+                  </TableHead>
+                  <TableHead className={cn(FOLDED, 'text-right')}>Variance</TableHead>
                   <TableHead className={cn(EDGE, 'w-12')} />
                 </TableRow>
               </TableHeader>
@@ -783,11 +801,35 @@ function CountRow({
   // A count queued offline and synced later was measured against the book at
   // the moment it was taken (0369). Whoever reviews and posts sees when.
   const capturedText = line.counted_quantity != null ? offlineCaptureLabel(line, timeZone) : null;
+  const skuText = line.item?.sku ?? '—';
+  const expectedText = formatNumber(line.expected_quantity);
+  const varianceText =
+    variance == null
+      ? '—'
+      : variance === 0
+        ? '0'
+        : `${variance > 0 ? '+' : ''}${formatNumber(variance)}`;
+  const varianceTone =
+    variance == null
+      ? 'text-muted-foreground'
+      : variance > 0
+        ? 'text-success'
+        : variance < 0
+          ? 'text-destructive'
+          : 'text-muted-foreground';
 
   return (
     <TableRow>
-      <TableCell className={cn(EDGE, 'min-w-[160px] max-w-[320px]')}>
+      {/* 112 px wide at least below sm, so a 320 px phone shows the item, its
+          box and Clear count side by side; 160 from sm up, as before. A
+          13-digit barcode keeps its one line, so a line with one and with
+          Clear count is 5 px wider than a 320 px card, its controls whole. */}
+      <TableCell className={cn(EDGE, 'min-w-28 max-w-[320px] sm:min-w-[160px]')}>
         <div className="font-medium [overflow-wrap:anywhere]">{line.item?.name ?? 'Unknown'}</div>
+        {/* The SKU column's value, here below sm where that column is folded. */}
+        <div className="text-ink-2 font-mono text-[12px] [overflow-wrap:anywhere] sm:hidden">
+          {skuText}
+        </div>
         {/* WHICH VARIANT this row is. Six sizes of one shoe otherwise differ
             only by SKU, and a counter matching hex strings to shoeboxes puts
             the 10s in the 10.5 row. Renders nothing for an ungrouped item, so
@@ -803,12 +845,26 @@ function CountRow({
         {capturedText && (
           <div className="text-muted-foreground truncate text-[12px]">{capturedText}</div>
         )}
+        {/* The Expected and Variance columns' values, here below sm. The
+            variance follows the box as it is typed, as its column does. */}
+        <div
+          className="text-muted-foreground mt-0.5 text-[12px] tabular-nums sm:hidden"
+          data-testid="count-line-folded-numbers"
+        >
+          Expected <span className="font-mono">{expectedText}</span> · Variance{' '}
+          <span className={cn('font-mono', varianceTone)}>{varianceText}</span>
+        </div>
       </TableCell>
-      <TableCell className="text-ink-2 whitespace-nowrap font-mono text-[12.5px]">
-        {line.item?.sku ?? '—'}
+      <TableCell className={cn(FOLDED, 'text-ink-2 whitespace-nowrap font-mono text-[12.5px]')}>
+        {skuText}
       </TableCell>
-      <TableCell className="text-muted-foreground text-right font-mono text-[13.5px] tabular-nums">
-        {formatNumber(line.expected_quantity)}
+      <TableCell
+        className={cn(
+          FOLDED,
+          'text-muted-foreground text-right font-mono text-[13.5px] tabular-nums',
+        )}
+      >
+        {expectedText}
       </TableCell>
       <TableCell className="text-right">
         {readOnly ? (
@@ -855,22 +911,9 @@ function CountRow({
         )}
       </TableCell>
       <TableCell
-        className={cn(
-          'text-right font-mono text-[13.5px] tabular-nums',
-          variance == null
-            ? 'text-muted-foreground'
-            : variance > 0
-              ? 'text-success'
-              : variance < 0
-                ? 'text-destructive'
-                : 'text-muted-foreground',
-        )}
+        className={cn(FOLDED, 'text-right font-mono text-[13.5px] tabular-nums', varianceTone)}
       >
-        {variance == null
-          ? '—'
-          : variance === 0
-            ? '0'
-            : `${variance > 0 ? '+' : ''}${formatNumber(variance)}`}
+        {varianceText}
       </TableCell>
       <TableCell className={cn(EDGE, 'w-12')}>
         {!disabled && line.counted_quantity != null && (

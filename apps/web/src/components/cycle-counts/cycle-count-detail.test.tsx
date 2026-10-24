@@ -491,3 +491,103 @@ describe('CycleCountDetail: Review & post', () => {
     expect(toast.error).toHaveBeenCalledWith(message);
   });
 });
+
+/**
+ * THE COUNT ON A PHONE (R4). The redesign drew the line as six columns at
+ * least 600 px wide, so at 390 px a one-item search put the count box past the
+ * screen's edge (about a 111 px sideways swipe, where before it needed none).
+ * Without the floor the six columns still needed 600 to 647 px of their own,
+ * so below sm the SKU, Expected and Variance columns fold into the Item cell:
+ * the item, its box and Clear count show whole on the screen, and from sm up
+ * the line is the six columns as before. happy-dom lays nothing out; the lab
+ * measured 320 to 1280 px in Chromium and WebKit. These pin the classes and
+ * the words.
+ */
+describe('CycleCountDetail: the count on a phone', () => {
+  const FOLDED = ['hidden', 'sm:table-cell'];
+
+  // Mutation caught: the 600 px floor at every width.
+  it('keeps the 600 px floor from sm up only', () => {
+    render(<CycleCountDetail {...baseProps} canAdjust role="staff" />);
+    const table = screen.getByRole('table');
+    expect(table).toHaveClass('sm:min-w-[600px]');
+    expect(table).not.toHaveClass('min-w-[600px]');
+  });
+
+  // Mutation caught: a column left out of the fold (its cell stays at every
+  // width), or Item, Counted or Clear count folded away.
+  it('folds SKU, Expected and Variance below sm and keeps Item, Counted and Clear count', () => {
+    render(<CycleCountDetail {...baseProps} canAdjust role="staff" />);
+    const table = screen.getByRole('table');
+    const heads = within(table).getAllByRole('columnheader');
+    expect(heads.map((h) => h.textContent)).toEqual([
+      'Item',
+      'SKU',
+      'Expected',
+      'Counted',
+      'Variance',
+      '',
+    ]);
+    const cells = Array.from(screen.getByText('Widget').closest('tr')!.querySelectorAll('td'));
+    for (const i of [1, 2, 4]) {
+      expect(heads[i]).toHaveClass(...FOLDED);
+      expect(cells[i]).toHaveClass(...FOLDED);
+    }
+    for (const i of [0, 3, 5]) {
+      expect(heads[i]).not.toHaveClass('hidden');
+      expect(cells[i]).not.toHaveClass('hidden');
+    }
+    // The Item column takes 112 px at least below sm (a 320 px phone shows the
+    // item, its box and Clear count side by side) and 160 from sm up, as before.
+    expect(cells[0]).toHaveClass('min-w-28', 'sm:min-w-[160px]');
+  });
+
+  // Mutation caught: the folded line left out, shown from sm up as well, or
+  // not following the box as it is typed.
+  it('shows the SKU, Expected and Variance under the name below sm, the variance following the box', () => {
+    render(<CycleCountDetail {...baseProps} canAdjust role="staff" />);
+    // Widget: SKU W-1, expected 5, counted 4.
+    const item = screen.getByText('Widget').closest('td')!;
+    expect(within(item).getByText('W-1')).toHaveClass('sm:hidden', 'font-mono');
+    const folded = within(item).getByTestId('count-line-folded-numbers');
+    expect(folded).toHaveClass('sm:hidden');
+    expect(folded).toHaveTextContent('Expected 5 · Variance -1');
+    expect(within(folded).getByText('-1')).toHaveClass('text-destructive');
+
+    const row = item.closest('tr')!;
+    fireEvent.change(within(row).getByPlaceholderText('—'), { target: { value: '7' } });
+    expect(folded).toHaveTextContent('Expected 5 · Variance +2');
+    expect(within(folded).getByText('+2')).toHaveClass('text-success');
+    // The Variance column says the same.
+    expect(row.querySelector('td:nth-child(5)')).toHaveTextContent('+2');
+
+    // An uncounted line reads "Variance —", as its column does.
+    const gadget = screen.getByText('Gadget').closest('td')!;
+    expect(within(gadget).getByTestId('count-line-folded-numbers')).toHaveTextContent(
+      'Expected 2 · Variance —',
+    );
+  });
+
+  // Mutation caught: the Expected help folded away with its column on a phone.
+  it('keeps the Expected help reachable on a phone, beside Counted', () => {
+    render(<CycleCountDetail {...baseProps} canAdjust role="staff" />);
+    const heads = within(screen.getByRole('table')).getAllByRole('columnheader');
+    const tips = screen.getAllByRole('button', { name: 'What is the Expected quantity?' });
+    expect(tips).toHaveLength(2);
+    // From sm up, in the Expected column's header; below sm, beside Counted.
+    expect(heads[2]).toContainElement(tips[0]!);
+    expect(heads[3]).toContainElement(tips[1]!);
+    expect(tips[1]!.parentElement).toHaveClass('sm:hidden');
+  });
+
+  // A read-only reader (no stock:adjust) gets the same fold, with the counted
+  // quantity as text.
+  it('folds the same way for a read-only reader', () => {
+    render(<CycleCountDetail {...baseProps} canAdjust={false} />);
+    const item = screen.getByText('Widget').closest('td')!;
+    expect(within(item).getByTestId('count-line-folded-numbers')).toHaveTextContent(
+      'Expected 5 · Variance -1',
+    );
+    expect(screen.queryByPlaceholderText('—')).not.toBeInTheDocument();
+  });
+});
