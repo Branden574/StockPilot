@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { csvFilename, toCsv } from '@/lib/csv';
+import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { reportError } from '@/lib/error-reporter';
 import {
@@ -13,7 +14,7 @@ import { getActiveWarehouseFilterFor } from '@/lib/warehouse-filter';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { MovementsService } from '@/server/services/movements';
 
-import { can } from '@stockpilot/core';
+import { can, resolveOrgTimezone } from '@stockpilot/core';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -62,14 +63,24 @@ export async function GET(request: Request) {
     const params = new URL(request.url).searchParams;
     const search = params.get('q') ?? undefined;
     const type = parseMovementTypeParam(params.get('type'));
-    const since = parseFromDateParam(params.get('from'));
-    const until = parseToDateParam(params.get('to'));
-    // Same warehouse-filter cookie the page reads — resolved server-side so
-    // the export can't be pointed at a warehouse the caller doesn't have via
-    // a forged query param. MUST be the ctx-accepting variant: the zero-arg
-    // getActiveWarehouseFilter() resolves auth via requireOrgContext(), which
-    // throws NEXT_REDIRECT in route handlers (this 500'd in prod, 2026-07-15).
-    const warehouseId = (await getActiveWarehouseFilterFor(ctx)) ?? undefined;
+    const [warehouseFilter, timeZone] = await Promise.all([
+      // Same warehouse-filter cookie the page reads — resolved server-side so
+      // the export can't be pointed at a warehouse the caller doesn't have via
+      // a forged query param. MUST be the ctx-accepting variant: the zero-arg
+      // getActiveWarehouseFilter() resolves auth via requireOrgContext(), which
+      // throws NEXT_REDIRECT in route handlers (this 500'd in prod, 2026-07-15).
+      getActiveWarehouseFilterFor(ctx),
+      // The org's zone (one row by primary key, ctx's own organization). A
+      // failed read never fails the export: core's documented default zone.
+      getCachedOrgTimezone(ctx.organizationId).catch(() => resolveOrgTimezone(null)),
+    ]);
+    const warehouseId = warehouseFilter ?? undefined;
+    // FROM AND TO CUT DAYS AT THE ORGANIZATION'S MIDNIGHT (slice 3 review F4;
+    // SP-079), as the Movements page now does, so a day exported is the day
+    // the screen shows. They cut at UTC midnight, which left out a movement
+    // the page prints as 6:30 PM on the To day.
+    const since = parseFromDateParam(params.get('from'), timeZone);
+    const until = parseToDateParam(params.get('to'), timeZone);
 
     const { rows, total } = await new MovementsService(ctx).exportRows({
       warehouseId,

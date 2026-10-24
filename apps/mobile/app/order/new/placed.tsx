@@ -71,6 +71,7 @@ import { orderStatusPill } from '@/lib/orders-list';
 import { nativeOutlookAvailable, type OutlookPlatform } from '@/lib/outlook-transport';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
+import { useOrderStatusMeta } from '@/lib/use-workspace';
 
 /**
  * ORDER REQUEST SUBMITTED (phone ordering PO-4): reached with router.replace
@@ -92,6 +93,8 @@ import { useTheme } from '@/lib/use-theme';
 export default function OrderPlaced() {
   useStorefrontScope();
   const snap = useStorefront();
+  // The organization's own status words (L83b), as the Orders list shows them.
+  const statusMeta = useOrderStatusMeta();
   const session = storefrontSession();
   const router = useRouter();
   const { c } = useTheme();
@@ -232,9 +235,10 @@ export default function OrderPlaced() {
             {successReference(placed, warehouseName)}
           </Mono>
           {/* The status on its tone's pill (the Orders list's own rule,
-              orders-list.ts orderStatusPill), in the same upper-case words. */}
-          <Pill status={orderStatusPill(order.status).status}>
-            {orderStatusLabel(order.status).toUpperCase()}
+              orders-list.ts orderStatusPill), in the same upper-case words,
+              in the organization's own words and colours (L83b). */}
+          <Pill status={orderStatusPill(order.status, null, statusMeta).status}>
+            {orderStatusLabel(order.status, statusMeta).toUpperCase()}
           </Pill>
           {successSentences(placed).map((line) => (
             <Body key={line} size={14.5} color={c.ink}>

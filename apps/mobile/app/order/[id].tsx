@@ -261,7 +261,7 @@ import { getOrderShipment, type OrderShipment } from '@/lib/shipping-api';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { UploadBatchProgress, uploadFileToBucket } from '@/lib/storage-upload';
 import { supabase } from '@/lib/supabase';
-import { useWorkspace } from '@/lib/use-workspace';
+import { useOrderStatusMeta, useWorkspace } from '@/lib/use-workspace';
 import { capTo, FONT, TYPE_CEILING } from '@/lib/theme';
 import { MIN_TAP } from '@/components/item-verification-card';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
@@ -478,6 +478,8 @@ export default function OrderDetail() {
   };
 
   const { activeOrgId: orgId, activeRole: role } = useWorkspace();
+  // The organization's own status words for the header (L83b).
+  const statusMeta = useOrderStatusMeta();
   const [loadedOrder, setOrder] = React.useState<OrderHeader | null>(null);
   // Why the order did not load. The header or the lines read FAILED, which is
   // not "Order not found." and not an order with no items: an empty lines list
@@ -2584,7 +2586,9 @@ export default function OrderDetail() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />}
         >
           <View style={{ paddingTop: 1 }}>
-            <Eyebrow>{orderHeaderEyebrow(order.orderNumber, order.status, order.fulfillmentType)}</Eyebrow>
+            <Eyebrow>
+              {orderHeaderEyebrow(order.orderNumber, order.status, order.fulfillmentType, statusMeta)}
+            </Eyebrow>
             <Display size={30} style={{ marginTop: 10 }}>
               {order.requester ?? 'Order'}
             </Display>

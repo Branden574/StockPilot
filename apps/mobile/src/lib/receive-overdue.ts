@@ -30,26 +30,6 @@ export function receiveOverdueCount(
   return overdue;
 }
 
-/** The organization zone the screen last read, and whose it is. */
-export interface KnownOrgZone {
-  orgId: string;
-  zone: string | null;
-}
-
-/**
- * The zone to keep after a read for `orgId` answered `read`. readOrgTimeZone
- * never throws: a refused or failed read answers null, as an unset zone does.
- * A null from a refresh must not replace a zone already read for the same
- * organization (a Sydney organization would otherwise fall back to the
- * default zone's day until the next good read); a different organization
- * starts from what its own read answered.
- */
-export function nextKnownOrgZone(
-  prev: KnownOrgZone | null,
-  orgId: string,
-  read: string | null,
-): KnownOrgZone {
-  if (read !== null) return { orgId, zone: read };
-  if (prev !== null && prev.orgId === orgId) return prev;
-  return { orgId, zone: null };
-}
+// The zone the screen keeps between reads lives in known-org-zone.ts now that
+// other screens keep theirs the same way (L7); re-exported for this screen.
+export { nextKnownOrgZone, type KnownOrgZone } from './known-org-zone';

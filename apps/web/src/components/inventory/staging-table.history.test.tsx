@@ -140,3 +140,55 @@ describe('StagingTable history entry point', () => {
     expect(await screen.findByText('Movement history')).toBeInTheDocument();
   });
 });
+
+// L7 (owner decision Q1): the history a staging row opens prints each
+// movement's time in the ORGANIZATION's zone, which the page hands the table.
+// 17:56 UTC on 22 July is 02:56 on 23 July in Tokyo, a zone no runner sits in.
+describe('StagingTable history: times in the organization zone (L7)', () => {
+  it('hands its zone to the history dialog', async () => {
+    fetchMock.mockImplementation(async (url: unknown) => ({
+      ok: true,
+      json: async () =>
+        String(url).includes('/history')
+          ? {
+              itemId: 'item-a',
+              itemName: 'Science Dimensions Earth & Space Science',
+              itemSku: 'SP-0WK2L-LY1',
+              rows: [
+                {
+                  id: 'mv-1',
+                  at: '2026-07-22T17:56:00.525Z',
+                  movementType: 'add',
+                  quantityChange: 10,
+                  movedQuantity: null,
+                  previousQuantity: 0,
+                  newQuantity: 10,
+                  actorName: 'Andrew Rosas',
+                  actorEmail: null,
+                  fromLocationName: null,
+                  toLocationName: 'Staging',
+                  note: null,
+                  receiptNumber: null,
+                  receiptStatus: null,
+                  poNumber: null,
+                  poStatus: null,
+                  reversalReason: null,
+                  reversal: null,
+                },
+              ],
+              total: 1,
+              limit: 50,
+              offset: 0,
+              hasMore: false,
+            }
+          : { items: [] },
+    }));
+    const user = userEvent.setup();
+    renderTable({ timeZone: 'Asia/Tokyo' });
+    await user.click(
+      screen.getByRole('button', { name: 'View history for Science Dimensions Earth & Space Science' }),
+    );
+    expect(await screen.findByText(/Jul 23, 2026, 2:56 AM/)).toBeInTheDocument();
+    expect(screen.queryAllByText(/Jul 22, 2026/)).toHaveLength(0);
+  });
+});

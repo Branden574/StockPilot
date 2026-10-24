@@ -33,6 +33,11 @@ vi.mock('@/lib/auth/session', () => ({
   })),
 }));
 vi.mock('@/lib/warehouse-filter', () => ({ getActiveWarehouseFilter: vi.fn(async () => null) }));
+// The page reads the organization's zone for its times and its From and To
+// days (L7); page.org-zone.test.tsx covers what it does with it.
+vi.mock('@/lib/dashboard/request-cache', () => ({
+  getOrgRowForRequest: vi.fn(async () => ({ timezone: 'America/Los_Angeles' })),
+}));
 vi.mock('@/server/services/movements', () => ({
   MovementsService: {
     forCurrentUser: vi.fn(async () => ({

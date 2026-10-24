@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ORDER_REPLAY_COPY,
   prepareDeliveryRequest,
+  resolveOrderStatusConfig,
   type OrderCreateRequestInput,
   type OrderSummary,
   type StorefrontItem,
@@ -92,6 +93,11 @@ describe('what the success screen says', () => {
     expect(orderStatusLabel('pending_approval')).toBe('Pending');
     expect(orderStatusLabel('staged_for_delivery')).toBe('Ready');
     expect(orderStatusLabel('mystery_state')).toBe('mystery state');
+    // L83b: the organization's own words when it renamed the status.
+    const renamed = resolveOrderStatusConfig({ pending_approval: { label: 'Waiting for sign-off' } });
+    expect(orderStatusLabel('pending_approval', renamed)).toBe('Waiting for sign-off');
+    expect(orderStatusLabel('staged_for_delivery', renamed)).toBe('Ready');
+    expect(orderStatusLabel('mystery_state', renamed)).toBe('mystery state');
     expect(successSentences(placed())).toEqual(["Sent for approval. You'll be notified in the app when it's approved."]);
   });
 

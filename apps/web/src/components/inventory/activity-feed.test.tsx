@@ -11,8 +11,18 @@ vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('@/server/actions/movements', () => ({
   editMovementNoteAction: vi.fn(async () => ({ ok: true as const, data: { note: null } })),
 }));
+// The panel's "Load older" action; never called by these tests.
+vi.mock('@/server/actions/activity', () => ({
+  loadOlderItemActivityAction: vi.fn(),
+}));
+
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+import { formatMovementWhen } from '@stockpilot/core';
 
 import { ActivityFeed } from './activity-feed';
+import { ItemActivityPanel } from './item-activity-panel';
 
 import type { ActivityEvent } from '@/server/services/activity';
 
@@ -517,23 +527,75 @@ describe('ActivityFeed', () => {
     expect(screen.queryByText('(jane@example.com)')).not.toBeInTheDocument();
   });
 
-  it('renders the exact absolute local date+time VISIBLY next to the relative time (owner ask 2026-07-15 — was hover-only)', () => {
+  it('renders the exact absolute date+time VISIBLY next to the relative time (owner ask 2026-07-15 — was hover-only), in the organization zone', () => {
     const iso = new Date(Date.now() - 5 * 60_000).toISOString();
     const events = [
       makeEvent({ id: 'a15', kind: 'audit', type: 'inventory.item.updated', createdAt: iso }),
     ];
-    const { container } = render(<ActivityFeed events={events} />);
+    const { container } = render(<ActivityFeed events={events} timeZone="Asia/Tokyo" />);
     const timeEl = container.querySelector('time');
     expect(timeEl).not.toBeNull();
     expect(timeEl!.getAttribute('dateTime')).toBe(iso);
-    const absolute = new Date(iso).toLocaleString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    });
-    expect(container.textContent).toContain(absolute);
+    expect(container.textContent).toContain(` · ${formatMovementWhen(iso, 'Asia/Tokyo')}`);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// L7 (owner decision Q1), slice 3 review F2: the item page's Movements and
+// Activity tabs print EVERY row's date and time in the organization's zone,
+// like the Movements page, the count cards and orders. They printed the
+// viewer's zone (<LocalDateTime>), so near midnight a movement showed one day
+// here and another on the Movements page. Audit rows move too, so one list
+// never mixes two zones.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('ActivityFeed — dates in the organization zone (L7)', () => {
+  // 01:30 UTC on 11 Oct: 6:30 PM on 10 Oct in Los Angeles, 10:30 AM on 11 Oct
+  // in Tokyo. Neither is the test machine's zone by accident: Tokyo is never.
+  const ISO = '2026-10-11T01:30:00.000Z';
+  const rows = [
+    makeEvent({ id: 'm:1', kind: 'movement', type: 'adjustment', delta: 2, createdAt: ISO }),
+    makeEvent({ id: 'a:1', kind: 'audit', type: 'inventory.item.updated', createdAt: ISO }),
+  ];
+
+  it('prints every row, movement and audit alike, in the zone it is given', () => {
+    const { container } = render(<ActivityFeed events={rows} timeZone="Asia/Tokyo" />);
+    const text = container.textContent ?? '';
+    expect(text.split('Oct 11, 2026, 10:30 AM')).toHaveLength(3);
+    expect(text).not.toContain('Oct 10');
+  });
+
+  it('a movement near midnight shows the organization day, not the viewer day', () => {
+    const { container } = render(<ActivityFeed events={rows} timeZone="America/Los_Angeles" />);
+    const text = container.textContent ?? '';
+    expect(text.split('Oct 10, 2026, 6:30 PM')).toHaveLength(3);
+    expect(text).not.toContain('Oct 11');
+  });
+
+  it('no zone (the read failed) prints in core\'s documented default zone, never the viewer\'s', () => {
+    const { container } = render(<ActivityFeed events={rows} />);
+    expect(container.textContent).toContain(formatMovementWhen(ISO, null)!);
+    expect(formatMovementWhen(ISO, null)).toBe('Oct 10, 2026, 6:30 PM');
+  });
+
+  it('the item page panel hands its zone to the feed', () => {
+    const { container } = render(
+      <ItemActivityPanel
+        itemId="item-1"
+        initialEvents={rows}
+        initialLocationNames={{}}
+        initialCursor={null}
+        initialExhausted
+        timeZone="Asia/Tokyo"
+      />,
+    );
+    expect(container.textContent).toContain('Oct 11, 2026, 10:30 AM');
+  });
+
+  it('the feed no longer renders the viewer-zone component', () => {
+    const src = readFileSync(resolve(__dirname, 'activity-feed.tsx'), 'utf8');
+    expect(src).not.toMatch(/<LocalDateTime\s|from '@\/components\/ui\/local-datetime'/);
+    expect(src).toContain('formatMovementWhen(e.createdAt, timeZone)');
   });
 });
 

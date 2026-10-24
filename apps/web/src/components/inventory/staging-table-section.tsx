@@ -1,5 +1,6 @@
 import {
   describeStagingItemFilter,
+  resolveOrgTimezone,
   STAGING_FILTER_EMPTY_COPY,
   stagingFilterInvalidCopy,
   stagingRowsForOrderWarehouse,
@@ -8,11 +9,14 @@ import {
 
 import { StagingTable } from '@/components/inventory/staging-table';
 import { IntentLink } from '@/components/ui/intent-link';
+import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
+import { reportError } from '@/lib/error-reporter';
 import {
   toDestinationOption,
   type DestinationLocationRow,
   type DestinationOption,
 } from '@/lib/locations/destination-option';
+import { isSiteLocation } from '@/lib/locations/groups';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
@@ -27,9 +31,9 @@ type OrderLink = Awaited<ReturnType<OrderRequestsService['orderLinkLabel']>>;
 
 /**
  * The Staging page's data and table: an async Server Component that streams
- * behind the page's <Suspense>. Fetches the staged worklist and the rack/crate
- * locations (grouped by warehouse_id), then passes serializable props to the
- * 'use client' <StagingTable>.
+ * behind the page's <Suspense>. Fetches the staged worklist and the Place
+ * destinations (racks, crates and Sites, grouped by warehouse_id), then passes
+ * serializable props to the 'use client' <StagingTable>.
  *
  * PUT AWAY FROM AN ORDER (F2-3). `filter` is the page's `?item=` (repeatable)
  * and `?order=`, parsed by core parseStagingItemFilter. With a usable filter
@@ -64,11 +68,14 @@ export async function StagingTableSection({
   filter,
   canPlace,
   canMintDestination,
+  organizationId,
 }: {
   itemType: 'book' | 'non-book' | undefined;
   filter: StagingFilterParse;
   canPlace: boolean;
   canMintDestination: boolean;
+  /** The page's org, for the zone the movement history prints in (L7). */
+  organizationId: string;
 }) {
   const itemFilter = filter.state === 'ok' ? filter.filter : null;
   const orderId = itemFilter?.orderId ?? null;
@@ -82,7 +89,7 @@ export async function StagingTableSection({
     itemFilter ? Promise.resolve<string | null>(null) : getActiveWarehouseFilter(),
   ]);
 
-  const [worklist, allLocations, warehouses, orderLink] = await Promise.all([
+  const [worklist, allLocations, warehouses, orderLink, orgRow] = await Promise.all([
     inventorySvc.stagedWorklist(
       itemFilter
         ? { itemType, itemIds: itemFilter.itemIds }
@@ -95,7 +102,20 @@ export async function StagingTableSection({
           .then((svc) => svc.orderLinkLabel(orderId))
           .catch((): OrderLink => ({ state: 'failed' }))
       : Promise.resolve<OrderLink | null>(null),
+    // The org's zone for the rows' movement history (L7: the organization's
+    // zone, like counts and orders). Request-cached; a failed read never fails
+    // the page, prints in core's documented default zone and is reported, as
+    // the calendar's is.
+    getOrgRowForRequest(organizationId).catch((e: unknown) => {
+      void reportError(e, {
+        tag: 'staging.history.org_timezone_failed',
+        level: 'warning',
+        organizationId,
+      });
+      return null;
+    }),
   ]);
+  const timeZone = resolveOrgTimezone(orgRow?.timezone);
 
   // The order's warehouse, when the order was read: the rows its pick can use.
   const narrowed =
@@ -112,8 +132,23 @@ export async function StagingTableSection({
     warehouseNames[w.id] = w.name;
   }
 
-  // Build a map of warehouseId → rack/crate destinations for that warehouse.
-  // The PlaceFromStagingDialog only needs rack and crate kinds.
+  // Build a map of warehouseId → Place destinations for that warehouse: its
+  // racks and crates, and its SITE(s).
+  //
+  // THE SITE (L121). A cancelled pick restocks to Staging, and a warehouse whose
+  // stock sits on its Site (no racks: Demo's Main Distribution Center; L4L's
+  // no-rack items on DC4) had no screen that could put it back. A Site is
+  // kind NULL with a site-ish type — never backfill that kind — so the ONE
+  // classifier decides (isSiteLocation): a NULL-kind row typed shelf/bin is a
+  // legacy placement and stays out, as do the Staging/Unplaced buckets. Placing
+  // onto a Site keeps the item's rack label (placeStockAction).
+  //
+  // SITES COME LAST, after the racks and crates (slice 3 review, F3). Put-away
+  // means shelving: the owner's 2026-09-24 direction is that stock with no rack
+  // lands in Unplaced and L4L's DC4 Site stays a label (67 items were moved off
+  // it to rack 31-C). A Site at the top of the list would make "DC4 (site)" the
+  // first of 87 options, and a mis-pick clears the worklist without shelving
+  // anything. The phone's chips follow the same order (offeredDestinationOrder).
   //
   // Each destination carries its rack/crate COLUMNS (migration 0188), not just
   // {id, name, kind}: dropping them is why the put-away dialog could never show
@@ -122,8 +157,11 @@ export async function StagingTableSection({
   // not a substitute — "Blue #42" is a dedupe key, and parsing a crate back out
   // of it would break the moment someone renames a crate.
   const destinationsByWarehouse = new Map<string, DestinationOption[]>();
-  for (const loc of allLocations) {
-    if (loc.kind !== 'rack' && loc.kind !== 'crate') continue;
+  const racksThenSites = [
+    ...allLocations.filter((loc) => loc.kind === 'rack' || loc.kind === 'crate'),
+    ...allLocations.filter((loc) => isSiteLocation(loc)),
+  ];
+  for (const loc of racksThenSites) {
     const wid = (loc.warehouse_id as string | null) ?? '__none__';
     if (!destinationsByWarehouse.has(wid)) {
       destinationsByWarehouse.set(wid, []);
@@ -237,6 +275,7 @@ export async function StagingTableSection({
         activeItemType={itemType ?? 'all'}
         // A filtered list says it is empty once, in the chip above.
         hideEmptyState={chip !== null}
+        timeZone={timeZone}
       />
     </div>
   );

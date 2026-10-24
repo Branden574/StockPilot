@@ -76,6 +76,7 @@ export default async function StagingPage({
           filter={itemFilter}
           canPlace={canPlace}
           canMintDestination={canMintDestination}
+          organizationId={sessionCtx.organizationId}
         />
       </Suspense>
     </div>

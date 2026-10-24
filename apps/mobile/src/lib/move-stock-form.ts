@@ -67,6 +67,13 @@ export interface MoveDestination {
   id: string;
   name: string;
   kind: string | null;
+  /**
+   * locations.type. A SITE has no kind (NULL) and a site-ish type; a legacy
+   * NULL-kind shelf or bin is a placement. The type is what tells them apart
+   * (core isSiteLocation; L121). Optional so fixtures that predate it still
+   * type-check.
+   */
+  type?: string | null;
   warehouseId: string | null;
   /**
    * The row's own rack/crate columns (migration 0188), when the sheet read

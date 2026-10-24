@@ -16,13 +16,12 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 
-import { reasonWithoutRefLabel } from '@stockpilot/core';
+import { formatMovementWhen, reasonWithoutRefLabel } from '@stockpilot/core';
 
 import { MetadataDiff } from '@/components/audit/metadata-diff';
 import { EditableMovementNote } from '@/components/movements/editable-movement-note';
 import { StatePanel } from '@/components/patterns/state-panel';
 import { Timeline, TimelineEntry, type TimelineTone } from '@/components/patterns/timeline';
-import { LocalDateTime } from '@/components/ui/local-datetime';
 import { referenceHref, referenceTypeLabel } from '@/lib/activity-references';
 import { formatAuditEvent } from '@/lib/audit/format';
 import { cn, formatNumber, formatRelative } from '@/lib/utils';
@@ -43,6 +42,14 @@ interface ActivityFeedProps {
    * Gated on `movements:edit_notes`; the server action + RPC re-check.
    */
   canEditNotes?: boolean;
+  /**
+   * The ORGANIZATION's time zone (`organizations.timezone`), which every row's
+   * date and time prints in (L7, owner decision Q1; slice 3 review F2), like
+   * the Movements page, counts and orders. Movement AND audit rows, so one list
+   * never mixes two zones. Absent or unusable: core's documented default zone,
+   * never the viewer's.
+   */
+  timeZone?: string | null;
 }
 
 interface VisualSpec {
@@ -119,7 +126,12 @@ function specFor(e: ActivityEvent): VisualSpec {
   }
 }
 
-export function ActivityFeed({ events, locationNames, canEditNotes = false }: ActivityFeedProps) {
+export function ActivityFeed({
+  events,
+  locationNames,
+  canEditNotes = false,
+  timeZone,
+}: ActivityFeedProps) {
   if (events.length === 0) {
     return (
       <StatePanel
@@ -176,6 +188,10 @@ export function ActivityFeed({ events, locationNames, canEditNotes = false }: Ac
         // a chip reading "SO-000060" — the handle printed twice on one line.
         // The chip is the linked one, so the reason gives it up.
         const reasonText = reasonWithoutRefLabel(e.reason, referenceDisplayLabel);
+        // The exact date and time, in the ORGANIZATION's zone (L7). The same
+        // text on the server render and in the browser (formatOrgDateTime
+        // spells it one way on every engine), so there is no hydration gap.
+        const absolute = formatMovementWhen(e.createdAt, timeZone);
         return (
           <TimelineEntry
             key={e.id}
@@ -251,13 +267,14 @@ export function ActivityFeed({ events, locationNames, canEditNotes = false }: Ac
                 <span aria-hidden className="mx-1.5">
                   ·
                 </span>
-                {/* Relative for scanability + exact viewer-local date/time
-                    always visible (owner ask 2026-07-15: every movement must
-                    carry its accurate date+time, not just "2 months ago"). */}
+                {/* Relative for scanability + the exact date/time always
+                    visible (owner ask 2026-07-15: every movement must carry its
+                    accurate date+time, not just "2 months ago"), in the
+                    organization's zone since L7 (it was the viewer's). */}
                 <time dateTime={e.createdAt} suppressHydrationWarning>
                   {formatRelative(e.createdAt)}
                 </time>
-                <LocalDateTime iso={e.createdAt} prefix=" · " />
+                {absolute && <span> · {absolute}</span>}
                 {referenceDisplayLabel && (
                   <>
                     <span aria-hidden className="mx-1.5">

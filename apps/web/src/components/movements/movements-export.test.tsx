@@ -30,6 +30,7 @@ function rows(): MovementDisplayRow[] {
       note: null,
       noteEditable: true,
       createdAt: '2026-09-01T12:00:00.000Z',
+      createdAtLabel: 'Sep 1, 2026, 5:00 AM',
       itemName: 'Lanyard',
       itemSku: 'LAN-01',
       actorLabel: 'Avery Stone',
@@ -80,7 +81,7 @@ describe('Instant ledger inside the page provider', () => {
         <header>
           <MovementsExportButton />
         </header>
-        <MovementsInstantTable rows={rows()} canEditNotes />
+        <MovementsInstantTable rows={rows()} canEditNotes timeZone="America/Los_Angeles" />
       </MovementsInstantFiltersProvider>,
     );
 
@@ -106,7 +107,7 @@ describe('Instant ledger inside the page provider', () => {
 describe('Instant ledger on its own (no provider)', () => {
   it('keeps its own Export CSV beside the pager, following its filters', async () => {
     const user = userEvent.setup();
-    render(<MovementsInstantTable rows={rows()} />);
+    render(<MovementsInstantTable rows={rows()} timeZone="America/Los_Angeles" />);
 
     const link = exportLinks()[0]!;
     expect(exportLinks()).toHaveLength(1);

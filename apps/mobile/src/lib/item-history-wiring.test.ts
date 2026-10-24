@@ -19,7 +19,8 @@ import { describe, expect, it } from 'vitest';
  *      divergence this whole feature exists to end;
  *   2. every word on a movement comes from @stockpilot/core's
  *      formatHistoryMovement, so the phone and the browser read identically;
- *   3. the timestamp is formatted in the VIEWER's timezone;
+ *   3. the timestamp is formatted in the ORGANIZATION's zone (L7, owner
+ *      decision Q1), which the staging screen reads and hands in;
  *   4. paging is driven by the SERVER's hasMore, never by a client-side guess
  *      at how much data exists — three defects in this codebase have come from
  *      a constant that guessed the server's row cap;
@@ -66,10 +67,12 @@ describe('item history sheet wiring', () => {
     expect(sheetCode).not.toContain("'Customer return");
   });
 
-  it('renders the timestamp in the viewer’s timezone', () => {
-    expect(sheet).toContain('formatHistoryWhen(f.whenIso)');
-    // The formatter deliberately does no date formatting — a hand-rolled
-    // toLocaleString here would drift from web's <LocalDateTime>.
+  it('renders the timestamp in the organization’s zone, handed in by the screen (L7)', () => {
+    expect(sheet).toContain('formatHistoryWhen(f.whenIso, timeZone)');
+    // The zone is a prop: this sheet makes no Supabase read of its own (pinned
+    // above), and a hand-rolled toLocaleString here would print the device's
+    // zone again and drift from the web dialog.
+    expect(sheet).toMatch(/timeZone\?: string \| null/);
     expect(sheetCode).not.toContain('toLocaleString(');
     expect(sheetCode).not.toContain('toLocaleDateString(');
   });
@@ -116,6 +119,9 @@ describe('the staging row opens it', () => {
     expect(screen).toContain('onOpenHistory={() => setViewingHistory(item)}');
     expect(screen).toContain('<ItemHistorySheet');
     expect(screen).toContain('itemId={viewingHistory.itemId}');
+    // L7: the organization's zone, read once with the screen's display map.
+    expect(screen).toContain('readOrgTimeZone(supabase, orgId)');
+    expect(screen).toContain('timeZone={orgTimeZone}');
     // Outside the canPlace/disabledReason branch — a row that cannot be placed
     // is precisely the row whose provenance is being questioned.
     expect(screen).toMatch(/onPress=\{onOpenHistory\}[\s\S]{0,200}History\s*<\/Button>/);
