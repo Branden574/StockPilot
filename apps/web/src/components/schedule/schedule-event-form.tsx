@@ -172,6 +172,9 @@ export function ScheduleEventForm({
   // A start or end that names a time that never happens in the zone.
   const [startError, setStartError] = React.useState<string | null>(null);
   const [endError, setEndError] = React.useState<string | null>(null);
+  // The fields a refusal moves focus to (they sit far above Save).
+  const startsRef = React.useRef<HTMLInputElement>(null);
+  const endsRef = React.useRef<HTMLInputElement>(null);
   const bundleLocked = Boolean(defaults?.bundleAlreadyDistributed);
   // The event as Edit opened it: a field still showing it saves it as stored.
   const storedStart = defaults?.startsAt ?? null;
@@ -234,7 +237,13 @@ export function ScheduleEventForm({
         : null;
     setStartError(nextStartError);
     setEndError(nextEndError);
-    if (!startsAtIso || nextEndError) return;
+    if (!startsAtIso || nextEndError) {
+      // Starts and Ends sit far above Save (off screen on a phone by then):
+      // move to the first field refused, which brings it into view; its
+      // message is announced (role="alert").
+      (nextStartError ? startsRef : endsRef).current?.focus();
+      return;
+    }
     setBusy(true);
 
     // Validate bundle linkage: if any of the 3 are set, all must be.
@@ -317,6 +326,7 @@ export function ScheduleEventForm({
         <div className="space-y-1.5">
           <Label htmlFor="starts">Starts</Label>
           <Input
+            ref={startsRef}
             id="starts"
             type="datetime-local"
             value={startsAtLocal}
@@ -331,7 +341,7 @@ export function ScheduleEventForm({
             aria-describedby={startError ? `${startErrorId} ${zoneNoteId}` : zoneNoteId}
           />
           {startError ? (
-            <p id={startErrorId} className="text-destructive text-[12px]">
+            <p id={startErrorId} role="alert" className="text-destructive text-[12px]">
               {startError}
             </p>
           ) : null}
@@ -339,6 +349,7 @@ export function ScheduleEventForm({
         <div className="space-y-1.5">
           <Label htmlFor="ends">Ends (optional)</Label>
           <Input
+            ref={endsRef}
             id="ends"
             type="datetime-local"
             value={endsAtLocal}
@@ -352,7 +363,7 @@ export function ScheduleEventForm({
             aria-describedby={endError ? `${endErrorId} ${zoneNoteId}` : zoneNoteId}
           />
           {endError ? (
-            <p id={endErrorId} className="text-destructive text-[12px]">
+            <p id={endErrorId} role="alert" className="text-destructive text-[12px]">
               {endError}
             </p>
           ) : null}

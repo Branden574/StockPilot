@@ -159,6 +159,96 @@ describe("ScheduleEventForm: dates and times in the organization's zone", () => 
     expect(actions.create).not.toHaveBeenCalled();
   });
 
+  // Starts and Ends sit far above Save (on a phone, off screen once Save is
+  // reached), so a refusal said only under the field looked like Save doing
+  // nothing, and a screen reader heard nothing (slice 8 review). Focus moves
+  // to the first field refused, which brings it into view, and the message
+  // is announced (role="alert", as the app's other inline errors are).
+  describe('a refused time is announced and focus moves to its field', () => {
+    function pressCreate() {
+      const create = screen.getByRole('button', { name: 'Create event' });
+      create.focus();
+      fireEvent.click(create);
+    }
+
+    it('a start the clocks skip', async () => {
+      render(
+        <ScheduleEventForm
+          warehouses={WAREHOUSES}
+          bundles={[]}
+          initialDate="2027-03-14"
+          timeZone="America/Los_Angeles"
+        />,
+      );
+      fillTitle();
+      fireEvent.change(starts(), { target: { value: '2027-03-14T02:30' } });
+      pressCreate();
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        "That start time doesn't exist in America/Los_Angeles (the clocks change). Pick another time.",
+      );
+      expect(starts()).toHaveFocus();
+      expect(actions.create).not.toHaveBeenCalled();
+    });
+
+    it('a blank start', async () => {
+      render(
+        <ScheduleEventForm
+          warehouses={WAREHOUSES}
+          bundles={[]}
+          initialDate="2026-11-07"
+          timeZone="America/Los_Angeles"
+        />,
+      );
+      fillTitle();
+      fireEvent.change(starts(), { target: { value: '' } });
+      pressCreate();
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Pick a start date and time.');
+      expect(starts()).toHaveFocus();
+      expect(actions.create).not.toHaveBeenCalled();
+    });
+
+    it('an end the clocks skip, after a start that is fine', async () => {
+      render(
+        <ScheduleEventForm
+          warehouses={WAREHOUSES}
+          bundles={[]}
+          initialDate="2027-03-14"
+          timeZone="America/Los_Angeles"
+        />,
+      );
+      fillTitle();
+      fireEvent.change(starts(), { target: { value: '2027-03-14T01:00' } });
+      fireEvent.change(ends(), { target: { value: '2027-03-14T02:30' } });
+      pressCreate();
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        "That end time doesn't exist in America/Los_Angeles (the clocks change). Pick another time.",
+      );
+      expect(ends()).toHaveFocus();
+      expect(actions.create).not.toHaveBeenCalled();
+    });
+
+    it('both refused: focus goes to Starts, and both are announced', async () => {
+      render(
+        <ScheduleEventForm
+          warehouses={WAREHOUSES}
+          bundles={[]}
+          initialDate="2027-03-14"
+          timeZone="America/Los_Angeles"
+        />,
+      );
+      fillTitle();
+      fireEvent.change(starts(), { target: { value: '2027-03-14T02:15' } });
+      fireEvent.change(ends(), { target: { value: '2027-03-14T02:45' } });
+      pressCreate();
+
+      await waitFor(() => expect(screen.getAllByRole('alert')).toHaveLength(2));
+      expect(starts()).toHaveFocus();
+    });
+  });
+
   it("the overlap warning reads the form's times and prints the other event's time in the organization's zone", () => {
     render(
       <ScheduleEventForm
