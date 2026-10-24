@@ -52,6 +52,7 @@
 --   I7 the updated_at trigger not enabled again               -> R2 (trigger_state raises; nothing applied)
 --   I8 the image checksum after the null-out dropped          -> X9
 --   I9 the unexpected-error wrapper re-raises every error     -> X10 (review stage)
+--   I10 the capture trigger dropped (port to 0403)          -> C1, C2, C3, C6, P2
 --
 -- Roles: fixtures as the test superuser; attempts through pg_temp.attempt
 -- (undone) or pg_temp.call_as (kept). begin/rollback. Namespace 04030000.

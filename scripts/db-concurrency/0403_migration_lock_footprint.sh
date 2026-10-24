@@ -52,6 +52,8 @@
 # passed.
 #
 # Usage: bash scripts/db-concurrency/0403_migration_lock_footprint.sh
+#        CONTAINER=supabase_db_spmig bash scripts/db-concurrency/0403_migration_lock_footprint.sh
+#        (the migration scratch stack; run it holding that stack's slot)
 
 set -uo pipefail
 
