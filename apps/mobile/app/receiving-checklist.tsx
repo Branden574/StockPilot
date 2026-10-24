@@ -1,7 +1,7 @@
 import { useNetworkState } from 'expo-network';
 import { type Href, useNavigation, useRouter } from 'expo-router';
 import { usePreventRemove } from 'expo-router/react-navigation';
-import { ArrowLeft } from 'lucide-react-native';
+import { ArrowLeft, Circle, CircleDot } from 'lucide-react-native';
 import * as React from 'react';
 import {
   ActivityIndicator,
@@ -36,6 +36,7 @@ import {
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Eyebrow, FieldLabel } from '@/components/ui/text';
 import { isOfflineState } from '@/lib/exceptions-api';
@@ -54,7 +55,7 @@ import {
   editorScreenLoaded,
   type ChecklistEditorScreen,
 } from '@/lib/receiving-checks-view';
-import { ACCENT, capTo, FONT, TYPE_CEILING } from '@/lib/theme';
+import { capTo, FONT, TYPE_CEILING } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 const C = RECEIVING_CHECKLIST_COPY;
@@ -186,7 +187,7 @@ export default function ReceivingChecklistScreen() {
           </Card>
         </View>
       ) : (
-        <ActivityIndicator color={c.ink4} style={{ marginTop: 40 }} />
+        <ActivityIndicator color={c.ink3} style={{ marginTop: 40 }} />
       )}
     </SafeAreaView>
   );
@@ -353,7 +354,7 @@ function Editor({
   }
 
   const errorCard = error ? (
-    <Card padding={14} style={[styles.block, { borderColor: ACCENT.crit }]}>
+    <Card padding={14} style={[styles.block, { borderColor: c.critText }]}>
       <Body size={14} accessibilityRole="alert">
         {error.message}
       </Body>
@@ -484,14 +485,17 @@ function Editor({
               maxLength={CHECKLIST_LIMITS.title}
               accessibilityLabel={C.titleLabel}
               editable={!busy}
-              style={[styles.input, { color: c.ink, borderColor: c.hair, backgroundColor: c.card }]}
+              style={[
+                styles.input,
+                { color: c.ink, borderColor: c.hair2, backgroundColor: c.card },
+              ]}
             />
 
             {steps.map((s, i) => (
               <Card
                 key={s.uid}
                 padding={14}
-                style={[styles.block, error?.step === i + 1 ? { borderColor: ACCENT.crit } : {}]}
+                style={[styles.block, error?.step === i + 1 ? { borderColor: c.critText } : {}]}
               >
                 <FieldLabel>{`${C.stepLabel} ${i + 1}`}</FieldLabel>
                 <TextInput
@@ -502,7 +506,7 @@ function Editor({
                   editable={!busy}
                   style={[
                     styles.input,
-                    { color: c.ink, borderColor: c.hair, backgroundColor: c.card },
+                    { color: c.ink, borderColor: c.hair2, backgroundColor: c.card },
                   ]}
                 />
 
@@ -514,6 +518,9 @@ function Editor({
                 >
                   {CHECKLIST_PUBLISHABLE_KINDS.map((k) => {
                     const checked = s.kind === k;
+                    // The ink edge on the recessed fill, a filled radio mark
+                    // and the heavier word: never a colour alone.
+                    const Mark = checked ? CircleDot : Circle;
                     return (
                       <Pressable
                         key={k}
@@ -525,15 +532,19 @@ function Editor({
                         style={[
                           styles.option,
                           {
-                            borderColor: checked ? c.ink : c.hair,
-                            backgroundColor: checked ? c.paper2 : c.card,
+                            borderColor: checked ? c.ink : c.hair2,
+                            backgroundColor: checked ? c.sunk : c.card,
                           },
                         ]}
                       >
+                        <Mark size={16} color={checked ? c.ink : c.ink3} strokeWidth={1.8} />
                         <Text
                           style={[
                             styles.optionText,
-                            { color: c.ink, fontWeight: checked ? '700' : '500' },
+                            {
+                              color: c.ink,
+                              fontFamily: checked ? FONT.displaySemi : FONT.display,
+                            },
                           ]}
                           maxFontSizeMultiplier={capTo(14, TYPE_CEILING.control)}
                         >
@@ -544,25 +555,16 @@ function Editor({
                   })}
                 </View>
 
-                <Pressable
-                  onPress={() => update(s.uid, { required: !s.required })}
-                  disabled={busy}
-                  accessibilityRole="checkbox"
+                {/* The shared checkbox: a tick on the ink box, its state and
+                    its name read as one control (44pt or more). */}
+                <Checkbox
+                  checked={s.required}
+                  onChange={(next) => update(s.uid, { required: next })}
+                  label={C.stepRequired}
                   accessibilityLabel={`${C.stepRequired}, ${C.stepLabel.toLowerCase()} ${i + 1}`}
-                  accessibilityState={{ checked: s.required, disabled: busy }}
-                  style={styles.checkboxRow}
-                >
-                  <View
-                    style={[
-                      styles.checkbox,
-                      {
-                        borderColor: c.ink,
-                        backgroundColor: s.required ? c.ink : 'transparent',
-                      },
-                    ]}
-                  />
-                  <Body size={14}>{C.stepRequired}</Body>
-                </Pressable>
+                  disabled={busy}
+                  style={{ marginTop: 8 }}
+                />
 
                 <FieldLabel style={{ marginTop: 12 }}>{C.stepHelp}</FieldLabel>
                 <TextInput
@@ -575,7 +577,7 @@ function Editor({
                   style={[
                     styles.input,
                     styles.multiline,
-                    { color: c.ink, borderColor: c.hair, backgroundColor: c.card },
+                    { color: c.ink, borderColor: c.hair2, backgroundColor: c.card },
                   ]}
                 />
 
@@ -640,6 +642,7 @@ function Editor({
                 <View accessibilityRole="radiogroup" accessibilityLabel={C.procedureLabel}>
                   {[{ id: '', title: C.procedureNone }, ...editor.procedures].map((p) => {
                     const checked = procedureId === p.id;
+                    const Mark = checked ? CircleDot : Circle;
                     return (
                       <Pressable
                         key={p.id || 'none'}
@@ -648,18 +651,17 @@ function Editor({
                         accessibilityRole="radio"
                         accessibilityLabel={p.title}
                         accessibilityState={{ checked, disabled: busy }}
-                        style={styles.checkboxRow}
+                        style={({ pressed }) => [styles.radioRow, pressed && { opacity: 0.7 }]}
                       >
-                        <View
-                          style={[
-                            styles.radio,
-                            {
-                              borderColor: c.ink,
-                              backgroundColor: checked ? c.ink : 'transparent',
-                            },
-                          ]}
-                        />
-                        <Body size={14} style={{ flexShrink: 1 }}>
+                        <Mark size={20} color={checked ? c.ink : c.ink3} strokeWidth={1.8} />
+                        <Body
+                          size={14}
+                          color={c.ink}
+                          style={{
+                            flexShrink: 1,
+                            fontFamily: checked ? FONT.display : undefined,
+                          }}
+                        >
                           {p.title}
                         </Body>
                       </Pressable>
@@ -761,7 +763,7 @@ const styles = StyleSheet.create({
   pad: { padding: 20 },
   scroll: { paddingHorizontal: 20, paddingTop: 9, paddingBottom: 48 },
   block: { marginTop: 16 },
-  sectionTitle: { fontFamily: FONT.display, fontSize: 15, fontWeight: '600' },
+  sectionTitle: { fontFamily: FONT.displaySemi, fontSize: 15 },
   actions: { marginTop: 16, gap: 10 },
   input: {
     minHeight: MIN_TAP,
@@ -779,20 +781,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderRadius: 10,
     borderWidth: 1,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 8,
     flexGrow: 1,
   },
-  optionText: { fontSize: 14, fontFamily: FONT.display, flexShrink: 1, textAlign: 'center' },
-  checkboxRow: {
+  optionText: { fontSize: 14, flexShrink: 1, textAlign: 'center' },
+  // A procedure to link: the whole row is the radio, 44pt or more.
+  radioRow: {
     minHeight: MIN_TAP,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
     marginTop: 8,
   },
-  checkbox: { width: 22, height: 22, borderRadius: 5, borderWidth: 1.5 },
-  radio: { width: 22, height: 22, borderRadius: 11, borderWidth: 1.5 },
   rowButtons: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
   historyToggle: { minHeight: MIN_TAP, justifyContent: 'center' },
 });

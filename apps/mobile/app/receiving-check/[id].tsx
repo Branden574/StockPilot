@@ -1,7 +1,7 @@
 import { useNetworkState } from 'expo-network';
 import { type Href, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { usePreventRemove } from 'expo-router/react-navigation';
-import { ArrowLeft } from 'lucide-react-native';
+import { ArrowLeft, Circle, CircleDot } from 'lucide-react-native';
 import * as React from 'react';
 import {
   ActivityIndicator,
@@ -53,7 +53,7 @@ import {
   type PhoneSavedRun,
 } from '@/lib/receiving-checks-api';
 import { CHECK_ANSWER_OPTIONS } from '@/lib/receiving-checks-view';
-import { ACCENT, capTo, FONT, TYPE_CEILING } from '@/lib/theme';
+import { capTo, FONT, TYPE_CEILING } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 const C = RECEIVING_CHECKLIST_COPY;
@@ -199,7 +199,7 @@ export default function ReceivingCheckScreen() {
           </Card>
         </View>
       ) : (
-        <ActivityIndicator color={c.ink4} style={{ marginTop: 40 }} />
+        <ActivityIndicator color={c.ink3} style={{ marginTop: 40 }} />
       )}
     </SafeAreaView>
   );
@@ -389,7 +389,7 @@ function RunForm({
             <Body
               key={i}
               size={14}
-              color={l.tone === 'warn' ? ACCENT.warn : undefined}
+              color={l.tone === 'warn' ? c.warnText : undefined}
               style={{ marginTop: 4 }}
             >
               {l.text}
@@ -427,7 +427,7 @@ function RunForm({
               key={i}
               size={13.5}
               muted={l.tone !== 'done'}
-              color={l.tone === 'done' ? ACCENT.mintInk : undefined}
+              color={l.tone === 'done' ? c.accent : undefined}
               style={{ marginTop: 2 }}
             >
               {l.text}
@@ -442,7 +442,7 @@ function RunForm({
             <Card
               key={s.key}
               padding={14}
-              style={[styles.stepCard, flagged ? { borderColor: ACCENT.crit } : {}]}
+              style={[styles.stepCard, flagged ? { borderColor: c.critText } : {}]}
             >
               <Body size={15} style={{ fontFamily: FONT.display }}>
                 {`${i + 1}. ${s.label}`}
@@ -466,6 +466,11 @@ function RunForm({
                 >
                   {CHECK_ANSWER_OPTIONS.map((o) => {
                     const checked = d.value === o.value;
+                    // The chosen answer is the ink edge on the recessed fill
+                    // with a filled radio mark and the heavier word, so the
+                    // choice never rests on a colour alone (the redesign's
+                    // radio rows).
+                    const Mark = checked ? CircleDot : Circle;
                     return (
                       <Pressable
                         key={o.value}
@@ -477,16 +482,20 @@ function RunForm({
                         style={[
                           styles.segmentOption,
                           {
-                            borderColor: checked ? c.ink : c.hair,
-                            backgroundColor: checked ? c.paper2 : c.card,
+                            borderColor: checked ? c.ink : c.hair2,
+                            backgroundColor: checked ? c.sunk : c.card,
                             opacity: locked && !checked ? 0.6 : 1,
                           },
                         ]}
                       >
+                        <Mark size={16} color={checked ? c.ink : c.ink3} strokeWidth={1.8} />
                         <Text
                           style={[
                             styles.segmentText,
-                            { color: c.ink, fontWeight: checked ? '700' : '500' },
+                            {
+                              color: c.ink,
+                              fontFamily: checked ? FONT.displaySemi : FONT.display,
+                            },
                           ]}
                           maxFontSizeMultiplier={capTo(14, TYPE_CEILING.control)}
                         >
@@ -505,11 +514,11 @@ function RunForm({
                   editable={!locked}
                   keyboardType="number-pad"
                   placeholder={C.countPlaceholder}
-                  placeholderTextColor={c.ink4}
+                  placeholderTextColor={c.ink3}
                   accessibilityLabel={s.label}
                   style={[
                     styles.input,
-                    { color: c.ink, borderColor: c.hair, backgroundColor: c.card },
+                    { color: c.ink, borderColor: c.hair2, backgroundColor: c.card },
                   ]}
                 />
               ) : null}
@@ -522,12 +531,12 @@ function RunForm({
                   multiline
                   maxLength={CHECKLIST_LIMITS.text}
                   placeholder={C.textPlaceholder}
-                  placeholderTextColor={c.ink4}
+                  placeholderTextColor={c.ink3}
                   accessibilityLabel={s.label}
                   style={[
                     styles.input,
                     styles.multiline,
-                    { color: c.ink, borderColor: c.hair, backgroundColor: c.card },
+                    { color: c.ink, borderColor: c.hair2, backgroundColor: c.card },
                   ]}
                 />
               ) : null}
@@ -547,7 +556,7 @@ function RunForm({
                   styles.multiline,
                   {
                     color: c.ink,
-                    borderColor: needsNote.has(s.key) ? ACCENT.crit : c.hair,
+                    borderColor: needsNote.has(s.key) ? c.critText : c.hair2,
                     backgroundColor: c.card,
                   },
                 ]}
@@ -567,12 +576,12 @@ function RunForm({
           style={[
             styles.input,
             styles.multiline,
-            { color: c.ink, borderColor: c.hair, backgroundColor: c.card },
+            { color: c.ink, borderColor: c.hair2, backgroundColor: c.card },
           ]}
         />
 
         {error ? (
-          <Card padding={14} style={[styles.errorCard, { borderColor: ACCENT.crit }]}>
+          <Card padding={14} style={[styles.errorCard, { borderColor: c.critText }]}>
             <Body size={14} accessibilityRole="alert">
               {error.message}
             </Body>
@@ -633,21 +642,23 @@ const styles = StyleSheet.create({
   topbar: { paddingHorizontal: 9, paddingTop: 5, flexDirection: 'row' },
   pad: { padding: 20 },
   scroll: { paddingHorizontal: 20, paddingTop: 9, paddingBottom: 48 },
-  sectionTitle: { fontFamily: FONT.display, fontSize: 15, fontWeight: '600', marginBottom: 2 },
+  sectionTitle: { fontFamily: FONT.displaySemi, fontSize: 15, marginBottom: 2 },
   linkRow: { minHeight: MIN_TAP, justifyContent: 'center', marginTop: 6 },
   stepCard: { marginTop: 14 },
   segment: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
   segmentOption: {
     minHeight: MIN_TAP,
     minWidth: 88,
-    paddingHorizontal: 14,
+    paddingHorizontal: 12,
     borderRadius: 10,
     borderWidth: 1,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 8,
     flexGrow: 1,
   },
-  segmentText: { fontSize: 14, fontFamily: FONT.display, flexShrink: 1, textAlign: 'center' },
+  segmentText: { fontSize: 14, flexShrink: 1, textAlign: 'center' },
   input: {
     minHeight: MIN_TAP,
     marginTop: 8,

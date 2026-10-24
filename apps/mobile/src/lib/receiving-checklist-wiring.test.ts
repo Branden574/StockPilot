@@ -245,7 +245,13 @@ describe('the run and editor screens (4)', () => {
     expect(editor).toMatch(
       /Alert\.alert\(C\.turnOff, C\.turnOffConfirm, \[[\s\S]*?style: 'destructive'/,
     );
-    expect(editor).toContain('accessibilityRole="checkbox"');
+    // Re-pinned by the redraw in the redesign's look (was: a hand-drawn
+    // accessibilityRole="checkbox" row): Required is the shared Checkbox,
+    // whose role, state, tick and 44pt target checkbox.test.ts pins.
+    expect(editor).toContain("import { Checkbox } from '@/components/ui/checkbox';");
+    expect(editor).toMatch(
+      /<Checkbox\s+checked=\{s\.required\}\s+onChange=\{\(next\) => update\(s\.uid, \{ required: next \}\)\}/,
+    );
     expect(editor).toContain('{C.proceduresUnavailable}');
   });
 
@@ -258,7 +264,9 @@ describe('the run and editor screens (4)', () => {
     for (const src of [run, editor]) expect(src).toContain('const MIN_TAP = 44;');
     expect(run).toMatch(/segmentOption: \{\s*minHeight: MIN_TAP,/);
     expect(editor).toMatch(/option: \{\s*minHeight: MIN_TAP,/);
-    expect(editor).toMatch(/checkboxRow: \{\s*minHeight: MIN_TAP,/);
+    // Re-pinned by the redraw (was: checkboxRow, which also drew the
+    // procedure radios): the procedure radios are their own radioRow.
+    expect(editor).toMatch(/radioRow: \{\s*minHeight: MIN_TAP,/);
   });
 });
 

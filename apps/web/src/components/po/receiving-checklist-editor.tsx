@@ -1,11 +1,13 @@
 'use client';
 
-import { AlertTriangle, ArrowDown, ArrowUp, Loader2, Plus, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, Loader2, Plus, Trash2, TriangleAlert } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { DetailSection } from '@/components/patterns/detail-section';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
@@ -47,6 +49,10 @@ import type {
 const C = RECEIVING_CHECKLIST_COPY;
 
 type EditorStep = ChecklistEditorStep;
+
+/** A native select in the redesign's control look (the settings panels'). */
+const SELECT =
+  'bg-card text-foreground flex h-8 rounded-md border border-[var(--ed-line-strong)] px-2.5 text-[13px] transition-colors focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:h-11 max-sm:text-base';
 
 /**
  * The receiving checklist editor (F4-1): the live version read only, "Start
@@ -224,64 +230,90 @@ export function ReceivingChecklistEditor({ editor }: { editor: ChecklistEditorVi
   }
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-4">
       {!editing && (
-        <section
-          aria-labelledby="live-checklist"
-          className="border-border bg-card rounded-xl border p-4"
+        <DetailSection
+          headingId="live-checklist"
+          title={live ? `${C.liveVersion(live.versionNumber)} ${live.title}` : C.noLiveVersion}
+          footer={
+            canPublish ? (
+              <div className="flex flex-wrap gap-2">
+                {live ? (
+                  <>
+                    <Button
+                      type="button"
+                      variant="gradient"
+                      onClick={() => begin('live')}
+                      disabled={busy}
+                    >
+                      {C.prepareVersion(editor.nextVersionNumber)}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setConfirm('turn_off')}
+                      disabled={busy}
+                    >
+                      {C.turnOff}
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <Button type="button" variant="gradient" onClick={() => begin('suggested')}>
+                      {C.startSuggested}
+                    </Button>
+                    <Button type="button" variant="outline" onClick={() => begin('blank')}>
+                      {C.startBlank}
+                    </Button>
+                  </>
+                )}
+              </div>
+            ) : undefined
+          }
         >
           {live ? (
-            <>
-              <h2 id="live-checklist" className="font-medium">
-                {C.liveVersion(live.versionNumber)} {live.title}
-              </h2>
-              <VersionDetails version={live} timeZone={editor.timeZone} />
-              {canPublish && (
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <Button
-                    type="button"
-                    variant="gradient"
-                    onClick={() => begin('live')}
-                    disabled={busy}
-                  >
-                    {C.prepareVersion(editor.nextVersionNumber)}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => setConfirm('turn_off')}
-                    disabled={busy}
-                  >
-                    {C.turnOff}
-                  </Button>
-                </div>
-              )}
-            </>
+            <VersionDetails version={live} timeZone={editor.timeZone} />
           ) : (
-            <>
-              <h2 id="live-checklist" className="font-medium">
-                {C.noLiveVersion}
-              </h2>
-              <p className="text-muted-foreground mt-1 text-sm">{C.editorEmpty}</p>
-              {canPublish && (
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <Button type="button" variant="gradient" onClick={() => begin('suggested')}>
-                    {C.startSuggested}
-                  </Button>
-                  <Button type="button" variant="outline" onClick={() => begin('blank')}>
-                    {C.startBlank}
-                  </Button>
-                </div>
-              )}
-            </>
+            <p className="text-muted-foreground text-[13.5px] leading-[20.25px]">{C.editorEmpty}</p>
           )}
-          {!canPublish && <p className="text-muted-foreground mt-3 text-xs">{C.readOnlyEditor}</p>}
-        </section>
+          {!canPublish && (
+            <p className="text-muted-foreground mt-3 text-[12.5px] leading-[18.75px]">
+              {C.readOnlyEditor}
+            </p>
+          )}
+        </DetailSection>
       )}
 
       {editing && (
-        <section aria-label={C.publishVersion(editor.nextVersionNumber)} className="space-y-4">
-          <div className="space-y-1">
+        <DetailSection
+          aria-label={C.publishVersion(editor.nextVersionNumber)}
+          bodyClassName="space-y-4"
+          footer={
+            <div className="flex flex-wrap gap-2">
+              {/* Publishing commits the version in front of you: the ink
+                  button (DESIGN-SPEC 6.2). */}
+              <Button type="button" variant="default" onClick={askPublish} disabled={busy}>
+                {busy ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  C.publishVersion(editor.nextVersionNumber)
+                )}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busy}
+                onClick={() => {
+                  setEditing(false);
+                  setError(null);
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          }
+        >
+          <div className="space-y-1.5">
             <Label htmlFor="checklist-title">{C.titleLabel}</Label>
             <Input
               id="checklist-title"
@@ -294,24 +326,24 @@ export function ReceivingChecklistEditor({ editor }: { editor: ChecklistEditorVi
             {steps.map((s, i) => (
               <li
                 key={s.uid}
-                className={`rounded-xl border p-3 ${error?.step === i + 1 ? 'border-destructive' : 'border-border'}`}
+                className={`bg-card rounded-lg border p-3 ${error?.step === i + 1 ? 'border-destructive' : 'border-border'}`}
               >
                 <div className="flex items-start gap-2">
-                  <span className="text-muted-foreground mt-2 w-6 text-sm tabular-nums">
+                  <span className="text-muted-foreground mt-1.5 w-6 font-mono text-[12.5px] tabular-nums">
                     {i + 1}.
                   </span>
-                  <div className="flex-1 space-y-2">
+                  <div className="min-w-0 flex-1 space-y-2">
                     <Input
                       aria-label={`${C.stepLabel} ${i + 1}`}
                       value={s.label}
                       maxLength={CHECKLIST_LIMITS.label}
                       onChange={(e) => update(s.uid, { label: e.target.value })}
                     />
-                    <div className="flex flex-wrap items-center gap-3 text-sm">
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
                       <label className="flex items-center gap-2">
-                        <span className="text-muted-foreground text-xs">{C.stepKind}</span>
+                        <span className="text-muted-foreground text-[12.5px]">{C.stepKind}</span>
                         <select
-                          className="bg-background rounded-md border px-2 py-1.5 text-sm"
+                          className={SELECT}
                           value={s.kind}
                           onChange={(e) =>
                             update(s.uid, { kind: e.target.value as ChecklistStepKind })
@@ -324,14 +356,15 @@ export function ReceivingChecklistEditor({ editor }: { editor: ChecklistEditorVi
                           ))}
                         </select>
                       </label>
-                      <label className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={s.required}
-                          onChange={(e) => update(s.uid, { required: e.target.checked })}
-                        />
+                      {/* The shared checkbox: the tick and the word are one
+                          control, named for its step. */}
+                      <Checkbox
+                        checked={s.required}
+                        onCheckedChange={(next) => update(s.uid, { required: next })}
+                        aria-label={`${C.stepRequired}, ${C.stepLabel.toLowerCase()} ${i + 1}`}
+                      >
                         {C.stepRequired}
-                      </label>
+                      </Checkbox>
                     </div>
                     <Input
                       aria-label={`${C.stepHelp}, ${C.stepLabel.toLowerCase()} ${i + 1}`}
@@ -391,14 +424,16 @@ export function ReceivingChecklistEditor({ editor }: { editor: ChecklistEditorVi
             <Plus /> {C.addStep}
           </Button>
           {editor.proceduresUnavailable && (
-            <p className="text-muted-foreground text-sm">{C.proceduresUnavailable}</p>
+            <p className="text-muted-foreground text-[13.5px] leading-[20.25px]">
+              {C.proceduresUnavailable}
+            </p>
           )}
           {editor.procedures && editor.procedures.length > 0 && (
-            <div className="space-y-1">
+            <div className="space-y-1.5">
               <Label htmlFor="checklist-procedure">{C.procedureLabel}</Label>
               <select
                 id="checklist-procedure"
-                className="bg-background w-full rounded-md border px-2 py-2 text-sm"
+                className={`${SELECT} w-full`}
                 value={procedureId}
                 onChange={(e) => setProcedureId(e.target.value)}
               >
@@ -411,36 +446,16 @@ export function ReceivingChecklistEditor({ editor }: { editor: ChecklistEditorVi
               </select>
             </div>
           )}
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="gradient" onClick={askPublish} disabled={busy}>
-              {busy ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                C.publishVersion(editor.nextVersionNumber)
-              )}
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={busy}
-              onClick={() => {
-                setEditing(false);
-                setError(null);
-              }}
-            >
-              Cancel
-            </Button>
-          </div>
-        </section>
+        </DetailSection>
       )}
 
       {error && (
         <div
           role="alert"
-          className="border-destructive/40 text-destructive flex items-start gap-2 rounded-md border p-3 text-sm"
+          className="border-destructive/30 bg-destructive-wash text-destructive flex items-start gap-2 rounded-md border px-3 py-2.5 text-[13px] leading-[19.5px]"
         >
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-          <div className="space-y-2">
+          <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+          <div className="min-w-0 space-y-2 [overflow-wrap:anywhere]">
             <p>{error.message}</p>
             {error.changed && (
               <Button type="button" variant="outline" size="sm" onClick={reload}>
@@ -452,19 +467,20 @@ export function ReceivingChecklistEditor({ editor }: { editor: ChecklistEditorVi
       )}
 
       {editor.history.length > 0 && (
-        <section aria-labelledby="checklist-history" className="space-y-3">
-          <h2 id="checklist-history" className="font-medium">
-            {C.history}
-          </h2>
-          {editor.history.map((v) => (
-            <details key={v.id} className="border-border rounded-xl border p-3">
-              <summary className="cursor-pointer text-sm">
-                {C.versionLine(v.versionNumber, v.title)}
-              </summary>
-              <VersionDetails version={v} timeZone={editor.timeZone} />
-            </details>
-          ))}
-        </section>
+        <DetailSection headingId="checklist-history" title={C.history} flush>
+          <ul className="divide-border divide-y">
+            {editor.history.map((v) => (
+              <li key={v.id}>
+                <details className="group px-[18px] py-2.5">
+                  <summary className="text-foreground cursor-pointer text-[13.5px] leading-[20.25px]">
+                    {C.versionLine(v.versionNumber, v.title)}
+                  </summary>
+                  <VersionDetails version={v} timeZone={editor.timeZone} />
+                </details>
+              </li>
+            ))}
+          </ul>
+        </DetailSection>
       )}
 
       <Dialog open={confirm !== null} onOpenChange={(o) => !o && setConfirm(null)}>
@@ -484,7 +500,7 @@ export function ReceivingChecklistEditor({ editor }: { editor: ChecklistEditorVi
               Cancel
             </Button>
             <Button
-              variant={confirm === 'turn_off' ? 'destructive' : 'gradient'}
+              variant={confirm === 'turn_off' ? 'destructive' : 'default'}
               onClick={() => void (confirm === 'turn_off' ? turnOff() : publish())}
             >
               {confirm === 'turn_off' ? C.turnOff : C.publishVersion(editor.nextVersionNumber)}
@@ -504,21 +520,27 @@ function VersionDetails({
   timeZone: string;
 }) {
   return (
-    <div className="mt-2 space-y-2 text-sm">
+    <div className="mt-2 space-y-2 text-[13.5px] leading-[20.25px]">
       <ol className="list-decimal space-y-1 pl-5">
         {version.steps.map((s) => (
           <li key={s.key}>
             {s.label}
             <span className="text-muted-foreground"> · {checklistKindLabel(s.kind)}</span>
             {s.required && <span className="text-muted-foreground"> · {C.stepRequired}</span>}
-            {s.help && <span className="text-muted-foreground block text-xs">{s.help}</span>}
+            {s.help && (
+              <span className="text-muted-foreground block text-[12.5px] leading-[18.75px]">
+                {s.help}
+              </span>
+            )}
           </li>
         ))}
       </ol>
       {version.procedureTitle && (
         <p className="text-muted-foreground">{C.instructions(version.procedureTitle)}</p>
       )}
-      <p className="text-muted-foreground text-xs">{checklistVersionMetaLine(version, timeZone)}</p>
+      <p className="text-muted-foreground text-[12.5px] leading-[18.75px]">
+        {checklistVersionMetaLine(version, timeZone)}
+      </p>
     </div>
   );
 }

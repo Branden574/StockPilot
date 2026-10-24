@@ -1,11 +1,12 @@
 'use client';
 
-import { AlertTriangle, CheckCircle2, Loader2 } from 'lucide-react';
+import { CheckCircle2, Loader2, TriangleAlert } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { DetailSection } from '@/components/patterns/detail-section';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -42,6 +43,14 @@ import {
 import type { ReceivingRunView } from '@/server/services/receiving-checklist';
 
 const C = RECEIVING_CHECKLIST_COPY;
+
+/**
+ * The shared radio's dot (components/ui/radio-group): a faint-ink ring that
+ * fills with an ink centre when chosen; the browser's own radio comes back in
+ * forced colors.
+ */
+const RADIO_DOT =
+  'bg-card checked:border-foreground checked:bg-foreground mt-px size-4 shrink-0 appearance-none rounded-full border border-[var(--ed-ink-4)] transition-colors checked:shadow-[inset_0_0_0_3px_hsl(var(--card))] focus-visible:outline-none disabled:cursor-not-allowed forced-colors:appearance-auto';
 
 type Draft = ChecklistAnswerDraft;
 type Drafts = ChecklistAnswerDrafts;
@@ -246,50 +255,54 @@ export function ReceivingCheckForm({ view }: { view: ReceivingRunView }) {
   );
 
   return (
-    <div className="space-y-6">
-      <p className="text-muted-foreground text-sm">{C.honesty}</p>
+    <div className="flex flex-col gap-4">
+      <p className="text-muted-foreground text-[13.5px] leading-[20.25px]">{C.honesty}</p>
 
-      <section
-        aria-labelledby="about-delivery"
-        className="border-border bg-card rounded-xl border p-4 text-sm"
+      <DetailSection
+        headingId="about-delivery"
+        title={C.aboutHeading}
+        bodyClassName="text-[13.5px] leading-[20.25px]"
       >
-        <h2 id="about-delivery" className="mb-2 font-medium">
-          {C.aboutHeading}
-        </h2>
         <ul className="space-y-1">
           {aboutLines.map((l, i) => (
-            <li
-              key={i}
-              className={l.tone === 'warn' ? 'text-amber-700 dark:text-amber-300' : undefined}
-            >
+            <li key={i} className={l.tone === 'warn' ? 'text-warning' : undefined}>
               {l.text}
             </li>
           ))}
         </ul>
         {view.lines.length > 0 && (
-          <ul className="text-muted-foreground mt-3 space-y-0.5 text-xs">
+          <ul className="text-muted-foreground mt-3 space-y-0.5 text-[12.5px] leading-[18.75px]">
             {view.lines.map((l, i) => (
               <li key={i}>
                 {l.itemName}
-                {l.sku ? ` · ${l.sku}` : ''} · {l.qtyReceived.toLocaleString('en-US')}
+                {l.sku ? (
+                  <>
+                    {' · '}
+                    <span className="font-mono text-[11.5px]">{l.sku}</span>
+                  </>
+                ) : null}{' '}
+                · <span className="tabular-nums">{l.qtyReceived.toLocaleString('en-US')}</span>
               </li>
             ))}
           </ul>
         )}
         {view.version.procedure && (
           <p className="mt-3">
-            <Link className="underline" href={`/dashboard/procedures/${view.version.procedure.id}`}>
+            <Link
+              className="text-accent hover:text-foreground underline underline-offset-2 transition-colors"
+              href={`/dashboard/procedures/${view.version.procedure.id}`}
+            >
               {C.instructions(view.version.procedure.title)}
             </Link>
           </p>
         )}
-      </section>
+      </DetailSection>
 
-      <div className="text-muted-foreground space-y-1 text-sm">
+      <div className="text-muted-foreground space-y-1 text-[13.5px] leading-[20.25px]">
         {statusLines.map((l, i) =>
           l.tone === 'done' ? (
             <p key={i} className="text-foreground flex items-center gap-1.5">
-              <CheckCircle2 className="h-4 w-4 text-emerald-600" aria-hidden />
+              <CheckCircle2 className="text-success h-4 w-4 shrink-0" aria-hidden />
               {l.text}
             </p>
           ) : (
@@ -298,7 +311,7 @@ export function ReceivingCheckForm({ view }: { view: ReceivingRunView }) {
         )}
       </div>
 
-      <ol className="space-y-4">
+      <ol className="space-y-3">
         {steps.map((s, i) => {
           const d = drafts[s.key] ?? { value: '', note: '' };
           const flagged = missing.has(s.key) || needsNote.has(s.key) || badKey === s.key;
@@ -306,19 +319,23 @@ export function ReceivingCheckForm({ view }: { view: ReceivingRunView }) {
           return (
             <li
               key={s.key}
-              className={`rounded-xl border p-4 ${flagged ? 'border-destructive' : 'border-border'}`}
+              className={`bg-card rounded-lg border p-4 ${flagged ? 'border-destructive' : 'border-border'}`}
               data-step={s.key}
             >
               <fieldset disabled={readOnly || busy !== null}>
-                <legend className="font-medium">
+                <legend className="text-foreground text-[13.5px] font-medium leading-[20.25px]">
                   {i + 1}. {s.label}
                   {s.required && (
-                    <span className="text-muted-foreground ml-2 text-xs">
+                    <span className="text-muted-foreground ml-2 text-[12px] font-normal">
                       ({C.requiredToComplete})
                     </span>
                   )}
                 </legend>
-                {s.help && <p className="text-muted-foreground mt-1 text-xs">{s.help}</p>}
+                {s.help && (
+                  <p className="text-muted-foreground mt-1 text-[12.5px] leading-[18.75px]">
+                    {s.help}
+                  </p>
+                )}
                 <div className="mt-3">
                   {s.kind === 'check' && (
                     <div role="radiogroup" aria-label={s.label} className="flex flex-wrap gap-2">
@@ -329,12 +346,14 @@ export function ReceivingCheckForm({ view }: { view: ReceivingRunView }) {
                           ['na', C.notApplicable],
                         ] as const
                       ).map(([v, label]) => (
+                        // The shared card radio's look: the chosen answer is
+                        // the ink edge and the ink dot, never a colour alone.
                         <label
                           key={v}
-                          className={`flex min-h-10 cursor-pointer items-center gap-2 rounded-md border px-3 text-sm ${
+                          className={`has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-offset-background flex min-h-10 cursor-pointer items-center gap-2 rounded-md border px-3 text-[13px] transition-colors has-[:disabled]:cursor-not-allowed has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-offset-2 ${
                             d.value === v
-                              ? 'border-foreground bg-muted font-medium'
-                              : 'border-border'
+                              ? 'border-foreground bg-sunk font-medium shadow-[0_0_0_1px_hsl(var(--foreground))]'
+                              : 'border-border bg-card hover:border-[var(--ed-line-strong)]'
                           }`}
                         >
                           <input
@@ -343,6 +362,7 @@ export function ReceivingCheckForm({ view }: { view: ReceivingRunView }) {
                             value={v}
                             checked={d.value === v}
                             onChange={() => setDraft(s.key, { value: v })}
+                            className={RADIO_DOT}
                           />
                           {label}
                         </label>
@@ -354,7 +374,7 @@ export function ReceivingCheckForm({ view }: { view: ReceivingRunView }) {
                       inputMode="numeric"
                       aria-label={s.label}
                       placeholder={C.countPlaceholder}
-                      className="max-w-40"
+                      className="max-w-40 font-mono tabular-nums"
                       value={d.value}
                       onChange={(e) => setDraft(s.key, { value: e.target.value })}
                     />
@@ -370,8 +390,8 @@ export function ReceivingCheckForm({ view }: { view: ReceivingRunView }) {
                     />
                   )}
                 </div>
-                <div className="mt-3 space-y-1">
-                  <Label htmlFor={noteId} className="text-muted-foreground text-xs">
+                <div className="mt-3 space-y-1.5">
+                  <Label htmlFor={noteId} className="text-muted-foreground text-[12.5px]">
                     {s.kind === 'check' && d.value === 'fail' ? C.whatWasWrong : C.notes}
                   </Label>
                   <Input
@@ -387,7 +407,7 @@ export function ReceivingCheckForm({ view }: { view: ReceivingRunView }) {
         })}
       </ol>
 
-      <div className="space-y-1">
+      <div className="space-y-1.5">
         <Label htmlFor="run-note">{C.runNote}</Label>
         <Textarea
           id="run-note"
@@ -402,10 +422,10 @@ export function ReceivingCheckForm({ view }: { view: ReceivingRunView }) {
       {error && (
         <div
           role="alert"
-          className="border-destructive/40 text-destructive flex items-start gap-2 rounded-md border p-3 text-sm"
+          className="border-destructive/30 bg-destructive-wash text-destructive flex items-start gap-2 rounded-md border px-3 py-2.5 text-[13px] leading-[19.5px]"
         >
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-          <div className="space-y-2">
+          <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+          <div className="min-w-0 space-y-2 [overflow-wrap:anywhere]">
             <p>{error.message}</p>
             {(error.kind === 'changed' || error.kind === 'completed') && (
               <Button type="button" variant="outline" size="sm" onClick={reload}>
@@ -426,9 +446,11 @@ export function ReceivingCheckForm({ view }: { view: ReceivingRunView }) {
           >
             {busy === 'save' ? <Loader2 className="h-4 w-4 animate-spin" /> : C.saveProgress}
           </Button>
+          {/* Completing commits the run in front of you: the ink button
+              (DESIGN-SPEC 6.2). */}
           <Button
             type="button"
-            variant="gradient"
+            variant="default"
             onClick={() => setConfirmOpen(true)}
             disabled={busy !== null}
           >
@@ -452,7 +474,7 @@ export function ReceivingCheckForm({ view }: { view: ReceivingRunView }) {
               Cancel
             </Button>
             <Button
-              variant="gradient"
+              variant="default"
               onClick={() => {
                 setConfirmOpen(false);
                 void send(true);

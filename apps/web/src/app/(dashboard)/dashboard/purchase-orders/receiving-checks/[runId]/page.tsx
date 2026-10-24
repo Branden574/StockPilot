@@ -1,6 +1,6 @@
-import Link from 'next/link';
 import { notFound, unstable_rethrow } from 'next/navigation';
 
+import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { ReceivingCheckForm } from '@/components/po/receiving-check-form';
 import { ReceivingChecklistLoadFailed } from '@/components/po/receiving-checklist-load-failed';
 import { reportError } from '@/lib/error-reporter';
@@ -13,6 +13,13 @@ import {
 import { RECEIVING_CHECKLIST_COPY, uuidSchema } from '@stockpilot/core';
 
 export const metadata = { title: 'Receiving checklist' };
+
+/** The page area (DESIGN-SPEC 4 and 5.3), the box every redesigned page draws. */
+const PAGE_BOX =
+  'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
+
+/** The run at the new PO form's reading width. */
+const FORM_WIDTH = 'w-full max-w-[960px]';
 
 /**
  * One receiving checklist run (F4-1). A static segment beside [id] on
@@ -45,46 +52,54 @@ export default async function ReceivingCheckPage({
   }
   if (!view) {
     return (
-      <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-        <div className="mb-6">
-          <Link
-            href="/dashboard/purchase-orders"
-            className="text-muted-foreground hover:text-foreground text-sm"
-          >
-            ← Back to purchase orders
-          </Link>
-        </div>
-        <ReceivingChecklistLoadFailed
-          retryHref={`/dashboard/purchase-orders/receiving-checks/${runId}`}
+      <div className={PAGE_BOX}>
+        {/* Nothing about the run is known, so the h1 is the page's name (its
+            metadata title) and the panel under it says what failed. */}
+        <PageHeader
+          back={
+            <PageHeaderBackLink href="/dashboard/purchase-orders">
+              ← Back to purchase orders
+            </PageHeaderBackLink>
+          }
+          title={RECEIVING_CHECKLIST_COPY.editorTitle}
+          className={FORM_WIDTH}
         />
+        <div className={FORM_WIDTH}>
+          <ReceivingChecklistLoadFailed
+            retryHref={`/dashboard/purchase-orders/receiving-checks/${runId}`}
+          />
+        </div>
       </div>
     );
   }
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href={`/dashboard/purchase-orders/${view.po.id}`}
-          className="text-muted-foreground hover:text-foreground text-sm"
-        >
-          ← Back to {view.po.poNumber}
-        </Link>
-      </div>
-      <h1 className="text-xl font-semibold tracking-tight">
-        {RECEIVING_CHECKLIST_COPY.runHeading(
+    <div className={PAGE_BOX}>
+      {/* The record's header (DESIGN-SPEC 6.1): which receipt of which PO is
+          the h1, the version it records against under it. */}
+      <PageHeader
+        back={
+          <PageHeaderBackLink href={`/dashboard/purchase-orders/${view.po.id}`}>
+            ← Back to {view.po.poNumber}
+          </PageHeaderBackLink>
+        }
+        title={RECEIVING_CHECKLIST_COPY.runHeading(
           view.receipt.receiptNumber,
           view.po.poNumber,
           view.po.supplierName,
         )}
-      </h1>
-      <p className="text-muted-foreground mb-6 mt-1 text-sm">
-        {RECEIVING_CHECKLIST_COPY.versionLine(view.version.versionNumber, view.version.title)}
-      </p>
-      {/* Keyed on the run only (desk check F3): a newer save reaching the
-          page must not remount the form over typed answers. The form adopts
-          it when nothing is typed, and otherwise keeps the answers and offers
-          Reload. */}
-      <ReceivingCheckForm key={view.run.id} view={view} />
+        subline={RECEIVING_CHECKLIST_COPY.versionLine(
+          view.version.versionNumber,
+          view.version.title,
+        )}
+        className={FORM_WIDTH}
+      />
+      <div className={FORM_WIDTH}>
+        {/* Keyed on the run only (desk check F3): a newer save reaching the
+            page must not remount the form over typed answers. The form adopts
+            it when nothing is typed, and otherwise keeps the answers and
+            offers Reload. */}
+        <ReceivingCheckForm key={view.run.id} view={view} />
+      </div>
     </div>
   );
 }
