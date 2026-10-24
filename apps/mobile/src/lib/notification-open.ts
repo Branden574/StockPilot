@@ -296,8 +296,13 @@ async function readTargetOrganization(
   id: string,
 ): Promise<TargetResolution> {
   try {
-    const read = client.from(table) as OrganizationRead;
-    const { data, error } = await read.select('organization_id').eq('id', id).maybeSingle();
+    // A read, chained straight off from(): the web's stock-write guard
+    // (inventory-list-invalidation.guard.test.ts) scans the phone too, and
+    // can tell a table it cannot name is only read when .select follows.
+    const { data, error } = await (client.from(table) as OrganizationRead)
+      .select('organization_id')
+      .eq('id', id)
+      .maybeSingle();
     if (error) return { kind: 'error', errorClass: errorClassOf(error) };
     const orgId = (data as { organization_id?: unknown } | null)?.organization_id;
     return typeof orgId === 'string' && orgId ? { kind: 'found', orgId } : { kind: 'none' };
