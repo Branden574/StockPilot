@@ -1032,7 +1032,12 @@ describe('tours: the same targets, the same start rules, the reference buttons',
 
   it('starts from ?tour=<id>, only on the focused screen, never while What’s New is up', () => {
     expect(code).toContain('if (params.tour === tour.id && !autoStarted.current) {');
-    expect(code).toContain("visible={isFocused && phase !== 'idle' && !whatsNewOpen}");
+    // 2026-10-24 (iPhone push tap, review 4): the Modal also yields while a
+    // tapped notification's notice holds the slot, as it does to What's New.
+    // Was: visible={isFocused && phase !== 'idle' && !whatsNewOpen}.
+    expect(code).toContain(
+      "visible={isFocused && phase !== 'idle' && !whatsNewOpen && !noticeOpen}",
+    );
     expect(code).toContain("setTourVisible(tour.id, isFocused && phase !== 'idle');");
     expect(code).toContain('setActiveTour(tour.id);');
   });

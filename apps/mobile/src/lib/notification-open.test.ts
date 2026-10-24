@@ -17,6 +17,8 @@ import {
   focusedStackRoute,
   nextOpenStep,
   noticeContent,
+  noticeShows,
+  openStepRunsUnder,
   resolutionReason,
   resolveTargetWorkspace,
   stepAfterResolution,
@@ -1213,5 +1215,80 @@ describe('the notices say plainly what happened', () => {
     for (const notice of ALL_NOTICES) {
       expect(PUSH_OPEN_REASONS as readonly string[]).toContain(notice.kind);
     }
+  });
+});
+
+/**
+ * Review 4 (2026-10-24), IMPORTANT: iOS refuses to present a sheet while
+ * another is on screen or still fading out, and React Native 0.86 marks a
+ * Modal presented before it asks and never asks again
+ * (RCTModalHostViewComponentView.mm). A notice presented over a tour's offer
+ * was never seen; it still held the interruption slot, so the tap stayed
+ * pending and What's New waited for it all launch. One interruption at a
+ * time, and the first to show keeps the slot.
+ */
+describe('the notice takes the one interruption slot only when it is free, then keeps it', () => {
+  const free = {
+    hasNotice: true,
+    splashActive: false,
+    whatsNewOpen: false,
+    holdsSlot: false,
+    tourShown: false,
+  };
+
+  it('shows when nothing else is on screen', () => {
+    expect(noticeShows(free)).toBe(true);
+  });
+
+  it("waits for a tour's offer or run on screen (the Home tour offer at a cold start)", () => {
+    expect(noticeShows({ ...free, tourShown: true })).toBe(false);
+  });
+
+  it('once on screen, keeps the slot when a tour offer comes up after it (the tour yields)', () => {
+    expect(noticeShows({ ...free, holdsSlot: true, tourShown: true })).toBe(true);
+  });
+
+  it("waits for the cold-launch splash and What's New, slot or not", () => {
+    for (const holdsSlot of [false, true]) {
+      expect(noticeShows({ ...free, holdsSlot, splashActive: true })).toBe(false);
+      expect(noticeShows({ ...free, holdsSlot, whatsNewOpen: true })).toBe(false);
+    }
+  });
+
+  it('nothing shows without a notice', () => {
+    expect(noticeShows({ ...free, hasNotice: false })).toBe(false);
+    expect(noticeShows({ ...free, hasNotice: false, holdsSlot: true })).toBe(false);
+  });
+});
+
+/**
+ * Review 4: Try again closed the sheet and the read failed again at once
+ * offline, so the next sheet was presented into the closing one's fade-out,
+ * and iOS refused it. Try again now keeps the one sheet: it says Checking
+ * while the open step runs again under it, and the answer replaces it.
+ */
+describe('the open step runs again only under the Checking notice', () => {
+  it('runs with no notice, or under the Checking notice', () => {
+    expect(openStepRunsUnder(null)).toBe(true);
+    expect(openStepRunsUnder({ kind: 'checking', noun: 'order' })).toBe(true);
+    expect(openStepRunsUnder({ kind: 'checking', noun: 'return' })).toBe(true);
+  });
+
+  it('every other notice waits for the person', () => {
+    const waiting: IntentNotice[] = [
+      { kind: 'account-mismatch' },
+      { kind: 'unsupported', title: 'T', body: 'B' },
+      { kind: 'unavailable' },
+      { kind: 'retry' },
+      {
+        kind: 'switch',
+        orgId: 'org-a',
+        orgName: 'Acme Demo Co',
+        activeOrgName: 'Ledger QA Co',
+        noun: 'order',
+        native: `/order/${ORDER}`,
+      },
+    ];
+    for (const notice of waiting) expect(openStepRunsUnder(notice), notice.kind).toBe(false);
   });
 });

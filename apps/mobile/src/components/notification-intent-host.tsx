@@ -21,6 +21,8 @@ import {
   createWorkspaceChecks,
   focusedStackRoute,
   nextOpenStep,
+  noticeShows,
+  openStepRunsUnder,
   resolutionReason,
   resolveTargetWorkspace,
   stepAfterResolution,
@@ -30,7 +32,13 @@ import {
 } from '@/lib/notification-open';
 import { errorClassOf, pushOpenDiag, type PushOpenReason } from '@/lib/push-open-diagnostics';
 import { supabase } from '@/lib/supabase';
-import { setTourVisible, useWhatsNewOpen } from '@/lib/tour-targets';
+import {
+  NOTIFICATION_NOTICE_LOCK_ID,
+  setTourVisible,
+  useAnyTourVisibleExcept,
+  useNotificationNoticeOpen,
+  useWhatsNewOpen,
+} from '@/lib/tour-targets';
 import {
   getWorkspaceSnapshot,
   retryWorkspace,
@@ -38,9 +46,6 @@ import {
   useWorkspaceSnapshot,
   workspaceShownForAccount,
 } from '@/lib/use-workspace';
-
-/** The interruption lock (tour-targets.ts): What's New waits while it shows. */
-const NOTICE_LOCK_ID = 'notification-notice';
 
 /** A notice on screen, for one tap. */
 interface ShownNotice {
@@ -94,7 +99,10 @@ function routeKindOf(path: string): string {
  * a slow connection never looks like a dead tap (notification-open.ts
  * createWorkspaceChecks). Another workspace is offered as a switch, never
  * made silently; while the switch runs the notice says so, and the
- * destination opens once the new workspace is published. A tap never
+ * destination opens once the new workspace is published. The notice takes
+ * the one interruption slot only when it is free, and keeps it until it
+ * closes (notification-open.ts noticeShows): iOS never shows a sheet
+ * presented over another. A tap never
  * approves, posts stock, opens Outlook or sends email: this only reads and
  * navigates (notification-intent-wiring.test.ts).
  */
@@ -109,6 +117,10 @@ export function NotificationIntentHost() {
   const { activeOrgId } = workspace;
   const { splashActive } = useColdLaunchGate();
   const whatsNewOpen = useWhatsNewOpen();
+  // The one interruption slot (tour-targets.ts): whether this notice holds
+  // it, and whether a tour's offer or run does.
+  const holdsSlot = useNotificationNoticeOpen();
+  const tourShown = useAnyTourVisibleExcept(NOTIFICATION_NOTICE_LOCK_ID);
   const offline = isOfflineState(useNetworkState());
 
   const [shown, setShown] = React.useState<ShownNotice | null>(null);
@@ -173,7 +185,10 @@ export function NotificationIntentHost() {
   );
 
   React.useEffect(() => {
-    if (!intent || notice || checks.running(intent.seq)) return;
+    if (!intent || checks.running(intent.seq)) return;
+    // A notice waits for the person, except the Checking notice that Try
+    // again puts up: the step runs again under it, on the one sheet (review 4).
+    if (!openStepRunsUnder(notice?.notice ?? null)) return;
     const take = notificationIntents.take(
       userId ? { id: userId, email: userEmail } : null,
       Date.now(),
@@ -347,7 +362,15 @@ export function NotificationIntentHost() {
         return;
       }
       case 'retry':
-        setShown(null);
+        // The same sheet says Checking while the open step runs again under
+        // it, and the answer replaces it (review 4). Closing it first let the
+        // next sheet be presented into its closing, which iOS refuses: offline
+        // the read fails again within milliseconds.
+        setShown({
+          seq: notice.seq,
+          notice: { kind: 'checking', noun: targetNoun(it.target.ok ? it.target.routeKind : '') },
+          busy: false,
+        });
         // No workspace on screen (a start offline): load it again as well. The
         // effect then waits for it and reads the order's workspace again.
         if (!getWorkspaceSnapshot().activeOrgId) void retryWorkspace();
@@ -371,13 +394,21 @@ export function NotificationIntentHost() {
     }
   };
 
-  // The notice waits for the cold-launch splash and for What's New, and holds
-  // the interruption lock while it shows so What's New waits for it in turn.
-  const visible = notice !== null && !splashActive && !whatsNewOpen;
+  // One interruption at a time (review 4, notification-open.ts noticeShows):
+  // the notice waits for the cold-launch splash, What's New and any tour on
+  // screen before it first shows, then holds the slot until it closes. What's
+  // New waits for it, and a tour's Modal yields to it (mobile-tour.tsx).
+  const visible = noticeShows({
+    hasNotice: notice !== null,
+    splashActive,
+    whatsNewOpen,
+    holdsSlot,
+    tourShown,
+  });
   React.useEffect(() => {
     if (!visible) return;
-    setTourVisible(NOTICE_LOCK_ID, true);
-    return () => setTourVisible(NOTICE_LOCK_ID, false);
+    setTourVisible(NOTIFICATION_NOTICE_LOCK_ID, true);
+    return () => setTourVisible(NOTIFICATION_NOTICE_LOCK_ID, false);
   }, [visible]);
 
   if (!visible || !notice) return null;

@@ -26,6 +26,7 @@ import {
   measureTarget,
   setActiveTour,
   setTourVisible,
+  useNotificationNoticeOpen,
   useWhatsNewOpen,
   type TargetRect,
 } from '@/lib/tour-targets';
@@ -63,6 +64,11 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
   // Mutual lock: if What's New grabbed the interruption slot first, keep this
   // tour's Modal hidden until it closes (we keep our phase, so we re-present).
   const whatsNewOpen = useWhatsNewOpen();
+  // The same for a tapped notification's notice once it holds the slot: iOS
+  // refuses to present a sheet over another, and React Native never asks
+  // again. This tour still reports itself up by its phase (below), so a
+  // notice that comes later waits for it instead.
+  const noticeOpen = useNotificationNoticeOpen();
   // Tab navigators keep every screen MOUNTED — without this gate all
   // screens' offers open their Modals at once and the topmost (wrong)
   // one wins. Only the focused screen may present.
@@ -234,7 +240,7 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
       </Pressable>
 
       <Modal
-        visible={isFocused && phase !== 'idle' && !whatsNewOpen}
+        visible={isFocused && phase !== 'idle' && !whatsNewOpen && !noticeOpen}
         transparent
         statusBarTranslucent
         animationType="none"

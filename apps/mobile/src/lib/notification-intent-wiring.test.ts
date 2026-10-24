@@ -4,6 +4,8 @@ import * as path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { attrText, parseTsx, tagOf, walkJsx, type JsxNode } from './__fixtures__/jsx-touch-audit';
+
 /**
  * WIRING PINS for the iPhone push-tap fix (Phase 3).
  *
@@ -35,6 +37,20 @@ const rel = (file: string) => path.relative(ROOT, file).split(path.sep).join('/'
 /** Source with comments removed: a comment may name what the code may not do. */
 const codeOnly = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 const flat = (src: string) => codeOnly(src).replace(/\s+/g, ' ');
+
+/** The notice's JSX elements, each with its JSX ancestors (outermost first),
+ *  read with the TypeScript parser as sheet-a11y-structure.test.ts does. */
+function noticeTree() {
+  const file = 'src/components/notification-intent-notice.tsx';
+  const sf = parseTsx(read(file), file);
+  const nodes: { el: JsxNode; ancestors: JsxNode[] }[] = [];
+  walkJsx(sf, (el, ancestors) => nodes.push({ el, ancestors: [...ancestors] }));
+  return {
+    nodes,
+    tag: (el: JsxNode) => tagOf(el, sf),
+    attr: (el: JsxNode, name: string) => attrText(el, name, sf),
+  };
+}
 
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];
@@ -258,13 +274,65 @@ describe('7. the host and the notice only read and navigate', () => {
     }
   });
 
-  it("the host opens with router.push, waits for the splash and What's New, and holds the interruption lock", () => {
+  // 2026-10-24 (review 4): the notice is a full member of the interruption
+  // lock. It waited only for the splash and What's New, so it was presented
+  // over a tour's offer, which iOS refused; it still held the lock, so the tap
+  // stayed pending and What's New waited for it all launch. Was:
+  // `!splashActive && !whatsNewOpen` and a lock id of the host's own.
+  it('the host opens with router.push, takes the one interruption slot only when it is free, and keeps it while it shows', () => {
     const code = codeOnly(host);
     expect(code).toContain('router.push(');
-    expect(code).toContain('!splashActive && !whatsNewOpen');
-    expect(code).toContain('setTourVisible(NOTICE_LOCK_ID, true);');
-    expect(code).toContain('setTourVisible(NOTICE_LOCK_ID, false)');
-    expect(code).toContain("const NOTICE_LOCK_ID = 'notification-notice';");
+    // The lock id is the shared one a tour's Modal yields to (tour-targets.ts).
+    expect(code).not.toContain('const NOTICE_LOCK_ID');
+    expect(code).toContain('const holdsSlot = useNotificationNoticeOpen();');
+    expect(code).toContain(
+      'const tourShown = useAnyTourVisibleExcept(NOTIFICATION_NOTICE_LOCK_ID);',
+    );
+    expect(flat(host)).toContain(
+      'const visible = noticeShows({ hasNotice: notice !== null, splashActive, whatsNewOpen, holdsSlot, tourShown, });',
+    );
+    expect(code).toContain('setTourVisible(NOTIFICATION_NOTICE_LOCK_ID, true);');
+    expect(code).toContain('setTourVisible(NOTIFICATION_NOTICE_LOCK_ID, false)');
+    expect(code).toContain('if (!visible || !notice) return null;');
+  });
+
+  it("a tour's Modal yields to the notice while it holds the slot, as it does to What's New (review 4)", () => {
+    const tour = flat(read('src/components/onboarding/mobile-tour.tsx'));
+    expect(tour).toContain('const noticeOpen = useNotificationNoticeOpen();');
+    expect(tour).toContain(
+      "visible={isFocused && phase !== 'idle' && !whatsNewOpen && !noticeOpen}",
+    );
+    // It still tells the lock it is up by its phase, so the notice waits for it.
+    expect(tour).toContain("setTourVisible(tour.id, isFocused && phase !== 'idle');");
+  });
+
+  // 2026-10-24 (review 4): Try again closed the sheet (setShown(null)) and the
+  // open step read again at once. Offline that read failed within
+  // milliseconds, and the next sheet was presented into the closing one's
+  // fade-out, which iOS refused.
+  it('Try again keeps the one sheet on screen: it says Checking, and the open step runs again under it (review 4)', () => {
+    const code = codeOnly(host);
+    const start = code.indexOf("case 'retry':");
+    expect(start).toBeGreaterThan(-1);
+    const body = code.slice(start, code.indexOf('return;', start));
+    expect(body).not.toContain('setShown(null)');
+    expect(flat(body)).toMatch(
+      /setShown\(\{ seq: notice\.seq, notice: \{ kind: 'checking', noun: targetNoun\(it\.target\.ok \? it\.target\.routeKind : ''\) \}, busy: false, \}\);/,
+    );
+    // No workspace on screen (a start offline): load it again as well.
+    expect(body).toContain('if (!getWorkspaceSnapshot().activeOrgId) void retryWorkspace();');
+    // The open effect waits for a notice, except the Checking one.
+    const effectAt = code.indexOf(
+      'React.useEffect(() => {',
+      code.indexOf('const open = React.useCallback('),
+    );
+    const first = code.slice(
+      effectAt,
+      code.indexOf('const take = notificationIntents.take(', effectAt),
+    );
+    expect(first).toContain('if (!intent || checks.running(intent.seq)) return;');
+    expect(first).toContain('if (!openStepRunsUnder(notice?.notice ?? null)) return;');
+    expect(first).not.toMatch(/\|\|\s*notice\s*\|\|/);
   });
 
   it('router.push only queues the move on this expo-router, so open() has nothing to catch', () => {
@@ -405,6 +473,30 @@ describe('7. the host and the notice only read and navigate', () => {
       "import { WORKSPACE_SWITCH_OFFLINE_COPY } from '@/components/workspace-switcher';",
     );
     expect(codeOnly(notice)).toContain('{WORKSPACE_SWITCH_OFFLINE_COPY}');
+  });
+
+  // 2026-10-24 (review 4): React Native 0.86 marks a Modal presented before it
+  // asks UIKit, and never asks again; UIKit refuses while another sheet is on
+  // screen or still fading out. The notice faded with UIKit
+  // (animationType="fade"), so What's New, a tour or the next notice presented
+  // into its fade-out was never seen. It presents as What's New and the tours
+  // do: no UIKit animation, and its own content fades in.
+  it("the notice presents with no UIKit animation and fades its own content in, as What's New and the tours do (review 4)", () => {
+    const { nodes, tag, attr } = noticeTree();
+    const modals = nodes.filter((n) => tag(n.el) === 'Modal');
+    expect(modals).toHaveLength(1);
+    expect(attr(modals[0]!.el, 'animationType')).toBe('none');
+    expect(notice).not.toContain('animationType="fade"');
+    // Everything inside the Modal sits in one Animated.View that fades in.
+    const inModal = nodes.filter((n) => n.ancestors.includes(modals[0]!.el));
+    const top = inModal.filter((n) => n.ancestors[n.ancestors.length - 1] === modals[0]!.el);
+    expect(top.map((n) => tag(n.el))).toEqual(['Animated.View']);
+    expect(attr(top[0]!.el, 'style')).toMatch(/opacity: fade/);
+    const container = nodes.find((n) => attr(n.el, 'accessibilityViewIsModal') === 'true');
+    expect(container?.ancestors).toContain(top[0]!.el);
+    expect(flat(notice)).toMatch(
+      /Animated\.timing\(fade, \{ toValue: 1, duration: NOTICE_FADE_MS, useNativeDriver: true, \}\)/,
+    );
   });
 
   it('the notice is a modal sheet VoiceOver treats as one, and announces itself', () => {

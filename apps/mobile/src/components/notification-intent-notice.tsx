@@ -2,10 +2,12 @@ import * as React from 'react';
 import {
   AccessibilityInfo,
   ActivityIndicator,
+  Animated,
   Modal,
   Pressable,
   ScrollView,
   StyleSheet,
+  useAnimatedValue,
   View,
 } from 'react-native';
 
@@ -37,6 +39,13 @@ import { useTheme } from '@/lib/use-theme';
  * same rule its sheet applies. While the switch it started runs, the sheet
  * says "Switching to <Org>." with a spinner and nothing to press: a switch
  * cannot be stopped half-way.
+ *
+ * Presented as What's New and the tours are (review 4): with no UIKit
+ * animation, its own content fading in. iOS refuses to present a sheet while
+ * another is on screen or still fading out, and React Native 0.86 marks a
+ * Modal presented before it asks and never asks again, so a notice that
+ * faded out with UIKit left What's New, a tour or the next notice presented
+ * into its fade-out and never seen. Closing is instant.
  */
 export function NotificationIntentNotice({
   notice,
@@ -56,78 +65,108 @@ export function NotificationIntentNotice({
   React.useEffect(() => {
     AccessibilityInfo.announceForAccessibility(announcement);
   }, [announcement]);
+  const fade = useAnimatedValue(0);
+  // Once, when the sheet first shows: its content fades in. The fade starts
+  // at once, so the sheet can never stay invisible over the app; with Reduce
+  // Motion on it is shown whole as soon as that is known.
+  React.useEffect(() => {
+    let cancelled = false;
+    const appear = Animated.timing(fade, {
+      toValue: 1,
+      duration: NOTICE_FADE_MS,
+      useNativeDriver: true,
+    });
+    appear.start();
+    void AccessibilityInfo.isReduceMotionEnabled().then(
+      (reduced) => {
+        if (cancelled || !reduced) return;
+        appear.stop();
+        fade.setValue(1);
+      },
+      () => undefined,
+    );
+    return () => {
+      cancelled = true;
+      appear.stop();
+    };
+  }, [fade]);
   const dismissAction = content.actions.find((a) => a.id === content.dismiss);
   const dismiss = () => {
     if (content.dismiss) onAction(content.dismiss);
   };
   return (
-    <Modal transparent animationType="fade" onRequestClose={dismiss}>
-      <View style={{ flex: 1 }} accessibilityViewIsModal onAccessibilityEscape={dismiss}>
-        <Pressable
-          style={[
-            StyleSheet.absoluteFill,
-            { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
-          ]}
-          onPress={dismiss}
-          onAccessibilityTap={dismiss}
-          disabled={content.dismiss === null}
-          accessible={content.dismiss !== null}
-          accessibilityRole="button"
-          accessibilityLabel={dismissAction?.label ?? 'Close'}
-        />
-        <View style={{ flex: 1, justifyContent: 'center', padding: 24 }} pointerEvents="box-none">
-          <Card padding={18}>
-            {content.progress ? (
-              <ActivityIndicator
-                color={c.ink}
-                style={{ alignSelf: 'flex-start', marginBottom: 12 }}
-              />
-            ) : null}
-            {content.heading ? (
-              <Body
-                size={16}
-                color={c.ink}
-                accessibilityRole="header"
-                style={{ fontFamily: FONT.display }}
-              >
-                {content.heading}
-              </Body>
-            ) : null}
-            <ScrollView style={{ maxHeight: 320, marginTop: content.heading ? 8 : 0 }}>
-              {content.lines.map((line, i) => (
+    <Modal transparent animationType="none" onRequestClose={dismiss}>
+      <Animated.View style={{ flex: 1, opacity: fade }}>
+        <View style={{ flex: 1 }} accessibilityViewIsModal onAccessibilityEscape={dismiss}>
+          <Pressable
+            style={[
+              StyleSheet.absoluteFill,
+              { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+            ]}
+            onPress={dismiss}
+            onAccessibilityTap={dismiss}
+            disabled={content.dismiss === null}
+            accessible={content.dismiss !== null}
+            accessibilityRole="button"
+            accessibilityLabel={dismissAction?.label ?? 'Close'}
+          />
+          <View style={{ flex: 1, justifyContent: 'center', padding: 24 }} pointerEvents="box-none">
+            <Card padding={18}>
+              {content.progress ? (
+                <ActivityIndicator
+                  color={c.ink}
+                  style={{ alignSelf: 'flex-start', marginBottom: 12 }}
+                />
+              ) : null}
+              {content.heading ? (
                 <Body
-                  key={`${i}:${line}`}
-                  size={14}
-                  color={c.ink2}
-                  style={i > 0 ? { marginTop: 8 } : undefined}
+                  size={16}
+                  color={c.ink}
+                  accessibilityRole="header"
+                  style={{ fontFamily: FONT.display }}
                 >
-                  {line}
-                </Body>
-              ))}
-              {notice.kind === 'switch' && offline && !busy ? (
-                <Body size={12.5} muted style={{ marginTop: 8 }}>
-                  {WORKSPACE_SWITCH_OFFLINE_COPY}
+                  {content.heading}
                 </Body>
               ) : null}
-            </ScrollView>
-            {content.actions.length > 0 ? (
-              <View style={{ marginTop: 16, gap: 8 }}>
-                {content.actions.map((a) => (
-                  <Button
-                    key={a.id}
-                    variant={a.primary ? 'primary' : 'ghost'}
-                    block
-                    disabled={a.disabled}
-                    onPress={() => onAction(a.id)}
+              <ScrollView style={{ maxHeight: 320, marginTop: content.heading ? 8 : 0 }}>
+                {content.lines.map((line, i) => (
+                  <Body
+                    key={`${i}:${line}`}
+                    size={14}
+                    color={c.ink2}
+                    style={i > 0 ? { marginTop: 8 } : undefined}
                   >
-                    {a.label}
-                  </Button>
+                    {line}
+                  </Body>
                 ))}
-              </View>
-            ) : null}
-          </Card>
+                {notice.kind === 'switch' && offline && !busy ? (
+                  <Body size={12.5} muted style={{ marginTop: 8 }}>
+                    {WORKSPACE_SWITCH_OFFLINE_COPY}
+                  </Body>
+                ) : null}
+              </ScrollView>
+              {content.actions.length > 0 ? (
+                <View style={{ marginTop: 16, gap: 8 }}>
+                  {content.actions.map((a) => (
+                    <Button
+                      key={a.id}
+                      variant={a.primary ? 'primary' : 'ghost'}
+                      block
+                      disabled={a.disabled}
+                      onPress={() => onAction(a.id)}
+                    >
+                      {a.label}
+                    </Button>
+                  ))}
+                </View>
+              ) : null}
+            </Card>
+          </View>
         </View>
-      </View>
+      </Animated.View>
     </Modal>
   );
 }
+
+/** The sheet's fade-in, as What's New's and the tours' cards fade in. */
+const NOTICE_FADE_MS = 180;

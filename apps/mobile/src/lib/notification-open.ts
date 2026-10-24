@@ -421,6 +421,50 @@ export function createWorkspaceChecks(pendingSeq: () => number | null): Workspac
   };
 }
 
+/**
+ * Whether the open step may run while `notice` is set for the pending tap
+ * (review 4). A notice waits for the person, except the Checking notice that
+ * Try again puts up: the step runs again under it, so one sheet stays on
+ * screen for the tap and the answer replaces it or closes it. Closing the
+ * sheet first let the next one be presented into its closing, which iOS
+ * refuses (noticeShows). A check still running is waited for separately
+ * (createWorkspaceChecks).
+ */
+export function openStepRunsUnder(notice: IntentNotice | null): boolean {
+  return notice === null || notice.kind === 'checking';
+}
+
+/** What decides whether the notice is on screen (NotificationIntentHost). */
+export interface NoticeSlotInput {
+  /** A notice is set for the tap pending now. */
+  hasNotice: boolean;
+  /** The cold-launch splash is still up. */
+  splashActive: boolean;
+  /** What's New is on screen. */
+  whatsNewOpen: boolean;
+  /** The notice already holds the interruption slot: it is on screen
+   *  (tour-targets.ts useNotificationNoticeOpen). */
+  holdsSlot: boolean;
+  /** Another holder of the slot, a tour's offer or run, is on screen
+   *  (tour-targets.ts useAnyTourVisibleExcept). */
+  tourShown: boolean;
+}
+
+/**
+ * Whether the notice may be on screen (review 4): one interruption at a time,
+ * and the first to show keeps the slot. The notice waits for the cold-launch
+ * splash, What's New and any tour on screen before it first shows, then holds
+ * the slot until it closes; a tour's Modal yields to it, and What's New waits
+ * for it. iOS refuses to present a sheet while another is on screen, and
+ * React Native 0.86 marks a Modal presented before it asks and never asks
+ * again: a notice presented over a tour's offer was never seen, yet held the
+ * slot, so the tap stayed pending and What's New waited for it all launch.
+ */
+export function noticeShows(input: NoticeSlotInput): boolean {
+  if (!input.hasNotice || input.splashActive || input.whatsNewOpen) return false;
+  return input.holdsSlot || !input.tourShown;
+}
+
 // ── The notice (notification-intent-notice.tsx renders this) ──────────────
 
 export const NOTICE_UNAVAILABLE_COPY =
