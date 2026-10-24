@@ -5,8 +5,10 @@ import { PoForm, type InitialPoValues } from '@/components/po/po-form';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { requireOrgContext } from '@/lib/auth/session';
 import { purchaseOrderItemTypes } from '@/lib/purchase-orders/item-types';
+import { createClient } from '@/lib/supabase/server';
 import { ChartersService } from '@/server/services/charters';
 import { InventoryService } from '@/server/services/inventory';
+import { readUnofferedDestinations, readUnofferedSuppliers } from '@/server/services/lib/unoffered-choices';
 import { LocationsService } from '@/server/services/locations';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
 import { ServiceError } from '@/server/services/context';
@@ -90,6 +92,62 @@ export default async function EditPoPage({ params }: { params: Promise<{ id: str
     if (current) charterOptions = [...charters, current];
   }
 
+  // The destinations and suppliers the form offers: sites linked to a
+  // warehouse (a warehouse-less location makes the PO impossible to receive
+  // against), and the active suppliers.
+  const locationOptions = locations
+    .filter((l) => Boolean((l as { warehouse_id?: string | null }).warehouse_id))
+    .map((l) => ({ id: l.id as string, name: l.name as string }));
+  let supplierOptions = suppliers.map((s) => ({ id: s.id as string, name: s.name as string }));
+
+  // A draft can hold a destination or supplier the form does not offer: a
+  // staging area or a location deleted since (production 2026-10-06: four
+  // Demo Co purchase orders to Staging, three Learn4Life ones to deleted
+  // locations, none of them drafts), or an archived supplier. The selects
+  // showed those blank and the save sent them back unseen. The form now keeps
+  // none of them and names each one (PoForm `unoffered`, small fixes slice 8),
+  // so read what they are, in this organization through RLS. Labels only: a
+  // failed read names nothing, never an error page.
+  const currentDestinationId =
+    (po as { destination_location_id?: string | null }).destination_location_id ?? null;
+  const currentSupplierId = (po as { supplier_id?: string | null }).supplier_id ?? null;
+  const unofferedDestinationId =
+    currentDestinationId !== null && !locationOptions.some((l) => l.id === currentDestinationId)
+      ? currentDestinationId
+      : null;
+  const unofferedSupplierId =
+    currentSupplierId !== null && !supplierOptions.some((s) => s.id === currentSupplierId)
+      ? currentSupplierId
+      : null;
+  const [unofferedDestinations, unofferedSuppliers] = await Promise.all([
+    unofferedDestinationId
+      ? createClient().then((client) =>
+          readUnofferedDestinations(
+            client,
+            ctx.organizationId,
+            [unofferedDestinationId],
+            'purchase_orders.edit.unoffered_destination',
+          ),
+        )
+      : null,
+    unofferedSupplierId
+      ? readUnofferedSuppliers(
+          (ids) => suppliersSvc.namesByIds(ids),
+          [unofferedSupplierId],
+          'purchase_orders.edit.unoffered_supplier',
+        )
+      : null,
+  ]);
+  // A supplier still active that the select lacks only because the
+  // Suppliers module is off is offered after all, so the draft keeps it.
+  if (unofferedSuppliers) supplierOptions = [...supplierOptions, ...unofferedSuppliers.fold];
+  const unoffered = {
+    destination: unofferedDestinationId
+      ? (unofferedDestinations?.get(unofferedDestinationId) ?? null)
+      : null,
+    supplier: unofferedSupplierId ? (unofferedSuppliers?.unoffered.get(unofferedSupplierId) ?? null) : null,
+  };
+
   // Map PO's existing lines to the form's Line shape.
   // Lines from the service have item_id (snake_case); the form expects itemId.
   const initialLines = lines.map((l) => ({
@@ -170,15 +228,14 @@ export default async function EditPoPage({ params }: { params: Promise<{ id: str
             groupId: i.group_id,
             variantSize: i.variant_size,
           }))}
-          suppliers={suppliers.map((s) => ({ id: s.id as string, name: s.name as string }))}
+          suppliers={supplierOptions}
           // Only warehouse-backed locations can be receiving destinations — a
           // warehouse-less location makes the PO impossible to receive against.
-          locations={locations
-            .filter((l) => Boolean((l as { warehouse_id?: string | null }).warehouse_id))
-            .map((l) => ({ id: l.id as string, name: l.name as string }))}
+          locations={locationOptions}
           charters={charterOptions.map((c) => ({ id: c.id as string, name: c.name as string }))}
           poId={id}
           initial={initial}
+          unoffered={unoffered}
         />
       </div>
     </div>
