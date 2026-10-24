@@ -12353,8 +12353,12 @@ describe('the new look release (redesign-2026-10)', () => {
     expect(grid).toContain("return value === 'grid' ? 'grid' : 'table';");
     const card = source('components/patterns/grid-card.tsx');
     expect(card).toContain('selected || selectionActive');
+    // With a mouse the check box shows on hover and with focus anywhere in its
+    // card: the descendant selector that replaced Tailwind's group-focus-within
+    // variant (lib/group-focus-variants.guard.test.ts; Tailwind builds a class
+    // quoted in a test too). String.raw keeps the one backslash grid-card.tsx has.
     expect(card).toContain(
-      "'pointer-coarse:opacity-100 opacity-0 group-focus-within/card:opacity-100 group-hover/card:opacity-100'",
+      String.raw`pointer-coarse:opacity-100 opacity-0 group-hover/card:opacity-100 [.group\/card:focus-within_&]:opacity-100`,
     );
     expect(entry('items-books-grid').whatChanged).toContain(
       'a Table and Grid switch at the right end of the row with All items, Low + critical and Out of stock',
