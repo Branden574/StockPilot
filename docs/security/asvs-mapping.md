@@ -211,8 +211,8 @@ data-processing register.
 
 TLS throughout, HSTS with preload, hardened response headers, and a CSP that
 names the origins scripts, images, media, requests and frames may use (it still
-allows inline and eval'd scripts: see the V14 gap). Certificate expiry monitored
-daily. Every server-side fetch of a
+allows inline and eval'd scripts, and governs no navigation: see the V14 gap).
+Certificate expiry monitored daily. Every server-side fetch of a
 user-supplied URL passes the SSRF guard, which classifies IP literals and
 re-resolves on each redirect hop so a redirect to a private or metadata address is
 refused.
@@ -318,7 +318,11 @@ these as owner-verify items, and they remain owner-verify.
 
 _Gap_: the CSP's `script-src` still allows `'unsafe-inline'` and `'unsafe-eval'`
 (`apps/web/next.config.ts`), because Next.js's inline bootstrap script carries no
-nonce, so the policy does not stop an injected inline script from running. It is
+nonce, so the policy does not stop an injected inline script from running. Nor
+does it stop such a script from sending data away, for example by navigating the
+page or opening a window to an address carrying the data: no directive in the
+policy governs navigation, and `connect-src`, `img-src`, `media-src`, `frame-src`
+and `form-action` limit requests, images, media, frames and form posts only. It is
 not a `strict-dynamic` policy: adding that directive on its own makes browsers
 ignore `'unsafe-inline'`, which blocked the bootstrap script and broke the
 dashboard. A per-request nonce policy is planned.
