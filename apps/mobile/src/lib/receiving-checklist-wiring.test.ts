@@ -264,6 +264,22 @@ describe('the run and editor screens (4)', () => {
     expect(editor).toContain('onPress={() => void reloadAfterConflict()}');
   });
 
+  // Review 2026-10-24: Prepare version N and Start from suggested steps make
+  // a new version at page level, so they are the accent button, as on the web
+  // (variant="gradient") and as the shared Button's rule says; Publish, which
+  // commits the version in front of you, stays the ink. Mutation caught:
+  // either one drawn in ink (the default), so the two apps disagreed.
+  it('the editor: the accent for preparing or starting a version, the ink for publishing it', () => {
+    expect(editor).toMatch(
+      /<Button\s+block\s+variant="accent"\s+disabled=\{busy \|\| offline\}\s+onPress=\{\(\) => begin\('live'\)\}\s*>/,
+    );
+    expect(editor).toMatch(
+      /<Button\s+block\s+variant="accent"\s+disabled=\{offline\}\s+onPress=\{\(\) => begin\('suggested'\)\}\s*>/,
+    );
+    expect(editor).toMatch(/<Button block disabled=\{busy \|\| offline\} onPress=\{askPublish\}>/);
+    expect(count(editor, 'variant="accent"')).toBe(2);
+  });
+
   it('the editor: read only without the publisher gate, confirmations to publish and to turn off', () => {
     expect(editor).toContain('const canPublish = editor.gate.canPublishChecklist;');
     expect(editor).toContain('{C.readOnlyEditor}');

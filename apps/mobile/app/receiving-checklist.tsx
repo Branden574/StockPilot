@@ -432,9 +432,17 @@ function Editor({
                     {C.editorOffline}
                   </Body>
                 ) : null}
+                {/* Preparing or starting a version makes something new at
+                    page level: the accent, as on the web; Publish, which
+                    commits it, is the ink (review 2026-10-24). */}
                 {live ? (
                   <>
-                    <Button block disabled={busy || offline} onPress={() => begin('live')}>
+                    <Button
+                      block
+                      variant="accent"
+                      disabled={busy || offline}
+                      onPress={() => begin('live')}
+                    >
                       {C.prepareVersion(next)}
                     </Button>
                     <Button block variant="outline" disabled={busy || offline} onPress={askTurnOff}>
@@ -443,7 +451,12 @@ function Editor({
                   </>
                 ) : (
                   <>
-                    <Button block disabled={offline} onPress={() => begin('suggested')}>
+                    <Button
+                      block
+                      variant="accent"
+                      disabled={offline}
+                      onPress={() => begin('suggested')}
+                    >
                       {C.startSuggested}
                     </Button>
                     <Button
