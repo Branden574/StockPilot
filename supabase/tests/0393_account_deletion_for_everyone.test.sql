@@ -379,20 +379,20 @@ select is(
   (select string_agg(c.conrelid::regclass::text || '.' || c.conname || ':' || c.convalidated::text, ',' order by c.conname collate "C")
      from pg_constraint c
     where c.connamespace = 'public'::regnamespace and c.contype = 'c'
-      -- Re-pinned by 0406 (the selector was every *_deleted_chk in public):
-      -- 0406's exactly-one CHECKs on its own tables follow the same rule and
-      -- are proven by the receiving checklist suite (A9); this line stays
-      -- about 0393's own, on the marked tables. The expected value is unchanged.
       and (c.conname like '%\_deleted\_chk' and c.conname <> 'order_requests_requester_deleted_chk'
-           and c.conrelid::regclass::text in (select m.tbl from marked m)
            or c.conname = 'cc_ai_scans_confirm_chk')),
+  -- Re-pinned by 0406 (was the same list without the two checklist_ rows):
+  -- the receiving checklist adds two exactly-one CHECKs of the same rule on
+  -- its own tables. The selector stays every *_deleted_chk in public, so any
+  -- later one, on any table, must be validated and listed here.
   'approvals.approvals_requested_by_deleted_chk:true,cycle_count_ai_scans.cc_ai_scans_confirm_chk:true,'
+  'checklist_runs.checklist_runs_started_by_deleted_chk:true,checklist_versions.checklist_versions_published_by_deleted_chk:true,'
   'cycle_count_ai_scans.cycle_count_ai_scans_created_by_deleted_chk:true,organization_invites.organization_invites_invited_by_deleted_chk:true,'
   'platform_admin_audit.platform_admin_audit_actor_user_id_deleted_chk:true,po_imports.po_imports_uploaded_by_deleted_chk:true,'
   'putaway_moves.putaway_moves_performed_by_deleted_chk:true,receipts.receipts_received_by_deleted_chk:true,'
   'schedule_events.schedule_events_created_by_deleted_chk:true,'
   'size_count_training_samples.size_count_training_samples_captured_by_deleted_chk:true',
-  'K6: the nine exactly-one CHECKs and the relaxed cc_ai_scans_confirm_chk exist and are validated');
+  'K6: the nine exactly-one CHECKs, 0406''s two and the relaxed cc_ai_scans_confirm_chk exist and are validated');
 select is(
   (select coalesce(string_agg(x.tbl || ':' || x.problem, ',' order by x.tbl), '')
      from (
@@ -542,16 +542,15 @@ select is(
   || '|' || (select bool_and(coalesce(obj_description(c.oid, 'pg_constraint') ~ '0393', false))::text || '/' || count(*)::text
                from pg_constraint c
               where c.connamespace = 'public'::regnamespace
-                -- Re-pinned by 0406 (the first arm was every *_deleted_chk in
-                -- public): only 0393's own, on the marked tables; 0406's
-                -- exactly-one CHECKs say "the 0393 rule" in their own words.
                 and (c.conname like '%\_deleted\_chk' and c.conname <> 'order_requests_requester_deleted_chk'
-                     and c.conrelid::regclass::text in (select m.tbl from marked m)
                      or c.conname in ('cc_ai_scans_confirm_chk', 'order_requests_delivery_target_chk', 'order_submissions_user_id_fkey',
                                       'delivery_locations_driver_user_id_fkey', 'user_permission_overrides_updated_by_fkey',
                                       'role_permission_overrides_updated_by_fkey', 'user_profiles_disabled_by_fkey'))),
-  'true|true|true/16',
-  'K20: the five functions, the 16 deleted_users columns and the 16 constraints 0393 adds or restates say so in their comments');
+  -- Re-pinned by 0406 (was true|true|true/16): its two exactly-one CHECKs
+  -- (K6) say "the 0393 rule" in their comments, so every *_deleted_chk in
+  -- public still has to name 0393.
+  'true|true|true/18',
+  'K20: the five functions, the 16 deleted_users columns, the 16 constraints 0393 adds or restates and 0406''s two exactly-one CHECKs say so in their comments');
 
 select is(
   (select md5(p.prosrc) || '|' || p.prosecdef::text || '|' || coalesce(p.proconfig::text, '') || '|' || pg_get_userbyid(p.proowner) || '|'
