@@ -230,7 +230,13 @@ describe('the order screen reads these gates (wiring pins)', () => {
     expect(SCREEN).toMatch(/const orderAccess = orderWarehouseAccess\(\{\s*role,\s*warehouseId: order\?\.warehouseId \?\? null,\s*scope: order\?\.warehouseScope \?\? null,\s*\}\);/);
     expect(SCREEN).toContain('const writesHere = orderAccess.writes === true;');
     expect(SCREEN).toContain('const viewerCanPickHere = viewerCanPick && writesHere;');
-    expect(SCREEN).toContain('const linesInScope = ownOrderLines || orderAccess.reads === true;');
+    // Slice E review: the line edits ask read access of the requester too
+    // (loadEditableOrderHeader), so an approver's own order outside their
+    // warehouses offers no Add items or line edit (mutation: the requester
+    // term put back in front of the read, `ownOrderLines || ...`).
+    expect(SCREEN).toContain('const linesInScope = orderAccess.reads === true;');
+    expect(SCREEN).not.toMatch(/const linesInScope =[^;]*requesterUserId|const linesInScope =[^;]*ownOrderLines/);
+    expect(SCREEN).not.toContain('ownOrderLines');
     expect(SCREEN).toMatch(/needsOrderWarehouseScope\(\{\s*role,\s*canApproveOrders: rpApprove,\s*canPick: rpItems,\s*status: \(headerForReadiness\.status as string \| null\) \?\? null,\s*\}\)\s*\? readOrderWarehouseScope\(supabase, \{ role, organizationId: orgId, userId \}\)\s*: null;/);
     expect(SCREEN).toContain('const warehouseScope = warehouseScopeRead ? await warehouseScopeRead : null;');
     expect(SCREEN).toMatch(/replacement,\s*warehouseScope,\s*lines: rows\.map/);

@@ -637,9 +637,61 @@ describe("orders/[id]: an approver outside the order's warehouse (security slice
     expect(cancelButtonProps).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'pending_approval' }),
     );
-    // Their own order's lines are still theirs to change (the requester's rule).
-    expect(orderLineActionsProps).toHaveBeenCalledWith(expect.objectContaining({ lineId: 'LA' }));
     expect(managerActionsProps).not.toHaveBeenCalled();
+  });
+
+  // Slice E review: the service's line edits (loadEditableOrderHeader) ask
+  // read access to the order's warehouse of the person who placed it too, and
+  // the line insert policy refuses the same caller, so being the requester
+  // does not stand in for it. Mutation caught: `approverReadsHere ||
+  // isOwnRequest` put back for the lines (every assertion on the lines here).
+  it("their own order in a warehouse they don't work in offers no line control, no Add items and no short-line note; the requester's Cancel request stays", async () => {
+    asStaffApprover();
+    orderAt('pending_approval', { requester_user_id: 'u1' });
+    worksIn(['wh-other']);
+    const pending = await renderPage();
+    expect(cancelButtonProps).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'pending_approval' }),
+    );
+    expect(orderLineActionsProps).not.toHaveBeenCalled();
+    expect(addItemsProps).not.toHaveBeenCalled();
+    pending.unmount();
+
+    // Out for delivery: the short line's note goes to the people who could
+    // have changed the lines, which they could not.
+    vi.clearAllMocks();
+    asStaffApprover();
+    orderGet.mockResolvedValue(
+      detailFixture({
+        request: requestFixture({ status: 'in_transit', requester_user_id: 'u1' }),
+        lines: [
+          { ...LINE, quantity_picked: 0 },
+          { ...LINE, id: 'LB', item_id: 'iB', quantity_picked: 2 },
+        ],
+      }),
+    );
+    worksIn(['wh-other']);
+    const shipped = await renderPage();
+    expect(shortLineFixesProps).not.toHaveBeenCalled();
+    shipped.unmount();
+
+    // In their own warehouse the same order is theirs to change.
+    vi.clearAllMocks();
+    asStaffApprover();
+    orderAt('pending_approval', { requester_user_id: 'u1' });
+    worksIn(['wh-1']);
+    await renderPage();
+    expect(orderLineActionsProps).toHaveBeenCalledWith(expect.objectContaining({ lineId: 'LA' }));
+    expect(addItemsProps).toHaveBeenCalled();
+  });
+
+  it('a requester who does not approve keeps their own order\'s lines, with no warehouse read paid for it (the service answers the rest)', async () => {
+    ctxHolder.current = { role: 'staff', permissions: new Set(['orders:read', 'orders:request']) };
+    orderAt('pending_approval', { requester_user_id: 'u1' });
+    await renderPage();
+    expect(orderLineActionsProps).toHaveBeenCalledWith(expect.objectContaining({ lineId: 'LA' }));
+    expect(addItemsProps).toHaveBeenCalled();
+    expect(getWarehouseAccessMock).not.toHaveBeenCalled();
   });
 
   it("in the picking phase the panel stays (it is every picker's) without an approver's step, and the picker roster is not read", async () => {

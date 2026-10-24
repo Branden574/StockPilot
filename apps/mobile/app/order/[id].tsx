@@ -909,12 +909,15 @@ export default function OrderDetail() {
   const writesHere = orderAccess.writes === true;
   // The pick gate with the order's warehouse, as the web page decides it.
   const viewerCanPickHere = viewerCanPick && writesHere;
-  // The line edits ask READ access to the order's warehouse
-  // (loadEditableOrderHeader) of an approver; the person who placed the order
-  // is answered by the server (the web page's canAddLines).
-  const ownOrderLines =
-    order?.requesterUserId != null && order.requesterUserId === (user?.id ?? null);
-  const linesInScope = ownOrderLines || orderAccess.reads === true;
+  // The line edits ask READ access to the order's warehouse of everyone, the
+  // person who placed the order included (loadEditableOrderHeader; the line
+  // insert policy refuses the same caller), so being the requester never
+  // stands in for it: an approver whose own order sits in a warehouse they
+  // don't work in is offered no Add items or line edit (slice E review; the
+  // web page's viewerMayChangeLines). Nothing is read for a requester who
+  // neither approves nor picks here, so the scope is null and they are
+  // offered as before (orderWarehouseAccess reads: true); the server answers.
+  const linesInScope = orderAccess.reads === true;
   const canAddItems = canAddOrderItems(lineGate) && !isReplacementOrder && linesInScope;
   // Correcting a line rides the SAME gate — on the server all three line
   // mutations load the order through one helper (loadEditableOrderHeader), and

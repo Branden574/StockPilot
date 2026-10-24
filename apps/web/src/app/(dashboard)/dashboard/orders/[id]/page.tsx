@@ -312,13 +312,17 @@ export default async function OrderDetailPage({
   // requester-or-approver, and only before the order ships or dies. Gating here
   // rather than letting the server 409 means nobody opens the picker, stages
   // five items and only then learns the order already left the building.
-  // The service's assertWarehouseAccess(warehouse_id, 'read') is mirrored for
-  // an approver (security slice E: approverReadsHere, from the access read
-  // already in flight for them), so an approver outside the order's warehouse
-  // is not offered the lines of someone else's order. Not for the person who
-  // placed it: that read is paid only for approvers below manager rank (the
-  // service still answers a requester outside the warehouse in its one
-  // sentence).
+  // The service's assertWarehouseAccess(warehouse_id, 'read') is asked of
+  // EVERYONE, the person who placed the order included
+  // (loadEditableOrderHeader), and the line insert policy refuses the same
+  // caller. So for an approver the page asks it too (security slice E:
+  // approverReadsHere, from the access read already in flight for them), and
+  // being the requester never stands in for it: an approver whose own order
+  // sits in a warehouse they don't work in is offered no line control either
+  // (slice E review). For anyone else the read is not paid (the requester
+  // placed the order in a warehouse they read; one whose assignment was
+  // removed since gets the service's one sentence).
+  const viewerMayChangeLines = canApprove ? approverReadsHere : isOwnRequest;
   const ADD_LINES_BLOCKED: OrderRequestStatus[] = [
     'in_transit',
     'completed',
@@ -326,9 +330,7 @@ export default async function OrderDetailPage({
     'cancelled',
   ];
   const canAddLines =
-    (approverReadsHere || isOwnRequest) &&
-    !ADD_LINES_BLOCKED.includes(request.status) &&
-    !isReplacement;
+    viewerMayChangeLines && !ADD_LINES_BLOCKED.includes(request.status) && !isReplacement;
   // Correcting a line is the same act as adding one — addLines,
   // updateLineQuantity and removeLine all run the SAME
   // loadEditableOrderHeader gate (ship gate + requester-or-approver +
@@ -1013,7 +1015,7 @@ export default async function OrderDetailPage({
   // people who could have edited them before.
   const pickedPhase = isPickingSettled(request.status);
   const showShortLineFixes =
-    canEditLines || (request.status === 'in_transit' && (approverReadsHere || isOwnRequest));
+    canEditLines || (request.status === 'in_transit' && viewerMayChangeLines);
   const shortFixesFor = (lineId: string, rowIndex: number): ShortLineActions | null => {
     if (!showShortLineFixes) return null;
     const isOnlyLine = lines.length === 1;

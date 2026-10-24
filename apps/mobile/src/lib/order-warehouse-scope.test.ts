@@ -156,6 +156,22 @@ describe('orderWarehouseAccess', () => {
     }
   });
 
+  // Slice E review: the line edits (Add items, change and remove) ask READ
+  // access to the order's warehouse of the person who placed it too
+  // (loadEditableOrderHeader), so the screen offers them on `reads` alone.
+  // The two requesters that decides for, end to end through the screen's
+  // read decision.
+  it("the person who placed the order: an approver's own order outside their warehouses offers no line edit; a requester who neither approves nor picks has nothing read and is offered as before", () => {
+    const approverRequester = { role: 'staff', canApproveOrders: true, canPick: true, status: 'pending_approval' };
+    expect(needsOrderWarehouseScope(approverRequester)).toBe(true);
+    expect(orderWarehouseAccess({ role: 'staff', warehouseId: WH_B, scope: read([WH_A]) }).reads).toBe(false);
+    expect(orderWarehouseAccess({ role: 'staff', warehouseId: WH_A, scope: read([WH_A]) }).reads).toBe(true);
+
+    const plainRequester = { role: 'staff', canApproveOrders: false, canPick: false, status: 'pending_approval' };
+    expect(needsOrderWarehouseScope(plainRequester)).toBe(false);
+    expect(orderWarehouseAccess({ role: 'staff', warehouseId: WH_B, scope: null }).reads).toBe(true);
+  });
+
   // The phone's precedent for this screen (neededBySheetOpening): a read that
   // did not happen, or failed, decides nothing; the server answers.
   it('a scope not read, or unreadable, offers as before (a viewer still never writes)', () => {
