@@ -75,9 +75,22 @@
 -- organization still cancels such an order (within their warehouses), and
 -- the app never offered its cancel to anyone else.
 --
--- LOCKS. CREATE OR REPLACE FUNCTION and COMMENT take no table lock; a call
--- already running finishes on the body it started with. lock_timeout 900ms
--- bounds anything unforeseen.
+-- LOCKS. No table lock is held to commit, and a call already running
+-- finishes on the body it started with. One table lock is taken briefly:
+-- checking a body compiles it (check_function_bodies, on by default), each
+-- body declares public.order_requests%rowtype, and the first compile in a
+-- session loads that row type's description with an AccessShareLock on
+-- public.order_requests, released at once (the session keeps the
+-- description, so the five bodies after it take none). AccessShareLock
+-- conflicts only with ACCESS EXCLUSIVE, so no read, write, row lock or
+-- autovacuum waits for it or holds it up. Only an ACCESS EXCLUSIVE on
+-- order_requests that is held or queued (an ALTER TABLE, VACUUM FULL,
+-- another migration) makes the file wait; lock_timeout 900ms then ends it
+-- with 55P03 and nothing applied, and the push can be run again once that
+-- statement has finished. COMMENT holds a ShareUpdateExclusiveLock on each
+-- of the six functions to commit (only other DDL on the same function waits
+-- for it). scripts/db-concurrency/0405_migration_lock_footprint.sh checks
+-- each of these (5-8 for the order_requests lock).
 --
 -- DATA SAFETY: no row changes. The file restates six bodies and their
 -- comments.
