@@ -739,6 +739,19 @@ PGTAP_TESTS=(
   # family; the INVOKER preview never names item_stock_levels (INV-33). The
   # two-session proofs are scripts/db-concurrency/0400_item_display_groups_races.sh.
   supabase/tests/0400_item_display_groups.test.sql
+  # Receiving checklist (0406, F4-1): the two tables are read-only for
+  # authenticated (TRUNCATE, REFERENCES and TRIGGER revoked too) and closed to
+  # anon; every write goes through four SECURITY DEFINER functions that take
+  # the organization from the row (a receipt or run of another organization
+  # reads as not found) and gate in this order: signed in, member, receiving
+  # on, then a manager with purchase_orders:manage (publish, turn off) or with
+  # stock:adjust and purchase_orders:read (start, save). A run is visible
+  # exactly when its purchase order is (warehouse scope below manager
+  # included); versions follow membership. Person keys are SET NULL with the
+  # 0393 marker. The start, save and publish races are
+  # scripts/db-concurrency/0406_checklist_races.sh; the lock footprint is
+  # scripts/db-concurrency/0406_migration_lock_footprint.sh.
+  supabase/tests/0406_receiving_checklist.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql

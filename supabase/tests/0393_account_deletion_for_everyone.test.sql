@@ -316,9 +316,16 @@ select is(
   -- afc55a5ab973223f06d7c9d0245929f1|134, production's own census through
   -- 0396 (read 2026-10-11). 0399 (Ungroup) adds one key: the grouping
   -- request log's person, item_grouping_requests.user_id>user_profiles:c:NN
-  -- (recomputed from that production census with the one entry added).
-  '885e1d5a80696bacdf3424d5f34953e2|135|0/0',
-  'K1: the person-key census in public is 0393''s plus 0399''s grouping request log (135 keys), and no key to a person is composite or names SET NULL columns');
+  -- (recomputed from that production census with the one entry added),
+  -- 885e1d5a80696bacdf3424d5f34953e2|135, which production gives at head 0401.
+  -- Re-pinned by 0406: the receiving checklist adds four person keys, all ON
+  -- DELETE SET NULL on nullable columns (A3 rule): checklist_runs.completed_by
+  -- and started_by, checklist_versions.published_by and retired_by, to
+  -- user_profiles. Computed from production's own 135 rows (the schema-only
+  -- dump of 2026-10-24, which reproduces 885e1d5a...|135) plus exactly those
+  -- four.
+  '10105e6b2602f70de346249c34886572|139|0/0',
+  'K1: the person-key census in public is 0393''s plus 0399''s grouping request log and the receiving checklist''s four SET NULL keys (139 keys), and no key to a person is composite or names SET NULL columns');
 select is(
   (select coalesce(string_agg(c.conrelid::regclass::text || '.' || c.conname || ':' || c.confdeltype::text, ',' order by 1), '')
      from pg_constraint c
@@ -351,10 +358,16 @@ select is(
              where c.conrelid = ('public.' || m.tbl)::regclass and c.contype = 'f'
                and c.confrelid in ('auth.users'::regclass, 'public.user_profiles'::regclass)
                and c.confdeltype = 'n')),
-  'approvals,audit_logs,carrier_shipments,cycle_count_ai_scans,org_connections,organization_invites,organization_modules,'
-  'platform_admin_audit,po_imports,putaway_moves,receipts,returns,schedule_events,size_count_training_samples,'
-  'stock_movements,uom_conversions#',
-  'K4: deleted_users is on exactly the 16 tables of the narrow scope (the 14 whose key 0393 changes, audit_logs, stock_movements), and on each the marked columns are exactly its SET NULL person columns');
+  -- Re-pinned by 0406 (was the 16 without checklist_runs and
+  -- checklist_versions): the receiving checklist's two new tables carry the
+  -- marker for their person columns (A3 rule for a new person column shown
+  -- as "Deleted user"); their trigger pairs, stamps and CHECKs are proven by
+  -- the receiving checklist suite (A9, A10, D1), so they are not added to
+  -- `marked` here.
+  'approvals,audit_logs,carrier_shipments,checklist_runs,checklist_versions,cycle_count_ai_scans,org_connections,'
+  'organization_invites,organization_modules,platform_admin_audit,po_imports,putaway_moves,receipts,returns,'
+  'schedule_events,size_count_training_samples,stock_movements,uom_conversions#',
+  'K4: deleted_users is on exactly the 16 tables of the narrow scope (the 14 whose key 0393 changes, audit_logs, stock_movements) and the receiving checklist''s two, and on each marked table the marked columns are exactly its SET NULL person columns');
 select is(
   (select coalesce(string_agg(c.conrelid::regclass::text || '.' || a.attname, ',' order by 1), '')
      from pg_constraint c join pg_attribute a on a.attrelid = c.conrelid and a.attnum = c.conkey[1]
@@ -366,7 +379,12 @@ select is(
   (select string_agg(c.conrelid::regclass::text || '.' || c.conname || ':' || c.convalidated::text, ',' order by c.conname collate "C")
      from pg_constraint c
     where c.connamespace = 'public'::regnamespace and c.contype = 'c'
+      -- Re-pinned by 0406 (the selector was every *_deleted_chk in public):
+      -- 0406's exactly-one CHECKs on its own tables follow the same rule and
+      -- are proven by the receiving checklist suite (A9); this line stays
+      -- about 0393's own, on the marked tables. The expected value is unchanged.
       and (c.conname like '%\_deleted\_chk' and c.conname <> 'order_requests_requester_deleted_chk'
+           and c.conrelid::regclass::text in (select m.tbl from marked m)
            or c.conname = 'cc_ai_scans_confirm_chk')),
   'approvals.approvals_requested_by_deleted_chk:true,cycle_count_ai_scans.cc_ai_scans_confirm_chk:true,'
   'cycle_count_ai_scans.cycle_count_ai_scans_created_by_deleted_chk:true,organization_invites.organization_invites_invited_by_deleted_chk:true,'
@@ -524,7 +542,11 @@ select is(
   || '|' || (select bool_and(coalesce(obj_description(c.oid, 'pg_constraint') ~ '0393', false))::text || '/' || count(*)::text
                from pg_constraint c
               where c.connamespace = 'public'::regnamespace
+                -- Re-pinned by 0406 (the first arm was every *_deleted_chk in
+                -- public): only 0393's own, on the marked tables; 0406's
+                -- exactly-one CHECKs say "the 0393 rule" in their own words.
                 and (c.conname like '%\_deleted\_chk' and c.conname <> 'order_requests_requester_deleted_chk'
+                     and c.conrelid::regclass::text in (select m.tbl from marked m)
                      or c.conname in ('cc_ai_scans_confirm_chk', 'order_requests_delivery_target_chk', 'order_submissions_user_id_fkey',
                                       'delivery_locations_driver_user_id_fkey', 'user_permission_overrides_updated_by_fkey',
                                       'role_permission_overrides_updated_by_fkey', 'user_profiles_disabled_by_fkey'))),
