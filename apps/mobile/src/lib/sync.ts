@@ -23,6 +23,7 @@ import {
   deleteOrgData,
   getDb,
   getMeta,
+  setCacheOwner,
   setMeta,
   withDbTransaction,
 } from './db';
@@ -250,10 +251,19 @@ export async function pullSnapshot(
   // either. Another account's cache is cleared and pulled again in full, never
   // delta-pulled from their cursor.
   const { userId: liveUserId } = await liveOutboxScope();
-  if (cacheOwnerAction(await getMeta(CACHE_USER_META_KEY), liveUserId) === 'reset') {
+  if (liveUserId && cacheOwnerAction(await getMeta(CACHE_USER_META_KEY), liveUserId) === 'reset') {
     // The previous account's photos go with its rows (photo-cache-wipe.ts):
     // the ways a session ends without a wipe all reach this pull.
     await wipeWithPhotoCaches(deleteOrgData);
+    // Nothing of the previous account is left now, so the emptied cache is
+    // this account's, recorded before the pull is sent (cache-owner.ts).
+    // deleteOrgData keeps the record, and left alone it would still name the
+    // previous account after a pull that fails here (offline, a timeout):
+    // every later tick would reset again, before its network check, and wipe
+    // what this account has cached since, such as a count it opened to work
+    // on offline. A wipe that threw never reaches this line: the previous
+    // account stays recorded and the next pull resets again.
+    await setCacheOwner(liveUserId);
     force = true;
     // The live readers still hold the previous account's modules, permissions
     // and warehouse banner in memory; the persisted values are gone, so they

@@ -1314,10 +1314,16 @@ MOBILE_TESTS=(
   # never wipe, all arrive) clear the photo caches (expo-image's memory and
   # disk caches, and the item-photo links held in memory) with the SQLite
   # wipe, even when that wipe fails, so the next account on a shared phone
-  # finds no photo the previous one saw. A
+  # finds no photo the previous one saw. The record of whose cache it is
+  # outlives the wipes that keep the photos (a workspace switch, the
+  # workspace repair, Clear offline cache), is forgotten only after the
+  # photos are gone, and names the new account once a reset has cleared the
+  # old one: a pull that finds no record adopts what is on the phone. A
   # stored file's one-hour link (proof of delivery, purchase order files) is
   # signed again at the tap once it is about to expire, never opened stale.
   src/lib/photo-cache-wipe.test.ts
+  src/lib/cache-owner.sqlite.test.ts
+  src/lib/db-clear-keys.wiring.test.ts
   src/lib/photo-links-wiring.test.ts
   src/lib/stored-file-link.test.ts
 

@@ -57,6 +57,10 @@ vi.mock('./db', () => ({
     meta.generation += 1;
     meta.wipe?.();
   }),
+  // db.ts setCacheOwner: the reset records the new account (cache-owner.ts).
+  setCacheOwner: vi.fn(async (userId: string) => {
+    meta.store.set('cache_user_id', userId);
+  }),
 }));
 vi.mock('./queue', () => ({
   listPending: vi.fn(async () => []),
@@ -221,7 +225,13 @@ beforeEach(() => {
     sqlite.exec(`delete from items; delete from warehouses; delete from purchase_orders;
       delete from po_lines; delete from cycle_counts; delete from cycle_count_lines;
       delete from bundles; delete from bundle_components;`);
-    for (const k of ['last_synced_at', 'enabled_modules', 'effective_permissions', 'warehouse_scope', 'cache_user_id']) {
+    // Not cache_user_id: deleteOrgData keeps whose cache it is (cache-owner.ts).
+    for (const k of [
+      'last_synced_at',
+      'enabled_modules',
+      'effective_permissions',
+      'warehouse_scope',
+    ]) {
       meta.store.delete(k);
     }
   };
@@ -581,6 +591,8 @@ describe('whose cache: a pull for another account resets it first (#242 follow-u
     await pullSnapshot();
 
     expect(meta.store.has('effective_permissions')).toBe(false);
+    // Recorded at the reset, not by the pull that never landed (cache-owner.ts).
+    expect(meta.store.get('cache_user_id')).toBe('u1');
     expect(refreshEnabledModules).toHaveBeenCalled();
     expect(refreshEffectivePermissions).toHaveBeenCalled();
     expect(refreshWarehouseScope).toHaveBeenCalled();
@@ -652,5 +664,7 @@ describe('whose cache: a pull for another account resets it first (#242 follow-u
     expect(photos.clearDiskCache).toHaveBeenCalledTimes(1);
     expect(photos.forgetSignedImageUrls).toHaveBeenCalledTimes(1);
     expect(apiMock.api).not.toHaveBeenCalled();
+    // The previous account stays recorded, so the next pull resets again.
+    expect(meta.store.get('cache_user_id')).toBe('u0');
   });
 });

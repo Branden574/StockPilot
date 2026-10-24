@@ -121,7 +121,10 @@ describe('the cache wipes wait their turn', () => {
     // own queued transaction).
     expect(body('deleteOrgData')).toContain('await withDbTransaction(db, () => clearOrgScopedTables(db));');
     // Sign-out clears the cache and KEEPS the outbox, held for its account (S4b).
-    expect(body('wipeForSignOut')).toContain('await withDbTransaction(db, () => clearOrgScopedTables(db));');
+    // It also forgets whose cache it was, in the same transaction (cache-owner.ts).
+    expect(body('wipeForSignOut')).toMatch(
+      /await withDbTransaction\(db, async \(\) => \{\s+await clearOrgScopedTables\(db\);\s+await forgetCacheOwner\(db\);\s+\}\);/,
+    );
     expect(body('wipeForSignOut')).not.toContain('pending_actions');
     // Only the eviction of a disabled account drops what is left unsent.
     expect(body('wipeForEviction')).toMatch(/await withDbTransaction\(db, async \(\) => \{\s+await clearOrgScopedTables\(db\);[\s\S]*delete from pending_actions/);

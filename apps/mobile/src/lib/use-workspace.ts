@@ -245,6 +245,10 @@ async function loadWorkspace(userId: string) {
       console.warn('[workspace] saving the chosen workspace failed', err);
     }
   }
+  // The repair's wipe keeps the record of whose cache it is (cache-owner.ts):
+  // this load can be the NEXT account's sign-in, with the previous account's
+  // photos still on the device, and its pull must still find that account
+  // recorded to clear them.
   if (activeOrgId && choice.resetCache) {
     // The cache may hold another workspace's rows; clear the org-scoped
     // tables (never the outbox) and pull this workspace in full below.
@@ -369,7 +373,9 @@ async function switchActiveOrg(orgId: string, epoch: number): Promise<void> {
   // would be wrong. deleteOrgData deliberately preserves pending_actions: each
   // queued row carries its own organization and is sent under it (see
   // outbox-scope.ts), so nothing queued in the old workspace is lost or
-  // replayed into the new one.
+  // replayed into the new one. It keeps this account's photos and the record
+  // that the cache is this account's (cache-owner.ts): the account is the
+  // same, and a pull for another account still finds it recorded.
   try {
     await deleteOrgData();
   } catch (err) {

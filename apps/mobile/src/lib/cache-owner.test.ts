@@ -11,7 +11,9 @@ describe('cacheOwnerAction', () => {
     expect(cacheOwnerAction('u1', 'u1')).toBe('keep');
   });
 
-  it('adopts a cache with no recorded owner (pulled before owners were recorded, or just wiped)', () => {
+  // Which wipes may leave no record, and in what order, is executed in
+  // cache-owner.sqlite.test.ts.
+  it('adopts a cache with no recorded owner (pulled before owners were recorded, or emptied with its photos at a sign-out or an eviction)', () => {
     expect(cacheOwnerAction(null, 'u1')).toBe('adopt');
     expect(cacheOwnerAction('', 'u1')).toBe('adopt');
   });

@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
@@ -39,12 +39,35 @@ vi.mock('./api', () => ({ api: vi.fn() }));
  *      caught here rather than shipping as the same bug again;
  *   2. the literals in db.ts are the exported constants, so renaming a key at
  *      its source cannot silently un-pin the wipe.
+ *
+ * ONE PERSISTED KEY IS KEPT ON PURPOSE: `cache_user_id`, the record of whose
+ * cache this is (cache-owner.ts). A pull that finds no record adopts the device
+ * as it is, photos included, and deleteOrgData (a workspace switch, the
+ * workspace repair, Settings > Offline cache > Clear) keeps the photos, so it
+ * keeps the record too. Only the wipes of an account leaving the device, whose
+ * callers clear the photos first, forget it (wipeForSignOut, wipeForEviction).
+ * Pinned in (3) below; executed end to end in cache-owner.sqlite.test.ts.
  */
 
 const read = (rel: string) => readFileSync(path.resolve(__dirname, rel), 'utf8');
 
 const dbSrc = read('./db.ts');
 const syncSrc = read('./sync.ts');
+
+/** The code without comments. */
+const code = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+/** One db.ts function, comments stripped: from its declaration to the next
+ *  `}` at column 0. */
+function fnBody(declaration: string): string {
+  const src = code(dbSrc);
+  const start = src.indexOf(declaration);
+  expect(start, declaration).toBeGreaterThan(-1);
+  return src.slice(start, src.indexOf('\n}\n', start));
+}
+
+/** Keys sync.ts persists that a wipe keeps on purpose (see the header). */
+const KEPT_BY_THE_WIPE = [CACHE_USER_META_KEY];
 
 /** The body of clearOrgScopedTables — the delete block, comments stripped. */
 function clearBody(src: string): string {
@@ -94,18 +117,72 @@ describe('clearOrgScopedTables clears every org-scoped meta key sync.ts persists
     );
   });
 
-  it.each(['last_synced_at', 'enabled_modules', 'effective_permissions', 'warehouse_scope', 'cache_user_id'])(
+  it.each(['last_synced_at', 'enabled_modules', 'effective_permissions', 'warehouse_scope'])(
     'clears %s',
     (key) => {
       expect(body).toContain(`delete from meta where key = '${key}';`);
     },
   );
 
-  it('clears every key sync.ts writes, including any added later', () => {
+  it('clears every key sync.ts writes, including any added later, except the record of whose cache it is', () => {
     const missing = persisted.filter(
-      (k) => !body.includes(`delete from meta where key = '${k}';`),
+      (k) =>
+        !KEPT_BY_THE_WIPE.includes(k) && !body.includes(`delete from meta where key = '${k}';`),
     );
     expect(missing).toEqual([]);
+  });
+});
+
+describe('(3) the record of whose cache it is outlives a wipe that keeps the photos', () => {
+  // Mutation caught: clearOrgScopedTables, or deleteOrgData on its own,
+  // forgetting the record again (B18 review, 2026-10-24).
+  it('clearOrgScopedTables, and so deleteOrgData, keeps it', () => {
+    const body = clearBody(dbSrc);
+    expect(body).not.toContain(CACHE_USER_META_KEY);
+    expect(body).not.toContain('CACHE_USER_META_KEY');
+    expect(fnBody('export async function deleteOrgData(')).not.toMatch(
+      /forgetCacheOwner|cache_user_id|CACHE_USER_META_KEY/,
+    );
+  });
+
+  it('only the sign-out and the eviction wipes forget it, inside their own transaction', () => {
+    expect(fnBody('export async function wipeForSignOut(')).toContain(
+      'await forgetCacheOwner(db);',
+    );
+    expect(fnBody('export async function wipeForEviction(')).toContain(
+      'await forgetCacheOwner(db);',
+    );
+    expect([...code(dbSrc).matchAll(/forgetCacheOwner\(db\)/g)]).toHaveLength(2);
+  });
+
+  it('forgetCacheOwner and setCacheOwner use the constant sync.ts reads and stamps', () => {
+    expect(fnBody('async function forgetCacheOwner(')).toContain(
+      "'delete from meta where key = ?', [CACHE_USER_META_KEY]",
+    );
+    expect(fnBody('export async function setCacheOwner(')).toMatch(
+      /\[\s*CACHE_USER_META_KEY,\s*userId,?\s*\]/,
+    );
+    expect(code(syncSrc)).toContain('await setMeta(CACHE_USER_META_KEY, liveUserId)');
+    expect(code(syncSrc)).toContain('await setCacheOwner(liveUserId);');
+  });
+
+  // Mutation caught: any other module writing or deleting the record, which
+  // would let a wipe elsewhere leave photos with no owner recorded.
+  it('no other phone source reads, writes or deletes it', () => {
+    const root = path.resolve(__dirname, '../..');
+    const sources = (dir: string): string[] =>
+      readdirSync(path.join(root, dir), { withFileTypes: true }).flatMap((e) => {
+        const rel = path.join(dir, e.name);
+        if (e.isDirectory())
+          return e.name === 'node_modules' || e.name === '__fixtures__' ? [] : sources(rel);
+        return /\.(ts|tsx)$/.test(e.name) && !/\.test\.tsx?$/.test(e.name) ? [rel] : [];
+      });
+    const touching = [...sources('src'), ...sources('app')].filter((f) =>
+      /cache_user_id|CACHE_USER_META_KEY/.test(code(readFileSync(path.join(root, f), 'utf8'))),
+    );
+    expect(touching.sort()).toEqual(
+      ['src/lib/cache-owner.ts', 'src/lib/db.ts', 'src/lib/sync.ts'].map((f) => path.normalize(f)),
+    );
   });
 });
 
@@ -113,7 +190,6 @@ describe('the cleared literals are the exported constants', () => {
   const body = clearBody(dbSrc);
 
   it.each([
-    ['cache_user_id', CACHE_USER_META_KEY],
     ['enabled_modules', ENABLED_MODULES_META_KEY],
     ['effective_permissions', EFFECTIVE_PERMISSIONS_META_KEY],
     ['warehouse_scope', WAREHOUSE_SCOPE_META_KEY],

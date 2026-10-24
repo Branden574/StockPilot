@@ -4,7 +4,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * Signing out, an account eviction, or a pull for another account forgets the
  * photos the leaving account saw: expo-image's memory and disk caches (which
  * keep a photo under its storage path for up to a week) and the in-memory
- * item-photo links. Before, a sign-out cleared the SQLite cache only.
+ * item-photo links. Before, a sign-out cleared the SQLite cache only. Which
+ * wipes keep the photos, and the record of whose they are, is executed end to
+ * end in cache-owner.sqlite.test.ts.
  */
 
 const { image, createSignedUrl } = vi.hoisted(() => ({
@@ -77,18 +79,36 @@ describe('clearPhotoCaches', () => {
  * reported and the sign-out completed, with every photo left in place.
  */
 describe('wipeWithPhotoCaches', () => {
-  it('clears the photo caches after the SQLite wipe', async () => {
+  // Mutation caught: the SQLite wipe first, as it was. The sign-out's and the
+  // eviction's wipes forget whose cache it was (cache-owner.ts), so an app
+  // closed before the disk clear finished left photos with no owner recorded
+  // and the next account adopted them (executed in cache-owner.sqlite.test.ts).
+  it('clears the photo caches before the SQLite wipe, which waits for the disk clear to finish', async () => {
     const { wipeWithPhotoCaches } = await import('./photo-cache-wipe');
     const order: string[] = [];
     image.clearDiskCache.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
       order.push('photos');
       return true;
     });
     await wipeWithPhotoCaches(async () => {
       order.push('sqlite');
     });
-    expect(order).toEqual(['sqlite', 'photos']);
+    expect(order).toEqual(['photos', 'sqlite']);
     expect(image.clearMemoryCache).toHaveBeenCalledTimes(1);
+  });
+
+  // Mutation caught: `await clearPhotoCaches(); await wipe();` without the
+  // finally. clearPhotoCaches reports a cache it could not clear rather than
+  // throwing, but a throw must still never skip the SQLite wipe.
+  it('a photo wipe that throws still runs the SQLite wipe', async () => {
+    const { wipeWithPhotoCaches } = await import('./photo-cache-wipe');
+    image.clearMemoryCache.mockImplementationOnce(() => {
+      throw new Error('native module missing');
+    });
+    const wipe = vi.fn(async () => {});
+    await expect(wipeWithPhotoCaches(wipe)).rejects.toThrow('native module missing');
+    expect(wipe).toHaveBeenCalledTimes(1);
   });
 
   // Mutation caught: the photo wipe run only when the SQLite wipe succeeds.
