@@ -65,8 +65,13 @@ describe('the PO screen (1-3)', () => {
   // nothing), or on every render offline. Re-pinned by the rebase onto the
   // small fixes slice 2 (was: !reviewOnly): nor for a reader without
   // stock:adjust, whose screen is read only before any gate answer.
+  // Re-pinned by the review of 2026-10-24 (was: `header !== null &&
+  // !readOnly`): readOnly now follows the gate's own answer too, so the
+  // request keys on the synced set alone. Keyed on readOnly, a "no"
+  // remembered this session would stop every later check, even after the
+  // permission came back.
   it('asks the gate only for a receivable PO on screen, online', () => {
-    expect(po).toContain('const gateWanted = header !== null && !readOnly;');
+    expect(po).toContain('const gateWanted = header !== null && !reviewOnly && adjustSynced;');
     expect(po).toContain(
       'if (!gateWanted || !userId || !orgId || gateKey === null || offline) return;',
     );
@@ -74,6 +79,27 @@ describe('the PO screen (1-3)', () => {
     expect(po).toContain("import { useAuth } from '@/lib/auth-context';");
     expect(po).toMatch(
       /const gate = receiveGateOf\(gateView, enabledModules\.has\('receiving'\)\);/,
+    );
+  });
+
+  // Review 2026-10-24 (owner question 2: the missing permission is named
+  // first, the same on the web and the phone). Mutation caught: readOnly and
+  // the permission notice keyed on the synced set alone, so when the gate's
+  // answer lacked stock:adjust (revoked since the last sync, or a set not
+  // loaded at a cold start) the footer said "A manager posts receipts."
+  // and the notice stayed hidden, while the web named the permission.
+  it("reads the PO read only, with the permission notice, when the gate's answer lacks Adjust on-hand", () => {
+    expect(po).toContain(
+      "const adjustSynced = showWriteCtaForRole(role, permissions, 'stock:adjust');",
+    );
+    expect(po).toContain(
+      'const canReceive = receiveHoldsAdjust({ synced: adjustSynced, gate: gateView });',
+    );
+    expect(po).toContain('const readOnly = reviewOnly || !canReceive;');
+    expect(po).toContain('{!reviewOnly && !canReceive && hasOutstanding ? (');
+    expect(po.indexOf('const gateView = receiveGateState({')).toBeGreaterThan(-1);
+    expect(po.indexOf('const gateView = receiveGateState({')).toBeLessThan(
+      po.indexOf('const canReceive = receiveHoldsAdjust('),
     );
   });
 

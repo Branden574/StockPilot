@@ -143,6 +143,26 @@ export function receiveGateState(input: {
   return { kind: 'loading' };
 }
 
+/**
+ * Whether this person holds Adjust on-hand (stock:adjust), the permission the
+ * receipt route asserts. Without it the PO screen reads the PO like a draft
+ * and its notice names the permission (small fixes slice 2), as the web page
+ * does first (owner question 2).
+ *
+ * The effective set this device last synced decides until the gate is known.
+ * Once it is, the server's answer counts too (review 2026-10-24): the synced
+ * set can be stale (revoked while the app was in the background) or not
+ * loaded yet (a cold start, read as the role's defaults or as yes), and the
+ * web reads the permission from the server's own context. Keyed on the synced
+ * set alone, such a person was told "A manager posts receipts." on the phone
+ * while the web named the missing permission. It only narrows: a known yes
+ * never overrides a synced no.
+ */
+export function receiveHoldsAdjust(input: { synced: boolean; gate: ReceiveGateState }): boolean {
+  if (!input.synced) return false;
+  return input.gate.kind !== 'known' || input.gate.facts.canAdjust;
+}
+
 /** The gate when it is known; null while it is not (never a guess). */
 export function receiveGateOf(state: ReceiveGateState, receivingOn: boolean): ReceivingGate | null {
   return state.kind === 'known' ? receiveGateFromFacts(state.facts, receivingOn) : null;
@@ -172,10 +192,12 @@ export type ReceiveFooter =
 /**
  * The footer. A draft shows none (and the screen makes no gate request for
  * one). Post receipt appears ONLY on a known yes; stock:adjust alone is never
- * enough (staff hold it by default). Someone who cannot post is told a
- * manager posts receipts only while something is left to receive; with
- * nothing to receive there is no footer for them (the web's rule; desk check
- * F10).
+ * enough (staff hold it by default). Someone who holds stock:adjust but cannot
+ * post is told a manager posts receipts only while something is left to
+ * receive; with nothing to receive there is no footer for them (the web's
+ * rule; desk check F10). Someone without stock:adjust gets none either: the
+ * screen reads the PO read only for them (receiveHoldsAdjust) and its notice
+ * names the missing permission, the web's first message (review 2026-10-24).
  */
 export function receiveFooter(input: {
   reviewOnly: boolean;
@@ -192,7 +214,7 @@ export function receiveFooter(input: {
       : { kind: 'unknown', text: RECEIVE_GATE_UNKNOWN_COPY, retry: true };
   }
   if (!receiveGateFromFacts(gate.facts, false).canPostReceipt) {
-    return input.anyReceivable
+    return input.anyReceivable && gate.facts.canAdjust
       ? { kind: 'manager_posts', text: RECEIVE_MANAGER_POSTS_COPY }
       : { kind: 'none' };
   }

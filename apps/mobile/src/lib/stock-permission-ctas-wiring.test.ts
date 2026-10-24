@@ -59,7 +59,17 @@ describe('PO screen: receiving follows stock:adjust', () => {
   it('reads the role and the effective permissions and gates receiving on stock:adjust', () => {
     expect(po).toMatch(/const \{ role \} = useRole\(\);/);
     expect(po).toMatch(/const permissions = useEffectivePermissions\(\);/);
-    expect(po).toMatch(/const canReceive = showWriteCtaForRole\(role, permissions, 'stock:adjust'\);/);
+    // Re-pinned by F4-1's review of 2026-10-24 (was: `const canReceive =
+    // showWriteCtaForRole(role, permissions, 'stock:adjust');`): the synced
+    // set decides until the receive gate is known, and a known answer without
+    // stock:adjust counts too, so a permission revoked since the last sync
+    // reads the PO this way as well (receive-gate.test.ts receiveHoldsAdjust).
+    expect(po).toMatch(
+      /const adjustSynced = showWriteCtaForRole\(role, permissions, 'stock:adjust'\);/,
+    );
+    expect(po).toMatch(
+      /const canReceive = receiveHoldsAdjust\(\{ synced: adjustSynced, gate: gateView \}\);/,
+    );
     expect(po).toMatch(/const readOnly = reviewOnly \|\| !canReceive;/);
   });
 

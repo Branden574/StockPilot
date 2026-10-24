@@ -21,6 +21,7 @@ import {
   receiveGateKey,
   receiveGateOf,
   receiveGateState,
+  receiveHoldsAdjust,
   rememberedReceiveFacts,
   type ReceiveGateFacts,
   type ReceiveGateState,
@@ -216,6 +217,23 @@ describe('the quantities and the footer', () => {
     }
   });
 
+  // Review 2026-10-24 (owner question 2: the missing permission is named
+  // first, the same on the web and the phone). Mutation caught: the footer
+  // telling someone without Adjust on-hand "A manager posts receipts." when
+  // the gate's answer lacks stock:adjust but the synced set still had it. No
+  // footer for them: the screen reads the PO read only (receiveHoldsAdjust)
+  // and its notice names the permission.
+  it('someone without Adjust on-hand is never told a manager posts receipts', () => {
+    for (const gate of [
+      known('staff', ['purchase_orders:read']),
+      known('viewer', []),
+      known('manager', ['purchase_orders:read', 'purchase_orders:manage']),
+    ]) {
+      expect(footer(gate)).toEqual({ kind: 'none' });
+      expect(footer(gate, { anyReceivable: false })).toEqual({ kind: 'none' });
+    }
+  });
+
   // Desk check F10(b): with nothing left to receive there is no receipt to
   // post, so nobody is told who posts one (the web says it only while the PO
   // is receivable too).
@@ -241,5 +259,48 @@ describe('the quantities and the footer', () => {
       label: 'Fully received',
       disabled: true,
     });
+  });
+});
+
+/**
+ * Review 2026-10-24: whether someone may receive at all (Adjust on-hand) on the
+ * phone. The web reads stock:adjust from the server's context; the phone's
+ * synced set can be stale (revoked while the app was in the background) or
+ * not loaded yet (a cold start, read as the role's defaults or as yes).
+ */
+describe('Adjust on-hand, once the gate is known', () => {
+  // Mutation caught: the screen's read-only rule and its permission notice
+  // keyed on the synced set alone, so a known answer without stock:adjust
+  // was told "A manager posts receipts." while the web named the permission.
+  it('a known answer without stock:adjust counts, even when the synced set says yes', () => {
+    for (const gate of [
+      known('staff', ['purchase_orders:read']),
+      known('viewer', []),
+      known('manager', ['purchase_orders:read', 'purchase_orders:manage']),
+    ]) {
+      expect(receiveHoldsAdjust({ synced: true, gate })).toBe(false);
+    }
+  });
+
+  it('until the gate is known, the synced set decides', () => {
+    expect(receiveHoldsAdjust({ synced: true, gate: { kind: 'loading' } })).toBe(true);
+    expect(receiveHoldsAdjust({ synced: true, gate: { kind: 'unknown', offline: true } })).toBe(
+      true,
+    );
+    expect(receiveHoldsAdjust({ synced: true, gate: { kind: 'unknown', offline: false } })).toBe(
+      true,
+    );
+    expect(receiveHoldsAdjust({ synced: true, gate: known('staff') })).toBe(true);
+    expect(receiveHoldsAdjust({ synced: true, gate: known('manager') })).toBe(true);
+  });
+
+  // It only narrows what the synced set shows: a cached yes from earlier in
+  // the session never makes a PO editable for someone the set says lacks it.
+  it('a known yes never overrides a synced no', () => {
+    expect(receiveHoldsAdjust({ synced: false, gate: known('owner') })).toBe(false);
+    expect(receiveHoldsAdjust({ synced: false, gate: { kind: 'loading' } })).toBe(false);
+    expect(receiveHoldsAdjust({ synced: false, gate: { kind: 'unknown', offline: true } })).toBe(
+      false,
+    );
   });
 });

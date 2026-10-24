@@ -46,6 +46,7 @@ import {
   receiveGateKey,
   receiveGateOf,
   receiveGateState,
+  receiveHoldsAdjust,
   rememberedReceiveFacts,
   type ReceiveGateAnswer,
 } from '@/lib/receive-gate';
@@ -533,26 +534,19 @@ export default function PoReceiveScreen() {
   // route refuses on its own.
   const { role } = useRole();
   const permissions = useEffectivePermissions();
-  const canReceive = showWriteCtaForRole(role, permissions, 'stock:adjust');
-  const readOnly = reviewOnly || !canReceive;
-  const hasOutstanding = lines.some((l) => l.quantity_ordered - l.quantity_received > 0);
-  // A receipt can be posted only while a line has something left to receive:
-  // the footer's Post receipt, the Notes that go with a receipt and the
-  // attachment hint about posting one all follow it (a fully received PO
-  // showed a Notes field whose note could never be sent; review 2026-10-05).
-  const receivable = !readOnly && lines.some((l) => l.quantity_ordered - l.quantity_received > 0);
-  const blocks = React.useMemo(
-    () => buildPoBlocks(lines, readOnly ? {} : groups),
-    [lines, groups, readOnly],
-  );
+  // The effective set this device last synced. It decides until the receive
+  // gate below is known.
+  const adjustSynced = showWriteCtaForRole(role, permissions, 'stock:adjust');
 
   // F4-1: posting is for a manager or above with stock:adjust (core
   // receivingGate, the predicate the web page and ReceivingService.postReceipt
-  // share). Someone without stock:adjust reads the PO as above; for everyone
-  // else the gate is asked once the PO is on screen: a draft and a read-only
-  // PO ask nothing. Every set is post-await.
+  // share). The gate is asked once the PO is on screen: a draft asks nothing,
+  // nor does someone the synced set already says lacks stock:adjust (their PO
+  // reads as below). Keyed on the synced set, never on the gate's own answer,
+  // so a "no" remembered this session never stops a later check. Every set is
+  // post-await.
   const gateKey = receiveGateKey(userId, orgId);
-  const gateWanted = header !== null && !readOnly;
+  const gateWanted = header !== null && !reviewOnly && adjustSynced;
   React.useEffect(() => {
     if (!gateWanted || !userId || !orgId || gateKey === null || offline) return;
     let cancelled = false;
@@ -575,6 +569,24 @@ export default function PoReceiveScreen() {
     remembered: rememberedReceiveFacts(userId, orgId),
     offline,
   });
+  // Without stock:adjust the PO reads like a draft, with the notice that
+  // names the permission (main's rule). Once the gate is known its answer
+  // counts too (receiveHoldsAdjust): a permission revoked since the last
+  // sync, or a set not loaded at a cold start, gets the permission notice, as
+  // the web shows it, and never "A manager posts receipts." (owner question
+  // 2; review 2026-10-24).
+  const canReceive = receiveHoldsAdjust({ synced: adjustSynced, gate: gateView });
+  const readOnly = reviewOnly || !canReceive;
+  const hasOutstanding = lines.some((l) => l.quantity_ordered - l.quantity_received > 0);
+  // A receipt can be posted only while a line has something left to receive:
+  // the footer's Post receipt, the Notes that go with a receipt and the
+  // attachment hint about posting one all follow it (a fully received PO
+  // showed a Notes field whose note could never be sent; review 2026-10-05).
+  const receivable = !readOnly && lines.some((l) => l.quantity_ordered - l.quantity_received > 0);
+  const blocks = React.useMemo(
+    () => buildPoBlocks(lines, readOnly ? {} : groups),
+    [lines, groups, readOnly],
+  );
   const gate = receiveGateOf(gateView, enabledModules.has('receiving'));
   // One rule for the loose fields and their All, the size runs and Scan: only
   // on a known yes, never on a read-only PO.

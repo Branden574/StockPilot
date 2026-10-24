@@ -5,10 +5,14 @@ import { RECEIVE_MANAGER_POSTS_COPY } from '@stockpilot/core';
 
 /**
  * F4-1's Receive gating fix on the web PO page: Receive items shows only for
- * someone core receivingGate lets post (a manager with stock:adjust); staff
- * and viewers see "A manager posts receipts." in its place, and are never
+ * someone core receivingGate lets post (a manager with stock:adjust). Anyone
+ * below manager who holds Adjust on-hand sees "A manager posts receipts." in
+ * its place; anyone without the permission sees the permission sentence
+ * instead (main's, pinned by po-detail-destination.test.tsx). Neither is
  * offered Record checklist. The live checklist and the recorder flag reach
- * the dialog and the receipt history as the gate decides.
+ * the dialog and the receipt history as the gate decides. Here the caller
+ * is staff holding the permission (staff's defaults), and each test sets the
+ * gate's answer.
  */
 
 const gate = vi.hoisted(() => ({
