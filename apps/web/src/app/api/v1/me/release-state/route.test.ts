@@ -66,6 +66,24 @@ describe('POST /api/v1/me/release-state', () => {
     expect(withApiContext).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['Sec-Fetch-Site cross-site, with no Origin', { 'Sec-Fetch-Site': 'cross-site' }],
+    [
+      'Sec-Fetch-Site same-site from a sibling subdomain',
+      { 'Sec-Fetch-Site': 'same-site', Origin: 'https://evil.stockpilotusa.com' },
+    ],
+    ['Sec-Fetch-Site none (no page made it)', { 'Sec-Fetch-Site': 'none' }],
+    [
+      'a Basic Authorization header, which is not a bearer',
+      { Authorization: 'Basic dXNlcjpwYXNz', Origin: 'https://evil.example' },
+    ],
+  ])('refuses %s with the same 403 (the shared rule, docket S14)', async (_name, headers) => {
+    const res = await POST(req({ action: 'read_all' }, headers));
+    expect(res.status).toBe(403);
+    expect(withApiContext).not.toHaveBeenCalled();
+    expect(recordReleaseState).not.toHaveBeenCalled();
+  });
+
   it('accepts same-origin, no Origin at all, and a Bearer caller whatever its Origin', async () => {
     expect(
       (await POST(req({ action: 'read_all' }, { Origin: 'https://stockpilotusa.com' }))).status,

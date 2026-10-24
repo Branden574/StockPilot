@@ -552,6 +552,26 @@ describe('review 8: a cookie session completes a hand-over only from this site',
     expect(res.status).toBe(200);
   });
 
+  it('a non-Bearer Authorization header is not a bearer: withApiContext reads the cookie for it, so it is judged (docket S14)', async () => {
+    // A browser can attach Basic credentials on its own; withApiContext takes
+    // its bearer path only for `Bearer <token>`, and reads the cookie otherwise.
+    const res = await POST(
+      request(DIGEST, { authorization: 'Basic dXNlcjpwYXNz', origin: 'https://evil.example' }),
+    );
+    expect(res.status).toBe(404);
+    expect(await res.text()).toBe(NOT_FOUND_TEXT);
+    expect(withApiContext).not.toHaveBeenCalled();
+    expect(confirmCalls()).toHaveLength(0);
+  });
+
+  it("the context is asked with the post's own method, so withApiContext judges it as the write it is (docket S14)", async () => {
+    const res = await POST(request(DIGEST, { origin: 'https://test.local', 'sec-fetch-site': 'same-origin' }));
+    expect(res.status).toBe(200);
+    const asked = vi.mocked(withApiContext).mock.calls[0]![0] as Request;
+    expect(asked.method).toBe('POST');
+    expect(asked.url).toBe('https://test.local/api/v1/orders/sign');
+  });
+
   it('a raw link needs no session, so a cross-site post of a printed QR is judged as before', async () => {
     const res = await POST(request(RAW, { origin: 'https://evil.example', 'sec-fetch-site': 'cross-site' }));
     expect(res.status).toBe(200);
