@@ -20,7 +20,7 @@ const sentry = vi.hoisted(() => {
   return {
     addBreadcrumb: vi.fn(),
     captureException: vi.fn(),
-    captureMessage: vi.fn(() => {
+    captureMessage: vi.fn((_message: string, _context?: Record<string, unknown>) => {
       state.capturedInsideScope.push(state.insideScope);
     }),
     scope,
