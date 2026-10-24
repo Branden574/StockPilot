@@ -31,7 +31,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * set does not list) it asks the Auth server itself.
  *
  * A verdict on the token is final: getClaims() refused it (bad signature,
- * expired, malformed), or the Auth server it asked refused it (401 or 403).
+ * expired, malformed), or the Auth server it asked refused it (401 or 403,
+ * or session_not_found for a signed-out or revoked session).
  * Only when getClaims() could not check the token at all (the key set could
  * not be fetched, a key would not import) is the Auth server asked here:
  * getUser(token) on the same token, the fallback the proxy and session.ts take
@@ -89,9 +90,16 @@ function decodePayload(token: string): Record<string, unknown> | null {
  * the Auth server again would only repeat it: the signature, expiry or shape
  * failed (AuthInvalidJwtError), or the Auth server that getClaims() asked
  * refused the token (401 or 403).
+ *
+ * GoTrue refuses a token of a session it no longer has (signed out, revoked
+ * from another device) with 403 session_not_found, and auth-js raises that as
+ * AuthSessionMissingError (status 400), not as an AuthApiError(403). The
+ * token is always passed in explicitly here, so getClaims() never loads a
+ * session and that error can only be GoTrue's answer about this token.
  */
 function isVerdictOnToken(error: { name?: string; status?: number }): boolean {
   if (error.name === 'AuthInvalidJwtError') return true;
+  if (error.name === 'AuthSessionMissingError') return true;
   return error.name === 'AuthApiError' && (error.status === 401 || error.status === 403);
 }
 

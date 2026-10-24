@@ -51,10 +51,12 @@ import {
   FIXTURE_USER_ID,
   INSECURE_USER_WARNING,
   fakeAuthServer,
+  makeLegacySecret,
   makeSigningKey,
   sessionClaims,
   sessionCookies,
   signAccessToken,
+  signLegacyToken,
   unsignedToken,
   withEditedPayload,
   type FakeAuthServer,
@@ -72,6 +74,8 @@ let projectKey: SigningKey;
 let rotatedKey: SigningKey;
 /** The attacker's own key, presented under the project's key id. */
 let attackerKey: SigningKey;
+/** The project's legacy HS256 secret, which GoTrue still accepts. */
+let legacySecret: CryptoKey;
 let server: FakeAuthServer;
 let warn: ReturnType<typeof vi.spyOn>;
 
@@ -79,6 +83,7 @@ beforeAll(async () => {
   projectKey = await makeSigningKey('project-kid-1');
   rotatedKey = await makeSigningKey('project-kid-2');
   attackerKey = await makeSigningKey('attacker-kid');
+  legacySecret = await makeLegacySecret();
 });
 
 /** Serve the Auth server for `keys` (the project's current key set). */
@@ -204,6 +209,35 @@ describe('readVerifiedSessionClaims', () => {
     expect(await readVerifiedSessionClaims(await createClient())).toBeNull();
     // getClaims() fetches the key set again for the unknown key id, finds no
     // such key, and asks the Auth server, which refuses the token.
+    expect(server.calls['/user']).toBe(1);
+  });
+
+  it('a legacy HS256 token GoTrue accepts: its claims, after one Auth request', async () => {
+    // A symmetric algorithm and no key id: getClaims() cannot check it
+    // locally, so it asks the Auth server, which checks it with the secret.
+    server.legacySecret = legacySecret;
+    const claims = sessionClaims({ aal: 'aal2' });
+    await signIn(claims, await signLegacyToken(legacySecret, claims));
+    expect(await readVerifiedSessionClaims(await createClient())).toMatchObject({
+      userId: FIXTURE_USER_ID,
+      sessionId: FIXTURE_SESSION_ID,
+      aal: 'aal2',
+    });
+    expect(server.calls['/user']).toBe(1);
+    expect(server.calls['/.well-known/jwks.json']).toBeUndefined();
+  });
+
+  it('a legacy HS256 token of a revoked session: null, after one Auth request', async () => {
+    // GoTrue checks the signature, then finds no such session (signed out, or
+    // revoked from another device) and answers session_not_found. auth-js
+    // reports that as AuthSessionMissingError (status 400), not as an
+    // AuthApiError(403). It is a verdict on this token all the same, so the
+    // Auth server is not asked a second time.
+    server.legacySecret = legacySecret;
+    server.revokedSessions.add(FIXTURE_SESSION_ID);
+    const claims = sessionClaims({ aal: 'aal2' });
+    await signIn(claims, await signLegacyToken(legacySecret, claims));
+    expect(await readVerifiedSessionClaims(await createClient())).toBeNull();
     expect(server.calls['/user']).toBe(1);
   });
 

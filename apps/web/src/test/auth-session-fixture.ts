@@ -15,8 +15,10 @@
  * - The cookie: the session JSON written the way `@supabase/ssr` writes it
  *   (`base64-` + base64url, chunked), under `sb-<project ref>-auth-token`.
  * - The Auth server: `GET /user` accepts a token only when its signature is
- *   the project key's and it has not expired (GoTrue's own check); a refresh
- *   always fails, so an expired session cannot be revived.
+ *   the project key's (or the legacy HS256 secret's, when a test sets one) and
+ *   it has not expired (GoTrue's own check), then answers session_not_found
+ *   for a session a test revoked; a refresh always fails, so an expired
+ *   session cannot be revived.
  *
  * A forged token is modelled the two ways an attacker can make one: a real
  * token whose payload was edited (its signature no longer matches), and a
@@ -121,6 +123,34 @@ export function unsignedToken(claims: Record<string, unknown>): string {
 }
 
 /**
+ * The project's LEGACY symmetric secret (HS256), made at run time like the
+ * keys above. The key set never lists a symmetric key, so getClaims() cannot
+ * check a token signed with it and asks the Auth server (GET /user) instead:
+ * the path of a project still on the legacy secret, and of a session issued
+ * before a project moved to asymmetric keys.
+ */
+export async function makeLegacySecret(): Promise<CryptoKey> {
+  return (await crypto.subtle.generateKey({ name: 'HMAC', hash: 'SHA-256' }, false, [
+    'sign',
+    'verify',
+  ])) as CryptoKey;
+}
+
+/** A compact HS256 JWS over `claims`, signed with the legacy secret (no key id, as legacy tokens have none). */
+export async function signLegacyToken(
+  secret: CryptoKey,
+  claims: Record<string, unknown>,
+): Promise<string> {
+  const signingInput = `${b64url({ alg: 'HS256', typ: 'JWT' })}.${b64url(claims)}`;
+  const signature = await crypto.subtle.sign(
+    'HMAC',
+    secret,
+    new TextEncoder().encode(signingInput),
+  );
+  return `${signingInput}.${Buffer.from(signature).toString('base64url')}`;
+}
+
+/**
  * The cookies `@supabase/ssr` would hold for a session carrying `jwt`. The
  * stored user object lists a VERIFIED TOTP factor: what the session cookie of
  * an enrolled member holds, and the field the warning proxy guards.
@@ -168,38 +198,62 @@ export interface FakeAuthServer {
   calls: Record<string, number>;
   /** Make the JWKS endpoint fail (a transient Auth outage for key discovery only). */
   failJwks: boolean;
+  /** The legacy HS256 secret GoTrue still accepts tokens under, if any. */
+  legacySecret: CryptoKey | null;
+  /**
+   * Session ids GoTrue no longer has (signed out, or revoked from another
+   * device): `/user` answers session_not_found for a token of one of them,
+   * after its signature and expiry check out, as GoTrue does.
+   */
+  revokedSessions: Set<string>;
 }
 
-function json(status: number, body: unknown): Response {
+function json(status: number, body: unknown, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...headers },
   });
 }
 
-/** Does GoTrue accept `jwt`: signed by the project key its header names, unexpired? */
-async function accepted(keys: SigningKey[], jwt: string): Promise<boolean> {
+/**
+ * The claims of `jwt` if GoTrue accepts it, else null: signed by the project
+ * key its header names (or, for HS256, by the legacy secret) and unexpired.
+ */
+async function accepted(
+  keys: SigningKey[],
+  legacySecret: CryptoKey | null,
+  jwt: string,
+): Promise<Record<string, unknown> | null> {
   const [header, payload, signature] = jwt.split('.');
-  if (!header || !payload || !signature) return false;
+  if (!header || !payload || !signature) return null;
   try {
-    const { kid } = JSON.parse(Buffer.from(header, 'base64url').toString('utf8')) as {
+    const { alg, kid } = JSON.parse(Buffer.from(header, 'base64url').toString('utf8')) as {
+      alg?: string;
       kid?: string;
     };
-    const key = keys.find((k) => k.kid === kid);
-    if (!key) return false;
-    const ok = await crypto.subtle.verify(
-      { name: 'ECDSA', hash: 'SHA-256' },
-      key.publicKey,
-      Buffer.from(signature, 'base64url'),
-      new TextEncoder().encode(`${header}.${payload}`),
-    );
-    if (!ok) return false;
-    const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as {
-      exp?: number;
-    };
-    return typeof claims.exp === 'number' && claims.exp * 1000 > Date.now();
+    const signed = new TextEncoder().encode(`${header}.${payload}`);
+    const sig = Buffer.from(signature, 'base64url');
+    let ok = false;
+    if (alg === 'HS256') {
+      ok = legacySecret !== null && (await crypto.subtle.verify('HMAC', legacySecret, sig, signed));
+    } else {
+      const key = keys.find((k) => k.kid === kid);
+      if (!key) return null;
+      ok = await crypto.subtle.verify(
+        { name: 'ECDSA', hash: 'SHA-256' },
+        key.publicKey,
+        sig,
+        signed,
+      );
+    }
+    if (!ok) return null;
+    const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as Record<
+      string,
+      unknown
+    >;
+    return typeof claims.exp === 'number' && claims.exp * 1000 > Date.now() ? claims : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -209,6 +263,8 @@ export function fakeAuthServer(projectKeys: SigningKey | SigningKey[]): FakeAuth
   const server: FakeAuthServer = {
     calls: {},
     failJwks: false,
+    legacySecret: null,
+    revokedSessions: new Set(),
     fetch: async (input, init) => {
       const url = new URL(
         typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
@@ -225,14 +281,23 @@ export function fakeAuthServer(projectKeys: SigningKey | SigningKey[]): FakeAuth
       if (path === '/user') {
         const headers = new Headers(init?.headers);
         const bearer = headers.get('authorization')?.replace(/^Bearer\s+/i, '') ?? '';
-        if (!(await accepted(keys, bearer))) {
+        const claims = await accepted(keys, server.legacySecret, bearer);
+        if (!claims) {
           return json(403, { code: 'bad_jwt', error_code: 'bad_jwt', msg: 'invalid JWT' });
         }
-        const claims = JSON.parse(
-          Buffer.from(bearer.split('.')[1]!, 'base64url').toString('utf8'),
-        ) as {
-          sub: string;
-        };
+        if (server.revokedSessions.has(String(claims.session_id))) {
+          // GoTrue's answer in the 2024-01-01 API version that auth-js asks
+          // for: auth-js turns this code into AuthSessionMissingError (status
+          // 400), not an AuthApiError(403).
+          return json(
+            403,
+            {
+              code: 'session_not_found',
+              message: 'Session from session_id claim in JWT does not exist',
+            },
+            { 'x-supabase-api-version': '2024-01-01' },
+          );
+        }
         return json(200, {
           id: claims.sub,
           aud: 'authenticated',
