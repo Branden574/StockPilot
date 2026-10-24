@@ -737,7 +737,13 @@ select is(
 select is(
   (select coalesce(string_agg(x.sig, ','), '')
      from (values
-       ('public.close_partial(uuid)',                             'a519c3e58fb577c3ff1b30fb3a6cc0ad'),
+       -- Re-pinned by 0405 (was a519c3e58fb577c3ff1b30fb3a6cc0ad): slice E refuses an
+       -- approver who may not write to the order's warehouse before the body changes
+       -- anything (0405 R3: removing that block gives this body exactly); for everyone else
+       -- the body is unchanged. The RMA cancel and the rest-close call it only after the
+       -- RMA's own write check on the original order's warehouse, where the replacement is
+       -- placed and the header guard keeps it.
+       ('public.close_partial(uuid)',                             '44852737eedc1959e887b8621925d157'),
        ('public.tg_order_requests_replacement_header()',          'b7220c36c4f78792f698adfbd8da79ea'),
        ('public.cancel_return_replacement(uuid,integer,text,text)', '9e42b480d4a77b1ccde60f10fc858d44'),
        ('public._return_exchange_requester_options(uuid,boolean)', 'c9a8b3ff98fa7e53e1befaeb39b52c55'),

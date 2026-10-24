@@ -2260,13 +2260,39 @@ select is(
        ('public.tg_order_requests_insert_guard()',                'caf69f8a23d03b9bfa6ea87a9cf94077'),
        ('public.tg_order_request_lines_guard()',                  'd899924c0f8fc1dfae4e8be7bd4c5cad'),
        ('public.tg_order_requests_workflow_guard()',              '55bceafc13d599f8d77d6a4180c28140'),
-       ('public.approve_partial(uuid)',                           '40ca0878733b08a649773fe9b7efd4e0'),
-       ('public.cancel_order_request(uuid,text)',                 '535fc49935f15adc8d7dfa78836a06af'),
+       -- Re-pinned by 0405 (was 40ca0878733b08a649773fe9b7efd4e0): slice E refuses an
+       -- approver who may not write to the order's warehouse before the body changes
+       -- anything (0405 R2: removing that block gives this body exactly); for everyone else
+       -- the body is unchanged. The replacement issuer calls it only after asking write
+       -- access to the original order's warehouse itself, where it places the replacement.
+       ('public.approve_partial(uuid)',                           '897c53295f88b0bac7dcc03edd07211f'),
+       -- Re-pinned by 0405 (was 535fc49935f15adc8d7dfa78836a06af): slice E refuses an
+       -- approver's cancel outside the order's warehouses and counts an order with no
+       -- requester account as nobody's own (0405 R6: removing both gives this body
+       -- exactly); the cancel and its restocks are unchanged. Every RMA cancel of a
+       -- replacement runs as an approver who passed the RMA's own write check on the
+       -- original order's warehouse, where the replacement is placed and the header guard
+       -- keeps it.
+       ('public.cancel_order_request(uuid,text)',                 '2f230491b82b32b37f81c3ddbb8caf8e'),
        ('public.complete_picking(uuid)',                          'b8f1ef1fb01efa5c04c916c178129541'),
-       ('public.close_partial(uuid)',                             'a519c3e58fb577c3ff1b30fb3a6cc0ad'),
-       ('public.resume_fulfillment(uuid)',                        '2e2d5aab1db5392250879bfa9ff4bccd'),
+       -- Re-pinned by 0405 (was a519c3e58fb577c3ff1b30fb3a6cc0ad): slice E refuses an
+       -- approver who may not write to the order's warehouse before the body changes
+       -- anything (0405 R3: removing that block gives this body exactly); for everyone else
+       -- the body is unchanged. The RMA cancel and the rest-close call it only after the
+       -- RMA's own write check on the original order's warehouse, where the replacement is
+       -- placed and the header guard keeps it.
+       ('public.close_partial(uuid)',                             '44852737eedc1959e887b8621925d157'),
+       -- Re-pinned by 0405 (was 2e2d5aab1db5392250879bfa9ff4bccd): slice E refuses an
+       -- approver who may not write to the order's warehouse before the body changes
+       -- anything (0405 R4: removing that block gives this body exactly); for everyone else
+       -- the body is unchanged. No RMA function calls it.
+       ('public.resume_fulfillment(uuid)',                        'ce593a9203c41c1a7311b1af27d4cbd3'),
        ('public.hold_order_stock(uuid)',                          '3b0691d604823164daaa7f248616f00f'),
-       ('public.reopen_picking(uuid,text)',                       '14e49293fa670dc2e05a1c1b6930bce5'),
+       -- Re-pinned by 0405 (was 14e49293fa670dc2e05a1c1b6930bce5): slice E refuses an
+       -- approver who may not write to the order's warehouse before the body changes
+       -- anything (0405 R5: removing that block gives this body exactly); for everyone else
+       -- the body is unchanged. No RMA function calls it.
+       ('public.reopen_picking(uuid,text)',                       'b62fbb68ee0d0eb44a9e641921a757e5'),
        ('public.order_readiness_facts(uuid)',                     '2f3fb057bacda8143377ecd9c2c5e6e2'),
        ('public.order_items_orderable(uuid,uuid[])',              'b4df95d74e32850923a430769f96f246'),
        ('public.assign_order_request_number()',                   '03097df3cded3d0ea42676855abc6a25'),

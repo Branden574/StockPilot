@@ -322,13 +322,19 @@ select is(
   (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, 'public.has_permission(v_req.organization_id, ''orders:approve'')',
                                               E'public.has_org_role(v_req.organization_id, ''manager'')\n          or public.has_permission(v_req.organization_id, ''orders:approve'')'))
      from pg_proc p where p.oid = to_regprocedure('public.approve_order_request(uuid)')),
-  '7883f466ae2642cbb4664ebc473e571b|96e5f7c8b4cdd6b7e4ffcc994c9ed642',
+  -- Re-pinned by 0405 (was 7883f466ae2642cbb4664ebc473e571b|96e5f7c8b4cdd6b7e4ffcc994c9ed642):
+  -- slice E adds the warehouse term; 0405 R1 proves that removing it gives 0390's body
+  -- (7883f466), whose role term this checks.
+  '0fb614dd15db280a97641ae0ac2673b0|cb6bce5b0ab22ed8aa27e1b6211e2847',
   'R1: approve_order_request has 0390''s body (md5 7883f466), and putting the role term back gives production''s pre-0390 body exactly (96e5f7c8): the gate is the only change');
 select is(
   (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, 'public.has_permission(v_req.organization_id, ''orders:approve'')',
                                               E'public.has_org_role(v_req.organization_id, ''manager'')\n          or public.has_permission(v_req.organization_id, ''orders:approve'')'))
      from pg_proc p where p.oid = to_regprocedure('public.approve_partial(uuid)')),
-  '40ca0878733b08a649773fe9b7efd4e0|64bb847ffc8681adeed4b881c1b6a4ab',
+  -- Re-pinned by 0405 (was 40ca0878733b08a649773fe9b7efd4e0|64bb847ffc8681adeed4b881c1b6a4ab):
+  -- slice E adds the warehouse term; 0405 R2 proves that removing it gives 0390's body
+  -- (40ca0878), whose role term this checks.
+  '897c53295f88b0bac7dcc03edd07211f|4b9e0cafd26216b8963b1c9b4215e83a',
   'R2: approve_partial has 0390''s body (md5 40ca0878), and putting the role term back gives production''s pre-0390 body exactly (64bb847f): the gate is the only change');
 select is(
   (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, 'public.has_permission(v_req.organization_id, ''orders:approve'')',
@@ -343,13 +349,19 @@ select is(
   -- Re-pinned by 0395 (was 47cabcd1fe4f52fb7b2b6b6b64b68da1|7a2302dec888970054738b0dad420fd3):
   -- 0395 adds the requester's window and the restock link; 0395 R1 proves that
   -- removing them gives 0390's body (47cabcd1), whose role term this checks.
-  '535fc49935f15adc8d7dfa78836a06af|2a2c6626a1e3b5db5884a793eb067576',
+  -- Re-pinned by 0405 (was 535fc49935f15adc8d7dfa78836a06af|2a2c6626a1e3b5db5884a793eb067576):
+  -- slice E adds its two blocks; 0405 R6 proves that removing them gives 0395's body
+  -- (535fc499), whose role term this checks.
+  '2f230491b82b32b37f81c3ddbb8caf8e|51734794c00572e67c8f2a0c9961c175',
   'R4: cancel_order_request has 0390''s body (md5 47cabcd1), and putting the role term back gives production''s pre-0390 body exactly (7a2302de): the gate is the only change');
 select is(
   (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, 'public.has_permission(v_req.organization_id, ''orders:approve'')',
                                               E'public.has_org_role(v_req.organization_id, ''manager'')\n          or public.has_permission(v_req.organization_id, ''orders:approve'')'))
      from pg_proc p where p.oid = to_regprocedure('public.close_partial(uuid)')),
-  'a519c3e58fb577c3ff1b30fb3a6cc0ad|2d873a049a5584df7d3a168fb2b45e34',
+  -- Re-pinned by 0405 (was a519c3e58fb577c3ff1b30fb3a6cc0ad|2d873a049a5584df7d3a168fb2b45e34):
+  -- slice E adds the warehouse term; 0405 R3 proves that removing it gives 0390's body
+  -- (a519c3e5), whose role term this checks.
+  '44852737eedc1959e887b8621925d157|eed7a0ac5e65e8af78894a1d5181fb55',
   'R5: close_partial has 0390''s body (md5 a519c3e5), and putting the role term back gives production''s pre-0390 body exactly (2d873a04): the gate is the only change');
 select is(
   (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, 'public.has_permission(v_org, ''orders:approve'')',
@@ -370,13 +382,19 @@ select is(
   -- Re-pinned by 0395 (was 293ce0e76d195bb13105cfd1c067de82|a7fabd5fb3d07467135006b56581e46c):
   -- 0395 adds the movement link; 0395 R2 proves that removing it gives 0390's
   -- body (293ce0e7), whose role term this checks.
-  '14e49293fa670dc2e05a1c1b6930bce5|5d4e4cc624c2ec460e907e9952cee106',
+  -- Re-pinned by 0405 (was 14e49293fa670dc2e05a1c1b6930bce5|5d4e4cc624c2ec460e907e9952cee106):
+  -- slice E adds the warehouse term; 0405 R5 proves that removing it gives 0395's body
+  -- (14e49293), whose role term this checks.
+  'b62fbb68ee0d0eb44a9e641921a757e5|9d4f840caceee2d283a9b3acf24854eb',
   'R8: reopen_picking has 0390''s body (md5 293ce0e7), and putting the role term back gives production''s pre-0390 body exactly (a7fabd5f): the gate is the only change');
 select is(
   (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, 'public.has_permission(v_req.organization_id, ''orders:approve'')',
                                               E'public.has_org_role(v_req.organization_id, ''manager'')\n          or public.has_permission(v_req.organization_id, ''orders:approve'')'))
      from pg_proc p where p.oid = to_regprocedure('public.resume_fulfillment(uuid)')),
-  '2e2d5aab1db5392250879bfa9ff4bccd|e0f2ae5d7d3564cdad3b36ba4cf5aa8c',
+  -- Re-pinned by 0405 (was 2e2d5aab1db5392250879bfa9ff4bccd|e0f2ae5d7d3564cdad3b36ba4cf5aa8c):
+  -- slice E adds the warehouse term; 0405 R4 proves that removing it gives 0390's body
+  -- (2e2d5aab), whose role term this checks.
+  'ce593a9203c41c1a7311b1af27d4cbd3|8dd5f0b9c59b55265c41bb1e461be9a6',
   'R9: resume_fulfillment has 0390''s body (md5 2e2d5aab), and putting the role term back gives production''s pre-0390 body exactly (e0f2ae5d): the gate is the only change');
 select is(
   (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, 'public.has_permission(v_org, ''orders:approve'')',
@@ -425,18 +443,26 @@ select is(
   select 'revise_order_needed_by' as fn, md5(replace(pg_get_functiondef(p.oid), 'public.has_permission(v_org, ''orders:approve'')',
                                   E'public.has_org_role(v_org, ''manager'')\n          or public.has_permission(v_org, ''orders:approve'')')) as m
     from pg_proc p where p.oid = to_regprocedure('public.revise_order_needed_by(uuid, timestamptz, timestamptz, text, text)')) d),
-  E'approve_order_request=a133a783f3d4c2257e9979cb5ec90683\n'
-  'approve_partial=76cf3cf8d6f10908f3e63e66cffbf8fc\n'
+  -- Re-pinned by 0405 (was approve_order_request=a133a783f3d4c2257e9979cb5ec90683,
+  -- approve_partial=76cf3cf8d6f10908f3e63e66cffbf8fc,
+  -- cancel_order_request=79a8dcaf652b4ef59075c0f532666fee,
+  -- close_partial=eca9e0f511b63c157f278adf05f34955,
+  -- reopen_picking=0a8a99eb2d7ccf077b65907e9c6e32db,
+  -- resume_fulfillment=6cd0f43bc073c47555bbc12268c20415): the six bodies carry slice E's
+  -- blocks; 0405 R1-R6 prove each body is otherwise as before and 0405 P1 that the rest of
+  -- each definition is unchanged.
+  E'approve_order_request=61121bbef6c89a33196ef3f007535ed7\n'
+  'approve_partial=8e99d881333085f118dccd6f35a860d2\n'
   'assign_picking=87c2d7c6289af3e12179ddc8c13ce4c1\n'
   -- Re-pinned by 0395 (was 60198cff2d40c936d4d1cd11e050de14 and, for reopen_picking,
   -- 53b3b2e29c611896d4a99987c0983c18): the bodies carry 0395's blocks; 0395 R11
   -- proves the definitions are otherwise production's.
-  'cancel_order_request=79a8dcaf652b4ef59075c0f532666fee\n'
-  'close_partial=eca9e0f511b63c157f278adf05f34955\n'
+  'cancel_order_request=5f03882c390a074236bb4a4a64b2e3b9\n'
+  'close_partial=404fa538dbeadbd6b005363979421d0a\n'
   'hold_order_stock=8f40b4baabd79973458d1759be5da4dd\n'
   'order_readiness_facts=faea50d0129c265a99b2660b42998abc\n'
-  'reopen_picking=0a8a99eb2d7ccf077b65907e9c6e32db\n'
-  'resume_fulfillment=6cd0f43bc073c47555bbc12268c20415\n'
+  'reopen_picking=871841884a7d06fdcc9b3d0a066ee150\n'
+  'resume_fulfillment=b1dd5adf5f3eec12c16401e3dfda1970\n'
   'revise_order_needed_by=63ebe4a959306bc59edf61f39f68739b',
   'R11: for each of the ten, putting the role term back into the whole definition (pg_get_functiondef) gives production''s pre-0390 definition exactly: arguments and defaults, result, volatility, strictness, cost, parallel, leakproof, SECURITY DEFINER and SET clauses are unchanged, not only the body');
 

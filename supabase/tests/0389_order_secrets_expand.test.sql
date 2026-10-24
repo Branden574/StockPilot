@@ -581,8 +581,14 @@ select is(
   -- clears this suite cares about are untouched.
   -- Re-pinned by 0395 (was 293ce0e76d195bb13105cfd1c067de82): its movements carry the order
   -- (0395 R2); the draw reversal and the holds it restores are unchanged.
-  'reopen_picking(uuid,text)|14e49293fa670dc2e05a1c1b6930bce5\n'
-  'resume_fulfillment(uuid)|2e2d5aab1db5392250879bfa9ff4bccd\n'
+  -- Re-pinned by 0405 (was 14e49293fa670dc2e05a1c1b6930bce5): slice E refuses an approver
+  -- who may not write to the order's warehouse before the body changes anything (0405 R5:
+  -- removing that block gives this body exactly); for everyone else the body is unchanged.
+  'reopen_picking(uuid,text)|b62fbb68ee0d0eb44a9e641921a757e5\n'
+  -- Re-pinned by 0405 (was 2e2d5aab1db5392250879bfa9ff4bccd): slice E refuses an approver
+  -- who may not write to the order's warehouse before the body changes anything (0405 R4:
+  -- removing that block gives this body exactly); for everyone else the body is unchanged.
+  'resume_fulfillment(uuid)|ce593a9203c41c1a7311b1af27d4cbd3\n'
   -- Re-pinned by 0392 (was 1b109d535811e9a21c43d01dcc344892, 0365's body): the
   -- insert guard also refuses an admin-client (service_role) insert carrying
   -- a return token, a track token or a signature image (0392 suite G23);
