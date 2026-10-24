@@ -154,6 +154,34 @@ describe('5. auth: the sign-in to MFA window, and the deliberate sign-out', () =
     expect(flat(auth)).toMatch(/value=\{\{[^}]*\bmfaPending,/);
   });
 
+  /**
+   * Review 3 (2026-10-13): nextOpenStep's mfaPending wait is unit-tested, but
+   * nothing read how the host feeds it. A host that passed `mfaPending: false`,
+   * took it from anywhere but useAuth(), or left it out of its open effect's
+   * dependencies would pass every other gate. On a phone, a TOTP-enrolled user
+   * signing in from a tapped notification would then have the order pushed in
+   * the window between the password grant and the MFA check, and lose it when
+   * the MFA screen replaces the Stack. The simulator walk cannot reach that
+   * window, so this pin is its guard.
+   */
+  it('the host reads mfaPending from useAuth(), hands it to nextOpenStep as is, and re-runs on it', () => {
+    const host = codeOnly(read('src/components/notification-intent-host.tsx'));
+    // Destructured from the auth state, never a local of its own.
+    expect(host).toMatch(/const \{[^}]*\bmfaPending\b[^}]*\} = useAuth\(\);/);
+    // Handed over as the signal itself (shorthand), never a literal.
+    const callAt = host.indexOf('const step = nextOpenStep({');
+    expect(callAt).toBeGreaterThan(-1);
+    const call = host.slice(callAt, host.indexOf('});', callAt));
+    expect(call).toMatch(/^\s*mfaPending,$/m);
+    expect(call).not.toMatch(/mfaPending\s*:/);
+    // The open effect (the one making that call) runs again when the flag
+    // drops, so the tap waiting on it opens.
+    const depsAt = host.indexOf('}, [', callAt);
+    expect(depsAt).toBeGreaterThan(callAt);
+    const deps = host.slice(depsAt, host.indexOf(']);', depsAt));
+    expect(deps).toMatch(/^\s*mfaPending,$/m);
+  });
+
   it('only a completed deliberate sign-out drops the pending tap (never the fallback to a password)', () => {
     expect(code).toContain("import { notificationIntents } from './notification-intent';");
     expect(fn('signOut')).toMatch(
