@@ -1,12 +1,15 @@
 /**
  * SINGLE source of truth for web-path → native-route translation.
  * Used by every way a web link reaches the router: app/+native-intent.ts (OS
- * link opens), the in-app inbox (app/(drawer)/notifications.tsx) and
+ * link opens), the in-app inbox (app/(drawer)/notifications.tsx),
  * notification-link.ts, which parses a tapped push's link for the
- * notification coordinator (notification-intent.ts). Notification
- * `link` values are WEB paths; every mobile navigation of one MUST go
- * through here — never a hand-rolled per-path if/else (two tables drifted
- * once already and shipped an "Unmatched Route" dead end).
+ * notification coordinator (notification-intent.ts), and the What's New
+ * card's call to action (src/components/onboarding/whats-new.tsx), which
+ * shows its button only when this answers a page other than Home, and opens
+ * that page. Notification `link` values are WEB paths; every mobile
+ * navigation of one MUST go through here — never a hand-rolled per-path
+ * if/else (two tables drifted once already and shipped an "Unmatched Route"
+ * dead end). A change to a rule or to the catch-all changes all four.
  *
  * Rules: known pages → native twin; web-only pages → the inbox; any other
  * /dashboard/* → home. Non-/dashboard paths pass through untouched.
