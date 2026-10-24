@@ -41,6 +41,11 @@ vi.mock('@/lib/dashboard/request-cache', () => ({
     return state.orgRow;
   }),
 }));
+const reportError = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/error-reporter', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/error-reporter')>()),
+  reportError: (...args: unknown[]) => reportError(...args),
+}));
 vi.mock('@/server/services/movements', () => ({
   MovementsService: {
     forCurrentUser: async () => ({
@@ -108,6 +113,7 @@ beforeEach(() => {
   state.instantProps = null;
   state.listCalls = [];
   state.countCalls = [];
+  reportError.mockClear();
 });
 
 describe('Movements page: times in the organization zone (L7)', () => {
@@ -133,11 +139,22 @@ describe('Movements page: times in the organization zone (L7)', () => {
     expect(rows[0]!.createdAtLabel).toBe('Oct 5, 2026, 5:30 AM');
   });
 
-  it('a failed zone read still renders the page, in core’s documented default zone', async () => {
+  it('a failed zone read still renders the page, in core’s documented default zone, and is reported', async () => {
     state.orgRowFails = true;
     await renderPage();
     const rows = state.instantProps!.rows as Array<Record<string, unknown>>;
     expect(rows[0]!.createdAtLabel).toBe('Oct 4, 2026, 10:30 PM');
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError).toHaveBeenCalledWith(expect.any(Error), {
+      tag: 'movements.page.org_timezone_failed',
+      level: 'warning',
+      organizationId: 'org-1',
+    });
+  });
+
+  it('a zone read that answers reports nothing', async () => {
+    await renderPage();
+    expect(reportError).not.toHaveBeenCalled();
   });
 });
 

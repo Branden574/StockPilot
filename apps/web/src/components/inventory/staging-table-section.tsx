@@ -10,6 +10,7 @@ import {
 import { StagingTable } from '@/components/inventory/staging-table';
 import { IntentLink } from '@/components/ui/intent-link';
 import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
+import { reportError } from '@/lib/error-reporter';
 import {
   toDestinationOption,
   type DestinationLocationRow,
@@ -103,8 +104,16 @@ export async function StagingTableSection({
       : Promise.resolve<OrderLink | null>(null),
     // The org's zone for the rows' movement history (L7: the organization's
     // zone, like counts and orders). Request-cached; a failed read never fails
-    // the page and prints in core's documented default zone.
-    getOrgRowForRequest(organizationId).catch(() => null),
+    // the page, prints in core's documented default zone and is reported, as
+    // the calendar's is.
+    getOrgRowForRequest(organizationId).catch((e: unknown) => {
+      void reportError(e, {
+        tag: 'staging.history.org_timezone_failed',
+        level: 'warning',
+        organizationId,
+      });
+      return null;
+    }),
   ]);
   const timeZone = resolveOrgTimezone(orgRow?.timezone);
 

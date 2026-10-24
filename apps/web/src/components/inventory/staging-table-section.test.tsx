@@ -63,6 +63,11 @@ vi.mock('@/lib/dashboard/request-cache', () => ({
     return calls.orgRow;
   },
 }));
+const reportError = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/error-reporter', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/error-reporter')>()),
+  reportError: (...args: unknown[]) => reportError(...args),
+}));
 vi.mock('@/lib/warehouse-filter', () => ({
   getActiveWarehouseFilter: async () => {
     calls.cookieReads += 1;
@@ -130,6 +135,7 @@ beforeEach(() => {
   calls.orgRow = { timezone: 'Asia/Tokyo' };
   calls.orgRowFails = false;
   calls.orgRowReads = [];
+  reportError.mockClear();
 });
 
 describe('Staging page data path: ?item and ?order (F2-3)', () => {
@@ -316,12 +322,19 @@ describe('Staging: the organization zone for the movement history (L7)', () => {
     await renderSection(parseStagingItemFilter({}));
     expect(calls.orgRowReads).toEqual(['org-1']);
     expect(calls.tableProps).toMatchObject({ timeZone: 'Asia/Tokyo' });
+    expect(reportError).not.toHaveBeenCalled();
   });
 
-  it("a failed read still renders, in core's default zone", async () => {
+  it("a failed read still renders, in core's default zone, and is reported", async () => {
     calls.orgRowFails = true;
     await renderSection(parseStagingItemFilter({}));
     expect(screen.getByTestId('staging-table')).toBeInTheDocument();
     expect(calls.tableProps).toMatchObject({ timeZone: 'America/Los_Angeles' });
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError).toHaveBeenCalledWith(expect.any(Error), {
+      tag: 'staging.history.org_timezone_failed',
+      level: 'warning',
+      organizationId: 'org-1',
+    });
   });
 });

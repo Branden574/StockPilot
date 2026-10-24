@@ -239,13 +239,19 @@ export async function ItemDetail({
   // Movements page, counts and orders. Read beside the feed, never after it:
   // request-cached and normally already in hand from the request context, so
   // it is not another round trip. A failed read never fails the tab; it prints
-  // in core's documented default zone. Overview shows no feed and never asks.
+  // in core's documented default zone and is reported, as the calendar's is.
+  // Overview shows no feed and never asks.
   const feedTimeZoneRead: Promise<string> =
     activeTab === 'movements' || activeTab === 'activity'
       ? getOrgRowForRequest(ctx.organizationId)
           .then((row) => resolveOrgTimezone(row?.timezone))
           .catch((e: unknown) => {
             if (isNextControlFlowError(e)) throw e;
+            void reportError(e, {
+              tag: 'item_detail.feed.org_timezone_failed',
+              level: 'warning',
+              organizationId: ctx.organizationId,
+            });
             return resolveOrgTimezone(null);
           })
       : Promise.resolve(resolveOrgTimezone(null));

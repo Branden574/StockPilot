@@ -22,6 +22,7 @@ import { Button } from '@/components/ui/button';
 import { Pagination } from '@/components/ui/pagination';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
+import { reportError } from '@/lib/error-reporter';
 import { movementActorLabel } from '@/lib/movements/actor-label';
 import {
   buildMovementsQueryString,
@@ -173,8 +174,16 @@ export default async function MovementsPage({
     getActiveWarehouseFilter(),
     // The org's zone, request-cached (normally already in hand from the
     // request context). A failed read never fails the ledger: it prints in
-    // core's documented default zone.
-    getOrgRowForRequest(ctx.organizationId).catch(() => null),
+    // core's documented default zone and is reported, as the calendar's is
+    // (getOrgRowForRequest throws on a read error).
+    getOrgRowForRequest(ctx.organizationId).catch((e: unknown) => {
+      void reportError(e, {
+        tag: 'movements.page.org_timezone_failed',
+        level: 'warning',
+        organizationId: ctx.organizationId,
+      });
+      return null;
+    }),
   ]);
   const warehouseId = warehouseFilter ?? undefined;
   // MOVEMENT TIMES IN THE ORGANIZATION'S ZONE (owner decision Q1, 2026-10-05;

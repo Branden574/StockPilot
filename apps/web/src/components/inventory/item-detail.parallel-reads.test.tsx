@@ -789,7 +789,7 @@ describe('ItemDetail: the feed prints in the organization zone (L7)', () => {
     });
   }
 
-  it("a failed zone read still renders the feed, in core's documented default zone", async () => {
+  it("a failed zone read still renders the feed, in core's documented default zone, and is reported", async () => {
     orgRow.answer = async () => {
       throw new Error('org row read failed');
     };
@@ -798,6 +798,11 @@ describe('ItemDetail: the feed prints in the organization zone (L7)', () => {
     expect(panelProps.at(-1)).toMatchObject({ timeZone: 'America/Los_Angeles' });
     await flush();
     expect(unhandled).toEqual([]);
+    expect(reportError).toHaveBeenCalledWith(expect.any(Error), {
+      tag: 'item_detail.feed.org_timezone_failed',
+      level: 'warning',
+      organizationId: expect.any(String),
+    });
   });
 
   it("a redirect from the zone read is not swallowed into the default zone", async () => {
@@ -809,6 +814,10 @@ describe('ItemDetail: the feed prints in the organization zone (L7)', () => {
     ).rejects.toThrow('NEXT_REDIRECT');
     await flush();
     expect(unhandled).toEqual([]);
+    expect(reportError).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: 'item_detail.feed.org_timezone_failed' }),
+    );
   });
 
   it('an unknown stored zone prints in the default zone too', async () => {
