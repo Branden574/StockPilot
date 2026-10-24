@@ -1,6 +1,8 @@
 import { render, screen } from '@testing-library/react';
 import type * as React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { resolveOrgTimezone } from '@stockpilot/core';
 
 /**
  * L7 (owner decision Q1, 2026-10-05): the Movements page prints each
@@ -195,5 +197,52 @@ describe('Movements page: From and To cut days in the organization zone (F4)', (
       since: '2026-10-10T07:00:00.000Z',
       until: '2026-10-11T07:00:00.000Z',
     });
+  });
+});
+
+// Slice 3 review (2026-10-24): the page formats every row of the instant
+// ledger here, on the server, up to MOVEMENTS_INSTANT_CAP (1,000) rows. Core
+// built two Intl formatters for every row (about 50 to 70 ms per visit,
+// measured on a Mac); it now builds them once per zone and options. Before
+// this branch the browser formatted only the 50 rows on screen.
+describe('Movements page: a full instant ledger without two formatters per row', () => {
+  const REAL_DTF = Intl.DateTimeFormat;
+  afterEach(() => {
+    Object.defineProperty(Intl, 'DateTimeFormat', { value: REAL_DTF, configurable: true, writable: true });
+  });
+
+  it('1,000 instant rows build two Intl formatters, not 2,000', async () => {
+    state.count = 1000;
+    const start = Date.parse(LATE);
+    state.rows = Array.from({ length: 1000 }, (_, i) => ({
+      ...movement(`m-${i}`),
+      created_at: new Date(start + i * 3_600_000).toISOString(),
+    }));
+    // Core keeps every zone it has checked, with a formatter of its own:
+    // checked before counting.
+    resolveOrgTimezone('Asia/Tokyo');
+    let built = 0;
+    class CountingDateTimeFormat {
+      private readonly real: Intl.DateTimeFormat;
+      constructor(locales?: string | string[], options?: Intl.DateTimeFormatOptions) {
+        built += 1;
+        this.real = new REAL_DTF(locales, options);
+      }
+      format(date?: Date | number): string {
+        return this.real.format(date);
+      }
+    }
+    Object.defineProperty(Intl, 'DateTimeFormat', {
+      value: CountingDateTimeFormat,
+      configurable: true,
+      writable: true,
+    });
+    await renderPage();
+    const rows = state.instantProps!.rows as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(1000);
+    expect(rows[0]!.createdAtLabel).toBe('Oct 5, 2026, 2:30 PM');
+    // 999 hours later, in Tokyo (no daylight saving).
+    expect(rows[999]!.createdAtLabel).toBe('Nov 16, 2026, 5:30 AM');
+    expect(built).toBe(2);
   });
 });

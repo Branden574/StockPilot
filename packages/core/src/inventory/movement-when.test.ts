@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
+import { REAL_DTF, restoreIntl } from '../time/__fixtures__/hermes-like-intl';
+import { resolveOrgTimezone } from '../time/org-timezone';
 import {
   formatMovementCardWhen,
   formatMovementClock,
@@ -90,5 +92,46 @@ describe('the phone item cards and home rows in the organization zone (L7, F2)',
   it('plain spaces only', () => {
     expect(formatMovementCardWhen(LATE, 'UTC')).not.toMatch(/[\u202f\u00a0]/);
     expect(formatMovementClock(LATE, 'UTC')).not.toMatch(/[\u202f\u00a0]/);
+  });
+});
+
+/**
+ * Slice 3 review (2026-10-24): the web Movements page formats every row of its
+ * instant ledger on the server, up to 1,000, through formatMovementWhen. It
+ * built two Intl formatters per row (about 50 to 70 ms per visit, measured);
+ * the formatters are now built once per zone (core formatOrgDateTime).
+ */
+describe('a whole ledger builds its formatters once (slice 3 review, 2026-10-24)', () => {
+  afterEach(() => {
+    restoreIntl();
+  });
+
+  it('1,000 movements in the organization zone build two Intl formatters, not two per row', () => {
+    const zone = 'Asia/Tokyo';
+    resolveOrgTimezone(zone);
+    const start = Date.parse('2026-10-05T05:30:00.000Z');
+    const isos = Array.from({ length: 1000 }, (_, i) => new Date(start + i * 3_600_000).toISOString());
+    let built = 0;
+    class CountingDateTimeFormat {
+      private readonly real: Intl.DateTimeFormat;
+      constructor(locales?: string | string[], options?: Intl.DateTimeFormatOptions) {
+        built += 1;
+        this.real = new REAL_DTF(locales, options);
+      }
+      format(date?: Date | number): string {
+        return this.real.format(date);
+      }
+    }
+    Object.defineProperty(Intl, 'DateTimeFormat', {
+      value: CountingDateTimeFormat,
+      configurable: true,
+      writable: true,
+    });
+    const labels = isos.map((iso) => formatMovementWhen(iso, zone));
+    expect(built).toBe(2);
+    expect(labels[0]).toBe('Oct 5, 2026, 2:30 PM');
+    // 999 hours (41 days and 15 hours) later: 5:30 AM on 16 November in
+    // Tokyo, which keeps no daylight saving.
+    expect(labels[999]).toBe('Nov 16, 2026, 5:30 AM');
   });
 });
