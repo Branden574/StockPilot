@@ -6,8 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * The purchase orders list in the redesign's patterns (page header, stat strip,
  * segmented status tabs, filter row, table card, state panels) keeps what the
  * page did: the heading and its rename, the count and value line, Export with
- * its URL, + New PO, the four stats, the six tabs (All without Cancelled) as a
- * "Filter by status" navigation, the 800-PO split between the instant search
+ * its URL, + New PO, the four stats, the six tabs (All without Cancelled) and
+ * the Overdue view the Overview links to as a "Filter by status" navigation, the 800-PO split between the instant search
  * and the URL search, the 30-per-page pager with its past-end clamp, every
  * empty and failed state with its own words, the owner/admin threshold panel
  * and the module gate.
@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const listStats = vi.fn();
 const listPage = vi.fn();
+const listOverdue = vi.fn();
 const listForLookups = vi.fn();
 const effectiveNavLabel = vi.fn();
 const getActiveWarehouseFilter = vi.fn();
@@ -41,7 +42,9 @@ vi.mock('@/lib/warehouse-filter', () => ({
   getActiveWarehouseFilter: () => getActiveWarehouseFilter(),
 }));
 vi.mock('@/server/services/purchase-orders', () => ({
-  PurchaseOrdersService: { forCurrentUser: vi.fn(async () => ({ listStats, listPage })) },
+  PurchaseOrdersService: {
+    forCurrentUser: vi.fn(async () => ({ listStats, listPage, listOverdue })),
+  },
 }));
 vi.mock('@/server/services/suppliers', () => ({
   SuppliersService: { forCurrentUser: vi.fn(async () => ({ listForLookups })) },
@@ -220,12 +223,13 @@ describe('the purchase orders list: header and stats', () => {
 });
 
 describe('the purchase orders list: status tabs', () => {
-  it('draws the six tabs as the "Filter by status" navigation with the shown one current', async () => {
+  it('draws the six tabs and the Overdue view as the "Filter by status" navigation with the shown one current', async () => {
     await renderList({ status: 'in_transit' });
     const nav = screen.getByRole('navigation', { name: 'Filter by status' });
     const links = within(nav).getAllByRole('link');
     expect(links.map((l) => l.textContent)).toEqual([
       'All',
+      'Overdue',
       'Draft',
       'Ordered',
       'In transit',
@@ -234,6 +238,7 @@ describe('the purchase orders list: status tabs', () => {
     ]);
     expect(links.map((l) => l.getAttribute('href'))).toEqual([
       '/dashboard/purchase-orders?status=all',
+      '/dashboard/purchase-orders?status=overdue',
       '/dashboard/purchase-orders?status=draft',
       '/dashboard/purchase-orders?status=ordered',
       '/dashboard/purchase-orders?status=in_transit',
@@ -250,8 +255,21 @@ describe('the purchase orders list: status tabs', () => {
     );
   });
 
-  it('treats an unknown status (the Overview’s ?status=overdue) as All, which leaves out Cancelled', async () => {
+  it('opens the Overview’s ?status=overdue on the Overdue view, read on its own (small fixes slice 8)', async () => {
+    listOverdue.mockResolvedValue({ rows: [row(1)], asOfDay: '2026-10-11' });
     await renderList({ status: 'overdue' });
+    const nav = screen.getByRole('navigation', { name: 'Filter by status' });
+    expect(within(nav).getByRole('link', { name: 'Overdue' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    expect(within(nav).getByRole('link', { name: 'All' })).not.toHaveAttribute('aria-current');
+    expect(listOverdue).toHaveBeenCalledWith({ warehouseId: undefined });
+    expect(listPage).not.toHaveBeenCalled();
+  });
+
+  it('treats an unknown status as All, which leaves out Cancelled', async () => {
+    await renderList({ status: 'late' });
     const nav = screen.getByRole('navigation', { name: 'Filter by status' });
     expect(within(nav).getByRole('link', { name: 'All' })).toHaveAttribute('aria-current', 'page');
     const statuses = listPage.mock.calls[0]![0].statuses as string[];

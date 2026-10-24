@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 import { assertWarehouseAccess, getWarehouseAccess } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
+import { OVERDUE_PO_STATUSES } from '@/lib/purchase-orders/tabs';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { mapWithConcurrency } from '@/lib/supabase/in-filter';
 import { createNotification } from './notifications';
@@ -319,39 +320,129 @@ export class PurchaseOrdersService {
    * (pastExpectedDayCutoff). The zone is read alongside the warehouse access.
    */
   async overdueCount(params: { warehouseId?: string } = {}): Promise<number> {
-    const [access, timeZone] = await Promise.all([
-      getWarehouseAccess(this.ctx),
-      orgTimeZoneFor(this.ctx, 'purchase-orders.overdue_count.org_timezone'),
-    ]);
-    const needsScope = !access.hasAllAccess || !!params.warehouseId;
-    if (!access.hasAllAccess && access.readableIds.length === 0) return 0;
-    // Null only when this runtime cannot name the organization's day: count
-    // nothing rather than guess.
-    const cutoff = pastExpectedDayCutoff(new Date(), timeZone);
-    if (cutoff === null) return 0;
+    const overdue = await this.overdueFilter(params, 'purchase-orders.overdue_count.org_timezone');
+    if (overdue === null) return 0;
 
-    const destEmbed = needsScope
-      ? 'destination:locations!destination_location_id!inner (warehouse_id)'
-      : 'destination:locations!destination_location_id (warehouse_id)';
-
-    let query = this.ctx.supabase
-      .from('purchase_orders')
-      .select(`id, ${destEmbed}`, { count: 'exact', head: true })
-      .eq('organization_id', this.ctx.organizationId)
-      .in('status', ['expected_inbound', 'ordered', 'partially_received'])
-      .not('expected_at', 'is', null)
-      .lt('expected_at', cutoff);
-
-    if (!access.hasAllAccess) {
-      // in-list-bound: the caller's readable warehouses (an org's handful of sites)
-      query = query.in('destination.warehouse_id', access.readableIds);
-    } else if (params.warehouseId) {
-      query = query.eq('destination.warehouse_id', params.warehouseId);
-    }
+    const query = overdue.apply(
+      this.ctx.supabase
+        .from('purchase_orders')
+        .select(`id, ${overdue.destEmbed}`, { count: 'exact', head: true }),
+    );
 
     const { count, error } = await query;
     if (error) throw new ServiceError('internal_error', error.message);
     return count ?? 0;
+  }
+
+  /**
+   * The overdue purchase orders themselves: the rows overdueCount counts, for
+   * the purchase orders list's Overdue view (the dashboard's overdue line
+   * links there; until 2026-10-11 the list had no such view and showed All).
+   * The same filter as the count (overdueFilter), so the view lists exactly
+   * what the dashboard counts for the same warehouse. Newest first, as the
+   * list's other views, every row (paged past PostgREST's 1000-row cap), in
+   * the list's row shape. `asOfDay` is the organization's day the rule was
+   * applied on ("YYYY-MM-DD"), for the view to say; null when nothing can be
+   * overdue for this caller (no readable warehouse, or the runtime cannot
+   * name the day). A failed read throws (the page shows its retry banner).
+   */
+  async listOverdue(
+    params: { warehouseId?: string } = {},
+  ): Promise<{ rows: PoPageRow[]; asOfDay: string | null }> {
+    assertModuleEnabled(this.ctx, 'purchase_orders');
+    const overdue = await this.overdueFilter(params, 'purchase-orders.list_overdue.org_timezone');
+    if (overdue === null) return { rows: [], asOfDay: null };
+
+    type OverdueRow = Omit<PoPageRow, 'line_count'> & {
+      destination?: unknown;
+      purchase_order_items?: Array<{ count: number }>;
+    };
+    const rows = await fetchAllRows<OverdueRow>(
+      (from, to) =>
+        overdue
+          .apply(
+            this.ctx.supabase
+              .from('purchase_orders')
+              .select(
+                `id, po_number, status, supplier_id, destination_location_id, expected_at, ordered_at, received_at, total, created_at, updated_at, ${overdue.destEmbed}, purchase_order_items(count)`,
+              ),
+          )
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: true })
+          .range(from, to) as unknown as PromiseLike<{
+          data: OverdueRow[] | null;
+          error: { message: string } | null;
+        }>,
+    );
+    return {
+      rows: rows.map(({ destination: _destination, purchase_order_items, ...row }) => ({
+        ...row,
+        line_count: Array.isArray(purchase_order_items) ? (purchase_order_items[0]?.count ?? 0) : 0,
+      })),
+      asOfDay: overdue.asOfDay,
+    };
+  }
+
+  /**
+   * THE overdue filter, once, for overdueCount and listOverdue: receivable
+   * (ordered, in transit or partly received), with an expected date before
+   * the organization's today at midnight UTC (pastExpectedDayCutoff, #338's
+   * rule), in this organization, scoped by the destination's warehouse as
+   * list() scopes (a warehouse-scoped member: their readable warehouses, the
+   * header's pick ignored; an all-access member: the header's pick, if any).
+   * Null when nothing can be overdue for this caller: no readable warehouse,
+   * or the runtime cannot name the organization's day (nothing is called
+   * overdue on a guess).
+   */
+  private async overdueFilter(
+    params: { warehouseId?: string },
+    timeZoneTag: string,
+  ): Promise<{
+    asOfDay: string;
+    destEmbed: string;
+    apply: <Q>(query: Q) => Q;
+  } | null> {
+    const [access, timeZone] = await Promise.all([
+      getWarehouseAccess(this.ctx),
+      orgTimeZoneFor(this.ctx, timeZoneTag),
+    ]);
+    if (!access.hasAllAccess && access.readableIds.length === 0) return null;
+    const now = new Date();
+    const cutoff = pastExpectedDayCutoff(now, timeZone);
+    if (cutoff === null) return null;
+    const needsScope = !access.hasAllAccess || !!params.warehouseId;
+    const organizationId = this.ctx.organizationId;
+
+    type Filters = {
+      eq(column: string, value: string): Filters;
+      in(column: string, values: readonly string[]): Filters;
+      not(column: string, operator: string, value: null): Filters;
+      lt(column: string, value: string): Filters;
+    };
+    // The destination's embed, for the count's and the list's select on
+    // purchase_orders (inner when the rows are scoped by its warehouse).
+    // postgrest-from: purchase_orders
+    const destEmbed = needsScope
+      ? 'destination:locations!destination_location_id!inner (warehouse_id)'
+      : 'destination:locations!destination_location_id (warehouse_id)';
+    return {
+      asOfDay: cutoff.slice(0, 10),
+      destEmbed,
+      apply: <Q>(query: Q): Q => {
+        let q = (query as unknown as Filters)
+          .eq('organization_id', organizationId)
+          .in('status', OVERDUE_PO_STATUSES)
+          .not('expected_at', 'is', null)
+          .lt('expected_at', cutoff);
+        if (!access.hasAllAccess) {
+          // in-list-bound: the caller's readable warehouses (an org's handful of sites)
+          q = q.in('destination.warehouse_id', access.readableIds);
+        } else if (params.warehouseId) {
+          q = q.eq('destination.warehouse_id', params.warehouseId);
+        }
+        return q as unknown as Q;
+      },
+    };
   }
 
   async list(params: { warehouseId?: string } = {}) {

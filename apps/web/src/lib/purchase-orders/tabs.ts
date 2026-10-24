@@ -6,12 +6,19 @@
 // "All excludes cancelled" derivation below — can be unit-tested without
 // pulling in the RSC's server-only dependency graph (auth/session, supabase
 // server client, etc.).
-export type PoTab = 'all' | 'draft' | 'ordered' | 'in_transit' | 'received' | 'cancelled';
+//
+// OVERDUE is a VIEW, not part of the partition (small fixes slice 8): the
+// purchase orders the dashboard's overdue line counts, across the open
+// statuses, past their expected day in the organization's zone (#338's rule;
+// PurchaseOrdersService.listOverdue). The dashboard links to
+// ?status=overdue; until 2026-10-11 the list had no such view and showed All.
+export type PoTab = 'all' | 'overdue' | 'draft' | 'ordered' | 'in_transit' | 'received' | 'cancelled';
 
-export const TAB_ORDER: PoTab[] = ['all', 'draft', 'ordered', 'in_transit', 'received', 'cancelled'];
+export const TAB_ORDER: PoTab[] = ['all', 'overdue', 'draft', 'ordered', 'in_transit', 'received', 'cancelled'];
 
 export const TAB_LABELS: Record<PoTab, string> = {
   all: 'All',
+  overdue: 'Overdue',
   draft: 'Draft',
   ordered: 'Ordered',
   in_transit: 'In transit',
@@ -19,7 +26,14 @@ export const TAB_LABELS: Record<PoTab, string> = {
   cancelled: 'Cancelled',
 };
 
-export const TAB_STATUSES: Record<Exclude<PoTab, 'all'>, string[]> = {
+/**
+ * The statuses a purchase order can be overdue in: receivable and not yet
+ * fully received. The ONE list PurchaseOrdersService's overdue filter (the
+ * dashboard's count and the Overdue view) and the CSV export use.
+ */
+export const OVERDUE_PO_STATUSES: readonly string[] = ['expected_inbound', 'ordered', 'partially_received'];
+
+export const TAB_STATUSES: Record<Exclude<PoTab, 'all' | 'overdue'>, string[]> = {
   draft: ['draft'],
   ordered: ['ordered'],
   in_transit: ['expected_inbound', 'partially_received'],
@@ -50,5 +64,10 @@ export function isPoTab(value: string | undefined): value is PoTab {
  * listPage with this same value.
  */
 export function statusesForTab(tab: PoTab): string[] {
-  return tab === 'all' ? ALL_NON_CANCELLED_STATUSES : TAB_STATUSES[tab];
+  if (tab === 'all') return ALL_NON_CANCELLED_STATUSES;
+  // The statuses only: the Overdue view also needs the expected day to have
+  // passed (PurchaseOrdersService.listOverdue; the export applies the same
+  // rule, core pastExpectedDayTest).
+  if (tab === 'overdue') return [...OVERDUE_PO_STATUSES];
+  return TAB_STATUSES[tab];
 }

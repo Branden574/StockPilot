@@ -17,6 +17,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { poMatchesSearch } from '@/lib/purchase-orders/list-search';
 import { useHydrated } from '@/lib/use-hydrated';
 import { cn, formatCurrency, formatDateShort } from '@/lib/utils';
 
@@ -225,11 +226,14 @@ export function PoInstantTable({
   rows,
   supplierNames,
   leading,
+  caption,
 }: {
   rows: PoInstantRow[];
   supplierNames: Record<string, string>;
   /** The status tabs, left of the search in the filter row. */
   leading?: React.ReactNode;
+  /** Under the filter row, above the rows: the Overdue view's count line. */
+  caption?: React.ReactNode;
 }) {
   const [q, setQ] = React.useState('');
 
@@ -238,15 +242,12 @@ export function PoInstantTable({
     [supplierNames],
   );
 
-  const filtered = React.useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    if (!needle) return rows;
-    return rows.filter(
-      (po) =>
-        po.po_number.toLowerCase().includes(needle) ||
-        supplierName(po.supplier_id).toLowerCase().includes(needle),
-    );
-  }, [q, rows, supplierName]);
+  // The list's one search rule (lib/purchase-orders/list-search.ts), which
+  // the server-paged Overdue view and the CSV export apply too.
+  const filtered = React.useMemo(
+    () => (q.trim() ? rows.filter((po) => poMatchesSearch(po, q, supplierName)) : rows),
+    [q, rows, supplierName],
+  );
 
   return (
     <>
@@ -278,6 +279,8 @@ export function PoInstantTable({
           )}
         </div>
       </FilterBar>
+
+      {caption}
 
       {filtered.length === 0 ? (
         <StatePanel
