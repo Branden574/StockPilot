@@ -228,7 +228,14 @@ installed from an **immutable version with an inline sha256 pin**, so neither an
 upstream branch compromise nor a swapped release asset can execute code in CI.
 Dependabot with a documented remediation record
 ([`dependency-hardening-2026-08.md`](dependency-hardening-2026-08.md)) and
-version-scoped `pnpm.overrides`. `--frozen-lockfile` in CI.
+version-scoped `pnpm.overrides`. `--frozen-lockfile` in CI. A dependency audit
+in the Security Scan (job "Dependency audit": `pnpm audit --prod` read by
+`scripts/dependency-audit/report.mjs`) on every push and pull request to main,
+weekly and by hand: it fails on a critical advisory in a production dependency
+unless `scripts/dependency-audit/allow-list.json` dismisses it with a reason and
+a review date, reports high ones, and fails closed when the registry does not
+answer. The job holds no secret and installs nothing. It is not a required
+check, so a new advisory against an unchanged dependency does not block a merge.
 
 _Gap, and it is the top open supply-chain item_: **pnpm 9.12.3 executes package
 lifecycle scripts by default.** Migrating to pnpm 10.x with an

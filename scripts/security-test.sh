@@ -1233,6 +1233,15 @@ WEB_TESTS=(
   src/components/portal/portal-shop.test.tsx
   'src/app/returns/request/[token]/page.test.tsx'
   'src/app/(dashboard)/dashboard/orders/[id]/page.returns.test.tsx'
+
+  # The Security Scan's dependency audit (scripts/dependency-audit): a
+  # critical advisory in a production dependency fails the job unless the
+  # allow-list dismisses it by advisory id and package until its review date;
+  # unreadable audit output or a malformed allow-list entry fails it closed;
+  # registry text cannot form a runner command; the job holds no secret, no
+  # expression and no install. The file carries the "Security invariant"
+  # marker.
+  src/test/dependency-audit.guard.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1396,6 +1405,11 @@ CORE_TESTS=(
   # payload is pinned against, the words no key may carry, two-state
   # availability, and the tracking sentences.
   src/returns/requester-exchange-types.test.ts
+  # The one mailto rule for stored addresses (web support triage and order
+  # emails, phone Team, Users and Suppliers): one plain ASCII address or no
+  # link, so a link can add no recipient or parameter and opens only the
+  # address the screen shows.
+  src/email/mailto-link.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
