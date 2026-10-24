@@ -374,6 +374,12 @@ function GroupSelectedReview({ params: routeParams }: { params: GroupSelectedPar
         </View>
       </SafeAreaView>
 
+      {/* The keyboard: the Group name box sits under the records and the
+          keyboard covered it while it was being typed in (the redesign drew
+          it about 20pt lower, so the typed words went under the keyboard's
+          edge). The scroll insets itself by the keyboard on iOS and brings
+          the box being typed in into view above it, as on New count. The
+          footer stays pinned under the keyboard; Return puts it away. */}
       <ScrollView
         contentContainerStyle={{
           paddingHorizontal: 20,
@@ -382,6 +388,7 @@ function GroupSelectedReview({ params: routeParams }: { params: GroupSelectedPar
         }}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
+        automaticallyAdjustKeyboardInsets
       >
         {!params ? (
           <Body muted size={13.5}>
