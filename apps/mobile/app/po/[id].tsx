@@ -1,5 +1,6 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { useNetworkState } from 'expo-network';
+import { type Href, Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { ArrowLeft, Camera, Check } from 'lucide-react-native';
 import * as React from 'react';
@@ -16,14 +17,16 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { dbPermissionRefusedCopy } from '@stockpilot/core';
+import { dbPermissionRefusedCopy, RECEIVING_CHECKLIST_COPY } from '@stockpilot/core';
 
 import { PoAttachments } from '@/components/po-attachments';
 import { Button } from '@/components/ui/button';
 import { IconChip } from '@/components/ui/row';
 import { api, ApiError } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 import { showWriteCtaForRole } from '@/lib/cta-gating';
 import { receiverText } from '@/lib/deleted-user-labels';
+import { isOfflineState } from '@/lib/exceptions-api';
 import { mapPostReceiptError } from '@/lib/receipt-post-error';
 import { settleIdBatchRead } from '@/lib/id-batches';
 import { readPoRunGroups, readReceiptTotals } from '@/lib/id-reads';
@@ -36,6 +39,30 @@ import {
   poSizeLabel,
   type PoRunGroup,
 } from '@/lib/po-size-run';
+import {
+  canEditReceiptQuantities,
+  fetchReceiveFacts,
+  receiveFooter,
+  receiveGateKey,
+  receiveGateOf,
+  receiveGateState,
+  rememberedReceiveFacts,
+  type ReceiveGateAnswer,
+} from '@/lib/receive-gate';
+import {
+  describeChecklistError,
+  getPoChecks,
+  startReceivingCheck,
+} from '@/lib/receiving-checks-api';
+import {
+  historyChecksFailed,
+  postedAlertPlan,
+  receiptChip,
+  receivingCheckPath,
+  startAfterPostFailureBody,
+  type PoChecksState,
+  type ReceiptChip,
+} from '@/lib/receiving-checks-view';
 import { supabase } from '@/lib/supabase';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
@@ -61,6 +88,8 @@ import {
   type ThemeMode,
 } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
+
+const C = RECEIVING_CHECKLIST_COPY;
 
 interface PoLine {
   id: string;
@@ -120,6 +149,9 @@ export default function PoReceiveScreen() {
   };
 
   const { orgId } = useOrg();
+  const { user } = useAuth();
+  const userId = user?.id ?? null;
+  const offline = isOfflineState(useNetworkState());
   const [header, setHeader] = React.useState<PoHeader | null>(null);
   const [lines, setLines] = React.useState<PoLine[]>([]);
   const [groups, setGroups] = React.useState<Record<string, PoRunGroup>>({});
@@ -130,10 +162,28 @@ export default function PoReceiveScreen() {
   // The receipt history (or its totals) did not load: said in place of the
   // history, never shown as receipts with 0 accepted. Set by every read.
   const [receiptsError, setReceiptsError] = React.useState<string | null>(null);
-  // A part-reload in flight ("Try again" on the size runs or the history).
-  // Only that part re-reads: a full load() reseeds the draft and would wipe
-  // the quantities being typed.
-  const [retryingPart, setRetryingPart] = React.useState<'groups' | 'history' | null>(null);
+  // A part-reload in flight ("Try again" on the size runs, the history or the
+  // checklist status). Only that part re-reads: a full load() reseeds the
+  // draft and would wipe the quantities being typed.
+  const [retryingPart, setRetryingPart] = React.useState<'groups' | 'history' | 'checks' | null>(
+    null,
+  );
+  // WHO MAY POST AND RECORD (F4-1): core receivingGate, fed the role and
+  // effective permissions from /api/v1/me/permissions (receive-gate.ts), read
+  // when a receivable PO opens online and remembered for this session. The
+  // answer is kept with the account and workspace it was asked under, so a
+  // switch never carries it over. Never guessed: before an answer the footer
+  // says so and the quantities stay read only.
+  const [gateAnswer, setGateAnswer] = React.useState<ReceiveGateAnswer | null>(null);
+  const [gateNonce, setGateNonce] = React.useState(0);
+  // The receiving checklist's versions and this PO's runs, for the chips on
+  // Receipt history and the "Posted" alert's offer. A failed read says
+  // "Checklist status didn't load" (when there are receipts) and never blocks
+  // posting; only the newest read lands.
+  const [checks, setChecks] = React.useState<PoChecksState>({ kind: 'loading' });
+  const checksSeqRef = React.useRef(0);
+  // The receipt whose checklist is being started from its card.
+  const [startingReceiptId, setStartingReceiptId] = React.useState<string | null>(null);
   const [draft, setDraft] = React.useState<Record<string, DraftLine>>({});
   const [loading, setLoading] = React.useState(true);
   /** A READ that failed, surfaced in place of the screen. Never a silent empty
@@ -285,8 +335,28 @@ export default function PoReceiveScreen() {
     setReceiptsError(null);
   }, [id, orgId]);
 
+  /**
+   * The receiving checklist status for this PO (F4-1): GET
+   * /api/v1/po/<id>/receiving-checks, the service the web PO page reads. Never
+   * throws: a failure is `{ ok: false }`, which Receipt history says once
+   * ("Checklist status didn't load"), never "not recorded". Only the newest
+   * read lands.
+   */
+  const loadChecks = React.useCallback(async () => {
+    if (!id || !orgId) return;
+    const seq = ++checksSeqRef.current;
+    let next: PoChecksState;
+    try {
+      next = { kind: 'ready', checks: await getPoChecks(id) };
+    } catch (e) {
+      console.warn('[po] checklist status failed', describeChecklistError(e, 'failed'));
+      next = { kind: 'ready', checks: { ok: false } };
+    }
+    if (seq === checksSeqRef.current) setChecks(next);
+  }, [id, orgId]);
+
   /** "Try again" on one part. Guarded so repeated taps do not stack reads. */
-  async function retryPart(part: 'groups' | 'history') {
+  async function retryPart(part: 'groups' | 'history' | 'checks') {
     if (retryingPart !== null) return;
     setRetryingPart(part);
     try {
@@ -294,6 +364,8 @@ export default function PoReceiveScreen() {
         await loadRunGroups(
           Array.from(new Set(lines.map((l) => l.groupId).filter((v): v is string => Boolean(v)))),
         );
+      } else if (part === 'checks') {
+        await loadChecks();
       } else {
         await loadReceiptHistory();
       }
@@ -307,6 +379,9 @@ export default function PoReceiveScreen() {
   // both itself before re-invoking load().
   const load = React.useCallback(async () => {
     if (!id || !orgId) return;
+    // The checklist status is read beside everything else and lands on its
+    // own (it never holds the screen, and never fails it).
+    void loadChecks();
     const [{ data: po, error: poErr }, { data: lineRows, error: linesErr }] = await Promise.all([
       supabase
         .from('purchase_orders')
@@ -420,7 +495,21 @@ export default function PoReceiveScreen() {
     // sportsEnabled deliberately excluded — see sportsEnabledRef above. Only
     // the PO id / org context re-key the draft (the two part loaders are
     // keyed on the same values, so their identity never changes on their own).
-  }, [id, orgId, loadRunGroups, loadReceiptHistory]);
+  }, [id, orgId, loadRunGroups, loadReceiptHistory, loadChecks]);
+
+  // Back from a checklist (pushed from a receipt card), its chip is re-read:
+  // the run may have been saved or completed there. The first focus is the
+  // mount, which load() already covers.
+  const focusedOnceRef = React.useRef(false);
+  useFocusEffect(
+    React.useCallback(() => {
+      if (!focusedOnceRef.current) {
+        focusedOnceRef.current = true;
+        return;
+      }
+      void loadChecks();
+    }, [loadChecks]),
+  );
 
   React.useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount AND dep-change re-run: the flag resets are pre-await by necessity (the spinner must show during the fetch; a workspace switch re-runs this with stale content otherwise); everything else is post-await
@@ -456,6 +545,49 @@ export default function PoReceiveScreen() {
     () => buildPoBlocks(lines, readOnly ? {} : groups),
     [lines, groups, readOnly],
   );
+
+  // F4-1: posting is for a manager or above with stock:adjust (core
+  // receivingGate, the predicate the web page and ReceivingService.postReceipt
+  // share). Someone without stock:adjust reads the PO as above; for everyone
+  // else the gate is asked once the PO is on screen: a draft and a read-only
+  // PO ask nothing. Every set is post-await.
+  const gateKey = receiveGateKey(userId, orgId);
+  const gateWanted = header !== null && !readOnly;
+  React.useEffect(() => {
+    if (!gateWanted || !userId || !orgId || gateKey === null || offline) return;
+    let cancelled = false;
+    fetchReceiveFacts(userId, orgId).then(
+      (facts) => {
+        if (!cancelled) setGateAnswer({ key: gateKey, facts });
+      },
+      () => {
+        if (!cancelled) setGateAnswer({ key: gateKey, failed: true });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [gateWanted, userId, orgId, gateKey, offline, gateNonce]);
+
+  const gateView = receiveGateState({
+    answer: gateAnswer,
+    key: gateKey,
+    remembered: rememberedReceiveFacts(userId, orgId),
+    offline,
+  });
+  const gate = receiveGateOf(gateView, enabledModules.has('receiving'));
+  // One rule for the loose fields and their All, the size runs and Scan: only
+  // on a known yes, never on a read-only PO.
+  const canEditQuantities = canEditReceiptQuantities({ reviewOnly: readOnly, gate: gateView });
+  // What the pinned footer shows (receive-gate.ts receiveFooter): none on a
+  // read-only PO; Post receipt only on a known yes; otherwise who posts,
+  // "Checking…", or why it could not check (with Retry when online).
+  const footer = receiveFooter({
+    reviewOnly: readOnly,
+    gate: gateView,
+    posting,
+    anyReceivable: receivable,
+  });
 
   function setField(lineId: string, field: keyof DraftLine, value: string) {
     setDraft((m) => ({
@@ -500,8 +632,37 @@ export default function PoReceiveScreen() {
     setTimeout(() => setHighlightLineId(null), 2000);
   }
 
+  /**
+   * "Record checklist" from the Posted alert: start the receipt's run, then
+   * open it in this screen's place (Back from the checklist returns to where
+   * the PO was opened from). A start that fails says the receipt is saved and
+   * reloads this PO, so its card in Receipt history offers the checklist.
+   * Declared before postReceipt, which offers it: the React Compiler reads a
+   * later declaration as a call during render.
+   */
+  async function recordAfterPost(receiptId: string) {
+    try {
+      const started = await startReceivingCheck(receiptId);
+      router.replace(receivingCheckPath(started.runId) as Href);
+    } catch (e) {
+      Alert.alert(C.recordChecklist, startAfterPostFailureBody(e), [
+        {
+          text: 'OK',
+          onPress: () => {
+            setLoading(true);
+            setLoadError(null);
+            void load();
+          },
+        },
+      ]);
+    }
+  }
+
   async function postReceipt() {
     if (!header) return;
+    // The footer offers Post only on a known yes (receive-gate.ts); this is
+    // the same rule again, so no other path can post for someone who cannot.
+    if (!canEditQuantities) return;
     if (!header.destination_warehouse_id) {
       Alert.alert(
         'No destination',
@@ -613,17 +774,21 @@ export default function PoReceiveScreen() {
     // key + EDITED lines raises idempotency_conflict — is now enforced with
     // the same digest both clients use, and a key-as-hash cannot recur here.
     let failure: unknown = null;
+    let posted: { receiptId?: unknown; receiptNumber?: unknown } | null = null;
     try {
-      await api<{ receiptId: string; receiptNumber: string }>(`/api/v1/po/${id}/receipts`, {
-        method: 'POST',
-        body: {
-          warehouseId: header.destination_warehouse_id,
-          idempotencyKey,
-          lines: payloadLines,
-          // The optional note (L21); left out when nothing was typed.
-          notes: receiptNotesForPost(notes),
+      posted = await api<{ receiptId: string; receiptNumber: string }>(
+        `/api/v1/po/${id}/receipts`,
+        {
+          method: 'POST',
+          body: {
+            warehouseId: header.destination_warehouse_id,
+            idempotencyKey,
+            lines: payloadLines,
+            // The optional note (L21); left out when nothing was typed.
+            notes: receiptNotesForPost(notes),
+          },
         },
-      });
+      );
     } catch (e) {
       failure = e;
     }
@@ -669,11 +834,48 @@ export default function PoReceiveScreen() {
     }
     // Posted: retire the key so a later receive against this PO is a new intent.
     idemKeyRef.current = null;
-    Alert.alert(
-      'Posted',
-      `Received ${payloadLines.length} line${payloadLines.length === 1 ? '' : 's'}.`,
-      [{ text: 'OK', onPress: () => router.back() }],
-    );
+    // The receipt is saved. When a checklist is turned on and this person may
+    // record it, the alert offers Record checklist beside Done (F4-1);
+    // otherwise it is the plain alert it always was. Either way leaving goes
+    // through goBack(): opened from a link, there is nothing behind it.
+    const receiptId = typeof posted?.receiptId === 'string' ? posted.receiptId : null;
+    const plan = postedAlertPlan({
+      lineCount: payloadLines.length,
+      receiptId,
+      receiptNumber: typeof posted?.receiptNumber === 'string' ? posted.receiptNumber : null,
+      gate,
+      checks,
+    });
+    if (plan.offerRecord && receiptId !== null) {
+      Alert.alert(plan.title, plan.body, [
+        { text: C.done, style: 'cancel', onPress: goBack },
+        { text: C.recordChecklist, onPress: () => void recordAfterPost(receiptId) },
+      ]);
+      return;
+    }
+    Alert.alert(plan.title, plan.body, [{ text: 'OK', onPress: goBack }]);
+  }
+
+  /** A receipt card's checklist action: start (Record) or open (Continue, View). */
+  async function openChecklist(receiptId: string, chip: ReceiptChip) {
+    if (chip.action === 'record') {
+      if (startingReceiptId !== null) return;
+      if (offline) {
+        Alert.alert(C.recordChecklist, C.offline);
+        return;
+      }
+      setStartingReceiptId(receiptId);
+      try {
+        const started = await startReceivingCheck(receiptId);
+        router.push(receivingCheckPath(started.runId) as Href);
+      } catch (e) {
+        Alert.alert(C.recordChecklist, describeChecklistError(e, C.loadFailed));
+      } finally {
+        setStartingReceiptId(null);
+      }
+      return;
+    }
+    if (chip.runId) router.push(receivingCheckPath(chip.runId) as Href);
   }
 
   return (
@@ -726,7 +928,10 @@ export default function PoReceiveScreen() {
                 {header?.supplier_name ?? 'No supplier'} · {labelForStatus(header?.status ?? '')}
               </Text>
             </View>
-            {readOnly ? null : (
+            {/* Scan fills quantities, so it follows the same rule as the
+                fields (canEditQuantities): never on a draft or a read-only
+                PO, and only for someone who can post. */}
+            {!canEditQuantities ? null : (
               <Pressable
                 onPress={openScanner}
                 accessibilityRole="button"
@@ -795,6 +1000,7 @@ export default function PoReceiveScreen() {
                         group={group}
                         lines={block.lines}
                         draft={draft}
+                        editable={canEditQuantities}
                         highlightLineId={highlightLineId}
                         onChangeReceived={(lineId, v) => setField(lineId, 'received', v)}
                         onReceiveAll={() => {
@@ -855,7 +1061,7 @@ export default function PoReceiveScreen() {
                             Fully received — nothing left to receive on this line.
                           </Text>
                         </View>
-                      ) : readOnly ? null : (
+                      ) : !canEditQuantities ? null : (
                         <View style={styles.qtyRow}>
                           <View style={styles.qtyField}>
                             <Text style={styles.qtyLabel}>Received now</Text>
@@ -920,25 +1126,102 @@ export default function PoReceiveScreen() {
                 <Text style={styles.historyHeading} accessibilityRole="header">
                   Receipt history
                 </Text>
-                {receipts.map((r) => (
-                  <View key={r.id} style={styles.historyCard}>
-                    <View style={styles.historyTopRow}>
-                      <Text style={styles.historyNumber}>
-                        {r.receipt_number}
-                        {r.status !== 'posted' ? ` · ${r.status}` : ''}
-                      </Text>
-                      <Text style={styles.historyDate}>{formatReceiptDate(r.received_at)}</Text>
-                    </View>
-                    <Text style={styles.historyMeta}>
-                      by {r.received_by_name} · {r.accepted} accepted
-                      {r.rejected > 0 ? ` · ${r.rejected} rejected` : ''}
-                    </Text>
+                {historyChecksFailed(checks, receipts.length) ? (
+                  <View style={styles.partNotice}>
+                    <Text style={styles.partNoticeText}>{C.chipUnavailable}</Text>
+                    <Pressable
+                      onPress={() => void retryPart('checks')}
+                      disabled={retryingPart !== null}
+                      accessibilityRole="button"
+                      accessibilityState={{ disabled: retryingPart !== null }}
+                      style={({ pressed }) => [
+                        styles.partRetry,
+                        (pressed || retryingPart !== null) && { opacity: 0.6 },
+                      ]}
+                    >
+                      {retryingPart === 'checks' ? (
+                        <ActivityIndicator color={c.ink} />
+                      ) : (
+                        <Text style={styles.partRetryText}>Try again</Text>
+                      )}
+                    </Pressable>
                   </View>
-                ))}
+                ) : null}
+                {receipts.map((r) => {
+                  // The receiving checklist on this receipt (F4-1): its state
+                  // in words, and Record, Continue or View when it applies.
+                  const chip = receiptChip({
+                    receipt: { id: r.id, status: r.status, receivedAt: r.received_at },
+                    checks,
+                    canRecord: gate?.canRecordChecklist === true,
+                  });
+                  const starting = startingReceiptId === r.id;
+                  return (
+                    <View key={r.id} style={styles.historyCard}>
+                      <View style={styles.historyTopRow}>
+                        <Text style={styles.historyNumber}>
+                          {r.receipt_number}
+                          {r.status !== 'posted' ? ` · ${r.status}` : ''}
+                        </Text>
+                        <Text style={styles.historyDate}>{formatReceiptDate(r.received_at)}</Text>
+                      </View>
+                      <Text style={styles.historyMeta}>
+                        by {r.received_by_name} · {r.accepted} accepted
+                        {r.rejected > 0 ? ` · ${r.rejected} rejected` : ''}
+                      </Text>
+                      {chip ? (
+                        <View style={styles.checkRow}>
+                          {/* No words for a receipt from a gap after the
+                              first checklist: only its Record (core rule). */}
+                          {chip.text !== null ? (
+                            <Text
+                              style={[
+                                styles.checkChip,
+                                chip.tone === 'ok'
+                                  ? styles.checkChipOk
+                                  : chip.tone === 'warn'
+                                    ? styles.checkChipWarn
+                                    : null,
+                              ]}
+                            >
+                              {chip.text}
+                            </Text>
+                          ) : null}
+                          {chip.action && chip.actionLabel ? (
+                            <Pressable
+                              onPress={() => void openChecklist(r.id, chip)}
+                              disabled={startingReceiptId !== null}
+                              accessibilityRole="button"
+                              accessibilityLabel={`${chip.actionLabel}, ${r.receipt_number}`}
+                              accessibilityState={{
+                                disabled: startingReceiptId !== null,
+                                busy: starting,
+                              }}
+                              style={({ pressed }) => [
+                                styles.checkAction,
+                                (pressed || (startingReceiptId !== null && !starting)) && {
+                                  opacity: 0.6,
+                                },
+                              ]}
+                            >
+                              {starting ? (
+                                <ActivityIndicator color={c.ink} />
+                              ) : (
+                                <Text style={styles.checkActionText}>{chip.actionLabel}</Text>
+                              )}
+                            </Pressable>
+                          ) : null}
+                        </View>
+                      ) : null}
+                    </View>
+                  );
+                })}
               </View>
             )}
 
-            {receivable ? (
+            {/* The receipt's note goes with Post receipt, so it shows only
+                to someone who can post one (F4-1's gate). */}
+            {receivable && canEditQuantities ? (
               <View style={styles.notesBlock}>
                 <Text style={styles.qtyLabel}>{RECEIPT_NOTES_LABEL}</Text>
                 <TextInput
@@ -966,12 +1249,33 @@ export default function PoReceiveScreen() {
             <PoAttachments poId={id} />
           </ScrollView>
 
-          {readOnly ? null : (
+          {footer.kind === 'none' ? null : (
             <View style={styles.footer}>
-              {/* Committing the receipt: the screen's one ink button. */}
-              <Button block onPress={postReceipt} disabled={posting || !receivable}>
-                {posting ? 'Posting…' : receivable ? 'Post receipt' : 'Fully received'}
-              </Button>
+              {footer.kind === 'post' ? (
+                // Committing the receipt: the screen's one ink button.
+                <Button block onPress={postReceipt} disabled={footer.disabled}>
+                  {footer.label}
+                </Button>
+              ) : (
+                // Who posts, "Checking…", or why it could not check: words in
+                // place of the button, never a guess (F4-1).
+                <View style={styles.gateRow}>
+                  {footer.kind === 'checking' ? <ActivityIndicator color={c.ink3} /> : null}
+                  <Text style={styles.gateText}>{footer.text}</Text>
+                  {footer.kind === 'unknown' && footer.retry ? (
+                    <Pressable
+                      onPress={() => {
+                        setGateAnswer(null);
+                        setGateNonce((n) => n + 1);
+                      }}
+                      accessibilityRole="button"
+                      style={({ pressed }) => [styles.partRetry, pressed && { opacity: 0.6 }]}
+                    >
+                      <Text style={styles.partRetryText}>Retry</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+              )}
               {/* Clear of the home indicator: the button sat in its strip. */}
               <View style={{ height: Math.max(0, insets.bottom - SPACE.md) }} />
             </View>
@@ -1054,6 +1358,7 @@ function SizeRunCard({
   group,
   lines,
   draft,
+  editable,
   highlightLineId,
   onChangeReceived,
   onReceiveAll,
@@ -1061,6 +1366,8 @@ function SizeRunCard({
   group: PoRunGroup;
   lines: PoLine[];
   draft: Record<string, DraftLine>;
+  /** Quantities take input (canEditQuantities): otherwise no fields and no All. */
+  editable: boolean;
   highlightLineId: string | null;
   onChangeReceived: (lineId: string, value: string) => void;
   onReceiveAll: () => void;
@@ -1087,7 +1394,7 @@ function SizeRunCard({
             Size run · {lines.length} sizes · {totalOrdered} ordered
           </Text>
         </View>
-        {anyOutstanding && (
+        {anyOutstanding && editable && (
           <Pressable
             onPress={onReceiveAll}
             accessibilityRole="button"
@@ -1117,7 +1424,7 @@ function SizeRunCard({
                 <Check size={13} color={c.accent} strokeWidth={2} />
                 <Text style={styles.runDone}>Full</Text>
               </View>
-            ) : (
+            ) : !editable ? null : (
               <TextInput
                 value={value}
                 onChangeText={(v) => onChangeReceived(l.id, v)}
@@ -1457,6 +1764,52 @@ function makeStyles(c: Palette) {
       justifyContent: 'center',
     },
     partRetryText: { color: c.ink, fontFamily: FONT.display, fontSize: 13.5 },
+    // The receiving checklist on a receipt (F4-1): its state in words, then
+    // Record, Continue or View as a 44pt outlined control.
+    checkRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      gap: SPACE.sm,
+      marginTop: SPACE.sm,
+    },
+    // Words carry the state; the colour only repeats it.
+    checkChip: {
+      color: c.ink3,
+      fontFamily: FONT.display,
+      fontSize: 12.5,
+      flexShrink: 1,
+    },
+    checkChipOk: { color: c.accent },
+    checkChipWarn: { color: c.warnText },
+    checkAction: {
+      minHeight: 44,
+      paddingHorizontal: 14,
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: c.hair2,
+      backgroundColor: c.card,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    checkActionText: { color: c.ink, fontFamily: FONT.display, fontSize: 13.5 },
+    // The footer's words in place of Post receipt: who posts, "Checking…", or
+    // why it could not check, with Retry beside them.
+    gateRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: SPACE.sm,
+      minHeight: 44,
+    },
+    gateText: {
+      color: c.ink3,
+      fontFamily: FONT.displayRegular,
+      fontSize: 14,
+      textAlign: 'center',
+      flexShrink: 1,
+    },
     historyHeading: {
       color: c.ink3,
       fontFamily: FONT.mono,

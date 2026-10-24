@@ -1,4 +1,4 @@
-import { ClipboardList, Download, SearchX } from 'lucide-react';
+import { ClipboardList, Download, ListChecks, SearchX } from 'lucide-react';
 import Link from 'next/link';
 
 import { checkModuleAccess } from '@/lib/modules/module-gate';
@@ -31,7 +31,7 @@ import {
   type PoTab,
 } from '@/lib/purchase-orders/tabs';
 
-import { formatCalendarDate } from '@stockpilot/core';
+import { formatCalendarDate, isManagerOrAbove, RECEIVING_CHECKLIST_COPY } from '@stockpilot/core';
 
 export const metadata = { title: 'Purchase orders' };
 
@@ -98,6 +98,10 @@ export default async function PurchaseOrdersPage({
   // Approval-threshold panel (owner/admin only). Read fails SOFT to "panel
   // shows 0" — the enforcement read in the service is the fail-closed one.
   const isAdmin = orgCtx.role === 'owner' || orgCtx.role === 'admin';
+  // The receiving checklist (F4-1) is reached from here by managers, where
+  // Receiving is on; everyone who reads POs can open it from Procedures too.
+  const showChecklistLink =
+    isManagerOrAbove(orgCtx.role) && (await checkModuleAccess('receiving')).enabled;
   let approvalThreshold = 0;
   if (isAdmin) {
     const supabase = await createClient();
@@ -413,12 +417,22 @@ export default async function PurchaseOrdersPage({
           </span>
         }
         actions={
-          <Button asChild variant="outline">
-            <a href={exportHref} download aria-label="Export purchase orders to CSV">
-              <Download className="h-4 w-4" />
-              Export
-            </a>
-          </Button>
+          <>
+            {showChecklistLink && (
+              <Button asChild variant="outline">
+                <Link href="/dashboard/purchase-orders/receiving-checklist">
+                  <ListChecks className="h-4 w-4" />
+                  {RECEIVING_CHECKLIST_COPY.editorTitle}
+                </Link>
+              </Button>
+            )}
+            <Button asChild variant="outline">
+              <a href={exportHref} download aria-label="Export purchase orders to CSV">
+                <Download className="h-4 w-4" />
+                Export
+              </a>
+            </Button>
+          </>
         }
         primaryAction={
           <Button asChild variant="gradient">

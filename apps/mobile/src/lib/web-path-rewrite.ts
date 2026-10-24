@@ -79,6 +79,23 @@ const REWRITES: { re: RegExp; to: (m: RegExpMatchArray) => string }[] = [
   // ordering convention. Query (the stock/type filters) is dropped → the
   // full Items tab.
   { re: /\/dashboard\/inventory(\?.*)?$/, to: () => '/inventory' },
+  // The receiving checklist (F4-1): one receipt's run and the editor have
+  // native twins (app/receiving-check/[id].tsx, app/receiving-checklist.tsx).
+  // Both ABOVE the PO-id rule: the run page is a static segment beside the
+  // web's [id], and although "receiving-checks/<uuid>" can never satisfy the
+  // 36-char UUID right after "purchase-orders/", the convention here is that
+  // every sub-route sits above the id rule. Query dropped. The cold-start
+  // shims are app/dashboard/purchase-orders/receiving-checks/[id].tsx and
+  // app/dashboard/purchase-orders/receiving-checklist.tsx (a static segment
+  // beats the PO shim's [id], which would otherwise open "/po/receiving-checklist").
+  {
+    re: new RegExp(`/dashboard/purchase-orders/receiving-checks/${UUID}`),
+    to: (m) => `/receiving-check/${m[1]}`,
+  },
+  {
+    re: /\/dashboard\/purchase-orders\/receiving-checklist(\?.*)?$/,
+    to: () => '/receiving-checklist',
+  },
   { re: new RegExp(`/dashboard/purchase-orders/${UUID}`), to: (m) => `/po/${m[1]}` },
   // The auto-reorder and recurring-po crons notify with the BARE list path
   // '/dashboard/purchase-orders' (no id — they create N drafts at once), so

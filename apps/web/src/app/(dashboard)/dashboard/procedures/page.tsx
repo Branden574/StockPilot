@@ -1,4 +1,4 @@
-import { BookOpen, History } from 'lucide-react';
+import { BookOpen, History, ListChecks } from 'lucide-react';
 import Link from 'next/link';
 
 import { checkModuleAccess } from '@/lib/modules/module-gate';
@@ -16,7 +16,7 @@ import { ProcedureCard } from '@/components/procedures/procedure-card';
 import { ProcedureFilters } from '@/components/procedures/procedure-filters';
 import { RestoreButton } from '@/components/procedures/restore-button';
 import { requireOrgContext } from '@/lib/auth/session';
-import { can } from '@stockpilot/core';
+import { can, RECEIVING_CHECKLIST_COPY } from '@stockpilot/core';
 import { ProcedureCategoriesService } from '@/server/services/procedure-categories';
 import { ProceduresService } from '@/server/services/procedures';
 import { WarehousesService } from '@/server/services/warehouses';
@@ -50,6 +50,12 @@ export default async function ProceduresListPage({
   // the table's RLS. The sidebar still surfaces the entry for everyone.
   const canCreate = can(ctx, 'categories:manage');
   const canRestore = canCreate; // Restore uses the same permission gate as archive.
+  // The receiving checklist (F4-1) belongs with the procedures: a card for
+  // anyone who can read purchase orders, where Receiving is on.
+  const showReceivingChecklist =
+    !isArchivedView &&
+    can(ctx, 'purchase_orders:read') &&
+    (await checkModuleAccess('receiving')).enabled;
 
   const [procService, catService, whService] = await Promise.all([
     ProceduresService.forCurrentUser(),
@@ -97,6 +103,27 @@ export default async function ProceduresListPage({
         categories={categories.map((c) => ({ id: c.id, name: c.name, color: c.color }))}
         warehouses={warehouses.map((w) => ({ id: w.id, name: w.name }))}
       />
+
+      {showReceivingChecklist && (
+        // The way in from the procedures: one hairline card on the page
+        // surface whose border strengthens on hover, as the procedure cards'
+        // do. The checklist itself lives with the purchase orders.
+        <Link
+          href="/dashboard/purchase-orders/receiving-checklist"
+          data-slot="receiving-checklist-card"
+          className="border-border bg-background focus-visible:ring-ring focus-visible:ring-offset-background hover:border-ink-4 flex min-w-0 items-start gap-3 rounded-lg border px-[18px] py-3.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
+        >
+          <ListChecks aria-hidden className="text-muted-foreground mt-0.5 h-4 w-4 shrink-0" />
+          <div className="min-w-0">
+            <p className="text-foreground text-[13.5px] font-medium leading-5">
+              {RECEIVING_CHECKLIST_COPY.procedureCard}
+            </p>
+            <p className="text-muted-foreground mt-0.5 text-[12.5px] leading-[18.75px]">
+              {RECEIVING_CHECKLIST_COPY.procedureCardBody}
+            </p>
+          </div>
+        </Link>
+      )}
 
       {rows.length === 0 ? (
         hasFilters ? (

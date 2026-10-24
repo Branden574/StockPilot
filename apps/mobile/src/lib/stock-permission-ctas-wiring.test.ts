@@ -65,8 +65,17 @@ describe('PO screen: receiving follows stock:adjust', () => {
 
   it('without it: no Scan, no quantities, no Post receipt, size runs shown line by line', () => {
     // Every receive affordance follows readOnly (a draft, or no permission).
-    expect(po).toMatch(/\{readOnly \? null : \(\s*<Pressable\s+onPress=\{openScanner\}/);
-    expect(po).toMatch(/\{readOnly \? null : \(\s*<View style=\{styles\.footer\}>/);
+    // Re-pinned by F4-1 (was: `{readOnly ? null : (` at Scan and at the
+    // footer): Scan and the quantities follow canEditQuantities and the footer
+    // follows receiveFooter, both given readOnly as their review-only flag, so
+    // each is gone without the permission (receive-gate.test.ts pins both
+    // helpers' read-only answers).
+    expect(po).toContain(
+      'const canEditQuantities = canEditReceiptQuantities({ reviewOnly: readOnly, gate: gateView });',
+    );
+    expect(po).toMatch(/\{!canEditQuantities \? null : \(\s*<Pressable\s+onPress=\{openScanner\}/);
+    expect(po).toMatch(/const footer = receiveFooter\(\{\s*reviewOnly: readOnly,/);
+    expect(po).toMatch(/\{footer\.kind === 'none' \? null : \(\s*<View style=\{styles\.footer\}>/);
     expect(po).toMatch(/buildPoBlocks\(lines, readOnly \? \{\} : groups\)/);
     expect(po).toMatch(/const receivable =\s*!readOnly && lines\.some/);
   });

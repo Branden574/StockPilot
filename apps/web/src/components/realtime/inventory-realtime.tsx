@@ -70,6 +70,11 @@ const REALTIME_SKIP_PREFIXES = [
   '/dashboard/tags',
   '/dashboard/suppliers',
   '/dashboard/ai',
+  // The receiving checklist editor (/receiving-checklist) and run pages
+  // (/receiving-checks/<id>), F4-1: nothing on them is live, and a refresh
+  // there replaced what an open edit or an open run form was based on (desk
+  // check F2, F3). A purchase order (a uuid in the same section) stays live.
+  '/dashboard/purchase-orders/receiving-check',
 ];
 
 /**
