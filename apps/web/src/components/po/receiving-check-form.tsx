@@ -258,8 +258,11 @@ export function ReceivingCheckForm({ view }: { view: ReceivingRunView }) {
     <div className="flex flex-col gap-4">
       <p className="text-muted-foreground text-[13.5px] leading-[20.25px]">{C.honesty}</p>
 
+      {/* aria-labelledby makes the section a region named by its heading
+          (DetailSection only puts the id on the heading). */}
       <DetailSection
         headingId="about-delivery"
+        aria-labelledby="about-delivery"
         title={C.aboutHeading}
         bodyClassName="text-[13.5px] leading-[20.25px]"
       >
@@ -438,13 +441,16 @@ export function ReceivingCheckForm({ view }: { view: ReceivingRunView }) {
 
       {!readOnly && (
         <div className="flex flex-wrap gap-2">
+          {/* While a call is out, the spinner shows beside the words, so
+              each button keeps its name (the Receive dialog's rule). */}
           <Button
             type="button"
             variant="outline"
             onClick={() => send(false)}
             disabled={busy !== null}
           >
-            {busy === 'save' ? <Loader2 className="h-4 w-4 animate-spin" /> : C.saveProgress}
+            {busy === 'save' ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
+            {C.saveProgress}
           </Button>
           {/* Completing commits the run in front of you: the ink button
               (DESIGN-SPEC 6.2). */}
@@ -454,11 +460,8 @@ export function ReceivingCheckForm({ view }: { view: ReceivingRunView }) {
             onClick={() => setConfirmOpen(true)}
             disabled={busy !== null}
           >
-            {busy === 'complete' ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              C.completeChecklist
-            )}
+            {busy === 'complete' ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
+            {C.completeChecklist}
           </Button>
         </div>
       )}

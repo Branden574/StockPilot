@@ -124,6 +124,14 @@ describe('ReceivingCheckForm', () => {
     expect(screen.getByText(C.stillToComeUnavailable)).toBeTruthy();
   });
 
+  // Review 2026-10-24: the redraw put "About this delivery" in a DetailSection
+  // that named only its heading, so the section stopped being a region.
+  it('"About this delivery" is a region named by its heading', () => {
+    render(<ReceivingCheckForm view={view()} />);
+    const region = screen.getByRole('region', { name: C.aboutHeading });
+    expect(region.textContent).toContain(C.receivedOnReceipt(3));
+  });
+
   it('labels Pass, Fail and Not applicable as radios with words', () => {
     render(<ReceivingCheckForm view={view()} />);
     const pass = screen.getAllByRole('radio', { name: C.pass });
@@ -258,6 +266,46 @@ describe('ReceivingCheckForm', () => {
     const second = saveReceivingCheckAction.mock.calls[1]![1] as { saveId: string };
     expect(second.saveId).toBe(first.saveId);
     expect(router.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  // Review 2026-10-24: a busy button showed its spinner alone, so it had no
+  // name until the call came back. The spinner now sits beside the words, as
+  // the Receive dialog's do.
+  it('Save progress and Complete checklist keep their names while they work', async () => {
+    const replies: Array<(v: unknown) => void> = [];
+    saveReceivingCheckAction.mockImplementation(
+      () => new Promise((resolve) => void replies.push(resolve)),
+    );
+    const user = userEvent.setup();
+    render(<ReceivingCheckForm view={view()} />);
+    await user.click(screen.getByRole('button', { name: C.saveProgress }));
+    await waitFor(() => expect(saveReceivingCheckAction).toHaveBeenCalledTimes(1));
+    const saving = screen.getByRole('button', { name: C.saveProgress });
+    expect(saving).toBeDisabled();
+    expect(saving.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
+    replies[0]!({
+      ok: true,
+      data: {
+        id: 'run-1',
+        status: 'in_progress',
+        revision: 2,
+        results: { s1: { value: 'pass' } },
+        note: null,
+        completedAt: null,
+      },
+    });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: C.saveProgress })).not.toBeDisabled(),
+    );
+
+    await user.click(screen.getByRole('button', { name: C.completeChecklist }));
+    await user.click(screen.getAllByRole('button', { name: C.completeChecklist }).at(-1)!);
+    await waitFor(() => expect(saveReceivingCheckAction).toHaveBeenCalledTimes(2));
+    const completing = screen
+      .getAllByRole('button', { name: C.completeChecklist })
+      .filter((b) => (b as HTMLButtonElement).disabled);
+    expect(completing).toHaveLength(1);
+    expect(completing[0]!.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
   });
 
   it('Complete names and marks what is missing before anything is sent', async () => {

@@ -318,6 +318,39 @@ describe('ReceivingChecklistEditor', () => {
     expect(screen.queryByLabelText(C.procedureLabel)).toBeNull();
   });
 
+  // Review 2026-10-24: the redraw put the live version and the earlier
+  // versions in DetailSections that named only their headings, so neither was
+  // a region any more.
+  it('the live version and the earlier versions are regions named by their headings', () => {
+    const view = render(
+      <ReceivingChecklistEditor
+        editor={editor({ live: LIVE_V2, history: [RETIRED_V1], nextVersionNumber: 3 })}
+      />,
+    );
+    expect(
+      screen.getByRole('region', { name: `${C.liveVersion(2)} Delivery checks (theirs)` }),
+    ).toBeTruthy();
+    expect(screen.getByRole('region', { name: C.history })).toBeTruthy();
+    view.unmount();
+    render(<ReceivingChecklistEditor editor={editor()} />);
+    expect(screen.getByRole('region', { name: C.noLiveVersion })).toBeTruthy();
+  });
+
+  // Review 2026-10-24: the busy button showed its spinner alone, so it had no
+  // name until the call came back.
+  it('Publish version N keeps its name while it works', async () => {
+    publishReceivingChecklistAction.mockImplementation(() => new Promise(() => {}));
+    const user = userEvent.setup();
+    render(<ReceivingChecklistEditor editor={editor()} />);
+    await user.click(screen.getByRole('button', { name: C.startSuggested }));
+    await user.click(screen.getByRole('button', { name: C.publishVersion(1) }));
+    await user.click(screen.getAllByRole('button', { name: C.publishVersion(1) }).at(-1)!);
+    await waitFor(() => expect(publishReceivingChecklistAction).toHaveBeenCalledTimes(1));
+    const busy = screen.getByRole('button', { name: C.publishVersion(1) });
+    expect(busy).toBeDisabled();
+    expect(busy.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
+  });
+
   // The row helpers themselves (checklistEditorStepsFrom, moveChecklistStep,
   // checklistPublishPayload) are tested in core, where the phone uses them too.
 });

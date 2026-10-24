@@ -231,9 +231,12 @@ export function ReceivingChecklistEditor({ editor }: { editor: ChecklistEditorVi
 
   return (
     <div className="flex flex-col gap-4">
+      {/* aria-labelledby makes each section a region named by its heading
+          (DetailSection only puts the id on the heading). */}
       {!editing && (
         <DetailSection
           headingId="live-checklist"
+          aria-labelledby="live-checklist"
           title={live ? `${C.liveVersion(live.versionNumber)} ${live.title}` : C.noLiveVersion}
           footer={
             canPublish ? (
@@ -291,13 +294,11 @@ export function ReceivingChecklistEditor({ editor }: { editor: ChecklistEditorVi
           footer={
             <div className="flex flex-wrap gap-2">
               {/* Publishing commits the version in front of you: the ink
-                  button (DESIGN-SPEC 6.2). */}
+                  button (DESIGN-SPEC 6.2). While it is out, the spinner shows
+                  beside the words, so the button keeps its name. */}
               <Button type="button" variant="default" onClick={askPublish} disabled={busy}>
-                {busy ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  C.publishVersion(editor.nextVersionNumber)
-                )}
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
+                {C.publishVersion(editor.nextVersionNumber)}
               </Button>
               <Button
                 type="button"
@@ -467,7 +468,12 @@ export function ReceivingChecklistEditor({ editor }: { editor: ChecklistEditorVi
       )}
 
       {editor.history.length > 0 && (
-        <DetailSection headingId="checklist-history" title={C.history} flush>
+        <DetailSection
+          headingId="checklist-history"
+          aria-labelledby="checklist-history"
+          title={C.history}
+          flush
+        >
           <ul className="divide-border divide-y">
             {editor.history.map((v) => (
               <li key={v.id}>
