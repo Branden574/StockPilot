@@ -4,6 +4,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 import { usePathname } from 'next/navigation';
 import * as React from 'react';
 
+import { TryAgainButton } from '@/components/dashboard/try-again-button';
 import { IntentLink } from '@/components/ui/intent-link';
 import { cn } from '@/lib/utils';
 
@@ -57,7 +58,28 @@ export interface SettingsNavAccess {
   permissions: readonly string[];
   /** The gated modules that are on for the organization. */
   modules: readonly 'maintenance_requests'[];
+  /**
+   * The gated modules whose state could not be read (`checkModuleAccess`
+   * answered `checkFailed`). An unknown state never offers the destination's
+   * link, exactly as "off" does; a caller its permission would show it to sees
+   * its title, that it could not be checked, and Try again, instead of the
+   * destination silently missing.
+   */
+  uncheckedModules?: readonly 'maintenance_requests'[];
 }
+
+/** A destination as the caller sees it. */
+export interface VisibleSettingsEntry extends SettingsNavEntry {
+  /** Its module's state could not be read: drawn without its link, with Try again. */
+  unchecked?: boolean;
+}
+
+export interface VisibleSettingsGroup extends Omit<SettingsNavGroup, 'entries'> {
+  entries: readonly VisibleSettingsEntry[];
+}
+
+/** What an unchecked destination says under its title. */
+export const SETTINGS_ENTRY_UNCHECKED_NOTE = "We couldn't check whether this module is on.";
 
 /**
  * The gate table. Titles and descriptions are the hub tiles' words, verbatim;
@@ -242,17 +264,24 @@ export const SETTINGS_NAV_GROUPS: readonly SettingsNavGroup[] = [
   },
 ];
 
-/** The table filtered to what the caller may use; empty groups drop out. */
-export function visibleSettingsGroups(access: SettingsNavAccess): SettingsNavGroup[] {
+/**
+ * The table filtered to what the caller may use; empty groups drop out. A
+ * module-gated destination is a link only while its module is on. While its
+ * module's state is unknown (`uncheckedModules`) it stays in, marked
+ * `unchecked`, for a caller its permission shows it to, and is never drawn as
+ * a link; a caller without that permission never learns it exists.
+ */
+export function visibleSettingsGroups(access: SettingsNavAccess): VisibleSettingsGroup[] {
   const granted = new Set(access.permissions);
   const modules = new Set<string>(access.modules);
+  const unchecked = new Set<string>(access.uncheckedModules ?? []);
   return SETTINGS_NAV_GROUPS.map((group) => ({
     ...group,
-    entries: group.entries.filter(
-      (entry) =>
-        (entry.permission === undefined || granted.has(entry.permission)) &&
-        (entry.module === undefined || modules.has(entry.module)),
-    ),
+    entries: group.entries.flatMap((entry): VisibleSettingsEntry[] => {
+      if (entry.permission !== undefined && !granted.has(entry.permission)) return [];
+      if (entry.module === undefined || modules.has(entry.module)) return [entry];
+      return unchecked.has(entry.module) ? [{ ...entry, unchecked: true }] : [];
+    }),
   })).filter((group) => group.entries.length > 0);
 }
 
@@ -260,14 +289,16 @@ function within(pathname: string, base: string): boolean {
   return pathname === base || pathname.startsWith(`${base}/`);
 }
 
-/** The destination a settings path belongs to, for the sub-nav's current mark. */
+/** The destination a settings path belongs to, for the sub-nav's current mark.
+ *  An unchecked destination is not a link, so it is never the current one. */
 export function activeSettingsEntry(
-  groups: readonly SettingsNavGroup[],
+  groups: readonly VisibleSettingsGroup[],
   pathname: string | null,
 ): SettingsNavEntry | null {
   if (!pathname) return null;
   for (const group of groups) {
     for (const entry of group.entries) {
+      if (entry.unchecked) continue;
       if (within(pathname, entry.href)) return entry;
       if (entry.alsoActiveFor?.some((base) => within(pathname, base))) return entry;
     }
@@ -300,24 +331,28 @@ export function SettingsIndex({ access }: { access: SettingsNavAccess }) {
             <ul className="divide-border divide-y">
               {group.entries.map((entry) => (
                 <li key={entry.href}>
-                  <IntentLink
-                    href={entry.href}
-                    className="hover:bg-muted group flex min-h-11 items-center gap-3 px-[18px] py-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0"
-                  >
-                    <span className="min-w-0 flex-1">
-                      <h3 className="text-foreground block text-[13.5px] font-medium leading-5">
-                        {entry.title}
-                      </h3>
-                      <span className="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]">
-                        {entry.description}
+                  {entry.unchecked ? (
+                    <UncheckedSettingsEntry entry={entry} layout="index" />
+                  ) : (
+                    <IntentLink
+                      href={entry.href}
+                      className="hover:bg-muted group flex min-h-11 items-center gap-3 px-[18px] py-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0"
+                    >
+                      <span className="min-w-0 flex-1">
+                        <h3 className="text-foreground block text-[13.5px] font-medium leading-5">
+                          {entry.title}
+                        </h3>
+                        <span className="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]">
+                          {entry.description}
+                        </span>
                       </span>
-                    </span>
-                    <ChevronRight
-                      aria-hidden
-                      strokeWidth={1.8}
-                      className="text-ink-4 group-hover:text-foreground size-3.5 shrink-0 transition-colors"
-                    />
-                  </IntentLink>
+                      <ChevronRight
+                        aria-hidden
+                        strokeWidth={1.8}
+                        className="text-ink-4 group-hover:text-foreground size-3.5 shrink-0 transition-colors"
+                      />
+                    </IntentLink>
+                  )}
                 </li>
               ))}
             </ul>
@@ -405,6 +440,13 @@ export function SettingsSubNav({ access }: { access: SettingsNavAccess }) {
             </p>
             <ul aria-labelledby={`${listId}-${group.id}`} className="grid gap-px">
               {group.entries.map((entry) => {
+                if (entry.unchecked) {
+                  return (
+                    <li key={entry.href}>
+                      <UncheckedSettingsEntry entry={entry} layout="subnav" />
+                    </li>
+                  );
+                }
                 const active = current?.href === entry.href;
                 return (
                   <li key={entry.href}>
@@ -429,6 +471,63 @@ export function SettingsSubNav({ access }: { access: SettingsNavAccess }) {
         ))}
       </div>
     </nav>
+  );
+}
+
+/**
+ * A destination whose module could not be checked: its title (no link), what
+ * happened, and Try again, which asks the server for the page again. In the
+ * index it keeps the row's heading and padding, with Try again where the
+ * chevron sits; in the sub-nav the three stack in the 248 px rail. Try again
+ * is described by the title and the note, so its name stays the words it
+ * shows. Its 44 px touch target (28 px button) reaches 8 px past its edges,
+ * which the row's padding holds, so it never lies over the next link.
+ */
+function UncheckedSettingsEntry({
+  entry,
+  layout,
+}: {
+  entry: VisibleSettingsEntry;
+  layout: 'index' | 'subnav';
+}) {
+  const id = React.useId();
+  const titleId = `${id}-title`;
+  const noteId = `${id}-note`;
+  const describedBy = `${titleId} ${noteId}`;
+  if (layout === 'index') {
+    return (
+      <div
+        data-slot="settings-entry-unchecked"
+        className="flex min-h-11 items-center gap-3 px-[18px] py-3"
+      >
+        <span className="min-w-0 flex-1">
+          <h3
+            id={titleId}
+            className="text-muted-foreground block text-[13.5px] font-medium leading-5"
+          >
+            {entry.title}
+          </h3>
+          <span
+            id={noteId}
+            className="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]"
+          >
+            {SETTINGS_ENTRY_UNCHECKED_NOTE}
+          </span>
+        </span>
+        <TryAgainButton size="sm" className="shrink-0" aria-describedby={describedBy} />
+      </div>
+    );
+  }
+  return (
+    <div data-slot="settings-entry-unchecked" className="rounded-md px-2.5 py-2">
+      <p id={titleId} className="text-muted-foreground text-[13.5px] leading-5">
+        {entry.title}
+      </p>
+      <p id={noteId} className="text-muted-foreground mt-0.5 text-[12px] leading-[18px]">
+        {SETTINGS_ENTRY_UNCHECKED_NOTE}
+      </p>
+      <TryAgainButton size="sm" className="mt-2" aria-describedby={describedBy} />
+    </div>
   );
 }
 

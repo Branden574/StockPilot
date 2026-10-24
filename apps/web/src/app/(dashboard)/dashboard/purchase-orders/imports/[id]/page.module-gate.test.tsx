@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -8,16 +8,24 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * throws a ServiceError that is not not_found), so an old link or notification
  * used to land on the error screen. The page now shows the list's module-off
  * panel and reads nothing; with the module on it reads and renders the review
- * as before.
+ * as before. When the module set could not be read (docket R7) it says it
+ * could not check, with Try again, and still reads nothing.
  */
 
-const { access, svc } = vi.hoisted(() => ({
-  access: { current: { enabled: true, canManage: true } },
+const { access, svc, refresh } = vi.hoisted(() => ({
+  access: {
+    current: { enabled: true, canManage: true } as {
+      enabled: boolean;
+      canManage: boolean;
+      checkFailed?: boolean;
+    },
+  },
   svc: {
     get: vi.fn(),
     resolveLineResults: vi.fn(),
     uploaderProfiles: vi.fn(),
   },
+  refresh: vi.fn(),
 }));
 
 vi.mock('next/link', async () => {
@@ -31,6 +39,7 @@ vi.mock('next/navigation', () => ({
   notFound: vi.fn(() => {
     throw new Error('NEXT_NOT_FOUND');
   }),
+  useRouter: () => ({ refresh, push: vi.fn(), replace: vi.fn(), prefetch: vi.fn() }),
 }));
 vi.mock('@/lib/modules/module-gate', () => ({
   checkModuleAccess: vi.fn(async () => access.current),
@@ -142,5 +151,23 @@ describe('PO import review: the po_imports module gate', () => {
     expect(svc.get).toHaveBeenCalledWith('imp-1');
     expect(screen.getByRole('heading', { level: 1, name: 'Fall order' })).toBeInTheDocument();
     expect(screen.getByText('import review')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+  });
+
+  it('a module read that failed says it could not check, with Try again, and reads nothing', async () => {
+    access.current = { enabled: false, canManage: true, checkFailed: true };
+    await renderDetail();
+
+    expect(
+      screen.getByRole('heading', { level: 1, name: "We couldn't check whether PO imports is on" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("PO imports isn't enabled")).toBeNull();
+    expect(screen.queryByRole('link', { name: /Enable in Settings/ })).toBeNull();
+    expect(PoImportsService.forCurrentUser).not.toHaveBeenCalled();
+    expect(svc.get).not.toHaveBeenCalled();
+    expect(screen.queryByText('import review')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 });
