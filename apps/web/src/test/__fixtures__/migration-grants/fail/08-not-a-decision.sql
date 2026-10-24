@@ -10,9 +10,9 @@ grant select on public.via_public to public;
 revoke all on public.via_public from public;
 
 create table public.option_only (id int primary key);
-grant select on public.option_only to anon, authenticated;
+grant all on public.option_only to anon, authenticated;
 -- Revoking only the grant option leaves the privilege where it was.
-revoke grant option for select on public.option_only from service_role;
+revoke grant option for all on public.option_only from service_role;
 
 -- Default privileges change future objects, not this one.
 create table public.defaults_only (id int primary key);

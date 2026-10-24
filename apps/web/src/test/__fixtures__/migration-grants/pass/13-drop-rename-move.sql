@@ -1,16 +1,17 @@
 -- An object created and dropped in the same file needs no decision, a renamed
--- one is decided under any of its names, and one moved out of public needs
--- none.
+-- one is decided under any of its names, and one moved out of public (and
+-- left out) needs none.
 create table public.staging_rows (id int);
 insert into public.staging_rows values (1);
 drop table public.staging_rows;
 
 create table public.draft_name (id serial);
-grant select on public.draft_name to anon;
+revoke all on public.draft_name from anon;
 alter table public.draft_name rename to final_name;
+revoke all on public.final_name from authenticated, service_role;
 grant select on public.final_name to authenticated, service_role;
 -- The serial's sequence keeps the name it was given.
-grant usage on sequence public.draft_name_id_seq to anon, authenticated, service_role;
+grant usage, select on sequence public.draft_name_id_seq to anon, authenticated, service_role;
 
 create schema if not exists d1_archive;
 create table public.moving (id serial);

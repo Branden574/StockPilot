@@ -11,14 +11,14 @@ create table public.tickets (
   old_style serial8,
   quoted_type "serial"
 );
-grant select, insert on public.tickets to anon, authenticated, service_role;
+grant all on public.tickets to anon, authenticated, service_role;
 
 create table public.later (note text);
-grant select on public.later to anon, authenticated, service_role;
+grant all on public.later to anon, authenticated, service_role;
 alter table public.later add column n serial2;
 
 -- A grant on a name Postgres did not give the sequence decides nothing.
 create table public.misnamed (id serial);
-grant select on public.misnamed to anon, authenticated, service_role;
+grant all on public.misnamed to anon, authenticated, service_role;
 create sequence public.misnamed_seq;
-grant usage on sequence public.misnamed_seq to anon, authenticated, service_role;
+grant all on sequence public.misnamed_seq to anon, authenticated, service_role;

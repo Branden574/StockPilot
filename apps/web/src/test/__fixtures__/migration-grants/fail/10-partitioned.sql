@@ -3,7 +3,7 @@ create table public.readings (
   id bigint not null,
   taken_at date not null
 ) partition by range (taken_at);
-grant select on public.readings to anon, authenticated, service_role;
+grant all on public.readings to anon, authenticated, service_role;
 
 create table public.readings_2026 partition of public.readings
   for values from ('2026-01-01') to ('2027-01-01');

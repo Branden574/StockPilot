@@ -1,74 +1,114 @@
 /**
  * MIGRATION GUARD (D1): a migration from 0402 on that creates a table, view or
- * sequence in schema public decides, in the same file, what anon,
- * authenticated and service_role may do with it.
+ * sequence in schema public decides, in the same file, every privilege the
+ * default privileges would otherwise decide for anon, authenticated and
+ * service_role.
  *
  * WHY. Supabase's default privileges have given those three roles ALL on every
  * public table, view and sequence the migration role creates (production's
  * schema on 2026-10-24: ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA
  * public GRANT ALL ON TABLES, and ON SEQUENCES, TO anon, authenticated,
- * service_role). On 2026-10-30 Supabase stops that on every existing project
- * (changelog: github.com/orgs/supabase/discussions/45329). Objects that exist
- * keep their grants; a new one gets none, and the Data API refuses it before
- * RLS is ever asked. The local stack and CI keep auto-granting (CLI 2.117.0
- * with [api] auto_expose_new_tables unset, which it describes as covering
- * "newly-created tables, views, sequences and functions in the public
- * schema"), so a migration that leans on the old default passes every test
- * and fails in production.
+ * service_role). On 2026-10-30 Supabase changes that on every existing project
+ * (changelog 45329: github.com/orgs/supabase/discussions/45329). It revokes
+ * SELECT, INSERT, UPDATE and DELETE from the table defaults and USAGE and
+ * SELECT from the sequence defaults. Objects that exist keep their grants; a
+ * new one gets only what its migration grants, and the Data API refuses the
+ * rest before RLS is ever asked. The local stack and CI keep the old defaults
+ * (supabase/config.toml sets [api] auto_expose_new_tables = true, and CLI
+ * 2.117.0 treats unset the same), so a privilege a migration leaves to the
+ * defaults is there in every test and missing in production.
  *
  * THE RULE. For each public table, partitioned table, partition, view,
  * materialized view, foreign table or sequence a checked file creates, and for
  * each of anon, authenticated and service_role, a GRANT or a REVOKE after the
- * CREATE, in the same file, names the object for that role:
- *   - GRANT what the role needs (a column grant counts);
- *   - REVOKE ALL ... FROM the role when it must have nothing. That is how a
- *     deliberate no-access object says so (0111's order_email_log: revoke from
- *     public, anon, authenticated; grant to service_role).
- * Not a decision: GRANT ... ON ALL TABLES IN SCHEMA (it names no object, and it
- * would re-grant what earlier migrations revoked, 0368's and 0384's column
- * grants included), TO PUBLIC or FROM PUBLIC (not one of the three roles),
- * REVOKE GRANT OPTION FOR (it leaves the privilege), ALTER DEFAULT PRIVILEGES
- * (later objects only), and anything in a comment, a string or a function
- * body.
+ * CREATE, in the same file, names each privilege the change takes out of the
+ * defaults (requiredPrivileges in ./migration-grants.ts):
+ *   - SELECT, INSERT, UPDATE and DELETE on a table, partitioned table,
+ *     partition, view, materialized view or foreign table;
+ *   - USAGE and SELECT on a sequence.
+ * ALL names them all, so the usual form is
+ *   revoke all on <object> from anon, authenticated, service_role;
+ *   grant <what each role needs> on <object> to <role>;
+ * A privilege named either way ends the same under both defaults; one named
+ * by neither is whatever the defaults say, which is where CI and production
+ * part. (TRUNCATE, REFERENCES, TRIGGER, MAINTAIN and a sequence's UPDATE stay
+ * in both defaults, so they cannot differ.) A partial decision is the trap:
+ * 0111's `revoke all ... from public, anon, authenticated; grant select,
+ * insert ... to service_role` left service_role's UPDATE and DELETE to the
+ * defaults, 0230 left anon's SELECT, and 0394 service_role's INSERT, UPDATE
+ * and DELETE.
+ * Not a decision: a column-level GRANT or REVOKE (it leaves the table-level
+ * privilege the defaults set), GRANT ... ON ALL TABLES IN SCHEMA (it names no
+ * object, and it would re-grant what earlier migrations revoked, 0368's and
+ * 0384's column grants included), TO PUBLIC or FROM PUBLIC (not one of the
+ * three roles), REVOKE GRANT OPTION FOR (it leaves the privilege), ALTER
+ * DEFAULT PRIVILEGES (later objects only), and anything in a comment, a
+ * string or a function body.
  *
- * SEQUENCES. nextval() needs USAGE or UPDATE on the sequence, so an INSERT by
- * a role without it fails with "permission denied for sequence". A serial,
- * bigserial or smallserial column (serial2, serial4, serial8 too) makes such a
- * sequence, named as Postgres names it (table_column_seq cut to 63 bytes, with
- * a 1 added to the label when this file already used the name), and that
- * sequence is an object of its own here. An identity column's sequence is not:
- * Postgres draws identity values without a privilege check (REL_17_6,
- * ExecEvalNextValueExpr calls nextval_internal(seqid, false)), and on the
- * scratch database (Postgres 17.6, 2026-10-24) anon, authenticated and
- * service_role inserted into ALWAYS and BY DEFAULT identity tables holding no
- * privilege on the sequence, while their serial, bigserial, smallserial and
- * nextval-default inserts failed. Prefer identity columns.
+ * HELD TO POSTGRES. Every fixture below was applied, on the migration scratch
+ * server (Postgres 17.6, 2026-10-24), to a fresh database with the old
+ * default privileges and to one with the changelog's two statements added.
+ * For each, the public objects Postgres held are exactly the ones the scanner
+ * lists, and the (object, role, privilege) triples whose ACL differs between
+ * the two databases are exactly the scanner's findings, identity sequences
+ * aside. Two differences are deliberate: a schema-wide grant (fail/08) and a
+ * GRANT run by EXECUTE (fail/09) do settle a privilege in Postgres, and are
+ * still not accepted as decisions. On the history, a scratch replay of
+ * 0001-0401 under the changelog's defaults agrees: of the 17 objects an
+ * earlier version of this rule counted as decided, the 4 it now flags are the
+ * 4 whose privileges came out different from production's.
+ *
+ * SEQUENCES. Under the changelog's defaults a new sequence keeps UPDATE, so
+ * nextval() and serial inserts keep working after 2026-10-30. It loses USAGE
+ * and SELECT, which currval(), lastval() and reading the sequence need, and
+ * which nextval() needs once UPDATE goes too (revoke all on sequences in the
+ * defaults). A serial, bigserial or smallserial column (serial2, serial4,
+ * serial8 too) makes such a sequence, named as Postgres names it
+ * (table_column_seq cut to 63 bytes, with a 1 added to the label when this
+ * file already used the name), and that sequence is an object of its own
+ * here. An identity column's sequence is not: Postgres draws identity values
+ * without a privilege check (REL_17_6, ExecEvalNextValueExpr calls
+ * nextval_internal(seqid, false)), so identity inserts work under any
+ * defaults (checked on Postgres 17.6 with none at all). Only currval(),
+ * lastval() and reading the identity sequence need its USAGE or SELECT, and
+ * nothing in this repository calls them: use RETURNING. Prefer identity
+ * columns.
  *
  * WHICH FILES. Every file the Supabase CLI applies (/^([0-9]+)_(.*)\.sql$/)
- * except the four-digit 0001-0401, which predate the rule: 127 of their 145
+ * except the four-digit 0001-0401, which predate the rule: 132 of their 145
  * creations would fail it, and applied migrations are not edited. A
  * timestamped file, as `supabase migration new` names one, is checked.
  *
  * HOW IT READS SQL: ./migration-grants.ts. Comments, strings and quoted
- * identifiers are never code; a DO block's body runs during the migration and
- * is read as code; a function body runs later and is not. Names fold and are
- * cut as Postgres folds and cuts them, and an unqualified name is in public.
- * Every fixture below was applied to a fresh database on Postgres 17.6 and left
- * exactly the public objects the scanner lists, and replaying 0001-0401 ends
- * with exactly the 136 tables and 8 views of production's schema (2026-10-24).
+ * identifiers are never code, and their escapes (E'...', U&"...", UESCAPE)
+ * are decoded as Postgres decodes them. A DO block's body runs during the
+ * migration and is read as code; a function body runs later and is not.
+ * EXPLAIN ANALYZE runs its statement and a parenthesized SELECT INTO creates
+ * its table, so both are read. Names fold and are cut as Postgres folds and
+ * cuts them, and an unqualified name is in public. An object SET SCHEMA moves
+ * out of public and back is the same object; one moved in from another schema
+ * never had public's default privileges and is not checked. Dropping a
+ * column, a partitioned table or a schema drops what Postgres drops with it.
+ * Replaying 0001-0401 ends with exactly the 136 tables and 8 views of
+ * production's schema (2026-10-24).
  *
  * NOT SEEN: SQL run from a string (EXECUTE, or a function the migration
- * calls), objects CREATE EXTENSION or IMPORT FOREIGN SCHEMA makes, and a
- * search_path the file sets. Do not create public objects those ways.
+ * calls), objects CREATE EXTENSION or IMPORT FOREIGN SCHEMA makes, a
+ * search_path or standard_conforming_strings the file sets, and a serial
+ * sequence whose name clashes with an object this file did not create in
+ * public. Do not create public objects those ways. One case errs the other
+ * way: an object that only DROP ... CASCADE removes, through a dependency (a
+ * view on a dropped table), is still listed; drop it by name.
  *
- * IF THIS FAILS, the message names the file, the line, the object and each
- * role never decided. After the CREATE, in the same file, add for each role
- *   grant <privileges> on <object> to <role>;   when it needs access, or
- *   revoke all on <object> from <role>;         when it must have none.
- * For a serial column's sequence, grant (or revoke) usage on sequence <name>,
- * or make the column an identity column. CREATE OR REPLACE VIEW of a view an
- * earlier migration made keeps that view's grants, but this guard reads one
- * file at a time: restate them. There is no allowlist.
+ * IF THIS FAILS, the message names the file, the line, the object and, for
+ * each role, the privileges nothing names. After the CREATE, in the same
+ * file:
+ *   revoke all on <object> from anon, authenticated, service_role;
+ *   grant <privileges> on <object> to <role>;   for each role that needs some.
+ * For a serial column's sequence, the same on sequence <name> (grant usage,
+ * select), or make the column an identity column. CREATE OR REPLACE VIEW of a
+ * view an earlier migration made keeps that view's grants, but this guard
+ * reads one file at a time: restate them. There is no allowlist.
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -84,6 +124,7 @@ import {
   MIGRATION_FILE,
   newScanState,
   reportLines,
+  requiredPrivileges,
   scanInto,
   scanMigration,
 } from './migration-grants';
@@ -96,8 +137,10 @@ const readMigration = (file: string): string =>
   readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8');
 
 const IF_THIS_FAILS =
-  'Decide each role named above in the same migration, after the CREATE: ' +
-  '`grant <privileges> on <object> to <role>;` or `revoke all on <object> from <role>;` ' +
+  'Name each privilege listed above for its role in the same migration, after the CREATE: ' +
+  '`revoke all on <object> from anon, authenticated, service_role;` and then ' +
+  '`grant <privileges> on <object> to <role>;` for each role that needs some. ' +
+  'The local stack and CI still grant them by default; production stops on 2026-10-30 ' +
   '(see the header of apps/web/src/test/migration-grants.guard.test.ts).';
 
 describe('every public table, view and sequence a migration from 0402 on creates is decided for anon, authenticated and service_role', () => {
@@ -115,7 +158,7 @@ describe('every public table, view and sequence a migration from 0402 on creates
     expect(checked).toEqual(applied.filter((f) => !exempt.includes(f)));
   });
 
-  it('finds no public object a checked migration leaves undecided', () => {
+  it('finds no privilege a checked migration leaves to the default privileges', () => {
     const report = checked.flatMap((file) => reportLines(scanMigration(readMigration(file), file)));
     expect(report, `\n${report.join('\n')}\n${IF_THIS_FAILS}\n`).toEqual([]);
   });
@@ -146,8 +189,12 @@ const twoByte = (n: number): string => 'é'.repeat(n);
  *
  * Every fixture, passing or failing, applies cleanly to a fresh database on
  * Postgres 17.6, and the public objects the scanner lists for it are exactly
- * the ones Postgres's catalog held afterwards (identity sequences aside):
- * checked on the migration scratch database, 2026-10-24.
+ * the ones Postgres's catalog held afterwards (identity sequences aside).
+ * Each passing fixture leaves the three roles the same ACL on every one of
+ * its objects whether the database has the old default privileges or the
+ * changelog's; each failing one differs in exactly the privileges its
+ * findings name, except where fail/08 and fail/09 say otherwise. Checked on
+ * the migration scratch server, 2026-10-24.
  */
 const PASSING: Record<string, string[]> = {
   'pass/01-tables.sql': [
@@ -203,74 +250,110 @@ const PASSING: Record<string, string[]> = {
   'pass/13-drop-rename-move.sql': ['sequence public.draft_name_id_seq', 'table public.final_name'],
   'pass/14-select-into.sql': ['table public.source_rows', 'table public.copied_rows'],
   'pass/15-foreign-table.sql': ['foreign table public.remote_rows'],
+  'pass/16-unusual-forms.sql': [
+    'table public.paren_rows',
+    'table public.explained_rows',
+    'table public.explained_into',
+    'materialized view public.explained_totals',
+    'table public.uni_rows',
+    'table public.data',
+    'table public.escaped_rows',
+    'table public.round_trip',
+    'sequence public.round_trip_id_seq',
+    'table public.with_counter',
+    'partitioned table public.events_by_kind',
+    'partition public.events_kind_a',
+  ],
 };
 
 const ALL_ROLES = 'anon, authenticated, service_role';
+const LEFT = 'leaves to the default privileges:';
+/** Every privilege the changelog takes out of the defaults, by kind. */
+const EVERY_TABLE = 'SELECT, INSERT, UPDATE, DELETE';
+const EVERY_SEQUENCE = 'USAGE, SELECT';
 
 /** Each failing fixture: exactly what the guard prints for it. */
 const FAILING: Record<string, string[]> = {
   'fail/01-no-decision.sql': [
-    `fail/01-no-decision.sql:3: table public.widgets has no GRANT or REVOKE for ${ALL_ROLES}`,
-    `fail/01-no-decision.sql:7: table public.gadgets has no GRANT or REVOKE for ${ALL_ROLES}`,
+    `fail/01-no-decision.sql:3: table public.widgets ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
+    `fail/01-no-decision.sql:7: table public.gadgets ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
   ],
   'fail/02-missing-roles.sql': [
-    'fail/02-missing-roles.sql:2: table public.orders_archive has no GRANT or REVOKE for service_role',
-    'fail/02-missing-roles.sql:6: view public.orders_archive_view has no GRANT or REVOKE for anon, service_role',
+    `fail/02-missing-roles.sql:2: table public.orders_archive ${LEFT} ${EVERY_TABLE} for service_role`,
+    `fail/02-missing-roles.sql:6: view public.orders_archive_view ${LEFT} ${EVERY_TABLE} for anon, service_role`,
   ],
   'fail/03-names-must-match.sql': [
-    `fail/03-names-must-match.sql:5: table public.widgets has no GRANT or REVOKE for ${ALL_ROLES}`,
-    `fail/03-names-must-match.sql:8: table public."Order Lines" has no GRANT or REVOKE for ${ALL_ROLES}`,
-    `fail/03-names-must-match.sql:14: table public.gizmos has no GRANT or REVOKE for ${ALL_ROLES}`,
+    `fail/03-names-must-match.sql:5: table public.widgets ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
+    `fail/03-names-must-match.sql:8: table public."Order Lines" ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
+    `fail/03-names-must-match.sql:14: table public.gizmos ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
   ],
   'fail/04-if-not-exists-unlogged-ctas.sql': [
-    `fail/04-if-not-exists-unlogged-ctas.sql:2: table public.cache_rows has no GRANT or REVOKE for ${ALL_ROLES}`,
-    'fail/04-if-not-exists-unlogged-ctas.sql:4: table public.fast_rows has no GRANT or REVOKE for service_role',
-    'fail/04-if-not-exists-unlogged-ctas.sql:7: table public.copied has no GRANT or REVOKE for authenticated, service_role',
+    `fail/04-if-not-exists-unlogged-ctas.sql:2: table public.cache_rows ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
+    `fail/04-if-not-exists-unlogged-ctas.sql:4: table public.fast_rows ${LEFT} ${EVERY_TABLE} for service_role`,
+    `fail/04-if-not-exists-unlogged-ctas.sql:7: table public.copied ${LEFT} ${EVERY_TABLE} for authenticated, service_role`,
   ],
   'fail/05-views.sql': [
-    `fail/05-views.sql:6: view public.plain_view has no GRANT or REVOKE for ${ALL_ROLES}`,
-    `fail/05-views.sql:8: view public.replaced_view has no GRANT or REVOKE for ${ALL_ROLES}`,
-    `fail/05-views.sql:10: materialized view public.totals has no GRANT or REVOKE for ${ALL_ROLES}`,
-    `fail/05-views.sql:12: materialized view public.totals_again has no GRANT or REVOKE for ${ALL_ROLES}`,
-    `fail/05-views.sql:15: view public.counting has no GRANT or REVOKE for ${ALL_ROLES}`,
+    `fail/05-views.sql:6: view public.plain_view ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
+    `fail/05-views.sql:8: view public.replaced_view ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
+    `fail/05-views.sql:10: materialized view public.totals ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
+    `fail/05-views.sql:12: materialized view public.totals_again ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
+    `fail/05-views.sql:15: view public.counting ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
   ],
   'fail/06-sequences.sql': [
-    `fail/06-sequences.sql:3: sequence public.ticket_numbers has no GRANT or REVOKE for ${ALL_ROLES}`,
-    'fail/06-sequences.sql:4: sequence public.other_numbers has no GRANT or REVOKE for anon, service_role',
-    `fail/06-sequences.sql:8: sequence public.tickets_id_seq (made by the serial column tickets.id) has no GRANT or REVOKE for ${ALL_ROLES}`,
-    `fail/06-sequences.sql:9: sequence public.tickets_big_ref_seq (made by the bigserial column tickets.big_ref) has no GRANT or REVOKE for ${ALL_ROLES}`,
-    `fail/06-sequences.sql:10: sequence public.tickets_small_ref_seq (made by the smallserial column tickets.small_ref) has no GRANT or REVOKE for ${ALL_ROLES}`,
-    `fail/06-sequences.sql:11: sequence public.tickets_old_style_seq (made by the serial8 column tickets.old_style) has no GRANT or REVOKE for ${ALL_ROLES}`,
-    `fail/06-sequences.sql:12: sequence public.tickets_quoted_type_seq (made by the serial column tickets.quoted_type) has no GRANT or REVOKE for ${ALL_ROLES}`,
-    `fail/06-sequences.sql:18: sequence public.later_n_seq (made by the serial2 column later.n) has no GRANT or REVOKE for ${ALL_ROLES}`,
-    `fail/06-sequences.sql:21: sequence public.misnamed_id_seq (made by the serial column misnamed.id) has no GRANT or REVOKE for ${ALL_ROLES}`,
+    `fail/06-sequences.sql:3: sequence public.ticket_numbers ${LEFT} ${EVERY_SEQUENCE} for ${ALL_ROLES}`,
+    `fail/06-sequences.sql:4: sequence public.other_numbers ${LEFT} ${EVERY_SEQUENCE} for anon, service_role; SELECT for authenticated`,
+    `fail/06-sequences.sql:8: sequence public.tickets_id_seq (made by the serial column tickets.id) ${LEFT} ${EVERY_SEQUENCE} for ${ALL_ROLES}`,
+    `fail/06-sequences.sql:9: sequence public.tickets_big_ref_seq (made by the bigserial column tickets.big_ref) ${LEFT} ${EVERY_SEQUENCE} for ${ALL_ROLES}`,
+    `fail/06-sequences.sql:10: sequence public.tickets_small_ref_seq (made by the smallserial column tickets.small_ref) ${LEFT} ${EVERY_SEQUENCE} for ${ALL_ROLES}`,
+    `fail/06-sequences.sql:11: sequence public.tickets_old_style_seq (made by the serial8 column tickets.old_style) ${LEFT} ${EVERY_SEQUENCE} for ${ALL_ROLES}`,
+    `fail/06-sequences.sql:12: sequence public.tickets_quoted_type_seq (made by the serial column tickets.quoted_type) ${LEFT} ${EVERY_SEQUENCE} for ${ALL_ROLES}`,
+    `fail/06-sequences.sql:18: sequence public.later_n_seq (made by the serial2 column later.n) ${LEFT} ${EVERY_SEQUENCE} for ${ALL_ROLES}`,
+    `fail/06-sequences.sql:21: sequence public.misnamed_id_seq (made by the serial column misnamed.id) ${LEFT} ${EVERY_SEQUENCE} for ${ALL_ROLES}`,
   ],
   'fail/07-grant-before-create.sql': [
-    `fail/07-grant-before-create.sql:6: table public.rebuilt has no GRANT or REVOKE for ${ALL_ROLES}`,
+    `fail/07-grant-before-create.sql:6: table public.rebuilt ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
   ],
   'fail/08-not-a-decision.sql': [
-    `fail/08-not-a-decision.sql:2: table public.broad has no GRANT or REVOKE for ${ALL_ROLES}`,
-    `fail/08-not-a-decision.sql:7: table public.via_public has no GRANT or REVOKE for ${ALL_ROLES}`,
-    'fail/08-not-a-decision.sql:12: table public.option_only has no GRANT or REVOKE for service_role',
-    `fail/08-not-a-decision.sql:18: table public.defaults_only has no GRANT or REVOKE for ${ALL_ROLES}`,
-    'fail/08-not-a-decision.sql: a GRANT or REVOKE ... ON ALL TABLES|SEQUENCES IN SCHEMA names no object, so it decides nothing here',
+    `fail/08-not-a-decision.sql:2: table public.broad ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
+    `fail/08-not-a-decision.sql:7: table public.via_public ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
+    `fail/08-not-a-decision.sql:12: table public.option_only ${LEFT} ${EVERY_TABLE} for service_role`,
+    `fail/08-not-a-decision.sql:18: table public.defaults_only ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
+    `fail/08-not-a-decision.sql: a GRANT or REVOKE ... ON ALL TABLES|SEQUENCES IN SCHEMA names no object, so it decides nothing here`,
   ],
   'fail/09-do-block.sql': [
-    `fail/09-do-block.sql:6: table public.lazy_table has no GRANT or REVOKE for ${ALL_ROLES}`,
+    `fail/09-do-block.sql:6: table public.lazy_table ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
   ],
   'fail/10-partitioned.sql': [
-    `fail/10-partitioned.sql:8: partition public.readings_2026 has no GRANT or REVOKE for ${ALL_ROLES}`,
-    `fail/10-partitioned.sql:11: partitioned table public.by_list has no GRANT or REVOKE for ${ALL_ROLES}`,
+    `fail/10-partitioned.sql:8: partition public.readings_2026 ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
+    `fail/10-partitioned.sql:11: partitioned table public.by_list ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
   ],
   'fail/11-decisions-in-prose.sql': [
-    `fail/11-decisions-in-prose.sql:2: table public.commented has no GRANT or REVOKE for ${ALL_ROLES}`,
+    `fail/11-decisions-in-prose.sql:2: table public.commented ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
   ],
   'fail/12-select-into.sql': [
-    `fail/12-select-into.sql:5: table public.copied_rows has no GRANT or REVOKE for ${ALL_ROLES}`,
-    'fail/12-select-into.sql:7: table public.moved_rows has no GRANT or REVOKE for anon, authenticated',
+    `fail/12-select-into.sql:5: table public.copied_rows ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
+    `fail/12-select-into.sql:7: table public.moved_rows ${LEFT} ${EVERY_TABLE} for anon, authenticated`,
   ],
   'fail/13-foreign-table.sql': [
-    'fail/13-foreign-table.sql:4: foreign table public.remote_rows has no GRANT or REVOKE for anon, service_role',
+    `fail/13-foreign-table.sql:4: foreign table public.remote_rows ${LEFT} ${EVERY_TABLE} for anon, service_role`,
+  ],
+  'fail/14-partial-decisions.sql': [
+    `fail/14-partial-decisions.sql:5: table public.log_rows ${LEFT} UPDATE, DELETE for service_role`,
+    `fail/14-partial-decisions.sql:9: table public.stats_rows ${LEFT} SELECT for anon`,
+    `fail/14-partial-decisions.sql:14: view public.overview ${LEFT} INSERT, UPDATE, DELETE for service_role`,
+    `fail/14-partial-decisions.sql:19: table public.read_only ${LEFT} INSERT, UPDATE, DELETE for ${ALL_ROLES}`,
+    `fail/14-partial-decisions.sql:23: table public.by_column ${LEFT} SELECT, INSERT, UPDATE for ${ALL_ROLES}`,
+    `fail/14-partial-decisions.sql:28: sequence public.counter ${LEFT} SELECT for ${ALL_ROLES}`,
+    `fail/14-partial-decisions.sql:30: sequence public.reader ${LEFT} USAGE for anon, authenticated`,
+  ],
+  'fail/15-unusual-forms.sql': [
+    `fail/15-unusual-forms.sql:3: table public.paren_rows ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
+    `fail/15-unusual-forms.sql:4: table public.explained_rows ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
+    `fail/15-unusual-forms.sql:5: table public.explained_into ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
+    `fail/15-unusual-forms.sql:6: table public.uni_rows ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
+    `fail/15-unusual-forms.sql:7: table public.data ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
+    `fail/15-unusual-forms.sql:8: table public.escaped_rows ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
+    `fail/15-unusual-forms.sql:11: table public.round_trip ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
   ],
 };
 
@@ -322,6 +405,20 @@ describe("the names Postgres gives a serial column's sequence", () => {
   });
 });
 
+describe('the privileges a decision names', () => {
+  it.each([
+    ['table', EVERY_TABLE],
+    ['partitioned table', EVERY_TABLE],
+    ['partition', EVERY_TABLE],
+    ['view', EVERY_TABLE],
+    ['materialized view', EVERY_TABLE],
+    ['foreign table', EVERY_TABLE],
+    ['sequence', EVERY_SEQUENCE],
+  ] as const)('%s: %s, what changelog 45329 takes out of the defaults', (kind, privileges) => {
+    expect(requiredPrivileges(kind).join(', ')).toBe(privileges);
+  });
+});
+
 describe('history (0001-0401), which the guard exempts', () => {
   const history = migrationFiles.filter((f) => MIGRATION_FILE.test(f) && !isCheckedMigration(f));
   // History is never edited, so these never move. A scanner change that moves
@@ -351,27 +448,73 @@ describe('history (0001-0401), which the guard exempts', () => {
     expect(objects).toHaveLength(144);
   });
 
-  it('would fail the rule 127 times in 145 creations: the rule has teeth on real SQL', () => {
+  it('would fail the rule 132 times in 145 creations: the rule has teeth on real SQL', () => {
     const scans = history.map((file) => scanMigration(readMigration(file), file));
     expect(scans.flatMap((s) => s.objects)).toHaveLength(145);
-    expect(scans.flatMap((s) => s.findings)).toHaveLength(127);
-    // 0017 left its two tables to the default and granted its three views to
-    // authenticated alone.
+    expect(scans.flatMap((s) => s.findings)).toHaveLength(132);
+    // 0017 left its two tables to the default and granted SELECT on its three
+    // views to authenticated alone.
     const of0017 = scans.find((s) => s.file === '0017_reconciliation_views.sql')!;
     expect(of0017.findings.map(formatFinding)).toEqual([
-      `0017_reconciliation_views.sql:18: table public.tolerance_profiles has no GRANT or REVOKE for ${ALL_ROLES}`,
-      `0017_reconciliation_views.sql:52: table public.approvals has no GRANT or REVOKE for ${ALL_ROLES}`,
-      '0017_reconciliation_views.sql:110: view public.vw_po_reconciliation has no GRANT or REVOKE for anon, service_role',
-      '0017_reconciliation_views.sql:138: view public.vw_warehouse_inbound has no GRANT or REVOKE for anon, service_role',
-      '0017_reconciliation_views.sql:159: view public.vw_vendor_performance has no GRANT or REVOKE for anon, service_role',
+      `0017_reconciliation_views.sql:18: table public.tolerance_profiles ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
+      `0017_reconciliation_views.sql:52: table public.approvals ${LEFT} ${EVERY_TABLE} for ${ALL_ROLES}`,
+      `0017_reconciliation_views.sql:110: view public.vw_po_reconciliation ${LEFT} ${EVERY_TABLE} for anon, service_role; INSERT, UPDATE, DELETE for authenticated`,
+      `0017_reconciliation_views.sql:138: view public.vw_warehouse_inbound ${LEFT} ${EVERY_TABLE} for anon, service_role; INSERT, UPDATE, DELETE for authenticated`,
+      `0017_reconciliation_views.sql:159: view public.vw_vendor_performance ${LEFT} ${EVERY_TABLE} for anon, service_role; INSERT, UPDATE, DELETE for authenticated`,
     ]);
-    // 0111 decided order_email_log for all three: revoked from anon and
-    // authenticated, granted to service_role.
-    const of0111 = scans.find((s) => s.file === '0111_orders_pick_slip_rpcs.sql')!;
-    expect(of0111.objects.find((o) => o.name === 'order_email_log')?.decided).toEqual([
-      'anon',
-      'authenticated',
-      'service_role',
+  });
+
+  // A scratch replay of 0001-0401 with Supabase's new defaults run first
+  // (2026-10-24) left these four with privileges production does not have
+  // and the other thirteen below exactly as production has them.
+  it('flags the partial decisions in 0111, 0230, 0394 and 0396, which give a role a different privilege under the new defaults', () => {
+    const files = [
+      '0111_orders_pick_slip_rpcs.sql',
+      '0230_dashboard_snapshot_rollups.sql',
+      '0394_returns_lifecycle_original_rack.sql',
+      '0396_returns_exchange_staff.sql',
+    ];
+    const lines = files.flatMap((file) =>
+      scanMigration(readMigration(file), file)
+        .findings.filter((f) =>
+          [
+            'order_email_log',
+            'org_daily_stats',
+            'org_daily_movement_stats',
+            'return_overview',
+          ].some((name) => f.object === `public.${name}`),
+        )
+        .map(formatFinding),
+    );
+    expect(lines).toEqual([
+      `0111_orders_pick_slip_rpcs.sql:239: table public.order_email_log ${LEFT} UPDATE, DELETE for service_role`,
+      `0230_dashboard_snapshot_rollups.sql:111: table public.org_daily_stats ${LEFT} SELECT for anon`,
+      `0230_dashboard_snapshot_rollups.sql:129: table public.org_daily_movement_stats ${LEFT} SELECT for anon`,
+      `0394_returns_lifecycle_original_rack.sql:2537: view public.return_overview ${LEFT} INSERT, UPDATE, DELETE for service_role`,
+      `0396_returns_exchange_staff.sql:3027: view public.return_overview ${LEFT} INSERT, UPDATE, DELETE for service_role`,
+    ]);
+  });
+
+  it('counts as decided only the 13 creations that came out the same as production under the new defaults', () => {
+    const decided = history.flatMap((file) =>
+      scanMigration(readMigration(file), file)
+        .objects.filter((o) => o.missing.length === 0)
+        .map((o) => `${file.slice(0, 4)} ${o.name}`),
+    );
+    expect(decided).toEqual([
+      '0370 exception_occurrences',
+      '0370 exception_occurrence_events',
+      '0370 exception_occurrence_counters',
+      '0370 exception_sync_state',
+      '0373 stock_movement_holdings',
+      '0375 exception_evidence',
+      '0389 order_request_secrets',
+      '0391 order_submissions',
+      '0394 return_decisions',
+      '0396 return_exchange_lines',
+      '0399 item_grouping_requests',
+      '0400 item_display_groups',
+      '0400 item_display_group_members',
     ]);
   });
 });
