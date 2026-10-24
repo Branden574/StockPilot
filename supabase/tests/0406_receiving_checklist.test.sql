@@ -1,9 +1,10 @@
 -- supabase/tests/0406_receiving_checklist.test.sql
--- pgTAP proof for migration 0406 (receiving checklist, F4-1; written as 0406
--- and renumbered when it was rebased onto main; nothing below depends on it): a versioned checklist a
--- manager publishes, and runs a manager records on receipts, written only
--- through four gated SECURITY DEFINER functions, visible exactly when the
--- purchase order is, and writing no stock.
+-- pgTAP proof for migration 0406 (receiving checklist, F4-1; written as 0398
+-- and renumbered 0406 when it was rebased onto main, where 0398 is the
+-- returns contract; nothing below depends on the number): a versioned
+-- checklist a manager publishes, and runs a manager records on receipts,
+-- written only through four gated SECURITY DEFINER functions, visible exactly
+-- when the purchase order is, and writing no stock.
 --
 -- Personas (org A unless named):
 --   own       owner                       mgr, mgr2  managers, no override

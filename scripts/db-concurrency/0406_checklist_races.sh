@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
 # Two-session proof for migration 0406 (receiving checklist, F4-1; written as
-# 0406 and renumbered when it was rebased onto main; nothing here depends on
-# the number). pgTAP runs in ONE
+# 0398 and renumbered 0406 when it was rebased onto main, where 0398 is the
+# returns contract; nothing here depends on the number). pgTAP runs in ONE
 # session, so it cannot show what happens when two managers act on the same
 # receipt, run or checklist at the same moment.
 #
