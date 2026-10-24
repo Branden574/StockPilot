@@ -725,13 +725,17 @@ describe('every service stock write invalidates the Items/Books list cache', () 
  *         updateTag) where no such scope exists;
  *       - a stock-writing service call that is not awaited (`void svc.x()`,
  *         a bare statement): it can finish after the request did;
- *       - a stock-writing service call inside after() or defer(): Next's
- *         after() flush drops a tag the request already recorded (same tag and
- *         profile), which a request that wrote stock before has;
+ *       - a stock-writing service call inside after() or defer(): it runs
+ *         after the answer was sent, so its failure can only be logged. On
+ *         next 16.3 its tag was also lost when the request had recorded the
+ *         same tag before (the after() flush matched tag and profile); 16.4
+ *         sends it again (vercel/next.js#99499, lib/inventory-list-cache.test.ts);
  *       - a stock-writing service call during render (app pages/layouts,
  *         server/loaders, components) or inside unstable_cache: revalidateTag
- *         throws there (revalidate.js: "during render", E7 / E306) and the
- *         never-throwing wrapper can only log it.
+ *         throws there (revalidate.js; since next 16.4 the errors come from
+ *         use-cache/use-cache-messages.js: "can't be called during render",
+ *         "can't be called inside a cached function") and the never-throwing
+ *         wrapper can only log it.
  *     Route handlers, crons and server actions that AWAIT the write before
  *     returning are the effective shape and need nothing more.
  *
@@ -1281,7 +1285,7 @@ describe('stock writes outside services, and invalidations Next would drop', () 
         .filter((c) => insideCallbackOf(c.call, new Set(['after', 'defer'])))
         .map((c) => `${c.where} ${c.label}`),
     );
-    expect(tails, 'after() drops a tag the request already recorded').toEqual([]);
+    expect(tails, 'a stock write in after() or defer() runs after the answer was sent').toEqual([]);
   });
 
   it('no stock-writing service call runs during a render or inside unstable_cache', () => {

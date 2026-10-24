@@ -10,10 +10,11 @@
  *   - a Route Handler: ONCE, when the handler returns its Response
  *     (route-modules/app-route/module.js, resolvePendingRevalidations right
  *     after `res = await ...run(requestStore, handler, ...)`);
- *   - an after() callback: when the callbacks run, and only for tags that
- *     are NEW relative to the store as it stood when they started
- *     (after/after-context.js runCallbacks -> revalidation-utils.js
- *     withExecuteRevalidates / diffRevalidationState).
+ *   - an after() callback: when the callbacks run, for tags that are NEW
+ *     relative to the store as it stood when they started and, since next
+ *     16.4, tags recorded AGAIN since then (after/after-context.js
+ *     runCallbacks -> revalidation-utils.js withExecuteRevalidates /
+ *     diffRevalidationState, which compares each entry's revalidatedAt).
  * A tag recorded outside those windows (for example from inside a streamed
  * body, after the handler already returned) sits in the array and is never
  * sent anywhere. Nothing throws and nothing is logged. The AI chat route
