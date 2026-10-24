@@ -739,7 +739,7 @@ PGTAP_TESTS=(
   # family; the INVOKER preview never names item_stock_levels (INV-33). The
   # two-session proofs are scripts/db-concurrency/0400_item_display_groups_races.sh.
   supabase/tests/0400_item_display_groups.test.sql
-  # Receiving checklist (0406, F4-1): the two tables are read-only for
+  # Receiving checklist (0406, F4-1, INV-C8): the two tables are read-only for
   # authenticated (TRUNCATE, REFERENCES and TRIGGER revoked too) and closed to
   # anon; every write goes through four SECURITY DEFINER functions that take
   # the organization from the row (a receipt or run of another organization

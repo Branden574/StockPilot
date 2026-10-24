@@ -1,10 +1,10 @@
--- 0398_receiving_checklist.sql
+-- 0406_receiving_checklist.sql
 --
 -- Receiving checklist, slice F4-1 (owner-approved lean scope, blanket go
 -- 2026-09-27; plan stockpilot-work/six/f4-plan.md sections 3 and 4 F4-1, with
--- the 2026-09-30 refresh's corrections). Written as 0398; the number is fixed
--- at push time. Nothing in a function body names the number, so renumbering
--- moves no md5 pin.
+-- the 2026-09-30 refresh's corrections). Written as 0398 and renumbered 0406
+-- when it was rebased onto main, where 0398 is the returns contract. Nothing
+-- in a function body names the number, so the renumbering moved no md5 pin.
 --
 -- A manager publishes a short checklist for deliveries. After a receipt posts,
 -- or later from its receipt card, a manager records a run of it: what a person
@@ -102,7 +102,7 @@
 -- applied. SHARE ROW EXCLUSIVE lets plain reads through but makes writes to
 -- those six tables wait for the commit (milliseconds); the policy_grants
 -- tables (auth sessions among them) wait too. Push off-peak.
--- scripts/db-concurrency/0398_migration_lock_footprint.sh.
+-- scripts/db-concurrency/0406_migration_lock_footprint.sh.
 -- At run time: checklist_publish and checklist_retire take a transaction
 -- advisory lock per organization and binding, then the live version FOR NO
 -- KEY UPDATE (a start inserting a run that references it only takes KEY
@@ -134,7 +134,8 @@
 -- tables, two policies, grants and comments. No existing row is inserted,
 -- updated or deleted; no existing table, column, constraint, policy, trigger
 -- or function is altered or dropped. Proven locally by
--- stockpilot-work/six/data-safety-0398.sh.
+-- stockpilot-work/six/data-safety-0398.sh (named for the number this was
+-- written under; it finds the migration by name).
 
 -- PLAIN `set`, not `set local`: the CLI batch is atomic but is not a
 -- transaction block.

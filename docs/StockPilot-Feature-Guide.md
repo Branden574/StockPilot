@@ -243,7 +243,7 @@ This is the heart of warehouse accuracy. (See [the placement model](#locations--
 ### Receiving
 **Purpose:** record stock arriving against a PO (`receiving` module). Received quantities go to **Staging**, then you **Place** them (see [Put-away](#staging--put-away-placement)).
 
-**Who posts:** a manager (or above) who can adjust stock. On the web, **Receive items** shows only for them; in the mobile app, **Post receipt**, **Scan** and the quantity fields work only for them. Everyone else sees "A manager posts receipts."
+**Who posts:** a manager (or above) who can adjust stock. On the web, **Receive items** shows only for them; in the mobile app, **Post receipt**, **Scan** and the quantity fields work only for them. Someone without the **Adjust on-hand** permission is told that it is needed; a staff member who has it sees "A manager posts receipts."
 
 ### Receiving checklist
 **Purpose:** a short, optional check recorded for a delivery after its receipt posts: did the packing slip match, did the boxes arrive undamaged, how many boxes came. It records what a person checked; it never changes stock, the receipt or the purchase order, and a receipt posts without it (posting never fails because of it).

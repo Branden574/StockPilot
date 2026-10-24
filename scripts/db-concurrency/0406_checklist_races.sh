@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
-# Two-session proof for migration 0398 (receiving checklist, F4-1; the number
-# is fixed at push time and nothing here depends on it). pgTAP runs in ONE
+# Two-session proof for migration 0406 (receiving checklist, F4-1; written as
+# 0406 and renumbered when it was rebased onto main; nothing here depends on
+# the number). pgTAP runs in ONE
 # session, so it cannot show what happens when two managers act on the same
 # receipt, run or checklist at the same moment.
 #
@@ -44,14 +45,14 @@
 #   No session ever sees 40001 or 40P01.
 #
 # Runs against the LOCAL stack only (docker container supabase_db_stockpilot)
-# with 0398 applied. Fixtures are committed under the 03981111-... namespace
+# with 0406 applied. Fixtures are committed under the 04061111-... namespace
 # (receipt rows inserted directly by postgres for sections 1 to 6: the
 # receipt guard holds API roles only, and no stock moves; sections 7 to 9 post
 # and reverse for real, as a manager, on a second purchase order) and removed
 # at the start, at the end and by the EXIT trap (the organization's delete
 # takes the stock rows the posts wrote). Exit status 0 = every check passed.
 #
-# Usage: bash scripts/db-concurrency/0398_checklist_races.sh
+# Usage: bash scripts/db-concurrency/0406_checklist_races.sh
 
 set -uo pipefail
 
@@ -67,20 +68,20 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 
-ORG='03981111-0000-0000-0000-00000000000a'
-MGR='03981111-0000-0000-0000-0000000000a1'
-MGR2='03981111-0000-0000-0000-0000000000a2'
-WH='03981111-0000-0000-0000-0000000000b1'
-IT='03981111-0000-0000-0000-0000000000c1'
-PO='03981111-0000-0000-0000-0000000000d1'
-LN='03981111-0000-0000-0000-0000000000d2'
-PO2='03981111-0000-0000-0000-0000000000d3'
-LN2='03981111-0000-0000-0000-0000000000d4'
-R1='03981111-0000-0000-0000-0000000000e1'
-R2='03981111-0000-0000-0000-0000000000e2'
-R3='03981111-0000-0000-0000-0000000000e3'
-R4='03981111-0000-0000-0000-0000000000e4'
-R5='03981111-0000-0000-0000-0000000000e5'
+ORG='04061111-0000-0000-0000-00000000000a'
+MGR='04061111-0000-0000-0000-0000000000a1'
+MGR2='04061111-0000-0000-0000-0000000000a2'
+WH='04061111-0000-0000-0000-0000000000b1'
+IT='04061111-0000-0000-0000-0000000000c1'
+PO='04061111-0000-0000-0000-0000000000d1'
+LN='04061111-0000-0000-0000-0000000000d2'
+PO2='04061111-0000-0000-0000-0000000000d3'
+LN2='04061111-0000-0000-0000-0000000000d4'
+R1='04061111-0000-0000-0000-0000000000e1'
+R2='04061111-0000-0000-0000-0000000000e2'
+R3='04061111-0000-0000-0000-0000000000e3'
+R4='04061111-0000-0000-0000-0000000000e4'
+R5='04061111-0000-0000-0000-0000000000e5'
 STEPS='[{"kind": "check", "label": "Packing slip matches this purchase order", "required": true}, {"kind": "count", "label": "Number of boxes received"}]'
 
 FAILS=0
@@ -122,33 +123,33 @@ cleanup || exit 1
 
 if ! "${PSQL[@]}" >/dev/null <<SQL
 insert into auth.users (id, email, raw_user_meta_data) values
-  ('$MGR',  '0398-2s-mgr@test.local',  '{}'::jsonb),
-  ('$MGR2', '0398-2s-mgr2@test.local', '{}'::jsonb);
-insert into public.organizations (id, name, slug) values ('$ORG', '0398 Two Session Org', '0398-two-session');
+  ('$MGR',  '0406-2s-mgr@test.local',  '{}'::jsonb),
+  ('$MGR2', '0406-2s-mgr2@test.local', '{}'::jsonb);
+insert into public.organizations (id, name, slug) values ('$ORG', '0406 Two Session Org', '0406-two-session');
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values
   ('$ORG', '$MGR',  'manager', now()),
   ('$ORG', '$MGR2', 'manager', now());
 insert into public.organization_modules (organization_id, module_id, enabled, tier, settings) values
   ('$ORG', 'receiving', true, 'optional', '{}'::jsonb), ('$ORG', 'purchase_orders', true, 'optional', '{}'::jsonb)
 on conflict (organization_id, module_id) do update set enabled = true;
-insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0398 2S Main', 'WH-0398-2S', 'active');
+insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0406 2S Main', 'WH-0406-2S', 'active');
 insert into public.inventory_items (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type)
-  values ('$IT', '$ORG', '$WH', 'X0398-2S', '2S item', 0, 'active', 'none');
-insert into public.purchase_orders (id, organization_id, po_number, status) values ('$PO', '$ORG', 'X0398-2S-PO', 'partially_received');
+  values ('$IT', '$ORG', '$WH', 'X0406-2S', '2S item', 0, 'active', 'none');
+insert into public.purchase_orders (id, organization_id, po_number, status) values ('$PO', '$ORG', 'X0406-2S-PO', 'partially_received');
 insert into public.purchase_order_items (id, organization_id, purchase_order_id, item_id, quantity_ordered, quantity_received, unit_cost)
   values ('$LN', '$ORG', '$PO', '$IT', 10, 0, 1);
 insert into public.receipts (id, organization_id, purchase_order_id, warehouse_id, receipt_number, status, received_by, immutable_hash) values
-  ('$R1', '$ORG', '$PO', '$WH', 'R-0398-2S-1', 'posted', '$MGR', md5('r1')),
-  ('$R2', '$ORG', '$PO', '$WH', 'R-0398-2S-2', 'posted', '$MGR', md5('r2')),
-  ('$R3', '$ORG', '$PO', '$WH', 'R-0398-2S-3', 'posted', '$MGR', md5('r3'));
+  ('$R1', '$ORG', '$PO', '$WH', 'R-0406-2S-1', 'posted', '$MGR', md5('r1')),
+  ('$R2', '$ORG', '$PO', '$WH', 'R-0406-2S-2', 'posted', '$MGR', md5('r2')),
+  ('$R3', '$ORG', '$PO', '$WH', 'R-0406-2S-3', 'posted', '$MGR', md5('r3'));
 -- Sections 7 to 9: a second, ordered purchase order that real posts land on,
 -- with two receipts of its own to start checklists on.
-insert into public.purchase_orders (id, organization_id, po_number, status) values ('$PO2', '$ORG', 'X0398-2S-PO2', 'ordered');
+insert into public.purchase_orders (id, organization_id, po_number, status) values ('$PO2', '$ORG', 'X0406-2S-PO2', 'ordered');
 insert into public.purchase_order_items (id, organization_id, purchase_order_id, item_id, quantity_ordered, quantity_received, unit_cost)
   values ('$LN2', '$ORG', '$PO2', '$IT', 10, 0, 1);
 insert into public.receipts (id, organization_id, purchase_order_id, warehouse_id, receipt_number, status, received_by, immutable_hash) values
-  ('$R4', '$ORG', '$PO2', '$WH', 'R-0398-2S-4', 'posted', '$MGR', md5('r4')),
-  ('$R5', '$ORG', '$PO2', '$WH', 'R-0398-2S-5', 'posted', '$MGR', md5('r5'));
+  ('$R4', '$ORG', '$PO2', '$WH', 'R-0406-2S-4', 'posted', '$MGR', md5('r4')),
+  ('$R5', '$ORG', '$PO2', '$WH', 'R-0406-2S-5', 'posted', '$MGR', md5('r5'));
 SQL
 then echo "fixture setup failed"; cleanup; exit 1; fi
 
@@ -221,7 +222,7 @@ no_retryable() { # no_retryable <label> <files...>
   check "$label: no 40001 or 40P01 in either session" "$(cat "$@" | grep -cE '40001|40P01')" "0"
 }
 
-V1="$(as_mgr "$MGR" "$(publish null 03981111-0000-0000-0000-000000000101 'Race v1')" | grep -E '^[0-9a-f-]{36}$')"
+V1="$(as_mgr "$MGR" "$(publish null 04061111-0000-0000-0000-000000000101 'Race v1')" | grep -E '^[0-9a-f-]{36}$')"
 if [ -z "$V1" ]; then echo "could not publish version 1"; cleanup; exit 1; fi
 
 # ═══ 1. Two starts for one receipt ═════════════════════════════════════════
@@ -262,8 +263,8 @@ fi
 
 # ═══ 3. Two saves on one revision ═══════════════════════════════════════════
 echo "== 3. two managers save the same run on the same revision"
-race saves "$(save "$A_RUN" 0 03981111-0000-0000-0000-000000000201 '{"s1": {"value": "pass"}}')" \
-           "$(save "$A_RUN" 0 03981111-0000-0000-0000-000000000202 '{"s1": {"value": "fail", "note": "late"}}')"
+race saves "$(save "$A_RUN" 0 04061111-0000-0000-0000-000000000201 '{"s1": {"value": "pass"}}')" \
+           "$(save "$A_RUN" 0 04061111-0000-0000-0000-000000000202 '{"s1": {"value": "fail", "note": "late"}}')"
 WAITED="$(cat "$TMP/saves.waited")"
 check "3a: A saved revision 1" "$(sed -n 's/^A=//p' "$TMP/saves.A.out")" '1/{"s1": {"value": "pass"}}'
 if [ "$WAITED" -ge 1500 ]; then ok "3b: B waited for the run's row lock ($WAITED ms)"; else bad "3b: B did not wait ($WAITED ms)"; fi
@@ -274,8 +275,8 @@ no_retryable "3e" "$TMP/saves.A.out" "$TMP/saves.B.out"
 
 # ═══ 4. Two publishes on one expected id ═══════════════════════════════════
 echo "== 4. two managers publish over the same live version"
-race publishes "$(publish "$V1" 03981111-0000-0000-0000-000000000102 'Race v2 by A')" \
-               "$(publish "$V1" 03981111-0000-0000-0000-000000000103 'Race v2 by B')"
+race publishes "$(publish "$V1" 04061111-0000-0000-0000-000000000102 'Race v2 by A')" \
+               "$(publish "$V1" 04061111-0000-0000-0000-000000000103 'Race v2 by B')"
 WAITED="$(cat "$TMP/publishes.waited")"
 V2="$(sed -n 's/^A=//p' "$TMP/publishes.A.out")"
 if [ "$WAITED" -ge 1500 ]; then ok "4a: B waited for the checklist lock ($WAITED ms)"; else bad "4a: B did not wait ($WAITED ms)"; fi
@@ -288,8 +289,8 @@ no_retryable "4d" "$TMP/publishes.A.out" "$TMP/publishes.B.out"
 # ═══ 5. The same client id twice at once ═══════════════════════════════════
 echo "== 5. a double tap: the same client publish id twice"
 FLAG="(v.version).id || '/' || v.created"
-race doubletap "$(publish "$V2" 03981111-0000-0000-0000-000000000104 'Race v3' "$FLAG")" \
-               "$(publish "$V2" 03981111-0000-0000-0000-000000000104 'Race v3' "$FLAG")"
+race doubletap "$(publish "$V2" 04061111-0000-0000-0000-000000000104 'Race v3' "$FLAG")" \
+               "$(publish "$V2" 04061111-0000-0000-0000-000000000104 'Race v3' "$FLAG")"
 A_V3="$(sed -n 's/^A=//p' "$TMP/doubletap.A.out" | sed 's#/true$##')"
 check "5a: A made version 3 and says so (created true)" "$(sed -n 's/^A=//p' "$TMP/doubletap.A.out")" "$A_V3/true"
 check "5b: B answered A's version, a replay that made nothing (created false)" "$(sed -n 's/^B=//p' "$TMP/doubletap.B.out")" "$A_V3/false"
@@ -299,7 +300,7 @@ no_retryable "5d" "$TMP/doubletap.A.out" "$TMP/doubletap.B.out"
 
 # ═══ 6. A start and a publish at once ═════════════════════════════════════
 echo "== 6. a start racing a publish: neither waits"
-race startpub "$(start "$R3")" "$(publish "$A_V3" 03981111-0000-0000-0000-000000000105 'Race v4')"
+race startpub "$(start "$R3")" "$(publish "$A_V3" 04061111-0000-0000-0000-000000000105 'Race v4')"
 WAITED="$(cat "$TMP/startpub.waited")"
 if [ "$WAITED" -lt 1000 ]; then ok "6a: the publish did not wait for the start ($WAITED ms)"; else bad "6a: the publish waited $WAITED ms"; fi
 check "6b: the start made its run on version 3, the live one when it read" \
@@ -309,7 +310,7 @@ no_retryable "6d" "$TMP/startpub.A.out" "$TMP/startpub.B.out"
 
 # ═══ 7. A start held open against a post on the same purchase order ═══════
 echo "== 7. a checklist start holds its run open; a post on the same purchase order"
-race startpost "$(start "$R4")" "$(post 0398-2s-post-7)"
+race startpost "$(start "$R4")" "$(post 0406-2s-post-7)"
 WAITED="$(cat "$TMP/startpost.waited")"
 RP7="$(sed -n 's/^B=//p' "$TMP/startpost.B.out")"
 if [ "$WAITED" -ge 1500 ]; then ok "7a: the post waited for the start to commit ($WAITED ms)"; else bad "7a: the post did not wait ($WAITED ms)"; fi
@@ -333,7 +334,7 @@ no_retryable "8e" "$TMP/startrev.A.out" "$TMP/startrev.B.out"
 
 # ═══ 9. A post held open against a start ═══════════════════════════════════
 echo "== 9. a post holds the purchase order; a checklist start on another of its receipts"
-race poststart "$(post 0398-2s-post-9)" "$(start "$R5")"
+race poststart "$(post 0406-2s-post-9)" "$(start "$R5")"
 WAITED="$(cat "$TMP/poststart.waited")"
 RP9="$(sed -n 's/^A=//p' "$TMP/poststart.A.out")"
 if [ "$WAITED" -ge 1500 ]; then ok "9a: the start waited for the post to commit ($WAITED ms)"; else bad "9a: the start did not wait ($WAITED ms)"; fi
