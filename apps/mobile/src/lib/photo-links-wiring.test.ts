@@ -46,7 +46,7 @@ describe('the order screen opens proof of delivery through a fresh link', () => 
   it('asks linkToOpen, signing the one file in the attachments bucket', () => {
     const open = between(ORDER, 'async function openAttachment(a: Attachment) {', 'return ( <View');
     expect(open).toContain(
-      'const link = await linkToOpen( { url: a.url, signedAt: a.signedAt }, signerFor(supabase.storage, BUCKET, a.storagePath), );',
+      'const link = await linkToOpen( { url: a.url, signedAt: a.signedAt }, signerFor(supabase, BUCKET, a.storagePath), );',
     );
     // A new link is kept for the next tap and the tile.
     expect(open).toMatch(/if \(link\?\.resigned\) \{ setAttachments\(/);
@@ -80,7 +80,7 @@ describe('the purchase order card opens files through a fresh link', () => {
       'async function uploadToPo(',
     );
     expect(open).toContain(
-      'const link = await linkToOpen( { url: row.url, signedAt: row.signedAt }, signerFor(supabase.storage, BUCKET, row.storage_path), );',
+      'const link = await linkToOpen( { url: row.url, signedAt: row.signedAt }, signerFor(supabase, BUCKET, row.storage_path), );',
     );
     expect(open).toMatch(/if \(link\.resigned\) \{ setItems\(/);
     expect(open).toContain('void Linking.openURL(link.url);');

@@ -110,12 +110,12 @@ describe('signerFor', () => {
   function storage(answer: { data: { signedUrl: string } | null; error: unknown }) {
     const createSignedUrl = vi.fn(async (_path: string, _expiresIn: number) => answer);
     const from = vi.fn((_bucket: string) => ({ createSignedUrl }));
-    return { storage: { from } as StorageSigner, from, createSignedUrl };
+    return { client: { storage: { from } } as StorageSigner, from, createSignedUrl };
   }
 
   it('signs the one object, in its own bucket, for the same hour', async () => {
     const s = storage({ data: { signedUrl: 'https://files.example/signed' }, error: null });
-    const url = await signerFor(s.storage, 'order-attachments', 'org/order/photo.jpg')();
+    const url = await signerFor(s.client, 'order-attachments', 'org/order/photo.jpg')();
     expect(url).toBe('https://files.example/signed');
     expect(s.from).toHaveBeenCalledWith('order-attachments');
     expect(s.createSignedUrl).toHaveBeenCalledWith('org/order/photo.jpg', 3600);
@@ -123,10 +123,10 @@ describe('signerFor', () => {
 
   it('a refusal or an empty answer is null', async () => {
     expect(
-      await signerFor(storage({ data: null, error: { message: 'not found' } }).storage, 'b', 'p')(),
+      await signerFor(storage({ data: null, error: { message: 'not found' } }).client, 'b', 'p')(),
     ).toBeNull();
     expect(
-      await signerFor(storage({ data: { signedUrl: '' }, error: null }).storage, 'b', 'p')(),
+      await signerFor(storage({ data: { signedUrl: '' }, error: null }).client, 'b', 'p')(),
     ).toBeNull();
   });
 });

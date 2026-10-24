@@ -66,24 +66,33 @@ export async function linkToOpen(
   return url ? { url, signedAt: startedAt, resigned: true } : null;
 }
 
-/** The part of the Supabase storage client this needs. */
+/** The part of the Supabase client this needs: its storage API. */
 export interface StorageSigner {
-  from(bucket: string): {
-    createSignedUrl(
-      path: string,
-      expiresIn: number,
-    ): Promise<{ data: { signedUrl: string } | null; error: unknown }>;
+  storage: {
+    from(bucket: string): {
+      createSignedUrl(
+        path: string,
+        expiresIn: number,
+      ): Promise<{ data: { signedUrl: string } | null; error: unknown }>;
+    };
   };
 }
 
-/** Signs one object of `bucket` for STORED_FILE_LINK_SECONDS; null on any failure. */
+/**
+ * Signs one object of `bucket` for STORED_FILE_LINK_SECONDS; null on any
+ * failure. Takes the client, not its storage API, so the call reads
+ * `client.storage.from(bucket)`: the stock-write guard
+ * (apps/web inventory-list-invalidation.guard.test.ts) reads a `.from(x)`
+ * with a variable `x` as a write to an unknown table unless it is called on
+ * `.storage`.
+ */
 export function signerFor(
-  storage: StorageSigner,
+  client: StorageSigner,
   bucket: string,
   path: string,
 ): () => Promise<string | null> {
   return async () => {
-    const { data, error } = await storage
+    const { data, error } = await client.storage
       .from(bucket)
       .createSignedUrl(path, STORED_FILE_LINK_SECONDS);
     return error || !data?.signedUrl ? null : data.signedUrl;

@@ -187,7 +187,7 @@ export function PoAttachments({ poId }: { poId: string }) {
   async function openFile(row: AttachmentRow) {
     const link = await linkToOpen(
       { url: row.url, signedAt: row.signedAt },
-      signerFor(supabase.storage, BUCKET, row.storage_path),
+      signerFor(supabase, BUCKET, row.storage_path),
     );
     if (!link) {
       // Signing failed (offline, or a storage-RLS denial): say so instead of

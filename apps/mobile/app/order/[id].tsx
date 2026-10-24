@@ -2523,7 +2523,7 @@ export default function OrderDetail() {
     // (lib/stored-file-link.ts) and kept for the next tap and the tile.
     const link = await linkToOpen(
       { url: a.url, signedAt: a.signedAt },
-      signerFor(supabase.storage, BUCKET, a.storagePath),
+      signerFor(supabase, BUCKET, a.storagePath),
     );
     if (link?.resigned) {
       setAttachments((prev) =>
