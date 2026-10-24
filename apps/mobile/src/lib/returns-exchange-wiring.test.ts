@@ -505,8 +505,14 @@ describe('the order screen', () => {
   });
 
   it('a replacement has no Add items, line edits or Cancel order (they live in its RMA)', () => {
-    expect(screen).toContain('const canAddItems = canAddOrderItems(lineGate) && !isReplacementOrder;');
-    expect(screen).toContain('const canEditItems = canEditOrderLines(lineGate) && !isReplacementOrder;');
+    // Re-pinned by security slice E (0405): an approver's line edits also ask
+    // the order's warehouse (linesInScope); the replacement rule is unchanged.
+    expect(screen).toContain(
+      'const canAddItems = canAddOrderItems(lineGate) && !isReplacementOrder && linesInScope;',
+    );
+    expect(screen).toContain(
+      'const canEditItems = canEditOrderLines(lineGate) && !isReplacementOrder && linesInScope;',
+    );
     // Main's L93 moved Cancel into one offer for every open status (core's
     // orderCancelOffer); a replacement gets none, as on the web.
     expect(screen).toContain('const cancelOffer = isReplacementOrder ? null : phoneOrderCancel({');

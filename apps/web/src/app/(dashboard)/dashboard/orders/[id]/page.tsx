@@ -230,6 +230,8 @@ export default async function OrderDetailPage({
   // page's longest chain. It is the request-cached read the picking statuses
   // already pay (getWarehouseAccess is React.cache'd), so a picking order
   // reads it once. Observed at once: an order the viewer cannot see drops it.
+  // Security slice E reads the same answer for every approver control on the
+  // page (approverWritesHere, below the order read).
   const approverWarehouseAccess =
     canApprove && !roleSeesEveryWarehouse(ctx.role) ? getWarehouseAccess(ctx) : null;
   approverWarehouseAccess?.catch(() => {});
@@ -263,6 +265,35 @@ export default async function OrderDetailPage({
   const replacement = detail.replacement ?? null;
   const isReplacement = Boolean(request.replacement_for_return_id);
 
+  // SECURITY SLICE E (migration 0405): an approver acts on an order only in a
+  // warehouse they may write to. Every approval function asks it in the
+  // database and the service asks it first, so an approver outside this
+  // order's warehouse is offered none of an approver's controls (the actions
+  // panel's steps and its internal notes, Cancel, Hold available stock, the
+  // line controls and Add items) rather than each one refused after the tap
+  // with "This order is in a warehouse you don't work in". A manager or above
+  // works in every warehouse by role (roleSeesEveryWarehouse) and nothing is
+  // read; anyone else who approves has the read started beside the order read
+  // (approverWarehouseAccess), joined here after it, so it adds no level to
+  // the page. A failed read is no access (it answers empty lists), as for the
+  // needed-by Change and the hand-over link.
+  //   - approverWritesHere: write access, as assertWarehouseAccess 'write'
+  //     decides it (never a viewer): every approver action and Cancel.
+  //   - approverReadsHere: read access, the rule the line edits ask
+  //     (loadEditableOrderHeader: assertWarehouseAccess 'read'), so a viewer
+  //     granted orders:approve keeps the lines, and the actions panel, of
+  //     their own warehouse.
+  const approverAccess = approverWarehouseAccess
+    ? await approverWarehouseAccess.catch(() => null)
+    : null;
+  const approverAccessHas = (ids: string[] | undefined): boolean =>
+    roleSeesEveryWarehouse(ctx.role) ||
+    (approverAccess !== null &&
+      (approverAccess.hasAllAccess || (ids ?? []).includes(request.warehouse_id)));
+  const approverWritesHere =
+    canApprove && ctx.role !== 'viewer' && approverAccessHas(approverAccess?.writableIds);
+  const approverReadsHere = canApprove && approverAccessHas(approverAccess?.readableIds);
+
   // ---- Sync gates (no I/O). Every boolean the Tier-2 batch below needs to
   // decide WHICH round trips to fire is derived here, purely from ctx +
   // request/lines — none of it depends on anything async, so computing it
@@ -281,12 +312,13 @@ export default async function OrderDetailPage({
   // requester-or-approver, and only before the order ships or dies. Gating here
   // rather than letting the server 409 means nobody opens the picker, stages
   // five items and only then learns the order already left the building.
-  // Not mirrored: the service's assertWarehouseAccess(warehouse_id,'read').
-  // order_requests are readable org-wide, so a warehouse-scoped member can open
-  // an order for a warehouse they aren't assigned to and would still see the
-  // button; paying getWarehouseAccess on EVERY render (today it is paid only on
-  // picking statuses) to pre-empt that rare case isn't worth it — the action
-  // returns a clean forbidden with the dialog left open.
+  // The service's assertWarehouseAccess(warehouse_id, 'read') is mirrored for
+  // an approver (security slice E: approverReadsHere, from the access read
+  // already in flight for them), so an approver outside the order's warehouse
+  // is not offered the lines of someone else's order. Not for the person who
+  // placed it: that read is paid only for approvers below manager rank (the
+  // service still answers a requester outside the warehouse in its one
+  // sentence).
   const ADD_LINES_BLOCKED: OrderRequestStatus[] = [
     'in_transit',
     'completed',
@@ -294,7 +326,9 @@ export default async function OrderDetailPage({
     'cancelled',
   ];
   const canAddLines =
-    (canApprove || isOwnRequest) && !ADD_LINES_BLOCKED.includes(request.status) && !isReplacement;
+    (approverReadsHere || isOwnRequest) &&
+    !ADD_LINES_BLOCKED.includes(request.status) &&
+    !isReplacement;
   // Correcting a line is the same act as adding one — addLines,
   // updateLineQuantity and removeLine all run the SAME
   // loadEditableOrderHeader gate (ship gate + requester-or-approver +
@@ -326,9 +360,16 @@ export default async function OrderDetailPage({
   // manager+ → pick/complete/reassign/release).
   const isPickingStatus =
     request.status === 'pick_slip_generated' || request.status === 'picking_in_progress';
+  // Slice E: an approver outside the order's warehouse has nothing in the
+  // panel (every approval step and the notes ask write access, and the
+  // warehouse slip and the hand-over follow the same rule), so it is not
+  // shown to them for being an approver; the picking phase and the driver's
+  // own steps still show it. Inside it, the steps follow approverWritesHere
+  // (the panel's canApprove, below); a viewer granted orders:approve keeps
+  // the panel of their own warehouse as before, with no step in it.
   const showActionsPanel =
     request.status !== 'pending_confirmation' &&
-    (canApprove ||
+    (approverReadsHere ||
       isPickingStatus ||
       (isAssignedDriver && ['staged_for_delivery', 'in_transit'].includes(request.status)));
 
@@ -362,7 +403,10 @@ export default async function OrderDetailPage({
   // staged_for_delivery order. Every other status skips the round-trip.
   // 0390: assigning needs orders:assign_delivery as well as orders:approve.
   const canAssignDelivery = can(ctx, 'orders:assign_delivery');
-  const driversGate = canApprove && canAssignDelivery && request.status === 'staged_for_delivery';
+  // Slice E: the dialog is the panel's, offered only where the viewer writes
+  // (assign_order_delivery asks it too), so an approver elsewhere pays no read.
+  const driversGate =
+    approverWritesHere && canAssignDelivery && request.status === 'staged_for_delivery';
 
   // Carrier shipping (EasyPost). The panel renders (and self-hides via its own
   // GET when no shipment exists) for anyone on a shippable delivery order, but
@@ -433,7 +477,7 @@ export default async function OrderDetailPage({
   const printsOrgTime =
     Boolean(neededBy) ||
     (showActionsPanel &&
-      canApprove &&
+      approverWritesHere &&
       request.status === 'pending_approval' &&
       Boolean(request.notes?.trim()));
 
@@ -540,7 +584,9 @@ export default async function OrderDetailPage({
     isPickingStatus
       ? (async () => {
           const supabase = await createClient();
-          if (canApprove) {
+          // Slice E: Reassign is offered only where the viewer writes
+          // (assign_picking asks it too); elsewhere only the chip's name.
+          if (approverWritesHere) {
             // Only offer pickers who can actually pick at THIS warehouse: managers+
             // (all-warehouse access) OR members explicitly assigned to
             // request.warehouse_id. Without this filter AssignPickerDialog could
@@ -909,7 +955,9 @@ export default async function OrderDetailPage({
         ? ('resume' as const)
         : null;
   const partialPreview: PartialPreview | null =
-    canApprove && partialAction ? previewPartialFulfilment(readinessNow, partialAction) : null;
+    approverWritesHere && partialAction
+      ? previewPartialFulfilment(readinessNow, partialAction)
+      : null;
 
   // ── F2-2: held, and caught before it leaves. Everything below is computed
   // from what the page already read (the order, its lines, the readiness
@@ -918,9 +966,11 @@ export default async function OrderDetailPage({
   // "Hold available stock" on the strip (core shouldOfferHoldStock): an
   // approver, a hold status, some line not held or partly held. For lines
   // added before holds were topped up, or by someone who may not approve.
+  // An approver in the order's warehouse only (slice E: hold_order_stock
+  // asks write access to it, as every approver action does).
   const holdOrderId = shouldOfferHoldStock({
     assessment: readinessAssessment,
-    canApproveOrders: canApprove,
+    canApproveOrders: approverWritesHere,
   })
     ? id
     : null;
@@ -963,7 +1013,7 @@ export default async function OrderDetailPage({
   // people who could have edited them before.
   const pickedPhase = isPickingSettled(request.status);
   const showShortLineFixes =
-    canEditLines || (request.status === 'in_transit' && (canApprove || isOwnRequest));
+    canEditLines || (request.status === 'in_transit' && (approverReadsHere || isOwnRequest));
   const shortFixesFor = (lineId: string, rowIndex: number): ShortLineActions | null => {
     if (!showShortLineFixes) return null;
     const isOnlyLine = lines.length === 1;
@@ -1314,13 +1364,15 @@ export default async function OrderDetailPage({
             )}
             {/* L85: the service lets the requester cancel only while the
                 order waits for approval; an approver may cancel any open
-                order; and every cancel needs orders:request (desk check F3).
-                core's orderCancelOffer is that rule, shared with the phone.
+                order in a warehouse they write to (slice E, 0405); and
+                every cancel needs orders:request (desk check F3). core's
+                orderCancelOffer is that rule, shared with the phone.
                 Returns RX-2: a replacement is cancelled only from its RMA. */}
             {!isReplacement &&
               orderCancelOffer({
                 status: request.status,
                 canApprove,
+                canWriteOrderWarehouse: approverWritesHere,
                 isOwnRequest,
                 canRequest: can(ctx, 'orders:request'),
               }) !== null && <CancelOrderButton orderId={id} status={request.status} />}
@@ -1871,9 +1923,12 @@ export default async function OrderDetailPage({
               // panel (Approve/Deny, AssignDelivery, Internal notes).
               // A staff driver who only sees the panel for in-transit
               // actions still gets MarkInTransit + CollectSignature but
-              // none of the manager-only controls.
+              // none of the manager-only controls. Slice E: an approver
+              // only in a warehouse they write to (approverWritesHere); one
+              // outside it sees in the picking phase what any other member
+              // sees there, and none of the approver's steps.
               <ManagerActionsPanel
-                canApprove={canApprove}
+                canApprove={approverWritesHere}
                 canAssignDelivery={canAssignDelivery}
                 stockGates={stockGates}
                 approveNotice={approveNotice}

@@ -119,7 +119,11 @@ interface Props {
   /** Whether the viewer has orders:approve. Drives which manage-only
    *  sections render. False = staff driver assigned to this delivery
    *  who sees the panel ONLY for in-transit actions; they shouldn't
-   *  see Approve / Deny / Reassign / Internal-Notes. */
+   *  see Approve / Deny / Reassign / Internal-Notes. Since security slice E
+   *  (0405) the order page passes it only for an approver who may write to
+   *  this order's warehouse (approverWritesHere): every step it gates asks
+   *  that in the service and the database, so an approver outside the
+   *  warehouse is offered none of them. */
   canApprove: boolean;
   /** Whether the viewer holds orders:assign_delivery, the permission
    *  assignDelivery and assign_order_delivery ask besides orders:approve

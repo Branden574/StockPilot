@@ -29,7 +29,7 @@ const OPEN = [
 
 describe('phoneOrderCancel', () => {
   it('the requester: Cancel request, only while their order waits for approval, in the web words', () => {
-    const c = phoneOrderCancel({ status: 'pending_approval', canApproveOrders: false, isOwnRequest: true, canRequestOrders: true });
+    const c = phoneOrderCancel({ status: 'pending_approval', canApproveOrders: false, writesOrderWarehouse: true, isOwnRequest: true, canRequestOrders: true });
     expect(c).toEqual({
       label: 'Cancel request',
       confirmTitle: 'Cancel this order request?',
@@ -39,23 +39,23 @@ describe('phoneOrderCancel', () => {
       keepLabel: 'Keep request',
     });
     for (const status of OPEN.filter((s) => s !== 'pending_approval')) {
-      expect(phoneOrderCancel({ status, canApproveOrders: false, isOwnRequest: true, canRequestOrders: true })).toBeNull();
+      expect(phoneOrderCancel({ status, canApproveOrders: false, writesOrderWarehouse: true, isOwnRequest: true, canRequestOrders: true })).toBeNull();
     }
   });
 
   it('an approver: Cancel order at every open status, never on a closed one', () => {
     for (const status of OPEN) {
-      const c = phoneOrderCancel({ status, canApproveOrders: true, isOwnRequest: false, canRequestOrders: true });
+      const c = phoneOrderCancel({ status, canApproveOrders: true, writesOrderWarehouse: true, isOwnRequest: false, canRequestOrders: true });
       expect(c?.label).toBe('Cancel order');
       expect(c?.keepLabel).toBe('Keep order');
     }
     for (const status of ['completed', 'denied', 'cancelled']) {
-      expect(phoneOrderCancel({ status, canApproveOrders: true, isOwnRequest: true, canRequestOrders: true })).toBeNull();
+      expect(phoneOrderCancel({ status, canApproveOrders: true, writesOrderWarehouse: true, isOwnRequest: true, canRequestOrders: true })).toBeNull();
     }
   });
 
   it('a backordered order keeps its own words: delivered items are not restocked', () => {
-    expect(phoneOrderCancel({ status: 'backordered', canApproveOrders: true, isOwnRequest: false, canRequestOrders: true })?.confirmMessage).toBe(
+    expect(phoneOrderCancel({ status: 'backordered', canApproveOrders: true, writesOrderWarehouse: true, isOwnRequest: false, canRequestOrders: true })?.confirmMessage).toBe(
       'The order is voided. Already-delivered items are NOT restocked; the hold on the remaining items is released. Reason (optional):',
     );
   });
@@ -65,22 +65,43 @@ describe('phoneOrderCancel', () => {
   it('without orders:request: nothing, for an approver or the requester', () => {
     for (const status of OPEN) {
       expect(
-        phoneOrderCancel({ status, canApproveOrders: true, isOwnRequest: true, canRequestOrders: false }),
+        phoneOrderCancel({ status, canApproveOrders: true, writesOrderWarehouse: true, isOwnRequest: true, canRequestOrders: false }),
       ).toBeNull();
     }
     expect(
       phoneOrderCancel({
         status: 'pending_approval',
         canApproveOrders: false,
+        writesOrderWarehouse: true,
         isOwnRequest: true,
         canRequestOrders: false,
       }),
     ).toBeNull();
   });
 
+  // Security slice E (0405): an approver's cancel asks write access to the
+  // order's warehouse (the service and cancel_order_request), so an approver
+  // outside it is offered nothing on someone else's order, and keeps the
+  // requester's Cancel request on their own pending one. Mutation caught: the
+  // warehouse input dropped on the way to core.
+  it("an approver outside the order's warehouse: nothing on someone else's order, Cancel request on their own pending one", () => {
+    for (const status of OPEN) {
+      expect(
+        phoneOrderCancel({ status, canApproveOrders: true, writesOrderWarehouse: false, isOwnRequest: false, canRequestOrders: true }),
+        status,
+      ).toBeNull();
+    }
+    expect(
+      phoneOrderCancel({ status: 'pending_approval', canApproveOrders: true, writesOrderWarehouse: false, isOwnRequest: true, canRequestOrders: true })?.label,
+    ).toBe('Cancel request');
+    expect(
+      phoneOrderCancel({ status: 'approved', canApproveOrders: true, writesOrderWarehouse: false, isOwnRequest: true, canRequestOrders: true }),
+    ).toBeNull();
+  });
+
   it('someone else, or no status yet: nothing', () => {
-    expect(phoneOrderCancel({ status: 'pending_approval', canApproveOrders: false, isOwnRequest: false, canRequestOrders: true })).toBeNull();
-    expect(phoneOrderCancel({ status: null, canApproveOrders: true, isOwnRequest: true, canRequestOrders: true })).toBeNull();
+    expect(phoneOrderCancel({ status: 'pending_approval', canApproveOrders: false, writesOrderWarehouse: true, isOwnRequest: false, canRequestOrders: true })).toBeNull();
+    expect(phoneOrderCancel({ status: null, canApproveOrders: true, writesOrderWarehouse: true, isOwnRequest: true, canRequestOrders: true })).toBeNull();
   });
 });
 
@@ -99,12 +120,13 @@ describe('order/[id].tsx wiring (L93)', () => {
     .replace(/^\s*\/\/.*$/gm, '');
 
   // Mutation caught: the offer decided on the screen again (by status or
-  // role), or the effective orders:request left out (desk check F3).
-  it('offers Cancel through the tested rule, with the effective approve, request and the requester', () => {
+  // role), the effective orders:request left out (desk check F3), or the
+  // order's warehouse left out (security slice E).
+  it('offers Cancel through the tested rule, with the effective approve, the order warehouse, request and the requester', () => {
     expect(screen).toMatch(
       // Returns RX-2: a replacement order gets no offer (it is cancelled
       // from its RMA), as on the web.
-      /const cancelOffer = isReplacementOrder \? null : phoneOrderCancel\(\{\s*status: st,\s*canApproveOrders: rpApprove,\s*isOwnRequest: !!order\?\.requesterUserId && order\.requesterUserId === userId,\s*canRequestOrders: role !== null && can\(\{ role: role as Role, permissions \}, 'orders:request'\),\s*\}\);/,
+      /const cancelOffer = isReplacementOrder \? null : phoneOrderCancel\(\{\s*status: st,\s*canApproveOrders: rpApprove,\s*writesOrderWarehouse: writesHere,\s*isOwnRequest: !!order\?\.requesterUserId && order\.requesterUserId === userId,\s*canRequestOrders: role !== null && can\(\{ role: role as Role, permissions \}, 'orders:request'\),\s*\}\);/,
     );
     expect(screen).toMatch(/\{cancelOffer \? \(/);
     expect(screen).toContain("actionBtn(cancelOffer.label, 'cancelorder', () => promptCancel(cancelOffer), 'danger')");

@@ -259,11 +259,12 @@ describe('the Scan tab asks before a scanned packing slip is signed', () => {
 
 describe('Hold available stock, and the hold after an add or a raise', () => {
   // Mutation caught: offering the button to everyone, or with the phone's
-  // own rule instead of core's (the web strip's).
-  it('the readiness card offers it by core’s rule, to approvers', () => {
+  // own rule instead of core's (the web strip's), or (security slice E,
+  // 0405) to an approver outside the order's warehouse.
+  it('the readiness card offers it by core’s rule, to approvers in the order’s warehouse', () => {
     const code = codeOnly(screen);
     expect(code).toMatch(
-      /const offerHold =\s*readinessShown &&\s*shouldOfferHoldStock\(\{\s*assessment: order\?\.readiness\?\.state === 'ok' \? order\.readiness\.assessment : null,\s*canApproveOrders: rpApprove,\s*\}\);/,
+      /const offerHold =\s*readinessShown &&\s*shouldOfferHoldStock\(\{\s*assessment: order\?\.readiness\?\.state === 'ok' \? order\.readiness\.assessment : null,\s*canApproveOrders: rpApprove && writesHere,\s*\}\);/,
     );
     expect(code).toMatch(
       /hold=\{\s*offerHold\s*\? \{\s*busy: acting === 'hold',\s*disabled: acting !== null,\s*onPress: \(\) => void holdStock\(\),\s*\}\s*: null\s*\}/,

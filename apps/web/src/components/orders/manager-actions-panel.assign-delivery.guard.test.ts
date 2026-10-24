@@ -21,8 +21,11 @@ const PANEL = readFileSync(path.resolve(__dirname, 'manager-actions-panel.tsx'),
 describe('Assign delivery follows both permissions on the web', () => {
   it('the page reads orders:assign_delivery, loads drivers only with both, and passes it to the panel', () => {
     expect(PAGE).toContain("const canAssignDelivery = can(ctx, 'orders:assign_delivery');");
-    expect(PAGE).toContain(
-      "const driversGate = canApprove && canAssignDelivery && request.status === 'staged_for_delivery';",
+    // Security slice E (0405): an approver only in a warehouse they write to
+    // (approverWritesHere), as the panel's canApprove; assign_order_delivery
+    // asks it too.
+    expect(PAGE).toMatch(
+      /const driversGate =\s*approverWritesHere && canAssignDelivery && request\.status === 'staged_for_delivery';/,
     );
     expect(PAGE).toContain('canAssignDelivery={canAssignDelivery}');
   });

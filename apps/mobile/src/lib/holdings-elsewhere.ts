@@ -245,7 +245,24 @@ export async function readDestinationWarehouseScope(
     return { writableIds: null, unreadable: false };
   }
   if (role === 'viewer') return { writableIds: [], unreadable: false };
-  if (!input.userId) return { writableIds: [], unreadable: true };
+  const read = await readAssignedWarehouseIds(client, input);
+  return { writableIds: read.ids, unreadable: read.unreadable };
+}
+
+/**
+ * The member's own `user_warehouse_assignments` rows in this organization:
+ * the warehouses a staff member or a viewer reads (and staff also writes),
+ * each once. No signed-in user id, or a failed read, is `unreadable` with no
+ * warehouse (never "every warehouse"). Never throws. The order screen reads it
+ * for a viewer granted orders:approve (security slice E: the line edits ask
+ * read access to the order's warehouse); readDestinationWarehouseScope for
+ * staff.
+ */
+export async function readAssignedWarehouseIds(
+  client: AssignmentReadClient,
+  input: { organizationId: string; userId: string | null | undefined },
+): Promise<{ ids: readonly string[]; unreadable: boolean }> {
+  if (!input.userId) return { ids: [], unreadable: true };
   try {
     const table = client.from('user_warehouse_assignments') as AssignmentChain;
     const res = await table
@@ -253,13 +270,13 @@ export async function readDestinationWarehouseScope(
       .eq('organization_id', input.organizationId)
       .eq('user_id', input.userId);
     if (!res || res.error || !Array.isArray(res.data)) {
-      return { writableIds: [], unreadable: true };
+      return { ids: [], unreadable: true };
     }
     const ids = (res.data as { warehouse_id?: unknown }[])
       .map((r) => r?.warehouse_id)
       .filter((id): id is string => typeof id === 'string' && id !== '');
-    return { writableIds: [...new Set(ids)], unreadable: false };
+    return { ids: [...new Set(ids)], unreadable: false };
   } catch {
-    return { writableIds: [], unreadable: true };
+    return { ids: [], unreadable: true };
   }
 }
