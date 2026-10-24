@@ -160,6 +160,9 @@ describe('the dates fixes release is published', () => {
   // draft just below the public link draft, dated after every other release
   // but that one"): both are published now, a minute apart.
   it('sits just below the public link release (published a minute later), dated after every other release, at a real time after the phone update launched', () => {
+    // Re-pinned by the small fixes slice 8 draft (fix/small-fixes-8; was:
+    // without it): dated after every release, it sits at the top, so every
+    // position below it moves down by one, and it is the one draft.
     // Re-pinned by the public link draft (fix/placed-cart-draft; was: the
     // newest entry, at the top, dated after every other release): it is
     // dated later and sits above this one.
@@ -205,35 +208,37 @@ describe('the dates fixes release is published', () => {
     // Re-pinned by docs/whats-new-ungroup-follow-ups (2026-10-12; was: 7): the Ungroup follow-ups release is published after it, at the top.
     // Re-pinned by docs/whats-new-pages-keep-groups-whole (2026-10-12; was: 8): the pages-keep-groups-whole release is published after it, at the top.
     // Re-pinned by docs/whats-new-redesign-2026-10 (2026-10-20; was: 9): the three redesign releases and the parked ai-search-finds-every-item release (#367) are published after it, at the top, so it sits four places lower.
-    expect(at).toBe(13);
+    expect(at).toBe(14);
     // Re-pinned by docs/whats-new-ungroup-follow-ups (2026-10-12): the Ungroup follow-ups release is published at the top, above Group selected's, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-pages-keep-groups-whole (2026-10-12; was: the Ungroup follow-ups release at 0, the public link release at 7): the pages-keep-groups-whole release is published at the top, above the Ungroup follow-ups release, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-redesign-2026-10 (2026-10-20; was: the pages-keep-groups-whole release at 0, the public link release at 8): the three redesign releases and the parked ai-search-finds-every-item release (#367) are published at the top, above the pages-keep-groups-whole release, so every position below them moves down by four.
-    expect(RELEASES.slice(0, 4).map((r) => [r.id, r.status])).toEqual([
+    expect(RELEASES[0]?.id).toBe('small-fixes-8-2026-10');
+    expect(RELEASES[0]?.status).toBe('draft');
+    expect(RELEASES.slice(1, 5).map((r) => [r.id, r.status])).toEqual([
       ['redesign-2026-10', 'published'],
       ['redesign-mobile-app-2026-10', 'published'],
       ['redesign-web-fixes-2026-10', 'published'],
       ['ai-search-finds-every-item-2026-10', 'published'],
     ]);
-    expect(RELEASES[4]?.id).toBe('pages-keep-groups-whole-2026-10');
-    expect(RELEASES[4]?.status).toBe('published');
-    expect(RELEASES[5]?.id).toBe('ungroup-follow-ups-2026-10');
+    expect(RELEASES[5]?.id).toBe('pages-keep-groups-whole-2026-10');
     expect(RELEASES[5]?.status).toBe('published');
-    expect(RELEASES[6]?.id).toBe('group-selected-2026-10');
+    expect(RELEASES[6]?.id).toBe('ungroup-follow-ups-2026-10');
     expect(RELEASES[6]?.status).toBe('published');
-    expect(RELEASES[7]?.id).toBe('ungroup-2026-10');
+    expect(RELEASES[7]?.id).toBe('group-selected-2026-10');
     expect(RELEASES[7]?.status).toBe('published');
-    expect(RELEASES[8]?.id).toBe('returns-history-hand-over-2026-10');
+    expect(RELEASES[8]?.id).toBe('ungroup-2026-10');
     expect(RELEASES[8]?.status).toBe('published');
-    expect(RELEASES[9]?.id).toBe('returns-close-rest-2026-10');
+    expect(RELEASES[9]?.id).toBe('returns-history-hand-over-2026-10');
     expect(RELEASES[9]?.status).toBe('published');
-    expect(RELEASES[10]?.id).toBe('returns-requester-exchange-2026-10');
+    expect(RELEASES[10]?.id).toBe('returns-close-rest-2026-10');
     expect(RELEASES[10]?.status).toBe('published');
-    expect(RELEASES[11]?.id).toBe('returns-exchange-2026-10');
+    expect(RELEASES[11]?.id).toBe('returns-requester-exchange-2026-10');
     expect(RELEASES[11]?.status).toBe('published');
-    expect(RELEASES[12]?.id).toBe('public-link-sent-request-2026-10');
+    expect(RELEASES[12]?.id).toBe('returns-exchange-2026-10');
     expect(RELEASES[12]?.status).toBe('published');
-    expect(Date.parse(RELEASES[12]!.publishedAt) - Date.parse(release().publishedAt)).toBe(60_000);
+    expect(RELEASES[13]?.id).toBe('public-link-sent-request-2026-10');
+    expect(RELEASES[13]?.status).toBe('published');
+    expect(Date.parse(RELEASES[13]!.publishedAt) - Date.parse(release().publishedAt)).toBe(60_000);
     for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
