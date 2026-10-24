@@ -39,6 +39,7 @@ describe('the 0395 refusal words', () => {
       'receipt_post',
       'receipt_reverse',
       'kit_assemble',
+      'kit_distribute',
     ];
     expect(actions.map((a) => `${a}=${dbPermissionFor(a)}`)).toEqual([
       'adjust=stock:adjust',
@@ -47,6 +48,9 @@ describe('the 0395 refusal words', () => {
       'receipt_post=stock:adjust',
       'receipt_reverse=stock:adjust',
       'kit_assemble=bundles:manage',
+      // 0404: distribute_bundle answers to the permission the Bundles page,
+      // the phone and the API assert before every distribution.
+      'kit_distribute=bundles:distribute',
     ]);
     expect(dbPermissionRefusedCopy('adjust')).toBe(
       'Adjusting stock needs the Adjust on-hand permission. Ask an admin if you need it.',
@@ -57,6 +61,9 @@ describe('the 0395 refusal words', () => {
     expect(dbPermissionRefusedCopy('kit_assemble')).toBe(
       'Assembling a kit needs the Manage bundles permission. Ask an admin if you need it.',
     );
+    expect(dbPermissionRefusedCopy('kit_distribute')).toBe(
+      'Distributing a kit needs the Distribute bundles permission. Ask an admin if you need it.',
+    );
   });
 
   it('says what to do in plain words, with no code word and never "book"', () => {
@@ -65,7 +72,7 @@ describe('the 0395 refusal words', () => {
       ORDER_WAREHOUSE_WRITE_REFUSED_COPY,
       ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY,
       ITEM_HOLDS_STOCK_COPY,
-      ...(['adjust', 'transfer', 'count_post', 'receipt_post', 'receipt_reverse', 'kit_assemble'] as const).map(
+      ...(['adjust', 'transfer', 'count_post', 'receipt_post', 'receipt_reverse', 'kit_assemble', 'kit_distribute'] as const).map(
         dbPermissionRefusedCopy,
       ),
     ];

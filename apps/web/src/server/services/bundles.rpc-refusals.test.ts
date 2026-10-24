@@ -98,3 +98,77 @@ describe('BundlesService.distribute — 0365 refusals', () => {
     ).rejects.toMatchObject({ code: 'internal_error' });
   });
 });
+
+/**
+ * 0404: no kit from nothing, nor from another organization's item, nor
+ * against another organization's event; and distribute_bundle refuses a direct
+ * call without bundles:distribute itself (42501 forbidden, hint permission).
+ * Each arrives as a sentence the modal and the phone show, never the code.
+ */
+describe('0404 refusals', () => {
+  const sentences = {
+    bundle_no_required_components:
+      "This kit has no required component, so it can't be built from components. Edit the bundle and mark at least one component as required.",
+    component_not_in_org:
+      "A component of this kit is an item of another organization, so the kit can't be built. Edit the bundle and remove that component.",
+  };
+
+  it.each([
+    ['bundle_no_required_components', 'P0001'],
+    ['component_not_in_org', '42501'],
+  ] as const)('assemble maps %s to a validation_error sentence', async (raised, code) => {
+    rpc.mockResolvedValue({ data: null, error: { message: raised, code, hint: null } });
+    await expect(service().assemble('b-1', 2, 'wh-1')).rejects.toMatchObject({
+      code: 'validation_error',
+      message: sentences[raised],
+    });
+  });
+
+  it.each([
+    ['bundle_no_required_components', 'P0001'],
+    ['component_not_in_org', '42501'],
+  ] as const)('distribute maps %s to a validation_error sentence', async (raised, code) => {
+    rpc.mockResolvedValue({ data: null, error: { message: raised, code, hint: null } });
+    await expect(
+      service().distribute('b-1', { quantity: 3, warehouseId: 'wh-1' }),
+    ).rejects.toMatchObject({ code: 'validation_error', message: sentences[raised] });
+  });
+
+  it('distribute maps schedule_event_not_found to a not_found sentence', async () => {
+    rpc.mockResolvedValue({
+      data: null,
+      error: { message: 'schedule_event_not_found', code: 'P0002', hint: null },
+    });
+    await expect(
+      service().distribute('b-1', { quantity: 1, warehouseId: 'wh-1', scheduleEventId: 'ev-1' }),
+    ).rejects.toMatchObject({
+      code: 'not_found',
+      message:
+        "The linked schedule event wasn't found in this organization, so nothing was distributed. Link another event, or none.",
+    });
+  });
+
+  it('distribute names the permission when the database refuses it (hint permission)', async () => {
+    rpc.mockResolvedValue({
+      data: null,
+      error: { message: 'forbidden', code: '42501', hint: 'permission' },
+    });
+    await expect(
+      service().distribute('b-1', { quantity: 1, warehouseId: 'wh-1' }),
+    ).rejects.toMatchObject({
+      code: 'forbidden',
+      message:
+        'Distributing a kit needs the Distribute bundles permission. Ask an admin if you need it.',
+    });
+  });
+
+  it('a body role refusal (42501 with no hint) still reads "Permission denied"', async () => {
+    rpc.mockResolvedValue({
+      data: null,
+      error: { message: 'forbidden', code: '42501', hint: null },
+    });
+    await expect(
+      service().distribute('b-1', { quantity: 1, warehouseId: 'wh-1' }),
+    ).rejects.toMatchObject({ code: 'forbidden', message: 'Permission denied' });
+  });
+});

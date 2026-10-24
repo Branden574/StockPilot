@@ -1,7 +1,12 @@
 import 'server-only';
 
 import { assertWarehouseAccess } from '@/lib/auth/warehouse';
-import { BUNDLE_DUPLICATE_COMPONENT, componentItemsDistinct } from '@/lib/bundles/component-set';
+import {
+  BUNDLE_DUPLICATE_COMPONENT,
+  BUNDLE_NO_REQUIRED_COMPONENT,
+  componentItemsDistinct,
+  componentsHaveRequired,
+} from '@/lib/bundles/component-set';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 
@@ -175,10 +180,16 @@ const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 /** A component set naming one item twice is refused before anything is
  *  written: (bundle_id, item_id) is the table's key, so the second row would
- *  fail the insert, or the upsert, part way through (L10). */
-function assertDistinctComponents(components: ReadonlyArray<{ itemId: string }>): void {
+ *  fail the insert, or the upsert, part way through (L10). So is a set with no
+ *  required component: since 0404 no kit can be built from it. */
+function assertComponentSet(
+  components: ReadonlyArray<{ itemId: string; isOptional?: boolean }>,
+): void {
   if (!componentItemsDistinct(components)) {
     throw new ServiceError('validation_error', BUNDLE_DUPLICATE_COMPONENT);
+  }
+  if (!componentsHaveRequired(components)) {
+    throw new ServiceError('validation_error', BUNDLE_NO_REQUIRED_COMPONENT);
   }
 }
 
@@ -195,6 +206,41 @@ export const BUNDLE_PHANTOM_DELETED =
   "This kit's stock item was deleted, so no more can be assembled.";
 export const BUNDLE_COMPONENT_NOT_VISIBLE =
   "A component of this kit isn't in your inventory view, so the kit can't be built from it.";
+/** 0404: assemble_bundle and distribute_bundle build no kit from a bundle
+ *  whose components are all optional, or that has none. */
+export const BUNDLE_NO_REQUIRED_COMPONENTS =
+  "This kit has no required component, so it can't be built from components. Edit the bundle and mark at least one component as required.";
+/** 0404: a component naming another organization's item is refused by name
+ *  (the component policy no longer lets one be saved). */
+export const BUNDLE_COMPONENT_NOT_IN_ORG =
+  "A component of this kit is an item of another organization, so the kit can't be built. Edit the bundle and remove that component.";
+/** 0404: a distribution linked to an event outside the kit's organization (or
+ *  to one deleted meanwhile) is refused before anything is drawn. */
+export const BUNDLE_SCHEDULE_EVENT_NOT_FOUND =
+  "The linked schedule event wasn't found in this organization, so nothing was distributed. Link another event, or none.";
+
+/**
+ * The refusals assemble_bundle() and distribute_bundle() raise by name (0365,
+ * 0404), as the ServiceError whose sentence the web modal and the phone show
+ * (the phone reaches distribute through the API, which forwards the
+ * message), or null for any other error. ScheduleService's completion shows
+ * the same sentence.
+ */
+export function kitRefusal(message: string): ServiceError | null {
+  if (message.includes('bundle_no_required_components')) {
+    return new ServiceError('validation_error', BUNDLE_NO_REQUIRED_COMPONENTS);
+  }
+  if (message.includes('component_not_in_org')) {
+    return new ServiceError('validation_error', BUNDLE_COMPONENT_NOT_IN_ORG);
+  }
+  if (message.includes('component_not_visible')) {
+    return new ServiceError('validation_error', BUNDLE_COMPONENT_NOT_VISIBLE);
+  }
+  if (message.includes('schedule_event_not_found')) {
+    return new ServiceError('not_found', BUNDLE_SCHEDULE_EVENT_NOT_FOUND);
+  }
+  return null;
+}
 
 /**
  * Whether stock on an item row can be drawn for a kit at `warehouseId`: the
@@ -507,7 +553,7 @@ export class BundlesService {
     if (input.components.length === 0) {
       throw new ServiceError('validation_error', 'A bundle needs at least one component');
     }
-    assertDistinctComponents(input.components);
+    assertComponentSet(input.components);
 
     const { data: bundle, error } = await this.ctx.supabase
       .from('bundles')
@@ -608,8 +654,10 @@ export class BundlesService {
    * The two statements are separate calls, so two saves of one bundle can
    * interleave: A upserts {a}, B upserts {b}, A deletes everything but a, B
    * deletes everything but b, and the bundle has NO components (review
-   * 2026-10-05, a rolled-back probe as a manager under RLS). assemble_bundle
-   * has no "no components" refusal, so it would then make kits from nothing.
+   * 2026-10-05, a rolled-back probe as a manager under RLS). Before 0404,
+   * assemble_bundle then made kits from nothing; since 0404 it refuses a
+   * bundle with no required component (bundle_no_required_components), so
+   * the race would stop kits instead, and this read-back keeps the saved set.
    * The second write is an upsert ONLY, never another delete: the last
    * statement of two interleaved saves is then always one of them writing its
    * whole set, so the bundle is never left empty. It may keep both sets (the
@@ -655,6 +703,15 @@ export class BundlesService {
       }
     }
 
+    // A refused component set (empty, an item twice, or no required
+    // component) is refused before anything is written, the bundle row too.
+    if (patch.components) {
+      if (patch.components.length === 0) {
+        throw new ServiceError('validation_error', 'A bundle needs at least one component');
+      }
+      assertComponentSet(patch.components);
+    }
+
     const updatePayload: Record<string, unknown> = { updated_by: this.ctx.userId };
     if (patch.name !== undefined) updatePayload.name = patch.name;
     if (patch.sku !== undefined) updatePayload.sku = patch.sku;
@@ -673,10 +730,6 @@ export class BundlesService {
     }
 
     if (patch.components) {
-      if (patch.components.length === 0) {
-        throw new ServiceError('validation_error', 'A bundle needs at least one component');
-      }
-      assertDistinctComponents(patch.components);
       // Write the new set first, then drop the rows left out of it (L10). The
       // old delete-then-insert left a bundle with NO components when the
       // insert failed; now a failed upsert changes nothing, and a failed
@@ -850,9 +903,10 @@ export class BundlesService {
       if (msg.includes('phantom_deleted')) {
         throw new ServiceError('validation_error', BUNDLE_PHANTOM_DELETED);
       }
-      if (msg.includes('component_not_visible')) {
-        throw new ServiceError('validation_error', BUNDLE_COMPONENT_NOT_VISIBLE);
-      }
+      // 0365 component_not_visible; 0404 bundle_no_required_components and
+      // component_not_in_org (a 42501 with no hint, so before 'forbidden').
+      const named = kitRefusal(msg);
+      if (named) throw named;
       if (msg.includes('forbidden')) {
         throw new ServiceError('forbidden', 'Permission denied');
       }
@@ -894,6 +948,11 @@ export class BundlesService {
       p_idempotency_key: input.idempotencyKey ?? null,
     });
     if (error) {
+      // 0404: distribute_bundle refuses a direct call without
+      // bundles:distribute itself (42501 forbidden, hint permission), as
+      // assertPermission above does.
+      const guard = dbGuardRefusal(error, 'kit_distribute');
+      if (guard) throw guard;
       const msg = error.message ?? '';
       if (msg.includes('idempotency_conflict')) {
         // The same key arrived with a different request. The original attempt
@@ -913,10 +972,11 @@ export class BundlesService {
         throw new ServiceError('validation_error', 'This bundle is archived or inactive.');
       }
       // 0365: a required component the caller's inventory view cannot see
-      // used to be skipped, and the kit went out without it.
-      if (msg.includes('component_not_visible')) {
-        throw new ServiceError('validation_error', BUNDLE_COMPONENT_NOT_VISIBLE);
-      }
+      // used to be skipped, and the kit went out without it. 0404: a bundle
+      // with no required component, a component of another organization and
+      // an event outside this organization are refused by name.
+      const named = kitRefusal(msg);
+      if (named) throw named;
       if (msg.includes('forbidden')) {
         throw new ServiceError('forbidden', 'Permission denied');
       }

@@ -3,7 +3,7 @@ import 'server-only';
 import { assertWarehouseAccess, ForbiddenError } from '@/lib/auth/warehouse';
 
 import { audit } from './audit';
-import { BUNDLE_COMPONENT_NOT_VISIBLE } from './bundles';
+import { kitRefusal } from './bundles';
 import {
   assertModuleEnabled,
   assertPermission,
@@ -11,6 +11,7 @@ import {
   withContext,
   type ServiceContext,
 } from './context';
+import { dbGuardRefusal } from './lib/db-guard-refusal';
 import { fetchAllRowsByIds, reportDegradedRead } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 
@@ -525,17 +526,18 @@ export class ScheduleService {
       patch.status === 'completed' &&
       beforeStatus === 'in_progress'
     ) {
-      const bundleId =
-        (patch.bundleId ?? (beforeRow.bundle_id as string | null)) ?? null;
+      // The kit, quantity and warehouse the event was just SAVED with: what
+      // the person sees on the event, and what distribute_bundle checks the
+      // Schedule's call against (0404: a caller without bundles:distribute is
+      // let through only for a completed event naming this kit, quantity and
+      // warehouse). The old `patch.bundleId ?? before` read a kit cleared in
+      // this same save as "unchanged" and handed out the old one.
+      const saved = data as Record<string, unknown>;
+      const bundleId = (saved.bundle_id as string | null | undefined) ?? null;
       const bundleQuantity =
-        (patch.bundleQuantity ??
-          (beforeRow.bundle_quantity == null
-            ? null
-            : Number(beforeRow.bundle_quantity))) ?? null;
+        saved.bundle_quantity == null ? null : Number(saved.bundle_quantity);
       const bundleWarehouseId =
-        (patch.bundleWarehouseId ??
-          (beforeRow.bundle_warehouse_id as string | null)) ??
-        null;
+        (saved.bundle_warehouse_id as string | null | undefined) ?? null;
 
       if (bundleId && bundleQuantity && bundleWarehouseId) {
         // Defense in depth: the in-process duplicate check + the new
@@ -597,12 +599,14 @@ export class ScheduleService {
             } else {
               // Status flip already succeeded. Capture the failure
               // so we can surface a soft error to the UI after
-              // emitting audit events. distribute_bundle's 0365 refusal
-              // is a code; the manager reads the sentence instead.
+              // emitting audit events. distribute_bundle's refusals are
+              // codes (0365, 0404) or the permission hint (0404); the
+              // manager reads the sentence instead.
               autoDistFailed = {
-                message: msg.includes('component_not_visible')
-                  ? BUNDLE_COMPONENT_NOT_VISIBLE
-                  : distErr.message,
+                message:
+                  dbGuardRefusal(distErr, 'kit_distribute')?.message ??
+                  kitRefusal(msg)?.message ??
+                  distErr.message,
                 bundleId,
               };
             }

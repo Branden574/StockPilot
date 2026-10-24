@@ -138,12 +138,12 @@ describe('BundlesService.update: components', () => {
  * whose sets share no item, interleaved as
  *   A.upsert{a} -> B.upsert{b} -> A.delete(not a) -> B.delete(not b),
  * left NO components: a rolled-back probe as the QA manager under RLS on the
- * local stack returned 0, and assemble_bundle, which has no "no components"
- * refusal, then made kits from nothing. The old delete-then-insert gave the
- * union. A save now reads its set back after the delete and, unless every
- * item of it is there, writes the set again: an upsert only, never another
- * delete, so the last statement of the two saves is always one of them
- * writing its whole set and the bundle never ends empty.
+ * local stack returned 0, and assemble_bundle, which had no "no components"
+ * refusal until 0404, then made kits from nothing. The old delete-then-insert
+ * gave the union. A save now reads its set back after the delete and, unless
+ * every item of it is there, writes the set again: an upsert only, never
+ * another delete, so the last statement of the two saves is always one of
+ * them writing its whole set and the bundle never ends empty.
  */
 describe('BundlesService.update: a save that interleaves with another', () => {
   type Row = { bundle_id: string; item_id: string };
@@ -390,5 +390,46 @@ describe('BundlesService.create: components', () => {
       }),
     ).rejects.toMatchObject({ code: 'validation_error' });
     expect(stub.chainsAll.get('bundles.insert')).toBeUndefined();
+  });
+});
+
+/**
+ * 0404: assemble_bundle and distribute_bundle build no kit from a bundle whose
+ * components are all optional (bundle_no_required_components). The service
+ * refuses that set when it is saved, before anything is written, so a bundle
+ * is not left in a state no kit can be built from.
+ */
+describe('BundlesService: at least one required component', () => {
+  const NO_REQUIRED =
+    'Mark at least one component as required. A kit made only of optional components could be built from nothing.';
+
+  it('create refuses a set whose components are all optional, before writing anything', async () => {
+    const { stub, svc } = service({});
+
+    await expect(
+      svc.create({
+        name: 'Kit',
+        components: [
+          { itemId: A, quantity: 1, isOptional: true },
+          { itemId: B, quantity: 2, isOptional: true },
+        ],
+      }),
+    ).rejects.toMatchObject({ code: 'validation_error', message: NO_REQUIRED });
+    expect(stub.chainsAll.get('bundles.insert')).toBeUndefined();
+    expect(stub.chainsAll.get('bundle_components.insert')).toBeUndefined();
+  });
+
+  it('update refuses it too, and writes nothing, not even the name saved with it', async () => {
+    const { stub, svc } = service({});
+
+    await expect(
+      svc.update('b-1', {
+        name: 'Renamed kit',
+        components: [{ itemId: A, quantity: 1, isOptional: true }],
+      }),
+    ).rejects.toMatchObject({ code: 'validation_error', message: NO_REQUIRED });
+    expect(stub.chainsAll.get('bundles.update')).toBeUndefined();
+    expect(stub.chainsAll.get('bundle_components.insert')).toBeUndefined();
+    expect(stub.chainsAll.get('bundle_components.delete')).toBeUndefined();
   });
 });
