@@ -82,7 +82,9 @@ describe('Export CSV of the Overdue view', () => {
     expect(text).toContain('PO-3');
     expect(text).not.toContain('PO-2');
     expect(text).not.toContain('PO-4');
-    expect(res.headers.get('content-disposition')).toMatch(/purchase-orders-\d{4}-\d{2}-\d{2}-overdue\.csv/);
+    expect(res.headers.get('content-disposition')).toMatch(
+      /purchase-orders-\d{4}-\d{2}-\d{2}-overdue\.csv/,
+    );
   });
 
   it("with the list's search: PO number or supplier, any case", async () => {

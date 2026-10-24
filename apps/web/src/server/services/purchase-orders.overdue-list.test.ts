@@ -14,7 +14,12 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makeServiceContext, makeSupabaseStub, type MockCall, type QueryResult } from '@/test/supabase-mock';
+import {
+  makeServiceContext,
+  makeSupabaseStub,
+  type MockCall,
+  type QueryResult,
+} from '@/test/supabase-mock';
 
 const { getWarehouseAccessMock } = vi.hoisted(() => ({ getWarehouseAccessMock: vi.fn() }));
 
@@ -96,7 +101,9 @@ function servedLikePostgres(rows: Row[]) {
     call.methods.forEach((method, i) => {
       const [col, a, b] = (call.args[i] ?? []) as [string, unknown, unknown];
       const value = (r: Row): unknown =>
-        col.startsWith('destination.') ? r.destination?.[col.slice(12) as 'warehouse_id'] : r[col as keyof Row];
+        col.startsWith('destination.')
+          ? r.destination?.[col.slice(12) as 'warehouse_id']
+          : r[col as keyof Row];
       switch (method) {
         case 'select':
           head = (a as { head?: boolean } | undefined)?.head === true;
@@ -113,10 +120,15 @@ function servedLikePostgres(rows: Row[]) {
           out = out.filter((r) => value(r) !== null);
           break;
         case 'lt':
-          out = out.filter((r) => value(r) !== null && Date.parse(String(value(r))) < Date.parse(String(a)));
+          out = out.filter(
+            (r) => value(r) !== null && Date.parse(String(value(r))) < Date.parse(String(a)),
+          );
           break;
         case 'order':
-          order.push({ col: col as keyof Row, ascending: (a as { ascending?: boolean })?.ascending !== false });
+          order.push({
+            col: col as keyof Row,
+            ascending: (a as { ascending?: boolean })?.ascending !== false,
+          });
           break;
         case 'range':
           from = Number(col);
@@ -184,7 +196,11 @@ describe('listOverdue lists exactly what the dashboard counts', () => {
     const listed = await svc.listOverdue();
     const counted = await svc.overdueCount();
 
-    expect(listed.rows.map((r) => r.status).sort()).toEqual(['expected_inbound', 'ordered', 'partially_received']);
+    expect(listed.rows.map((r) => r.status).sort()).toEqual([
+      'expected_inbound',
+      'ordered',
+      'partially_received',
+    ]);
     expect(listed.rows).toHaveLength(counted);
     expect(counted).toBe(3);
     // Newest first, as the list's other views.
@@ -192,7 +208,11 @@ describe('listOverdue lists exactly what the dashboard counts', () => {
     expect(created).toEqual([...created].sort().reverse());
     // Each row in the list's own shape, with its line count.
     expect(listed.rows[0]).toEqual(
-      expect.objectContaining({ id: expect.any(String), po_number: expect.any(String), line_count: expect.any(Number) }),
+      expect.objectContaining({
+        id: expect.any(String),
+        po_number: expect.any(String),
+        line_count: expect.any(Number),
+      }),
     );
     expect(listed.rows[0]).not.toHaveProperty('destination');
     expect(listed.rows[0]).not.toHaveProperty('purchase_order_items');
@@ -200,7 +220,7 @@ describe('listOverdue lists exactly what the dashboard counts', () => {
     expect(listed.asOfDay).toBe('2026-10-10');
   });
 
-  it('east of UTC the day is the organization\'s too (Sydney: Oct 11 already)', async () => {
+  it("east of UTC the day is the organization's too (Sydney: Oct 11 already)", async () => {
     const rows = [po('ordered', '2026-10-10T00:00:00.000Z')];
     const { svc } = svcFor(rows, 'Australia/Sydney');
     const listed = await svc.listOverdue();
@@ -219,7 +239,10 @@ describe('listOverdue lists exactly what the dashboard counts', () => {
     const rows = [
       po('ordered', '2026-10-01T00:00:00.000Z'),
       po('ordered', '2026-10-01T00:00:00.000Z', { destination: { warehouse_id: WH_B } }),
-      po('ordered', '2026-10-01T00:00:00.000Z', { destination_location_id: null, destination: null }),
+      po('ordered', '2026-10-01T00:00:00.000Z', {
+        destination_location_id: null,
+        destination: null,
+      }),
     ];
     const { svc } = svcFor(rows);
     const listed = await svc.listOverdue();

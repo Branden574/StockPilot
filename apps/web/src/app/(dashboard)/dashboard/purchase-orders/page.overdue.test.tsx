@@ -20,7 +20,12 @@ vi.mock('@/lib/modules/module-gate', () => ({
   checkModuleAccess: vi.fn(async () => ({ enabled: true, canManage: false })),
 }));
 vi.mock('@/lib/auth/session', () => ({
-  requireOrgContext: vi.fn(async () => ({ organizationId: 'org-1', userId: 'u1', role: 'staff', permissions: null })),
+  requireOrgContext: vi.fn(async () => ({
+    organizationId: 'org-1',
+    userId: 'u1',
+    role: 'staff',
+    permissions: null,
+  })),
 }));
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(async () => {
@@ -30,9 +35,13 @@ vi.mock('@/lib/supabase/server', () => ({
 vi.mock('@/lib/dashboard/request-cache', () => ({
   getOrgRowForRequest: vi.fn(async () => ({ timezone: 'America/Los_Angeles' })),
 }));
-vi.mock('@/lib/warehouse-filter', () => ({ getActiveWarehouseFilter: vi.fn(async () => 'wh-picked') }));
+vi.mock('@/lib/warehouse-filter', () => ({
+  getActiveWarehouseFilter: vi.fn(async () => 'wh-picked'),
+}));
 vi.mock('@/server/services/purchase-orders', () => ({
-  PurchaseOrdersService: { forCurrentUser: vi.fn(async () => ({ listStats, listPage, listOverdue })) },
+  PurchaseOrdersService: {
+    forCurrentUser: vi.fn(async () => ({ listStats, listPage, listOverdue })),
+  },
 }));
 vi.mock('@/server/services/suppliers', () => ({
   SuppliersService: {
@@ -130,7 +139,7 @@ describe('the purchase orders list has the Overdue view the dashboard links to',
     expect(tab('Overdue')).toHaveAttribute('href', '/dashboard/purchase-orders?status=overdue');
   });
 
-  it('nothing overdue says so, in the rule\'s words', async () => {
+  it("nothing overdue says so, in the rule's words", async () => {
     listStats.mockResolvedValue(stats(40));
     listOverdue.mockResolvedValueOnce({ rows: [], asOfDay: '2026-10-11' });
     await open({ status: 'overdue' });

@@ -44,7 +44,7 @@ describe('unofferedDestinationFrom: why a destination is not offered', () => {
   // (the purchase order save refuses a deleted destination or one linked to
   // no warehouse), read from the row, never from which `why` came first: a
   // rack with no warehouse is not a site AND refused (slice 8 review).
-  it('saveRefuses is the save\'s own rule, whatever the why', () => {
+  it("saveRefuses is the save's own rule, whatever the why", () => {
     expect(judge(row({ kind: 'rack', warehouse_id: null }))).toEqual({
       name: 'Somewhere',
       why: 'not_a_site',
@@ -81,7 +81,9 @@ describe('the notes', () => {
     expect(unofferedDestinationNote('purchase_order', { name: null, why: 'deleted' })).toBe(
       'This purchase order goes to a location that was deleted, so choose a destination.',
     );
-    expect(unofferedDestinationNote('purchase_order', { name: 'District Office', why: 'no_warehouse' })).toBe(
+    expect(
+      unofferedDestinationNote('purchase_order', { name: 'District Office', why: 'no_warehouse' }),
+    ).toBe(
       'This purchase order goes to "District Office", which isn\'t linked to a warehouse, so choose a destination.',
     );
     expect(unofferedDestinationNote('purchase_order', { name: 'Staging', why: 'not_a_site' })).toBe(
@@ -99,7 +101,9 @@ describe('the notes', () => {
     expect(unofferedDestinationNote('template', { name: null, why: 'deleted' })).toBe(
       "This template's destination was deleted, so choose a destination.",
     );
-    expect(unofferedDestinationNote('template', { name: 'District Office', why: 'no_warehouse' })).toBe(
+    expect(
+      unofferedDestinationNote('template', { name: 'District Office', why: 'no_warehouse' }),
+    ).toBe(
       'This template\'s destination, "District Office", isn\'t linked to a warehouse, so choose a destination.',
     );
     expect(unofferedDestinationNote('template', { name: 'Staging', why: 'not_a_site' })).toBe(

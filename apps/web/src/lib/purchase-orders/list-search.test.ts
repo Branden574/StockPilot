@@ -28,12 +28,17 @@ describe('poMatchesSearch', () => {
 
   it('a purchase order with no supplier, or one the list does not name, reads "—"', () => {
     expect(poMatchesSearch({ po_number: 'PO-1', supplier_id: null }, '—', name)).toBe(true);
-    expect(poMatchesSearch({ po_number: 'PO-1', supplier_id: 'sup-archived' }, '—', name)).toBe(true);
+    expect(poMatchesSearch({ po_number: 'PO-1', supplier_id: 'sup-archived' }, '—', name)).toBe(
+      true,
+    );
   });
 });
 
 describe('searchedPage', () => {
-  const rows = Array.from({ length: 7 }, (_, i) => ({ po_number: `PO-${i + 1}`, supplier_id: 'sup-1' }));
+  const rows = Array.from({ length: 7 }, (_, i) => ({
+    po_number: `PO-${i + 1}`,
+    supplier_id: 'sup-1',
+  }));
 
   it('one page of the matches, and how many match in all', () => {
     expect(searchedPage(rows, { query: '', page: 2, perPage: 3, supplierName: name })).toEqual({

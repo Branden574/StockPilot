@@ -8,7 +8,10 @@ import { purchaseOrderItemTypes } from '@/lib/purchase-orders/item-types';
 import { createClient } from '@/lib/supabase/server';
 import { ChartersService } from '@/server/services/charters';
 import { InventoryService } from '@/server/services/inventory';
-import { readUnofferedDestinations, readUnofferedSuppliers } from '@/server/services/lib/unoffered-choices';
+import {
+  readUnofferedDestinations,
+  readUnofferedSuppliers,
+} from '@/server/services/lib/unoffered-choices';
 import { LocationsService } from '@/server/services/locations';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
 import { ServiceError } from '@/server/services/context';
@@ -148,7 +151,9 @@ export default async function EditPoPage({ params }: { params: Promise<{ id: str
     destination: unofferedDestinationId
       ? (unofferedDestinations?.unoffered.get(unofferedDestinationId) ?? null)
       : null,
-    supplier: unofferedSupplierId ? (unofferedSuppliers?.unoffered.get(unofferedSupplierId) ?? null) : null,
+    supplier: unofferedSupplierId
+      ? (unofferedSuppliers?.unoffered.get(unofferedSupplierId) ?? null)
+      : null,
   };
 
   // Map PO's existing lines to the form's Line shape.

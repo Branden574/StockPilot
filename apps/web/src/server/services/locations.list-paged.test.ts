@@ -42,7 +42,9 @@ const SITE = {
 
 describe('LocationsService.list reads every page', () => {
   it('returns a site past the first 1000 rows of every kind', async () => {
-    const stub = makeSupabaseStub({ 'locations.select': servedLikePostgrest([...racks(1200), SITE]) });
+    const stub = makeSupabaseStub({
+      'locations.select': servedLikePostgrest([...racks(1200), SITE]),
+    });
     const svc = new LocationsService(makeServiceContext(stub.client) as never);
 
     const sites = await svc.list({ sitesOnly: true });

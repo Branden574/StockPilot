@@ -749,7 +749,9 @@ export function PoForm({
     initialSupplierOffered ? null : unofferedSupplierNote('purchase_order', unoffered?.supplier),
   );
   const [destinationNote, setDestinationNote] = React.useState<string | null>(() =>
-    initialLocationOffered ? null : unofferedDestinationNote('purchase_order', unoffered?.destination),
+    initialLocationOffered
+      ? null
+      : unofferedDestinationNote('purchase_order', unoffered?.destination),
   );
   const [charterId, setCharterId] = React.useState<string>(initial?.charterId ?? '');
   const [poNumber, setPoNumber] = React.useState<string>(initial?.poNumber ?? '');

@@ -34,7 +34,11 @@ vi.mock('@/lib/auth/warehouse', () => ({
   },
 }));
 vi.mock('@/lib/auth/session', () => ({
-  requireOrgContext: vi.fn(async () => ({ userId: 'user-test', organizationId: 'org-test', role: 'admin' })),
+  requireOrgContext: vi.fn(async () => ({
+    userId: 'user-test',
+    organizationId: 'org-test',
+    role: 'admin',
+  })),
 }));
 
 const { audit, insertAuditRowReported, reportError } = vi.hoisted(() => ({
@@ -53,7 +57,11 @@ vi.mock('./item-images', () => ({
   },
 }));
 
-import { RecurringPoTemplatesService, recurringRunNotice, type RecurringRunSummary } from './recurring-pos';
+import {
+  RecurringPoTemplatesService,
+  recurringRunNotice,
+  type RecurringRunSummary,
+} from './recurring-pos';
 
 const NOW = new Date('2026-10-12T14:00:00.000Z');
 const DUE_AT = '2026-10-12T13:00:00.000Z';
@@ -65,10 +73,34 @@ const LOC = {
 } as const;
 
 const LOCATIONS = [
-  { id: LOC.site, organization_id: 'org-test', name: 'Main Warehouse', kind: null, type: 'warehouse', warehouse_id: 'wh-a', deleted_at: null },
+  {
+    id: LOC.site,
+    organization_id: 'org-test',
+    name: 'Main Warehouse',
+    kind: null,
+    type: 'warehouse',
+    warehouse_id: 'wh-a',
+    deleted_at: null,
+  },
   // Deleted AFTER the template was saved; it kept its warehouse.
-  { id: LOC.deleted, organization_id: 'org-test', name: 'Old Annex', kind: null, type: 'warehouse', warehouse_id: 'wh-a', deleted_at: '2026-10-05T00:00:00Z' },
-  { id: LOC.noWarehouse, organization_id: 'org-test', name: 'District Office', kind: null, type: 'warehouse', warehouse_id: null, deleted_at: null },
+  {
+    id: LOC.deleted,
+    organization_id: 'org-test',
+    name: 'Old Annex',
+    kind: null,
+    type: 'warehouse',
+    warehouse_id: 'wh-a',
+    deleted_at: '2026-10-05T00:00:00Z',
+  },
+  {
+    id: LOC.noWarehouse,
+    organization_id: 'org-test',
+    name: 'District Office',
+    kind: null,
+    type: 'warehouse',
+    warehouse_id: null,
+    deleted_at: null,
+  },
 ];
 
 function template(over: Record<string, unknown>) {
@@ -100,14 +132,19 @@ function stubFor(templates: Array<Record<string, unknown>>, over: Record<string,
     ]),
     'locations.select': servedLikePostgrest(LOCATIONS),
     'rpc:next_po_number': { data: 'PO-100', error: null },
-    'rpc:save_purchase_order_draft': { data: { id: 'po-new', stamped: 0, stamp_error: null }, error: null },
+    'rpc:save_purchase_order_draft': {
+      data: { id: 'po-new', stamped: 0, stamp_error: null },
+      error: null,
+    },
     ...over,
   });
 }
 
 async function run(templates: Array<Record<string, unknown>>, over: Record<string, unknown> = {}) {
   const stub = stubFor(templates, over);
-  const svc = new RecurringPoTemplatesService(makeServiceContext(stub.client, { role: 'owner' }) as never);
+  const svc = new RecurringPoTemplatesService(
+    makeServiceContext(stub.client, { role: 'owner' }) as never,
+  );
   const summary = await svc.runDueTemplates(NOW);
   const saves = stub.rpcCalls.filter((c) => c.name === 'save_purchase_order_draft');
   return { summary, saves, stub };
@@ -119,7 +156,9 @@ beforeEach(() => {
 
 describe('runDueTemplates: a template whose purchase order is refused is skipped, with the reason told', () => {
   it('a destination deleted after the template was saved: no purchase order, and the template is named with why', async () => {
-    const { summary, saves, stub } = await run([template({ destination_location_id: LOC.deleted })]);
+    const { summary, saves, stub } = await run([
+      template({ destination_location_id: LOC.deleted }),
+    ]);
 
     expect(saves).toHaveLength(0);
     expect(summary).toMatchObject({ created: 0, failures: 1 });
@@ -176,7 +215,7 @@ describe('runDueTemplates: a template whose purchase order is refused is skipped
   // to a warehouse, ... Pick a warehouse-backed location.") point at a form
   // the notification reader is not on; the run names the template's
   // destination and where to fix it (slice 8 review).
-  it('a destination linked to no warehouse is told in the template\'s words, by name', async () => {
+  it("a destination linked to no warehouse is told in the template's words, by name", async () => {
     const { summary, saves } = await run([template({ destination_location_id: LOC.noWarehouse })]);
 
     expect(saves).toHaveLength(0);
@@ -206,7 +245,10 @@ describe('runDueTemplates: a template whose purchase order is refused is skipped
     expect(summary.templatesSkipped[0]!.reason).toMatch(/supplier/i);
     expect(reportError).toHaveBeenCalledWith(
       expect.any(Error),
-      expect.objectContaining({ tag: 'recurring_pos.template_skipped', extra: { templateId: 'tpl-1', refusal: 'validation_error' } }),
+      expect.objectContaining({
+        tag: 'recurring_pos.template_skipped',
+        extra: { templateId: 'tpl-1', refusal: 'validation_error' },
+      }),
     );
   });
 
@@ -214,13 +256,20 @@ describe('runDueTemplates: a template whose purchase order is refused is skipped
   // and nothing else; if it fails every day the template never runs again.
   it('a failed claim is reported, naming the template', async () => {
     const { summary, saves } = await run([template({})], {
-      'recurring_po_templates.update': { data: null, error: { message: 'permission denied for table recurring_po_templates' } },
+      'recurring_po_templates.update': {
+        data: null,
+        error: { message: 'permission denied for table recurring_po_templates' },
+      },
     });
     expect(saves).toHaveLength(0);
     expect(summary).toMatchObject({ created: 0, failures: 1 });
     expect(reportError).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ tag: 'recurring_pos.claim_failed', organizationId: 'org-test', extra: { templateId: 'tpl-1' } }),
+      expect.objectContaining({
+        tag: 'recurring_pos.claim_failed',
+        organizationId: 'org-test',
+        extra: { templateId: 'tpl-1' },
+      }),
     );
   });
 
@@ -228,27 +277,47 @@ describe('runDueTemplates: a template whose purchase order is refused is skipped
   // failed. The notice said only "created 1 purchase order" while the
   // template is set to send (slice 8 review).
   it('a send-mode template whose purchase order could not be sent is named, its draft kept', async () => {
-    const { summary, saves } = await run([template({ send_mode: 'send', max_auto_send_cents: 100000 })], {
-      'organization_modules.select': { data: { settings: {} }, error: null },
-      'purchase_orders.select': {
-        data: { id: 'po-new', po_number: 'PO-100', status: 'draft', total: 50, destination: null },
-        error: null,
+    const { summary, saves } = await run(
+      [template({ send_mode: 'send', max_auto_send_cents: 100000 })],
+      {
+        'organization_modules.select': { data: { settings: {} }, error: null },
+        'purchase_orders.select': {
+          data: {
+            id: 'po-new',
+            po_number: 'PO-100',
+            status: 'draft',
+            total: 50,
+            destination: null,
+          },
+          error: null,
+        },
+        'purchase_order_items.select': { data: [], error: null },
+        'purchase_orders.update': { data: null, error: { message: 'statement timeout' } },
       },
-      'purchase_order_items.select': { data: [], error: null },
-      'purchase_orders.update': { data: null, error: { message: 'statement timeout' } },
-    });
+    );
     expect(saves).toHaveLength(1);
-    expect(summary).toMatchObject({ created: 1, sent: 0, failures: 1, templatesSendFailed: ['Weekly Supplies'] });
+    expect(summary).toMatchObject({
+      created: 1,
+      sent: 0,
+      failures: 1,
+      templatesSendFailed: ['Weekly Supplies'],
+    });
     expect(summary.templatesSkipped).toEqual([]);
     expect(reportError).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ tag: 'recurring_pos.auto_send_failed', extra: { templateId: 'tpl-1', poId: 'po-new' } }),
+      expect.objectContaining({
+        tag: 'recurring_pos.auto_send_failed',
+        extra: { templateId: 'tpl-1', poId: 'po-new' },
+      }),
     );
   });
 
   it('an unexpected failure is told without its internals, and reported as an error', async () => {
     const { summary } = await run([template({})], {
-      'rpc:save_purchase_order_draft': { data: null, error: { message: 'permission denied for table purchase_orders' } },
+      'rpc:save_purchase_order_draft': {
+        data: null,
+        error: { message: 'permission denied for table purchase_orders' },
+      },
     });
 
     expect(summary).toMatchObject({ created: 0, failures: 1 });
@@ -263,7 +332,10 @@ describe('runDueTemplates: a template whose purchase order is refused is skipped
     expect(JSON.stringify(summary)).not.toContain('permission denied');
     expect(reportError).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ tag: 'recurring_pos.template_failed', extra: { templateId: 'tpl-1' } }),
+      expect.objectContaining({
+        tag: 'recurring_pos.template_failed',
+        extra: { templateId: 'tpl-1' },
+      }),
     );
   });
 
@@ -274,13 +346,17 @@ describe('runDueTemplates: a template whose purchase order is refused is skipped
     ]);
 
     expect(saves).toHaveLength(1);
-    expect((saves[0]!.args as { p_destination_location_id: string }).p_destination_location_id).toBe(LOC.site);
+    expect(
+      (saves[0]!.args as { p_destination_location_id: string }).p_destination_location_id,
+    ).toBe(LOC.site);
     expect(summary).toMatchObject({ created: 1, failures: 1 });
     expect(summary.templatesSkipped.map((s) => s.name)).toEqual(['Annex Paper']);
   });
 
   it('a template created by nobody still in the record is skipped the same way, with no creator', async () => {
-    const { summary } = await run([template({ destination_location_id: LOC.deleted, created_by: null })]);
+    const { summary } = await run([
+      template({ destination_location_id: LOC.deleted, created_by: null }),
+    ]);
     expect(summary.templatesSkipped[0]).toMatchObject({ templateId: 'tpl-1', createdBy: null });
   });
 });
@@ -307,7 +383,9 @@ describe('recurringRunNotice: the skipped templates are named with why', () => {
   });
 
   it('a run that only skipped a template still notifies, as needing attention', () => {
-    expect(recurringRunNotice({ ...base, failures: 1, templatesSkipped: [skipped('Annex Paper')] })).toEqual({
+    expect(
+      recurringRunNotice({ ...base, failures: 1, templatesSkipped: [skipped('Annex Paper')] }),
+    ).toEqual({
       title: 'Recurring purchase orders need attention',
       body: `"Annex Paper" created no purchase order. ${DELETED}`,
     });
@@ -318,7 +396,12 @@ describe('recurringRunNotice: the skipped templates are named with why', () => {
   // "ran" (slice 8 review).
   it('beside purchase orders that were created, the title still says it needs attention', () => {
     expect(
-      recurringRunNotice({ ...base, created: 1, failures: 1, templatesSkipped: [skipped('Annex Paper')] }),
+      recurringRunNotice({
+        ...base,
+        created: 1,
+        failures: 1,
+        templatesSkipped: [skipped('Annex Paper')],
+      }),
     ).toEqual({
       title: 'Recurring purchase orders need attention',
       body: `Recurring purchase orders created 1 purchase order. "Annex Paper" created no purchase order. ${DELETED}`,
@@ -327,15 +410,23 @@ describe('recurringRunNotice: the skipped templates are named with why', () => {
 
   it('a purchase order created as a draft that could not be sent is named, and needs attention', () => {
     expect(
-      recurringRunNotice({ ...base, created: 2, sent: 1, failures: 1, templatesSendFailed: ['Weekly Supplies'] }),
+      recurringRunNotice({
+        ...base,
+        created: 2,
+        sent: 1,
+        failures: 1,
+        templatesSendFailed: ['Weekly Supplies'],
+      }),
     ).toEqual({
       title: 'Recurring purchase orders need attention',
-      body:
-        'Recurring purchase orders created 2 purchase orders, 1 sent. "Weekly Supplies" created its purchase order as a draft, but it could not be sent. Open it in Purchase orders and send it.',
+      body: 'Recurring purchase orders created 2 purchase orders, 1 sent. "Weekly Supplies" created its purchase order as a draft, but it could not be sent. Open it in Purchase orders and send it.',
     });
     expect(
-      recurringRunNotice({ ...base, created: 2, failures: 2, templatesSendFailed: ['A', 'B'] })?.body,
-    ).toContain('"A" and "B" created their purchase orders as drafts, but they could not be sent. Open them in Purchase orders and send them.');
+      recurringRunNotice({ ...base, created: 2, failures: 2, templatesSendFailed: ['A', 'B'] })
+        ?.body,
+    ).toContain(
+      '"A" and "B" created their purchase orders as drafts, but they could not be sent. Open them in Purchase orders and send them.',
+    );
   });
 
   it("a creator past the first three is told their own template's name", () => {
@@ -365,7 +456,8 @@ describe('recurringRunNotice: the skipped templates are named with why', () => {
       templatesSkipped: ['P', 'Q', 'R', 'S'].map((n) => skipped(n, DELETED, 'manager-4')),
     };
     const theirs = recurringRunNotice(many, { recipientId: 'manager-4' })!.body;
-    for (const n of ['P', 'Q', 'R', 'S']) expect(theirs).toContain(`"${n}" created no purchase order.`);
+    for (const n of ['P', 'Q', 'R', 'S'])
+      expect(theirs).toContain(`"${n}" created no purchase order.`);
     expect(theirs).not.toContain('more template');
   });
 
@@ -373,7 +465,9 @@ describe('recurringRunNotice: the skipped templates are named with why', () => {
     const body = recurringRunNotice({
       ...base,
       failures: 5,
-      templatesSkipped: ['A', 'B', 'C', 'D', 'E'].map((n) => skipped(n, 'An unexpected error stopped it. It runs again on its next date.')),
+      templatesSkipped: ['A', 'B', 'C', 'D', 'E'].map((n) =>
+        skipped(n, 'An unexpected error stopped it. It runs again on its next date.'),
+      ),
     })?.body;
     expect(body).toContain('"A" created no purchase order. An unexpected error stopped it.');
     expect(body).toContain('"C" created no purchase order.');

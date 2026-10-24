@@ -174,7 +174,10 @@ describe("the purchase orders list prints Placed as the organization's day", () 
   it("a viewer in New York reads the Los Angeles organization's day, with no hydration error", async () => {
     listStats.mockResolvedValue(stats(1));
     // 11:30 PM on Oct 5 in Los Angeles; 2:30 AM on Oct 6 in New York.
-    listPage.mockResolvedValue({ rows: [{ ...ROW, ordered_at: '2026-10-06T06:30:00.000Z' }], total: 1 });
+    listPage.mockResolvedValue({
+      rows: [{ ...ROW, ordered_at: '2026-10-06T06:30:00.000Z' }],
+      total: 1,
+    });
     const run = await hydratedPlacedCell('America/New_York');
     try {
       expect(run.errors).toEqual([]);
@@ -188,7 +191,10 @@ describe("the purchase orders list prints Placed as the organization's day", () 
     listStats.mockResolvedValue(stats(900));
     getOrgRowForRequest.mockResolvedValue({ timezone: 'Australia/Sydney' });
     // 7:30 AM on Oct 5 in Los Angeles; 1:30 AM on Oct 6 in Sydney; Oct 5 in UTC.
-    listPage.mockResolvedValue({ rows: [{ ...ROW, ordered_at: '2026-10-05T14:30:00.000Z' }], total: 1 });
+    listPage.mockResolvedValue({
+      rows: [{ ...ROW, ordered_at: '2026-10-05T14:30:00.000Z' }],
+      total: 1,
+    });
     const run = await hydratedPlacedCell();
     try {
       expect(run.errors).toEqual([]);

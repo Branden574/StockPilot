@@ -91,7 +91,10 @@ async function save() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(updatePoAction).mockResolvedValue({ ok: true, data: { id: 'po-1', poNumber: 'PO-001' } });
+  vi.mocked(updatePoAction).mockResolvedValue({
+    ok: true,
+    data: { id: 'po-1', poNumber: 'PO-001' },
+  });
   vi.mocked(createPoAction).mockResolvedValue({ ok: true, data: { id: 'po-new' } });
 });
 
@@ -117,7 +120,9 @@ describe('Edit purchase order: a destination the form does not offer', () => {
     });
 
     expect(
-      screen.getByText('This purchase order goes to "Old Annex", which was deleted, so choose a destination.'),
+      screen.getByText(
+        'This purchase order goes to "Old Annex", which was deleted, so choose a destination.',
+      ),
     ).toBeInTheDocument();
     expect(destination()).toHaveTextContent('None');
     expect(await save()).toMatchObject({ destinationLocationId: null });
@@ -127,7 +132,9 @@ describe('Edit purchase order: a destination the form does not offer', () => {
     renderEdit({ initial: initial({ locationId: 'loc-unknown' }) });
 
     expect(
-      screen.getByText("This purchase order goes to a location you can't pick here, so choose a destination."),
+      screen.getByText(
+        "This purchase order goes to a location you can't pick here, so choose a destination.",
+      ),
     ).toBeInTheDocument();
     expect(destination()).toHaveTextContent('None');
     expect(await save()).toMatchObject({ destinationLocationId: null });
@@ -141,7 +148,9 @@ describe('Edit purchase order: a destination the form does not offer', () => {
     });
 
     await user.click(destination());
-    await user.click(within(await screen.findByRole('listbox')).getByRole('option', { name: 'North Site' }));
+    await user.click(
+      within(await screen.findByRole('listbox')).getByRole('option', { name: 'North Site' }),
+    );
 
     expect(screen.queryByText(/so choose a destination/)).toBeNull();
     expect(destination()).toHaveTextContent('North Site');
@@ -181,7 +190,9 @@ describe('Edit purchase order: a supplier the form does not offer', () => {
     });
 
     await user.click(supplier());
-    await user.click(within(await screen.findByRole('listbox')).getByRole('option', { name: 'Office Depot' }));
+    await user.click(
+      within(await screen.findByRole('listbox')).getByRole('option', { name: 'Office Depot' }),
+    );
 
     expect(screen.queryByText(/so choose a supplier/)).toBeNull();
     expect(await save()).toMatchObject({ supplierId: 'sup-2' });
@@ -205,7 +216,9 @@ describe('Edit purchase order: unsaved work (CONFLICTS D30) with a value the for
     expect(getUnsavedSources()).toEqual([]);
 
     await user.click(destination());
-    await user.click(within(await screen.findByRole('listbox')).getByRole('option', { name: 'North Site' }));
+    await user.click(
+      within(await screen.findByRole('listbox')).getByRole('option', { name: 'North Site' }),
+    );
     expect(getUnsavedSources()).toEqual([{ id: 'po-form-po-1', label: 'Editing PO-001' }]);
   });
 });

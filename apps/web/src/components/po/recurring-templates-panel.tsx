@@ -200,7 +200,9 @@ function templateChoices(
   return {
     supplierId: supplierOffered ? supplierId : '',
     locationId: locationOffered ? locationId : '',
-    supplierNote: supplierOffered ? null : unofferedSupplierNote('template', choices.unofferedSuppliers[supplierId]),
+    supplierNote: supplierOffered
+      ? null
+      : unofferedSupplierNote('template', choices.unofferedSuppliers[supplierId]),
     destinationNote: locationOffered
       ? null
       : unofferedDestinationNoteFor('template', choices.unofferedDestinations[locationId]),

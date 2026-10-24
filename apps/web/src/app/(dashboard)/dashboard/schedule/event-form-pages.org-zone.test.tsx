@@ -19,7 +19,12 @@ vi.mock('next/navigation', () => ({
   }),
 }));
 vi.mock('@/lib/auth/session', () => ({
-  requireOrgContext: vi.fn(async () => ({ organizationId: 'org-1', userId: 'u1', role: 'owner', permissions: null })),
+  requireOrgContext: vi.fn(async () => ({
+    organizationId: 'org-1',
+    userId: 'u1',
+    role: 'owner',
+    permissions: null,
+  })),
 }));
 vi.mock('@/lib/dashboard/request-cache', () => ({
   getOrgRowForRequest: (...args: unknown[]) => getOrgRowForRequest(...args),
@@ -51,12 +56,18 @@ vi.mock('@/server/services/schedule', () => ({
   },
 }));
 vi.mock('@/server/services/warehouses', () => ({
-  WarehousesService: { forCurrentUser: vi.fn(async () => ({ listNames: vi.fn(async () => [{ id: 'wh-1', name: 'Fresno HQ' }]) })) },
+  WarehousesService: {
+    forCurrentUser: vi.fn(async () => ({
+      listNames: vi.fn(async () => [{ id: 'wh-1', name: 'Fresno HQ' }]),
+    })),
+  },
 }));
 vi.mock('@/server/services/bundles', () => ({
   BundlesService: { forCurrentUser: vi.fn(async () => ({ list: vi.fn(async () => []) })) },
 }));
-vi.mock('@/components/schedule/schedule-event-form', () => ({ ScheduleEventForm: vi.fn(() => null) }));
+vi.mock('@/components/schedule/schedule-event-form', () => ({
+  ScheduleEventForm: vi.fn(() => null),
+}));
 
 import { ScheduleEventForm } from '@/components/schedule/schedule-event-form';
 
@@ -86,20 +97,26 @@ beforeEach(() => {
   getOrgRowForRequest.mockResolvedValue({ timezone: 'America/New_York' });
 });
 
-describe.each(['new', 'edit'] as const)("the %s event page hands the form the organization's zone", (which) => {
-  it("passes the organization's zone", async () => {
-    const props = findProps(await pages[which](), ScheduleEventForm);
-    expect(props?.timeZone).toBe('America/New_York');
-    expect(getOrgRowForRequest).toHaveBeenCalledWith('org-1');
-  });
+describe.each(['new', 'edit'] as const)(
+  "the %s event page hands the form the organization's zone",
+  (which) => {
+    it("passes the organization's zone", async () => {
+      const props = findProps(await pages[which](), ScheduleEventForm);
+      expect(props?.timeZone).toBe('America/New_York');
+      expect(getOrgRowForRequest).toHaveBeenCalledWith('org-1');
+    });
 
-  it('a failed read is the default zone, reported, and the page still renders', async () => {
-    getOrgRowForRequest.mockRejectedValueOnce(new Error('statement timeout'));
-    const props = findProps(await pages[which](), ScheduleEventForm);
-    expect(props?.timeZone).toBe('America/Los_Angeles');
-    expect(reportError).toHaveBeenCalledWith(
-      expect.any(Error),
-      expect.objectContaining({ tag: 'schedule.event_form.org_timezone_failed', level: 'warning' }),
-    );
-  });
-});
+    it('a failed read is the default zone, reported, and the page still renders', async () => {
+      getOrgRowForRequest.mockRejectedValueOnce(new Error('statement timeout'));
+      const props = findProps(await pages[which](), ScheduleEventForm);
+      expect(props?.timeZone).toBe('America/Los_Angeles');
+      expect(reportError).toHaveBeenCalledWith(
+        expect.any(Error),
+        expect.objectContaining({
+          tag: 'schedule.event_form.org_timezone_failed',
+          level: 'warning',
+        }),
+      );
+    });
+  },
+);

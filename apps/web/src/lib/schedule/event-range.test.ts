@@ -15,9 +15,9 @@ describe('formatEventRange prints in the organization zone', () => {
     expect(plain(formatEventRange('2026-10-07T18:00:00Z', null, false, 'America/New_York'))).toBe(
       'Wed, Oct 7, 2026 · 2:00 PM',
     );
-    expect(plain(formatEventRange('2026-10-07T18:00:00Z', null, false, 'America/Los_Angeles'))).toBe(
-      'Wed, Oct 7, 2026 · 11:00 AM',
-    );
+    expect(
+      plain(formatEventRange('2026-10-07T18:00:00Z', null, false, 'America/Los_Angeles')),
+    ).toBe('Wed, Oct 7, 2026 · 11:00 AM');
   });
 
   it("decides one day or two in the organization's zone", () => {

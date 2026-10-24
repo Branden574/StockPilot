@@ -28,7 +28,12 @@ vi.mock('./purchase-orders', () => ({ PurchaseOrdersService: class {} }));
 
 import { DEFAULT_MODULE_IDS, type ModuleId } from '@stockpilot/core';
 
-import { makeServiceContext, makeSupabaseStub, servedLikePostgrest, type MockCall } from '@/test/supabase-mock';
+import {
+  makeServiceContext,
+  makeSupabaseStub,
+  servedLikePostgrest,
+  type MockCall,
+} from '@/test/supabase-mock';
 
 import { ScheduleService } from './schedule';
 
@@ -77,7 +82,8 @@ function servedWithOr(rows: Row[]) {
     const methods: string[] = [];
     const args: unknown[][] = [];
     call.methods.forEach((m, i) => {
-      if (m === 'or') kept = kept.filter((r) => splitTop(String(call.args[i]![0])).some((c) => matches(r, c)));
+      if (m === 'or')
+        kept = kept.filter((r) => splitTop(String(call.args[i]![0])).some((c) => matches(r, c)));
       else {
         methods.push(m);
         args.push(call.args[i]!);
@@ -141,8 +147,14 @@ describe('ScheduleService.listInRange reads only the events that touch the range
 
   it('500 old open-ended events no longer crowd out the month', async () => {
     const old = Array.from({ length: 500 }, (_, i) =>
-      event(`old-${i}`, new Date(Date.parse('2025-01-01T00:00:00Z') + i * 3_600_000).toISOString(), null),
+      event(
+        `old-${i}`,
+        new Date(Date.parse('2025-01-01T00:00:00Z') + i * 3_600_000).toISOString(),
+        null,
+      ),
     );
-    expect(await idsInRange([...old, event('this-month', '2026-10-15T17:00:00Z', null)])).toEqual(['this-month']);
+    expect(await idsInRange([...old, event('this-month', '2026-10-15T17:00:00Z', null)])).toEqual([
+      'this-month',
+    ]);
   });
 });

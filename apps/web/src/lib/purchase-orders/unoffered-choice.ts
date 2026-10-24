@@ -97,7 +97,8 @@ export function unofferedSupplierNote(
   owner: UnofferedOwner,
   supplier: UnofferedSupplier | null | undefined,
 ): string {
-  const whose = owner === 'purchase_order' ? "This purchase order's supplier" : "This template's supplier";
+  const whose =
+    owner === 'purchase_order' ? "This purchase order's supplier" : "This template's supplier";
   const name = quoted(supplier?.name ?? null);
   if (supplier?.why === 'archived') {
     return name
@@ -115,14 +116,20 @@ export function unofferedSupplierNote(
  * `isSite` is core's isSiteLocation for the row.
  */
 export function unofferedDestinationFrom(
-  row: { name?: string | null; deleted_at?: string | null; warehouse_id?: string | null } | null | undefined,
+  row:
+    | { name?: string | null; deleted_at?: string | null; warehouse_id?: string | null }
+    | null
+    | undefined,
   isSite: boolean,
 ): UnofferedDestination {
   if (!row) return { name: null, why: 'unknown' };
   const name = (row.name ?? '').trim() || null;
   if (row.deleted_at) return { name, why: 'deleted', saveRefuses: 'deleted' };
   const noWarehouse = !row.warehouse_id;
-  if (!isSite) return noWarehouse ? { name, why: 'not_a_site', saveRefuses: 'no_warehouse' } : { name, why: 'not_a_site' };
+  if (!isSite)
+    return noWarehouse
+      ? { name, why: 'not_a_site', saveRefuses: 'no_warehouse' }
+      : { name, why: 'not_a_site' };
   if (noWarehouse) return { name, why: 'no_warehouse', saveRefuses: 'no_warehouse' };
   return { name, why: 'unknown' };
 }

@@ -12,7 +12,10 @@ import { purchaseOrderItemTypes } from '@/lib/purchase-orders/item-types';
 import { InventoryService } from '@/server/services/inventory';
 import { reportDegradedRead } from '@/server/services/lib/fetch-by-ids';
 import { fetchAllRows } from '@/server/services/lib/paginate';
-import { readUnofferedDestinations, readUnofferedSuppliers } from '@/server/services/lib/unoffered-choices';
+import {
+  readUnofferedDestinations,
+  readUnofferedSuppliers,
+} from '@/server/services/lib/unoffered-choices';
 import { LocationsService } from '@/server/services/locations';
 import { RecurringPoTemplatesService } from '@/server/services/recurring-pos';
 import { SuppliersService } from '@/server/services/suppliers';
@@ -134,8 +137,10 @@ export default async function RecurringPosPage({
       if (error) throw error;
       if (!data) return { destination: null, supplierId: null };
       const supplierId = (data as { supplier_id?: string | null }).supplier_id ?? null;
-      const locationId = (data as { destination_location_id: string | null }).destination_location_id;
-      if (!locationId) return { destination: { locationId: null, name: null, deleted: false }, supplierId };
+      const locationId = (data as { destination_location_id: string | null })
+        .destination_location_id;
+      if (!locationId)
+        return { destination: { locationId: null, name: null, deleted: false }, supplierId };
       // A many-to-one embed: one row (typed as a list), as PurchaseOrdersService.get reads it.
       const embedded = (data as { destination?: unknown }).destination;
       const location = (Array.isArray(embedded) ? embedded[0] : embedded) as

@@ -9,7 +9,10 @@ import {
   takeRecurringPoSeed,
   type RecurringPoSeed,
 } from '@/lib/purchase-orders/recurring-seed';
-import type { UnofferedDestination, UnofferedSupplier } from '@/lib/purchase-orders/unoffered-choice';
+import type {
+  UnofferedDestination,
+  UnofferedSupplier,
+} from '@/lib/purchase-orders/unoffered-choice';
 
 import {
   RecurringTemplatesPanel,

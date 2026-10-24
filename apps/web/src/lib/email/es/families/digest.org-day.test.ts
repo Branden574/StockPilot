@@ -51,7 +51,11 @@ function payload(startedAt: string): DigestPayload {
   };
 }
 
-const OPTS = { orgName: 'Harbour', appUrl: 'https://stockpilotusa.com', settingsUrl: 'https://stockpilotusa.com/s' };
+const OPTS = {
+  orgName: 'Harbour',
+  appUrl: 'https://stockpilotusa.com',
+  settingsUrl: 'https://stockpilotusa.com/s',
+};
 
 describe("the digest's dates are the organization's", () => {
   it("the subject: Tuesday in Sydney, not UTC's Monday", () => {
@@ -61,7 +65,9 @@ describe("the digest's dates are the organization's", () => {
 
   it("a preview sent at 6 PM in Los Angeles carries that day, not UTC's tomorrow", () => {
     expect(weeklyDigestPreviewSubject(EVENING_PREVIEW, LA)).toContain('Monday, October 12, 2026');
-    expect(weeklyDigestPreviewSubject(EVENING_PREVIEW, SYDNEY)).toContain('Tuesday, October 13, 2026');
+    expect(weeklyDigestPreviewSubject(EVENING_PREVIEW, SYDNEY)).toContain(
+      'Tuesday, October 13, 2026',
+    );
   });
 
   it('the "As of" pill', () => {
@@ -82,14 +88,18 @@ describe("the digest's dates are the organization's", () => {
     expect(html).not.toContain('As of Oct 12');
   });
 
-  it('the plain text: its dateline and the started day, at the run\'s moment', () => {
-    const text = weeklyDigestText(payload('2026-10-11T14:30:00.000Z'), { ...OPTS, now: RUN, timeZone: SYDNEY });
+  it("the plain text: its dateline and the started day, at the run's moment", () => {
+    const text = weeklyDigestText(payload('2026-10-11T14:30:00.000Z'), {
+      ...OPTS,
+      now: RUN,
+      timeZone: SYDNEY,
+    });
     expect(text).toContain('Harbour · Tuesday, October 13, 2026');
     expect(text).toContain('10/12/2026');
     expect(text).not.toContain('10/11/2026');
   });
 
-  it('a missing zone is the documented default (Los Angeles), not the server\'s', () => {
+  it("a missing zone is the documented default (Los Angeles), not the server's", () => {
     expect(weeklyDigestSubject(EVENING_PREVIEW, null)).toContain('Monday, October 12, 2026');
     expect(digestAsOfLabel(EVENING_PREVIEW, undefined)).toBe('As of Oct 12');
   });

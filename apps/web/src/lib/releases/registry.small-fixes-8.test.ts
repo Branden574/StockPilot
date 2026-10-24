@@ -8,10 +8,18 @@ import {
   type ReleaseViewer,
 } from '@stockpilot/core';
 
-import { unofferedDestinationNote, unofferedSupplierNote } from '@/lib/purchase-orders/unoffered-choice';
+import {
+  unofferedDestinationNote,
+  unofferedSupplierNote,
+} from '@/lib/purchase-orders/unoffered-choice';
 import { TAB_LABELS } from '@/lib/purchase-orders/tabs';
 
-import { buildReleaseList, legacyAnnouncementsFor, registryFingerprint, visibleReleases } from './logic';
+import {
+  buildReleaseList,
+  legacyAnnouncementsFor,
+  registryFingerprint,
+  visibleReleases,
+} from './logic';
 import { RELEASES } from './registry';
 
 /**
@@ -57,9 +65,13 @@ describe('the small fixes slice 8 release', () => {
     expect(release().status).toBe('draft');
     expect(release().revision).toBe(1);
     expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
-    expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).not.toContain(ID);
+    expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).not.toContain(
+      ID,
+    );
     expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
-    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
+    expect(registryFingerprint(RELEASES)).toBe(
+      registryFingerprint(RELEASES.filter((r) => r.id !== ID)),
+    );
   });
 
   it('is the newest entry, at the top, dated after every other release', () => {
@@ -96,10 +108,19 @@ describe('the small fixes slice 8 release', () => {
       href: '/dashboard/purchase-orders?status=overdue',
       label: 'Open purchase orders',
     });
-    for (const id of ['po-edit-names-unoffered-choices', 'recurring-template-names-unoffered-choices', 'recurring-run-says-why']) {
-      expect(entry(id).audience, id).toEqual({ anyPermission: ['purchase_orders:manage'], modules: ['purchase_orders'] });
+    for (const id of [
+      'po-edit-names-unoffered-choices',
+      'recurring-template-names-unoffered-choices',
+      'recurring-run-says-why',
+    ]) {
+      expect(entry(id).audience, id).toEqual({
+        anyPermission: ['purchase_orders:manage'],
+        modules: ['purchase_orders'],
+      });
     }
-    expect(entry('recurring-template-names-unoffered-choices').link?.href).toBe('/dashboard/purchase-orders/recurring');
+    expect(entry('recurring-template-names-unoffered-choices').link?.href).toBe(
+      '/dashboard/purchase-orders/recurring',
+    );
     expect(entry('calendar-last-evening-and-zone').audience).toEqual({
       anyPermission: ['schedule:read', 'schedule:manage'],
       modules: ['schedule'],
@@ -110,9 +131,11 @@ describe('the small fixes slice 8 release', () => {
 
     const published: Release = { ...release(), status: 'published' };
     const told = (permissions: ReleaseViewer['permissions'], modules: ModuleId[]) =>
-      visibleReleases([published], { role: 'staff', permissions, enabledModules: modules })[0]?.entries.map(
-        (e) => e.id,
-      ) ?? [];
+      visibleReleases([published], {
+        role: 'staff',
+        permissions,
+        enabledModules: modules,
+      })[0]?.entries.map((e) => e.id) ?? [];
     // A member who reads purchase orders but cannot edit them: the Overdue
     // view and the digest, not the edit lines.
     expect(told(['purchase_orders:read'], ['purchase_orders'])).toEqual([
@@ -126,7 +149,9 @@ describe('the small fixes slice 8 release', () => {
       'calendar-last-evening-and-zone',
       'digest-dated-in-workspace-zone',
     ]);
-    expect(told(['purchase_orders:read', 'purchase_orders:manage'], [])).toEqual(['digest-dated-in-workspace-zone']);
+    expect(told(['purchase_orders:read', 'purchase_orders:manage'], [])).toEqual([
+      'digest-dated-in-workspace-zone',
+    ]);
   });
 
   it("uses the screens' own words", () => {
@@ -141,8 +166,12 @@ describe('the small fixes slice 8 release', () => {
     expect(text).toContain('Recurring purchase orders notification');
     expect(text).toContain('As of date');
     // The notes it describes say what the form had, and ask for a choice.
-    expect(unofferedDestinationNote('purchase_order', { name: 'Staging', why: 'not_a_site' })).toMatch(/choose a destination\.$/);
-    expect(unofferedSupplierNote('template', { name: 'Acme Paper', why: 'archived' })).toMatch(/was archived, so choose a supplier\.$/);
+    expect(
+      unofferedDestinationNote('purchase_order', { name: 'Staging', why: 'not_a_site' }),
+    ).toMatch(/choose a destination\.$/);
+    expect(unofferedSupplierNote('template', { name: 'Acme Paper', why: 'archived' })).toMatch(
+      /was archived, so choose a supplier\.$/,
+    );
   });
 
   it('claims nothing the product does not do, and never "book" for a quantity', () => {
@@ -157,8 +186,12 @@ describe('the small fixes slice 8 release', () => {
     // The past is told as it was: a deleted destination's template DID create
     // purchase orders (the run line says so), so the template line does not
     // say it created none (slice 8 review).
-    expect(entry('recurring-template-names-unoffered-choices').whyItMatters).not.toMatch(/creates no purchase orders/);
-    expect(entry('recurring-run-says-why').whatChanged).toContain('still created purchase orders to that location');
+    expect(entry('recurring-template-names-unoffered-choices').whyItMatters).not.toMatch(
+      /creates no purchase orders/,
+    );
+    expect(entry('recurring-run-says-why').whatChanged).toContain(
+      'still created purchase orders to that location',
+    );
     // Make recurring already named a deleted destination (#334): only the
     // archived supplier is new there.
     expect(entry('recurring-template-names-unoffered-choices').whatChanged).toContain(

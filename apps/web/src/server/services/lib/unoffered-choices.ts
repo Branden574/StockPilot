@@ -52,21 +52,26 @@ export async function readUnofferedDestinations(
   organizationId: string,
   ids: readonly string[],
   tag: string,
-): Promise<{ unoffered: Map<string, UnofferedDestination>; fold: Array<{ id: string; name: string }> }> {
+): Promise<{
+  unoffered: Map<string, UnofferedDestination>;
+  fold: Array<{ id: string; name: string }>;
+}> {
   const wanted = [...new Set(ids.filter(Boolean))];
   const unoffered = new Map<string, UnofferedDestination>();
   const fold: Array<{ id: string; name: string }> = [];
   if (wanted.length === 0) return { unoffered, fold };
   let rows: LocationRow[] = [];
   try {
-    rows = await fetchAllRowsByIds<LocationRow>(wanted, (batch) => (from, to) =>
-      client
-        .from('locations')
-        .select('id, name, kind, type, warehouse_id, deleted_at')
-        .eq('organization_id', organizationId)
-        .in('id', batch)
-        .order('id', { ascending: true })
-        .range(from, to),
+    rows = await fetchAllRowsByIds<LocationRow>(
+      wanted,
+      (batch) => (from, to) =>
+        client
+          .from('locations')
+          .select('id, name, kind, type, warehouse_id, deleted_at')
+          .eq('organization_id', organizationId)
+          .in('id', batch)
+          .order('id', { ascending: true })
+          .range(from, to),
     );
   } catch (err) {
     reportDegradedRead(tag, err, { ids: wanted.length });
@@ -94,10 +99,15 @@ export async function readUnofferedDestinations(
  * not gated on the module, batched; it throws on a failed read.
  */
 export async function readUnofferedSuppliers(
-  namesByIds: (ids: readonly string[]) => Promise<Array<{ id: string; name: string; deleted_at: string | null }>>,
+  namesByIds: (
+    ids: readonly string[],
+  ) => Promise<Array<{ id: string; name: string; deleted_at: string | null }>>,
   ids: readonly string[],
   tag: string,
-): Promise<{ unoffered: Map<string, UnofferedSupplier>; fold: Array<{ id: string; name: string }> }> {
+): Promise<{
+  unoffered: Map<string, UnofferedSupplier>;
+  fold: Array<{ id: string; name: string }>;
+}> {
   const wanted = [...new Set(ids.filter(Boolean))];
   const unoffered = new Map<string, UnofferedSupplier>();
   const fold: Array<{ id: string; name: string }> = [];

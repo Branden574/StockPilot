@@ -41,7 +41,11 @@ vi.mock('@/lib/auth/warehouse', () => ({
   },
 }));
 vi.mock('@/lib/auth/session', () => ({
-  requireOrgContext: vi.fn(async () => ({ userId: 'user-test', organizationId: 'org-test', role: 'admin' })),
+  requireOrgContext: vi.fn(async () => ({
+    userId: 'user-test',
+    organizationId: 'org-test',
+    role: 'admin',
+  })),
 }));
 vi.mock('./audit', () => ({ audit: vi.fn(async () => {}) }));
 vi.mock('./integration-events', () => ({ dispatchEvent: vi.fn(async () => {}) }));
@@ -59,11 +63,16 @@ vi.mock('./inventory', () => ({
   },
 }));
 vi.mock('@/lib/supabase/admin', () => ({
-  createAdminClient: () => makeSupabaseStub({ 'organization_members.select': { data: [], error: null } }).client,
+  createAdminClient: () =>
+    makeSupabaseStub({ 'organization_members.select': { data: [], error: null } }).client,
 }));
 
 import { ServiceError } from './context';
-import { PurchaseOrdersService, refusedDeletedDestination, refusedDestination } from './purchase-orders';
+import {
+  PurchaseOrdersService,
+  refusedDeletedDestination,
+  refusedDestination,
+} from './purchase-orders';
 
 const DEST = {
   site: 'dddddddd-0000-4000-8000-000000000001',
@@ -75,11 +84,51 @@ const DEST = {
 
 /** locations as the database holds them: deleted ones stay readable. */
 const LOCATIONS = [
-  { id: DEST.site, organization_id: 'org-test', name: 'Main Warehouse', kind: null, type: 'warehouse', warehouse_id: WH, deleted_at: null },
-  { id: DEST.staging, organization_id: 'org-test', name: 'Staging', kind: 'staging', type: 'other', warehouse_id: WH, deleted_at: null },
-  { id: DEST.deleted, organization_id: 'org-test', name: 'Old Annex', kind: null, type: 'warehouse', warehouse_id: WH, deleted_at: '2026-10-01T00:00:00Z' },
-  { id: DEST.deletedUnnamed, organization_id: 'org-test', name: '  ', kind: null, type: 'warehouse', warehouse_id: WH, deleted_at: '2026-10-01T00:00:00Z' },
-  { id: DEST.noWarehouse, organization_id: 'org-test', name: 'District Office', kind: null, type: 'warehouse', warehouse_id: null, deleted_at: null },
+  {
+    id: DEST.site,
+    organization_id: 'org-test',
+    name: 'Main Warehouse',
+    kind: null,
+    type: 'warehouse',
+    warehouse_id: WH,
+    deleted_at: null,
+  },
+  {
+    id: DEST.staging,
+    organization_id: 'org-test',
+    name: 'Staging',
+    kind: 'staging',
+    type: 'other',
+    warehouse_id: WH,
+    deleted_at: null,
+  },
+  {
+    id: DEST.deleted,
+    organization_id: 'org-test',
+    name: 'Old Annex',
+    kind: null,
+    type: 'warehouse',
+    warehouse_id: WH,
+    deleted_at: '2026-10-01T00:00:00Z',
+  },
+  {
+    id: DEST.deletedUnnamed,
+    organization_id: 'org-test',
+    name: '  ',
+    kind: null,
+    type: 'warehouse',
+    warehouse_id: WH,
+    deleted_at: '2026-10-01T00:00:00Z',
+  },
+  {
+    id: DEST.noWarehouse,
+    organization_id: 'org-test',
+    name: 'District Office',
+    kind: null,
+    type: 'warehouse',
+    warehouse_id: null,
+    deleted_at: null,
+  },
 ];
 
 const DRAFT = {
@@ -101,11 +150,16 @@ function stub() {
     'purchase_orders.select': { data: DRAFT, error: null },
     'purchase_order_items.select': { data: [], error: null },
     'rpc:next_po_number': { data: 'PO-100', error: null },
-    'rpc:save_purchase_order_draft': { data: { id: 'po-1', stamped: 0, stamp_error: null }, error: null },
+    'rpc:save_purchase_order_draft': {
+      data: { id: 'po-1', stamped: 0, stamp_error: null },
+      error: null,
+    },
   });
 }
 
-const LINES = [{ itemId: '00000000-0000-4000-8000-000000000001', quantityOrdered: 1, unitCost: 10 }];
+const LINES = [
+  { itemId: '00000000-0000-4000-8000-000000000001', quantityOrdered: 1, unitCost: 10 },
+];
 
 /** What the save said ('saved' or the refusal), and whether anything was written. */
 async function save(op: 'create' | 'update', destinationLocationId: string) {
@@ -132,7 +186,9 @@ beforeEach(() => {
 describe('PurchaseOrdersService: a deleted destination is refused by name, and nothing is written', () => {
   it.each(['create', 'update'] as const)('%s refuses a deleted location, naming it', async (op) => {
     const { outcome, written, error } = await save(op, DEST.deleted);
-    expect(outcome).toBe('"Old Annex" was deleted, so a purchase order can\'t go there. Choose another destination.');
+    expect(outcome).toBe(
+      '"Old Annex" was deleted, so a purchase order can\'t go there. Choose another destination.',
+    );
     expect(written).toBe(false);
     expect(error).toBeInstanceOf(ServiceError);
     expect((error as ServiceError).code).toBe('validation_error');
@@ -144,7 +200,9 @@ describe('PurchaseOrdersService: a deleted destination is refused by name, and n
 
   it('a deleted location with no name is refused without one', async () => {
     const { outcome, written, error } = await save('create', DEST.deletedUnnamed);
-    expect(outcome).toBe("The destination location was deleted, so a purchase order can't go there. Choose another destination.");
+    expect(outcome).toBe(
+      "The destination location was deleted, so a purchase order can't go there. Choose another destination.",
+    );
     expect(written).toBe(false);
     expect(refusedDeletedDestination(error)).toEqual({ locationName: null });
   });
@@ -158,24 +216,35 @@ describe('PurchaseOrdersService: a deleted destination is refused by name, and n
     // Not a deleted destination; tagged with its own reason and name, so the
     // recurring run says it in the template's words (slice 8 review).
     expect(refusedDeletedDestination(error)).toBeNull();
-    expect(refusedDestination(error)).toEqual({ why: 'no_warehouse', locationName: 'District Office' });
+    expect(refusedDestination(error)).toEqual({
+      why: 'no_warehouse',
+      locationName: 'District Office',
+    });
     expect(refusedDeletedDestination(new Error('x'))).toBeNull();
     expect(refusedDestination(new Error('x'))).toBeNull();
   });
 
-  it.each(['create', 'update'] as const)('%s still saves to a site, and to a staging area (linked to its warehouse)', async (op) => {
-    expect(await save(op, DEST.site)).toMatchObject({ outcome: 'saved', written: true });
-    expect(await save(op, DEST.staging)).toMatchObject({ outcome: 'saved', written: true });
-  });
+  it.each(['create', 'update'] as const)(
+    '%s still saves to a site, and to a staging area (linked to its warehouse)',
+    async (op) => {
+      expect(await save(op, DEST.site)).toMatchObject({ outcome: 'saved', written: true });
+      expect(await save(op, DEST.staging)).toMatchObject({ outcome: 'saved', written: true });
+    },
+  );
 
   it('a failed location read refuses the save as an error, never as "not found" or a pass', async () => {
     const s = makeSupabaseStub({
       'locations.select': { data: null, error: { message: 'statement timeout' } },
       'rpc:next_po_number': { data: 'PO-100', error: null },
-      'rpc:save_purchase_order_draft': { data: { id: 'po-1', stamped: 0, stamp_error: null }, error: null },
+      'rpc:save_purchase_order_draft': {
+        data: { id: 'po-1', stamped: 0, stamp_error: null },
+        error: null,
+      },
     });
     const svc = new PurchaseOrdersService(makeServiceContext(s.client) as never);
-    const error = await svc.create({ destinationLocationId: DEST.site, lines: LINES }).catch((e: unknown) => e);
+    const error = await svc
+      .create({ destinationLocationId: DEST.site, lines: LINES })
+      .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ServiceError);
     expect((error as ServiceError).code).toBe('internal_error');
     expect(s.rpcCalls.some((c) => c.name === 'save_purchase_order_draft')).toBe(false);

@@ -9,13 +9,19 @@ import { formatAuditEvent, formatEntityType } from './format';
  */
 describe('audit labels', () => {
   it('names a recurring PO template as the product does', () => {
-    expect(formatAuditEvent('recurring_po_template.run_skipped')).toBe('Recurring PO template · Run Skipped');
-    expect(formatAuditEvent('recurring_po_template.created')).toBe('Recurring PO template · Created');
+    expect(formatAuditEvent('recurring_po_template.run_skipped')).toBe(
+      'Recurring PO template · Run Skipped',
+    );
+    expect(formatAuditEvent('recurring_po_template.created')).toBe(
+      'Recurring PO template · Created',
+    );
     expect(formatEntityType('recurring_po_template')).toBe('Recurring PO template');
   });
 
   it('keeps the existing labels', () => {
-    expect(formatAuditEvent('purchase_order.status_changed')).toBe('Purchase Order · Status Changed');
+    expect(formatAuditEvent('purchase_order.status_changed')).toBe(
+      'Purchase Order · Status Changed',
+    );
     expect(formatEntityType('purchase_order')).toBe('Purchase order');
     expect(formatAuditEvent('po_import.created')).toBe('PO import · Created');
   });

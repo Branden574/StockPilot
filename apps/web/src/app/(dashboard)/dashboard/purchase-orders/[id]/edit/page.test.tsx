@@ -39,9 +39,33 @@ const namesByIds = vi.fn(async (ids: readonly string[]) =>
   ].filter((s) => ids.includes(s.id)),
 );
 const locationRows = [
-  { id: DEST.site, organization_id: 'org-1', name: 'Main Warehouse', kind: null, type: 'warehouse', warehouse_id: 'wh-1', deleted_at: null },
-  { id: DEST.staging, organization_id: 'org-1', name: 'Staging', kind: 'staging', type: 'other', warehouse_id: 'wh-1', deleted_at: null },
-  { id: DEST.gone, organization_id: 'org-1', name: 'Old Annex', kind: null, type: 'warehouse', warehouse_id: 'wh-1', deleted_at: '2026-10-01T00:00:00Z' },
+  {
+    id: DEST.site,
+    organization_id: 'org-1',
+    name: 'Main Warehouse',
+    kind: null,
+    type: 'warehouse',
+    warehouse_id: 'wh-1',
+    deleted_at: null,
+  },
+  {
+    id: DEST.staging,
+    organization_id: 'org-1',
+    name: 'Staging',
+    kind: 'staging',
+    type: 'other',
+    warehouse_id: 'wh-1',
+    deleted_at: null,
+  },
+  {
+    id: DEST.gone,
+    organization_id: 'org-1',
+    name: 'Old Annex',
+    kind: null,
+    type: 'warehouse',
+    warehouse_id: 'wh-1',
+    deleted_at: '2026-10-01T00:00:00Z',
+  },
 ];
 const locationsRead = vi.fn(servedLikePostgrest(locationRows));
 
@@ -54,7 +78,12 @@ vi.mock('next/navigation', () => ({
   }),
 }));
 vi.mock('@/lib/auth/session', () => ({
-  requireOrgContext: vi.fn(async () => ({ organizationId: 'org-1', userId: 'u1', role: 'owner', permissions: null })),
+  requireOrgContext: vi.fn(async () => ({
+    organizationId: 'org-1',
+    userId: 'u1',
+    role: 'owner',
+    permissions: null,
+  })),
 }));
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(async () => makeSupabaseStub({ 'locations.select': locationsRead }).client),
@@ -86,7 +115,9 @@ vi.mock('@/server/services/locations', () => ({
 vi.mock('@/server/services/charters', () => ({
   ChartersService: { forCurrentUser: vi.fn(async () => ({ list: vi.fn(async () => []) })) },
 }));
-vi.mock('@/server/services/size-run-display', () => ({ loadSizeRunGroups: vi.fn(async () => ({})) }));
+vi.mock('@/server/services/size-run-display', () => ({
+  loadSizeRunGroups: vi.fn(async () => ({})),
+}));
 const reportDegradedRead = vi.fn();
 vi.mock('@/server/services/lib/fetch-by-ids', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/server/services/lib/fetch-by-ids')>()),
@@ -134,10 +165,13 @@ describe('Edit purchase order: what the page tells the form the selects do not o
     expect(namesByIds).not.toHaveBeenCalled();
   });
 
-  it('a staging area: read in the caller\'s organization and named as not a site', async () => {
+  it("a staging area: read in the caller's organization and named as not a site", async () => {
     draft.mockReturnValueOnce({ ...draft(), destination_location_id: DEST.staging });
     const props = await formProps();
-    expect(props.unoffered).toEqual({ destination: { name: 'Staging', why: 'not_a_site' }, supplier: null });
+    expect(props.unoffered).toEqual({
+      destination: { name: 'Staging', why: 'not_a_site' },
+      supplier: null,
+    });
     expect(locationsRead).toHaveBeenCalledTimes(1);
     const call = locationsRead.mock.calls[0]![0];
     expect(call.args[call.methods.indexOf('eq')]).toEqual(['organization_id', 'org-1']);
@@ -154,7 +188,10 @@ describe('Edit purchase order: what the page tells the form the selects do not o
   it('an archived supplier: named as archived, and not offered', async () => {
     draft.mockReturnValueOnce({ ...draft(), supplier_id: SUP.archived });
     const props = await formProps();
-    expect(props.unoffered).toEqual({ destination: null, supplier: { name: 'Acme Paper', why: 'archived' } });
+    expect(props.unoffered).toEqual({
+      destination: null,
+      supplier: { name: 'Acme Paper', why: 'archived' },
+    });
     expect(props.suppliers.map((s) => s.id)).toEqual([SUP.active]);
   });
 
@@ -180,15 +217,30 @@ describe('Edit purchase order: what the page tells the form the selects do not o
   });
 
   it('failed reads name nothing, are reported, and never take the page down', async () => {
-    draft.mockReturnValueOnce({ ...draft(), destination_location_id: DEST.gone, supplier_id: SUP.archived });
-    locationsRead.mockImplementationOnce(() => ({ data: null, error: { message: 'statement timeout' } }));
+    draft.mockReturnValueOnce({
+      ...draft(),
+      destination_location_id: DEST.gone,
+      supplier_id: SUP.archived,
+    });
+    locationsRead.mockImplementationOnce(() => ({
+      data: null,
+      error: { message: 'statement timeout' },
+    }));
     namesByIds.mockRejectedValueOnce(new Error('statement timeout'));
     const props = await formProps();
     expect(props.unoffered).toEqual({
       destination: { name: null, why: 'unknown' },
       supplier: { name: null, why: 'unknown' },
     });
-    expect(reportDegradedRead).toHaveBeenCalledWith('purchase_orders.edit.unoffered_destination', expect.anything(), { ids: 1 });
-    expect(reportDegradedRead).toHaveBeenCalledWith('purchase_orders.edit.unoffered_supplier', expect.anything(), { ids: 1 });
+    expect(reportDegradedRead).toHaveBeenCalledWith(
+      'purchase_orders.edit.unoffered_destination',
+      expect.anything(),
+      { ids: 1 },
+    );
+    expect(reportDegradedRead).toHaveBeenCalledWith(
+      'purchase_orders.edit.unoffered_supplier',
+      expect.anything(),
+      { ids: 1 },
+    );
   });
 });

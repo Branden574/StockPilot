@@ -24,12 +24,19 @@ vi.mock('next/navigation', () => ({
 const toastMock = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock('sonner', () => ({ toast: toastMock }));
 const actions = vi.hoisted(() => ({
-  create: vi.fn(async (_payload: Record<string, unknown>) => ({ ok: true as const, data: { id: 'ev-new' } })),
-  update: vi.fn(async (_id: string, _payload: Record<string, unknown>) => ({ ok: true as const, data: { id: 'ev-1' } })),
+  create: vi.fn(async (_payload: Record<string, unknown>) => ({
+    ok: true as const,
+    data: { id: 'ev-new' },
+  })),
+  update: vi.fn(async (_id: string, _payload: Record<string, unknown>) => ({
+    ok: true as const,
+    data: { id: 'ev-1' },
+  })),
 }));
 vi.mock('@/server/actions/schedule', () => ({
   createScheduleEventAction: (payload: Record<string, unknown>) => actions.create(payload),
-  updateScheduleEventAction: (id: string, payload: Record<string, unknown>) => actions.update(id, payload),
+  updateScheduleEventAction: (id: string, payload: Record<string, unknown>) =>
+    actions.update(id, payload),
   deleteScheduleEventAction: vi.fn(),
 }));
 
@@ -57,7 +64,12 @@ function fillTitle() {
 describe("ScheduleEventForm: dates and times in the organization's zone", () => {
   it('"+ Add" on Nov 7 opens at 9:00 AM that day there and saves it, so the calendar draws it on Nov 7', async () => {
     render(
-      <ScheduleEventForm warehouses={WAREHOUSES} bundles={[]} initialDate="2026-11-07" timeZone="America/Los_Angeles" />,
+      <ScheduleEventForm
+        warehouses={WAREHOUSES}
+        bundles={[]}
+        initialDate="2026-11-07"
+        timeZone="America/Los_Angeles"
+      />,
     );
     expect(starts().value).toBe('2026-11-07T09:00');
     fillTitle();
@@ -98,19 +110,26 @@ describe("ScheduleEventForm: dates and times in the organization's zone", () => 
     });
   });
 
-  it('keeps an event\'s seconds across an unchanged save', async () => {
+  it("keeps an event's seconds across an unchanged save", async () => {
     render(
       <ScheduleEventForm
         warehouses={WAREHOUSES}
         bundles={[]}
         timeZone="America/Los_Angeles"
-        defaults={{ id: 'ev-1', title: 'Pickup', startsAt: '2026-11-08T04:00:30.000Z', warehouseId: 'wh-1' }}
+        defaults={{
+          id: 'ev-1',
+          title: 'Pickup',
+          startsAt: '2026-11-08T04:00:30.000Z',
+          warehouseId: 'wh-1',
+        }}
       />,
     );
     expect(starts().value).toBe('2026-11-07T20:00:30');
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(actions.update).toHaveBeenCalledTimes(1));
-    expect(actions.update.mock.calls[0]![1]).toMatchObject({ startsAt: '2026-11-08T04:00:30.000Z' });
+    expect(actions.update.mock.calls[0]![1]).toMatchObject({
+      startsAt: '2026-11-08T04:00:30.000Z',
+    });
   });
 
   it('names the zone the times are in', () => {
@@ -120,14 +139,21 @@ describe("ScheduleEventForm: dates and times in the organization's zone", () => 
 
   it('a time that does not happen there (the spring-forward hour) is refused with a field error, and nothing is saved', async () => {
     render(
-      <ScheduleEventForm warehouses={WAREHOUSES} bundles={[]} initialDate="2027-03-14" timeZone="America/Los_Angeles" />,
+      <ScheduleEventForm
+        warehouses={WAREHOUSES}
+        bundles={[]}
+        initialDate="2027-03-14"
+        timeZone="America/Los_Angeles"
+      />,
     );
     fillTitle();
     fireEvent.change(starts(), { target: { value: '2027-03-14T02:30' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create event' }));
 
     expect(
-      await screen.findByText("That start time doesn't exist in America/Los_Angeles (the clocks change). Pick another time."),
+      await screen.findByText(
+        "That start time doesn't exist in America/Los_Angeles (the clocks change). Pick another time.",
+      ),
     ).toBeInTheDocument();
     expect(starts()).toHaveAttribute('aria-invalid', 'true');
     expect(actions.create).not.toHaveBeenCalled();

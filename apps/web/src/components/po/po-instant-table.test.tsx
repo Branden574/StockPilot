@@ -64,13 +64,20 @@ const ROWS: PoInstantRow[] = [
 
 function render(timeZone = 'America/Los_Angeles') {
   return (
-    <PoInstantTable rows={ROWS} supplierNames={{ 'sup-1': 'TechSource Distributors' }} timeZone={timeZone} />
+    <PoInstantTable
+      rows={ROWS}
+      supplierNames={{ 'sup-1': 'TechSource Distributors' }}
+      timeZone={timeZone}
+    />
   );
 }
 
 describe('PoInstantTable hydrates with the server in UTC and the browser in Los Angeles', () => {
   it("prints Placed as the organization's day on the server and in the browser, and Expected as the picked day, with no hydration error", async () => {
-    const run = await hydrateAcrossClockShift(() => render(), { serverNow: T0, browserNow: T0 + 60_000 });
+    const run = await hydrateAcrossClockShift(() => render(), {
+      serverNow: T0,
+      browserNow: T0 + 60_000,
+    });
     try {
       expect(run.errors).toEqual([]);
       // The server prints the organization's Placed day (Los Angeles), never
@@ -91,7 +98,7 @@ describe('PoInstantTable hydrates with the server in UTC and the browser in Los 
 });
 
 describe("PoInstantTable prints the organization's day, whoever views it", () => {
-  it('a viewer in New York sees the Los Angeles organization\'s day, as the server-paged list prints it', async () => {
+  it("a viewer in New York sees the Los Angeles organization's day, as the server-paged list prints it", async () => {
     // 11:30 PM on Oct 5 in Los Angeles; 2:30 AM on Oct 6 in New York.
     const late: PoInstantRow = { ...ROWS[0]!, ordered_at: '2026-10-06T06:30:00.000Z' };
     const run = await hydrateAcrossClockShift(

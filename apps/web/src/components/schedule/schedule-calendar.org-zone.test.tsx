@@ -46,10 +46,13 @@ const cellOf = (container: HTMLElement, ymd: string) =>
 
 const todayCells = (container: HTMLElement) =>
   Array.from(container.querySelectorAll('.bg-foreground')).map((mark) =>
-    mark.closest('.group')?.querySelector('[aria-label^="Add event on"]')?.getAttribute('aria-label'),
+    mark
+      .closest('.group')
+      ?.querySelector('[aria-label^="Add event on"]')
+      ?.getAttribute('aria-label'),
   );
 
-describe('ScheduleCalendar draws the organization\'s days and times', () => {
+describe("ScheduleCalendar draws the organization's days and times", () => {
   it('a New York organization: an event at 10:30 PM on Oct 5 there sits on Oct 5 and reads 10:30 PM, for a viewer in Los Angeles too', async () => {
     // 10:30 PM on Oct 5 in New York; 7:30 PM in Los Angeles; Oct 6 in UTC.
     const late = event('ev-1', 'Evening delivery', '2026-10-06T02:30:00Z');
@@ -73,9 +76,15 @@ describe('ScheduleCalendar draws the organization\'s days and times', () => {
       expect(run.errors).toEqual([]);
       // Drawn on the server already: the same on both sides.
       expect(run.html).toContain('Evening delivery');
-      expect(within(cellOf(run.container, '2026-10-05')).getByText('Evening delivery')).toBeInTheDocument();
-      expect(within(cellOf(run.container, '2026-10-06')).queryByText('Evening delivery')).toBeNull();
-      expect(within(cellOf(run.container, '2026-10-05')).getByText(/10:30\sPM/)).toBeInTheDocument();
+      expect(
+        within(cellOf(run.container, '2026-10-05')).getByText('Evening delivery'),
+      ).toBeInTheDocument();
+      expect(
+        within(cellOf(run.container, '2026-10-06')).queryByText('Evening delivery'),
+      ).toBeNull();
+      expect(
+        within(cellOf(run.container, '2026-10-05')).getByText(/10:30\sPM/),
+      ).toBeInTheDocument();
       expect(within(cellOf(run.container, '2026-10-07')).getByText(/2:00\sPM/)).toBeInTheDocument();
       expect(run.container.textContent).not.toMatch(/7:30\sPM|11:00\sAM/);
     } finally {
@@ -89,7 +98,14 @@ describe('ScheduleCalendar draws the organization\'s days and times', () => {
     const t0 = Date.parse('2026-11-01T05:00:00.000Z');
     const run = await hydrateAcrossClockShift(
       () => (
-        <ScheduleCalendar year={2026} month={11} events={[]} canManage timeZone={NEW_YORK} todayYmd="2026-11-01" />
+        <ScheduleCalendar
+          year={2026}
+          month={11}
+          events={[]}
+          canManage
+          timeZone={NEW_YORK}
+          todayYmd="2026-11-01"
+        />
       ),
       { serverNow: t0, browserNow: t0 + 60_000, browserZone: 'America/Los_Angeles' },
     );
@@ -101,11 +117,18 @@ describe('ScheduleCalendar draws the organization\'s days and times', () => {
     }
   });
 
-  it('a month without the organization\'s today has no mark', async () => {
+  it("a month without the organization's today has no mark", async () => {
     const t0 = Date.parse('2026-10-06T03:00:00.000Z');
     const run = await hydrateAcrossClockShift(
       () => (
-        <ScheduleCalendar year={2026} month={3} events={[]} canManage timeZone={NEW_YORK} todayYmd="2026-10-05" />
+        <ScheduleCalendar
+          year={2026}
+          month={3}
+          events={[]}
+          canManage
+          timeZone={NEW_YORK}
+          todayYmd="2026-10-05"
+        />
       ),
       { serverNow: t0, browserNow: t0 + 60_000 },
     );

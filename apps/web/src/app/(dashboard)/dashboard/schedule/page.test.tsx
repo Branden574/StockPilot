@@ -236,7 +236,15 @@ describe('the eyebrow follows a Settings > Navigation rename', () => {
  *     opens the organization's month without a Today mark.
  */
 describe('the team calendar reads and draws the organization’s days', () => {
-  type Ev = { id: string; title: string; startsAt: string; endsAt: string | null; allDay: boolean; status: string; locationText: null };
+  type Ev = {
+    id: string;
+    title: string;
+    startsAt: string;
+    endsAt: string | null;
+    allDay: boolean;
+    status: string;
+    locationText: null;
+  };
   const ev = (id: string, title: string, startsAt: string): Ev => ({
     id,
     title,
@@ -250,7 +258,9 @@ describe('the team calendar reads and draws the organization’s days', () => {
   function servedFrom(events: Ev[]) {
     listInRange.mockImplementation((async (from: Date, to: Date) =>
       events.filter(
-        (e) => Date.parse(e.startsAt) < to.getTime() && (e.endsAt === null || Date.parse(e.endsAt) >= from.getTime()),
+        (e) =>
+          Date.parse(e.startsAt) < to.getTime() &&
+          (e.endsAt === null || Date.parse(e.endsAt) >= from.getTime()),
       )) as never);
   }
   const cellOf = (container: HTMLElement, ymd: string) =>
@@ -267,12 +277,19 @@ describe('the team calendar reads and draws the organization’s days', () => {
   it("loads the grid's last evening in the organization's zone: 8 PM on Nov 7 in Los Angeles (Nov 8 in UTC) shows on Nov 7", async () => {
     getOrgRowForRequest.mockResolvedValue({ timezone: 'America/Los_Angeles' });
     // October 2026's grid runs Sun Sep 27 to Sat Nov 7.
-    servedFrom([ev('ev-late', 'Late pickup', '2026-11-08T04:00:00Z'), ev('ev-early', 'Early drop', '2026-09-27T08:00:00Z')]);
+    servedFrom([
+      ev('ev-late', 'Late pickup', '2026-11-08T04:00:00Z'),
+      ev('ev-early', 'Early drop', '2026-09-27T08:00:00Z'),
+    ]);
     const run = await openCalendar(Date.parse('2026-10-15T19:00:00.000Z'), '2026-10');
     try {
       expect(run.errors).toEqual([]);
-      expect(within(cellOf(run.container, '2026-11-07')).getByText('Late pickup')).toBeInTheDocument();
-      expect(within(cellOf(run.container, '2026-09-27')).getByText('Early drop')).toBeInTheDocument();
+      expect(
+        within(cellOf(run.container, '2026-11-07')).getByText('Late pickup'),
+      ).toBeInTheDocument();
+      expect(
+        within(cellOf(run.container, '2026-09-27')).getByText('Early drop'),
+      ).toBeInTheDocument();
     } finally {
       run.unmount();
     }
@@ -296,7 +313,7 @@ describe('the team calendar reads and draws the organization’s days', () => {
     }
   });
 
-  it("a viewer in Los Angeles of a New York organization at 10 PM on Oct 31 (Nov 1 in New York): November, with Nov 1 marked today", async () => {
+  it('a viewer in Los Angeles of a New York organization at 10 PM on Oct 31 (Nov 1 in New York): November, with Nov 1 marked today', async () => {
     getOrgRowForRequest.mockResolvedValue({ timezone: 'America/New_York' });
     const at = Date.parse('2026-11-01T05:00:00.000Z');
     const page = await pageAt(at, 'UTC');

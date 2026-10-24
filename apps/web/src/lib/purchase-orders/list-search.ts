@@ -38,7 +38,12 @@ export function poMatchesSearch(
  */
 export function searchedPage<T extends SearchablePo>(
   rows: readonly T[],
-  opts: { query: string; page: number; perPage: number; supplierName: (id: string | null) => string },
+  opts: {
+    query: string;
+    page: number;
+    perPage: number;
+    supplierName: (id: string | null) => string;
+  },
 ): { rows: T[]; total: number } {
   const matching = rows.filter((po) => poMatchesSearch(po, opts.query, opts.supplierName));
   const perPage = Math.max(1, Math.floor(opts.perPage));

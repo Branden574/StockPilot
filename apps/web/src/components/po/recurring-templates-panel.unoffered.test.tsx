@@ -37,7 +37,10 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn(), back: vi.fn() }),
 }));
 
-import { createRecurringTemplateAction, updateRecurringTemplateAction } from '@/server/actions/recurring-pos';
+import {
+  createRecurringTemplateAction,
+  updateRecurringTemplateAction,
+} from '@/server/actions/recurring-pos';
 
 import { RecurringTemplatesPanel, type RecurringTemplateRow } from './recurring-templates-panel';
 
@@ -112,7 +115,9 @@ describe('Edit a template whose destination was deleted after it was saved (B)',
     render(<RecurringTemplatesPanel {...props} />);
     openEdit();
 
-    const note = screen.getByText('This template\'s destination, "Old Annex", was deleted, so choose a destination.');
+    const note = screen.getByText(
+      'This template\'s destination, "Old Annex", was deleted, so choose a destination.',
+    );
     expect(destination()).toHaveTextContent('None');
     expect(destination()).toHaveAttribute('aria-describedby', note.id);
     expect(await saveEdit()).toMatchObject({ destinationLocationId: null, supplierId: 'sup-1' });
@@ -124,18 +129,27 @@ describe('Edit a template whose destination was deleted after it was saved (B)',
     openEdit();
 
     await user.click(destination());
-    await user.click(within(await screen.findByRole('listbox')).getByRole('option', { name: 'North Site' }));
+    await user.click(
+      within(await screen.findByRole('listbox')).getByRole('option', { name: 'North Site' }),
+    );
 
     expect(screen.queryByText(/so choose a destination/)).toBeNull();
     expect(await saveEdit()).toMatchObject({ destinationLocationId: 'loc-north' });
   });
 
   it('the page could not read it: still not kept, named without a name, and the list says nothing it does not know', () => {
-    render(<RecurringTemplatesPanel {...PROPS} initial={[{ ...TEMPLATE, destination_location_id: 'loc-gone' }]} />);
+    render(
+      <RecurringTemplatesPanel
+        {...PROPS}
+        initial={[{ ...TEMPLATE, destination_location_id: 'loc-gone' }]}
+      />,
+    );
     expect(screen.queryByText(/creates no purchase order/)).toBeNull();
     openEdit();
     expect(
-      screen.getByText("This template's destination is a location you can't pick here, so choose a destination."),
+      screen.getByText(
+        "This template's destination is a location you can't pick here, so choose a destination.",
+      ),
     ).toBeInTheDocument();
     expect(destination()).toHaveTextContent('None');
   });
@@ -189,7 +203,9 @@ describe('An archived supplier (D)', () => {
   });
 
   it('a supplier the page could not read is "Supplier unknown" in the list, never "not available"', () => {
-    render(<RecurringTemplatesPanel {...PROPS} initial={[{ ...TEMPLATE, supplier_id: 'sup-unread' }]} />);
+    render(
+      <RecurringTemplatesPanel {...PROPS} initial={[{ ...TEMPLATE, supplier_id: 'sup-unread' }]} />,
+    );
     expect(screen.getByText(/Supplier unknown/)).toBeInTheDocument();
     expect(screen.queryByText(/not available/)).toBeNull();
   });
@@ -198,7 +214,9 @@ describe('An archived supplier (D)', () => {
     render(<RecurringTemplatesPanel {...props} />);
     openEdit();
 
-    const note = screen.getByText('This template\'s supplier, "Acme Paper", was archived, so choose a supplier.');
+    const note = screen.getByText(
+      'This template\'s supplier, "Acme Paper", was archived, so choose a supplier.',
+    );
     expect(supplier()).toHaveTextContent('No supplier');
     expect(supplier()).toHaveAttribute('aria-describedby', note.id);
     expect(await saveEdit()).toMatchObject({ supplierId: null, destinationLocationId: 'loc-main' });
@@ -210,7 +228,9 @@ describe('An archived supplier (D)', () => {
     openEdit();
 
     await user.click(supplier());
-    await user.click(within(await screen.findByRole('listbox')).getByRole('option', { name: 'Office Depot' }));
+    await user.click(
+      within(await screen.findByRole('listbox')).getByRole('option', { name: 'Office Depot' }),
+    );
 
     expect(screen.queryByText(/so choose a supplier/)).toBeNull();
     expect(await saveEdit()).toMatchObject({ supplierId: 'sup-2' });
@@ -221,15 +241,23 @@ describe('An archived supplier (D)', () => {
       <RecurringTemplatesPanel
         {...props}
         initial={[]}
-        seed={{ supplierId: 'sup-gone', destinationLocationId: 'loc-main', lineItems: TEMPLATE.line_items as never }}
+        seed={{
+          supplierId: 'sup-gone',
+          destinationLocationId: 'loc-main',
+          lineItems: TEMPLATE.line_items as never,
+        }}
       />,
     );
 
     expect(
-      screen.getByText('This purchase order\'s supplier, "Acme Paper", was archived, so choose a supplier.'),
+      screen.getByText(
+        'This purchase order\'s supplier, "Acme Paper", was archived, so choose a supplier.',
+      ),
     ).toBeInTheDocument();
     expect(supplier()).toHaveTextContent('No supplier');
-    fireEvent.change(screen.getByPlaceholderText('e.g. Weekly office supplies'), { target: { value: 'Monthly paper' } });
+    fireEvent.change(screen.getByPlaceholderText('e.g. Weekly office supplies'), {
+      target: { value: 'Monthly paper' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Create template' }));
     await waitFor(() => expect(createRecurringTemplateAction).toHaveBeenCalledTimes(1));
     expect(vi.mocked(createRecurringTemplateAction).mock.calls[0]?.[0]).toMatchObject({
@@ -247,6 +275,9 @@ describe('Offered values are kept, with no note', () => {
     expect(screen.queryByText(/so choose a/)).toBeNull();
     expect(destination()).toHaveTextContent('Main Warehouse');
     expect(supplier()).toHaveTextContent('TechSource Distributors');
-    expect(await saveEdit()).toMatchObject({ supplierId: 'sup-1', destinationLocationId: 'loc-main' });
+    expect(await saveEdit()).toMatchObject({
+      supplierId: 'sup-1',
+      destinationLocationId: 'loc-main',
+    });
   });
 });
