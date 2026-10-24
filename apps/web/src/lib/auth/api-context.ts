@@ -8,6 +8,7 @@ import { guardedSupabaseFetch } from '@/lib/supabase/url-length-guard';
 import { loadEffectivePermissions } from '@/lib/auth/effective-permissions';
 import { effectiveModules } from '@/lib/modules/effective-modules';
 import { accountIsDisabledOrThrow, loadAccountStatus } from '@/lib/auth/account-status';
+import { bearerTokenFrom, refusesCrossSiteCookieWrite } from '@/lib/auth/cross-site-request';
 import type { ServiceContext } from '@/server/services/context';
 
 import { parseRequestContextBundle } from '@/lib/auth/request-context-bundle';
@@ -383,6 +384,36 @@ async function pickActiveMembership(
 }
 
 /**
+ * One warning per refused cross-site write, so a refusal of the app's own
+ * traffic (a proxy that renames the host, a browser that misreports) shows in
+ * the runtime logs. The method, the path, Sec-Fetch-Site and the Origin's host
+ * only: never the query string, a cookie or a token.
+ */
+function logRefusedCrossSiteWrite(req: Request): void {
+  let path = '(unreadable)';
+  try {
+    path = new URL(req.url).pathname;
+  } catch {
+    // Keep the placeholder.
+  }
+  const origin = req.headers.get('origin');
+  let originHost: string | null = null;
+  if (origin !== null) {
+    try {
+      originHost = origin === 'null' ? 'null' : new URL(origin).host || '(no host)';
+    } catch {
+      originHost = '(unreadable)';
+    }
+  }
+  console.warn('[api-context] refused a cookie-authenticated write from another origin', {
+    method: req.method,
+    path,
+    secFetchSite: req.headers.get('sec-fetch-site')?.slice(0, 32) ?? null,
+    originHost: originHost?.slice(0, 255) ?? null,
+  });
+}
+
+/**
  * Builds a ServiceContext for use inside an API route handler. Two paths:
  *
  *   1. Cookie-based (web fetches from the dashboard) — uses the SSR
@@ -396,10 +427,15 @@ async function pickActiveMembership(
  * Returns null when neither path resolves a user — the caller should
  * 401. Redirect-to-/signin behavior is intentionally NOT done here
  * because API routes don't have a useful redirect target.
+ *
+ * The cookie path also returns null for a write (any method but GET, HEAD and
+ * OPTIONS) that a browser sent from another origin, before the session is read
+ * (docket S14, lib/auth/cross-site-request.ts). Pass the request the route
+ * received, or one built from it with the same method, URL and headers: the
+ * rule reads all three.
  */
 export async function withApiContext(req?: Request): Promise<ServiceContext | null> {
-  const auth = req?.headers.get('authorization') ?? null;
-  const bearer = auth?.match(/^Bearer\s+(.+)$/i)?.[1] ?? null;
+  const bearer = bearerTokenFrom(req);
 
   if (bearer) {
     // Bearer path: validate the JWT against the Auth API and bind a
@@ -505,6 +541,17 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
   // header is honored if present so a cookie-authed client can request a
   // specific org (membership is verified before use).
   //
+  // A write a browser sent from another origin is refused first (docket S14).
+  // The browser attaches the session cookie whatever page made the request, and
+  // SameSite=Lax still lets a page on a sibling subdomain post with it; a route
+  // handler gets no Origin check from the framework the way a server action
+  // does. Null is every caller's signed-out answer, so the refusal needs no
+  // route change, and nothing below (getUser, the context RPC) runs for it.
+  if (req && refusesCrossSiteCookieWrite(req)) {
+    logRefusedCrossSiteWrite(req);
+    return null;
+  }
+
   // Fast-path: short-circuit when the request carries no Supabase auth
   // cookie at all. Without this, anonymous requests to any /api/*
   // endpoint paid a ~500-700ms round trip to supabase.auth.getUser()
