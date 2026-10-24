@@ -16,8 +16,9 @@ import { isSharePath } from '@/lib/share-paths';
  * which sits in the root layout and re-renders on every navigation.
  *
  * It forwards the metric to `reportWebVital`, which reads five scalar fields
- * and nothing else. In particular it never touches `metric.entries`: the LCP
- * entry's `url` is a signed photo URL.
+ * and, for a soft navigation's vital, the URL that navigation went to (only to
+ * turn it into a route template), and nothing else. In particular it never
+ * touches `metric.entries`: the LCP entry's `url` is a signed photo URL.
  */
 type ReportWebVitalsCallback = Parameters<typeof useReportWebVitals>[0];
 const handleWebVital: ReportWebVitalsCallback = (metric) => {

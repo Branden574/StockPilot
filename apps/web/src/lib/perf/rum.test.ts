@@ -284,6 +284,108 @@ describe('reportWebVital', () => {
     expect(only().properties).toEqual({ metric: 'FCP', value: 640, route: '/dashboard' });
   });
 
+  it("files a soft navigation's vital under the route that navigation went to, with its own navigation type", () => {
+    landedOn = '/dashboard';
+    // web-vitals v6 finalizes a soft navigation's CLS when the NEXT navigation
+    // starts: by then the address bar is already on the next screen.
+    goTo('/dashboard/orders');
+    reportWebVital({
+      name: 'CLS',
+      value: 0.0512,
+      delta: 0.0512,
+      rating: 'good',
+      navigationType: 'soft-navigation',
+      navigationURL: `http://localhost:3000/dashboard/inventory/${UUID}?q=acme#photos`,
+    });
+    expect(only()).toEqual({
+      event: 'perf_web_vital',
+      properties: {
+        metric: 'CLS',
+        value: 0.051,
+        delta: 0.051,
+        rating: 'good',
+        navigation_type: 'soft-navigation',
+        route: '/dashboard/inventory/[id]',
+      },
+    });
+  });
+
+  it('files each soft-navigation vital Next asks for (FCP, LCP, INP, CLS) the same way', () => {
+    landedOn = '/dashboard';
+    goTo('/dashboard/books');
+    for (const name of ['FCP', 'LCP', 'INP', 'CLS']) {
+      reportWebVital({
+        name,
+        value: 120,
+        delta: 120,
+        rating: 'good',
+        navigationType: 'soft-navigation',
+        navigationURL: 'http://localhost:3000/dashboard/books?view=grid',
+      });
+    }
+    expect(sent().map(({ properties: p }) => [p.metric, p.navigation_type, p.route])).toEqual([
+      ['FCP', 'soft-navigation', '/dashboard/books'],
+      ['LCP', 'soft-navigation', '/dashboard/books'],
+      ['INP', 'soft-navigation', '/dashboard/books'],
+      ['CLS', 'soft-navigation', '/dashboard/books'],
+    ]);
+  });
+
+  it('files a soft-navigation vital that carries no URL under the current location', () => {
+    landedOn = '/dashboard';
+    goTo(`/dashboard/inventory/${UUID}?q=acme`);
+    for (const navigationURL of [undefined, '', 42, null]) {
+      reportWebVital({
+        name: 'FCP',
+        value: 210,
+        delta: 210,
+        rating: 'good',
+        navigationType: 'soft-navigation',
+        navigationURL,
+      });
+    }
+    for (const { properties } of sent()) {
+      expect(properties.navigation_type).toBe('soft-navigation');
+      expect(properties.route).toBe('/dashboard/inventory/[id]');
+    }
+    expect(captureMock).toHaveBeenCalledTimes(4);
+  });
+
+  it('files a hard load exactly as before: under the document, without reading navigationURL', () => {
+    landedOn = `/dashboard/inventory/${UUID}`;
+    goTo('/dashboard/orders');
+    const navigationURL = vi.fn(() => 'http://localhost:3000/dashboard/books');
+    const types = [
+      'navigate',
+      'reload',
+      'back-forward',
+      'back-forward-cache',
+      'prerender',
+      'restore',
+      undefined,
+      'teleport',
+    ];
+    for (const navigationType of types) {
+      const metric = { name: 'LCP', value: 900, delta: 900, rating: 'good', navigationType };
+      Object.defineProperty(metric, 'navigationURL', { enumerable: true, get: navigationURL });
+      reportWebVital(metric);
+    }
+    expect(navigationURL).not.toHaveBeenCalled();
+    expect(sent().map((s) => s.properties.route)).toEqual(
+      types.map(() => '/dashboard/inventory/[id]'),
+    );
+    expect(sent().map((s) => s.properties.navigation_type)).toEqual([
+      'navigate',
+      'reload',
+      'back-forward',
+      'back-forward-cache',
+      'prerender',
+      'restore',
+      undefined,
+      undefined,
+    ]);
+  });
+
   it('never even READS entries or id: the LCP entry carries a signed photo URL', () => {
     const entries = vi.fn(() => [{ url: 'https://x.supabase.co/object/sign/a.jpg?token=SECRET' }]);
     const id = vi.fn(() => 'v4-1726850000000-1234567890123');
@@ -652,6 +754,7 @@ describe('HOSTILE INPUT: nothing a caller hands in can reach the wire', () => {
     'back-forward-cache',
     'prerender',
     'restore',
+    'soft-navigation',
   ]);
   const KEY_RE = /^[a-z][a-z0-9_]{0,59}$/;
 
@@ -684,8 +787,20 @@ describe('HOSTILE INPUT: nothing a caller hands in can reach the wire', () => {
       delta: h,
       rating: h,
       navigationType: h,
+      navigationURL: h,
       entries: [{ url: h, element: { src: h, currentSrc: h }, name: h }],
       attribution: { url: h, target: h },
+    } as Parameters<typeof reportWebVital>[0]);
+    // A soft navigation's vital: the one path that reads navigationURL.
+    reportWebVital({
+      ...extras,
+      name: 'CLS',
+      value: 0.1,
+      delta: h,
+      rating: h,
+      navigationType: 'soft-navigation',
+      navigationURL: h,
+      entries: [{ url: h, sources: [{ node: { src: h } }] }],
     } as Parameters<typeof reportWebVital>[0]);
     reportWebVital({ ...extras, name: h, value: 900 });
 
@@ -829,6 +944,54 @@ describe('LAYER 2: emit refuses what a broken reporter hands it', () => {
         click_to_feedback_ms: 10,
         click_to_useful_ms: 20,
       });
+    } finally {
+      vi.doUnmock('./route-template');
+      vi.resetModules();
+    }
+  });
+
+  it("MUTATION GUARD: a soft navigation's raw URL is dropped too, and its vital still sent", async () => {
+    vi.resetModules();
+    vi.doMock('./route-template', () => ({ toRouteTemplate: (input: unknown) => input }));
+    try {
+      const broken = await import('./rum');
+      const signedUrl =
+        'https://x.supabase.co/storage/v1/object/sign/item-images/a/b.jpg?token=SECRET';
+      goTo(`/dashboard/inventory/${UUID}?q=search+term`);
+      landedOn = '/dashboard';
+
+      broken.reportWebVital({
+        name: 'LCP',
+        value: 900,
+        delta: 900,
+        rating: 'good',
+        navigationType: 'soft-navigation',
+        navigationURL: signedUrl,
+      });
+      broken.reportWebVital({
+        name: 'FCP',
+        value: 200,
+        delta: 200,
+        rating: 'good',
+        navigationType: 'soft-navigation',
+      });
+
+      expect(sent().map((s) => s.properties)).toEqual([
+        {
+          metric: 'LCP',
+          value: 900,
+          delta: 900,
+          rating: 'good',
+          navigation_type: 'soft-navigation',
+        },
+        {
+          metric: 'FCP',
+          value: 200,
+          delta: 200,
+          rating: 'good',
+          navigation_type: 'soft-navigation',
+        },
+      ]);
     } finally {
       vi.doUnmock('./route-template');
       vi.resetModules();
