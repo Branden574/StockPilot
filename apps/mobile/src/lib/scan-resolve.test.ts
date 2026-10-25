@@ -6,6 +6,8 @@ import { describe, expect, it } from 'vitest';
 import {
   resolveScanMatches,
   sanitizeScanCode,
+  scanCandidatePlacementLabel,
+  scanHoldingsByItem,
   SCAN_PICKER_COPY,
   scanPickerSubtitle,
 } from './scan-resolve';
@@ -117,5 +119,74 @@ describe('the placement picker words (R3-1)', () => {
     expect(src).toContain('scanPickerSubtitle(placementChoices)');
     expect(src).not.toContain('This SKU is stocked in more than one place');
     expect(src).toMatch(/SKU \{c\.sku\}/);
+  });
+});
+
+// B26: the picker's line under each record said the raw rack text
+// (`c.binLocation ?? 'No bin set'`), which named one rack for stock split
+// across two, a rack the stock had left for crated stock, and no rack at all
+// for a book whose rack lives in its rack keys. It now says where the stock is
+// by the one placement rule, as the web lookup API and the Items list do.
+describe('the placement picker line (B26)', () => {
+  const none = { itemType: 'product', customFields: {}, binLocation: null, holdings: [] };
+
+  it("names a book's rack from its rack keys when it has no rack text", () => {
+    expect(
+      scanCandidatePlacementLabel({
+        ...none,
+        itemType: 'book',
+        customFields: { book_rack_number: '37', book_rack_row: 'B' },
+      }),
+    ).toBe('Rack 37-B');
+  });
+
+  it('names every rack of split stock, not the one the rack text names', () => {
+    expect(
+      scanCandidatePlacementLabel({
+        ...none,
+        binLocation: '1-A',
+        holdings: [
+          { name: '5-A', quantity: 5, kind: 'rack' },
+          { name: '2-C', quantity: 20, kind: 'rack' },
+        ],
+      }),
+    ).toBe('2-C ×20 · 5-A ×5');
+  });
+
+  it('names the crate when all of the stock is in a crate', () => {
+    expect(
+      scanCandidatePlacementLabel({
+        ...none,
+        binLocation: '38-A',
+        holdings: [{ name: 'Blue Shelf', quantity: 12, kind: 'crate' }],
+      }),
+    ).toBe('Blue Shelf ×12');
+  });
+
+  it('keeps the rack text when that is all there is, and says nothing when nothing is known', () => {
+    expect(scanCandidatePlacementLabel({ ...none, binLocation: ' 14-D ' })).toBe('14-D');
+    expect(scanCandidatePlacementLabel(none)).toBeNull();
+  });
+
+  it('groups the holdings read by record, from either embed shape, and skips a row with no location', () => {
+    const byItem = scanHoldingsByItem([
+      { item_id: 'item-a', quantity: 20, locations: { name: '2-C', kind: 'rack' } },
+      { item_id: 'item-a', quantity: '5', locations: [{ name: '5-A', kind: 'rack' }] },
+      { item_id: 'item-b', quantity: 3, locations: null },
+      { item_id: 'item-b', quantity: 7, locations: { name: 'Blue Shelf', kind: 'crate' } },
+    ]);
+    expect(byItem.get('item-a')).toEqual([
+      { name: '2-C', quantity: 20, kind: 'rack' },
+      { name: '5-A', quantity: 5, kind: 'rack' },
+    ]);
+    expect(byItem.get('item-b')).toEqual([{ name: 'Blue Shelf', quantity: 7, kind: 'crate' }]);
+    expect(byItem.get('item-c')).toBeUndefined();
+  });
+
+  it('the scan screen shows that line (source pin: the screen is not rendered under vitest)', () => {
+    const src = readFileSync(resolve(__dirname, '../../app/(drawer)/(tabs)/scan.tsx'), 'utf8');
+    expect(src).toMatch(/\{c\.placementLabel \?\? 'No bin set'\} · \{c\.quantityOnHand\} on hand/);
+    expect(src).not.toMatch(/\{c\.binLocation \?\?/);
+    expect(src).toContain('scanCandidatePlacementLabel(');
   });
 });

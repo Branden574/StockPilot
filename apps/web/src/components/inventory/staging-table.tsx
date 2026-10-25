@@ -50,6 +50,11 @@ import { stagingReturnedSourceLabel, type BookStorageInfo } from '@stockpilot/co
 
 import { cn, formatRelative } from '@/lib/utils';
 import type { DestinationOption } from '@/lib/locations/destination-option';
+import {
+  NO_PLACE_WAREHOUSE_REASON,
+  placeWarehouseOptions,
+  stagingRowPlaceable,
+} from '@/lib/locations/place-warehouse';
 import { HelpTip } from '@/components/onboarding/help-tip';
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -59,7 +64,13 @@ interface StagedRow {
   name: string;
   sku: string;
   itemType: string;
+  /** The HOLDING's warehouse: null for the organization-level Staging or
+   *  Unplaced bucket (migration 0194), which Place handles by asking for a
+   *  warehouse first (B38). */
   warehouseId: string | null;
+  /** The ITEM's own warehouse (stagedWorklist), which the warehouse picker of
+   *  a row with no warehouse opens on. */
+  itemWarehouseId?: string | null;
   sourceLocationId: string;
   sourceKind: 'staging' | 'unplaced';
   quantity: number;
@@ -321,9 +332,16 @@ export function StagingTable({
     updateFilters({ poNumber: canonical });
   }
 
+  // The warehouses a row with no warehouse (the organization-level bucket) can
+  // be placed into: the page's own, by name (B38). Without one, such a row
+  // cannot be placed and says so.
+  const warehouseOptions = React.useMemo(
+    () => placeWarehouseOptions(warehouseNames),
+    [warehouseNames],
+  );
   const placeableKeys = React.useMemo(
-    () => visibleRows.filter((r) => canPlace && r.warehouseId !== null).map(rowKey),
-    [visibleRows, canPlace],
+    () => visibleRows.filter((r) => stagingRowPlaceable(r, canPlace, warehouseOptions)).map(rowKey),
+    [visibleRows, canPlace, warehouseOptions],
   );
   const selectedRows = visibleRows.filter((r) => selectedKeys.has(rowKey(r)));
   // The bulk-place bar: only for people who may place, only while VISIBLE
@@ -580,6 +598,7 @@ export function StagingTable({
                 sourceLocationId: r.sourceLocationId,
                 quantity: r.quantity,
                 warehouseId: r.warehouseId,
+                itemWarehouseId: r.itemWarehouseId,
                 bookStorage: r.bookStorage,
               }))}
               destinationsMap={destinationsMap}
@@ -678,7 +697,7 @@ export function StagingTable({
                 const destinations = row.warehouseId
                   ? (destinationsMap[row.warehouseId] ?? [])
                   : [];
-                const canPlaceRow = canPlace && row.warehouseId !== null;
+                const canPlaceRow = stagingRowPlaceable(row, canPlace, warehouseOptions);
                 const key = rowKey(row);
                 const selected = selectedKeys.has(key);
 
@@ -809,10 +828,23 @@ export function StagingTable({
                               itemType={row.itemType}
                               sourceLocationId={row.sourceLocationId}
                               sourceKind={row.sourceKind}
-                              warehouseId={row.warehouseId!}
-                              warehouseName={warehouseNames[row.warehouseId!]}
+                              warehouseId={row.warehouseId}
+                              warehouseName={
+                                row.warehouseId ? warehouseNames[row.warehouseId] : undefined
+                              }
                               availableQuantity={row.quantity}
                               destinations={destinations}
+                              // The organization-level bucket (B38): the
+                              // warehouse first, opening on the item's own.
+                              warehouseChoice={
+                                row.warehouseId === null
+                                  ? {
+                                      warehouses: warehouseOptions,
+                                      destinationsByWarehouse: destinationsMap,
+                                      defaultWarehouseId: row.itemWarehouseId ?? null,
+                                    }
+                                  : undefined
+                              }
                               bookStorage={row.bookStorage}
                               canMintDestination={canMintDestination}
                               trigger={
@@ -826,7 +858,7 @@ export function StagingTable({
                               size="sm"
                               variant="outline"
                               disabled
-                              title="No warehouse — cannot place"
+                              title={NO_PLACE_WAREHOUSE_REASON}
                             >
                               Place
                             </Button>
