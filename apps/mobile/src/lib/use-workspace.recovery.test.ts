@@ -263,10 +263,18 @@ describe('useSync loads the workspace again when none is shown', () => {
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/^\s*\/\/.*$/gm, '');
 
-  it('on each sync tick and on every return to the foreground', () => {
+  // Both through the tested tick (foreground-tick.ts), which retries only
+  // online: offline, a return to the app flipped an offline Try again to a
+  // spinner and back (B24), as the 60 s timer did before L18a.
+  it('on each sync tick and on every return to the foreground, while online', () => {
     expect(src).toContain("import { retryWorkspace } from './use-workspace';");
-    expect(src).toMatch(/setInterval\(\(\) => \{[\s\S]*?void syncNow\(\);\s*void retryWorkspace\(\);/);
-    expect(src).toMatch(/if \(state === 'active'\) \{\s*void syncNow\(\);\s*void retryWorkspace\(\);/);
+    expect(src).toMatch(
+      /setInterval\(\(\) => \{\s*if \(cancelled\) return;\s*void foregroundTick\(\{ syncNow, retryWorkspace, isOnline \}\);/,
+    );
+    expect(src).toMatch(
+      /if \(state === 'active'\) \{\s*void foregroundTick\(\{ syncNow, retryWorkspace, isOnline \}\);\s*start\(\);/,
+    );
+    expect(src.match(/void retryWorkspace\(\)/g)).toHaveLength(1); // the network listener's
   });
 
   it('when the connection comes back (the rule sync.ts isOnline() applies), and stops listening on sign-out', () => {

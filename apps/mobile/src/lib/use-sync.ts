@@ -15,8 +15,10 @@ const FOREGROUND_INTERVAL_MS = 60_000;
  * Run sync on:
  *   • mount (when a user is signed in)
  *   • app foreground transition
- *   • a 60s timer while foregrounded (foregroundTick: the workspace retry
- *     only when online, so an offline Try again does not flicker, L18a)
+ *   • a 60s timer while foregrounded
+ * The last two run foregroundTick: the workspace retry only when online, so
+ * an offline Try again does not flicker to a spinner and back (L18a for the
+ * timer; B24 for a return to the app, which still retried offline).
  *
  * No-op when not signed in. Errors are swallowed inside syncNow so a
  * sync failure never crashes the app shell.
@@ -53,8 +55,7 @@ export function useSync(user: User | null): void {
 
     const onAppStateChange = (state: AppStateStatus) => {
       if (state === 'active') {
-        void syncNow();
-        void retryWorkspace();
+        void foregroundTick({ syncNow, retryWorkspace, isOnline });
         start();
       } else {
         stop();

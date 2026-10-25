@@ -46,4 +46,13 @@ describe('useSync wiring (L18a)', () => {
       /interval = setInterval\(\(\) => \{\s*if \(cancelled\) return;\s*void foregroundTick\(\{ syncNow, retryWorkspace, isOnline \}\);\s*\}, FOREGROUND_INTERVAL_MS\);/,
     );
   });
+
+  // B24: a return to the app still called retryWorkspace directly, so offline
+  // every return flipped a Try again to a spinner and back. Mutation caught:
+  // `void syncNow(); void retryWorkspace();` back in the foreground branch.
+  it('a return to the foreground runs the same tick', () => {
+    expect(src).toMatch(
+      /if \(state === 'active'\) \{\s*void foregroundTick\(\{ syncNow, retryWorkspace, isOnline \}\);\s*start\(\);\s*\} else \{\s*stop\(\);\s*\}/,
+    );
+  });
 });
