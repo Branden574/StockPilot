@@ -212,3 +212,24 @@ export function shouldStackItemTabs(
   }
   return ITEM_TAB_WIDEST_LABEL_EM * itemTabLabelSize(fontScale) > itemTabLabelRoom(windowWidth);
 }
+
+/**
+ * A key that changes when, and only when, the user's text size changes: for a
+ * React `key` that remounts what was laid out at the old size.
+ *
+ * WHY (docket B10). After a live text-size change (Settings, with the app in
+ * the background) the notifications list kept every row at its old height,
+ * its text clipped, until the screen was opened again (simulator walk,
+ * 2026-10-05, React Native 0.86.3). Nothing in the rows fixes a height: the
+ * stale measurement is React Native's. A remount measures afresh, so the
+ * shared list chrome keys its head and its list on this.
+ *
+ * Three decimals, so float noise in one reading never remounts a list and two
+ * different text sizes never share a key (iOS steps differ by 0.05 or more).
+ * A scale that is not a finite, positive number is the default size.
+ */
+export function fontScaleKey(fontScale: number | null | undefined): string {
+  const scale =
+    typeof fontScale === 'number' && Number.isFinite(fontScale) && fontScale > 0 ? fontScale : 1;
+  return scale.toFixed(3);
+}

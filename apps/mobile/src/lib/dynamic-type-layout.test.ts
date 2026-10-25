@@ -6,6 +6,7 @@ import {
   LONGEST_STOCK_PILL_CHARS,
   ROW_STACK_FONT_SCALE,
   TRAILING_COLUMN_MAX_WIDTH,
+  fontScaleKey,
   footerReservation,
   itemTabLabelRoom,
   itemTabLabelSize,
@@ -264,6 +265,28 @@ describe('shouldStackItemTabs', () => {
     for (const bad of [Number.NaN, 0, -1, Number.POSITIVE_INFINITY, null, undefined]) {
       expect(itemTabLabelSize(bad)).toBe(13);
       expect(shouldStackItemTabs(bad, 3.571)).toBe(false);
+    }
+  });
+});
+
+describe('fontScaleKey', () => {
+  // iOS text sizes as RN's fontScale, from xSmall to AX5.
+  const STEPS = [0.823, 0.882, 0.941, 1, 1.118, 1.235, 1.353, 1.786, 2.143, 2.643, 3.143, 3.571];
+
+  it('gives every iOS text size its own key', () => {
+    const keys = STEPS.map(fontScaleKey);
+    expect(new Set(keys).size).toBe(STEPS.length);
+  });
+
+  it('gives one size the same key on every reading, float noise included', () => {
+    expect(fontScaleKey(1)).toBe('1.000');
+    expect(fontScaleKey(1.0000001)).toBe(fontScaleKey(1));
+    expect(fontScaleKey(3.5714285714)).toBe(fontScaleKey(3.571));
+  });
+
+  it('treats a bad reading as the default size', () => {
+    for (const bad of [Number.NaN, 0, -1, Number.POSITIVE_INFINITY, null, undefined]) {
+      expect(fontScaleKey(bad)).toBe('1.000');
     }
   });
 });
