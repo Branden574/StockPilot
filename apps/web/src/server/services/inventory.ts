@@ -32,6 +32,7 @@ import type { ItemHistoryMovement, ItemHistoryPage } from '@stockpilot/core';
 import type { RemoveStockFromLocationInput } from '@stockpilot/core';
 import type { CountingUnit } from '@stockpilot/core';
 import type { RackHoldingLike } from '@stockpilot/core';
+import type { PlacementFailure } from '@stockpilot/core';
 import type { HoldingsElsewhere, ItemElsewhere } from '@stockpilot/core';
 import type {
   BookCrateAcknowledgedChange,
@@ -73,6 +74,7 @@ import {
   hasRackPosition,
   historyNote,
   collectLegacyRefIdsByKind,
+  newRackBlockerFor,
   newRackConfirmationDetail,
   normalizeRackFields,
   normalizeSizeValue,
@@ -3628,8 +3630,14 @@ export class InventoryService {
    * at multiple racks, so we don't need to mangle it with a suffix.
    * Same SKU at the SAME bin_location still 23505s (rendered to the
    * user as a friendly "already exists at this rack" error).
+   *
+   * Returns the copy's id and, like create(), whether its stock did NOT reach
+   * the rack the dialog named (`placementFailed`, 2026-10-25), so the dialog
+   * can say so instead of only "Duplicated".
    */
-  async duplicateItem(input: DuplicateItemInput): Promise<string> {
+  async duplicateItem(
+    input: DuplicateItemInput,
+  ): Promise<{ id: string; placementFailed: PlacementFailure | null }> {
     assertPermission(this.ctx, 'items:create');
 
     // Load the original SKU so we can pass it through to the RPC.
@@ -3761,26 +3769,33 @@ export class InventoryService {
     // rack with the shared placement helper. Books keep their crate-aware
     // path unchanged. FAIL-SOFT: the copy already exists; a placement that
     // cannot run is reported, never fatal. Unconfirmed, it only FINDS the rack.
+    //
+    // Reported to the PERSON too (2026-10-25), not only to Sentry: the dialog
+    // said "Duplicated" over a copy whose stock was still at the original's
+    // site. A placement that died outright counts as not placed, as in
+    // create(): the silent version is the defect.
+    let placementFailed: PlacementFailure | null = null;
     if (placesCopyOnRack && originalWarehouseId) {
       const outcome = await this.placeManualCreateOnRack(
         [newId as string],
         originalWarehouseId,
         rackLabel,
         { mayCreateRack },
-      ).catch((e: unknown) => {
+      ).catch((e: unknown): ManualPlacementOutcome => {
         void reportError(new Error(rawErrorText(e)), {
           tag: 'inventory.duplicate.place_on_rack',
           level: 'warning',
           organizationId: this.ctx.organizationId,
         });
-        return null;
+        return { rackName: rackLabel, failedItemIds: [newId as string] };
       });
-      if (outcome && outcome.failedItemIds.length > 0) {
+      if (outcome.failedItemIds.length > 0) {
         void reportError(new Error(`duplicate not placed on ${outcome.rackName}`), {
           tag: 'inventory.duplicate.place_on_rack',
           level: 'warning',
           organizationId: this.ctx.organizationId,
         });
+        placementFailed = { rackName: outcome.rackName, count: outcome.failedItemIds.length };
       }
     }
 
@@ -3794,7 +3809,7 @@ export class InventoryService {
       this.ctx,
     );
 
-    return newId as string;
+    return { id: newId as string, placementFailed };
   }
 
   /**
@@ -8698,6 +8713,11 @@ export class InventoryService {
       warehouseName,
       quantity: units,
       existingLabels: labels,
+      // Worded for what THIS member's yes can do (2026-10-25). The placement
+      // creates the rack under locations:manage and moves the stock under
+      // stock:transfer; a Staff member has no locations:manage, so their yes
+      // never created the rack, right after a question that promised it.
+      blockedBy: newRackBlockerFor(this.ctx),
     });
     // Someone created the rack between the two reads: nothing new to create.
     if (!detail) return;
@@ -8792,6 +8812,13 @@ export class InventoryService {
    * created: the caller's new-rack question already refused a rack that did
    * not exist, so a miss here means it disappeared since, and the stock stays
    * where it was seeded, reported as not placed.
+   *
+   * And only for a member who can both create the rack and move the stock
+   * onto it (newRackBlockerFor, 2026-10-25), the question's own rule. For
+   * anyone else the yes is "Save anyway": the rack is only found. Before, a
+   * Staff member's yes attempted a create that locations:manage refused, and a
+   * member without stock:transfer got an empty rack the move then never
+   * reached.
    */
   private async placeManualCreateOnRack(
     itemIds: string[],
@@ -8802,7 +8829,8 @@ export class InventoryService {
     if (itemIds.length === 0) return { rackName: rawLabel, failedItemIds: [] };
     const rack = this.manualCreateRack(rawLabel);
     const rackName = rack.name;
-    const rackId = opts.mayCreateRack
+    const createsRack = opts.mayCreateRack && newRackBlockerFor(this.ctx) === null;
+    const rackId = createsRack
       ? await this.findOrCreateRackLocation(warehouseId, rack.number, rack.row, rackName)
       : await this.findRackLocation(warehouseId, rack.number, rack.row, rackName);
     // The rack could not be resolved OR created, so nothing can have reached

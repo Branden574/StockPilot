@@ -377,7 +377,7 @@ describe('duplicateItem(): the copy is embedded when it is saved', () => {
         rackRow: 'A',
         quantity: 0,
       }),
-    ).resolves.toBe('dup-1');
+    ).resolves.toMatchObject({ id: 'dup-1' });
 
     expect(keepAlive).toHaveBeenCalledTimes(1);
     await expectHeldUntilEveryEmbedSettles(h.kept[0]!, ['dup-1']);

@@ -61,7 +61,7 @@ describe('duplicateItemAction', () => {
   });
 
   it('passes the yes on to the service, and leaves it out when it was not given', async () => {
-    svc.duplicateItem.mockResolvedValue('dup-1');
+    svc.duplicateItem.mockResolvedValue({ id: 'dup-1', placementFailed: null });
 
     await expect(duplicateItemAction({ ...INPUT, confirmNewRack: true })).resolves.toEqual({
       ok: true,
@@ -73,6 +73,26 @@ describe('duplicateItemAction', () => {
 
     await duplicateItemAction(INPUT);
     expect(svc.duplicateItem.mock.calls[1]?.[0]).not.toHaveProperty('confirmNewRack');
+  });
+
+  // 2026-10-25: a copy whose stock did not reach its rack was reported only to
+  // Sentry, and the dialog said "Duplicated" over stock left at the original's
+  // site. The action hands the outcome to the dialog, as createItemAction does.
+  it('hands the dialog a copy whose stock did not reach its rack, and nothing when it did', async () => {
+    svc.duplicateItem.mockResolvedValueOnce({
+      id: 'dup-1',
+      placementFailed: { rackName: '1-B', count: 1 },
+    });
+    await expect(duplicateItemAction({ ...INPUT, confirmNewRack: true })).resolves.toEqual({
+      ok: true,
+      data: { id: 'dup-1', placementFailed: { rackName: '1-B', count: 1 } },
+    });
+
+    svc.duplicateItem.mockResolvedValueOnce({ id: 'dup-2', placementFailed: null });
+    await expect(duplicateItemAction(INPUT)).resolves.toEqual({
+      ok: true,
+      data: { id: 'dup-2' },
+    });
   });
 
   it("never forwards an internal error's detail", async () => {

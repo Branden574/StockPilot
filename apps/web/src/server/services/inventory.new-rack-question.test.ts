@@ -174,6 +174,7 @@ describe('InventoryService.create asks before it creates a rack', () => {
       title: 'Create new rack 1-B?',
       message: INCIDENT_MESSAGE,
       suggestions: ['17-B', '18-B'],
+      canCreateRack: true,
     });
     // Nothing at all was written: no item, no ledger row, no rack, no move.
     expect(writes(stub)).toEqual([]);
@@ -365,8 +366,114 @@ describe('InventoryService.create asks before it creates a rack', () => {
       title: 'Create new rack 1-B?',
       message: '1-B does not exist yet. Continuing creates it and moves 130 units into it.',
       suggestions: [],
+      canCreateRack: true,
     });
     expect(writes(stub)).toEqual([]);
+  });
+
+  // 2026-10-25 review. Creating the rack needs Manage locations
+  // (LocationsService.create) and moving the stock onto it needs Transfer
+  // stock (transferStock). The Staff preset has items:create and
+  // stock:transfer but not locations:manage, so a Staff yes never created the
+  // rack: the create was refused, caught, and the stock stayed in Unplaced
+  // right after a question that promised the move.
+  describe('a member whose yes cannot put the stock on the new rack', () => {
+    const STAFF_MESSAGE =
+      '1-B does not exist in DC4 yet, and creating a rack needs the Manage locations permission. Saving does not put the 130 units on a rack. Did you mean 17-B or 18-B?';
+
+    it('a Staff member is told they cannot create the rack, and nothing is written', async () => {
+      const stub = buildStub();
+      const svc = new InventoryService(makeServiceContext(stub.client, { role: 'staff' }));
+
+      const e = await refusal(svc.create({ ...BASE }));
+
+      expect(e.code).toBe('conflict');
+      expect(e.message).toBe(STAFF_MESSAGE);
+      expect(e.details).toEqual({
+        reason: NEW_RACK_REQUIRES_CONFIRMATION,
+        label: '1-B',
+        title: 'Rack 1-B does not exist',
+        message: STAFF_MESSAGE,
+        suggestions: ['17-B', '18-B'],
+        canCreateRack: false,
+      });
+      expect(writes(stub)).toEqual([]);
+    });
+
+    it("a Staff member's Save anyway saves the item, creates no rack, moves nothing, and says so", async () => {
+      const stub = buildStub();
+      const svc = new InventoryService(makeServiceContext(stub.client, { role: 'staff' }));
+
+      const item = await svc.create({ ...BASE, confirmNewRack: true });
+
+      expect(item).toEqual({ id: 'item-new', placementFailed: { rackName: '1-B', count: 1 } });
+      expect(createdRack(stub)).toBeUndefined();
+      expect(transferTargets(stub)).toEqual([]);
+      // No create is attempted only to be refused: nothing to log as a failure.
+      expect(errorSpy).not.toHaveBeenCalledWith(
+        '[rack place] rack create failed',
+        expect.anything(),
+      );
+    });
+
+    it('the phone build that asks on its own screen gets the same result for a Staff member', async () => {
+      const stub = buildStub();
+      const svc = new InventoryService(makeServiceContext(stub.client, { role: 'staff' }));
+
+      const item = await svc.create({ ...BASE }, { allowUnconfirmedNewRack: true });
+
+      expect(item).toEqual({ id: 'item-new', placementFailed: { rackName: '1-B', count: 1 } });
+      expect(createdRack(stub)).toBeUndefined();
+      expect(transferTargets(stub)).toEqual([]);
+    });
+
+    it('a Staff member saving onto an existing rack is not asked, and the stock is placed', async () => {
+      const stub = buildStub();
+      const svc = new InventoryService(makeServiceContext(stub.client, { role: 'staff' }));
+
+      const item = await svc.create({ ...BASE, binLocation: '17-B' });
+
+      expect(item).toEqual({ id: 'item-new', placementFailed: null });
+      expect(transferTargets(stub)).toEqual(['rack-17-b']);
+    });
+
+    it('a Staff member granted Manage locations is asked the ordinary question, and the yes creates the rack', async () => {
+      const stub = buildStub();
+      const ctx = makeServiceContext(stub.client, {
+        role: 'staff',
+        permissions: new Set(['items:create', 'stock:transfer', 'locations:manage']),
+      });
+
+      const e = await refusal(new InventoryService(ctx).create({ ...BASE }));
+      expect(e.details).toMatchObject({ title: 'Create new rack 1-B?', canCreateRack: true });
+
+      const item = await new InventoryService(ctx).create({ ...BASE, confirmNewRack: true });
+      expect(item).toEqual({ id: 'item-new', placementFailed: null });
+      expect(transferTargets(stub)).toEqual(['rack-1b-new']);
+    });
+
+    it('a member who may create racks but not move stock is told that, and the yes leaves no empty rack', async () => {
+      const stub = buildStub();
+      const ctx = makeServiceContext(stub.client, {
+        role: 'manager',
+        permissions: new Set(['items:create', 'locations:manage']),
+      });
+
+      const e = await refusal(new InventoryService(ctx).create({ ...BASE }));
+      expect(e.details).toMatchObject({
+        title: 'Rack 1-B does not exist',
+        message:
+          '1-B does not exist in DC4 yet, and moving stock onto a rack needs the Transfer stock permission. Saving does not put the 130 units on a rack. Did you mean 17-B or 18-B?',
+        canCreateRack: false,
+      });
+
+      const item = await new InventoryService(ctx).create({ ...BASE, confirmNewRack: true });
+      expect(item).toEqual({ id: 'item-new', placementFailed: { rackName: '1-B', count: 1 } });
+      // Before: the rack was created, then the move was refused, and an empty
+      // rack nobody asked for was left in the warehouse.
+      expect(createdRack(stub)).toBeUndefined();
+      expect(transferTargets(stub)).toEqual([]);
+    });
   });
 
   describe('a refused sports create leaves no product group behind', () => {
@@ -535,6 +642,7 @@ describe('InventoryService.bulkCreateSizedVariants asks once for the whole run',
       message:
         '1-B does not exist in DC4 yet. Continuing creates it and moves 15 units into it. Did you mean 17-B or 18-B?',
       suggestions: ['17-B', '18-B'],
+      canCreateRack: true,
     });
     expect(writes(stub)).toEqual([]);
   });
@@ -565,6 +673,25 @@ describe('InventoryService.bulkCreateSizedVariants asks once for the whole run',
     expect(out.placementFailed).toBeNull();
     expect(createdRack(stub)).toBeUndefined();
     expect(transferTargets(stub)).toEqual(['rack-17-b', 'rack-17-b', 'rack-17-b']);
+  });
+
+  it('tells a Staff member once for the run, and Save anyway places no size and creates no rack', async () => {
+    const stub = runStub();
+    const svc = new InventoryService(makeServiceContext(stub.client, { role: 'staff' }));
+
+    const e = await refusal(svc.bulkCreateSizedVariants({ ...RUN }));
+    expect(e.details).toMatchObject({
+      title: 'Rack 1-B does not exist',
+      message:
+        '1-B does not exist in DC4 yet, and creating a rack needs the Manage locations permission. Saving does not put the 15 units on a rack. Did you mean 17-B or 18-B?',
+      canCreateRack: false,
+    });
+    expect(writes(stub)).toEqual([]);
+
+    const out = await svc.bulkCreateSizedVariants({ ...RUN, confirmNewRack: true });
+    expect(out.placementFailed).toEqual({ rackName: '1-B', count: 3 });
+    expect(createdRack(stub)).toBeUndefined();
+    expect(transferTargets(stub)).toEqual([]);
   });
 
   it('asks nothing for a run with no stock, and keeps creating for the phone build that asks on its own screen', async () => {
@@ -676,9 +803,10 @@ describe('InventoryService.duplicateItem asks before the copy is made', () => {
     const stub = dupStub();
     const svc = new InventoryService(makeServiceContext(stub.client));
 
-    await expect(svc.duplicateItem({ ...DUP, confirmNewRack: true } as never)).resolves.toBe(
-      'dup-1',
-    );
+    await expect(svc.duplicateItem({ ...DUP, confirmNewRack: true } as never)).resolves.toEqual({
+      id: 'dup-1',
+      placementFailed: null,
+    });
 
     expect(createdRack(stub)).toMatchObject({ name: '1-B', kind: 'rack', warehouse_id: 'wh-1' });
     expect(transferTargets(stub)).toEqual(['rack-1b-new']);
@@ -690,7 +818,7 @@ describe('InventoryService.duplicateItem asks before the copy is made', () => {
 
     await expect(
       svc.duplicateItem({ ...DUP, rackNumber: '17', rackRow: 'B' } as never),
-    ).resolves.toBe('dup-1');
+    ).resolves.toEqual({ id: 'dup-1', placementFailed: null });
 
     expect(createdRack(stub)).toBeUndefined();
     expect(transferTargets(stub)).toEqual(['rack-17-b']);
@@ -707,9 +835,71 @@ describe('InventoryService.duplicateItem asks before the copy is made', () => {
         crateColor: 'blue',
         crateNumber: '1',
       } as never),
-    ).resolves.toBe('dup-1');
+    ).resolves.toEqual({ id: 'dup-1', placementFailed: null });
 
     expect(stub.fromCalls).not.toContain('locations');
     expect(createdRack(stub)).toBeUndefined();
+  });
+
+  // 2026-10-25 review: a copy whose stock did not reach its rack was reported
+  // only to Sentry, and the dialog said "Duplicated" over stock left at the
+  // original's site. The copy's outcome now comes back, as create()'s does.
+  it("tells a Staff member they cannot create the rack, and Save anyway's copy reports its stock not placed", async () => {
+    const stub = dupStub();
+    const svc = new InventoryService(makeServiceContext(stub.client, { role: 'staff' }));
+
+    const e = await refusal(svc.duplicateItem({ ...DUP } as never));
+    expect(e.details).toMatchObject({
+      title: 'Rack 1-B does not exist',
+      message:
+        '1-B does not exist in DC4 yet, and creating a rack needs the Manage locations permission. Saving does not put the 4 units on a rack. Did you mean 17-B or 18-B?',
+      canCreateRack: false,
+    });
+    expect(writes(stub)).toEqual([]);
+
+    await expect(svc.duplicateItem({ ...DUP, confirmNewRack: true } as never)).resolves.toEqual({
+      id: 'dup-1',
+      placementFailed: { rackName: '1-B', count: 1 },
+    });
+    expect(createdRack(stub)).toBeUndefined();
+    expect(transferTargets(stub)).toEqual([]);
+  });
+
+  it('reports a copy whose move onto an existing rack failed', async () => {
+    const stub = buildStub({
+      'inventory_items.select': { data: { sku: 'SP-POLO', warehouse_id: 'wh-1' }, error: null },
+      'rpc:duplicate_inventory_item': { data: 'dup-1', error: null },
+      'item_stock_levels.select': {
+        data: [{ item_id: 'dup-1', location_id: 'site-dc4', quantity: 4 }],
+        error: null,
+      },
+      'rpc:transfer_stock': { data: null, error: { message: 'insufficient stock' } },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await expect(
+      svc.duplicateItem({ ...DUP, rackNumber: '17', rackRow: 'B' } as never),
+    ).resolves.toEqual({ id: 'dup-1', placementFailed: { rackName: '17-B', count: 1 } });
+  });
+
+  it('reports the copy as not placed when the placement itself fails', async () => {
+    const stub = dupStub();
+    const svc = new InventoryService(makeServiceContext(stub.client));
+    const place = vi
+      .spyOn(
+        InventoryService.prototype as unknown as {
+          placeManualCreateOnRack: (...args: unknown[]) => Promise<unknown>;
+        },
+        'placeManualCreateOnRack',
+      )
+      .mockRejectedValueOnce(new Error('connection reset'));
+
+    try {
+      await expect(
+        svc.duplicateItem({ ...DUP, rackNumber: '17', rackRow: 'B' } as never),
+      ).resolves.toEqual({ id: 'dup-1', placementFailed: { rackName: '17-B', count: 1 } });
+    } finally {
+      place.mockRestore();
+    }
   });
 });

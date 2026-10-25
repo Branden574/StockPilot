@@ -17,10 +17,17 @@
  * true`, or with the near-match the person picked instead.
  *
  * The answer is a safety question, never a permission: creating the rack still
- * needs the permission it always needed.
+ * needs the permission it always needed. So the question is worded for what
+ * THIS person's yes can do (2026-10-25). A Staff member cannot create racks
+ * (no Manage locations), and their yes never could: the placement's create
+ * was refused, and the stock stayed where it was seeded. For them the question
+ * says so, and the yes is "Save anyway" (`canCreateRack: false`).
  */
 
-import { describeNewRackPlacement } from './rack-near-match';
+import { can, type Permission } from '../constants/permissions';
+import type { Role } from '../constants/roles';
+
+import { describeNewRackPlacement, type NewRackBlocker } from './rack-near-match';
 
 /** `ServiceError.details.reason` of the refusal. */
 export const NEW_RACK_REQUIRES_CONFIRMATION = 'NEW_RACK_REQUIRES_CONFIRMATION' as const;
@@ -41,6 +48,31 @@ export interface NewRackConfirmationDetail {
   message: string;
   /** Existing racks in that warehouse that could explain a typo, closest first. */
   suggestions: string[];
+  /**
+   * Whether this person's yes creates the rack and moves the stock onto it.
+   * False for a member without Manage locations or Transfer stock (see
+   * newRackBlockerFor): the words then say that saving does not put the stock
+   * on a rack, and the confirm button is "Save anyway".
+   */
+  canCreateRack: boolean;
+}
+
+/**
+ * What stops this member's yes from putting the stock on a NEW rack, or null
+ * when nothing does. The item create's placement creates the rack through
+ * LocationsService.create, which asserts `locations:manage`, and moves the
+ * stock with transferStock, which asserts `stock:transfer`; this reads the
+ * same two permissions the same way (`can`: the effective set when the context
+ * carries one, else the role's defaults). The server words its question with
+ * it, and the phone words its own question with it, so both say the same.
+ */
+export function newRackBlockerFor(ctx: {
+  readonly role: Role;
+  readonly permissions?: ReadonlySet<Permission>;
+}): NewRackBlocker | null {
+  if (!can(ctx, 'locations:manage')) return 'create_rack';
+  if (!can(ctx, 'stock:transfer')) return 'move_stock';
+  return null;
 }
 
 /**
@@ -57,6 +89,8 @@ export function newRackConfirmationDetail(input: {
   warehouseName?: string | null;
   quantity: number;
   existingLabels: readonly string[];
+  /** What stops this member's yes (newRackBlockerFor); null or absent: nothing. */
+  blockedBy?: NewRackBlocker | null;
 }): NewRackConfirmationDetail | null {
   const decision = describeNewRackPlacement({
     label: input.label,
@@ -64,6 +98,7 @@ export function newRackConfirmationDetail(input: {
     quantity: input.quantity,
     existingLabels: input.existingLabels,
     noun: 'rack',
+    blockedBy: input.blockedBy ?? null,
   });
   if (decision.exists) return null;
   return {
@@ -72,6 +107,7 @@ export function newRackConfirmationDetail(input: {
     title: decision.title,
     message: decision.message,
     suggestions: [...decision.suggestions],
+    canCreateRack: !input.blockedBy,
   };
 }
 
@@ -96,7 +132,18 @@ export function parseNewRackConfirmationDetail(details: unknown): NewRackConfirm
   const suggestions = Array.isArray(d.suggestions)
     ? d.suggestions.filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
     : [];
-  return { reason: NEW_RACK_REQUIRES_CONFIRMATION, label, title, message, suggestions };
+  // Only an explicit false says the yes does not create the rack. Read the
+  // other way, a payload without the flag would label a yes that DOES create
+  // a rack "Save anyway", the one wrong answer this question exists to stop.
+  const canCreateRack = d.canCreateRack !== false;
+  return {
+    reason: NEW_RACK_REQUIRES_CONFIRMATION,
+    label,
+    title,
+    message,
+    suggestions,
+    canCreateRack,
+  };
 }
 
 /**

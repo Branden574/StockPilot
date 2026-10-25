@@ -6,9 +6,11 @@ import {
   updateItemSchema,
 } from '../schemas/inventory';
 import { duplicateItemSchema } from '../schemas/duplicate-item';
+import type { Permission } from '../constants/permissions';
 import {
   bodyAnswersNewRack,
   NEW_RACK_REQUIRES_CONFIRMATION,
+  newRackBlockerFor,
   newRackConfirmationDetail,
   parseNewRackConfirmationDetail,
 } from './new-rack-confirmation';
@@ -31,6 +33,26 @@ describe('newRackConfirmationDetail', () => {
       message:
         '1-B does not exist in DC4 yet. Continuing creates it and moves 130 units into it. Did you mean 17-B or 18-B?',
       suggestions: ['17-B', '18-B'],
+      canCreateRack: true,
+    });
+  });
+
+  it('for a member whose yes cannot put the stock on the rack, says what saving does and marks it', () => {
+    const detail = newRackConfirmationDetail({
+      label: '1-B',
+      warehouseName: 'DC4',
+      quantity: 130,
+      existingLabels: DC4,
+      blockedBy: 'create_rack',
+    });
+    expect(detail).toEqual({
+      reason: NEW_RACK_REQUIRES_CONFIRMATION,
+      label: '1-B',
+      title: 'Rack 1-B does not exist',
+      message:
+        '1-B does not exist in DC4 yet, and creating a rack needs the Manage locations permission. Saving does not put the 130 units on a rack. Did you mean 17-B or 18-B?',
+      suggestions: ['17-B', '18-B'],
+      canCreateRack: false,
     });
   });
 
@@ -86,6 +108,25 @@ describe('parseNewRackConfirmationDetail', () => {
     expect(parseNewRackConfirmationDetail({ ...detail, label: 42 })).toBeNull();
   });
 
+  it('reads whether the yes creates the rack, and only an explicit false says it does not', () => {
+    const blocked = newRackConfirmationDetail({
+      label: '1-B',
+      warehouseName: 'DC4',
+      quantity: 130,
+      existingLabels: DC4,
+      blockedBy: 'move_stock',
+    })!;
+    expect(parseNewRackConfirmationDetail(JSON.parse(JSON.stringify(blocked)))).toEqual(blocked);
+    expect(parseNewRackConfirmationDetail(blocked)?.canCreateRack).toBe(false);
+    // A payload without the flag, or with anything but false, keeps the words
+    // "Create rack and save" were written for: the yes creates the rack.
+    const { canCreateRack: _omitted, ...withoutFlag } = detail;
+    expect(parseNewRackConfirmationDetail(withoutFlag)?.canCreateRack).toBe(true);
+    expect(parseNewRackConfirmationDetail({ ...detail, canCreateRack: 'no' })?.canCreateRack).toBe(
+      true,
+    );
+  });
+
   it('keeps only real suggestions', () => {
     expect(
       parseNewRackConfirmationDetail({ ...detail, suggestions: ['17-B', '', 7, null] })
@@ -93,6 +134,40 @@ describe('parseNewRackConfirmationDetail', () => {
     ).toEqual(['17-B']);
     expect(parseNewRackConfirmationDetail({ ...detail, suggestions: 'x' })?.suggestions).toEqual(
       [],
+    );
+  });
+});
+
+describe('newRackBlockerFor (what a yes can do, by the permissions the create checks)', () => {
+  const set = (...p: Permission[]) => new Set<Permission>(p);
+
+  it('owners, admins and managers can create the rack and move the stock onto it', () => {
+    expect(newRackBlockerFor({ role: 'owner' })).toBeNull();
+    expect(newRackBlockerFor({ role: 'admin' })).toBeNull();
+    expect(newRackBlockerFor({ role: 'manager' })).toBeNull();
+  });
+
+  it('the Staff preset cannot create racks (no Manage locations)', () => {
+    expect(newRackBlockerFor({ role: 'staff' })).toBe('create_rack');
+    expect(newRackBlockerFor({ role: 'viewer' })).toBe('create_rack');
+  });
+
+  it('reads the effective permissions when the context carries them', () => {
+    // Staff granted Manage locations.
+    expect(
+      newRackBlockerFor({ role: 'staff', permissions: set('locations:manage', 'stock:transfer') }),
+    ).toBeNull();
+    // A manager whose Manage locations was revoked.
+    expect(newRackBlockerFor({ role: 'manager', permissions: set('stock:transfer') })).toBe(
+      'create_rack',
+    );
+    // A manager whose Transfer stock was revoked: the rack could be created,
+    // but the stock could not be moved onto it.
+    expect(newRackBlockerFor({ role: 'manager', permissions: set('locations:manage') })).toBe(
+      'move_stock',
+    );
+    expect(newRackBlockerFor({ role: 'staff', permissions: set('items:create') })).toBe(
+      'create_rack',
     );
   });
 });
