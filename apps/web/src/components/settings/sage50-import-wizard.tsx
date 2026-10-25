@@ -17,6 +17,12 @@ import {
 import { isControlFlow } from '@/lib/control-flow';
 import { parseCsv } from '@/lib/csv';
 import {
+  finishRun,
+  leaveRunUnfinished,
+  recordRun,
+  takeInterruptedRun,
+} from '@/lib/interrupted-run';
+import {
   applySage50Valuation,
   detectSage50Kind,
   mapSage50Items,
@@ -26,6 +32,8 @@ import {
   type Sage50Vendor,
 } from '@/lib/sage50';
 import { importSage50Action, type Sage50ImportSummary } from '@/server/actions/sage50-import';
+
+import { parseStoppedImport, SAGE50_IMPORT_RUN, type StoppedImport } from './sage50-import-run';
 
 interface LoadedFiles {
   items: {
@@ -58,18 +66,49 @@ const CHUNK_SIZE = 250;
  * receives normalized rows only, in CHUNK_SIZE chunks (vendors ride along with
  * every chunk so cross-chunk items still link — the server reuses by name, so
  * no duplicates).
+ *
+ * An import that a page load cuts short (the session ended and the next chunk
+ * was answered with a redirect to sign-in) leaves a record in this tab of what
+ * landed. When the wizard opens again for the same account, it shows that
+ * summary and says the import stopped there.
  */
-export function Sage50ImportWizard({ warehouses }: { warehouses: { id: string; name: string }[] }) {
+export function Sage50ImportWizard({
+  warehouses,
+  userId,
+  organizationId,
+}: {
+  warehouses: { id: string; name: string }[];
+  /** With organizationId, the account an import's record in this tab belongs to. */
+  userId: string;
+  organizationId: string;
+}) {
   const [loaded, setLoaded] = React.useState<LoadedFiles>(EMPTY);
   const [summary, setSummary] = React.useState<Sage50ImportSummary | null>(null);
+  /** Set when `summary` is an earlier import's, cut short by a page load. */
+  const [stopped, setStopped] = React.useState<Omit<StoppedImport, 'summary'> | null>(null);
   const [progress, setProgress] = React.useState<string | null>(null);
   const [warehouseId, setWarehouseId] = React.useState<string>(warehouses[0]?.id ?? '');
   const [importing, startImport] = React.useTransition();
   const inputRef = React.useRef<HTMLInputElement>(null);
 
+  // As the wizard opens: an import this tab started and a page load cut short
+  // left what landed (see SAGE50_IMPORT_RUN). Show it.
+  React.useEffect(() => {
+    const cutShort = takeInterruptedRun(
+      SAGE50_IMPORT_RUN,
+      { userId, organizationId },
+      parseStoppedImport,
+    );
+    if (!cutShort) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot sessionStorage hydration on mount
+    setSummary(cutShort.summary);
+    setStopped({ processed: cutShort.processed, fileTotal: cutShort.fileTotal });
+  }, [userId, organizationId]);
+
   async function handleFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
     setSummary(null);
+    setStopped(null);
 
     const next: LoadedFiles = { ...loaded, unknown: [...loaded.unknown] };
     for (const file of Array.from(files)) {
@@ -112,6 +151,7 @@ export function Sage50ImportWizard({ warehouses }: { warehouses: { id: string; n
     if (!loaded.items || !warehouseId) return;
     startImport(async () => {
       setProgress(null);
+      setStopped(null);
       // Deep-copy so the valuation overlay never double-applies across retries.
       const items = loaded.items!.items.map((i) => ({ ...i }));
       let valuationNote: string | null = null;
@@ -152,6 +192,7 @@ export function Sage50ImportWizard({ warehouses }: { warehouses: { id: string; n
             vendors,
           });
           if (!res.ok) {
+            finishRun(SAGE50_IMPORT_RUN);
             toast.error(res.error.message);
             // Surface what DID land before the failing chunk.
             if (agg.items.total > 0) setSummary(agg);
@@ -163,10 +204,20 @@ export function Sage50ImportWizard({ warehouses }: { warehouses: { id: string; n
           agg.items.failed += res.data.items.failed;
           agg.items.errors = [...agg.items.errors, ...res.data.items.errors].slice(0, 50);
           if (offset === 0) agg.suppliers = res.data.suppliers;
+          // What has landed, kept for the page the person comes back to if the
+          // next chunk is answered with a redirect (see SAGE50_IMPORT_RUN).
+          const sofar: StoppedImport = {
+            summary: agg,
+            processed: agg.items.total,
+            fileTotal: items.length,
+          };
+          recordRun(SAGE50_IMPORT_RUN, { userId, organizationId }, sofar);
         }
       } catch (e) {
         // A redirect (the session ended): the router is already navigating.
-        if (isControlFlow(e)) return;
+        // The record of what landed stays for the wizard after sign-in.
+        if (isControlFlow(e)) return leaveRunUnfinished(SAGE50_IMPORT_RUN);
+        finishRun(SAGE50_IMPORT_RUN);
         // Transport-level failure (offline, body too large, timeout) — keep the
         // parsed state and show a toast instead of crashing to the error page.
         toast.error(e instanceof Error ? e.message : 'Import failed — please try again.');
@@ -174,6 +225,7 @@ export function Sage50ImportWizard({ warehouses }: { warehouses: { id: string; n
         setProgress(null);
         return;
       }
+      finishRun(SAGE50_IMPORT_RUN);
       setProgress(null);
       setSummary(agg);
       toast.success(
@@ -313,6 +365,12 @@ export function Sage50ImportWizard({ warehouses }: { warehouses: { id: string; n
 
         {summary && (
           <div className="bg-sunk space-y-2 rounded-lg border p-3 text-[13px]">
+            {stopped ? (
+              <p className="font-medium">
+                The last import stopped when your session ended, after {stopped.processed} of{' '}
+                {stopped.fileTotal} items.
+              </p>
+            ) : null}
             <p>
               <span className="font-medium">Items:</span> {summary.items.created} created ·{' '}
               {summary.items.failed} failed (of {summary.items.total})
@@ -339,6 +397,12 @@ export function Sage50ImportWizard({ warehouses }: { warehouses: { id: string; n
                 </ul>
               </details>
             )}
+            {stopped ? (
+              <p className="text-muted-foreground text-[12.5px]">
+                To bring in the rest, load the same files and import again. The items already
+                imported fail individually, and nothing gets overwritten.
+              </p>
+            ) : null}
           </div>
         )}
       </SettingsPanel>
