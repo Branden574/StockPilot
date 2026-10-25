@@ -128,11 +128,11 @@ function sizeTokenOf(part: string): string | null {
  * receiving.
  *
  * CONSERVATIVE BY DESIGN: the count goes only when it equals the quantity the
- * line orders and a spaced dash or a colon follows it; the size moves only
- * when the line printed that same size, when it is a whole part of the name
- * (not a word inside a phrase such as "Large Format Paper"), when it is the
- * only size in the name, and when something other than the size is left.
- * Anything else returns the description as it was.
+ * line orders and a spaced dash, or a colon and a space, follows it; the size
+ * moves only when the line printed that same size, when it is a whole part of
+ * the name (not a word inside a phrase such as "Large Format Paper"), when it
+ * is the only size in the name, and when something other than the size is
+ * left. Anything else returns the description as it was.
  */
 export function normalizeApparelName(
   description: string,
