@@ -511,6 +511,28 @@ describe("GET /api/cron/maintenance-orphan-escalations: the run's time limit", (
     for (const org of body.notRead) expect(err.message).toContain(org);
   });
 
+  it('reads in the opposite order the next day, so organizations a cut-short run left are read first', async () => {
+    const orgs = Array.from({ length: 2 * ORPHAN_SWEEP.orgConcurrency - 1 }, (_v, i) => `org-${i}`);
+    const readOn = async (runAt: number) => {
+      vi.setSystemTime(runAt);
+      const stub = setup({
+        orgs,
+        // The first answer arrives after the deadline.
+        onRequestRead: () => vi.setSystemTime(runAt + ORPHAN_SWEEP.deadlineMs + 1),
+      });
+      const res = await GET(req(AUTH));
+      const body = (await res.json()) as { notRead: string[] };
+      expect(body.notRead.length).toBeGreaterThan(0);
+      return requestReadOrgs(stub);
+    };
+
+    const today = await readOn(NOW);
+    const tomorrow = await readOn(NOW + 24 * HOUR);
+
+    // Neither run read every organization; the two together did.
+    expect(new Set([...today, ...tomorrow])).toEqual(new Set(orgs));
+  });
+
   it('gives the reads in flight at the deadline minutes to finish before the function is stopped', () => {
     expect(maxDuration * 1000 - ORPHAN_SWEEP.deadlineMs).toBeGreaterThanOrEqual(4 * 60_000);
   });
