@@ -100,7 +100,7 @@ export async function GET(req: NextRequest) {
     const photos = format === 'pdf' && photosRaw !== '0';
     const query = bookReportApiQuery(url);
 
-    const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+    const limited = await exportRateLimited(req, ctx.userId, ctx.organizationId);
     if (limited) return limited;
 
     // The charter list (only for a chosen charter) is read beside the export
