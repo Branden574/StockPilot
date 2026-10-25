@@ -3237,19 +3237,11 @@ export class InventoryService {
     // it on insert, but a friendlier error here saves a round trip.
     const resolvedCharterId = input.charterId ?? null;
     if (resolvedCharterId) {
-      const { data: pair } = await this.ctx.supabase
-        .from('warehouse_charters')
-        .select('charter_id')
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('warehouse_id', resolvedWarehouseId)
-        .eq('charter_id', resolvedCharterId)
-        .maybeSingle();
-      if (!pair) {
-        throw new ServiceError(
-          'validation_error',
-          'This charter is not serviced by the chosen warehouse. Pick a different one or mark the item as Generic.',
-        );
-      }
+      await this.assertWarehouseServesCharter(
+        resolvedWarehouseId,
+        resolvedCharterId,
+        'This charter is not serviced by the chosen warehouse. Pick a different one or mark the item as Generic.',
+      );
     }
 
     // MANUAL-create-only guards, computed here so the new-rack question, the
@@ -4182,19 +4174,11 @@ export class InventoryService {
     // Validate (warehouse, charter) pair when a charter is set.
     const resolvedCharterId = input.charterId ?? null;
     if (resolvedCharterId) {
-      const { data: pair } = await this.ctx.supabase
-        .from('warehouse_charters')
-        .select('charter_id')
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('warehouse_id', resolvedWarehouseId)
-        .eq('charter_id', resolvedCharterId)
-        .maybeSingle();
-      if (!pair) {
-        throw new ServiceError(
-          'validation_error',
-          'This charter is not serviced by the chosen warehouse. Pick a different one or mark the variants as Generic.',
-        );
-      }
+      await this.assertWarehouseServesCharter(
+        resolvedWarehouseId,
+        resolvedCharterId,
+        'This charter is not serviced by the chosen warehouse. Pick a different one or mark the variants as Generic.',
+      );
     }
 
     // The new-rack question, create()'s rule for the whole run: the stocked
@@ -4617,19 +4601,11 @@ export class InventoryService {
     // every row in the batch.
     const resolvedCharterId = input.charterId ?? null;
     if (resolvedCharterId) {
-      const { data: pair } = await this.ctx.supabase
-        .from('warehouse_charters')
-        .select('charter_id')
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('warehouse_id', resolvedWarehouseId)
-        .eq('charter_id', resolvedCharterId)
-        .maybeSingle();
-      if (!pair) {
-        throw new ServiceError(
-          'validation_error',
-          'This charter is not serviced by the chosen warehouse. Pick a different one or mark the items as Generic.',
-        );
-      }
+      await this.assertWarehouseServesCharter(
+        resolvedWarehouseId,
+        resolvedCharterId,
+        'This charter is not serviced by the chosen warehouse. Pick a different one or mark the items as Generic.',
+      );
     }
 
     // Plan-limit aware of batch size — was per-row (would only catch the
@@ -4817,6 +4793,34 @@ export class InventoryService {
       errors: [],
       createdIds,
     };
+  }
+
+  /**
+   * Refuses a (warehouse, charter) pair the organization has not linked
+   * (warehouse_charters), in the caller's own words (`refusal`). A read that
+   * fails refuses too (fail closed), as an internal error: every copy of this
+   * check used to ignore the read's error and tell the person the warehouse
+   * does not service the charter, which is not what happened (B26).
+   */
+  private async assertWarehouseServesCharter(
+    warehouseId: string,
+    charterId: string,
+    refusal: string,
+  ): Promise<void> {
+    const { data: pair, error } = await this.ctx.supabase
+      .from('warehouse_charters')
+      .select('charter_id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('warehouse_id', warehouseId)
+      .eq('charter_id', charterId)
+      .maybeSingle();
+    if (error) {
+      throw new ServiceError(
+        'internal_error',
+        `Could not check that the warehouse services this charter: ${error.message}`,
+      );
+    }
+    if (!pair) throw new ServiceError('validation_error', refusal);
   }
 
   /**
@@ -5165,27 +5169,11 @@ export class InventoryService {
       const pairChanges =
         (patch.charterId ?? null) !== currentCharterId || finalWarehouseId !== currentWarehouseId;
       if (patch.charterId && finalWarehouseId && pairChanges) {
-        const { data: pair, error: pairError } = await this.ctx.supabase
-          .from('warehouse_charters')
-          .select('charter_id')
-          .eq('organization_id', this.ctx.organizationId)
-          .eq('warehouse_id', finalWarehouseId)
-          .eq('charter_id', patch.charterId)
-          .maybeSingle();
-        // A failed read refuses (fail closed) and says so, rather than
-        // claiming the warehouse does not service the charter.
-        if (pairError) {
-          throw new ServiceError(
-            'internal_error',
-            `Could not check that the warehouse services this charter: ${pairError.message}`,
-          );
-        }
-        if (!pair) {
-          throw new ServiceError(
-            'validation_error',
-            'This charter is not serviced by the chosen warehouse.',
-          );
-        }
+        await this.assertWarehouseServesCharter(
+          finalWarehouseId,
+          patch.charterId,
+          'This charter is not serviced by the chosen warehouse.',
+        );
       }
       updates.charter_id = patch.charterId ?? null;
     }
