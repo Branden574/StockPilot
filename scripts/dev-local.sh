@@ -38,9 +38,9 @@
 # write here, that test fails.
 #
 # NOTE: scripts/dev-prod.sh is no longer needed to "switch back" — just run
-# the normal dev command. Be aware it still does `cp .env.local.prod
-# .env.local`, which DOES write through the symlink and would replace your
-# canonical env file with the stale ten-key backup.
+# the normal dev command. It now only stops the local stack: its old
+# `cp .env.local.prod .env.local` wrote through the symlink the same way and
+# is gone too (B19, guarded by apps/web/src/test/dev-prod-script.test.ts).
 # ─────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -87,8 +87,8 @@ echo "  Mail catcher:     http://127.0.0.1:54324  (Supabase Auth emails land her
 echo "  Web app:          http://localhost:3000"
 echo ""
 echo "  To go back to hosted Supabase: stop this server and run"
-echo "  'pnpm --filter @stockpilot/web dev' normally. Do NOT run"
-echo "  scripts/dev-prod.sh — it overwrites your canonical .env.local."
+echo "  'pnpm --filter @stockpilot/web dev' normally. scripts/dev-prod.sh"
+echo "  also stops the local stack; it never writes an env file."
 echo ""
 echo "→ Starting pnpm --filter @stockpilot/web dev"
 exec pnpm --filter @stockpilot/web dev
