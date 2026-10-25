@@ -939,6 +939,11 @@ WEB_TESTS=(
   # every other refusal keeps its words and its reason. The file carries the
   # "Security invariant" marker.
   src/server/actions/restore-points.test.ts
+  # Duplicate (2026-10-24): an internal failure gets fixed words and no
+  # details, never the raw exception text; every other refusal keeps its
+  # details (the new-rack question rides them). The file carries the
+  # "Security invariant" marker.
+  src/server/actions/duplicate-item.test.ts
 
   # Warehouse scoping (defence in depth behind the RLS policies).
   src/lib/warehouse-scope.test.ts

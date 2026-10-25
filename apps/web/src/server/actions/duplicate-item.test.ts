@@ -3,13 +3,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NEW_RACK_REQUIRES_CONFIRMATION, newRackConfirmationDetail } from '@stockpilot/core';
 
 /**
- * The Duplicate action's refusals (2026-10-24).
+ * Security invariant (S13): the Duplicate action answers an internal failure
+ * with fixed words and no details. A raw exception's text (database or network
+ * detail) stays in the server log; this action used to return it.
  *
- * The server now asks "Create new rack 1-B?" before a copy lands on a rack
- * that does not exist, and the question rides the refusal's `details`. This
- * action used to drop `details`, so the dialog could only have shown a
- * sentence it had no way to answer. It also returned a raw exception's own
- * text for anything that was not a ServiceError.
+ * Every other refusal keeps its words and its details. Since 2026-10-24 the
+ * server asks "Create new rack 1-B?" before a copy lands on a rack that does
+ * not exist, and the question rides the refusal's `details`. This action used
+ * to drop them, so the dialog could only have shown a sentence it had no way
+ * to answer.
  */
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
