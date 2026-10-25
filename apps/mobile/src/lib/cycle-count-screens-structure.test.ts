@@ -427,7 +427,7 @@ describe('count screen: offline capture and the Post rule', () => {
     const body = functionBody(COUNT, 'postCount');
     const offline = body.indexOf("if (syncSnapshot.status === 'offline') {");
     const notCount = body.indexOf('const notCounts = linesNotACount(draft, lines);');
-    const unsaved = body.indexOf('const unsaved = hasUnsavedCount(draft, lines);');
+    const unsaved = body.indexOf('const unsaved = hasUnsavedEdit(draft);');
     const flush = body.indexOf('if (unsaved) lineSaver.flushAll();');
     const read = body.indexOf('pending = await pendingCountFor(header.id);');
     const pending = body.indexOf('if (unsaved || pending > 0) {');
@@ -455,18 +455,10 @@ describe('count screen: offline capture and the Post rule', () => {
   // Fix: a count typed within SAVE_DEBOUNCE_MS (300 ms) of tapping Post was
   // neither saved nor queued, so Post was not blocked; the post could reach
   // the server before that line's count, which then posted without it and
-  // had its queued count refused. The screen's own rule, run: which boxes
-  // hold a count, and whether one is still waiting for its save.
-  //
-  // B4(a): an emptied box over a saved count is waiting too, since its save
-  // is the clear. An emptied box over a line with no count has nothing to
-  // save, and a lone minus is never saved (Post names it instead, below).
-  it('a count or a clear still waiting for its save blocks Post; an emptied box over no count, or a lone minus, does not', () => {
-    const { countFromBox, hasUnsavedCount } = screenFunctions(COUNT, [
-      'isEmptyBox',
-      'countFromBox',
-      'hasUnsavedCount',
-    ]);
+  // had its queued count refused. The screen's own rules, run: what a box
+  // counts as, and whether an edit is still waiting for its save.
+  it('what a box counts as: a number of zero or more, never an emptied box or a lone minus', () => {
+    const { countFromBox } = screenFunctions(COUNT, ['isEmptyBox', 'countFromBox']);
     const verdicts = Object.fromEntries(
       ['', '   ', '0', ' 0 ', '12', '2.5', '-1', '-', 'abc', '.'].map((raw) => [
         raw,
@@ -485,26 +477,37 @@ describe('count screen: offline capture and the Post rule', () => {
       abc: null,
       '.': null,
     });
-    // l1 has a saved count, l2 has none.
-    const lines = [
-      { id: 'l1', counted: 5 },
-      { id: 'l2', counted: null },
-    ];
-    expect(hasUnsavedCount!({}, lines)).toBe(false);
-    // An emptied box: waiting for its clear where the line has a count,
-    // nothing to save where it has none.
-    expect(hasUnsavedCount!({ l1: '' }, lines)).toBe(true);
-    expect(hasUnsavedCount!({ l1: '   ' }, lines)).toBe(true);
-    expect(hasUnsavedCount!({ l2: '' }, lines)).toBe(false);
-    // A lone minus is never saved, over a count or not.
-    expect(hasUnsavedCount!({ l1: '-' }, lines)).toBe(false);
-    expect(hasUnsavedCount!({ l2: '', l1: '-' }, lines)).toBe(false);
-    // A count is always waiting.
-    expect(hasUnsavedCount!({ l2: '', l1: '7' }, lines)).toBe(true);
-    expect(hasUnsavedCount!({ l2: '7' }, lines)).toBe(true);
-    expect(hasUnsavedCount!({ l1: '0' }, lines)).toBe(true);
-    // A line the screen does not hold has no saved count to clear.
-    expect(hasUnsavedCount!({ gone: '' }, lines)).toBe(false);
+  });
+
+  // B4(a): a box's draft is dropped only once its own save has finished (the
+  // pins below: setDraft(withoutSavedDraft) runs after the awaited
+  // updateLocalLine or clearLocalLine, whose transaction queues the outbox
+  // row), so any draft left is a save still waiting or running, and Post
+  // waits for it. Post used to judge an emptied box by the count the line
+  // showed, which is set only when its save finishes: a count typed and then
+  // emptied while that count's write still waited its turn (behind a
+  // snapshot pull) counted as nothing to save, Post listed the line as "not
+  // counted will be skipped", and the count was queued and sent after.
+  it('any box whose edit has not finished saving blocks Post, whatever its line shows', () => {
+    const { hasUnsavedEdit } = screenFunctions(COUNT, ['hasUnsavedEdit']);
+    expect(hasUnsavedEdit!({})).toBe(false);
+    // A count waiting for its save, a count of 0 among them.
+    expect(hasUnsavedEdit!({ l1: '7' })).toBe(true);
+    expect(hasUnsavedEdit!({ l1: '0' })).toBe(true);
+    // An emptied box: its clear is waiting where the line has a count, and
+    // where the line is still shown uncounted, the count typed a moment ago
+    // may still be on its way to the phone's store (the window above).
+    expect(hasUnsavedEdit!({ l1: '' })).toBe(true);
+    expect(hasUnsavedEdit!({ l2: '   ' })).toBe(true);
+    // The line's count on screen plays no part: the rule takes no lines.
+    expect(functionBody(COUNT, 'hasUnsavedEdit')).toBe(
+      '{\n  return Object.keys(draft).length > 0;\n}',
+    );
+    // Post asks it of the drafts alone, after naming the boxes that hold
+    // something that is not a count (a lone minus is never saved, so its
+    // draft stays: Post names it rather than waiting on it).
+    expect(functionBody(COUNT, 'postCount')).toContain('const unsaved = hasUnsavedEdit(draft);');
+    expect(codeOnly(src)).not.toMatch(/hasUnsavedCount/);
   });
 
   // B4(a): a box holding something that is not a count saves nothing, so its

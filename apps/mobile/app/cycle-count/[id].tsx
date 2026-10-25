@@ -115,24 +115,24 @@ function countFromBox(raw: string): number | null {
 }
 
 /**
- * Whether an edit in a box is still waiting for its save: the line saver
- * writes a box SAVE_DEBOUNCE_MS after the last keystroke and only then queues
- * it, so until then it is on screen but neither saved nor queued. A box
- * holding a count is waiting, and so is an emptied box whose line still has a
- * saved count: its save is the clear (B4a). An emptied box over a line with
- * no count has nothing to save, and a box holding something that is not a
- * count (a lone minus sign) is never saved; Post waits on that instead
- * (linesNotACount).
+ * Whether a box's edit has not finished saving. The line saver writes a box
+ * SAVE_DEBOUNCE_MS after the last keystroke, and its save then waits its turn
+ * among the phone's writes (a snapshot pull or the count's own caching can
+ * hold that queue for a while); a box's draft is dropped only once its own
+ * save has finished (withoutSavedDraft), and by then its outbox row is
+ * queued. So any draft left is a save still waiting or running, and Post
+ * waits for it ("Sync first").
+ *
+ * Every draft counts, whatever the line shows: the line's count on screen is
+ * set only when its save finishes, so it can trail the phone's store. An
+ * emptied box over a line still shown uncounted used to count as nothing to
+ * save, while the count typed in it a moment before was still being written:
+ * that count was then queued and sent after Post had said the line would be
+ * skipped (B4a). A box that holds something that is not a count is never
+ * saved; Post names those first (linesNotACount).
  */
-function hasUnsavedCount(
-  draft: Readonly<Record<string, string>>,
-  lines: readonly { id: string; counted: number | null }[],
-): boolean {
-  const saved = new Map(lines.map((l) => [l.id, l.counted]));
-  return Object.entries(draft).some(
-    ([lineId, raw]) =>
-      countFromBox(raw) !== null || (isEmptyBox(raw) && (saved.get(lineId) ?? null) !== null),
-  );
+function hasUnsavedEdit(draft: Readonly<Record<string, string>>): boolean {
+  return Object.keys(draft).length > 0;
 }
 
 /**
@@ -645,12 +645,14 @@ export default function CycleCountDetail() {
       return;
     }
     // A count typed a moment ago is still waiting for its save (the pause
-    // after the last keystroke), so it is neither saved nor queued, and a post
-    // sent now could reach the server before it: the count would post without
-    // it, and the queued count would be refused afterwards. Save it at once;
-    // it is an unsynced edit like any other, so posting waits for it. An
-    // emptied box's clear waits the same way.
-    const unsaved = hasUnsavedCount(draft, lines);
+    // after the last keystroke, then its turn among the phone's writes), so
+    // it is neither saved nor queued, and a post sent now could reach the
+    // server before it: the count would post without it, and the queued count
+    // would be refused afterwards. Save what is still waiting at once; it is
+    // an unsynced edit like any other, so posting waits for it. An emptied
+    // box's clear waits the same way, and so does any box whose save is
+    // still running (hasUnsavedEdit).
+    const unsaved = hasUnsavedEdit(draft);
     if (unsaved) lineSaver.flushAll();
     // Only THIS count's unsynced edits block posting it. The engine's global
     // pendingCount includes every kind on the device (a queued PO line, a
