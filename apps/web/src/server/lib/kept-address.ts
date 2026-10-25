@@ -48,8 +48,10 @@ import 'server-only';
  * to them in that same change, which also closes the gap above. Rentals keep
  * a borrower's address too (borrower_email), but a borrower without an
  * account has no borrower_user_id either, so nothing can be inferred there:
- * its marker (rentals.borrower_deleted_at) is in the same design, and until
- * then a deleted member's open rental still gets its reminders.
+ * its marker (rentals.borrower_deleted_at) is in the same design. Until then,
+ * when a member who borrowed something deletes their account, the overdue
+ * reminders and the returned email (lib/email/rentals.ts) still go to the
+ * address kept on the rental.
  */
 
 /** The maintenance_requests column the answer reads. */
