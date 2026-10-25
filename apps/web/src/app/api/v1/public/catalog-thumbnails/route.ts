@@ -1,9 +1,10 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
+import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { sha256Hex } from '@/lib/token-hash';
 import { ItemImagesService } from '@/server/services/item-images';
-import { isLinkOpen } from '@/server/services/public-catalog';
+import { isLinkOpen, readEligibleItems } from '@/server/services/public-catalog';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -11,10 +12,11 @@ export const dynamic = 'force-dynamic';
 /**
  * Public version of /api/orders/catalog-thumbnails.
  *
- * Auth: validated via `?token=<public_request_token>` instead of a
- * logged-in session. The token resolves to an organization, then we
- * confirm the warehouseId belongs to that org and is publicly orderable.
- * On success, returns the same `{ urls: Record<itemId, signedUrl> }` map
+ * Auth: validated via `?token=<request link token>` instead of a
+ * logged-in session. The token resolves to a request link and its
+ * organization, then we confirm the warehouseId belongs to that org and is
+ * publicly orderable. On success, returns the same
+ * `{ urls: Record<itemId, signedUrl> }` map
  * that the staff endpoint returns, so the public picker can reuse the
  * same deferred-thumbnail pattern without any signed-in credentials.
  */
@@ -39,8 +41,8 @@ export async function GET(req: NextRequest) {
 
   const admin = createAdminClient();
 
-  // Resolve the token: links-table first (mig 0261 — the migrated General
-  // links carry the legacy org tokens), organizations fallback. The signed
+  // Resolve the token through the links table (mig 0261: the migrated
+  // General links carry the legacy org tokens). The signed
   // set is the LINK's eligible catalog, resolved through the same
   // `public_link_eligible_items` predicate as the page and the submit
   // endpoint, so thumbnails can't be used to enumerate items a link
@@ -61,31 +63,24 @@ export async function GET(req: NextRequest) {
   };
   const link = (linkRow as LinkRow | null) ?? null;
 
-  let organizationId: string;
-  if (link) {
-    if (
-      !isLinkOpen({
-        active: link.active,
-        expiresAt: link.expires_at,
-        availableFrom: link.available_from,
-        availableUntil: link.available_until,
-      })
-    ) {
-      return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });
-    }
-    organizationId = link.organization_id;
-  } else {
-    // Legacy fallback — org token without a links row.
-    const { data: org } = await admin
-      .from('organizations')
-      .select('id')
-      .eq('public_request_token_hash', sha256Hex(token))
-      .maybeSingle();
-    if (!org) {
-      return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });
-    }
-    organizationId = (org as { id: string }).id;
+  // No links row: either no such token, or a legacy organization token. The
+  // page renders an EMPTY catalog for a legacy token (r/[token]/page.tsx, fail
+  // closed), so there is nothing of its to sign. This used to sign up to 500
+  // of the warehouse's book photos that no page displayed (B32).
+  if (!link) {
+    return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });
   }
+  if (
+    !isLinkOpen({
+      active: link.active,
+      expiresAt: link.expires_at,
+      availableFrom: link.available_from,
+      availableUntil: link.available_until,
+    })
+  ) {
+    return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });
+  }
+  const organizationId = link.organization_id;
 
   // Module gate (review finding 2026-07-12): mirror the submit route — the
   // `public_requests` module is optional, so an explicit enabled row is
@@ -115,28 +110,25 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });
   }
 
-  // Eligible item_ids for this link + warehouse (or the pre-0261 book set
-  // on the legacy fallback path).
+  // Eligible item_ids for this link + warehouse: the page's own read, every
+  // page of it to the same ceiling and in the same order (readEligibleItems),
+  // so the photos signed are the items shown. It used to keep the first 500
+  // of one unpaged read (cut by PostgREST at 1000 rows, in no stated order):
+  // past 500 items, a different set from the page's.
+  //
+  // A failed read is not an empty catalog. It used to answer `{ urls: {} }`
+  // with the public CDN header, so one failed read showed no photos to every
+  // visitor for a minute and five more stale. Now a 500 no cache keeps; the
+  // page's thumbnail hook retries it (lib/use-catalog-thumbnails.ts).
   let itemIds: string[];
-  if (link) {
-    const { data: eligibleRows } = await admin.rpc('public_link_eligible_items', {
-      p_link_id: link.id,
-      p_warehouse_id: warehouseId,
-    });
-    itemIds = ((eligibleRows ?? []) as Array<{ item_id: string }>)
-      .map((r) => r.item_id)
-      .slice(0, 500);
-  } else {
-    const { data: items } = await admin
-      .from('inventory_items')
-      .select('id')
-      .eq('organization_id', organizationId)
-      .eq('warehouse_id', warehouseId)
-      .eq('item_type', 'book')
-      .eq('status', 'active')
-      .is('deleted_at', null)
-      .limit(500);
-    itemIds = ((items ?? []) as Array<{ id: string }>).map((i) => i.id);
+  try {
+    itemIds = (await readEligibleItems(admin, link.id, warehouseId)).map((r) => r.item_id);
+  } catch (err) {
+    void reportError(err, { tag: 'public.catalog_thumbnails.eligibility', organizationId });
+    return NextResponse.json(
+      { error: 'internal_error' },
+      { status: 500, headers: { 'Cache-Control': 'no-store' } },
+    );
   }
   if (itemIds.length === 0) {
     return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });

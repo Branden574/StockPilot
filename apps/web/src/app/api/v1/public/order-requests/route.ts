@@ -483,10 +483,14 @@ export async function POST(req: NextRequest) {
   };
 
   if (link) {
-    const { data: eligibleRows, error: eligErr } = await admin.rpc(
-      'public_link_eligible_items',
-      { p_link_id: link.id, p_warehouse_id: body.warehouseId },
-    );
+    // Only the request's own items. One unpaged read of the whole function
+    // came back with at most 1000 rows (PostgREST max_rows) in no stated
+    // order, so on a link with more eligible items than that, an item the
+    // page showed could be refused below as no longer available (B32).
+    const { data: eligibleRows, error: eligErr } = await admin
+      .rpc('public_link_eligible_items', { p_link_id: link.id, p_warehouse_id: body.warehouseId })
+      // in-list-bound: a request's distinct items; lineSchema caps lines at 100
+      .in('item_id', itemIds);
     if (eligErr) {
       return NextResponse.json({ error: 'internal_error' }, { status: 500 });
     }

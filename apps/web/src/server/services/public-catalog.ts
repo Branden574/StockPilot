@@ -6,6 +6,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { sha256Hex } from '@/lib/token-hash';
 
 import { fetchAllRowsByIds, reportDegradedRead, settleAsDataError } from './lib/fetch-by-ids';
+import { fetchAllRows } from './lib/paginate';
 import type { PublicAvailability, PublicCatalogItem } from '@/components/orders/public-v2/types';
 
 import { publicCatalogTag } from './public-links';
@@ -85,8 +86,58 @@ export interface PublicRequestContext {
  */
 const PUBLIC_BUCKET_LOW_THRESHOLD = 5;
 
-/** Hard cap on catalog size, matching the previous loader. */
-const CATALOG_LIMIT = 500;
+/**
+ * The most items one link's catalog holds for one warehouse: the internal
+ * storefront's CATALOG_ROW_CEILING (server/loaders/orders-new-catalog.ts),
+ * kept equal by public-catalog.caps.test.ts. A safety ceiling, not a page
+ * size: reaching it is logged. It replaced a silent cut at the first 500 items
+ * by name, past which an item was neither shown nor searchable on the public
+ * page (B32).
+ */
+export const PUBLIC_CATALOG_ROW_CEILING = 10_000;
+
+/** One row of `public_link_eligible_items`. */
+export interface EligibleItem {
+  item_id: string;
+  max_qty: number | null;
+}
+
+/**
+ * Every item `public_link_eligible_items` admits for a link and warehouse, up
+ * to PUBLIC_CATALOG_ROW_CEILING, read in item_id order in 1000-row pages.
+ *
+ * One unpaged call used to be enough to look right: PostgREST answers any
+ * request with at most 1000 rows (`max_rows`), and the function has no ORDER
+ * BY, so past 1000 eligible items an arbitrary set silently dropped out. The
+ * page and the thumbnail route read through here, so they hold the same set.
+ * THROWS on a failed page (fetchAllRows), never returning the pages before it
+ * as the whole catalog.
+ */
+export async function readEligibleItems(
+  admin: ReturnType<typeof createAdminClient>,
+  linkId: string,
+  warehouseId: string,
+  opts: { ceiling?: number } = {},
+): Promise<EligibleItem[]> {
+  const ceiling = opts.ceiling ?? PUBLIC_CATALOG_ROW_CEILING;
+  const rows = await fetchAllRows<EligibleItem>(
+    (from, to) =>
+      admin
+        .rpc('public_link_eligible_items', { p_link_id: linkId, p_warehouse_id: warehouseId })
+        .order('item_id', { ascending: true })
+        .range(from, to) as unknown as PromiseLike<{
+        data: EligibleItem[] | null;
+        error: { message: string } | null;
+      }>,
+    { cap: ceiling },
+  );
+  if (rows.length >= ceiling) {
+    console.error(
+      `[public-catalog] link ${linkId} reached the ${ceiling}-item ceiling for warehouse ${warehouseId}: items past it are not shown, searchable or signed`,
+    );
+  }
+  return rows;
+}
 
 /**
  * External cover URL to ship in the initial SSR payload. ISBN-imported books
@@ -265,16 +316,9 @@ async function loadPublicCatalogUncached(
 ): Promise<PublicCatalogItem[]> {
   const admin = createAdminClient();
 
-  // 1. THE eligibility predicate (shared with submit) → eligible ids + caps.
-  const { data: eligibleRows, error: eligErr } = await admin.rpc(
-    'public_link_eligible_items',
-    { p_link_id: linkId, p_warehouse_id: warehouseId },
-  );
-  if (eligErr) throw new Error(`public catalog eligibility failed: ${eligErr.message}`);
-  const eligible = (eligibleRows ?? []) as Array<{
-    item_id: string;
-    max_qty: number | null;
-  }>;
+  // 1. THE eligibility predicate (shared with submit) → eligible ids + caps,
+  // every page of it (readEligibleItems). A failed page throws: never cached.
+  const eligible = await readEligibleItems(admin, linkId, warehouseId);
   if (eligible.length === 0) return [];
 
   const maxQtyByItem = new Map<string, number | null>(
@@ -315,20 +359,23 @@ async function loadPublicCatalogUncached(
         .range(from, to),
   );
 
+  // Every eligible item, by name. The eligibility read already stops at
+  // PUBLIC_CATALOG_ROW_CEILING (logged there); nothing is cut here. This used
+  // to keep only the first 500, and the page's search runs over this payload,
+  // so item 501 could not even be found.
   items.sort((a, b) =>
     (a.public_display_name ?? a.name).localeCompare(b.public_display_name ?? b.name),
   );
-  const page = items.slice(0, CATALOG_LIMIT);
-  if (page.length === 0) return [];
-  const pageIds = page.map((i) => i.id);
+  if (items.length === 0) return [];
+  const pageIds = items.map((i) => i.id);
   const categoryIds = [
-    ...new Set(page.map((i) => i.category_id).filter((v): v is string => Boolean(v))),
+    ...new Set(items.map((i) => i.category_id).filter((v): v is string => Boolean(v))),
   ];
 
   // 3. Reservations (only when a stock signal ships), category labels, and
   // LQIP blurs in parallel. Signed thumbnail URLs stay deferred to the client.
   //
-  // All three are batched: a page is up to CATALOG_LIMIT ids, and one `.in()`
+  // All three are batched: a catalog is up to PUBLIC_CATALOG_ROW_CEILING ids, and one `.in()`
   // past ~215 uuids answers 414 locally and fails as "fetch failed" in
   // production after ~7 s of retries. Their errors used to be ignored, so a
   // failed reservation read showed reserved stock as available. Reservations
@@ -401,7 +448,7 @@ async function loadPublicCatalogUncached(
     if (!lqipByItem.has(row.item_id) && row.lqip) lqipByItem.set(row.item_id, row.lqip);
   }
 
-  return page.map((it): PublicCatalogItem => {
+  return items.map((it): PublicCatalogItem => {
     const net = Math.max(
       0,
       (Number(it.quantity_on_hand) || 0) - (reservedByItem.get(it.id) ?? 0),
