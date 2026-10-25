@@ -15,6 +15,10 @@ import { sendEmail } from '@/lib/email/resend';
 import { reportError } from '@/lib/error-reporter';
 import { SITE_URL, SUPPORT_EMAIL } from '@/lib/site';
 import { createAdminClient } from '@/lib/supabase/admin';
+import {
+  supportTicketOwner,
+  supportTicketSubmitterAccountDeleted,
+} from '@/server/lib/kept-address';
 
 /**
  * Support tickets — public "report a problem" submissions + platform-admin
@@ -63,6 +67,12 @@ export interface CreateSupportTicketInput {
   message: string;
   pageUrl?: string | null;
   userAgent?: string | null;
+  /**
+   * A ticket a member files in the app names both; a public one names
+   * neither. Half a pair is refused (supportTicketOwner, server/lib/
+   * kept-address.ts): the resolved notice reads "an organization and nobody"
+   * as a member who deleted their account.
+   */
   organizationId?: string | null;
   submittedBy?: string | null;
   /**
@@ -94,13 +104,15 @@ function mapRow(r: Record<string, unknown>): SupportTicketRow {
   };
 }
 
-export async function createSupportTicket(input: CreateSupportTicketInput): Promise<{ id: string }> {
+export async function createSupportTicket(
+  input: CreateSupportTicketInput,
+): Promise<{ id: string }> {
   const admin = createAdminClient();
   const { data, error } = await admin
     .from('support_tickets')
     .insert({
-      organization_id: input.organizationId ?? null,
-      submitted_by: input.submittedBy ?? null,
+      // Both or neither, or this throws before anything is written.
+      ...supportTicketOwner(input),
       name: input.name?.trim() || null,
       email: input.email.trim().toLowerCase(),
       category: input.category,
@@ -274,9 +286,7 @@ export async function listMyTickets(opts: {
  * callers must already be behind a platform-admin gate. Best-effort: missing
  * objects are simply absent from the result, never thrown.
  */
-export async function createAttachmentSignedUrls(
-  paths: string[],
-): Promise<Record<string, string>> {
+export async function createAttachmentSignedUrls(paths: string[]): Promise<Record<string, string>> {
   if (paths.length === 0) return {};
   const admin = createAdminClient();
   const { data, error } = await admin.storage
@@ -331,29 +341,18 @@ export async function updateSupportTicket(
     organization_id: string | null;
     submitted_by: string | null;
   };
+  // B23: never to the kept address of a member who deleted their account
+  // (A3); server/lib/kept-address.ts says how that is known.
   if (
     patch.status === 'resolved' &&
     b.status !== 'resolved' &&
     b.status !== 'closed' &&
-    !submitterAccountDeleted(b)
+    !supportTicketSubmitterAccountDeleted(b)
   ) {
     void sendResolvedNotice(id, b).catch((e) =>
       reportError(e, { tag: 'support-tickets.resolved', extra: { id } }),
     );
   }
-}
-
-/**
- * B23: a ticket filed in the app (the dashboard action, the phone's
- * /api/v1/support) always names its organization and the member who filed it;
- * a public one names neither. The user_profiles foreign key nulls submitted_by
- * only when that member deletes their account, so an organization with nobody
- * is a deleted member's ticket: its kept address is never emailed again (A3).
- * (A ticket whose organization was deleted too reads as public: neither is
- * named any more.)
- */
-function submitterAccountDeleted(t: { organization_id: string | null; submitted_by: string | null }): boolean {
-  return t.organization_id !== null && t.submitted_by === null;
 }
 
 async function sendResolvedNotice(
