@@ -21,8 +21,9 @@ vi.mock('@/server/actions/sage50-import', () => ({
   importSage50Action: (...a: unknown[]) => h.importSage50(...a),
 }));
 
+import { InterruptedRunExpiry } from '@/components/auth/interrupted-run-expiry';
 import { purgeInterruptedRuns, sweepInterruptedRuns } from '@/lib/interrupted-run';
-import { interruptedRunKeys } from '@/test/interrupted-run-fixtures';
+import { fakeBroadcastChannels, interruptedRunKeys } from '@/test/interrupted-run-fixtures';
 
 import { Sage50ImportWizard } from './sage50-import-wizard';
 
@@ -108,6 +109,7 @@ afterEach(() => {
   cleanup();
   // An import a test leaves going in this page would hold the next test's wizard.
   purgeInterruptedRuns();
+  vi.unstubAllGlobals();
 });
 
 describe('Sage50ImportWizard: the session ends between chunks', () => {
@@ -296,6 +298,57 @@ describe('Sage50ImportWizard: the session ends between chunks', () => {
     );
     expect(interruptedRunKeys()).toEqual([]);
 
+    cleanup();
+    renderWizard();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(screen.queryByText(/The last import stopped/)).toBeNull();
+    expect(screen.queryByText(/created ·/)).toBeNull();
+  });
+
+  it('a sign-out on purpose in another tab of this browser while the import runs leaves nothing in this tab', async () => {
+    // Review of round 2's repair. "Sign out and back in" on an error card, or
+    // Delete my account, in another tab ends this tab's session too (the
+    // session cookies are the browser's), but sends no revoke. Only that tab
+    // was cleared: here the chunk on its way landed and was recorded with its
+    // rows, the next chunk was answered with the redirect, and the record was
+    // kept for after signing in. The other tab's purge now reaches this one,
+    // where the root layout's InterruptedRunExpiry listens.
+    const tabs = fakeBroadcastChannels();
+    let finishSecond: (v: unknown) => void = () => {};
+    h.importSage50
+      .mockResolvedValueOnce(chunkSummary(250, 248))
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishSecond = resolve;
+          }),
+      )
+      .mockRejectedValueOnce(signInRedirect());
+
+    render(<InterruptedRunExpiry />);
+    renderWizard();
+    fireEvent.change(screen.getByLabelText('Sage 50 CSV files'), {
+      target: { files: [itemListCsv(600)] },
+    });
+    await waitFor(() => expect(screen.getByText('600 items')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Import into StockPilot' }));
+    await waitFor(() => expect(h.importSage50).toHaveBeenCalledTimes(2));
+    expect(interruptedRunKeys()).toHaveLength(1);
+
+    // The other tab's sign-out control sends its purge before its request.
+    tabs.otherTab().postMessage({ type: 'purge' });
+    tabs.deliver();
+    expect(interruptedRunKeys()).toEqual([]);
+
+    finishSecond(chunkSummary(250, 250));
+    await waitFor(() => expect(h.importSage50).toHaveBeenCalledTimes(3));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Import into StockPilot' })).toBeEnabled(),
+    );
+    expect(interruptedRunKeys()).toEqual([]);
+
+    // After signing in again on this tab, the wizard opens clean.
     cleanup();
     renderWizard();
     await new Promise((r) => setTimeout(r, 0));

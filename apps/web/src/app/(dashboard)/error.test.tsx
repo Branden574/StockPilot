@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   blockSessionStorage,
+  fakeBroadcastChannels,
   interruptedRunKeys,
   seedInterruptedRuns,
   UNRELATED_KEY,
@@ -91,6 +92,7 @@ describe('the dashboard error card: Sign out and back in', () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     sessionStorage.clear();
   });
 
@@ -107,12 +109,33 @@ describe('the dashboard error card: Sign out and back in', () => {
     expect(sessionStorage.getItem(UNRELATED_KEY)).toBe('kept');
   });
 
-  it('showing the card removes nothing: only the click does', () => {
+  it('tells the other tabs of this browser before the sign-out route loads: the route signs them out too', () => {
+    // Review of round 2's repair: the route ends the session in every tab (the
+    // session cookies are the browser's) and sends no revoke, so another tab
+    // kept its records, and a run going there kept recording.
+    const tabs = fakeBroadcastChannels();
+    const otherTab = tabs.otherTab();
+    const sentAtLoad: unknown[][] = [];
+    vi.spyOn(window.location, 'assign').mockImplementation(() => {
+      sentAtLoad.push(tabs.sent());
+    });
+    render(<DashboardError error={error} reset={() => {}} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out and back in' }));
+
+    expect(sentAtLoad).toEqual([[{ type: 'purge' }]]);
+    tabs.deliver();
+    expect(otherTab.received).toEqual([{ type: 'purge' }]);
+  });
+
+  it('showing the card removes nothing and tells no other tab: only the click does', () => {
+    const tabs = fakeBroadcastChannels();
     sessionStorage.clear();
     seedInterruptedRuns();
     render(<DashboardError error={error} reset={() => {}} />);
 
     expect(interruptedRunKeys()).toHaveLength(2);
+    expect(tabs.sent()).toEqual([]);
   });
 
   it('nothing on the card can open the sign-out route in another tab', () => {

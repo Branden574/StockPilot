@@ -6,6 +6,7 @@ import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  fakeBroadcastChannels,
   interruptedRunKeys,
   seedInterruptedRuns,
   UNRELATED_KEY,
@@ -57,6 +58,51 @@ describe('global-error: Sign out and back in', () => {
     expect(assign).toHaveBeenCalledTimes(1);
     expect(assign).toHaveBeenCalledWith('/auth/session-ended');
     expect(keysAtLoad).toEqual([[]]);
+    expect(sessionStorage.getItem(UNRELATED_KEY)).toBe('kept');
+  });
+
+  it('tells the other tabs of this browser before the sign-out route loads: the route signs them out too', () => {
+    // Review of round 2's repair: the route ends the session in every tab (the
+    // session cookies are the browser's) and sends no revoke, so another tab
+    // kept its records, and a run going there kept recording.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(null, { status: 204 })),
+    );
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const tabs = fakeBroadcastChannels();
+    const otherTab = tabs.otherTab();
+    const sentAtLoad: unknown[][] = [];
+    vi.spyOn(window.location, 'assign').mockImplementation(() => {
+      sentAtLoad.push(tabs.sent());
+    });
+    render(<GlobalError error={new Error('x')} reset={() => {}} />);
+    expect(tabs.sent()).toEqual([]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out and back in' }));
+
+    expect(sentAtLoad).toEqual([[{ type: 'purge' }]]);
+    tabs.deliver();
+    expect(otherTab.received).toEqual([{ type: 'purge' }]);
+  });
+
+  it('while it shows, a sign-out in another tab of this browser removes what this tab kept', () => {
+    // The page replaces the root layout, whose InterruptedRunExpiry listens on
+    // every other page, so it listens itself.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(null, { status: 204 })),
+    );
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const tabs = fakeBroadcastChannels();
+    sessionStorage.clear();
+    seedInterruptedRuns();
+    render(<GlobalError error={new Error('x')} reset={() => {}} />);
+
+    tabs.otherTab().postMessage({ type: 'purge' });
+    tabs.deliver();
+
+    expect(interruptedRunKeys()).toEqual([]);
     expect(sessionStorage.getItem(UNRELATED_KEY)).toBe('kept');
   });
 

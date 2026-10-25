@@ -56,13 +56,14 @@ vi.mock('@/server/actions/procedures', () => ({
   deleteProcedureVideoAction: vi.fn(),
 }));
 
+import { InterruptedRunExpiry } from '@/components/auth/interrupted-run-expiry';
 import {
   INTERRUPTED_RUN_PREFIX,
   INTERRUPTED_RUN_TTL_MS,
   purgeInterruptedRuns,
   sweepInterruptedRuns,
 } from '@/lib/interrupted-run';
-import { interruptedRunKeys } from '@/test/interrupted-run-fixtures';
+import { fakeBroadcastChannels, interruptedRunKeys } from '@/test/interrupted-run-fixtures';
 
 import { ProcedureForm } from './procedure-form';
 
@@ -152,6 +153,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   // A batch a test leaves going in this page would hold the next test's form.
   purgeInterruptedRuns();
+  vi.unstubAllGlobals();
 });
 
 describe('ProcedureForm: the session ends while staged videos upload', () => {
@@ -423,6 +425,44 @@ describe('ProcedureForm: the session ends while staged videos upload', () => {
     );
     expect(interruptedRunKeys()).toEqual([]);
 
+    cleanup();
+    renderNewForm();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(h.replace).not.toHaveBeenCalled();
+  });
+
+  it('a sign-out on purpose in another tab of this browser while the procedure is being saved leaves nothing in this tab', async () => {
+    // Review of round 2's repair. "Sign out and back in" on an error card, or
+    // Delete my account, in another tab ends this tab's session too (the
+    // session cookies are the browser's) and sends no revoke. Only that tab
+    // was cleared: the save landed, the batch recorded its procedure, the
+    // refused upload kept the record, and after signing in New procedure went
+    // to the edit page. The other tab's purge now reaches this one, where the
+    // root layout's InterruptedRunExpiry listens, even while the save is on
+    // its way.
+    const tabs = fakeBroadcastChannels();
+    const save = deferred<unknown>();
+    h.createProcedure.mockImplementation(() => save.promise);
+    // The other tab's sign-out ended the session: the first upload is refused.
+    h.createVideoUpload.mockRejectedValue(signInRedirect());
+
+    render(<InterruptedRunExpiry />);
+    await createWithTwoVideos();
+    await waitFor(() => expect(h.createProcedure).toHaveBeenCalledTimes(1));
+
+    // The other tab's sign-out control sends its purge before its request.
+    tabs.otherTab().postMessage({ type: 'purge' });
+    tabs.deliver();
+    save.resolve({ ok: true, data: { id: PROCEDURE_ID } });
+
+    await waitFor(() => expect(h.createVideoUpload).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Create procedure/i })).toBeEnabled(),
+    );
+    expect(interruptedRunKeys()).toEqual([]);
+
+    // After signing in again on this tab, New procedure opens empty.
     cleanup();
     renderNewForm();
     await new Promise((r) => setTimeout(r, 0));

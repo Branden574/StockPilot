@@ -25,13 +25,15 @@ import { purgeInterruptedRuns } from '@/lib/interrupted-run';
  * (lib/interrupted-run): this is a sign-out on purpose. The route itself
  * cannot (sessionStorage is the browser's), and it must not: the dashboard's
  * own redirect there, for a session that expired, keeps the record so the
- * person gets back to their work.
+ * person gets back to their work. The same call tells the browser's other
+ * tabs, which the route signs out too (the session cookies are the
+ * browser's) without telling them.
  *
  * So it is a button, never a link to the route. A link can be opened in
  * another tab (a middle-click, the context menu, a long press), which signs
- * the whole browser out while this tab runs nothing and keeps its records. A
- * Next <Link> would also prefetch the route, and prefetching it would sign
- * the person out just for seeing this card.
+ * the whole browser out while no tab runs the purge and every tab keeps its
+ * records. A Next <Link> would also prefetch the route, and prefetching it
+ * would sign the person out just for seeing this card.
  */
 function signOutAndBackIn(): void {
   purgeInterruptedRuns();

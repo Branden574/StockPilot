@@ -1,13 +1,17 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { fakeBroadcastChannels } from '@/test/interrupted-run-fixtures';
+
 import {
   beginRun,
   expireInterruptedRuns,
   finishRun,
+  INTERRUPTED_RUN_CHANNEL,
   INTERRUPTED_RUN_PREFIX,
   INTERRUPTED_RUN_TTL_MS,
   leaveRunUnfinished,
+  listenForPurges,
   purgeInterruptedRuns,
   recordRun,
   type RunAccount,
@@ -22,9 +26,10 @@ import {
  * answered with a redirect, the browser loads sign-in, and that memory is
  * gone. The record below is what the page the person comes back to reads
  * instead. It is kept for an hour at most, and only while somebody can need
- * it: a deliberate end of the session removes every record in the tab, the app
- * shell removes every record that is not the signed-in account's, and a record
- * over an hour old goes on any page of the app.
+ * it: a deliberate end of the session removes every record in the tab (and in
+ * the browser's other tabs, which share the sign-in), the app shell removes
+ * every record that is not the signed-in account's, and a record over an hour
+ * old goes on any page of the app.
  */
 
 const KIND = 'test-run';
@@ -55,6 +60,17 @@ function cutShort(kind: string, account: RunAccount, id: string) {
 /** A record as recordRun() writes it, for a run that ended in another page. */
 function stored(account: RunAccount, at: number, id = 'p-1') {
   return JSON.stringify({ v: 1, ...account, at, payload: { id } });
+}
+
+/**
+ * listenForPurges() for one test: afterEach stops it, also when the test
+ * failed before its own stop(), so the next test starts with nobody listening.
+ */
+const listening: Array<() => void> = [];
+function listen(): () => void {
+  const stop = listenForPurges();
+  listening.push(stop);
+  return stop;
 }
 
 /** The interrupted-run keys left in this tab. */
@@ -107,6 +123,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  while (listening.length > 0) listening.pop()!();
   vi.unstubAllGlobals();
   // A run a test leaves going in this page, or a timer it leaves armed, would
   // change the next test's outcome: the purge ends every run and the timer.
@@ -386,6 +403,277 @@ describe('a deliberate end of the session in this tab (purgeInterruptedRuns)', (
     purgeInterruptedRuns();
 
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+/**
+ * The tabs of a browser share its sign-in (the session cookies), so a
+ * sign-out in one ends it in all of them. Review of round 2's repair: "Sign
+ * out and back in" on an error card, and Delete my account, sign the whole
+ * browser out and send no revoke, and only the tab where the person clicked
+ * was cleared. A run going in another tab recorded its next step, and the
+ * redirect kept it for after signing in. Now every purge tells the other tabs,
+ * and each one with the app open (listenForPurges) clears itself.
+ */
+describe('the other tabs of this browser (purgeInterruptedRuns, listenForPurges)', () => {
+  /** A message as another tab's purgeInterruptedRuns() sends it. */
+  const PURGE = { type: 'purge' };
+
+  it('a purge here tells every other tab, and the message carries nothing else', () => {
+    const tabs = fakeBroadcastChannels();
+    const first = tabs.otherTab();
+    const second = tabs.otherTab();
+    going(KIND, ME, 'p-1');
+
+    purgeInterruptedRuns();
+
+    // Sent at once, before the sign-out request this call goes ahead of.
+    expect(tabs.sent()).toEqual([PURGE]);
+    tabs.deliver();
+    expect(first.received).toEqual([PURGE]);
+    expect(second.received).toEqual([PURGE]);
+    expect(INTERRUPTED_RUN_CHANNEL).toBe('sp:interrupted-run:v1');
+  });
+
+  it("another tab's purge clears this tab while the app listens: every record, and every run going here", () => {
+    const tabs = fakeBroadcastChannels();
+    const stop = listen();
+    const recorded = going(KIND, ME, 'p-1');
+    // A run whose first save is still on its way has recorded nothing yet.
+    const firstSaveOnItsWay = beginRun(OTHER_KIND, ME);
+    sessionStorage.setItem(`${INTERRUPTED_RUN_PREFIX}waiting`, stored(OTHER_USER, Date.now()));
+    sessionStorage.setItem('theme', 'dark');
+
+    tabs.otherTab().postMessage(PURGE);
+    tabs.deliver();
+
+    expect(recordKeysLeft()).toEqual([]);
+    expect(sessionStorage.getItem('theme')).toBe('dark');
+    // Both runs go on for a moment and would record their next step before
+    // the action that the ended session answers with a redirect.
+    expect(recordRun(recorded, { id: 'p-2' })).toBe(false);
+    expect(recordRun(firstSaveOnItsWay, { id: 'p-3' })).toBe(false);
+    leaveRunUnfinished(recorded);
+    leaveRunUnfinished(firstSaveOnItsWay);
+    expect(recordKeysLeft()).toEqual([]);
+    expect(takeInterruptedRun(KIND, ME, parseId)).toBeNull();
+    stop();
+  });
+
+  it('leaves no timer behind in this tab either', () => {
+    vi.useFakeTimers();
+    const tabs = fakeBroadcastChannels();
+    const stop = listen();
+    cutShort(KIND, ME, 'p-1');
+    expect(vi.getTimerCount()).toBe(1);
+
+    tabs.otherTab().postMessage(PURGE);
+    tabs.deliver();
+
+    expect(vi.getTimerCount()).toBe(0);
+    stop();
+  });
+
+  it('a purge that reaches this tab is not passed on, and a purge here does not come back here', () => {
+    const tabs = fakeBroadcastChannels();
+    const stop = listen();
+    const other = tabs.otherTab();
+    cutShort(KIND, ME, 'p-1');
+
+    other.postMessage(PURGE);
+    tabs.deliver();
+    expect(recordKeysLeft()).toEqual([]);
+    // Passed on, it would bounce between the tabs forever.
+    expect(tabs.sent()).toEqual([]);
+
+    // This tab's own purge, then a run that begins right after it (signed in
+    // again): the purge reaches the other tab only, and the run records.
+    going(OTHER_KIND, ME, 'p-2');
+    purgeInterruptedRuns();
+    const after = beginRun(KIND, ME);
+    tabs.deliver();
+    expect(other.received).toEqual([PURGE]);
+    expect(recordRun(after, { id: 'p-3' })).toBe(true);
+    leaveRunUnfinished(after);
+    expect(takeInterruptedRun(KIND, ME, parseId)).toEqual({ id: 'p-3' });
+    stop();
+  });
+
+  it("a purge here goes out on this tab's own end when that stays open, so it does not come back here", () => {
+    // A record the browser refuses to remove keeps this tab's end open.
+    const { map, storage } = mapStorage((key) => key === KEY);
+    vi.stubGlobal('sessionStorage', storage);
+    const tabs = fakeBroadcastChannels();
+    const stop = listen();
+    map.set(KEY, stored(ME, Date.now()));
+    expireInterruptedRuns();
+    expect(tabs.openHere()).toBe(1);
+    const other = tabs.otherTab();
+
+    purgeInterruptedRuns();
+    expect(tabs.openHere()).toBe(1);
+    const after = beginRun(OTHER_KIND, ME);
+    tabs.deliver();
+
+    expect(other.received).toEqual([PURGE]);
+    expect(recordRun(after, { id: 'p-2' })).toBe(true);
+    stop();
+  });
+
+  it('only a purge counts: any other message removes nothing', () => {
+    const tabs = fakeBroadcastChannels();
+    const stop = listen();
+    const run = going(KIND, ME, 'p-1');
+    const other = tabs.otherTab();
+
+    for (const message of [null, undefined, 'purge', 7, [], ['purge'], {}, { type: 'sweep' }]) {
+      other.postMessage(message);
+    }
+    tabs.deliver();
+
+    expect(recordKeysLeft()).toEqual([KEY]);
+    expect(recordRun(run, { id: 'p-2' })).toBe(true);
+    stop();
+  });
+
+  it('keeps a channel open only while this tab holds a run or a record, and the app listens', () => {
+    const tabs = fakeBroadcastChannels();
+    const stop = listen();
+    // An ordinary page: nothing to clear, no channel.
+    expect(tabs.openHere()).toBe(0);
+
+    // From the moment a run begins (before its first save), while its record
+    // waits for the page the person comes back to, until that page takes it.
+    const run = beginRun(KIND, ME);
+    expect(tabs.openHere()).toBe(1);
+    recordRun(run, { id: 'p-1' });
+    leaveRunUnfinished(run);
+    expect(tabs.openHere()).toBe(1);
+    expect(takeInterruptedRun(KIND, ME, parseId)).toEqual({ id: 'p-1' });
+    expect(tabs.openHere()).toBe(0);
+
+    // A run that ends on the page.
+    const ended = going(KIND, ME, 'p-2');
+    expect(tabs.openHere()).toBe(1);
+    finishRun(ended);
+    expect(tabs.openHere()).toBe(0);
+
+    // A run that a redirect stops before it recorded anything.
+    const stopped = beginRun(KIND, ME);
+    expect(tabs.openHere()).toBe(1);
+    leaveRunUnfinished(stopped);
+    expect(tabs.openHere()).toBe(0);
+
+    // A record found as the page loads, until the shell's sweep removes it.
+    sessionStorage.setItem(KEY, stored(OTHER_USER, Date.now()));
+    expireInterruptedRuns();
+    expect(tabs.openHere()).toBe(1);
+    sweepInterruptedRuns(ME);
+    expect(tabs.openHere()).toBe(0);
+
+    // The app stops listening (the page unmounts): closed, and another tab's
+    // purge no longer reaches this one.
+    cutShort(KIND, ME, 'p-3');
+    expect(tabs.openHere()).toBe(1);
+    stop();
+    stop();
+    expect(tabs.openHere()).toBe(0);
+    tabs.otherTab().postMessage(PURGE);
+    tabs.deliver();
+    expect(recordKeysLeft()).toEqual([KEY]);
+  });
+
+  it('a record already in the tab when the app starts listening is listened for', () => {
+    const tabs = fakeBroadcastChannels();
+    sessionStorage.setItem(KEY, stored(ME, Date.now()));
+
+    const stop = listen();
+    expect(tabs.openHere()).toBe(1);
+    tabs.otherTab().postMessage(PURGE);
+    tabs.deliver();
+
+    expect(recordKeysLeft()).toEqual([]);
+    expect(tabs.openHere()).toBe(0);
+    stop();
+  });
+
+  it('the timer that removes the last record at its hour closes the channel', () => {
+    vi.useFakeTimers({ now: 1_000_000 });
+    const tabs = fakeBroadcastChannels();
+    const stop = listen();
+    cutShort(KIND, ME, 'p-1');
+    expect(tabs.openHere()).toBe(1);
+
+    vi.advanceTimersByTime(61 * MINUTE);
+
+    expect(recordKeysLeft()).toEqual([]);
+    expect(tabs.openHere()).toBe(0);
+    stop();
+  });
+
+  it('one channel however many listen (a page mounted twice), open until the last one stops', () => {
+    const tabs = fakeBroadcastChannels();
+    const first = listen();
+    const second = listen();
+    cutShort(KIND, ME, 'p-1');
+    expect(tabs.openHere()).toBe(1);
+
+    first();
+    expect(tabs.openHere()).toBe(1);
+    tabs.otherTab().postMessage(PURGE);
+    tabs.deliver();
+    expect(recordKeysLeft()).toEqual([]);
+
+    cutShort(KIND, ME, 'p-2');
+    second();
+    expect(tabs.openHere()).toBe(0);
+  });
+
+  it('where the browser has no BroadcastChannel, or refuses it, this tab is still cleared and nothing throws', () => {
+    const refusing = [
+      undefined,
+      class {
+        constructor() {
+          throw new DOMException('denied', 'SecurityError');
+        }
+      },
+      class {
+        set onmessage(_handler: unknown) {
+          throw new DOMException('denied', 'SecurityError');
+        }
+        postMessage() {
+          throw new DOMException('closed', 'InvalidStateError');
+        }
+        close() {
+          throw new DOMException('closed', 'InvalidStateError');
+        }
+      },
+      class {
+        onmessage: unknown = null;
+        postMessage() {
+          throw new DOMException('closed', 'InvalidStateError');
+        }
+        close() {
+          throw new DOMException('closed', 'InvalidStateError');
+        }
+      },
+    ];
+    for (const Channel of refusing) {
+      vi.stubGlobal('BroadcastChannel', Channel);
+      let stop: () => void = () => {};
+      expect(() => {
+        stop = listen();
+      }).not.toThrow();
+      cutShort(KIND, ME, 'p-1');
+      const run = beginRun(OTHER_KIND, ME);
+
+      expect(() => purgeInterruptedRuns()).not.toThrow();
+
+      expect(recordKeysLeft()).toEqual([]);
+      expect(recordRun(run, { id: 'p-2' })).toBe(false);
+      expect(() => stop()).not.toThrow();
+      vi.unstubAllGlobals();
+    }
   });
 });
 

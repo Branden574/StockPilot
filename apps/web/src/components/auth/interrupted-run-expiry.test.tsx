@@ -6,7 +6,12 @@ import {
   INTERRUPTED_RUN_TTL_MS,
   purgeInterruptedRuns,
 } from '@/lib/interrupted-run';
-import { interruptedRunKeys, UNRELATED_KEY } from '@/test/interrupted-run-fixtures';
+import {
+  fakeBroadcastChannels,
+  interruptedRunKeys,
+  seedInterruptedRuns,
+  UNRELATED_KEY,
+} from '@/test/interrupted-run-fixtures';
 
 import { InterruptedRunExpiry } from './interrupted-run-expiry';
 
@@ -34,6 +39,7 @@ afterEach(() => {
   purgeInterruptedRuns();
   sessionStorage.clear();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe('InterruptedRunExpiry', () => {
@@ -66,5 +72,46 @@ describe('InterruptedRunExpiry', () => {
 
     vi.advanceTimersByTime(2 * MINUTE);
     expect(interruptedRunKeys()).toEqual([]);
+  });
+});
+
+/**
+ * The tabs of a browser share its sign-in (the session cookies), so a sign-out
+ * in one ends it in all of them. Review of round 2's repair: "Sign out and
+ * back in" on an error card, or Delete my account, in one tab left every
+ * other tab's records, and a run going there kept recording. Every sign-out
+ * now tells the other tabs (lib/interrupted-run), and this component, on every
+ * page, is where a tab hears it.
+ */
+describe('InterruptedRunExpiry: a sign-out in another tab of this browser', () => {
+  it('removes what this tab kept', () => {
+    const tabs = fakeBroadcastChannels();
+    seedInterruptedRuns();
+    render(<InterruptedRunExpiry />);
+    expect(interruptedRunKeys()).toHaveLength(2);
+
+    tabs.otherTab().postMessage({ type: 'purge' });
+    tabs.deliver();
+
+    expect(interruptedRunKeys()).toEqual([]);
+    expect(sessionStorage.getItem(UNRELATED_KEY)).toBe('kept');
+  });
+
+  it('keeps no channel open on a page with nothing to remove, and none once it unmounts', () => {
+    const tabs = fakeBroadcastChannels();
+    const empty = render(<InterruptedRunExpiry />);
+    expect(tabs.openHere()).toBe(0);
+    empty.unmount();
+
+    seedInterruptedRuns();
+    const { unmount } = render(<InterruptedRunExpiry />);
+    expect(tabs.openHere()).toBe(1);
+    unmount();
+    expect(tabs.openHere()).toBe(0);
+
+    // Unmounted, it removes nothing.
+    tabs.otherTab().postMessage({ type: 'purge' });
+    tabs.deliver();
+    expect(interruptedRunKeys()).toHaveLength(2);
   });
 });

@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { purgeInterruptedRuns } from '@/lib/interrupted-run';
+import { listenForPurges, purgeInterruptedRuns } from '@/lib/interrupted-run';
 import { isSharePath } from '@/lib/share-paths';
 
 /** lib/auth/session-ended.ts SESSION_ENDED_PATH, written out (no import, see below). */
@@ -25,10 +25,16 @@ const SIGN_OUT_PATH = '/auth/session-ended';
  * lands on sign-in. It used to point at /signin, which the proxy bounces a
  * signed-in visitor straight back from, so nothing happened. Its click first
  * removes what an interrupted run kept in this tab (lib/interrupted-run): this
- * is a sign-out on purpose, and the route cannot reach sessionStorage. So it
- * is a button, never a link to the route: a link can be opened in another tab
- * (a middle-click, the context menu, a long press), which signs the whole
- * browser out while this tab runs nothing and keeps its records.
+ * is a sign-out on purpose, and the route cannot reach sessionStorage. The
+ * same call tells the browser's other tabs, which the route signs out too
+ * (the session cookies are the browser's) without telling them. So it is a
+ * button, never a link to the route: a link can be opened in another tab (a
+ * middle-click, the context menu, a long press), which signs the whole
+ * browser out while no tab runs the purge and every tab keeps its records.
+ *
+ * The page replaces the root layout, whose InterruptedRunExpiry listens for a
+ * sign-out in another tab on every other page, so it listens itself while it
+ * shows.
  *
  * This file must not depend on anything that broke, so besides React it
  * imports only modules that import nothing themselves (share-paths and
@@ -49,6 +55,9 @@ export default function GlobalError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  // A sign-out in another tab of this browser clears this tab too (see above).
+  React.useEffect(() => listenForPurges(), []);
+
   React.useEffect(() => {
     // Best-effort report; we don't bring in the error-reporter module
     // here because it might be the very thing that broke. A bare fetch to

@@ -42,8 +42,10 @@ export function DeleteAccountButton() {
     setRefusal(null);
     setPending(true);
     // Deleting the account ends this browser's session on purpose (the action
-    // signs it out), so what an interrupted run kept in this tab
-    // (lib/interrupted-run) goes before the request does.
+    // signs it out, in every tab: the session cookies are the browser's, and
+    // no revoke is sent), so what an interrupted run kept in this tab and in
+    // the browser's other tabs (lib/interrupted-run) goes before the request
+    // does.
     purgeInterruptedRuns();
     const res = await deleteOwnAccountAction({ confirm: 'DELETE' });
     setPending(false);

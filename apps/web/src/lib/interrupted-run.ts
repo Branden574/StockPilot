@@ -35,15 +35,22 @@
  *
  * NOTHING IS KEPT ONCE NOBODY CAN NEED IT. A Sage 50 record carries up to 50
  * rows of the import's errors, so the records also go:
- * - when the session in this tab is ended on purpose: every sign-out control
- *   calls purgeInterruptedRuns() before its request leaves (the guard
- *   lib/interrupted-run.sign-out.guard.test.ts holds every one of them to
- *   it), and so does the forced sign-out when this session is revoked
- *   (components/realtime/session-revocation-listener.tsx). A run going in
- *   this page then writes nothing more, even one whose first save is still on
- *   its way. A session that EXPIRES keeps its record, because that is what the
- *   record is for: the redirect to sign-in, or /auth/session-ended reached
- *   from the dashboard's own redirect.
+ * - when the session is ended on purpose, in this tab or in another tab of
+ *   this browser: every sign-out control calls purgeInterruptedRuns() before
+ *   its request leaves (the guard lib/interrupted-run.sign-out.guard.test.ts
+ *   holds every one of them to it), and so does the forced sign-out when this
+ *   session is revoked (components/realtime/session-revocation-listener.tsx).
+ *   The tabs of a browser share its sign-in (the session cookies), so a
+ *   sign-out in one ends it in all of them, and some sign-outs send no revoke
+ *   (the error pages' "Sign out and back in", Delete my account). So the
+ *   purge also tells the browser's other tabs, on INTERRUPTED_RUN_CHANNEL, and
+ *   each one with the app open purges itself the same way (listenForPurges(),
+ *   from components/auth/interrupted-run-expiry.tsx in the root layout, and
+ *   from the last-resort error page). A run going in any of them then writes
+ *   nothing more, even one whose first save is still on its way. A session
+ *   that EXPIRES keeps its record, because that is what the record is for:
+ *   the redirect to sign-in, or /auth/session-ended reached from the
+ *   dashboard's own redirect.
  * - when the signed-in app shell renders for an account
  *   (components/dashboard/dashboard-shell.tsx): sweepInterruptedRuns() removes
  *   every record that is another account's, too old or unreadable, and hands
@@ -58,16 +65,31 @@
  *   app for another site runs none of this until it comes back; closing it
  *   ends its sessionStorage.
  *
- * sessionStorage belongs to one tab, so nothing here reaches another tab or
- * device. Every read and write tolerates a browser that refuses storage: the
- * run then works as it did without a record, and a purge, a sweep or an expiry
- * does what the browser lets it. This module imports nothing, so the
- * last-resort error page (app/global-error.tsx), which must not depend on
- * anything that could be what broke, can use it too.
+ * sessionStorage belongs to one tab: a record never leaves the tab that wrote
+ * it, and nothing here reaches another device. The one thing that crosses
+ * tabs is the purge message, which carries no record and no account. A tab
+ * listens for it only while the app is open there AND it holds something to
+ * purge (a run going in the page, or a record), so an ordinary page keeps no
+ * channel open. A tab that runs none of the app's code at that moment (still
+ * loading, unloaded by the browser to save memory, or showing another site)
+ * is not told: its records are kept as after an expired session, handed only
+ * to their own account and only within the hour. Every read and write
+ * tolerates a browser that refuses storage or has no BroadcastChannel: the
+ * run then works as it did without a record, and a purge, a sweep or an
+ * expiry does what the browser lets it (a purge always clears this tab first).
+ * This module imports nothing, so the last-resort error page
+ * (app/global-error.tsx), which must not depend on anything that could be
+ * what broke, can use it too.
  */
 
 /** Storage key prefix. Versioned so a shape change cannot feed a stale record. */
 export const INTERRUPTED_RUN_PREFIX = 'sp:interrupted-run:v1:';
+
+/**
+ * The BroadcastChannel on which a purge reaches the other tabs of this browser.
+ * Its one message is `{ type: 'purge' }`: no record and no account.
+ */
+export const INTERRUPTED_RUN_CHANNEL = 'sp:interrupted-run:v1';
 
 /**
  * How long after its last step a record is still handed out, and then kept in
@@ -102,10 +124,10 @@ interface StoredRun {
 /**
  * The runs going on in this page that may still keep a record (a page load
  * clears it). A run leaves it when it ends, and also when it stops being
- * allowed to keep a record: the session was ended on purpose
- * (purgeInterruptedRuns), or the shell came to render for another account
- * (sweepInterruptedRuns). A run that left it writes nothing more, whatever
- * other runs of its kind do.
+ * allowed to keep a record: the session was ended on purpose, in this tab
+ * (purgeInterruptedRuns) or in another tab of this browser (listenForPurges),
+ * or the shell came to render for another account (sweepInterruptedRuns). A
+ * run that left it writes nothing more, whatever other runs of its kind do.
  */
 const goingRuns = new Set<Run>();
 
@@ -123,6 +145,21 @@ let expiry: { timer: ReturnType<typeof setTimeout>; due: number } | null = null;
 
 /** How long after a record's hour its timer fires, so the record is past it when checked. */
 const EXPIRY_SLACK_MS = 1000;
+
+/** The one message sent on INTERRUPTED_RUN_CHANNEL. */
+const PURGE = 'purge';
+
+/**
+ * This page's end of INTERRUPTED_RUN_CHANNEL: open while the app listens in
+ * this tab (listenForPurges) AND the tab holds something a purge must reach
+ * (a run going in this page, or a record), closed otherwise. A purge this page
+ * sends goes out on this end while it is open: a channel never hands its own
+ * message back, so a page's purge does not come back to it.
+ */
+let channel: BroadcastChannel | null = null;
+
+/** How many listen in this page (listenForPurges calls not stopped yet). */
+let listeners = 0;
 
 function storage(): Storage | null {
   try {
@@ -217,12 +254,91 @@ function armExpiry(due: number): void {
   expiry = { due, timer: setTimeout(expireInterruptedRuns, delay) };
 }
 
+/** An end of INTERRUPTED_RUN_CHANNEL, or null where the browser has none or refuses one. */
+function openChannel(onMessage?: (data: unknown) => void): BroadcastChannel | null {
+  let opened: BroadcastChannel | null = null;
+  try {
+    if (typeof BroadcastChannel === 'undefined') return null;
+    opened = new BroadcastChannel(INTERRUPTED_RUN_CHANNEL);
+    if (onMessage) opened.onmessage = (event: MessageEvent) => onMessage(event.data);
+    return opened;
+  } catch {
+    if (opened !== null) closeChannel(opened);
+    return null;
+  }
+}
+
+function closeChannel(end: BroadcastChannel): void {
+  try {
+    end.close();
+  } catch {
+    /* best effort */
+  }
+}
+
+/** True for the purge message; anything else on the channel is ignored. */
+function isPurge(data: unknown): boolean {
+  return typeof data === 'object' && data !== null && (data as { type?: unknown }).type === PURGE;
+}
+
+/** Whether this tab holds anything a purge must reach: a run going in this page, or a record. */
+function holdsAnything(): boolean {
+  if (goingRuns.size > 0) return true;
+  const store = storage();
+  return store !== null && recordKeys(store).length > 0;
+}
+
+/**
+ * Opens this page's end of the channel while the app listens and the tab holds
+ * something to purge, and closes it once either stops. Never throws.
+ */
+function syncChannel(): void {
+  const wanted = listeners > 0 && holdsAnything();
+  if (wanted && channel === null) {
+    channel = openChannel((data) => {
+      // Another tab's purge: the sign-out there ended this tab's session too.
+      // This tab only: passed on, it would bounce between the tabs forever.
+      if (isPurge(data)) purgeThisTab();
+    });
+  } else if (!wanted && channel !== null) {
+    closeChannel(channel);
+    channel = null;
+  }
+}
+
+/** Tells the other tabs of this browser to purge. Best effort: never throws. */
+function tellOtherTabs(): void {
+  const own = channel;
+  const sender = own ?? openChannel();
+  if (sender === null) return;
+  try {
+    sender.postMessage({ type: PURGE });
+  } catch {
+    /* best effort */
+  }
+  if (sender !== own) closeChannel(sender);
+}
+
+/**
+ * Removes every record in this tab and stops every run going in this page,
+ * without telling another tab: for this tab's own purge (purgeInterruptedRuns),
+ * and for another tab's reaching this one.
+ */
+function purgeThisTab(): void {
+  goingRuns.clear();
+  writers.clear();
+  stopExpiry();
+  const store = storage();
+  if (store) for (const key of recordKeys(store)) remove(store, key);
+  syncChannel();
+}
+
 /**
  * A run of this `kind` is starting in this page for `account`: call it BEFORE
  * the run's first save is sent. It writes nothing. From now until the run ends
- * (finishRun or leaveRunUnfinished), it is going in this page: a purge, or a
- * sweep for another account, stops it from keeping any record, even before its
- * first one. Never throws.
+ * (finishRun or leaveRunUnfinished), it is going in this page: a purge (here,
+ * or in another tab of this browser), or a sweep for another account, stops it
+ * from keeping any record, even before its first one. Never throws.
  */
 export function beginRun(kind: string, account: RunAccount): RunHandle {
   const run: Run = {
@@ -230,6 +346,7 @@ export function beginRun(kind: string, account: RunAccount): RunHandle {
     account: { userId: account.userId, organizationId: account.organizationId },
   };
   goingRuns.add(run);
+  syncChannel();
   return run;
 }
 
@@ -269,10 +386,12 @@ export function recordRun(run: RunHandle, payload: unknown): boolean {
  */
 export function finishRun(run: RunHandle): void {
   const going = run as Run;
-  if (!goingRuns.delete(going) || writers.get(going.kind) !== going) return;
-  writers.delete(going.kind);
-  const store = storage();
-  if (store) remove(store, INTERRUPTED_RUN_PREFIX + going.kind);
+  if (goingRuns.delete(going) && writers.get(going.kind) === going) {
+    writers.delete(going.kind);
+    const store = storage();
+    if (store) remove(store, INTERRUPTED_RUN_PREFIX + going.kind);
+  }
+  syncChannel();
 }
 
 /**
@@ -282,6 +401,7 @@ export function finishRun(run: RunHandle): void {
  */
 export function leaveRunUnfinished(run: RunHandle): void {
   goingRuns.delete(run as Run);
+  syncChannel();
 }
 
 /**
@@ -308,27 +428,51 @@ export function takeInterruptedRun<T>(
   if (raw === null) return null;
   remove(store, key);
   writers.delete(kind);
+  syncChannel();
 
   const record = usableRecord(raw, account, Date.now());
   return record ? parse(record.payload) : null;
 }
 
 /**
- * The session in this tab is being ended on purpose: a sign-out control, or
- * the forced sign-out when this session is revoked. Removes every record in
- * this tab, of every kind and whoever's it is, and every run going in this
- * page writes nothing more, even one whose first save is still on its way.
- * Call it BEFORE the sign-out request leaves: a sign-out answered with a
- * redirect never returns to the code after it, and a page load ends this page.
- * Never throws, so it cannot hold up or break the sign-out.
+ * The session is being ended on purpose: a sign-out control, or the forced
+ * sign-out when this session is revoked. Removes every record in this tab, of
+ * every kind and whoever's it is, and every run going in this page writes
+ * nothing more, even one whose first save is still on its way. Then tells the
+ * other tabs of this browser, which the sign-out ends too (they share the
+ * session cookies): each one with the app open does the same for itself
+ * (listenForPurges), and tells nobody in turn. Call it BEFORE the sign-out
+ * request leaves: a sign-out answered with a redirect never returns to the
+ * code after it, and a page load ends this page. Never throws, so it cannot
+ * hold up or break the sign-out; where the browser has no BroadcastChannel or
+ * refuses it, this tab is still cleared.
  */
 export function purgeInterruptedRuns(): void {
-  goingRuns.clear();
-  writers.clear();
-  stopExpiry();
-  const store = storage();
-  if (!store) return;
-  for (const key of recordKeys(store)) remove(store, key);
+  purgeThisTab();
+  tellOtherTabs();
+}
+
+/**
+ * While the app is open in this tab, a purge in another tab of this browser
+ * (a sign-out there, which ends this tab's session too) purges this tab as
+ * well: every record in it goes, and every run going in this page writes
+ * nothing more, even one whose first save is still on its way. Only the purge
+ * message counts, and it is not passed on. The channel is open only while this
+ * tab holds something to purge. components/auth/interrupted-run-expiry.tsx
+ * calls it from the root layout, and app/global-error.tsx, which replaces that
+ * layout, calls it too. Returns the function that stops listening. Never
+ * throws.
+ */
+export function listenForPurges(): () => void {
+  listeners += 1;
+  syncChannel();
+  let listening = true;
+  return () => {
+    if (!listening) return;
+    listening = false;
+    listeners -= 1;
+    syncChannel();
+  };
 }
 
 /**
@@ -347,17 +491,19 @@ export function sweepInterruptedRuns(account: RunAccount): void {
     if (!sameAccount(writer.account, account)) writers.delete(kind);
   }
   const store = storage();
-  if (!store) return;
-  const now = Date.now();
-  for (const key of recordKeys(store)) {
-    let raw: string | null;
-    try {
-      raw = store.getItem(key);
-    } catch {
-      continue;
+  if (store) {
+    const now = Date.now();
+    for (const key of recordKeys(store)) {
+      let raw: string | null;
+      try {
+        raw = store.getItem(key);
+      } catch {
+        continue;
+      }
+      if (raw !== null && usableRecord(raw, account, now) === null) remove(store, key);
     }
-    if (raw !== null && usableRecord(raw, account, now) === null) remove(store, key);
   }
+  syncChannel();
 }
 
 /**
@@ -371,20 +517,22 @@ export function sweepInterruptedRuns(account: RunAccount): void {
 export function expireInterruptedRuns(): void {
   stopExpiry();
   const store = storage();
-  if (!store) return;
-  const now = Date.now();
-  let next = Infinity;
-  for (const key of recordKeys(store)) {
-    let raw: string | null;
-    try {
-      raw = store.getItem(key);
-    } catch {
-      continue;
+  if (store) {
+    const now = Date.now();
+    let next = Infinity;
+    for (const key of recordKeys(store)) {
+      let raw: string | null;
+      try {
+        raw = store.getItem(key);
+      } catch {
+        continue;
+      }
+      if (raw === null) continue;
+      const record = readable(raw);
+      if (record === null || !withinHour(record, now)) remove(store, key);
+      else next = Math.min(next, record.at + INTERRUPTED_RUN_TTL_MS);
     }
-    if (raw === null) continue;
-    const record = readable(raw);
-    if (record === null || !withinHour(record, now)) remove(store, key);
-    else next = Math.min(next, record.at + INTERRUPTED_RUN_TTL_MS);
+    if (next !== Infinity) armExpiry(next);
   }
-  if (next !== Infinity) armExpiry(next);
+  syncChannel();
 }

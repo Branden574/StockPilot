@@ -24,7 +24,11 @@ vi.mock('@/components/perf/web-vitals-reporter', () => ({ WebVitalsReporter: () 
 vi.mock('@/components/ui/sonner', () => ({ Toaster: () => null }));
 
 import { INTERRUPTED_RUN_PREFIX, INTERRUPTED_RUN_TTL_MS } from '@/lib/interrupted-run';
-import { interruptedRunKeys } from '@/test/interrupted-run-fixtures';
+import {
+  fakeBroadcastChannels,
+  interruptedRunKeys,
+  seedInterruptedRuns,
+} from '@/test/interrupted-run-fixtures';
 
 import RootLayout from './layout';
 
@@ -32,6 +36,7 @@ afterEach(() => {
   cleanup();
   sessionStorage.clear();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe('root layout: what interrupted runs kept in this tab', () => {
@@ -55,5 +60,21 @@ describe('root layout: what interrupted runs kept in this tab', () => {
     );
 
     expect(interruptedRunKeys()).toEqual([`${INTERRUPTED_RUN_PREFIX}fresh`]);
+  });
+
+  it('on any page, a sign-out in another tab of this browser removes what this tab kept', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const tabs = fakeBroadcastChannels();
+    seedInterruptedRuns();
+
+    render(
+      <RootLayout>
+        <p>the page</p>
+      </RootLayout>,
+    );
+    tabs.otherTab().postMessage({ type: 'purge' });
+    tabs.deliver();
+
+    expect(interruptedRunKeys()).toEqual([]);
   });
 });
