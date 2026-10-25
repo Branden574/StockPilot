@@ -20,6 +20,7 @@ const getAuthenticatorAssuranceLevel = vi.fn();
 const updateUser = vi.fn();
 const signOut = vi.fn();
 const getSession = vi.fn();
+const getClaims = vi.fn();
 const maybeSingle = vi.fn();
 const broadcastToChannel = vi.fn();
 // vi.hoisted: this spy is touched INSIDE a vi.mock factory (which vitest hoists
@@ -29,9 +30,13 @@ const { verifyPasswordSideChannel } = vi.hoisted(() => ({
   verifyPasswordSideChannel: vi.fn(),
 }));
 
-// A real (unsigned) access token whose payload carries the session id, so the
-// keepId below is produced by the REAL sessionIdFromJwt rather than a mock.
-const ACCESS_TOKEN = `h.${Buffer.from(JSON.stringify({ session_id: 'sess-1' })).toString('base64url')}.s`;
+// The session id the action keeps alive is the VERIFIED one: the `session_id`
+// claim getClaims() returns once the token's signature checks out. The stored
+// session (getSession) holds a token naming ANOTHER session, unsigned, so a
+// keepId read from it unchecked (as before 2026-10) shows up as 'sess-stored'.
+const VERIFIED_CLAIMS = { sub: 'u-1', session_id: 'sess-1', aal: 'aal1' };
+const STORED_PAYLOAD = { sub: 'u-1', session_id: 'sess-stored' };
+const STORED_ACCESS = `h.${Buffer.from(JSON.stringify(STORED_PAYLOAD)).toString('base64url')}.s`;
 
 vi.mock('next/headers', () => ({
   headers: vi.fn(async () => new Headers()),
@@ -83,6 +88,7 @@ vi.mock('@/lib/supabase/server', () => ({
       updateUser,
       signOut,
       getSession,
+      getClaims,
       mfa: { listFactors, getAuthenticatorAssuranceLevel },
     },
     from: () => ({ select: () => ({ eq: () => ({ maybeSingle }) }) }),
@@ -113,7 +119,8 @@ describe('changePasswordAction — account status', () => {
     getAuthenticatorAssuranceLevel.mockResolvedValue({ data: { currentLevel: 'aal1' } });
     updateUser.mockResolvedValue({ error: null });
     signOut.mockResolvedValue({ error: null });
-    getSession.mockResolvedValue({ data: { session: { access_token: ACCESS_TOKEN } } });
+    getSession.mockResolvedValue({ data: { session: { access_token: STORED_ACCESS } } });
+    getClaims.mockResolvedValue({ data: { claims: VERIFIED_CLAIMS }, error: null });
     // Default: ACTIVE account.
     maybeSingle.mockResolvedValue({ data: { disabled_at: null }, error: null });
   });
@@ -202,7 +209,8 @@ describe('changePasswordAction — session revocation + shared password check', 
     getAuthenticatorAssuranceLevel.mockResolvedValue({ data: { currentLevel: 'aal1' } });
     updateUser.mockResolvedValue({ error: null });
     signOut.mockResolvedValue({ error: null });
-    getSession.mockResolvedValue({ data: { session: { access_token: ACCESS_TOKEN } } });
+    getSession.mockResolvedValue({ data: { session: { access_token: STORED_ACCESS } } });
+    getClaims.mockResolvedValue({ data: { claims: VERIFIED_CLAIMS }, error: null });
     maybeSingle.mockResolvedValue({ data: { disabled_at: null }, error: null });
   });
 
@@ -220,7 +228,27 @@ describe('changePasswordAction — session revocation + shared password check', 
     // A `keepId: null` payload means "evict EVERY session" (signOutAction's
     // semantics) — broadcasting that here would sign the user out of the very
     // tab they just changed their password in.
+    getClaims.mockResolvedValue({ data: null, error: null });
     getSession.mockResolvedValue({ data: { session: null } });
+
+    const res = await changePasswordAction(INPUT);
+
+    expect(res.ok).toBe(true);
+    expect(broadcastToChannel).not.toHaveBeenCalled();
+  });
+
+  it('never aims the broadcast with a session id from a token that does not verify', async () => {
+    // getClaims() refuses the stored token and so does GoTrue: the id it names
+    // is not this session's, so nothing is kept and nothing is broadcast.
+    getClaims.mockResolvedValue({
+      data: null,
+      error: { name: 'AuthInvalidJwtError', message: 'Invalid JWT signature' },
+    });
+    getUser.mockImplementation(async (jwt?: string) =>
+      jwt
+        ? { data: { user: null }, error: { name: 'AuthApiError', message: 'invalid JWT' } }
+        : { data: { user: { id: 'u-1', email: 'u@example.com' } } },
+    );
 
     const res = await changePasswordAction(INPUT);
 

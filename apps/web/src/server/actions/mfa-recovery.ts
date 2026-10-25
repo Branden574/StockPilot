@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 
 import { requireSession } from '@/lib/auth/session';
+import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -28,9 +29,13 @@ export async function generateMfaRecoveryCodesAction(): Promise<
     // codes are not org-scoped, and withContext() → requireOrgContext() throws
     // NEXT_REDIRECT for an org-less caller, which this catch would swallow into a
     // generic internal_error.
+    //
+    // The level is the access token's `aal` claim once its signature checks
+    // out (lib/auth/verified-claims), not getAuthenticatorAssuranceLevel()'s
+    // unchecked decode of the cookie: a token that does not verify is refused.
     const supabase = await createClient();
-    const { data: aal, error: aalErr } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-    if (aalErr || aal?.currentLevel !== 'aal2') {
+    const claims = await readVerifiedSessionClaims(supabase);
+    if (claims?.aal !== 'aal2') {
       return err('forbidden', 'Re-authenticate with MFA before regenerating recovery codes.');
     }
     // Rate-limit regeneration: defends against a loop that repeatedly invalidates
