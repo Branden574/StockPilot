@@ -70,6 +70,56 @@ function outMovements(n: number) {
   }));
 }
 
+/** n bundles, each run once for 2 kits, with 3 of component value out. */
+function bundles(n: number) {
+  return {
+    activity: Array.from({ length: n }, (_, i) => ({
+      bundle_id: uuid(i),
+      bundle_name: `Kit ${i}`,
+      bundle_sku: `KIT-${i}`,
+      runs: 1,
+      kits_out: 2,
+      last_run_at: SINCE,
+      top_warehouse_name: 'Main',
+    })),
+    value: Array.from({ length: n }, (_, i) => ({ bundle_id: uuid(i), component_value_out: 3 })),
+  };
+}
+
+/**
+ * PostgREST over a function with no ORDER BY of its own. Every page re-runs
+ * the function, and without an `.order()` one run's rows can come back in
+ * another order than the last run's: here the first page comes back in key
+ * order and every later page in reverse, so offset pages repeat some rows and
+ * skip others, as an unordered plan can. With `.order()` it answers in that
+ * order, like servedLikePostgrest. Keyed on the window asked for, not on a
+ * counter: the stub answers a chained rpc twice.
+ */
+function unstableUnlessOrdered(rows: Array<Record<string, unknown>>) {
+  const inKeyOrder = servedLikePostgrest(rows);
+  const reversed = servedLikePostgrest([...rows].reverse());
+  return (call: MockCall) => {
+    if (call.methods.includes('order')) return inKeyOrder(call);
+    const from = (callArgs(call, 'range')?.[0] as number | undefined) ?? 0;
+    return from === 0 ? inKeyOrder(call) : reversed(call);
+  };
+}
+
+/** Answers like servedLikePostgrest, and records the window each page asked
+ *  for after checking that the page is in `key` order. */
+function pagesInKeyOrder(rows: Array<Record<string, unknown>>, key: string) {
+  const pages: unknown[][] = [];
+  const served = servedLikePostgrest(rows);
+  const answer = (call: MockCall) => {
+    if (call.methods.length > 1) {
+      expect(callArgs(call, 'order'), key).toEqual([key, { ascending: true }]);
+      pages.push(callArgs(call, 'range') ?? []);
+    }
+    return served(call);
+  };
+  return { pages, answer };
+}
+
 function svcWith(results: Parameters<typeof makeSupabaseStub>[0]) {
   const stub = makeSupabaseStub(results);
   return { svc: new ReportsService(makeServiceContext(stub.client)), stub };
@@ -147,21 +197,6 @@ describe('deadStock: an item that moved is never dead stock', () => {
 });
 
 describe('bundleActivity: every bundle counts in the totals', () => {
-  function bundles(n: number) {
-    return {
-      activity: Array.from({ length: n }, (_, i) => ({
-        bundle_id: uuid(i),
-        bundle_name: `Kit ${i}`,
-        bundle_sku: `KIT-${i}`,
-        runs: 1,
-        kits_out: 2,
-        last_run_at: SINCE,
-        top_warehouse_name: 'Main',
-      })),
-      value: Array.from({ length: n }, (_, i) => ({ bundle_id: uuid(i), component_value_out: 3 })),
-    };
-  }
-
   it('1000 bundles: all of them', async () => {
     const b = bundles(1000);
     const { svc } = svcWith({
@@ -186,6 +221,107 @@ describe('bundleActivity: every bundle counts in the totals', () => {
     expect(report.totalKits).toBe(2002);
     expect(report.totalValueOut).toBe(3003);
     expect(report.rows.every((r) => r.componentValueOut === 3)).toBe(true);
+  });
+});
+
+// Each page re-runs the aggregate, so offset pages only fit together when
+// every page asks for the same order on the function's unique key. Only dead
+// stock's order was checked (above); velocity class and both bundle reads
+// could lose theirs with every test green, and then repeat some rows and skip
+// others past 1000.
+describe('every aggregate read pages in the order of its unique key', () => {
+  it('the stand-in plan repeats and skips rows when a read pages without an order (vacuity control)', () => {
+    const answer = unstableUnlessOrdered(outMovements(1001));
+    const page = (from: number) =>
+      (
+        answer({
+          table: 'report_item_out_movements',
+          op: 'rpc',
+          methods: ['rpc', 'range'],
+          args: [[{}], [from, from + 999]],
+        }).data as Array<{ item_id: string }>
+      ).map((r) => r.item_id);
+    const seen = [...page(0), ...page(1000)];
+    expect(seen).toHaveLength(1001);
+    expect(new Set(seen).size).toBe(1000);
+    expect(seen).not.toContain(uuid(1000));
+  });
+
+  // Mutation caught: velocityClass's read without `.order('item_id')` (the
+  // 1001st item, skipped, was classed D).
+  it('velocity class: each of 1001 items that moved is counted, none is classed D', async () => {
+    const { svc } = svcWith({
+      'rpc:report_item_out_movements': unstableUnlessOrdered(outMovements(1001)),
+      'inventory_items.select': ranged(items(1001)),
+    });
+    const report = await svc.velocityClass(90);
+    expect(report.summary.D).toBe(0);
+    expect(report.totalValueOut).toBe(1001);
+  });
+
+  // Mutation caught: deadStock's read without `.order('item_id')`.
+  it('dead stock: none of 1001 stocked items that moved is listed', async () => {
+    const { svc } = svcWith({
+      'rpc:report_item_out_movements': unstableUnlessOrdered(outMovements(1001)),
+      'inventory_items.select': ranged(items(1001)),
+    });
+    expect((await svc.deadStock(90)).rows).toEqual([]);
+  });
+
+  // Mutation caught: the bundle activity read without `.order('bundle_id')`
+  // (one bundle twice, another missing).
+  it('bundle activity: each of 1001 bundles once', async () => {
+    const b = bundles(1001);
+    const { svc } = svcWith({
+      'rpc:report_bundle_activity': unstableUnlessOrdered(b.activity),
+      'rpc:report_bundle_component_value': servedLikePostgrest(b.value),
+    });
+    const report = await svc.bundleActivity(90);
+    expect(report.rows).toHaveLength(1001);
+    expect(new Set(report.rows.map((r) => r.bundleId)).size).toBe(1001);
+  });
+
+  // Mutation caught: the component value read without `.order('bundle_id')`
+  // (the skipped bundle's value was left out of the total).
+  it("bundle component value: every bundle's value counts", async () => {
+    const b = bundles(1001);
+    const { svc } = svcWith({
+      'rpc:report_bundle_activity': servedLikePostgrest(b.activity),
+      'rpc:report_bundle_component_value': unstableUnlessOrdered(b.value),
+    });
+    const report = await svc.bundleActivity(90);
+    expect(report.totalValueOut).toBe(3003);
+    expect(report.rows.every((r) => r.componentValueOut === 3)).toBe(true);
+  });
+
+  it('velocity class asks for item_id order, a window at a time', async () => {
+    const out = pagesInKeyOrder(outMovements(1001), 'item_id');
+    const { svc } = svcWith({
+      'rpc:report_item_out_movements': out.answer,
+      'inventory_items.select': ranged(items(3)),
+    });
+    await svc.velocityClass(90);
+    expect(out.pages).toEqual([
+      [0, 999],
+      [1000, 1999],
+    ]);
+  });
+
+  it('both bundle reads ask for bundle_id order, a window at a time', async () => {
+    const b = bundles(1001);
+    const activity = pagesInKeyOrder(b.activity, 'bundle_id');
+    const value = pagesInKeyOrder(b.value, 'bundle_id');
+    const { svc } = svcWith({
+      'rpc:report_bundle_activity': activity.answer,
+      'rpc:report_bundle_component_value': value.answer,
+    });
+    await svc.bundleActivity(90);
+    for (const read of [activity, value]) {
+      expect(read.pages).toEqual([
+        [0, 999],
+        [1000, 1999],
+      ]);
+    }
   });
 });
 
