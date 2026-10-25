@@ -73,6 +73,7 @@ import {
   formatStockQuantity,
   hasRackPosition,
   historyNote,
+  isbnSearchKeys,
   collectLegacyRefIdsByKind,
   newRackBlockerFor,
   newRackConfirmationDetail,
@@ -3285,19 +3286,11 @@ export class InventoryService {
     // it on insert, but a friendlier error here saves a round trip.
     const resolvedCharterId = input.charterId ?? null;
     if (resolvedCharterId) {
-      const { data: pair } = await this.ctx.supabase
-        .from('warehouse_charters')
-        .select('charter_id')
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('warehouse_id', resolvedWarehouseId)
-        .eq('charter_id', resolvedCharterId)
-        .maybeSingle();
-      if (!pair) {
-        throw new ServiceError(
-          'validation_error',
-          'This charter is not serviced by the chosen warehouse. Pick a different one or mark the item as Generic.',
-        );
-      }
+      await this.assertWarehouseServesCharter(
+        resolvedWarehouseId,
+        resolvedCharterId,
+        'This charter is not serviced by the chosen warehouse. Pick a different one or mark the item as Generic.',
+      );
     }
 
     // MANUAL-create-only guards, computed here so the new-rack question, the
@@ -4406,19 +4399,11 @@ export class InventoryService {
     // Validate (warehouse, charter) pair when a charter is set.
     const resolvedCharterId = input.charterId ?? null;
     if (resolvedCharterId) {
-      const { data: pair } = await this.ctx.supabase
-        .from('warehouse_charters')
-        .select('charter_id')
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('warehouse_id', resolvedWarehouseId)
-        .eq('charter_id', resolvedCharterId)
-        .maybeSingle();
-      if (!pair) {
-        throw new ServiceError(
-          'validation_error',
-          'This charter is not serviced by the chosen warehouse. Pick a different one or mark the variants as Generic.',
-        );
-      }
+      await this.assertWarehouseServesCharter(
+        resolvedWarehouseId,
+        resolvedCharterId,
+        'This charter is not serviced by the chosen warehouse. Pick a different one or mark the variants as Generic.',
+      );
     }
 
     // The new-rack question, create()'s rule for the whole run: the stocked
@@ -4841,19 +4826,11 @@ export class InventoryService {
     // every row in the batch.
     const resolvedCharterId = input.charterId ?? null;
     if (resolvedCharterId) {
-      const { data: pair } = await this.ctx.supabase
-        .from('warehouse_charters')
-        .select('charter_id')
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('warehouse_id', resolvedWarehouseId)
-        .eq('charter_id', resolvedCharterId)
-        .maybeSingle();
-      if (!pair) {
-        throw new ServiceError(
-          'validation_error',
-          'This charter is not serviced by the chosen warehouse. Pick a different one or mark the items as Generic.',
-        );
-      }
+      await this.assertWarehouseServesCharter(
+        resolvedWarehouseId,
+        resolvedCharterId,
+        'This charter is not serviced by the chosen warehouse. Pick a different one or mark the items as Generic.',
+      );
     }
 
     // Plan-limit aware of batch size — was per-row (would only catch the
@@ -4880,17 +4857,34 @@ export class InventoryService {
       }
     }
 
-    // Pre-flight: which barcodes already exist? Count those as skipped,
-    // build payloads only for the survivors.
+    // Pre-flight: which items already exist? Count those as skipped, build
+    // payloads only for the survivors.
     //
-    // Batched (up to 500 barcodes, and a long barcode costs more URL than a
-    // uuid) and FAIL-CLOSED: the error used to be ignored, so a failed read
-    // looked like "none exist" and created duplicates of every item already
-    // in the org. A failed batch throws before anything is inserted.
-    const allBarcodes = input.items.map((i) => i.barcode);
+    // A BOOK is identified by its ISBN in EITHER form. The barcode string used
+    // to be compared exactly, so the same book came in again whenever the list
+    // gave the other form of its ISBN (0306406152 for a book stocked as
+    // 9780306406157, or the hyphenated print form), and one import carrying
+    // both forms made two records of one book. A book's keys are therefore the
+    // barcode as given plus, for a checksum-valid ISBN, both of its digit
+    // forms (isbnSearchKeys: the rule the item search and the Book Order
+    // Totals report use). Anything else (a product, a code that is not an
+    // ISBN) keeps the exact barcode, as before.
+    //
+    // Batched (up to 500 items, so at most 1,500 keys, and a long barcode
+    // costs more URL than a uuid) and FAIL-CLOSED: the error used to be
+    // ignored, so a failed read looked like "none exist" and created
+    // duplicates of every item already in the org. A failed batch throws
+    // before anything is inserted. Deleted records still count, as they
+    // always have: Settings > Recovery can restore one, and a second record
+    // of the same book would then sit beside it.
+    const keysOf = (i: (typeof input.items)[number]): string[] => {
+      const isbnKeys = i.itemType === 'book' ? isbnSearchKeys(i.barcode) : null;
+      return [...new Set([i.barcode, ...(isbnKeys ?? [])])];
+    };
+    const itemKeys = input.items.map(keysOf);
     const ctx = this.ctx;
     const existing = await fetchAllRowsByIds<{ barcode: string }>(
-      allBarcodes,
+      [...new Set(itemKeys.flat())],
       (batch) => (from, to) =>
         ctx.supabase
           .from('inventory_items')
@@ -4902,7 +4896,16 @@ export class InventoryService {
     );
     const existingSet = new Set(existing.map((r) => r.barcode));
 
-    const survivors = input.items.filter((i) => !existingSet.has(i.barcode));
+    // A key also counts as taken once an EARLIER row of this same import
+    // claimed it, so one import never creates two records of one book (the
+    // same ISBN twice, or its two forms). The first row wins.
+    const claimed = new Set<string>();
+    const survivors = input.items.filter((_, idx) => {
+      const keys = itemKeys[idx] ?? [];
+      if (keys.some((k) => existingSet.has(k) || claimed.has(k))) return false;
+      for (const k of keys) claimed.add(k);
+      return true;
+    });
     const skipped = input.items.length - survivors.length;
 
     if (survivors.length === 0) {
@@ -5018,6 +5021,34 @@ export class InventoryService {
   }
 
   /**
+   * Refuses a (warehouse, charter) pair the organization has not linked
+   * (warehouse_charters), in the caller's own words (`refusal`). A read that
+   * fails refuses too (fail closed), as an internal error: every copy of this
+   * check used to ignore the read's error and tell the person the warehouse
+   * does not service the charter, which is not what happened (B26).
+   */
+  private async assertWarehouseServesCharter(
+    warehouseId: string,
+    charterId: string,
+    refusal: string,
+  ): Promise<void> {
+    const { data: pair, error } = await this.ctx.supabase
+      .from('warehouse_charters')
+      .select('charter_id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('warehouse_id', warehouseId)
+      .eq('charter_id', charterId)
+      .maybeSingle();
+    if (error) {
+      throw new ServiceError(
+        'internal_error',
+        `Could not check that the warehouse services this charter: ${error.message}`,
+      );
+    }
+    if (!pair) throw new ServiceError('validation_error', refusal);
+  }
+
+  /**
    * A 23505 on (organization, SKU, charter, rack label) as plain words: one
    * lookup of the record that holds the slot, under the CALLER's client, so a
    * record they cannot read is never named (design 5, SKU collision). The
@@ -5052,6 +5083,75 @@ export class InventoryService {
       sku,
       ...(hit ? { conflictItemId: hit.id } : {}),
     });
+  }
+
+  /**
+   * A SKU edit moves every other live record of the ORIGINAL SKU to the new
+   * one (update()'s fan-out), in a second statement after the edited record's
+   * own UPDATE. Refuses, BEFORE either write, a move that second statement
+   * could not finish (unique index 0234: one live record per organization,
+   * SKU, charter and rack label, NULLs equal), so a refused SKU edit leaves
+   * every record where it was instead of the edited one alone on the new SKU.
+   *
+   * Two moves cannot finish:
+   *  - the edited record lands on the charter and rack of a record that moves
+   *    with it (both would then hold the new SKU there);
+   *  - a record outside the group already holds the new SKU at the charter
+   *    and rack of a record that moves.
+   * The edited record's own landing slot, when a record outside the group
+   * holds it, is left to its UPDATE: that statement is the first write and
+   * fails alone (skuTakenError, which can name the holder).
+   *
+   * Reads through the SERVICE ROLE, as the fan-out writes: the records that
+   * move, and the ones that block them, include records the editor cannot
+   * read. The organization_id filters are the tenant floor, and the refusal
+   * names no record. A read that fails refuses the edit (fail closed:
+   * fetchAllRows throws internal_error).
+   */
+  private async assertSkuGroupCanMove(
+    id: string,
+    originalSku: string,
+    newSku: string,
+    landing: { charterId: string | null; binLocation: string | null },
+  ): Promise<void> {
+    type SlotRow = { id: string; charter_id: string | null; bin_location: string | null };
+    const admin = createAdminClient();
+    const liveWithSku = (sku: string, excludeId?: string) =>
+      fetchAllRows<SlotRow>((from, to) => {
+        let q = admin
+          .from('inventory_items')
+          .select('id, charter_id, bin_location')
+          .eq('organization_id', this.ctx.organizationId)
+          .eq('sku', sku)
+          .is('deleted_at', null);
+        if (excludeId) q = q.neq('id', excludeId);
+        return q.order('id').range(from, to);
+      });
+    const [moving, holders] = await Promise.all([
+      liveWithSku(originalSku, id),
+      liveWithSku(newSku),
+    ]);
+    if (moving.length === 0) return;
+    // uuid text compares lower-case (Postgres prints it so); the rack label
+    // compares exactly, as the index does.
+    const slotOf = (charterId: string | null, binLocation: string | null) =>
+      JSON.stringify([charterId ? charterId.toLowerCase() : null, binLocation ?? null]);
+    const movingSlots = new Set(moving.map((r) => slotOf(r.charter_id, r.bin_location)));
+    const details = { reason: 'sku_taken_in_group', sku: newSku, previousSku: originalSku };
+    if (movingSlots.has(slotOf(landing.charterId, landing.binLocation))) {
+      throw new ServiceError(
+        'conflict',
+        `Another record with SKU ${originalSku} is already in the charter and rack chosen for this one, and changing the SKU moves both to SKU ${newSku}. Two records can't share a SKU there, so nothing was changed.`,
+        details,
+      );
+    }
+    if (holders.some((r) => movingSlots.has(slotOf(r.charter_id, r.bin_location)))) {
+      throw new ServiceError(
+        'conflict',
+        `Every record with SKU ${originalSku} moves to SKU ${newSku} together, and another record already uses SKU ${newSku} in the same charter and rack as one of them. Two records can't share a SKU there, so nothing was changed. Use a different SKU.`,
+        details,
+      );
+    }
   }
 
   async update(id: string, patch: UpdateItemInput) {
@@ -5283,23 +5383,22 @@ export class InventoryService {
     }
 
     if (patch.charterId !== undefined) {
-      // Validate the (final) (warehouse, charter) pair if non-null
+      // Validate the (final) (warehouse, charter) pair if non-null, when the
+      // charter or the warehouse CHANGES. The form sends every field on every
+      // save, so checking an unchanged pair refused every other edit of a
+      // record whose charter its warehouse no longer lists (an admin unlinked
+      // it later), and only a change of either one can make the pair new.
       const finalWarehouseId =
         (updates.warehouse_id as string | undefined) ?? currentWarehouseId ?? null;
-      if (patch.charterId && finalWarehouseId) {
-        const { data: pair } = await this.ctx.supabase
-          .from('warehouse_charters')
-          .select('charter_id')
-          .eq('organization_id', this.ctx.organizationId)
-          .eq('warehouse_id', finalWarehouseId)
-          .eq('charter_id', patch.charterId)
-          .maybeSingle();
-        if (!pair) {
-          throw new ServiceError(
-            'validation_error',
-            'This charter is not serviced by the chosen warehouse.',
-          );
-        }
+      const currentCharterId = (current as { charter_id?: string | null }).charter_id ?? null;
+      const pairChanges =
+        (patch.charterId ?? null) !== currentCharterId || finalWarehouseId !== currentWarehouseId;
+      if (patch.charterId && finalWarehouseId && pairChanges) {
+        await this.assertWarehouseServesCharter(
+          finalWarehouseId,
+          patch.charterId,
+          'This charter is not serviced by the chosen warehouse.',
+        );
       }
       updates.charter_id = patch.charterId ?? null;
     }
@@ -5310,6 +5409,28 @@ export class InventoryService {
     const sharedUpdates: Record<string, unknown> = {};
     for (const key of SHARED_ITEM_FIELDS) {
       if (key in updates) sharedUpdates[key] = updates[key];
+    }
+
+    // A SKU edit moves the whole group (the fan-out below): refuse, before
+    // this record's UPDATE, a move the fan-out could not finish, so a refused
+    // edit never leaves this record alone on the new SKU. Same condition as
+    // the fan-out: a blank SKU is never grouped.
+    if (
+      typeof updates.sku === 'string' &&
+      originalSku &&
+      originalSku.trim().length > 0 &&
+      updates.sku !== originalSku
+    ) {
+      const cur = current as { charter_id?: string | null; bin_location?: string | null };
+      await this.assertSkuGroupCanMove(id, originalSku, updates.sku, {
+        charterId:
+          ('charter_id' in updates ? (updates.charter_id as string | null) : cur.charter_id) ??
+          null,
+        binLocation:
+          ('bin_location' in updates
+            ? (updates.bin_location as string | null)
+            : cur.bin_location) ?? null,
+      });
     }
 
     const { data, error } = await this.ctx.supabase
@@ -5397,17 +5518,17 @@ export class InventoryService {
       // KNOWN LIMITATION: the target row was already updated (and committed)
       // in the prior statement above, in a SEPARATE statement from this
       // sibling fan-out — there is no shared transaction wrapping the two.
-      // If this edit is a `sku` re-key and the NEW sku collides with an
-      // existing row at one sibling's (org, sku, charter_id, bin_location)
-      // (migration 0234), this UPDATE fails with 23505 below and the group is
-      // left SPLIT: the target row
-      // now sits on the new sku while its siblings are still on the old one.
-      // This is surfaced to the caller as the `conflict` error (not silent,
+      // A `sku` re-key whose NEW sku collides at one sibling's (org, sku,
+      // charter_id, bin_location) (migration 0234) is refused BEFORE the
+      // target UPDATE (assertSkuGroupCanMove), so nothing is written. What
+      // remains is a race: a record that takes such a slot between that check
+      // and this UPDATE makes it fail with 23505 below, and the group is left
+      // SPLIT: the target row on the new sku, its siblings on the old one.
+      // That is surfaced to the caller as the `conflict` error (not silent,
       // not cross-tenant — organization_id stays scoped throughout — and
-      // on-hand quantities / stock ledger are untouched), but it is a real
-      // data-shape limitation until this fan-out is done. A fully-atomic
-      // group re-key would require moving target+siblings into one
-      // transactional RPC (tracked follow-up, not yet built).
+      // on-hand quantities / stock ledger are untouched). Closing the race
+      // needs target+siblings moved in one transactional database function
+      // (designed in the B26 pull request, not yet built).
       //
       // Deliberately the SERVICE-ROLE admin client, not this.ctx.supabase:
       // the RLS-scoped client is subject to inventory_items_update →
