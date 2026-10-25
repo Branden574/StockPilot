@@ -256,6 +256,62 @@ describe('CONFLICTS D18: a saved view’s owner controls reach touch and keyboar
   });
 });
 
+// B23: a shared view whose owner deleted their account. Once the database
+// keeps it for the team (the design in the PR), it has no owner: the chip
+// says so instead of "a teammate", and only the people the server says may
+// delete it (an admin or owner) get Delete. Nobody gets the owner's share
+// toggle, as nobody owns it.
+describe('B23: a shared view whose owner deleted their account', () => {
+  function renderWith(view: Record<string, unknown>) {
+    return render(
+      <InventoryTable
+        items={[row('a')] as never}
+        lookups={LOOKUPS}
+        total={1}
+        initialQuery=""
+        pageSize={30}
+        savedViews={[{ id: 'v1', name: 'Restock', state: {}, ...view }] as never}
+        savedViewScope="inventory"
+        currentUserId="u-1"
+      />,
+    );
+  }
+
+  it('says who shared it: a deleted user, not a teammate', () => {
+    const { container } = renderWith({ ownerId: null, isShared: true, canRemove: false });
+    const chip = container.querySelector('span[title^="Shared by"]');
+    expect(chip?.getAttribute('title')).toBe('Shared by a deleted user');
+  });
+
+  it('an admin the server lets remove it gets Delete, and no share toggle', () => {
+    renderWith({ ownerId: null, isShared: true, canRemove: true });
+    expect(screen.getByRole('button', { name: 'Apply view Restock' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Delete view Restock' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Make view Restock private|Share view Restock/ })).toBeNull();
+  });
+
+  it('a member gets only Apply', () => {
+    renderWith({ ownerId: null, isShared: true, canRemove: false });
+    expect(screen.getByRole('button', { name: 'Apply view Restock' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Delete view/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Make view Restock private|Share view Restock/ })).toBeNull();
+  });
+
+  it("a teammate's view still reads Shared by a teammate, and the owner's Shared by you", () => {
+    const teammate = renderWith({ ownerId: 'u-2', isShared: true, canRemove: false });
+    expect(teammate.container.querySelector('span[title^="Shared by"]')?.getAttribute('title')).toBe(
+      'Shared by a teammate',
+    );
+    teammate.unmount();
+    const own = renderWith({ ownerId: 'u-1', isShared: true, canRemove: true });
+    expect(own.container.querySelector('span[title^="Shared by"]')?.getAttribute('title')).toBe(
+      'Shared by you',
+    );
+    expect(screen.getByRole('button', { name: 'Make view Restock private' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Delete view Restock' })).toBeInTheDocument();
+  });
+});
+
 describe('the jump-to-page grid on a touch screen (P2.2 hand-off)', () => {
   // At 28 px with 4 px gaps, each page button's 44 px touch area reached over
   // the row above, so a tap on the bottom of page 1 opened page 6.

@@ -1,7 +1,7 @@
 import 'server-only';
 
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
-import { isManagerOrAbove, type Role } from '@stockpilot/core';
+import { isAtLeast, isManagerOrAbove, type Role } from '@stockpilot/core';
 
 import { ServiceError, withContext, type ServiceContext } from './context';
 
@@ -37,9 +37,31 @@ export interface SavedView {
    *  shared views as read-only chips (no share-toggle / delete). */
   isShared: boolean;
   /** Owner's user id — used by the client to decide whether to show
-   *  owner-only actions (toggle share, delete) on org-shared views. */
-  ownerId: string;
+   *  owner-only actions (toggle share, delete) on org-shared views. Null for
+   *  a shared view whose owner deleted their account (B23: once the database
+   *  keeps such a view for the team instead of deleting it with the account;
+   *  never null before that). */
+  ownerId: string | null;
+  /** Whether this viewer may delete the view (server-computed, the rule the
+   *  delete runs by): its owner; or, for a shared view whose owner deleted
+   *  their account, an admin or owner of the organization, so a view nobody
+   *  owns can still be cleaned up. */
+  canRemove: boolean;
 }
+
+type SavedViewRow = {
+  id: string;
+  name: string;
+  scope: SavedViewScope;
+  state: unknown;
+  sort_order: number;
+  created_at: string;
+  is_shared: boolean;
+  user_id: string | null;
+};
+
+/** The columns every read and write of a view returns. */
+const VIEW_COLUMNS = 'id, name, scope, state, sort_order, created_at, is_shared, user_id';
 
 const VALID_STATUSES = new Set(['active', 'archived', 'discontinued', 'all']);
 const VALID_STOCKS = new Set(['low', 'out']);
@@ -95,6 +117,27 @@ function sanitizeState(raw: unknown): SavedViewState {
 export class SavedViewsService {
   constructor(private readonly ctx: ServiceContext) {}
 
+  /** An admin or owner of this organization (the orphaned-view cleanup). */
+  private isOrgAdmin(): boolean {
+    return isAtLeast(this.ctx.role as Role, 'admin');
+  }
+
+  private toView(r: SavedViewRow): SavedView {
+    const ownerId = r.user_id ?? null;
+    return {
+      id: r.id,
+      name: r.name,
+      scope: r.scope,
+      state: sanitizeState(r.state),
+      sortOrder: r.sort_order,
+      createdAt: r.created_at,
+      isShared: r.is_shared,
+      ownerId,
+      canRemove:
+        ownerId === this.ctx.userId || (ownerId === null && r.is_shared && this.isOrgAdmin()),
+    };
+  }
+
   static async forCurrentUser() {
     return new SavedViewsService(await withContext());
   }
@@ -108,9 +151,7 @@ export class SavedViewsService {
   async list(scope: SavedViewScope): Promise<SavedView[]> {
     const { data, error } = await this.ctx.supabase
       .from('saved_views')
-      .select(
-        'id, name, scope, state, sort_order, created_at, is_shared, user_id',
-      )
+      .select(VIEW_COLUMNS)
       .eq('organization_id', this.ctx.organizationId)
       .eq('scope', scope)
       .order('is_shared', { ascending: true }) // own first, shared after
@@ -136,28 +177,7 @@ export class SavedViewsService {
       ? null
       : await getWarehouseAccess(this.ctx);
     return (data ?? [])
-      .map((row) => {
-        const r = row as {
-          id: string;
-          name: string;
-          scope: SavedViewScope;
-          state: unknown;
-          sort_order: number;
-          created_at: string;
-          is_shared: boolean;
-          user_id: string;
-        };
-        return {
-          id: r.id,
-          name: r.name,
-          scope: r.scope,
-          state: sanitizeState(r.state),
-          sortOrder: r.sort_order,
-          createdAt: r.created_at,
-          isShared: r.is_shared,
-          ownerId: r.user_id,
-        };
-      })
+      .map((row) => this.toView(row as SavedViewRow))
       .filter((v) => {
         if (v.ownerId === this.ctx.userId) return true;
         const wh = v.state.warehouseId;
@@ -188,9 +208,7 @@ export class SavedViewsService {
         state: sanitized,
         is_shared: input.isShared ?? false,
       })
-      .select(
-        'id, name, scope, state, sort_order, created_at, is_shared, user_id',
-      )
+      .select(VIEW_COLUMNS)
       .single();
     if (error) {
       // 23505 = unique_violation (user_id, org_id, scope, name)
@@ -202,44 +220,56 @@ export class SavedViewsService {
       }
       throw new ServiceError('internal_error', error.message);
     }
-    const row = data as {
-      id: string;
-      name: string;
-      scope: SavedViewScope;
-      state: unknown;
-      sort_order: number;
-      created_at: string;
-      is_shared: boolean;
-      user_id: string;
-    };
-    return {
-      id: row.id,
-      name: row.name,
-      scope: row.scope,
-      state: sanitizeState(row.state),
-      sortOrder: row.sort_order,
-      createdAt: row.created_at,
-      isShared: row.is_shared,
-      ownerId: row.user_id,
-    };
+    return this.toView(data as SavedViewRow);
   }
 
-  /** Owner-only: flip whether a view is shared with the org. */
+  /**
+   * Owner-only: flip whether a view is shared with the org. Proves a row
+   * changed (recurring pattern 2): RLS answers a view that is not the
+   * caller's, or is gone, with 0 rows and no error, which used to read as
+   * success.
+   */
   async setSharing(id: string, isShared: boolean): Promise<void> {
-    const { error } = await this.ctx.supabase
+    const { data, error } = await this.ctx.supabase
       .from('saved_views')
       .update({ is_shared: isShared })
+      .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
-      .eq('user_id', this.ctx.userId);
+      .eq('user_id', this.ctx.userId)
+      .select('id');
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!Array.isArray(data) || data.length === 0) {
+      throw new ServiceError(
+        'not_found',
+        'This view could not be changed. It may have been deleted, or only the person who saved it can change it.',
+      );
+    }
   }
 
+  /**
+   * Delete a view: the caller's own, or (an admin or owner only) a shared view
+   * whose owner deleted their account (B23), which nobody else can ever
+   * remove. Each delete is scoped to this organization and proves a row went
+   * (recurring pattern 2); RLS still decides both.
+   */
   async remove(id: string): Promise<void> {
-    const { error } = await this.ctx.supabase
+    if (await this.deleteWhere(id, 'own')) return;
+    if (this.isOrgAdmin() && (await this.deleteWhere(id, 'orphan'))) return;
+    throw new ServiceError(
+      'not_found',
+      'This view could not be deleted. It may have been deleted already, or only the person who saved it can delete it.',
+    );
+  }
+
+  private async deleteWhere(id: string, whose: 'own' | 'orphan'): Promise<boolean> {
+    let q = this.ctx.supabase
       .from('saved_views')
       .delete()
-      .eq('id', id)
-      .eq('user_id', this.ctx.userId);
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id);
+    q = whose === 'own' ? q.eq('user_id', this.ctx.userId) : q.is('user_id', null).eq('is_shared', true);
+    const { data, error } = await q.select('id');
     if (error) throw new ServiceError('internal_error', error.message);
+    return Array.isArray(data) && data.length > 0;
   }
 }

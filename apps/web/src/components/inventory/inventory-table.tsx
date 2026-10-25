@@ -62,6 +62,7 @@ import {
   groupCoverRow,
   shownUnderByRecord,
   ungroupableItemIds,
+  DELETED_USER_LABEL,
   DISPLAY_GROUP_FALLBACK_NAME,
   GROUP_COPY,
   groupingSelectionFacts,
@@ -545,9 +546,14 @@ interface SavedViewSummary {
   /** True when shared with the whole org. Non-owner viewers see a
       read-only chip with a small Users icon. */
   isShared?: boolean;
-  /** Owner's user id. Only the owner sees the delete + share-toggle
-      controls on the chip; everyone else gets a click-to-apply chip. */
-  ownerId?: string;
+  /** Owner's user id. Only the owner sees the share toggle on the chip;
+      everyone else gets a click-to-apply chip. Null for a shared view whose
+      owner deleted their account (B23). */
+  ownerId?: string | null;
+  /** Whether this viewer may delete the view (the server's rule: the owner,
+      or an admin or owner for a shared view whose owner deleted their
+      account). Omitted: the owner only, as before. */
+  canRemove?: boolean;
 }
 
 type SparkMode = 'qty' | 'moves';
@@ -2712,6 +2718,7 @@ export function InventoryTable({
               scope={savedViewScope ?? (showBookFields ? 'books' : 'inventory')}
               basePath={basePath}
               isOwner={!!currentUserId && sv.ownerId === currentUserId}
+              canRemove={sv.canRemove ?? (!!currentUserId && sv.ownerId === currentUserId)}
             />
           ))}
           {savedViewScope && (
@@ -5579,18 +5586,27 @@ function describeState(state: SavedViewSummary['state']): string {
   return parts.length === 0 ? 'No filters set' : parts.join(' · ');
 }
 
+/** Who shared a view, for its chip's title. B23: a shared view whose owner
+ *  deleted their account has no owner, so it never reads "a teammate". */
+function savedViewSharer(view: SavedViewSummary, isOwner: boolean): string {
+  if (isOwner) return 'you';
+  return view.ownerId === null ? `a ${DELETED_USER_LABEL.toLowerCase()}` : 'a teammate';
+}
+
 function SavedViewChip({
   view,
   isActive,
   scope,
   basePath,
   isOwner,
+  canRemove,
 }: {
   view: SavedViewSummary;
   isActive: boolean;
   scope: 'inventory' | 'books';
   basePath: string;
   isOwner: boolean;
+  canRemove: boolean;
 }) {
   const router = useRouter();
   const [deleting, setDeleting] = React.useState(false);
@@ -5667,7 +5683,7 @@ function SavedViewChip({
           ? 'border-foreground bg-foreground text-background'
           : 'hover:bg-muted border-[var(--ed-line-strong)] text-[var(--ed-ink-2)]',
       )}
-      title={view.isShared ? `Shared by ${isOwner ? 'you' : 'a teammate'}` : undefined}
+      title={view.isShared ? `Shared by ${savedViewSharer(view, isOwner)}` : undefined}
     >
       <button
         type="button"
@@ -5701,7 +5717,7 @@ function SavedViewChip({
           )}
         </button>
       )}
-      {isOwner && (
+      {canRemove && (
         <button
           type="button"
           onClick={remove}

@@ -114,8 +114,9 @@ function ctxFor(role: RoleCase): { ctx: ServiceContext; stub: SupabaseStub } {
 }
 
 /** list()'s filter as it read before: the access lookup for every role. The
- *  fixture states are already in sanitized shape, so the rows map 1:1. */
-async function previousList(ctx: ServiceContext): Promise<SavedView[]> {
+ *  fixture states are already in sanitized shape, so the rows map 1:1. (B23
+ *  added `canRemove`; the comparison below is by id.) */
+async function previousList(ctx: ServiceContext): Promise<Array<Omit<SavedView, 'canRemove'>>> {
   const access = await getWarehouseAccess(ctx);
   return ROWS.map((r) => ({
     id: r.id,
@@ -134,7 +135,7 @@ async function previousList(ctx: ServiceContext): Promise<SavedView[]> {
   });
 }
 
-const ids = (views: SavedView[]) => views.map((v) => v.id);
+const ids = (views: ReadonlyArray<{ id: string }>) => views.map((v) => v.id);
 
 beforeEach(() => {
   vi.clearAllMocks();
