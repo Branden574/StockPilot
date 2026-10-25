@@ -919,6 +919,13 @@ WEB_TESTS=(
   # MED-27/28 — the emitted header set: no Supabase CSP wildcard, popup-safe
   # COOP, CORP. Asserted as properties, not as the literal strings.
   src/test/security-headers.test.ts
+  # D1 (Supabase stops default grants on 2026-10-30): a migration from 0402 on
+  # decides, in the same file, what anon, authenticated and service_role get
+  # on each public table, view and sequence it creates, a no-access object by
+  # an explicit REVOKE; a schema-wide grant never counts, and a schema-wide
+  # GRANT or REVOKE on public or an ALTER DEFAULT PRIVILEGES ... GRANT fails
+  # the file on its own.
+  src/test/migration-grants.guard.test.ts
   # S6-A — rental checkout, return and cancel answer an internal failure with
   # a fixed sentence, never the raw PostgREST text (the phone and the web
   # toast both show the message verbatim). The route and action pin the
