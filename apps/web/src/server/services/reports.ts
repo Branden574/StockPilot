@@ -226,6 +226,46 @@ function reportRpcError(error: {
   return new ServiceError('internal_error', error.message);
 }
 
+/** Rows per aggregate page: PostgREST's `max_rows` (supabase/config.toml), so
+ *  a full page comes back in full and a short one is the last. */
+const AGGREGATE_PAGE_ROWS = 1000;
+
+/**
+ * Every row of a report aggregate that returns one row per item or bundle
+ * (report_item_out_movements, report_bundle_activity,
+ * report_bundle_component_value), read in AGGREGATE_PAGE_ROWS windows.
+ * `page(from, to)` calls the function ordered by its unique key and ending
+ * in `.range(from, to)`.
+ *
+ * PostgREST answers any request with at most 1000 rows and no error, so the
+ * one unpaged call each report made used to drop every row past the 1000th
+ * (B32): a velocity report classed items that moved as D (dead) and
+ * understated the value out, dead stock listed items that moved, and bundle
+ * activity left bundles out of its totals. Each page re-runs the function;
+ * production has at most a few hundred rows per organization, one page.
+ *
+ * A failed page fails the report, mapped by reportRpcError so a refusal
+ * keeps its own words: never the pages before it standing in for the whole.
+ */
+async function allAggregateRows<Row>(
+  page: (
+    from: number,
+    to: number,
+  ) => PromiseLike<{
+    data: unknown;
+    error: { message: string; code?: string | null; hint?: string | null } | null;
+  }>,
+): Promise<Row[]> {
+  const rows: Row[] = [];
+  for (let from = 0; ; from += AGGREGATE_PAGE_ROWS) {
+    const { data, error } = await page(from, from + AGGREGATE_PAGE_ROWS - 1);
+    if (error) throw reportRpcError(error);
+    const window = (data ?? []) as Row[];
+    for (const row of window) rows.push(row);
+    if (window.length < AGGREGATE_PAGE_ROWS) return rows;
+  }
+}
+
 export class ReportsService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -1361,12 +1401,19 @@ export class ReportsService {
     // and the ABC classification were silently wrong.) The item list still
     // streams (it IS the display) but now with NO cap. `since` is the exact
     // instant the JS computed. The CALLER'S client (0380): only movements the
-    // caller can read.
-    const [outRes, itemRows] = await Promise.all([
-      this.ctx.supabase.rpc('report_item_out_movements', {
-        p_organization_id: this.ctx.organizationId,
-        p_since: since,
-      }),
+    // caller can read. Every page of it (allAggregateRows): one row per item,
+    // and the one unpaged call stopped at 1000.
+    type OutRow = { item_id: string; units_out: number; last_out_at: string | null };
+    const [outRows, itemRows] = await Promise.all([
+      allAggregateRows<OutRow>((from, to) =>
+        this.ctx.supabase
+          .rpc('report_item_out_movements', {
+            p_organization_id: this.ctx.organizationId,
+            p_since: since,
+          })
+          .order('item_id', { ascending: true })
+          .range(from, to),
+      ),
       fetchAllRows<ItemRow>(
         (from, to) =>
           this.ctx.supabase
@@ -1387,16 +1434,11 @@ export class ReportsService {
         {},
       ),
     ]);
-    if (outRes.error) throw reportRpcError(outRes.error);
 
     // Per-item units-out and last-out from the aggregate.
     const unitsOutById = new Map<string, number>();
     const lastOutById = new Map<string, string>();
-    for (const m of (outRes.data ?? []) as Array<{
-      item_id: string;
-      units_out: number;
-      last_out_at: string | null;
-    }>) {
+    for (const m of outRows) {
       unitsOutById.set(m.item_id, Number(m.units_out) || 0);
       if (m.last_out_at) lastOutById.set(m.item_id, m.last_out_at);
     }
@@ -1485,11 +1527,18 @@ export class ReportsService {
     // `itemList` (a readable item's movements are readable), so the
     // intersection below is unchanged. `since` is the exact instant the JS
     // computed. It does not depend on the item list, so it runs alongside
-    // the item stream (as in velocityClass), not after it.
-    const outRead = this.ctx.supabase.rpc('report_item_out_movements', {
-      p_organization_id: this.ctx.organizationId,
-      p_since: since,
-    });
+    // the item stream (as in velocityClass), not after it. Every page of it
+    // (allAggregateRows): the one unpaged call stopped at 1000 items, and an
+    // item past them that had moved was listed here as dead stock.
+    const outRead = allAggregateRows<{ item_id: string }>((from, to) =>
+      this.ctx.supabase
+        .rpc('report_item_out_movements', {
+          p_organization_id: this.ctx.organizationId,
+          p_since: since,
+        })
+        .order('item_id', { ascending: true })
+        .range(from, to),
+    );
 
     // Every item with on-hand > 0 in the org. Stream the FULL set (no cap) —
     // this IS the display, and an org with >1000 (or >50k) stocked items must
@@ -1515,10 +1564,9 @@ export class ReportsService {
       {},
     );
 
-    const [itemList, outRes] = await Promise.all([itemListRead, outRead]);
-    if (outRes.error) throw reportRpcError(outRes.error);
+    const [itemList, outRows] = await Promise.all([itemListRead, outRead]);
     const recentOut = new Set<string>();
-    for (const m of (outRes.data ?? []) as Array<{ item_id: string }>) {
+    for (const m of outRows) {
       recentOut.add(m.item_id);
     }
 
@@ -1582,53 +1630,51 @@ export class ReportsService {
     // `since` is the exact instant the JS computed. The CALLER'S client
     // (0380): component value counts only items the caller can read, and a
     // top warehouse the caller cannot read comes back without a name.
+    // Both are one row per bundle, read in full (allAggregateRows): the one
+    // unpaged call each stopped at 1000 bundles and short-changed the totals.
     const orgId = this.ctx.organizationId;
-    const [actRes, valRes] = await Promise.all([
-      this.ctx.supabase.rpc('report_bundle_activity', {
-        p_organization_id: orgId,
-        p_since: since,
-      }),
-      this.ctx.supabase.rpc('report_bundle_component_value', {
-        p_organization_id: orgId,
-        p_since: since,
-      }),
+    type ActivityRow = {
+      bundle_id: string;
+      bundle_name: string | null;
+      bundle_sku: string | null;
+      runs: number;
+      kits_out: number;
+      last_run_at: string | null;
+      top_warehouse_name: string | null;
+    };
+    const [activityRows, valueRows] = await Promise.all([
+      allAggregateRows<ActivityRow>((from, to) =>
+        this.ctx.supabase
+          .rpc('report_bundle_activity', { p_organization_id: orgId, p_since: since })
+          .order('bundle_id', { ascending: true })
+          .range(from, to),
+      ),
+      allAggregateRows<{ bundle_id: string | null; component_value_out: number }>((from, to) =>
+        this.ctx.supabase
+          .rpc('report_bundle_component_value', { p_organization_id: orgId, p_since: since })
+          .order('bundle_id', { ascending: true })
+          .range(from, to),
+      ),
     ]);
-    if (actRes.error) throw reportRpcError(actRes.error);
-    if (valRes.error) throw reportRpcError(valRes.error);
 
     // Component cost keyed by bundle id (RPC groups movements by reference_id,
     // which is the bundle id for bundle_distribution draws).
     const valueByBundle = new Map<string, number>();
-    for (const r of (valRes.data ?? []) as Array<{
-      bundle_id: string | null;
-      component_value_out: number;
-    }>) {
+    for (const r of valueRows) {
       if (r.bundle_id) valueByBundle.set(r.bundle_id, Number(r.component_value_out) || 0);
     }
 
-    const rows: BundleActivityRow[] = (
-      (actRes.data ?? []) as Array<{
-        bundle_id: string;
-        bundle_name: string | null;
-        bundle_sku: string | null;
-        runs: number;
-        kits_out: number;
-        last_run_at: string | null;
-        top_warehouse_name: string | null;
-      }>
-    )
-      .map(
-        (b): BundleActivityRow => ({
-          bundleId: b.bundle_id,
-          bundleName: b.bundle_name ?? 'Unknown bundle',
-          bundleSku: b.bundle_sku ?? null,
-          runs: Number(b.runs) || 0,
-          kitsOut: Number(b.kits_out) || 0,
-          componentValueOut: valueByBundle.get(b.bundle_id) ?? 0,
-          topWarehouseName: b.top_warehouse_name ?? null,
-          lastRunAt: b.last_run_at ?? null,
-        }),
-      )
+    const rows: BundleActivityRow[] = activityRows
+      .map((b): BundleActivityRow => ({
+        bundleId: b.bundle_id,
+        bundleName: b.bundle_name ?? 'Unknown bundle',
+        bundleSku: b.bundle_sku ?? null,
+        runs: Number(b.runs) || 0,
+        kitsOut: Number(b.kits_out) || 0,
+        componentValueOut: valueByBundle.get(b.bundle_id) ?? 0,
+        topWarehouseName: b.top_warehouse_name ?? null,
+        lastRunAt: b.last_run_at ?? null,
+      }))
       // Grouped with no ORDER BY in the function: ties on kits out break by
       // bundle name, then SKU, then id, not by the plan's row order.
       .sort(compareBundleActivity);

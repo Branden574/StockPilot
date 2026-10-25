@@ -46,12 +46,31 @@ function ctxOf(client: any) {
   return makeServiceContext(client);
 }
 
-/** Dispatch rpcMock by function name using a handler map. */
+/**
+ * Dispatch rpcMock by function name using a handler map. The answer chains
+ * like supabase-js's (`.order()`, `.range()`) and is awaited as a thenable;
+ * a `.range()` slices the rows, so the per-item and per-bundle aggregates,
+ * which are paged since B32, page here as they would against PostgREST.
+ */
 function wireRpc(handlers: Record<string, (args: Record<string, unknown>) => unknown[]>) {
   rpcMock.mockImplementation((name: string, args: Record<string, unknown>) => {
     const h = handlers[name];
     if (!h) throw new Error(`unexpected rpc: ${name}`);
-    return Promise.resolve({ data: h(args), error: null });
+    let window: [number, number] | null = null;
+    const answer = () => {
+      const rows = h(args);
+      return { data: window ? rows.slice(window[0], window[1] + 1) : rows, error: null };
+    };
+    const builder = {
+      order: () => builder,
+      range: (from: number, to: number) => {
+        window = [from, to];
+        return builder;
+      },
+      then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+        Promise.resolve().then(answer).then(resolve, reject),
+    };
+    return builder;
   });
 }
 
