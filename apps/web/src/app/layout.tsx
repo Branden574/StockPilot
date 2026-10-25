@@ -3,6 +3,7 @@ import { Inter, Inter_Tight, Instrument_Serif, JetBrains_Mono } from 'next/font/
 import type { ReactNode } from 'react';
 
 import { PostHogProvider } from '@/components/analytics/posthog-provider';
+import { InterruptedRunExpiry } from '@/components/auth/interrupted-run-expiry';
 import { WebVitalsReporter } from '@/components/perf/web-vitals-reporter';
 import { Toaster } from '@/components/ui/sonner';
 import { ThemeProvider } from '@/components/theme/theme-provider';
@@ -124,6 +125,13 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             taken before anyone was listening). See web-vitals-reporter.tsx.
           */}
           <WebVitalsReporter />
+          {/*
+            Removes what an interrupted run kept in this tab once it is over
+            an hour old, whatever page the tab shows (the sign-in page a
+            session that expired leaves it on above all). Renders nothing. See
+            interrupted-run-expiry.tsx.
+          */}
+          <InterruptedRunExpiry />
           <PostHogProvider>{children}</PostHogProvider>
           <Toaster />
         </ThemeProvider>

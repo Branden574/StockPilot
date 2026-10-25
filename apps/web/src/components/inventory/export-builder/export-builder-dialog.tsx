@@ -29,6 +29,7 @@ import {
   type ExportStage,
   type InventoryExportRequest,
 } from '@/lib/download-export';
+import { isControlFlow } from '@/lib/control-flow';
 import { exportItemTypeKind } from '@/lib/exports/export-request';
 import { droppedFieldsNote, type SharedExportPresetConfig } from '@/lib/exports/preset-config';
 import {
@@ -232,7 +233,9 @@ export function ExportBuilderDialog({
         setSaveError(null);
         setConfirmingDelete(false);
       })
-      .catch(() => {
+      .catch((e: unknown) => {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
         if (!cancelled) setShared(null);
       });
     return () => {
@@ -326,6 +329,8 @@ export function ExportBuilderDialog({
       setSaveName('');
       setSharedNote(null);
     } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
       setSaveError(e instanceof Error ? e.message : 'Saving the preset failed. Please try again.');
     } finally {
       setSaveBusy(false);
@@ -347,6 +352,8 @@ export function ExportBuilderDialog({
       );
       setSharedNote(null);
     } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
       setSharedNote(
         e instanceof Error ? e.message : 'Deleting the preset failed. Please try again.',
       );

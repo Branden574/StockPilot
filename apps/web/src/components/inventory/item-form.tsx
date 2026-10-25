@@ -58,6 +58,7 @@ import { capture } from '@/lib/analytics';
 import { CRATE_COLORS, GRADES } from '@/lib/book-storage';
 import { compressImageVariants } from '@/lib/image-variants';
 import { VARIANT_MIME } from '@/lib/image-variants.config';
+import { isControlFlow } from '@/lib/control-flow';
 import { resolveListReturnHref } from '@/lib/last-list-url';
 import { useUnsavedWork } from '@/lib/unsaved-work';
 import { generateSku, cn } from '@/lib/utils';
@@ -746,7 +747,9 @@ export function ItemForm({
         .then((res) => {
           if (res?.ok) setGroupCandidates(res.data);
         })
-        .catch(() => {
+        .catch((e: unknown) => {
+          // A redirect (the session ended): the router is already navigating.
+          if (isControlFlow(e)) return;
           setGroupCandidates([]);
         });
     }, 400);

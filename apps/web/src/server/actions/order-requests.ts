@@ -4,6 +4,7 @@ import { revalidatePath, revalidateTag } from 'next/cache';
 import { z } from 'zod';
 
 import { ForbiddenError } from '@/lib/auth/warehouse';
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { reportError } from '@/lib/error-reporter';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError, withContext } from '@/server/services/context';
@@ -32,6 +33,7 @@ import {
 } from '@stockpilot/core';
 
 function toResult<T>(error: unknown): ActionResult<T> {
+  rethrowControlFlow(error);
   // `details` go through for every refusal (returns RX-3 fix round 2): the
   // screen picks its behaviour by `details.reason`, never by message text
   // (pattern 28). Add items needs it most: busy wrote nothing and keeps the
@@ -125,6 +127,7 @@ function orderSubmissionActionError(
   tag: string,
   organizationId: string | null,
 ): ActionResult<never> {
+  rethrowControlFlow(e);
   // The organization that answered, on every refusal it made (none before the
   // session was read), so a tab left in another workspace drops it (core
   // orderCallResultForOrganization; review round 1).
@@ -290,6 +293,7 @@ const expectedNeededBySchema = z.string().datetime({ offset: true }).nullable();
  * is core's "couldn't be changed" sentence (the service reported its cause).
  */
 function neededByActionError(e: unknown): ActionResult<never> {
+  rethrowControlFlow(e);
   if (e instanceof ServiceError && e.code !== 'internal_error') {
     return err(e.code, e.message, e.details);
   }
@@ -498,7 +502,8 @@ export async function suggestNeededByAction(
       return ok({ iso: null });
     }
     return ok({ iso: new Date(t).toISOString() });
-  } catch {
+  } catch (e) {
+    rethrowControlFlow(e);
     return ok({ iso: null });
   }
 }
@@ -677,6 +682,7 @@ export async function holdOrderStockAction(
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     return ok(result);
   } catch (e) {
+    rethrowControlFlow(e);
     // A fault is core's "couldn't be held" sentence, as on the phone (the
     // service has reported it with its cause); a refusal comes in its own
     // words.

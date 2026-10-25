@@ -1,5 +1,6 @@
 'use server';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { audit } from '@/server/services/audit';
 import { ServiceError, withContext } from '@/server/services/context';
 import {
@@ -125,6 +126,7 @@ export async function listSharedExportPresetsAction(): Promise<
 
     return ok({ available: true, presets });
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     console.error(e);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
@@ -214,6 +216,7 @@ export async function saveSharedExportPresetAction(
       canDelete: true,
     });
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     console.error(e);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
@@ -266,6 +269,7 @@ export async function deleteSharedExportPresetAction(input: {
 
     return ok({ id: row.id });
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     console.error(e);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
