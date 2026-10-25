@@ -38,7 +38,7 @@ const SIGN_OUT_PATH = '/auth/session-ended';
  */
 function signOutAndBackIn(): void {
   purgeInterruptedRuns();
-  // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- deliberate full page load of a route handler: only a document request lets it clear the session cookies and land on sign-in, and router.push() would also need the router this page cannot rely on.
+  // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- deliberate full page load: the sign-out route is a route handler, not a page, and this page cannot rely on the router.
   window.location.assign(SIGN_OUT_PATH);
 }
 

@@ -127,8 +127,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <WebVitalsReporter />
           {/*
             Removes what an interrupted run kept in this tab once it is over
-            an hour old, on every page (the sign-in page a session that
-            expired leaves the tab on above all). Renders nothing. See
+            an hour old, whatever page the tab shows (the sign-in page a
+            session that expired leaves it on above all). Renders nothing. See
             interrupted-run-expiry.tsx.
           */}
           <InterruptedRunExpiry />

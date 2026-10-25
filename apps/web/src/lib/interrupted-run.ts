@@ -50,13 +50,13 @@
  *   nothing out. This account's records stay for their own pages to take. A
  *   run of another account going in this page writes nothing more.
  * - an hour after the run's last step, on whichever page of the app the tab
- *   shows: expireInterruptedRuns() runs as every page loads
+ *   shows: expireInterruptedRuns() runs whenever the app loads in the tab
  *   (components/auth/interrupted-run-expiry.tsx, in the root layout) and
  *   removes every record over an hour old or unreadable, whoever's it is; and
- *   while a page stays open (the sign-in page the redirect left the tab on,
- *   say), each record is removed at its hour. A tab that has left the app for
- *   another site runs none of this until it comes back; closing it ends its
- *   sessionStorage.
+ *   while the app stays loaded (on the sign-in page the redirect left the tab
+ *   on, say), a timer removes each record at its hour. A tab that has left the
+ *   app for another site runs none of this until it comes back; closing it
+ *   ends its sessionStorage.
  *
  * sessionStorage belongs to one tab, so nothing here reaches another tab or
  * device. Every read and write tolerates a browser that refuses storage: the
@@ -361,12 +361,12 @@ export function sweepInterruptedRuns(account: RunAccount): void {
 }
 
 /**
- * A page of the app is open in this tab (components/auth/interrupted-run-expiry
- * runs it as each page loads). Removes every record over an hour old, or
- * unreadable, whoever's it is, and hands nothing out: a fresh record stays for
- * its account's page, as on the sign-in page an expired session left the tab
- * on. Then, while this page stays open, removes each remaining record at its
- * hour. Never throws.
+ * The app has loaded in this tab (components/auth/interrupted-run-expiry runs
+ * it then), or the timer it set is due. Removes every record over an hour old,
+ * or unreadable, whoever's it is, and hands nothing out: a fresh record stays
+ * for its account's page, as on the sign-in page an expired session left the
+ * tab on. Then, while the app stays loaded, removes each remaining record at
+ * its hour. Never throws.
  */
 export function expireInterruptedRuns(): void {
   stopExpiry();
