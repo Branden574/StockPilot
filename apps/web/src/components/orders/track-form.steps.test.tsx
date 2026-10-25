@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -34,7 +34,7 @@ function result(extra: Record<string, unknown>) {
   return {
     id: '11111111-1111-1111-1111-111111111111',
     status: 'approved',
-    requesterName: 'Lillian',
+    requesterName: 'Reggie Requester',
     warehouseName: 'DC4',
     fulfillmentType: 'delivery',
     lines: [{ itemName: 'Polo S', quantityRequested: 2, quantityFulfilled: 0 }],
@@ -305,5 +305,48 @@ describe('/r/track steps: cancelled, denied and legacy', () => {
       'Signed for',
       'Delivered',
     ]);
+  });
+});
+
+/**
+ * The repository is public, so the tracker's tests use placeholder people: a
+ * name or address copied from an order would be published with the test. The
+ * public read's one person field, the requester's name, is drawn on the page
+ * ("Requester:"), and every tracker test sets it to the repository's
+ * placeholder requester. Every email address is at a domain reserved for
+ * examples (RFC 2606 and 6761). A failure names the file and line only.
+ */
+describe('/r/track test data', () => {
+  const PLACEHOLDER_REQUESTER = 'Reggie Requester';
+  const EXAMPLE_DOMAIN = /(^|\.)example\.(com|org|net)$|\.(example|invalid|localhost|test)$/;
+
+  /** Each value the pattern's first group captures in the tracker's tests, with its file:line. */
+  function valuesIn(pattern: RegExp): Array<{ at: string; value: string }> {
+    const found: Array<{ at: string; value: string }> = [];
+    for (const name of readdirSync(__dirname)) {
+      if (!/^track-form(\.[\w-]+)?\.test\.tsx$/.test(name)) continue;
+      readFileSync(path.join(__dirname, name), 'utf8')
+        .split('\n')
+        .forEach((line, i) => {
+          for (const m of line.matchAll(pattern)) {
+            found.push({ at: `${name}:${i + 1}`, value: m[1] ?? '' });
+          }
+        });
+    }
+    return found;
+  }
+
+  it('every tracker test names the placeholder requester, never a name from an order', () => {
+    const requesters = valuesIn(/requesterName:\s*['"`]([^'"`]*)['"`]/g);
+    expect(requesters.length).toBeGreaterThan(0);
+    expect(requesters.filter((r) => r.value !== PLACEHOLDER_REQUESTER).map((r) => r.at)).toEqual(
+      [],
+    );
+  });
+
+  it('every email address in the tracker tests is at a domain reserved for examples', () => {
+    const emails = valuesIn(/[\w.+-]+@([\w-]+(?:\.[\w-]+)+)/g);
+    expect(emails.length).toBeGreaterThan(0);
+    expect(emails.filter((e) => !EXAMPLE_DOMAIN.test(e.value)).map((e) => e.at)).toEqual([]);
   });
 });

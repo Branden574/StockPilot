@@ -20,7 +20,7 @@ function result(status: string, extra: Record<string, unknown> = {}) {
   return {
     id: '11111111-1111-1111-1111-111111111111',
     status,
-    requesterName: 'Lillian',
+    requesterName: 'Reggie Requester',
     warehouseName: 'DC4',
     fulfillmentType: 'pickup',
     lines: [{ itemName: 'Polo S', quantityRequested: 2, quantityFulfilled: 1 }],
