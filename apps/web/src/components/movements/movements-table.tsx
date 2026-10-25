@@ -1,6 +1,5 @@
 import * as React from 'react';
 
-import { LocalDateTime } from '@/components/ui/local-datetime';
 import {
   Table,
   TableBody,
@@ -21,8 +20,7 @@ import { EditableMovementNote } from './editable-movement-note';
 /**
  * A type's words and tone live in lib/movements/movement-type.ts, which imports
  * no component, so the Overview reads them there without this table's client
- * islands (the note editor and LocalDateTime). Re-exported for the table's
- * callers and tests.
+ * island (the note editor). Re-exported for the table's callers and tests.
  */
 export {
   movementTypeLabel,
@@ -51,6 +49,14 @@ export interface MovementDisplayRow {
    */
   noteEditable: boolean;
   createdAt: string;
+  /**
+   * When it happened, in the ORGANIZATION's time zone ("Oct 4, 2026,
+   * 10:30 PM"; L7, owner decision Q1). Formatted ONCE by the server page
+   * (core formatMovementWhen, in toDisplayRow) and handed in as text, so the
+   * server render and the browser cannot disagree. null when createdAt is not
+   * a date: nothing is printed then.
+   */
+  createdAtLabel: string | null;
   itemName: string | null;
   itemSku: string | null;
   actorLabel: string;
@@ -144,7 +150,12 @@ export function MovementsTable({
                   <div suppressHydrationWarning className="text-[12.5px] leading-[18.75px]">
                     {formatRelative(m.createdAt)}
                   </div>
-                  <LocalDateTime iso={m.createdAt} className="block text-[12px] leading-[18px]" />
+                  {/* The exact date and time in the organization's zone (L7),
+                      server-made text: it used to be <LocalDateTime>, the
+                      viewer's zone. */}
+                  {m.createdAtLabel ? (
+                    <span className="block text-[12px] leading-[18px]">{m.createdAtLabel}</span>
+                  ) : null}
                 </TableCell>
                 <TableCell className="min-w-[180px]">
                   <div className="text-foreground font-medium">{m.itemName ?? '—'}</div>

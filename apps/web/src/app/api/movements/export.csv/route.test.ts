@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModuleId } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
 import { getActiveWarehouseFilterFor } from '@/lib/warehouse-filter';
 import { ServiceError } from '@/server/services/context';
 import { MovementsService, type MovementExportRow } from '@/server/services/movements';
@@ -37,6 +38,12 @@ vi.mock('@/lib/export-rate-limit', () => ({
 // resolve at test time instead of passing silently).
 vi.mock('@/lib/warehouse-filter', () => ({
   getActiveWarehouseFilterFor: vi.fn().mockResolvedValue(null),
+}));
+
+// The org's zone, which From and To cut days in (slice 3 review F4). UTC by
+// default, so the pass-through test below keeps its plain UTC bounds.
+vi.mock('@/lib/dashboard/cached-org', () => ({
+  getCachedOrgTimezone: vi.fn().mockResolvedValue('UTC'),
 }));
 
 function buildCtx(role: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer') {
@@ -88,6 +95,7 @@ describe('GET /api/movements/export.csv', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getActiveWarehouseFilterFor).mockResolvedValue(null);
+    vi.mocked(getCachedOrgTimezone).mockResolvedValue('UTC');
   });
 
   it('401s without an auth context', async () => {
@@ -202,5 +210,38 @@ describe('GET /api/movements/export.csv', () => {
 
     const res = await GET(buildRequest());
     expect(res.status).toBe(500);
+  });
+
+  // Slice 3 review F4: the export cuts From and To at the ORGANIZATION's
+  // midnight, as the Movements page now does, so a day exported is the day the
+  // screen shows. It cut at UTC midnight (SP-079).
+  it("cuts From and To at the organization's midnight", async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx('manager'));
+    vi.mocked(getCachedOrgTimezone).mockResolvedValueOnce('America/Los_Angeles');
+    const exportRows = stubExportRows([]);
+
+    await GET(buildRequest('?from=2026-10-10&to=2026-10-10'));
+
+    expect(getCachedOrgTimezone).toHaveBeenCalledWith('org-1');
+    expect(exportRows).toHaveBeenCalledWith(
+      expect.objectContaining({ since: '2026-10-10T07:00:00.000Z', until: '2026-10-11T07:00:00.000Z' }),
+    );
+    // An 18:30 PT movement on the 10th (01:30Z on the 11th) is inside the day.
+    const { since, until } = (exportRows.mock.calls[0] as unknown as [{ since: string; until: string }])[0];
+    const evening = Date.parse('2026-10-11T01:30:00.000Z');
+    expect(evening >= Date.parse(since) && evening < Date.parse(until)).toBe(true);
+  });
+
+  it("a failed zone read exports in core's documented default zone, never a 500", async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx('manager'));
+    vi.mocked(getCachedOrgTimezone).mockRejectedValueOnce(new Error('org read failed'));
+    const exportRows = stubExportRows([]);
+
+    const res = await GET(buildRequest('?from=2026-10-10&to=2026-10-10'));
+
+    expect(res.status).toBe(200);
+    expect(exportRows).toHaveBeenCalledWith(
+      expect.objectContaining({ since: '2026-10-10T07:00:00.000Z', until: '2026-10-11T07:00:00.000Z' }),
+    );
   });
 });

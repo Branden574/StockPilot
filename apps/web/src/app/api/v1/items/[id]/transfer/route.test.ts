@@ -4,7 +4,7 @@ import { bookCrateFingerprint, type ModuleId } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { ServiceError } from '@/server/services/context';
-import { makeSupabaseStub, type SupabaseStub } from '@/test/supabase-mock';
+import { callArgs, makeSupabaseStub, type MockCall, type SupabaseStub } from '@/test/supabase-mock';
 
 import { POST } from './route';
 
@@ -786,5 +786,98 @@ describe('POST /api/v1/items/[id]/transfer — D1: staff mints the labelled crat
     expect(String(body.message)).toMatch(/Transfer stock permission/);
     expect(stub.rpcCalls.filter((c) => c.name === 'mint_placement_location')).toHaveLength(1);
     expect(mockTransferStock).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// L121 — the phone's put-away back onto the warehouse SITE.
+//
+// The route always accepted a Site destination (transfer_stock restricts no
+// kind), but a put-away stamped the placement label, so the Site's NAME went
+// over bin_location: the rack label the pick slip prints, and a Site name in
+// the rack column is the "items went under rack DC4" confusion. A put-away onto
+// a Site now moves the stock and keeps the label. The destination read hands
+// back only the SELECTED columns here, as PostgREST does: `type` is what tells
+// a Site (kind NULL, warehouse/room) from a NULL-kind legacy shelf or bin.
+// ---------------------------------------------------------------------------
+
+const SITE = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
+const SITE_ROW = {
+  id: SITE,
+  warehouse_id: WAREHOUSE,
+  kind: null,
+  type: 'warehouse',
+  rack_number: null,
+  rack_row: null,
+  crate_color: null,
+  crate_number: null,
+  name: 'Main Distribution Center',
+};
+
+function installPutAwayOnto(dest: Record<string, unknown>, source: Record<string, unknown> = STAGING_ROW): SupabaseStub {
+  let reads = 0;
+  const stub = makeSupabaseStub({
+    'locations.select': (call: MockCall) => {
+      reads += 1;
+      // The route reads the SOURCE first, then the destination.
+      if (reads === 1) return { data: source, error: null };
+      const columns = String(callArgs(call, 'select')?.[0] ?? '')
+        .split(',')
+        .map((c) => c.trim());
+      return {
+        data: Object.fromEntries(Object.entries(dest).filter(([key]) => columns.includes(key))),
+        error: null,
+      };
+    },
+    // A non-book: no crate summary to gate or reconcile.
+    'inventory_items.select': { data: [], error: null },
+    'item_stock_levels.select': { data: [], error: null },
+  });
+  vi.mocked(withApiContext).mockResolvedValue({
+    organizationId: 'org-1',
+    userId: 'u-1',
+    role: 'manager' as never,
+    supabase: stub.client as never,
+    mfaRequired: false,
+    mfaSatisfied: true,
+    enabledModules: new Set<ModuleId>(),
+  } as never);
+  return stub;
+}
+
+describe('POST /api/v1/items/[id]/transfer — put-away onto the warehouse Site (L121)', () => {
+  it('moves the staged stock onto the Site and keeps the rack label: no stamp', async () => {
+    installPutAwayOnto(SITE_ROW);
+    const res = await POST(request({ fromLocationId: STAGING, quantity: 1, toLocationId: SITE }), { params });
+    expect(res.status).toBe(200);
+    expect(mockTransferStock).toHaveBeenCalledWith(
+      expect.objectContaining({ itemId: ITEM, fromLocationId: STAGING, toLocationId: SITE, quantity: 1 }),
+    );
+    expect(mockStamp).not.toHaveBeenCalled();
+  });
+
+  it('from Unplaced too, and a room is a Site too', async () => {
+    installPutAwayOnto({ ...SITE_ROW, type: 'room', name: 'Back Room' }, { warehouse_id: WAREHOUSE, kind: 'unplaced' });
+    const res = await POST(request({ fromLocationId: STAGING, quantity: 1, toLocationId: SITE }), { params });
+    expect(res.status).toBe(200);
+    expect(mockTransferStock).toHaveBeenCalledOnce();
+    expect(mockStamp).not.toHaveBeenCalled();
+  });
+
+  it('a put-away onto a NULL-kind legacy SHELF is a placement, decided by its type: still stamped', async () => {
+    installPutAwayOnto({ ...SITE_ROW, type: 'shelf', name: 'Shelf 3' });
+    const res = await POST(request({ fromLocationId: STAGING, quantity: 1, toLocationId: SITE }), { params });
+    expect(res.status).toBe(200);
+    expect(mockStamp).toHaveBeenCalledWith([ITEM], expect.objectContaining({ kind: null, name: 'Shelf 3' }));
+  });
+
+  it('a put-away onto a rack is stamped exactly as before', async () => {
+    installPutAwayOnto({ ...SITE_ROW, kind: 'rack', type: 'shelf', name: '40-B', rack_number: '40', rack_row: 'B' });
+    const res = await POST(request({ fromLocationId: STAGING, quantity: 1, toLocationId: SITE }), { params });
+    expect(res.status).toBe(200);
+    expect(mockStamp).toHaveBeenCalledWith(
+      [ITEM],
+      expect.objectContaining({ kind: 'rack', rackNumber: '40', rackRow: 'B', name: '40-B' }),
+    );
   });
 });

@@ -28,6 +28,119 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'small-fixes-3-2026-10',
+    revision: 1,
+    // Small fixes slice 3 (followups triage 2026-10-05, no migration): L121,
+    // L83b and L7 (owner decision Q1). Held as a DRAFT until the web deploy is
+    // live and phones report launching the OTA that carries the phone half;
+    // the follow-up that publishes it sets the real publishedAt and re-reads
+    // these words against what shipped. At the top, above the redesign
+    // releases of 2026-10-20 (#370), and dated after every release: the date
+    // is a placeholder the publishing follow-up replaces.
+    //
+    // Each entry says only what the code does, told to the people who can see
+    // it: placing is stock:transfer on the Staging page (Inventory module);
+    // the status names wherever Orders is on; movement times to anyone who
+    // reads items (an item's Movements and Activity tabs, Staging's History,
+    // the phone's home screen) or the Movements page (activity_logs:read). The
+    // movement-times entry names exactly the screens that changed (slice 3
+    // review F2); the web's general Activity page, an order's Timeline and a
+    // PO's receipt history still print the viewer's zone (the L7 follow-on in
+    // six/followups.md) and are not named. The status entry says names AND colors: the
+    // one live organization with a config today (2026-10-05) changes seven
+    // colors and no names. The Site entry says the rack label is not replaced
+    // by the Site's name, which is what skipping the label stamp guarantees;
+    // a book's crate and rack summary still follows its stock, as on every
+    // placement, after the confirmation it already asks.
+    //
+    // The last two entries are phone fixes from the slice 3 review
+    // (2026-10-24), found beside the zone re-read it asked for: a refresh of
+    // Staging now reads the warehouse names again (only the start of each
+    // warehouse's id showed after a failed first read, stagingWarehouseLabel),
+    // told to the people who can open Staging (items:read, Inventory); and the
+    // home screen keeps only its newest load, told to every member.
+    status: 'draft',
+    title: 'Staged stock back on a Site, your status names in the app, and movement times in your time zone',
+    summary:
+      "Place on the Staging page, and Place on Staging in the mobile app after the latest update, now offer your warehouse's Site, so stock returned to Staging can go back where the rest of the item sits. In the mobile app, after the latest update, orders show your organization's status names and colors. Stock movement dates and times on the Movements page, an item's Movements and Activity tabs and Staging's History now follow your organization's time zone, on the web and in the mobile app.",
+    publishedAt: '2026-10-24T17:10:00Z',
+    entries: [
+      {
+        id: 'put-staged-stock-back-on-site',
+        category: 'improved',
+        area: 'Inventory',
+        title: 'Put staged stock back on a Site',
+        whatChanged:
+          "Place and Place selected on the Staging page, and in the mobile app after the latest update, Place on Staging and Transfer / put away on an item, for units in Staging or Unplaced, now list your warehouse's Site, marked (site), after its racks and crates. Placing stock there moves it onto the Site, and the item's rack label is not replaced by the Site's name.",
+        whyItMatters:
+          'A cancelled pick sends its units back to Staging, and a warehouse whose stock sits on its Site, with no racks, had no way to put them back.',
+        howItAffectsYou:
+          'Units that come back to Staging can go back where the rest of the item sits, without making a rack for them.',
+        whatToDo:
+          'No action needed. In the mobile app, close the app completely and open it again to load the latest update.',
+        link: { href: '/dashboard/inventory/staging', label: 'Open Staging' },
+        audience: { anyPermission: ['stock:transfer'], modules: ['inventory'] },
+      },
+      {
+        id: 'app-order-status-names',
+        category: 'fixed',
+        area: 'Orders',
+        title: "Orders in the mobile app use your organization's status names and colors",
+        whatChanged:
+          'In the mobile app, after the latest update, the Orders list, the order screen and the screen shown after placing an order name each status as set on the web in Settings, Order statuses, and the Orders list and the screen shown after placing an order color each status tag the same way.',
+        whyItMatters:
+          'The app showed the default status names and colors, so an organization that had renamed or recolored a status saw different words or colors in the app.',
+        howItAffectsYou: "An order's status reads in the same words in the app as on the web.",
+        whatToDo:
+          'No action needed. In the mobile app, close the app completely and open it again to load the latest update.',
+        audience: { modules: ['orders'] },
+      },
+      {
+        id: 'movement-times-org-time-zone',
+        category: 'improved',
+        area: 'Inventory',
+        title: "Movement times use your organization's time zone",
+        whatChanged:
+          "Stock movement dates and times now follow your organization's time zone, set under Timezone in Settings, Organization, as counts and orders do. On the web: the Movements page, every entry on an item's Movements and Activity tabs, and History on the Staging page. In the mobile app, after the latest update: the Movements list, Recent movements on the home screen, every entry on an item's Movements and Activity tabs, and History on Staging. On the Movements page, From and To now pick whole days in your organization's time zone, for the list and for Export CSV.",
+        whyItMatters:
+          "They followed the time zone of the device you were using, so near midnight a movement could show a different day from a count or an order, and a From and To filter for one day left out that day's evening.",
+        howItAffectsYou:
+          'On these screens, everyone sees the same date and time for a movement, whatever time zone their device is set to.',
+        whatToDo:
+          'No action needed. In the mobile app, close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['items:read', 'activity_logs:read'] },
+      },
+      {
+        id: 'app-staging-refresh-warehouse-names',
+        category: 'fixed',
+        area: 'Mobile app',
+        title: 'Refreshing Staging in the mobile app brings back the warehouse names',
+        whatChanged:
+          "In the mobile app, after the latest update, pulling down to refresh Staging also reads the warehouse names and your organization's time zone again.",
+        whyItMatters:
+          "If the warehouse names could not be read when Staging opened, for example without a connection, each row showed the start of its warehouse's id in place of the warehouse's name, even after a refresh.",
+        howItAffectsYou: 'Once the connection is back, a refresh shows the warehouse names.',
+        whatToDo:
+          'No action needed. In the mobile app, close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['items:read'], modules: ['inventory'] },
+      },
+      {
+        id: 'app-home-workspace-switch',
+        category: 'fixed',
+        area: 'Mobile app',
+        title: 'The home screen in the mobile app stays on the organization you switched to',
+        whatChanged:
+          "In the mobile app, after the latest update, switching organizations while the home screen is still loading no longer lets the previous organization's figures and recent movements replace the new organization's.",
+        whyItMatters:
+          'The home screen showed whichever load answered last, so a slow load for the organization you had left could put its figures back on the screen until the next refresh.',
+        howItAffectsYou:
+          'Once the home screen has loaded after a switch, its figures and recent movements are those of the organization you are in.',
+        whatToDo:
+          'No action needed. In the mobile app, close the app completely and open it again to load the latest update.',
+      },
+    ],
+  },
+  {
     id: 'redesign-2026-10',
     revision: 1,
     // The full-app redesign (PR #369, redesign/full-app at 036002d43): every web

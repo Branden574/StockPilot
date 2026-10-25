@@ -56,14 +56,17 @@ import {
   destinationFromFields,
   destinationIsRecordedStorage,
   destinationLabel,
+  destinationOptionLabel,
   destinationPhrase,
   destinationPosition,
   EMPTY_DESTINATION_FIELDS,
   fieldsFromOption,
   isCrateChoice,
+  isSiteOption,
   newDestinationProblem,
   newDestinationReady,
   planNewDestination,
+  rackOrCrateRows,
   seedDestinationFields,
   sharedRecordedStorage,
   type ChosenDestination,
@@ -90,7 +93,8 @@ export interface BulkPlaceRow {
 
 interface BulkPlaceDialogProps {
   rows: BulkPlaceRow[];
-  /** warehouseId → rack/crate destinations (same map the per-item dialog uses). */
+  /** warehouseId → Place destinations: Sites, racks and crates (same map the
+   *  per-item dialog uses). */
   destinationsMap: Record<string, DestinationOption[]>;
   /** warehouseId → display name, for the new-rack confirmation copy. */
   warehouseNames: Record<string, string>;
@@ -172,6 +176,14 @@ export function BulkPlaceDialog({
 
   const totalUnits = rows.reduce((s, r) => s + r.quantity, 0);
   const selectedDestination = destinations.find((d) => d.id === destId) ?? null;
+  // The warehouse's Site is offered beside its racks and crates (L121); the
+  // copy says so only when one is in the list.
+  const offersSite = destinations.some(isSiteOption);
+  // EVERY NAME CHECK SEES RACKS AND CRATES ONLY (F1): a typed rack resolves on
+  // the server among racks and crates, so the Site must never make a typed name
+  // read as existing (minting a rack for the whole batch unasked), nor be
+  // suggested as a rack to use instead.
+  const rackNameRows = rackOrCrateRows(destinations);
 
   // MIXED SELECTIONS ARE RACK-ONLY (for inline creation).
   //
@@ -243,7 +255,7 @@ export function BulkPlaceDialog({
   const plannedLabel = chosen && chosen.mode !== 'existing' ? destinationLabel(chosen) : '';
   const needsMint =
     plannedLabel.length > 0 &&
-    !destinations.some((d) => d.name.trim().toLowerCase() === plannedLabel.toLowerCase());
+    !rackNameRows.some((d) => d.name.trim().toLowerCase() === plannedLabel.toLowerCase());
   const cannotMint = needsMint && !canMintDestination;
   const newProblem =
     chosen !== null
@@ -408,7 +420,7 @@ export function BulkPlaceDialog({
             label: destinationLabel(dest),
             warehouseName,
             quantity: totalUnits,
-            existingLabels: destinations.map((d) => d.name),
+            existingLabels: rackNameRows.map((d) => d.name),
             noun: isCrateChoice(dest) ? 'crate' : 'rack',
           });
     const creating = creation !== null && !creation.exists;
@@ -447,9 +459,10 @@ export function BulkPlaceDialog({
   }
 
   // "Did you mean 10-A?" — place into the EXISTING rack the worker probably
-  // meant. The suggestion is an existing label; map it to that destination id.
+  // meant. The suggestion is an existing label; map it to that destination id,
+  // among racks and crates only (a rack may share a Site's name; F1).
   function placeIntoSuggestion(label: string) {
-    const match = destinations.find(
+    const match = rackNameRows.find(
       (d) => d.name.trim().toLowerCase() === label.trim().toLowerCase(),
     );
     if (!match) return;
@@ -588,7 +601,7 @@ export function BulkPlaceDialog({
           </DialogTitle>
           <DialogDescription>
             Move <span className="tabular-nums">{totalUnits}</span> total units from staging /
-            unplaced into one rack or crate.
+            unplaced into one rack or crate{offersSite ? ', or onto a site' : ''}.
           </DialogDescription>
         </DialogHeader>
 
@@ -606,7 +619,11 @@ export function BulkPlaceDialog({
 
                 {/* Existing-location shortcut — FILLS the four fields below. */}
                 <div className="space-y-1.5">
-                  <Label id="bulk-existing-label">Pick an existing rack / crate (optional)</Label>
+                  <Label id="bulk-existing-label">
+                    {offersSite
+                      ? 'Pick an existing rack, crate or site (optional)'
+                      : 'Pick an existing rack / crate (optional)'}
+                  </Label>
                   <Select value={destId} onValueChange={pickExisting}>
                     <SelectTrigger aria-labelledby="bulk-existing-label">
                       <SelectValue placeholder="Fill in from an existing location" />
@@ -614,7 +631,7 @@ export function BulkPlaceDialog({
                     <SelectContent>
                       {destinations.map((d) => (
                         <SelectItem key={d.id} value={d.id}>
-                          {d.name}
+                          {destinationOptionLabel(d)}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -646,7 +663,7 @@ export function BulkPlaceDialog({
                     <SelectContent>
                       {destinations.map((d) => (
                         <SelectItem key={d.id} value={d.id}>
-                          {d.name}
+                          {destinationOptionLabel(d)}
                         </SelectItem>
                       ))}
                       <SelectItem value={NEW_RACK_SENTINEL}>+ New rack</SelectItem>

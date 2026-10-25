@@ -1,5 +1,6 @@
 import {
   collectLegacyRefIdsByKind,
+  formatMovementDay,
   orderNumberLabels,
   resolveMovementRefReason,
   returnNumberLabels,
@@ -12,6 +13,8 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Body, Mono } from '@/components/ui/text';
 import { actorText, isRowPersonDeleted } from '@/lib/deleted-user-labels';
+import { knownZoneFor, nextKnownOrgZone, type KnownOrgZone } from '@/lib/known-org-zone';
+import { readOrgTimeZone } from '@/lib/order-readiness';
 import { useOrg } from '@/lib/use-org';
 import { retryWorkspace } from '@/lib/use-workspace';
 import { supabase } from '@/lib/supabase';
@@ -100,6 +103,14 @@ export default function MovementsScreen() {
   const { orgId, loading: workspaceLoading } = useOrg();
   const router = useRouter();
   const [stored, setStored] = React.useState<ListState<MovementRow> | null>(null);
+  // The organization's time zone: each row's day prints in it (L7, owner
+  // decision Q1), like counts, exceptions and orders and like the web's
+  // Movements page. It used to be the device's zone. Null until read, when
+  // unset, or when the first read fails: core's documented default zone. A
+  // failed read on a refresh keeps the zone already read (nextKnownOrgZone,
+  // the Receive POs rule), and another workspace's zone is never used.
+  const [knownZone, setKnownZone] = React.useState<KnownOrgZone | null>(null);
+  const timeZone = knownZoneFor(knownZone, orgId);
   const [refreshing, setRefreshing] = React.useState(false);
   // Only the newest read may land (a refresh, or a workspace switch).
   const seqRef = React.useRef(0);
@@ -109,17 +120,25 @@ export default function MovementsScreen() {
     const seq = ++seqRef.current;
     let rows: MovementRow[] | null = null;
     try {
-      const { data, error } = await supabase
-        .from('stock_movements')
-        .select(
-          `id, movement_type, quantity_change, previous_quantity, new_quantity,
-           reason, created_at, item_id, user_id, deleted_users,
-           item:inventory_items!item_id (name, sku),
-           actor:user_profiles!user_id (full_name, email)`,
-        )
-        .eq('organization_id', orgId)
-        .order('created_at', { ascending: false })
-        .limit(100);
+      // The organization's zone is read with the movements (the read never
+      // throws; unset or refused, it is null).
+      const [{ data, error }, zone] = await Promise.all([
+        supabase
+          .from('stock_movements')
+          .select(
+            `id, movement_type, quantity_change, previous_quantity, new_quantity,
+             reason, created_at, item_id, user_id, deleted_users,
+             item:inventory_items!item_id (name, sku),
+             actor:user_profiles!user_id (full_name, email)`,
+          )
+          .eq('organization_id', orgId)
+          .order('created_at', { ascending: false })
+          .limit(100),
+        readOrgTimeZone(supabase, orgId),
+      ]);
+      if (seq !== seqRef.current) return;
+      // A failed read on a refresh keeps the zone already read (nextKnownOrgZone).
+      setKnownZone((prev) => nextKnownOrgZone(prev, orgId, zone));
       // Only the message travels on (and into the warning below): never the
       // whole PostgREST error object.
       if (error) throw new Error(error.message);
@@ -188,6 +207,7 @@ export default function MovementsScreen() {
   }, [orgId]);
 
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await (the zone and the rows, each after the newest-read check); the effect synchronizes with the server
     void load();
   }, [load]);
 
@@ -244,6 +264,7 @@ export default function MovementsScreen() {
           m={m}
           first={i === 0}
           last={i === rows.length - 1}
+          timeZone={timeZone}
           onPress={() => router.push({ pathname: '/item/[id]', params: { id: m.item_id } })}
         />
       )}
@@ -267,11 +288,14 @@ function LedgerRow({
   m,
   first,
   last,
+  timeZone,
   onPress,
 }: {
   m: MovementRow;
   first: boolean;
   last: boolean;
+  /** The organization's zone (L7); null prints core's documented default. */
+  timeZone: string | null;
   onPress: () => void;
 }) {
   const { c } = useTheme();
@@ -347,10 +371,9 @@ function LedgerRow({
           {m.quantity_change}
         </Mono>
         <Mono size={11} color={c.ink3} tracking={0.04} style={{ marginTop: 2 }}>
-          {new Date(m.created_at).toLocaleDateString(undefined, {
-            month: 'short',
-            day: 'numeric',
-          })}
+          {/* The day in the ORGANIZATION's zone (L7), the shape the device's
+              text had ("Oct 4"); nothing for a value that is not a date. */}
+          {formatMovementDay(m.created_at, timeZone)}
         </Mono>
       </View>
     </Pressable>

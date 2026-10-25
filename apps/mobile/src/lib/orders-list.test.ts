@@ -8,6 +8,7 @@ import {
   ORDERS_LIST_LOAD_FAILED_TITLE_COPY,
   ORDERS_LIST_RELOAD_FAILED_COPY,
   ORDER_STATUS_KEYS,
+  resolveOrderStatusConfig,
   type Permission,
 } from '@stockpilot/core';
 
@@ -90,5 +91,73 @@ describe('the Orders list says what is true for who is reading it (PO-4 review)'
     expect(ordersListReloadNote(true, 3)).toBe(ORDERS_LIST_RELOAD_FAILED_COPY);
     expect(ordersListReloadNote(true, 0)).toBeNull();
     expect(ordersListReloadNote(false, 3)).toBeNull();
+  });
+});
+
+// L83b: the phone ignored the organization's own status words and colours
+// (Settings > Order statuses), so the same order read differently on the web.
+// The pill, the order screen header and the placed screen now take core's
+// resolved config. The one live organization with a config today (63c13e64)
+// changes seven COLOURS and no words; RENAMED is the words case.
+describe("the organization's status names and colours (L83b)", () => {
+  const RENAMED = resolveOrderStatusConfig({
+    pending_approval: { label: 'Waiting for sign-off' },
+    picking_in_progress: { label: 'Being picked', color: 'warning' },
+  });
+  const COLOURS_ONLY = resolveOrderStatusConfig({
+    cancelled: { color: 'destructive' },
+    in_transit: { color: 'warning' },
+    packing_slip_generated: { color: 'warning' },
+    picking_complete: { color: 'success' },
+    picking_in_progress: { color: 'warning' },
+    staged_for_delivery: { color: 'success' },
+    staged_for_pickup: { color: 'success' },
+  });
+
+  it("the list pill shows the organization's words and colour", () => {
+    expect(orderStatusPill('picking_in_progress', null, RENAMED)).toEqual({ label: 'BEING PICKED', status: 'warn' });
+    expect(orderStatusPill('pending_approval', null, RENAMED)).toEqual({ label: 'WAITING FOR SIGN-OFF', status: 'warn' });
+    // A status the organization did not touch keeps core's words and colour.
+    expect(orderStatusPill('approved', null, RENAMED)).toEqual(orderStatusPill('approved'));
+  });
+
+  it("a colours-only config changes the pill's colour and keeps core's words", () => {
+    expect(orderStatusPill('cancelled', null, COLOURS_ONLY)).toEqual({ label: 'CANCELLED', status: 'crit' });
+    expect(orderStatusPill('staged_for_pickup', null, COLOURS_ONLY)).toEqual({ label: 'STAGED (PICKUP)', status: 'ok' });
+    expect(orderStatusPill('picking_in_progress', null, COLOURS_ONLY)).toEqual({ label: 'PICKING', status: 'warn' });
+    expect(orderStatusPill('in_transit', null, COLOURS_ONLY)).toEqual({ label: 'IN TRANSIT', status: 'warn' });
+  });
+
+  it('the order screen header uses the same words as the pill', () => {
+    expect(orderHeaderEyebrow(49, 'picking_in_progress', null, RENAMED)).toBe('ORDER SO-000049 · BEING PICKED');
+    expect(orderHeaderEyebrow(null, 'pending_approval', null, RENAMED)).toBe('ORDER · WAITING FOR SIGN-OFF');
+    for (const key of ORDER_STATUS_KEYS) {
+      expect(orderHeaderEyebrow(7, key, null, RENAMED)).toBe(`ORDER SO-000007 · ${orderStatusPill(key, null, RENAMED).label}`);
+    }
+  });
+
+  it("no config (none set, or not read yet) is core's words, as before", () => {
+    const none = resolveOrderStatusConfig(null);
+    for (const key of ORDER_STATUS_KEYS) {
+      expect(orderStatusPill(key, null, none)).toEqual(orderStatusPill(key));
+    }
+  });
+
+  // With returns RX-3's fulfilment rule (polish (c)): a completed pickup reads
+  // HANDED OVER while the status keeps core's word, in the organization's
+  // colour; an organization that renamed "Delivered" keeps its own word for a
+  // pickup too, as the web badge does (core orderStatusLabelForFulfillment).
+  it("a completed pickup reads HANDED OVER in the organization's colour, and its own word when it renamed the status", () => {
+    const RECOLOURED = resolveOrderStatusConfig({ completed: { color: 'warning' } });
+    expect(orderStatusPill('completed', 'pickup', RECOLOURED)).toEqual({ label: 'HANDED OVER', status: 'warn' });
+    expect(orderStatusPill('completed', 'delivery', RECOLOURED)).toEqual({ label: 'DELIVERED', status: 'warn' });
+    const COLLECTED = resolveOrderStatusConfig({ completed: { label: 'Collected or shipped' } });
+    expect(orderStatusPill('completed', 'pickup', COLLECTED)).toEqual({ label: 'COLLECTED OR SHIPPED', status: 'ok' });
+    expect(orderHeaderEyebrow(27, 'completed', 'pickup', RECOLOURED)).toBe('ORDER SO-000027 · HANDED OVER');
+    expect(orderHeaderEyebrow(27, 'completed', 'pickup', COLLECTED)).toBe('ORDER SO-000027 · COLLECTED OR SHIPPED');
+  });
+
+  it('a status core does not know keeps its own words whatever the config says', () => {
+    expect(orderStatusPill('something_new', null, RENAMED)).toEqual({ label: 'SOMETHING NEW', status: 'default' });
   });
 });

@@ -4,7 +4,11 @@ import * as React from 'react';
 
 import { StatePanel } from '@/components/patterns/state-panel';
 import { Pagination } from '@/components/ui/pagination';
-import type { MovementsFilterQuery } from '@/lib/movements-filters';
+import {
+  parseFromDateParam,
+  parseToDateParam,
+  type MovementsFilterQuery,
+} from '@/lib/movements-filters';
 
 import {
   MovementsExportButton,
@@ -38,10 +42,18 @@ const EMPTY_FILTERS: MovementsFilterQuery = { q: '', type: '', from: '', to: '' 
 export function MovementsInstantTable({
   rows,
   canEditNotes = false,
+  timeZone,
 }: {
   rows: MovementDisplayRow[];
   /** Managers+/granted users get the add/edit-note affordance on each row. */
   canEditNotes?: boolean;
+  /**
+   * The ORGANIZATION's time zone (already resolved by the page), which the
+   * From and To filter cuts days in: the zone each row's time prints in (L7;
+   * slice 3 review F4). Required, so the table cannot fall back to UTC
+   * midnight bounds beside org-zone labels.
+   */
+  timeZone: string;
 }) {
   const shared = useInstantMovementsFilters();
   const [ownFilters, setOwnFilters] = React.useState<MovementsFilterQuery>(EMPTY_FILTERS);
@@ -52,12 +64,15 @@ export function MovementsInstantTable({
   const filtered = React.useMemo(() => {
     const needle = filters.q.trim().toLowerCase();
     const type = filters.type || null;
-    // Same inclusive-of-whole-day semantics as the server path
-    // (lib/movements-filters parseFromDateParam/parseToDateParam).
-    const sinceMs = filters.from ? Date.parse(`${filters.from}T00:00:00.000Z`) : null;
-    const untilMs = filters.to
-      ? Date.parse(`${filters.to}T00:00:00.000Z`) + 24 * 60 * 60 * 1000
-      : null;
+    // THE SAME BOUNDS AS THE SERVER PATH AND THE EXPORT, from the same
+    // parsers (lib/movements-filters), in the organization's zone: From is
+    // that day's midnight, To the next day's (exclusive), so the whole To day
+    // is in. It used to repeat UTC arithmetic inline (recurring pattern #26),
+    // which cut days at UTC midnight beside org-zone times (F4).
+    const since = parseFromDateParam(filters.from, timeZone);
+    const until = parseToDateParam(filters.to, timeZone);
+    const sinceMs = since ? Date.parse(since) : null;
+    const untilMs = until ? Date.parse(until) : null;
     return rows.filter((m) => {
       if (
         needle &&
@@ -74,7 +89,7 @@ export function MovementsInstantTable({
       }
       return true;
     });
-  }, [filters, rows]);
+  }, [filters, rows, timeZone]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);

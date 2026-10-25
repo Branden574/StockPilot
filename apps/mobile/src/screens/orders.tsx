@@ -26,6 +26,7 @@ import { orderStatusPill, ordersListEmpty, ordersListReloadNote, showPlaceOrder 
 import { orderExchangeChip } from '@/lib/returns-view';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
+import { useOrderStatusMeta } from '@/lib/use-workspace';
 import { useRole } from '@/lib/use-role';
 import { profileFromEmbed, resolveRequesterLabel } from '@/lib/requester-label';
 import { supabase } from '@/lib/supabase';
@@ -287,7 +288,10 @@ export default function OrdersScreen() {
 function OrderCard({ order }: { order: OrderRow }) {
   const { c } = useTheme();
   const router = useRouter();
-  const meta = orderStatusPill(order.status, order.fulfillment_type);
+  // The organization's status words and colours (L83b), from the workspace
+  // store: each card follows a config that loads after the rows.
+  const statusMeta = useOrderStatusMeta();
+  const meta = orderStatusPill(order.status, order.fulfillment_type, statusMeta);
   const requester = order.requester;
   const when = new Date(order.created_at);
   // Returns RX-2 simulator finding SIM-4: at the AX text sizes the status pill

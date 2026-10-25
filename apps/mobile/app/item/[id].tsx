@@ -42,6 +42,7 @@ import {
   countStartAllowed,
   DISPLAY_GROUP_FALLBACK_NAME,
   formatCycleCountNumber,
+  formatMovementCardWhen,
   isCountableItem,
   itemPhotoPath,
   formatOrderNumber,
@@ -159,6 +160,9 @@ import {
 } from '@/lib/serials';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { actorText, isRowPersonDeleted } from '@/lib/deleted-user-labels';
+import { knownZoneFor, nextKnownOrgZone, type KnownOrgZone } from '@/lib/known-org-zone';
+import { createNewestRead } from '@/lib/newest-read';
+import { readOrgTimeZone } from '@/lib/order-readiness';
 import { supabase } from '@/lib/supabase';
 import { FONT, SHADOW, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
@@ -1427,9 +1431,42 @@ export default function ItemDetail() {
     if (tab === 'activity') void loadActivity();
   }, [tab, loadMovements, loadActivity]);
 
+  // The ORGANIZATION's time zone, which the MOVEMENTS and ACTIVITY cards print
+  // every date and time in (L7, owner decision Q1; slice 3 review F2), like the
+  // Movements list, counts and orders. It was the device's zone, so with the
+  // zones apart this screen and the Movements list showed two different times
+  // for one movement. Read when a feed tab shows and this organization's zone
+  // is not known yet (Overview never pays for it), which includes after a
+  // failed read, and again on every pull-to-refresh while a feed tab shows:
+  // it was read once per screen, so one failed first read (offline) kept the
+  // default zone for the screen's whole life (slice 3 review, 2026-10-24).
+  // Null until it arrives, when unset, or when the read fails, prints core's
+  // documented default zone, never the device's. Only the newest read's answer
+  // lands (createNewestRead), so a late answer for the previous workspace
+  // never replaces the current one's zone, and each answer is kept per
+  // organization (nextKnownOrgZone, the Receive POs rule): a failed refresh
+  // keeps the zone already read.
+  const [knownZone, setKnownZone] = React.useState<KnownOrgZone | null>(null);
+  const orgTimeZone = knownZoneFor(knownZone, orgId);
+  const [zoneRead] = React.useState(() =>
+    createNewestRead(
+      (forOrg: string) => readOrgTimeZone(supabase, forOrg),
+      (forOrg, zone) => setKnownZone((prev) => nextKnownOrgZone(prev, forOrg, zone)),
+      null,
+    ),
+  );
+  const feedTabShown = tab === 'movements' || tab === 'activity';
+  React.useEffect(() => {
+    if (!feedTabShown || !orgId || orgTimeZone !== null || zoneRead.pendingFor() === orgId) return;
+    void zoneRead.read(orgId);
+  }, [feedTabShown, orgId, orgTimeZone, zoneRead]);
+
   /** Pull-to-refresh: re-runs the item load plus whichever tab is active. */
   async function onRefresh() {
     setRefreshing(true);
+    // A feed tab's zone is read again beside the item and the feed: a failed
+    // first read recovers here, and a failed refresh keeps the zone it had.
+    const zoneRefresh = feedTabShown && orgId ? zoneRead.read(orgId) : null;
     try {
       // Adjustments queued offline for this item: try to send them first, so
       // the read below can include them (a no-op while still offline).
@@ -1442,6 +1479,7 @@ export default function ItemDetail() {
       await load();
       if (tab === 'movements') await loadMovements();
       if (tab === 'activity') await loadActivity();
+      await zoneRefresh;
     } finally {
       setRefreshing(false);
     }
@@ -2322,6 +2360,7 @@ export default function ItemDetail() {
                     movement={m}
                     canEditNotes={canEditNotes}
                     onNoteSaved={handleNoteSaved}
+                    timeZone={orgTimeZone}
                   />
                 ))}
                 <LoadMoreFooter
@@ -2370,9 +2409,10 @@ export default function ItemDetail() {
                       movement={entry.movement}
                       canEditNotes={canEditNotes}
                       onNoteSaved={handleNoteSaved}
+                      timeZone={orgTimeZone}
                     />
                   ) : (
-                    <AuditCard key={entry.id} audit={entry.audit} />
+                    <AuditCard key={entry.id} audit={entry.audit} timeZone={orgTimeZone} />
                   ),
                 )}
                 <LoadMoreFooter
@@ -2628,6 +2668,7 @@ function MovementCard({
   movement,
   canEditNotes = false,
   onNoteSaved,
+  timeZone,
 }: {
   movement: MovementRow;
   /** Cosmetic gate — manager+ or the granted 'movements:edit_notes' perm.
@@ -2635,6 +2676,8 @@ function MovementCard({
   canEditNotes?: boolean;
   /** Optimistic hook: parent updates its movement list(s) with the saved note. */
   onNoteSaved?: (movementId: string, note: string | null) => void;
+  /** The organization's zone (L7); null prints core's documented default. */
+  timeZone: string | null;
 }) {
   const { c } = useTheme();
   const router = useRouter();
@@ -2676,6 +2719,9 @@ function MovementCard({
   // to a name — formatMovementRoute (movement-display.ts) is the single
   // source of truth for this four-case logic, unit-tested there.
   const route = formatMovementRoute(movement.from_location_name, movement.to_location_name);
+  // When it happened, in the ORGANIZATION's zone (L7), the shape the device's
+  // text had ("Oct 4, 10:30 PM"); null (not a date) prints nothing.
+  const when = formatMovementCardWhen(movement.created_at, timeZone);
   return (
     <Card padding={12}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
@@ -2715,13 +2761,8 @@ function MovementCard({
           {/* Who, when and the source, and the route below: information, in
               the muted ink (ink4 held them under AA). */}
           <Mono size={10.5} tracking={0.04} color={c.ink3} style={{ marginTop: 3 }}>
-            {actor} ·{' '}
-            {new Date(movement.created_at).toLocaleString(undefined, {
-              month: 'short',
-              day: 'numeric',
-              hour: 'numeric',
-              minute: '2-digit',
-            })}
+            {actor}
+            {when ? ` · ${when}` : ''}
             {referenceDisplayLabel ? (
               <Text
                 onPress={referenceHref ? () => router.push(referenceHref as Href) : undefined}
@@ -3052,14 +3093,11 @@ function LoadMoreFooter({
  * `AuditCardModel` built by `buildAuditCardModel` (item-activity.ts) — this
  * component only renders it, no metadata parsing here.
  */
-function AuditCard({ audit }: { audit: AuditCardModel }) {
+function AuditCard({ audit, timeZone }: { audit: AuditCardModel; timeZone: string | null }) {
   const { c } = useTheme();
-  const absolute = new Date(audit.createdAt).toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  // In the ORGANIZATION's zone, like the movement cards beside it (L7), so
+  // one list never mixes two zones.
+  const absolute = formatMovementCardWhen(audit.createdAt, timeZone);
   const relative = formatRelativeTime(audit.createdAt);
   return (
     <Card padding={12}>
@@ -3087,7 +3125,8 @@ function AuditCard({ audit }: { audit: AuditCardModel }) {
               1.8-3.7:1). */}
           <Mono size={10.5} tracking={0.04} color={c.ink3} style={{ marginTop: 3 }}>
             {audit.actorName}
-            {relative ? ` · ${relative}` : ''} · {absolute}
+            {relative ? ` · ${relative}` : ''}
+            {absolute ? ` · ${absolute}` : ''}
           </Mono>
           {audit.reason ? (
             <Body

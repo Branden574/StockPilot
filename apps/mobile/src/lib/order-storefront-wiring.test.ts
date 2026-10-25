@@ -153,8 +153,10 @@ describe('the Orders list (D4, D5, D6) and the order screen', () => {
   it('every status’s pill is core’s (mutation: a local table again)', () => {
     // Re-pinned by returns RX-3 PR stage, polish (c) (was: without the
     // fulfilment): a completed pickup's pill says HANDED OVER, so the list
-    // reads fulfillment_type with the row.
-    expect(orders).toContain('const meta = orderStatusPill(order.status, order.fulfillment_type);');
+    // reads fulfillment_type with the row. In the organization's own words
+    // and colours since L83b (the resolved map comes from the workspace
+    // store; orders-screen-wiring.test.ts).
+    expect(orders).toContain('const meta = orderStatusPill(order.status, order.fulfillment_type, statusMeta);');
     expect(orders).toMatch(/approved_at, delivered_at, created_at, replacement_for_return_id, fulfillment_type,/);
     expect(orders).not.toMatch(/STATUS_META/);
   });

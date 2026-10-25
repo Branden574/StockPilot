@@ -205,6 +205,71 @@ function splitDateTimeOptions(
 }
 
 /**
+ * THE DATE AND TIME FORMATTERS, BUILT ONCE PER ZONE AND SHAPE (slice 3
+ * review, 2026-10-24). Building an Intl.DateTimeFormat costs far more than
+ * formatting with one, and formatOrgDateTime built two on every call, so a
+ * list that prints each row's time paid for them per row: the web Movements
+ * page formats every row of its instant ledger on the server, up to 1,000,
+ * which took about 50 to 80 ms per visit (measured on a Mac; the 50 rows the
+ * browser printed before took about 3 ms). A formatter never changes once
+ * built, so one serves every call with the same options.
+ *
+ * Kept for the Intl.DateTimeFormat that built them and dropped whenever it is
+ * another constructor (a test's engine stand-in), as zoned-wall-clock.ts keeps
+ * its own, so a formatter never answers for an engine it was not built by.
+ * Only options whose values are all strings, numbers or booleans are kept (the
+ * key must name the request exactly); a formatter that cannot be built is
+ * never kept, so the next call tries again; and past SPLIT_FORMATTERS_MAX
+ * requests the oldest is let go, so the cache stays bounded.
+ */
+type SplitFormatters = { date: Intl.DateTimeFormat; time: Intl.DateTimeFormat; glue: string };
+const SPLIT_FORMATTERS = new Map<string, SplitFormatters>();
+const SPLIT_FORMATTERS_MAX = 256;
+let splitFormattersFrom: unknown = null;
+
+/** The request as a cache key, the same whatever order its options are
+ *  written in; null when a value is not a string, number or boolean. */
+function optionsKey(options: Intl.DateTimeFormatOptions): string | null {
+  const o = options as OptionsRecord;
+  const entries: Array<[string, string | number | boolean]> = [];
+  for (const k of Object.keys(o).sort()) {
+    const v = o[k];
+    if (v === undefined) continue;
+    if (typeof v !== 'string' && typeof v !== 'number' && typeof v !== 'boolean') return null;
+    entries.push([k, v]);
+  }
+  return JSON.stringify(entries);
+}
+
+/** The date-only and time-only formatters for a request that is one date plus
+ *  one time (splitDateTimeOptions), or null for any other request. Throws when
+ *  this engine cannot build them. */
+function splitFormattersFor(options: Intl.DateTimeFormatOptions): SplitFormatters | null {
+  if (splitFormattersFrom !== Intl.DateTimeFormat) {
+    SPLIT_FORMATTERS.clear();
+    splitFormattersFrom = Intl.DateTimeFormat;
+  }
+  const key = optionsKey(options);
+  const kept = key === null ? undefined : SPLIT_FORMATTERS.get(key);
+  if (kept) return kept;
+  const split = splitDateTimeOptions(options);
+  if (!split) return null;
+  const built: SplitFormatters = {
+    date: new Intl.DateTimeFormat('en-US', split.date),
+    time: new Intl.DateTimeFormat('en-US', split.time),
+    glue: split.glue,
+  };
+  if (key !== null) {
+    if (SPLIT_FORMATTERS.size >= SPLIT_FORMATTERS_MAX) {
+      const oldest = SPLIT_FORMATTERS.keys().next().value;
+      if (oldest !== undefined) SPLIT_FORMATTERS.delete(oldest);
+    }
+    SPLIT_FORMATTERS.set(key, built);
+  }
+  return built;
+}
+
+/**
  * Combined date + time, locale-aware, in the org's zone.
  *
  * ONE SPELLING ON EVERY ENGINE. `toLocaleString` joins a date and a time with
@@ -222,6 +287,10 @@ function splitDateTimeOptions(
  * A request that is not one date plus one time is formatted whole, spaces
  * made plain. A runtime whose Intl cannot format at all gets its own
  * toLocaleString, spaces made plain.
+ *
+ * The two formatters are built once per zone and options and kept
+ * (splitFormattersFor), so a list of a thousand rows builds two, not two
+ * thousand.
  */
 export function formatOrgDateTime(
   input: Date | string | number,
@@ -233,15 +302,15 @@ export function formatOrgDateTime(
   // Resolved, not passed through: an unrecognised stored zone degrades to the
   // default instead of throwing out of a render.
   const options: Intl.DateTimeFormatOptions = { timeZone: resolveOrgTimezone(tz), ...opts };
-  const split = splitDateTimeOptions(options);
-  if (split) {
-    try {
-      const date = new Intl.DateTimeFormat('en-US', split.date).format(d);
-      const time = new Intl.DateTimeFormat('en-US', split.time).format(d);
+  try {
+    const split = splitFormattersFor(options);
+    if (split) {
+      const date = split.date.format(d);
+      const time = split.time.format(d);
       return `${plainSpaces(date).trim()}${split.glue}${plainSpaces(time).trim()}`;
-    } catch {
-      // No usable Intl.DateTimeFormat: the engine's own words, below.
     }
+  } catch {
+    // No usable Intl.DateTimeFormat: the engine's own words, below.
   }
   return plainSpaces(d.toLocaleString('en-US', options));
 }

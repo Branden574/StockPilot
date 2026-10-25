@@ -19,7 +19,8 @@ import { describe, expect, it } from 'vitest';
  *      divergence this whole feature exists to end;
  *   2. every word on a movement comes from @stockpilot/core's
  *      formatHistoryMovement, so the phone and the browser read identically;
- *   3. the timestamp is formatted in the VIEWER's timezone;
+ *   3. the timestamp is formatted in the ORGANIZATION's zone (L7, owner
+ *      decision Q1), which the staging screen reads and hands in;
  *   4. paging is driven by the SERVER's hasMore, never by a client-side guess
  *      at how much data exists — three defects in this codebase have come from
  *      a constant that guessed the server's row cap;
@@ -66,10 +67,12 @@ describe('item history sheet wiring', () => {
     expect(sheetCode).not.toContain("'Customer return");
   });
 
-  it('renders the timestamp in the viewer’s timezone', () => {
-    expect(sheet).toContain('formatHistoryWhen(f.whenIso)');
-    // The formatter deliberately does no date formatting — a hand-rolled
-    // toLocaleString here would drift from web's <LocalDateTime>.
+  it('renders the timestamp in the organization’s zone, handed in by the screen (L7)', () => {
+    expect(sheet).toContain('formatHistoryWhen(f.whenIso, timeZone)');
+    // The zone is a prop: this sheet makes no Supabase read of its own (pinned
+    // above), and a hand-rolled toLocaleString here would print the device's
+    // zone again and drift from the web dialog.
+    expect(sheet).toMatch(/timeZone\?: string \| null/);
     expect(sheetCode).not.toContain('toLocaleString(');
     expect(sheetCode).not.toContain('toLocaleDateString(');
   });
@@ -116,6 +119,9 @@ describe('the staging row opens it', () => {
     expect(screen).toContain('onOpenHistory={() => setViewingHistory(item)}');
     expect(screen).toContain('<ItemHistorySheet');
     expect(screen).toContain('itemId={viewingHistory.itemId}');
+    // L7: the organization's zone, read with the screen's display map.
+    expect(screen).toContain('readOrgTimeZone(supabase, forOrg)');
+    expect(screen).toContain('timeZone={orgTimeZone}');
     // Outside the canPlace/disabledReason branch — a row that cannot be placed
     // is precisely the row whose provenance is being questioned.
     expect(screen).toMatch(/onPress=\{onOpenHistory\}[\s\S]{0,200}History\s*<\/Button>/);
@@ -135,5 +141,50 @@ describe('the staging row opens it', () => {
     // movement rows — that is exactly what the second reverted attempt did.
     expect(screenCode).not.toContain('itemHistoryPath');
     expect(screenCode).not.toContain('formatHistoryMovement');
+  });
+});
+
+/**
+ * Slice 3 review (2026-10-24): Staging read the organization's zone, and the
+ * warehouse names beside it, only when it opened or the workspace changed,
+ * and refresh() read neither. One failed first read (offline) kept the
+ * History sheet in core's default zone, and the rows on truncated warehouse
+ * ids, even after a refresh. Both are now read again on every refresh, through createNewestRead
+ * (tested in newest-read.test.ts), so a late answer for the previous
+ * workspace never replaces the current one's.
+ */
+describe('Staging: the names and the zone are read again on a refresh', () => {
+  function between(src: string, start: string, end: string): string {
+    const at = src.indexOf(start);
+    expect(at, `${start} not found`).toBeGreaterThan(-1);
+    const stop = src.indexOf(end, at + start.length);
+    expect(stop, `${end} not found after ${start}`).toBeGreaterThan(at);
+    return src.slice(at, stop);
+  }
+
+  it('reads them through a newest-read when the screen opens or the workspace changes, and drops what is still out when it leaves', () => {
+    expect(screenCode).toMatch(
+      /const \[displayFacts\] = React\.useState\(\(\) =>\s*createNewestRead<string, StagingDisplayFacts>\(/,
+    );
+    expect(screenCode).toContain("import { createNewestRead } from '@/lib/newest-read';");
+    expect(screenCode).toMatch(
+      /React\.useEffect\(\(\) => \{\s*if \(!orgId\) return;\s*void displayFacts\.read\(orgId\);\s*return \(\) => displayFacts\.cancel\(\);\s*\}, \[orgId, displayFacts\]\);/,
+    );
+  });
+
+  it('every refresh reads them again beside the worklist, and always ends', () => {
+    const refresh = between(screenCode, 'async function refresh() {', '\n  }\n');
+    expect(refresh).toContain('await Promise.all([load(), orgId ? displayFacts.read(orgId) : null]);');
+    expect(refresh).toMatch(/finally \{\s*setRefreshing\(false\);\s*\}/);
+  });
+
+  it('a failed read keeps what is shown: the names already read, and the zone already read for this organization', () => {
+    expect(screenCode).toContain(
+      'names: error || !data ? null : stagingWarehouseNameMap(data as StagingWarehouseOption[]),',
+    );
+    expect(screenCode).toContain('if (facts.names) setWarehouseNames(facts.names);');
+    expect(screenCode).toContain('setKnownZone((prev) => nextKnownOrgZone(prev, forOrg, facts.zone));');
+    // A failed read used to set the names to an empty map.
+    expect(screenCode).not.toContain('(data ?? []) as StagingWarehouseOption[]');
   });
 });

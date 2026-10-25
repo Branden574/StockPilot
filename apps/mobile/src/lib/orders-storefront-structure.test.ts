@@ -229,7 +229,9 @@ describe('Orders list (M-OR-01)', () => {
     );
     expect(cards).toHaveLength(1);
     expect(attrText(cards[0]!.el, 'accessibilityRole', sf)).toBe('button');
-    expect(code).toContain('const meta = orderStatusPill(order.status, order.fulfillment_type);');
+    // In the organization's own words and colours (L83b), from the workspace.
+    expect(code).toContain('const statusMeta = useOrderStatusMeta();');
+    expect(code).toContain('const meta = orderStatusPill(order.status, order.fulfillment_type, statusMeta);');
     expect(code).toMatch(/<Pill status=\{meta\.status\}>\{meta\.label\}<\/Pill>/);
     for (const key of ORDER_STATUS_KEYS) {
       for (const [mode, c] of MODES) {
@@ -452,7 +454,7 @@ describe('checkout and the placed screen (M-OR-05, 06)', () => {
   it("the placed screen's status is its tone's pill, in the same words; its notes in muted ink", () => {
     const code = codeOnly(sourceOf(FILES.placed));
     expect(code).toMatch(
-      /<Pill status=\{orderStatusPill\(order\.status\)\.status\}>\s*\{orderStatusLabel\(order\.status\)\.toUpperCase\(\)\}\s*<\/Pill>/,
+      /<Pill status=\{orderStatusPill\(order\.status, null, statusMeta\)\.status\}>\s*\{orderStatusLabel\(order\.status, statusMeta\)\.toUpperCase\(\)\}\s*<\/Pill>/,
     );
     for (const words of [
       'recipientsHelperText(prepared.draft)',

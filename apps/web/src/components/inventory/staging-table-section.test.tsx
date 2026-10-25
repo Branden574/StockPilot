@@ -21,6 +21,10 @@ const calls = vi.hoisted(() => ({
   rows: [{ itemId: 'x', warehouseId: 'wh-home' }] as unknown[],
   tableProps: null as Record<string, unknown> | null,
   orderFactoryFails: false,
+  locations: [] as Record<string, unknown>[],
+  orgRow: { timezone: 'Asia/Tokyo' } as Record<string, unknown> | null,
+  orgRowFails: false,
+  orgRowReads: [] as string[],
 }));
 
 vi.mock('@/server/services/inventory', () => ({
@@ -34,7 +38,7 @@ vi.mock('@/server/services/inventory', () => ({
   },
 }));
 vi.mock('@/server/services/locations', () => ({
-  LocationsService: { forCurrentUser: async () => ({ list: async () => [] }) },
+  LocationsService: { forCurrentUser: async () => ({ list: async () => calls.locations }) },
 }));
 vi.mock('@/server/services/warehouses', () => ({
   WarehousesService: { forCurrentUser: async () => ({ listNames: async () => [] }) },
@@ -51,6 +55,18 @@ vi.mock('@/server/services/order-requests', () => ({
       };
     },
   },
+}));
+vi.mock('@/lib/dashboard/request-cache', () => ({
+  getOrgRowForRequest: async (organizationId: string) => {
+    calls.orgRowReads.push(organizationId);
+    if (calls.orgRowFails) throw new Error('getOrgRowForRequest: read failed');
+    return calls.orgRow;
+  },
+}));
+const reportError = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/error-reporter', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/error-reporter')>()),
+  reportError: (...args: unknown[]) => reportError(...args),
 }));
 vi.mock('@/lib/warehouse-filter', () => ({
   getActiveWarehouseFilter: async () => {
@@ -96,7 +112,15 @@ const B = '00000000-0000-4000-8000-00000000000b';
 const ORDER = '0f0f0f0f-0000-4000-8000-000000000001';
 
 async function renderSection(filter: StagingFilterParse, itemType?: 'book' | 'non-book') {
-  render(await StagingTableSection({ itemType, filter, canPlace: true, canMintDestination: true }));
+  render(
+    await StagingTableSection({
+      itemType,
+      filter,
+      canPlace: true,
+      canMintDestination: true,
+      organizationId: 'org-1',
+    }),
+  );
 }
 
 beforeEach(() => {
@@ -107,6 +131,11 @@ beforeEach(() => {
   calls.rows = [{ itemId: 'x', warehouseId: 'wh-home' }];
   calls.tableProps = null;
   calls.orderFactoryFails = false;
+  calls.locations = [];
+  calls.orgRow = { timezone: 'Asia/Tokyo' };
+  calls.orgRowFails = false;
+  calls.orgRowReads = [];
+  reportError.mockClear();
 });
 
 describe('Staging page data path: ?item and ?order (F2-3)', () => {
@@ -240,5 +269,72 @@ describe('Staging page data path: ?item and ?order (F2-3)', () => {
     cleanup();
     await renderSection(parseStagingItemFilter({ item: A }));
     expect(calls.tableProps!.rows).toHaveLength(2);
+  });
+});
+
+// L121: a cancelled pick restocks to Staging, and a warehouse whose stock sits
+// on its Site (no racks) could not put it back from any screen. Place now
+// offers the warehouse's Site(s). A Site is kind NULL with a site-ish type (core
+// isSiteLocation); a NULL-kind row typed shelf/bin is a legacy placement and the
+// system buckets are never destinations.
+describe('Staging Place destinations: the warehouse Site (L121)', () => {
+  const loc = (over: Record<string, unknown>) => ({
+    warehouse_id: 'wh-home',
+    rack_number: null,
+    rack_row: null,
+    crate_color: null,
+    crate_number: null,
+    ...over,
+  });
+
+  it("offers the warehouse's racks and crates first, then its Sites; never Staging, Unplaced or a legacy shelf", async () => {
+    // Sites come LAST (slice 3 review, F3): the owner's 2026-09-24 direction is
+    // that stock with no rack lands in Unplaced and L4L's DC4 Site stays a
+    // label, so the Site must not be the first of 87 put-away options.
+    calls.locations = [
+      loc({ id: 'r-1a', name: '1-A', kind: 'rack', type: 'shelf', rack_number: '1', rack_row: 'A' }),
+      loc({ id: 'site-mdc', name: 'Main Distribution Center', kind: null, type: 'warehouse' }),
+      loc({ id: 'c-blue4', name: 'Blue #4', kind: 'crate', type: 'bin', crate_color: 'blue', crate_number: '4' }),
+      loc({ id: 'site-room', name: 'Back Room', kind: null, type: 'room' }),
+      loc({ id: 'stg', name: 'Staging', kind: 'staging', type: 'warehouse' }),
+      loc({ id: 'unp', name: 'Unplaced', kind: 'unplaced', type: 'warehouse' }),
+      loc({ id: 'shelf-old', name: 'Shelf 3', kind: null, type: 'shelf', warehouse_id: null }),
+      loc({ id: 'site-annex', name: 'Annex', kind: null, type: 'warehouse', warehouse_id: 'wh-other' }),
+    ];
+    await renderSection(parseStagingItemFilter({}));
+    const map = calls.tableProps!.destinationsMap as Record<string, Array<Record<string, unknown>>>;
+    expect(map['wh-home']!.map((d) => d.id)).toEqual(['r-1a', 'c-blue4', 'site-mdc', 'site-room']);
+    expect(map['wh-other']!.map((d) => d.id)).toEqual(['site-annex']);
+    // The legacy shelf has no warehouse and is no Site: nothing is offered for it.
+    expect(map['__none__']).toBeUndefined();
+    // The row's own type travels, so the dialogs can say "(site)".
+    expect(map['wh-home']![2]).toMatchObject({ id: 'site-mdc', name: 'Main Distribution Center', kind: '', type: 'warehouse' });
+    expect(map['wh-home']![0]).toMatchObject({ id: 'r-1a', kind: 'rack', type: 'shelf', rackNumber: '1', rackRow: 'A' });
+  });
+});
+
+// L7 (owner decision Q1): the staging row's movement history prints its times
+// in the ORGANIZATION's zone. The section reads the zone beside the worklist
+// and hands it to the table (and so to the history dialog); a failed read
+// never fails the page and uses core's documented default.
+describe('Staging: the organization zone for the movement history (L7)', () => {
+  it("reads the org's zone and hands it to the table", async () => {
+    await renderSection(parseStagingItemFilter({}));
+    expect(calls.orgRowReads).toEqual(['org-1']);
+    expect(calls.tableProps).toMatchObject({ timeZone: 'Asia/Tokyo' });
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it("a failed read still renders, in core's default zone, and is reported", async () => {
+    calls.orgRowFails = true;
+    await renderSection(parseStagingItemFilter({}));
+    expect(screen.getByTestId('staging-table')).toBeInTheDocument();
+    expect(calls.tableProps).toMatchObject({ timeZone: 'America/Los_Angeles' });
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError).toHaveBeenCalledWith(expect.any(Error), {
+      tag: 'staging.history.org_timezone_failed',
+      level: 'warning',
+      organizationId: 'org-1',
+    });
   });
 });

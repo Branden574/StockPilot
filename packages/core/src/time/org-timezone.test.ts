@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { restoreIntl, useHermesLikeIntl } from './__fixtures__/hermes-like-intl';
+import { REAL_DTF, restoreIntl, useHermesLikeIntl } from './__fixtures__/hermes-like-intl';
 import {
   ORG_TIMEZONE_DEFAULT,
   formatOrgDateTime,
@@ -363,5 +363,166 @@ describe('formatOrgDateTime: the same words on the web and the phone', () => {
     expect(
       formatOrgDateTime(AT, { dateStyle: 'medium', timeStyle: 'short' }, 'America/Fresno'),
     ).toBe('Sep 27, 2026, 4:32 PM');
+  });
+});
+
+/**
+ * ONE DATE FORMATTER AND ONE TIME FORMATTER PER ZONE AND SHAPE (slice 3
+ * review, 2026-10-24).
+ *
+ * formatOrgDateTime built both formatters on every call, and building an
+ * Intl.DateTimeFormat costs far more than formatting with one. The web
+ * Movements page formats every row of its instant ledger on the server, up to
+ * 1,000: 2,000 formatters and about 50 to 80 ms per visit, measured on a Mac
+ * (50 rows, the page the browser showed before, took about 3 ms). The
+ * formatters are now kept per zone and options, for the Intl.DateTimeFormat
+ * that built them.
+ */
+describe('formatOrgDateTime: formatters built once per zone and shape', () => {
+  afterEach(() => {
+    restoreIntl();
+  });
+
+  const AT = '2026-09-27T23:32:05.000Z';
+  const PT = 'America/Los_Angeles';
+  const MOVEMENT = {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  } as const;
+  const plain = (s: string) => s.replace(/[  ]/g, ' ');
+
+  /**
+   * Swaps in this runtime's own formatter, counting every one built. Zones are
+   * checked by resolveOrgTimezone with a formatter of their own (kept per
+   * zone), so a test resolves its zones before counting.
+   */
+  function countBuilds(): () => number {
+    let built = 0;
+    class CountingDateTimeFormat {
+      private readonly real: Intl.DateTimeFormat;
+      constructor(locales?: string | string[], options?: Intl.DateTimeFormatOptions) {
+        built += 1;
+        this.real = new REAL_DTF(locales, options);
+      }
+      format(date?: Date | number): string {
+        return this.real.format(date);
+      }
+      formatToParts(date?: Date | number): Intl.DateTimeFormatPart[] {
+        return this.real.formatToParts(date);
+      }
+      resolvedOptions(): Intl.ResolvedDateTimeFormatOptions {
+        return this.real.resolvedOptions();
+      }
+    }
+    Object.defineProperty(Intl, 'DateTimeFormat', {
+      value: CountingDateTimeFormat,
+      configurable: true,
+      writable: true,
+    });
+    return () => built;
+  }
+
+  it('1,000 rows in one zone build two formatters, not two per row, and read as before', () => {
+    const zone = 'Asia/Tokyo';
+    resolveOrgTimezone(zone);
+    const start = Date.parse('2026-10-01T00:00:00.000Z');
+    const instants = Array.from(
+      { length: 1000 },
+      (_, i) => new Date(start + i * 7 * 3_600_000 + i * 60_000),
+    );
+    const want = instants.map((d) => plain(d.toLocaleString('en-US', { timeZone: zone, ...MOVEMENT })));
+    const built = countBuilds();
+    const got = instants.map((d) => formatOrgDateTime(d, MOVEMENT, zone));
+    expect(built()).toBe(2);
+    expect(got).toEqual(want);
+  });
+
+  it('a formatter is used again only for the same zone and the same options', () => {
+    const zones = [PT, 'Asia/Tokyo'];
+    const shapes: Intl.DateTimeFormatOptions[] = [
+      MOVEMENT,
+      { ...MOVEMENT, hour12: false },
+      { dateStyle: 'medium', timeStyle: 'short' },
+    ];
+    for (const zone of zones) resolveOrgTimezone(zone);
+    const want = (zone: string, shape: Intl.DateTimeFormatOptions) =>
+      plain(new Date(AT).toLocaleString('en-US', { timeZone: zone, ...shape }));
+    const built = countBuilds();
+    for (let round = 0; round < 5; round += 1) {
+      for (const zone of zones) {
+        for (const shape of shapes) {
+          expect(formatOrgDateTime(AT, shape, zone), `${zone} ${JSON.stringify(shape)}`).toBe(
+            want(zone, shape),
+          );
+        }
+      }
+    }
+    // Two zones times three shapes, two formatters each, built in the first
+    // round only.
+    expect(built()).toBe(12);
+  });
+
+  it('options written in another order are the same request', () => {
+    resolveOrgTimezone(PT);
+    const built = countBuilds();
+    formatOrgDateTime(AT, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }, PT);
+    formatOrgDateTime(AT, { minute: '2-digit', hour: 'numeric', day: 'numeric', month: 'short' }, PT);
+    expect(built()).toBe(2);
+  });
+
+  it('never answers for an engine its formatters were not built by', () => {
+    const opts = { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' } as const;
+    // Built by this runtime's engine and kept.
+    expect(formatOrgDateTime(AT, opts, PT)).toBe('Sep 27, 4:32 PM');
+    // An engine with no usable formatter: its own words, not the kept ones.
+    useHermesLikeIntl(
+      class {
+        constructor() {
+          throw new RangeError('Intl.DateTimeFormat is not supported');
+        }
+      },
+    );
+    expect(formatOrgDateTime(AT, opts, PT)).toBe('Sep 27 at 4:32 PM');
+  });
+
+  it('a formatter that could not be built is not remembered: the next call builds it', () => {
+    resolveOrgTimezone(PT);
+    let attempts = 0;
+    class FailsOnce {
+      private readonly real: Intl.DateTimeFormat;
+      constructor(locales?: string | string[], options?: Intl.DateTimeFormatOptions) {
+        attempts += 1;
+        if (attempts === 1) throw new RangeError('not yet');
+        this.real = new REAL_DTF(locales, options);
+      }
+      format(date?: Date | number): string {
+        return this.real.format(date);
+      }
+    }
+    Object.defineProperty(Intl, 'DateTimeFormat', { value: FailsOnce, configurable: true, writable: true });
+    const words = 'Sep 27, 2026, 4:32 PM';
+    // The failed build falls back to the engine's own words.
+    expect(formatOrgDateTime(AT, MOVEMENT, PT)).toBe(words);
+    expect(attempts).toBe(1);
+    expect(formatOrgDateTime(AT, MOVEMENT, PT)).toBe(words);
+    expect(attempts).toBe(3);
+    expect(formatOrgDateTime(AT, MOVEMENT, PT)).toBe(words);
+    expect(attempts).toBe(3);
+  });
+
+  it('stays bounded: past its limit the oldest formatters are let go, the newest kept', () => {
+    const zones = Intl.supportedValuesOf('timeZone').slice(0, 300);
+    expect(zones).toHaveLength(300);
+    for (const zone of zones) expect(resolveOrgTimezone(zone)).toBe(zone);
+    const built = countBuilds();
+    for (const zone of zones) formatOrgDateTime(AT, MOVEMENT, zone);
+    expect(built()).toBe(600);
+    formatOrgDateTime(AT, MOVEMENT, zones[299]!);
+    expect(built()).toBe(600);
+    formatOrgDateTime(AT, MOVEMENT, zones[0]!);
+    expect(built()).toBe(602);
   });
 });

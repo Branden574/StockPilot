@@ -13,7 +13,7 @@
  * phone and the browser describe the same movement identically. This module
  * only does the things a client has to do for itself: build the request path,
  * parse the wire payload, page through it, and render the timestamp in the
- * VIEWER's timezone. No React, no Supabase, no expo modules, because
+ * ORGANIZATION's zone (L7). No React, no Supabase, no expo modules, because
  * apps/mobile has no component-test harness and this is where coverage can
  * actually live (same split as staging-worklist.ts / movement-display.ts).
  *
@@ -24,7 +24,7 @@
  * feature exists to end.
  */
 
-import type { ItemHistoryMovement, ItemHistoryPage } from '@stockpilot/core';
+import { formatMovementWhen, type ItemHistoryMovement, type ItemHistoryPage } from '@stockpilot/core';
 
 // ── Request ────────────────────────────────────────────────────────────────
 
@@ -260,30 +260,18 @@ export function historyAmountLines(f: {
 // ── Timestamps ─────────────────────────────────────────────────────────────
 
 /**
- * The date/time option bag, kept byte-identical to the web
- * <LocalDateTime> component (apps/web/src/components/ui/local-datetime.tsx) so
- * the two surfaces print the same instant the same way — "Jul 22, 2026,
- * 2:42 PM". Web needs a component for it because a server-rendered
- * toLocaleString() would use the deployment's timezone (UTC on Vercel); the
- * phone has no such problem and formats inline. What both share is the rule:
- * the timestamp is rendered in the VIEWER's timezone, never the server's.
+ * Absolute date+time for a raw ISO timestamp — "Jul 22, 2026, 2:42 PM" — in
+ * the ORGANIZATION's time zone (owner decision Q1, 2026-10-05; L7), like
+ * counts, exceptions and orders. It used to be the device's zone. Core's
+ * formatMovementWhen is the one formatter, so the web's item history dialog
+ * prints the same words for the same instant. `timeZone` is the org's
+ * `organizations.timezone`, read by the screen; null (not arrived, or a failed
+ * read) prints core's documented default zone, never the device's.
+ *
+ * Null when the value is not a date at all. Null means the caller renders
+ * NOTHING — "Invalid Date" on a screen whose entire purpose is answering "on
+ * what date and time" would be worse than the em dash that started this.
  */
-const HISTORY_DATETIME_OPTIONS: Intl.DateTimeFormatOptions = {
-  month: 'short',
-  day: 'numeric',
-  year: 'numeric',
-  hour: 'numeric',
-  minute: '2-digit',
-};
-
-/**
- * Absolute local date+time for a raw ISO timestamp, or null when the value is
- * not a date at all. Null means the caller renders NOTHING — "Invalid Date" on
- * a screen whose entire purpose is answering "on what date and time" would be
- * worse than the em dash that started this.
- */
-export function formatHistoryWhen(iso: string): string | null {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toLocaleString(undefined, HISTORY_DATETIME_OPTIONS);
+export function formatHistoryWhen(iso: string, timeZone: string | null | undefined): string | null {
+  return formatMovementWhen(iso, timeZone);
 }

@@ -806,3 +806,150 @@ describe('BulkPlaceDialog — book crates', () => {
     );
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// L121 — "Place selected" back onto the warehouse SITE. The Staging page hands
+// the Site in with the racks and crates; it reads as a Site and is sent by id.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('BulkPlaceDialog — the warehouse Site (L121)', () => {
+  const WITH_SITE = {
+    'wh-1': [
+      {
+        id: 'site-mdc',
+        name: 'Main Distribution Center',
+        kind: '',
+        type: 'warehouse',
+        rackNumber: null,
+        rackRow: null,
+        crateColor: null,
+        crateNumber: null,
+      },
+      ...DESTINATIONS_MAP['wh-1'],
+    ],
+  };
+
+  function renderWithSite(rows: BulkPlaceRow[]) {
+    return render(
+      <BulkPlaceDialog
+        rows={rows}
+        destinationsMap={WITH_SITE}
+        warehouseNames={{ 'wh-1': 'Main Warehouse' }}
+        onPlaced={() => {}}
+        trigger={<button>Place selected</button>}
+      />,
+    );
+  }
+
+  it('a MIXED selection lists the Site as one, says so, and places there by id', async () => {
+    const user = userEvent.setup();
+    renderWithSite(MIXED);
+    await open(user);
+    expect(screen.getByRole('dialog')).toHaveTextContent(/into one rack or crate, or onto a site\./i);
+    await chooseDestination(user, 'Main Distribution Center (site)');
+    await user.click(screen.getByRole('button', { name: /^place 2$/i }));
+
+    expect(mockBulkPlace.mock.calls[0]![0].destination).toEqual({ existingLocationId: 'site-mdc' });
+    expect(mockToast.success).toHaveBeenCalledWith('Placed 2 items at Main Distribution Center.');
+  });
+
+  it('an ALL-BOOKS selection picks the Site from the shortcut list', async () => {
+    const user = userEvent.setup();
+    renderWithSite(ROWS);
+    await open(user);
+    await user.click(screen.getByRole('combobox', { name: /existing rack, crate or site/i }));
+    await user.click(await screen.findByRole('option', { name: 'Main Distribution Center (site)' }));
+    await user.click(screen.getByRole('button', { name: /^place 2$/i }));
+
+    expect(mockBulkPlace.mock.calls[0]![0].destination).toEqual({ existingLocationId: 'site-mdc' });
+  });
+
+  it('with no Site in the list the description is unchanged', async () => {
+    const user = userEvent.setup();
+    renderDialog(MIXED);
+    await open(user);
+    expect(screen.getByRole('dialog')).toHaveTextContent(/into one rack or crate\./i);
+    expect(screen.getByRole('dialog')).not.toHaveTextContent(/onto a site/i);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// A SITE'S NAME IS NEVER A RACK NAME (slice 3 review, F1). The map now carries
+// the warehouse's Site; a typed rack resolves on the server only among racks
+// and crates, so a Site named "DC4" must not make a typed "DC4" read as an
+// existing rack (the server would mint rack DC4 and move EVERY selected row
+// into it unasked), and must never be suggested as one.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('BulkPlaceDialog — a Site name is never a rack name (F1)', () => {
+  const DC4_SITE = {
+    id: 'site-dc4',
+    name: 'DC4',
+    kind: '',
+    type: 'warehouse',
+    rackNumber: null,
+    rackRow: null,
+    crateColor: null,
+    crateNumber: null,
+  };
+
+  function renderWithDc4(rows: BulkPlaceRow[], opts: { canMintDestination?: boolean } = {}) {
+    return render(
+      <BulkPlaceDialog
+        rows={rows}
+        destinationsMap={{ 'wh-1': [DC4_SITE, ...DESTINATIONS_MAP['wh-1']] }}
+        warehouseNames={{ 'wh-1': 'Main Warehouse' }}
+        onPlaced={() => {}}
+        canMintDestination={opts.canMintDestination ?? true}
+        trigger={<button>Place selected</button>}
+      />,
+    );
+  }
+
+  it('an ALL-BOOKS batch typing rack "DC4" is still asked "Create new rack DC4?"', async () => {
+    const user = userEvent.setup();
+    renderWithDc4(ROWS);
+    await open(user);
+    await user.type(screen.getByLabelText(/rack number/i), 'DC4');
+    await user.click(screen.getByRole('button', { name: /^place 2$/i }));
+
+    expect(mockBulkPlace).not.toHaveBeenCalled();
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('Create new rack DC4?');
+  });
+
+  it('a MIXED batch typing "DC4" behind "+ New rack" is asked too', async () => {
+    const user = userEvent.setup();
+    renderWithDc4(MIXED);
+    await open(user);
+    await chooseDestination(user, '+ New rack');
+    await user.type(screen.getByLabelText(/rack number/i), 'DC4');
+    await user.click(screen.getByRole('button', { name: /^place 2$/i }));
+
+    expect(mockBulkPlace).not.toHaveBeenCalled();
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('Create new rack DC4?');
+  });
+
+  it.each(['C4', '4', 'DC4-A'])('a near-miss "%s" never offers the Site as a rack to use instead', async (typed) => {
+    const user = userEvent.setup();
+    renderWithDc4(ROWS);
+    await open(user);
+    await user.type(screen.getByLabelText(/rack number/i), typed);
+    await user.click(screen.getByRole('button', { name: /^place 2$/i }));
+
+    const confirm = screen.getByRole('alertdialog');
+    expect(within(confirm).queryByRole('button', { name: /use DC4 instead/i })).not.toBeInTheDocument();
+    expect(confirm).not.toHaveTextContent(/did you mean/i);
+  });
+
+  it('without the mint grant, a typed "DC4" is said inline as a rack to create, and Place is held', async () => {
+    const user = userEvent.setup();
+    renderWithDc4(ROWS, { canMintDestination: false });
+    await open(user);
+    await user.type(screen.getByLabelText(/rack number/i), 'DC4');
+
+    expect(
+      screen.getByText(/DC4 does not exist yet, and placing into a new rack or crate needs the Transfer stock permission/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^place 2$/i })).toBeDisabled();
+  });
+});

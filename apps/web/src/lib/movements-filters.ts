@@ -15,12 +15,12 @@ import { movementTypeSchema, resolveOrgTimezone, type MovementType } from '@stoc
  * `parseToDateParam` accept the zone the user picked the date IN; omitting it
  * keeps the historical UTC-midnight bounds. Every caller that has an org
  * timezone in hand SHOULD pass it — see the long note on those functions for
- * what the UTC bounds got wrong. Callers still to be threaded through:
- * `(dashboard)/dashboard/movements/page.tsx`,
- * `api/movements/export.csv/route.ts` (both have `ctx.organizationId`, so
- * `getCachedOrgTimezone`), and `components/movements/movements-instant-table
- * .tsx`, which repeats this UTC arithmetic inline instead of calling these
- * helpers at all (recurring pattern #26 — a second copy that will drift).
+ * what the UTC bounds got wrong. All three callers now pass the
+ * ORGANIZATION's zone, the zone the rows' times print in (L7; slice 3 review
+ * F4): `(dashboard)/dashboard/movements/page.tsx` (the request-cached org
+ * row), `api/movements/export.csv/route.ts` (`getCachedOrgTimezone`) and
+ * `components/movements/movements-instant-table.tsx` (handed the page's zone;
+ * it no longer repeats the UTC arithmetic inline).
  */
 
 /** Human labels for the movement_type enum, in the order the Select renders

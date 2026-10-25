@@ -416,8 +416,14 @@ describe('Home: real figures, real sync words, no fake sparklines (D26)', () => 
     expect(code).toMatch(
       /async function onRefresh\(\) \{\s*setNow\(new Date\(\)\);\s*setRefreshing\(true\);\s*try \{\s*if \(activeOrgId\) await Promise\.all\(\[load\(\), refreshUnread\(\)\]\);\s*else await retryWorkspace\(\);\s*\} finally \{\s*setRefreshing\(false\);/,
     );
+    // Re-pinned by small fixes slice 3 (fix/small-fixes-3, 2026-10-24; was:
+    // `} catch { setSummary(null); setRecentFailed(true); } finally {
+    // setLoading(false);`): only the newest load lands now (the slice 3
+    // review's workspace-switch fix), so the catch and the spinner stop answer
+    // for the newest load only. The newest load always reaches its finally, so
+    // the spinner still stops.
     expect(code).toMatch(
-      /\} catch \{\s*setSummary\(null\);\s*setRecentFailed\(true\);\s*\} finally \{\s*setLoading\(false\);/,
+      /\} catch \{\s*if \(seq !== seqRef\.current\) return;\s*setSummary\(null\);\s*setRecentFailed\(true\);\s*\} finally \{\s*if \(seq === seqRef\.current\) setLoading\(false\);/,
     );
   });
 

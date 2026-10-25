@@ -236,13 +236,14 @@ function soleRecord() {
   });
 }
 
-function renderDialog() {
+function renderDialog(opts: { timeZone?: string } = {}) {
   return render(
     <ItemHistoryDialog
       itemId="item-1"
       itemName="Science Dimensions Earth & Space Science"
       itemSku="SP-0WK2L-LY1"
       trigger={<button type="button">History</button>}
+      timeZone={opts.timeZone}
     />,
   );
 }
@@ -283,11 +284,37 @@ describe('ItemHistoryDialog', () => {
       within(row).getByText('Receipt R-20260722-175600-e56648 - PO CVW-002201 (received)'),
     ).toBeInTheDocument();
     // Rule 4: the raw ISO instant is carried on <time>; the visible absolute
-    // date comes from <LocalDateTime>, i.e. the VIEWER's timezone.
+    // date is in the ORGANIZATION's zone (L7, the case below).
     expect(within(row).getByRole('time')).toHaveAttribute(
       'dateTime',
       '2026-07-22T17:56:00.525Z',
     );
+  });
+
+  // L7 (owner decision Q1, 2026-10-05): movement times print in the
+  // organization's zone, as the phone's item history does, like counts and
+  // orders. This dialog used <LocalDateTime>, the viewer's zone. 17:56 UTC on
+  // 22 July is 02:56 on 23 July in Tokyo, a zone no test runner sits in, so a
+  // viewer-zone date beside it would be a second, different day.
+  it('prints each movement’s date and time in the organization’s zone (L7)', async () => {
+    const user = userEvent.setup();
+    okOnce(page([POSTED_RECEIPT]));
+    renderDialog({ timeZone: 'Asia/Tokyo' });
+    await open(user);
+
+    const row = await screen.findByTestId('history-row-mv-posted');
+    expect(within(row).getByText(/Jul 23, 2026, 2:56 AM/)).toBeInTheDocument();
+    expect(within(row).queryAllByText(/Jul 22, 2026/)).toHaveLength(0);
+  });
+
+  it('with no zone handed in, it prints core’s documented default zone, never the viewer’s', async () => {
+    const user = userEvent.setup();
+    okOnce(page([POSTED_RECEIPT]));
+    renderDialog();
+    await open(user);
+
+    const row = await screen.findByTestId('history-row-mv-posted');
+    expect(within(row).getByText(/Jul 22, 2026, 10:56 AM/)).toBeInTheDocument();
   });
 
   it('marks BOTH halves of a received-then-reversed pair and links them', async () => {

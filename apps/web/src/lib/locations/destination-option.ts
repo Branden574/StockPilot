@@ -22,8 +22,15 @@ export interface DestinationOption {
   id: string;
   /** locations.name — "22-B" for a rack, "Blue #42" for a crate. */
   name: string;
-  /** locations.kind — 'rack' | 'crate'. */
+  /** locations.kind — 'rack' | 'crate', or '' for a Site (kind NULL). */
   kind: string;
+  /**
+   * locations.type. It is what tells a SITE (kind NULL with a site-ish type:
+   * warehouse, room, vehicle, job site) from a legacy NULL-kind shelf or bin,
+   * which is a placement (core isSiteLocation; L121). Optional so the dialogs'
+   * hand-built options and fixtures that predate it still type-check.
+   */
+  type?: string | null;
   rackNumber: string | null;
   rackRow: string | null;
   crateColor: string | null;
@@ -36,6 +43,7 @@ export interface DestinationLocationRow {
   id: string;
   name: string;
   kind: string | null;
+  type?: string | null;
   rack_number?: string | null;
   rack_row?: string | null;
   crate_color?: string | null;
@@ -47,6 +55,7 @@ export function toDestinationOption(loc: DestinationLocationRow): DestinationOpt
     id: loc.id,
     name: loc.name,
     kind: loc.kind ?? '',
+    type: loc.type ?? null,
     rackNumber: loc.rack_number ?? null,
     rackRow: loc.rack_row ?? null,
     crateColor: loc.crate_color ?? null,
@@ -85,9 +94,14 @@ export type PlaceDest = {
  * The `locations` columns a placement destination must be read back with. ONE
  * constant, so no write path can forget the crate pair and then "helpfully"
  * reconstruct it by parsing `name` — which is a DEDUPE KEY, not a data source.
+ *
+ * `type` rides along for one decision: whether the destination is a SITE (kind
+ * NULL with a site-ish type) or a placement. A put-away onto a Site keeps the
+ * item's rack label (L121), and a NULL kind alone cannot say it: a legacy
+ * NULL-kind shelf or bin is a placement, told apart only by its type.
  */
 export const PLACE_DEST_COLUMNS =
-  'id, warehouse_id, kind, rack_number, rack_row, crate_color, crate_number, name';
+  'id, warehouse_id, kind, type, rack_number, rack_row, crate_color, crate_number, name';
 
 /**
  * Map a `locations` row — one just re-read from the DB, or the row
