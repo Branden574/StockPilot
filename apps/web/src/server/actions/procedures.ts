@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { ServiceError } from '@/server/services/context';
 import { ProceduresService } from '@/server/services/procedures';
 import { ProcedureCategoriesService } from '@/server/services/procedure-categories';
@@ -42,6 +43,7 @@ import {
 // guard inside the services never actually executes on the client.
 
 function toResult<T>(error: unknown): ActionResult<T> {
+  rethrowControlFlow(error);
   if (error instanceof ServiceError) return err(error.code, error.message);
    
   console.error(error);

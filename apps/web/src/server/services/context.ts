@@ -88,6 +88,19 @@ export interface ServiceContext {
    * fix, a6a5e10b: every warehouse-scoped mobile user read as unassigned).
    */
   cookieClient?: Awaited<ReturnType<typeof createClient>>;
+  /**
+   * True only for the context a scheduled job runs under (the cron
+   * `buildSystemContext` copies and the shared one in lib/system-context.ts).
+   * Such a context BORROWS an owner's or admin's `userId`, because service
+   * code needs a user to attribute writes to; the person did not act.
+   * `audit()` stamps `metadata.is_system` on every row written under it, so
+   * readers (the platform console's Last active, the anomaly monitor) can
+   * tell the job from the person. The request builders never set it.
+   *
+   * DESCRIPTIVE ONLY: it says who acted, never what is allowed. No check may
+   * be granted or skipped on it.
+   */
+  isSystem?: boolean;
 }
 
 /**

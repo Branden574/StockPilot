@@ -328,6 +328,15 @@ describe('duplicated cron helpers must not diverge', () => {
     expect(copiesOf('buildSystemContext').map((c) => c.file)).not.toContain(SHARED_MODULE_LABEL);
   });
 
+  it('every copy says the system is acting (isSystem), so the audit rows it writes are marked', () => {
+    // B9: the user id these contexts carry is BORROWED from an owner or admin.
+    // isSystem is how audit() knows to stamp metadata.is_system on the rows,
+    // so Last active and the anomaly monitor never count a job as that person.
+    const copies = copiesOf('buildSystemContext', { includeShared: true });
+    expect(copies.length).toBeGreaterThan(1);
+    for (const c of copies) expect(c.signature, c.file).toContain(' isSystem: true,');
+  });
+
   it('the shared module brands exactly what the route copies build, and nothing more', () => {
     // Negative pin on the normalisation above: it must erase ONLY the brand.
     // A shared body that also changed the actor predicate (here: dropping the

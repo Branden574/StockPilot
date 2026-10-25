@@ -5,7 +5,8 @@ import { vi } from 'vitest';
 
 /**
  * A REAL server render followed by a REAL hydration, with the clock and the
- * time zone each side would have.
+ * time zone each side would have (and, when asked, each side's default
+ * locale: ClockShift.browserLocale).
  *
  * Production (2026-10-05): React error #418 on /dashboard/movements and
  * /dashboard/returns/[id]. A client component renders on the server first
@@ -24,6 +25,104 @@ export interface ClockShift {
   serverZone?: string;
   /** The browser's zone. Default America/Los_Angeles, where every organization is today. */
   browserZone?: string;
+  /**
+   * The browser's language: the locale a formatter that names none uses while
+   * it hydrates (see setDefaultLocale). Unset, neither side's default locale
+   * is touched.
+   */
+  browserLocale?: string;
+  /** The server's default locale, applied only with `browserLocale`. Default en-US, as on Vercel. */
+  serverLocale?: string;
+}
+
+/**
+ * Makes every number and date formatter that is given no locale use `locale`,
+ * as a browser set to that language does, and returns the undo.
+ *
+ * A bare `n.toLocaleString()` (or `new Intl.NumberFormat()`) formats in the
+ * runtime's default locale: en-US on the server, the viewer's language in
+ * the browser. A client component that formats that way prints "1,234" on
+ * the server and "1.234" while a German browser hydrates it, and React then
+ * discards the server HTML (error #418). Node fixes its default locale when
+ * it starts, so this stands in for the browser: Number and Date toLocale*
+ * and the Intl.NumberFormat and Intl.DateTimeFormat constructors get
+ * `locale` whenever the caller passes no locale (undefined or an empty
+ * list). A call that names its locale is unchanged.
+ */
+export function setDefaultLocale(locale: string): () => void {
+  const pick = (locales: Intl.LocalesArgument): Intl.LocalesArgument =>
+    locales === undefined || (Array.isArray(locales) && locales.length === 0) ? locale : locales;
+  const numberToLocaleString = Number.prototype.toLocaleString;
+  const dateToLocaleString = Date.prototype.toLocaleString;
+  const dateToLocaleDateString = Date.prototype.toLocaleDateString;
+  const dateToLocaleTimeString = Date.prototype.toLocaleTimeString;
+  const intl = Intl as {
+    NumberFormat: typeof Intl.NumberFormat;
+    DateTimeFormat: typeof Intl.DateTimeFormat;
+  };
+  const NumberFormat = intl.NumberFormat;
+  const DateTimeFormat = intl.DateTimeFormat;
+
+  Number.prototype.toLocaleString = function (
+    this: number,
+    locales?: Intl.LocalesArgument,
+    options?: Intl.NumberFormatOptions,
+  ) {
+    return numberToLocaleString.call(this, pick(locales), options);
+  };
+  Date.prototype.toLocaleString = function (
+    this: Date,
+    locales?: Intl.LocalesArgument,
+    options?: Intl.DateTimeFormatOptions,
+  ) {
+    return dateToLocaleString.call(this, pick(locales), options);
+  };
+  Date.prototype.toLocaleDateString = function (
+    this: Date,
+    locales?: Intl.LocalesArgument,
+    options?: Intl.DateTimeFormatOptions,
+  ) {
+    return dateToLocaleDateString.call(this, pick(locales), options);
+  };
+  Date.prototype.toLocaleTimeString = function (
+    this: Date,
+    locales?: Intl.LocalesArgument,
+    options?: Intl.DateTimeFormatOptions,
+  ) {
+    return dateToLocaleTimeString.call(this, pick(locales), options);
+  };
+  // Called with or without `new`, as the built-ins may be.
+  intl.NumberFormat = new Proxy(NumberFormat, {
+    construct: (target, args: [Intl.LocalesArgument?, Intl.NumberFormatOptions?]) =>
+      new target(pick(args[0]), args[1]),
+    apply: (target, _this, args: [Intl.LocalesArgument?, Intl.NumberFormatOptions?]) =>
+      target(pick(args[0]), args[1]),
+  });
+  intl.DateTimeFormat = new Proxy(DateTimeFormat, {
+    construct: (target, args: [Intl.LocalesArgument?, Intl.DateTimeFormatOptions?]) =>
+      new target(pick(args[0]), args[1]),
+    apply: (target, _this, args: [Intl.LocalesArgument?, Intl.DateTimeFormatOptions?]) =>
+      target(pick(args[0]), args[1]),
+  });
+
+  return () => {
+    Number.prototype.toLocaleString = numberToLocaleString;
+    Date.prototype.toLocaleString = dateToLocaleString;
+    Date.prototype.toLocaleDateString = dateToLocaleDateString;
+    Date.prototype.toLocaleTimeString = dateToLocaleTimeString;
+    intl.NumberFormat = NumberFormat;
+    intl.DateTimeFormat = DateTimeFormat;
+  };
+}
+
+/** Runs `fn` with `locale` as the default locale (setDefaultLocale), then restores it. */
+export function inLocale<T>(locale: string, fn: () => T): T {
+  const restore = setDefaultLocale(locale);
+  try {
+    return fn();
+  } finally {
+    restore();
+  }
 }
 
 export interface HydrationRun {
@@ -72,10 +171,19 @@ export async function hydrateAcrossClockShift(
   vi.useFakeTimers({ toFake: ['Date'] });
   const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
   const previousActEnvironment = env.IS_REACT_ACT_ENVIRONMENT;
+  // Each side's default locale, only when the caller names the browser's.
+  const browserLocale = shift.browserLocale;
   try {
     setZone(shift.serverZone ?? 'UTC');
     vi.setSystemTime(shift.serverNow);
-    const html = renderToString(render());
+    const restoreServerLocale =
+      browserLocale === undefined ? null : setDefaultLocale(shift.serverLocale ?? 'en-US');
+    let html: string;
+    try {
+      html = renderToString(render());
+    } finally {
+      restoreServerLocale?.();
+    }
 
     const container = document.createElement('div');
     container.innerHTML = html;
@@ -91,6 +199,8 @@ export async function hydrateAcrossClockShift(
     // this is a test so it flushes them without a warning.
     env.IS_REACT_ACT_ENVIRONMENT = true;
     let root: Root | undefined;
+    const restoreBrowserLocale =
+      browserLocale === undefined ? null : setDefaultLocale(browserLocale);
     try {
       await act(async () => {
         root = hydrateRoot(container, render(), {
@@ -98,6 +208,7 @@ export async function hydrateAcrossClockShift(
         });
       });
     } finally {
+      restoreBrowserLocale?.();
       consoleError.mockRestore();
     }
     return {

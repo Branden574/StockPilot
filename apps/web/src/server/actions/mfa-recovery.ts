@@ -5,6 +5,7 @@ import { revalidatePath } from 'next/cache';
 import { requireSession } from '@/lib/auth/session';
 import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
@@ -50,6 +51,7 @@ export async function generateMfaRecoveryCodesAction(): Promise<
     revalidatePath('/dashboard/settings/security');
     return ok({ codes });
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }
@@ -78,7 +80,8 @@ export async function getMfaRecoveryCodeStatus(): Promise<{
         .is('used_at', null),
     ]);
     return { total: allRes.count ?? 0, unused: unusedRes.count ?? 0 };
-  } catch {
+  } catch (e) {
+    rethrowControlFlow(e);
     return { total: 0, unused: 0 };
   }
 }
@@ -177,6 +180,7 @@ export async function consumeMfaRecoveryCodeAction(input: {
     revalidatePath('/dashboard', 'layout');
     return ok({ unenrolled });
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
   }

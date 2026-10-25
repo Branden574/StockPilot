@@ -111,7 +111,15 @@ describe('ProcedureForm — create mode submit flow', () => {
       data: { id: 'p-123' },
     });
 
-    render(<ProcedureForm mode="create" categories={[]} warehouses={[]} organizationId="org-1" />);
+    render(
+      <ProcedureForm
+        mode="create"
+        categories={[]}
+        warehouses={[]}
+        userId="user-1"
+        organizationId="org-1"
+      />,
+    );
 
     const user = userEvent.setup();
     await user.type(screen.getByLabelText(/Title/i), 'My SOP');
@@ -135,7 +143,15 @@ describe('ProcedureForm — create mode submit flow', () => {
       data: { id: 'p-456' },
     });
 
-    render(<ProcedureForm mode="create" categories={[]} warehouses={[]} organizationId="org-1" />);
+    render(
+      <ProcedureForm
+        mode="create"
+        categories={[]}
+        warehouses={[]}
+        userId="user-1"
+        organizationId="org-1"
+      />,
+    );
 
     const user = userEvent.setup();
     await user.type(screen.getByLabelText(/Title/i), 'My SOP');
@@ -209,7 +225,15 @@ describe('ProcedureForm — create mode submit flow', () => {
       .mockResolvedValueOnce({ ok: true, status: 200 })
       .mockResolvedValueOnce({ ok: false, status: 500 });
 
-    render(<ProcedureForm mode="create" categories={[]} warehouses={[]} organizationId="org-1" />);
+    render(
+      <ProcedureForm
+        mode="create"
+        categories={[]}
+        warehouses={[]}
+        userId="user-1"
+        organizationId="org-1"
+      />,
+    );
 
     const user = userEvent.setup();
     await user.type(screen.getByLabelText(/Title/i), 'SOP');
@@ -233,7 +257,15 @@ describe('ProcedureForm — create mode submit flow', () => {
       error: { code: 'validation_error', message: 'nope' },
     });
 
-    render(<ProcedureForm mode="create" categories={[]} warehouses={[]} organizationId="org-1" />);
+    render(
+      <ProcedureForm
+        mode="create"
+        categories={[]}
+        warehouses={[]}
+        userId="user-1"
+        organizationId="org-1"
+      />,
+    );
 
     const user = userEvent.setup();
     await user.type(screen.getByLabelText(/Title/i), 'SOP');

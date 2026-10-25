@@ -64,6 +64,13 @@ export const duplicateItemAsProductSchema = z.object({
   rackNumber: trimmedNonEmpty,
   rackRow: optionalTrimmed,
   quantity: quantitySchema,
+  /**
+   * The person's answer to "Create new rack?" (2026-10-24), as on
+   * createItemSchema: a copy whose stock would land on a rack that does not
+   * exist is refused unless this is true. Products only: a duplicated book is
+   * never placed by the duplicate (it keeps its crate-aware path).
+   */
+  confirmNewRack: z.boolean().optional(),
   ...variantOverrides,
 });
 
