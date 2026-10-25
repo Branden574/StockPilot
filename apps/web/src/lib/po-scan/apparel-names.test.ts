@@ -228,13 +228,13 @@ describe('normalizeApparelLineNames', () => {
         size: 'Small',
       }),
       line({ lineNumber: 2, description: '1 - Setup : Small', quantity: 1, lineType: 'fee' }),
-      line({ lineNumber: 3, description: 'Persepolis', quantity: 10 }),
+      line({ lineNumber: 3, description: 'Harbor Lights Reader', quantity: 10 }),
     ];
     const out = normalizeApparelLineNames(lines, 500);
     expect(out.map((l) => l.description)).toEqual([
       'Carolina Blue - S',
       '1 - Setup : Small',
-      'Persepolis',
+      'Harbor Lights Reader',
     ]);
     // The size field is what the document printed; it is never rewritten.
     expect(out[0]).toEqual({ ...lines[0], description: 'Carolina Blue - S' });
@@ -280,12 +280,12 @@ describe('normalizeApparelLineNames', () => {
   // book's title stays as printed: no count is dropped and no word moves,
   // even when the scan read a size for the line.
   it('keeps the printed title of a line whose vendor number is an ISBN', () => {
-    const isbn13 = '9780000000002';
+    const isbn13 = '9780000000019';
     const isbn10 = '0306406152';
     const lines = [
       line({ description: 'M: Son of the Century', quantity: 2, vendorSku: isbn13 }),
       line({ description: 'M: Son of the Century', quantity: 2, vendorSku: isbn13, size: 'M' }),
-      line({ description: '25 - Persepolis', quantity: 25, vendorSku: isbn10 }),
+      line({ description: '25 - Harbor Lights Reader', quantity: 25, vendorSku: isbn10 }),
       line({
         description: 'Small : Big Book',
         quantity: 3,
@@ -303,7 +303,7 @@ describe('normalizeApparelLineNames', () => {
       line({
         description: '25 - Small : Navy',
         quantity: 25,
-        vendorSku: '9780000000003',
+        vendorSku: '9780000000010',
         size: 'Small',
       }),
       line({

@@ -341,7 +341,7 @@ describe('extractPoFromMedia: apparel names a size run can group', () => {
           lineNumber: 3,
           description: 'M: Son of the Century',
           quantity: 2,
-          vendorSku: '9780000000002',
+          vendorSku: '9780000000019',
           size: 'M',
         }),
       ]),
