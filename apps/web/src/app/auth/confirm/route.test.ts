@@ -306,8 +306,10 @@ describe('/auth/confirm lands where the link type says, not where the link says'
   beforeEach(() => vi.clearAllMocks());
 
   it.each([
-    ['magiclink', '/dashboard/items/new', '/portal'],
-    ['magiclink', '/dashboard/settings/billing', '/portal'],
+    ['magiclink', '/dashboard/items/new', '/dashboard'],
+    ['magiclink', '/dashboard/settings/billing', '/dashboard'],
+    ['magiclink', '/dashboard', '/dashboard'],
+    ['magiclink', '/portal', '/portal'],
     ['invite', '/dashboard', '/reset/complete'],
     ['invite', '/portal', '/portal'],
     ['invite', '/reset/complete', '/reset/complete'],
@@ -329,7 +331,7 @@ describe('/auth/confirm lands where the link type says, not where the link says'
     const html = await (
       await GET(getReq('token_hash=abc123&type=magiclink&next=%2Fdashboard%2Fitems%2Fnew'))
     ).text();
-    expect(html).toContain('<input type="hidden" name="next" value="/portal">');
+    expect(html).toContain('<input type="hidden" name="next" value="/dashboard">');
     expect(html).not.toContain('/dashboard/items/new');
   });
 
@@ -357,7 +359,7 @@ describe('/auth/confirm lands where the link type says, not where the link says'
       "You're signed in as <strong>member@example.com</strong> on this browser.",
     );
     // Its own form posts same-origin, so the press is verified; the browser
-    // lands where a sign-in link always lands, not on the page the link chose.
+    // lands on the account's home, not on the page the link chose.
     verifyOtp.mockResolvedValue({ error: null });
     const res = await POST(
       postReq(
@@ -365,7 +367,7 @@ describe('/auth/confirm lands where the link type says, not where the link says'
         { 'sec-fetch-site': 'same-origin', origin: 'null' },
       ),
     );
-    expect(res.headers.get('location')).toBe(`${BASE}/portal`);
+    expect(res.headers.get('location')).toBe(`${BASE}/dashboard`);
   });
 });
 

@@ -14,33 +14,37 @@ import { CONFIRM_FALLBACK_LANDING, CONFIRM_LANDINGS, confirmLanding } from './co
  * app's own page (the post is same-origin, so Sec-Fetch-Site cannot tell). With
  * `next` free, that page also chose where its account opened: a data-entry
  * page, Billing, an integration to connect. Each type now lands where the app's
- * own emails send it, and the builder sweep below fails when an email starts
- * sending another landing without this list being changed with it.
+ * own emails and its sign-in tools send it, and the sweeps below fail when an
+ * email or a test harness starts sending another landing without this list
+ * being changed with it.
  */
 
 describe('confirmLanding', () => {
-  it("each type keeps the landings the app's own emails use", () => {
+  it("each type keeps the landings the app's own emails and sign-in tools use", () => {
     expect(confirmLanding('recovery', '/reset/complete')).toBe('/reset/complete');
     expect(confirmLanding('invite', '/reset/complete')).toBe('/reset/complete');
     expect(confirmLanding('invite', '/portal')).toBe('/portal');
     expect(confirmLanding('magiclink', '/portal')).toBe('/portal');
+    expect(confirmLanding('magiclink', '/dashboard')).toBe('/dashboard');
   });
 
-  it('any other next lands on the first landing of its type', () => {
+  it('any other next lands on the first landing of its type: never a page inside the account', () => {
     for (const next of [
-      '/dashboard',
       '/dashboard/items/new',
       '/dashboard/settings/billing',
+      '/dashboard/settings/integrations',
       '/portal/x',
       '/',
       '',
     ]) {
       expect(confirmLanding('recovery', next), next).toBe('/reset/complete');
       expect(confirmLanding('invite', next), next).toBe('/reset/complete');
-      expect(confirmLanding('magiclink', next), next).toBe('/portal');
+      expect(confirmLanding('magiclink', next), next).toBe('/dashboard');
     }
+    expect(confirmLanding('recovery', '/dashboard')).toBe('/reset/complete');
+    expect(confirmLanding('invite', '/dashboard')).toBe('/reset/complete');
     expect(confirmLanding('recovery', null)).toBe('/reset/complete');
-    expect(confirmLanding('magiclink', undefined)).toBe('/portal');
+    expect(confirmLanding('magiclink', undefined)).toBe('/dashboard');
   });
 
   it('only an exact landing matches (no prefix, case, whitespace or protocol-relative variant)', () => {
@@ -52,8 +56,11 @@ describe('confirmLanding', () => {
       '//portal',
       '/reset/complete?x=1',
       'https://evil.example/portal',
+      '/dashboard/',
+      '/Dashboard',
+      '/dashboard#x',
     ]) {
-      expect(confirmLanding('magiclink', next), JSON.stringify(next)).toBe('/portal');
+      expect(confirmLanding('magiclink', next), JSON.stringify(next)).toBe('/dashboard');
       expect(confirmLanding('recovery', next), JSON.stringify(next)).toBe('/reset/complete');
     }
   });
@@ -136,5 +143,37 @@ describe("the app's confirmation emails land where the route sends them", () => 
     const src = readFileSync(path.join(WEB_SRC, 'server/services/email-change.ts'), 'utf8');
     expect(src).toMatch(/&type=email_change`/);
     expect(src).not.toMatch(/type=email_change&next=/);
+  });
+});
+
+// The test harnesses sign in the same way, with links they mint through the
+// admin API (never emailed): the perf harness opens a magic link and waits for
+// the dashboard. Their landings must be kept too, or a run stops at sign-in.
+describe("the repository's sign-in harnesses land where they wait", () => {
+  const WEB_TESTS = path.resolve(__dirname, '../../../tests');
+
+  function files(dir: string): string[] {
+    const out: string[] = [];
+    for (const name of readdirSync(dir)) {
+      const full = path.join(dir, name);
+      if (statSync(full).isDirectory()) out.push(...files(full));
+      else if (/\.(ts|tsx|mjs|js)$/.test(name)) out.push(full);
+    }
+    return out;
+  }
+
+  it('each (type, next) a harness opens is a landing the route keeps', () => {
+    const pairs: string[] = [];
+    for (const file of files(WEB_TESTS)) {
+      const src = readFileSync(file, 'utf8');
+      for (const m of src.matchAll(
+        /\/auth\/confirm\?token_hash=[^&\s]+&type=([a-z_]+)&next=([^`'"&\s]+)/g,
+      )) {
+        const next = decodeURIComponent(m[2]!);
+        pairs.push(`${path.relative(WEB_TESTS, file)} ${m[1]} ${next}`);
+        expect([file, confirmLanding(m[1]!, next)]).toEqual([file, next]);
+      }
+    }
+    expect(pairs).toEqual(['perf/auth.setup.ts magiclink /dashboard']);
   });
 });

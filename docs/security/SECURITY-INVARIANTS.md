@@ -1492,7 +1492,8 @@ application structure.
   (login CSRF: a post from another site, the signed-in notice, the fixed
   landing) and
   [`confirm-landing.test.ts`](../../apps/web/src/lib/auth/confirm-landing.test.ts)
-  (each type's landings, and a sweep over the five link builders);
+  (each type's landings, and sweeps over the five link builders and the
+  repository's sign-in harnesses);
   [`auth/session-ended/route.test.ts`](../../apps/web/src/app/auth/session-ended/route.test.ts)
   (another origin's link, image or frame leaves a live session alone and still
   clears a gone one); and

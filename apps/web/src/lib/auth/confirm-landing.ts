@@ -11,23 +11,30 @@
  * also chose where its account opened in the person's browser: a new item, an
  * order, Billing, an integration to connect, anywhere they might type their
  * own data into an account someone else reads. Each type now lands where the
- * app's own emails send it, and any other `next` lands on the type's first
- * entry. (email_change ignores `next` already: its destination is fixed in the
- * route.)
+ * app's own emails and its sign-in tools send it, and any other `next` lands on
+ * the type's first entry: never a page inside the account. (email_change
+ * ignores `next` already: its destination is fixed in the route.)
  *
- * The emails, each held by confirm-landing.test.ts:
+ * The landings, each held by confirm-landing.test.ts:
  *   recovery   /reset/complete  forgot password (lib/auth/password-reset-email.ts)
  *                               and the QA recovery link (api/admin/qa-recovery-link)
  *   invite     /reset/complete  a new organization's owner (server/actions/platform-admin.ts):
  *                               the account has no password yet
  *              /portal          a new portal customer (server/services/customers.ts)
- *   magiclink  /portal          an existing account invited to a portal (customers.ts)
- * A new email that needs another landing adds it here, with its builder.
+ *   magiclink  /dashboard       the sign-in tools: the perf harness
+ *                               (tests/perf/auth.setup.ts) and the QA and lab walks open
+ *                               magic links minted through the admin API, and wait for the
+ *                               dashboard (a walk that asks for a page inside it lands
+ *                               here and goes on from there)
+ *              /portal          an existing account invited to a portal (customers.ts)
+ * The first entry is where any other `next` lands, so it is the type's home,
+ * not a page inside the account. A new email or tool that needs another landing
+ * adds it here, with its builder.
  */
 export const CONFIRM_LANDINGS = {
   recovery: ['/reset/complete'],
   invite: ['/reset/complete', '/portal'],
-  magiclink: ['/portal'],
+  magiclink: ['/dashboard', '/portal'],
 } as const satisfies Record<string, readonly [string, ...string[]]>;
 
 export type ConfirmLandingType = keyof typeof CONFIRM_LANDINGS;
