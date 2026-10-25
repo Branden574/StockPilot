@@ -286,3 +286,32 @@ describe('mappingConfidence is required of the model', () => {
     ).toBe(false);
   });
 });
+
+describe('extractPoFromMedia: apparel names a size run can group', () => {
+  it('drops the leading count and moves the size to the end on inventory lines', async () => {
+    // The invoice shape seen 2026-08-20: "<qty> - <size> : <colour>".
+    respond(
+      po([
+        baseLine({
+          lineNumber: 1,
+          description: '25 - Small : Carolina Blue, Carolina Blue',
+          quantity: 25,
+        }),
+        baseLine({
+          lineNumber: 2,
+          description: '30 - Medium : Carolina Blue, Carolina Blue',
+          quantity: 30,
+        }),
+        baseLine({ lineNumber: 3, description: 'Setup charge', lineType: 'fee', quantity: 1 }),
+      ]),
+    );
+
+    const out = await extractPoFromMedia(MEDIA);
+
+    expect(out.lines.map((l) => l.description)).toEqual([
+      'Carolina Blue, Carolina Blue - S',
+      'Carolina Blue, Carolina Blue - M',
+      'Setup charge',
+    ]);
+  });
+});
