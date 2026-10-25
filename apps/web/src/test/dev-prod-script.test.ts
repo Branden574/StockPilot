@@ -14,14 +14,19 @@ import { afterEach, describe, expect, it } from 'vitest';
  * `cp "$WEB_ENV_PROD" "$WEB_ENV"`, and cp writes THROUGH a symlink, so one
  * run replaced the CANONICAL env file with the older backup and dropped every
  * line the backup lacked. That is the loss SP-030 fixed in dev-local.sh
- * (dev-local-script.test.ts). The restore also had nothing left to undo:
- * dev-local.sh stopped writing .env.local in SP-030. In a checkout whose env
- * files are plain files the copy did the same damage without any link.
+ * (dev-local-script.test.ts). In a checkout whose env files are plain files
+ * the copy did the same damage without any link.
  *
  * WHAT STOPS IT NOW: the script writes no env file in any layout. It says it
  * leaves .env.local alone (and refuses the link by name when it finds one),
  * then only stops the local Supabase stack, which no longer depends on the
  * backup existing.
+ *
+ * WHAT IT MUST NOT CLAIM: which project a plain dev server reaches next. That
+ * is whatever .env.local names, and the script never reads the file. The file
+ * can still name the local stack (dev-local.sh wrote it there before SP-030,
+ * and nothing writes it back), so "hosted dev ready" right after stopping
+ * that stack was false. The 'linked-local-stack' layout is that state.
  *
  * The test runs the REAL script inside a throwaway repo. `supabase` is a stub
  * that records its arguments, and the PATH holds only that stub and the system
@@ -42,6 +47,16 @@ const LIVE_ENV_LOCAL = [
   '',
 ].join('\n');
 
+// The same file after a pre-SP-030 dev-local.sh run: it names the local stack,
+// the one this script stops.
+const LOCAL_STACK_ENV_LOCAL = [
+  'NEXT_PUBLIC_APP_URL=http://localhost:3000',
+  'NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321',
+  'ONLY_IN_LIVE_FILE_A=kept',
+  'ONLY_IN_LIVE_FILE_B=kept-too',
+  '',
+].join('\n');
+
 const OLDER_BACKUP = [
   'NEXT_PUBLIC_APP_URL=https://app.example.test',
   'NEXT_PUBLIC_SUPABASE_URL=https://hosted.example.test',
@@ -54,11 +69,12 @@ const FILE_ONLY_TEXT = ['ONLY_IN_LIVE_FILE_A', 'hosted.example.test', 'kept-too'
 
 /**
  * - linked: the real layout. Both repo paths are links into the env folder.
+ * - linked-local-stack: the same links, but .env.local names the local stack.
  * - plain: a checkout whose env files are ordinary files in apps/web.
  * - linked-no-backup: the links are there, but no backup exists.
  * - dangling: .env.local links to a file that does not exist (yet).
  */
-type Layout = 'linked' | 'plain' | 'linked-no-backup' | 'dangling';
+type Layout = 'linked' | 'linked-local-stack' | 'plain' | 'linked-no-backup' | 'dangling';
 
 type Entry = { kind: 'link'; target: string } | { kind: 'file'; text: string };
 
@@ -92,7 +108,12 @@ function makeHarness(layout: Layout) {
     fs.writeFileSync(envLocal, LIVE_ENV_LOCAL);
     fs.writeFileSync(envProd, OLDER_BACKUP);
   } else {
-    if (layout !== 'dangling') fs.writeFileSync(folderLocal, LIVE_ENV_LOCAL);
+    if (layout !== 'dangling') {
+      fs.writeFileSync(
+        folderLocal,
+        layout === 'linked-local-stack' ? LOCAL_STACK_ENV_LOCAL : LIVE_ENV_LOCAL,
+      );
+    }
     fs.symlinkSync(folderLocal, envLocal);
     if (layout !== 'linked-no-backup') {
       fs.writeFileSync(folderProd, OLDER_BACKUP);
@@ -155,7 +176,7 @@ function snapshot(dirs: string[]): Record<string, Entry> {
 }
 
 describe('scripts/dev-prod.sh', () => {
-  it.each<Layout>(['linked', 'plain', 'linked-no-backup', 'dangling'])(
+  it.each<Layout>(['linked', 'linked-local-stack', 'plain', 'linked-no-backup', 'dangling'])(
     'writes no env file and still stops the local stack (%s layout)',
     (layout) => {
       const h = makeHarness(layout);
@@ -185,6 +206,29 @@ describe('scripts/dev-prod.sh', () => {
     expect(fs.lstatSync(path.join(h.webDir, '.env.local')).isSymbolicLink()).toBe(true);
     // It says why it will not write there, rather than failing in silence.
     expect(res.stdout).toContain('never writes through a link');
+  });
+
+  it('says it stopped the stack, not that the hosted project is ready', () => {
+    // .env.local names the stack this run stops.
+    const h = makeHarness('linked-local-stack');
+
+    const res = h.run();
+
+    expect(res.status).toBe(0);
+    expect(h.supabaseCalls()).toEqual(['stop']);
+    // The script never reads .env.local, so it cannot know which project a
+    // plain dev server reaches next. The old ending said "nothing to restore"
+    // and "Hosted dev ready" here, which sent the developer to a dev server
+    // that could not reach Supabase at all.
+    const said = res.stdout.replace(/\s+/g, ' ');
+    expect(said).not.toMatch(/\bhosted\b[^.]*\bready\b/i);
+    expect(said).not.toMatch(/nothing to restore/i);
+    // What it can say truthfully: what it did, and what picks the project.
+    expect(said).toContain('Local Supabase stack stopped. apps/web/.env.local is unchanged.');
+    expect(said).toContain('The dev server uses whichever Supabase project that file names.');
+    expect(said).toContain(
+      'If it names the local stack (http://127.0.0.1:54321), the dev server cannot reach Supabase',
+    );
   });
 
   it('does not create the env file a dangling link points at', () => {

@@ -37,10 +37,14 @@
 # the canonical file comes out byte-identical. If you ever reintroduce a
 # write here, that test fails.
 #
-# NOTE: scripts/dev-prod.sh is no longer needed to "switch back" — just run
-# the normal dev command. It now only stops the local stack: its old
-# `cp .env.local.prod .env.local` wrote through the symlink the same way and
-# is gone too (B19, guarded by apps/web/src/test/dev-prod-script.test.ts).
+# NOTE: there is nothing to "switch back" after this script: stop the dev
+# server and the override is gone. A plain dev command then uses whichever
+# Supabase project apps/web/.env.local names, and that can still be the
+# local stack: a run of the version before SP-030 rewrote the file to name
+# it, and nothing writes it back. scripts/dev-prod.sh only stops the local
+# stack: its old `cp .env.local.prod .env.local` wrote through the symlink
+# the same way and is gone too (B19, guarded by
+# apps/web/src/test/dev-prod-script.test.ts).
 # ─────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -86,9 +90,10 @@ echo "  Supabase Studio:  http://127.0.0.1:54323"
 echo "  Mail catcher:     http://127.0.0.1:54324  (Supabase Auth emails land here)"
 echo "  Web app:          http://localhost:3000"
 echo ""
-echo "  To go back to hosted Supabase: stop this server and run"
-echo "  'pnpm --filter @stockpilot/web dev' normally. scripts/dev-prod.sh"
-echo "  also stops the local stack; it never writes an env file."
+echo "  When you are done, stop this server; the override ends with it."
+echo "  A plain 'pnpm --filter @stockpilot/web dev' then uses whichever"
+echo "  Supabase project apps/web/.env.local names. scripts/dev-prod.sh"
+echo "  stops the local stack; it never writes an env file."
 echo ""
 echo "→ Starting pnpm --filter @stockpilot/web dev"
 exec pnpm --filter @stockpilot/web dev

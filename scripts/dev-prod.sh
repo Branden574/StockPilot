@@ -3,10 +3,13 @@
 # dev-prod.sh — stop the local Supabase stack after a dev-local.sh session.
 #
 # Stops the local Supabase Docker stack to free its ports (54321-54324).
-# It writes NOTHING to disk: apps/web/.env.local is left exactly as it is.
-# dev-local.sh never changes that file (it overrides Supabase in its own
-# process only, SP-030), so the normal dev command already talks to your
-# hosted project.
+# It writes NOTHING to disk and reads no env file: apps/web/.env.local is
+# left exactly as it is. It does not change which Supabase project the dev
+# server uses; that is whatever apps/web/.env.local names. Since SP-030,
+# dev-local.sh overrides Supabase in its own process only, but a run of the
+# version before SP-030 rewrote that file to name the local stack, and
+# nothing writes it back. So the file can still name the stack this script
+# stops, and the output says only what the script knows.
 #
 # ── WHY THIS SCRIPT NO LONGER COPIES .env.local.prod (B19) ───────────────
 # It used to "restore" the dev env with `cp "$WEB_ENV_PROD" "$WEB_ENV"`.
@@ -15,14 +18,18 @@
 # symlink: one run replaced the CANONICAL env file with the older backup and
 # dropped every key the backup lacked. That is the same loss SP-030 fixed in
 # dev-local.sh. With plain files instead of links the copy did the same
-# damage. And there was nothing left to restore: dev-local.sh stopped
-# writing .env.local in SP-030. So the copy is gone, in every layout, and
-# stopping the stack no longer depends on the backup existing.
+# damage. So the copy is gone, in every layout, and stopping the stack no
+# longer depends on the backup existing. To reach the hosted project while
+# the file names the local stack, export the hosted values in the dev
+# server's own process (the way dev-local.sh exports the local ones) rather
+# than copying over or editing the file.
 #
 # Guarded by apps/web/src/test/dev-prod-script.test.ts, which runs this
 # script in a throwaway repo (env files as links, as plain files, with no
-# backup, and as a dangling link) and asserts every env file and link comes
-# out unchanged. If you ever reintroduce a write here, that test fails.
+# backup, as a dangling link, and with .env.local naming the local stack).
+# It asserts every env file and link comes out unchanged, and that the
+# output claims nothing about which project the dev server reaches. If you
+# ever reintroduce a write here, that test fails.
 # ─────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -36,12 +43,17 @@ if [ -L "$WEB_ENV" ]; then
 else
   echo "→ Leaving apps/web/.env.local alone: this script never writes an env file."
 fi
-echo "  dev-local.sh never changes it, so there is nothing to restore."
 
 echo "→ Stopping local Supabase stack (frees ports 54321-54324)"
 cd "$ROOT"
 supabase stop || echo "  (already stopped)"
 
+# The file is never read here, so the script cannot know which project a
+# dev server reaches next. It says what decides that instead.
 echo ""
-echo "✓ Hosted dev ready."
-echo "  Run 'pnpm --filter @stockpilot/web dev' to start."
+echo "✓ Local Supabase stack stopped. apps/web/.env.local is unchanged."
+echo "  The dev server uses whichever Supabase project that file names."
+echo "  If it names the local stack (http://127.0.0.1:54321), the dev server"
+echo "  cannot reach Supabase while that stack is stopped. To use your hosted"
+echo "  project instead, export its values in the dev server's own process,"
+echo "  as dev-local.sh does for the local stack, rather than editing the file."
