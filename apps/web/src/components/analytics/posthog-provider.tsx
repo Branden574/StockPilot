@@ -4,8 +4,8 @@ import { usePathname } from 'next/navigation';
 import { useEffect } from 'react';
 import type { ReactNode } from 'react';
 
+import { scrubAnalyticsEvent } from '@/lib/analytics-before-send';
 import { env } from '@/lib/env.client';
-import { scrubPerfEvent } from '@/lib/perf/scrub';
 import { isSharePath } from '@/lib/share-paths';
 
 /**
@@ -14,7 +14,9 @@ import { isSharePath } from '@/lib/share-paths';
  * (`/m/`, `/r/`, `/i/`, `/invite/`, `/orders/sign/`, `/returns/request/`; the
  * list lives in lib/share-paths.ts). PostHog's pageview/autocapture ships
  * `window.location.href` verbatim to a third-party vendor, which would hand
- * the token over (GC 27: never log a share token or signed URL).
+ * the token over (GC 27: never log a share token or signed URL). A credential
+ * in another page's URL (a return path to a share page, a session in the
+ * fragment) is taken out of each event by the before_send hook below.
  *
  * THIS IS LIVE: `NEXT_PUBLIC_POSTHOG_KEY` is set for production and preview
  * (verified 2026-09-18), so the guard below is what stands between those
@@ -64,13 +66,19 @@ export function PostHogProvider({ children }: { children: ReactNode }) {
         // signed-in user — anonymous visitors stay anonymous, which keeps the
         // billable person count tied to real users.
         person_profiles: 'identified_only',
-        // Performance events (`perf_*`) carry route TEMPLATES only. The SDK
-        // decorates every event with `$current_url`, `$pathname`, referrers
-        // and titles, which on /dashboard/inventory/<id>?q=<search> name an
-        // item and quote a search term; this hook rewrites or removes them on
-        // `perf_*` events and returns every other event untouched. Pure, tiny,
-        // and imports nothing from posthog-js at runtime — see lib/perf/scrub.ts.
-        before_send: scrubPerfEvent,
+        // Never record a URL fragment ($current_url, the first and the
+        // session-entry URL, clicked hrefs). A link Supabase verified itself
+        // lands on /signin with a live session there, and the SDK keeps
+        // fragments by default when `defaults` is unset, as it is here.
+        disable_capture_url_hashes: true,
+        // Every event, before it leaves the browser: no credential in any URL
+        // it carries (the invite page's Sign in link is
+        // /signin?redirect=/invite/<token>), and `perf_*` events cut down to
+        // route TEMPLATES (on /dashboard/inventory/<id>?q=<search> the SDK's
+        // URLs name an item and quote a search term). Any other event goes out
+        // as the SDK built it. Pure, and imports nothing from posthog-js at
+        // runtime: see lib/analytics-before-send.ts and lib/perf/scrub.ts.
+        before_send: scrubAnalyticsEvent,
       });
     });
     return () => {

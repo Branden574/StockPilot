@@ -17,6 +17,8 @@ import { fragmentWithoutSession } from '@/lib/auth/auth-page-notices';
  * token and refresh token in the address bar and in the history entry, where a
  * synced history or a shared computer would hand them on. This swaps the
  * fragment for one that holds no token and still reads as a failed link.
+ * (Analytics never records a fragment: components/analytics/posthog-provider.tsx
+ * turns that off, and its before_send hook takes tokens out of every URL.)
  *
  * It replaces RecoveryFragmentGuard, which waited for the browser client to
  * adopt a recovery session and forwarded to /reset/complete. Under the PKCE
