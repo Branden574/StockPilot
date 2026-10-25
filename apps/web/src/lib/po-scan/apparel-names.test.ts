@@ -186,17 +186,20 @@ describe('normalizeApparelName: the size', () => {
     // "constructor" and "__proto__" read Object.prototype members (a function,
     // an object), which counted as a size and ended the name in
     // "function Object() { [native code] }" or "[object Object]".
-    for (const word of [
-      'constructor',
-      '__proto__',
-      'toString',
-      'valueOf',
-      'hasOwnProperty',
-      'isPrototypeOf',
-      'Size: constructor',
-    ]) {
-      const printed = `Gildan Tee - ${word} - Navy`;
-      expect(normalizeApparelName(printed, 4, word)).toBe(printed);
+    // The line's printed size is the same word, as the scan would read it, so
+    // each case reaches the lookup of the name's parts: a printed size that is
+    // not a size word returns the name before that lookup runs.
+    for (const [part, printedSize] of [
+      ['constructor', 'constructor'],
+      ['__proto__', '__proto__'],
+      ['toString', 'toString'],
+      ['valueOf', 'valueOf'],
+      ['hasOwnProperty', 'hasOwnProperty'],
+      ['isPrototypeOf', 'isPrototypeOf'],
+      ['Size: constructor', 'constructor'],
+    ] as const) {
+      const printed = `Gildan Tee - ${part} - Navy`;
+      expect(normalizeApparelName(printed, 4, printedSize)).toBe(printed);
     }
     // A real size beside one of them still moves (the inherited name is just
     // a word of the name).
