@@ -1,4 +1,5 @@
 import { act, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -86,8 +87,24 @@ vi.mock('@/components/ui/image-hover-preview', () => ({
 vi.mock('@/lib/cycle-counts/use-count-selection', () => ({
   useCountSelection: (selector: (s: { add: () => void }) => unknown) => selector({ add: vi.fn() }),
 }));
+// A row chip's Add to group opens GroupSelectedDialog from the table itself
+// (not the bulk bar): its props are kept, so a test can answer as the dialog
+// does after a save.
+const { addDialog } = vi.hoisted(() => ({
+  addDialog: {
+    props: null as {
+      itemIds: readonly string[];
+      initialGroupId?: string | null;
+      showGroupHref?: (groupId: string) => string;
+      onDone: (outcome: unknown) => void;
+    } | null,
+  },
+}));
 vi.mock('@/components/inventory/display-group-dialogs', () => ({
-  GroupSelectedDialog: () => null,
+  GroupSelectedDialog: (props: NonNullable<typeof addDialog.props>) => {
+    addDialog.props = props;
+    return null;
+  },
   RemoveFromGroupDialog: () => null,
   RenameGroupDialog: () => null,
 }));
@@ -181,6 +198,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   bar.onGrouped = undefined;
   bar.showGroupHref = undefined;
+  addDialog.props = null;
   scrolled = [];
   pushes = [];
   at('');
@@ -315,6 +333,133 @@ describe('instant mode: after a grouping the list turns to the page that draws t
     expect(screen.getByRole('button', { name: /collapse group pair/i })).toBeInTheDocument();
     expect(groupHeader(container)).not.toBeNull();
     expect(scrolled).toEqual([`display-group:${G}`]);
+  });
+
+  // The server reads a repeated parameter as an array, which is no group; the
+  // list in the browser must agree, or it would turn to the first group's page
+  // without opening it.
+  it('a repeated ?group= keeps the requested page and opens nothing', () => {
+    at(`group=${G}&group=${OTHER}&page=2`);
+    render(instantTable(straddle(true)));
+    expect(pager()).toBe('Page 2 of 4');
+    expect(window.location.search).toBe('?page=2');
+    expect(screen.queryByRole('button', { name: /collapse group pair/i })).toBeNull();
+    expect(scrolled).toEqual([]);
+  });
+});
+
+// Add to group, from a row's "Same SKU as records in <group>" chip: the dialog
+// opens on the record's group, and the person may put it in another group
+// there. The list then shows the group the record joined, as after Group
+// selected: instant mode turns to the page that draws it; a list paged on the
+// server gets the "Show it" link.
+describe('Add to group from a row chip: the list shows the group the record joined', () => {
+  const G2 = '5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a';
+  const inG2 = { display_group_id: G2, display_group_name: 'Pair two', display_group_version: 1 };
+
+  /** "Pair two" high on page 1; "Pair" (g-a, g-b) on page 3 with c, which
+   *  shares g-a's SKU and is in no group, so its chip offers Add to group. */
+  const records = (cInPairTwo: boolean) =>
+    view([
+      rec('h-a', 15, inG2),
+      rec('h-b', 25, inG2),
+      rec('g-a', 705, { ...inG, sku: 'PAD', name: 'Pad a' }),
+      rec('g-b', 715, { ...inG, name: 'Pad b' }),
+      rec('c', 725, { sku: 'PAD', name: 'Pad c', ...(cInPairTwo ? inG2 : {}) }),
+    ]);
+
+  /** The dialog's answer after it saved c into "Pair two". */
+  const joinedPairTwo = {
+    action: 'group',
+    outcome: 'applied',
+    replay: false,
+    created: false,
+    group: { id: G2, name: 'Pair two', version: 2, itemType: 'product', closed: false },
+    changes: [{ itemId: 'c', fromGroupId: null, toGroupId: G2 }],
+  };
+
+  async function openAddToGroup() {
+    await userEvent.click(screen.getByRole('button', { name: 'Add to group Pair: Pad c' }));
+    expect(addDialog.props?.itemIds).toEqual(['c']);
+    expect(addDialog.props?.initialGroupId).toBe(G);
+  }
+
+  it('instant mode: turns to the page that draws the group once the refreshed rows carry it', async () => {
+    at('page=3');
+    const { container, rerender } = render(instantTable(records(false)));
+    expect(pager()).toBe('Page 3 of 4');
+    await openAddToGroup();
+    // It turns to the page itself: no link.
+    expect(addDialog.props?.showGroupHref).toBeUndefined();
+
+    act(() => addDialog.props!.onDone(joinedPairTwo));
+    expect(routerMock.refresh).toHaveBeenCalled();
+    // The refresh has not landed: nothing turns yet.
+    expect(pushes).toEqual([]);
+
+    rerender(instantTable(records(true)));
+    expect(pushes).toEqual(['/dashboard/inventory']);
+    expect(pager()).toBe('Page 1 of 4');
+    expect(screen.getByRole('button', { name: /collapse group pair two/i })).toBeInTheDocument();
+    expect(container.querySelector(`[data-group-key="display-group:${G2}"]`)).not.toBeNull();
+    expect(scrolled).toEqual([`display-group:${G2}`]);
+  });
+
+  /** A server page planned as planLivePage plans it, with its rows. */
+  function serverPage(rows: InstantDatasetItem[], page: number, initialQuery = '') {
+    const plan = planGroupAwarePage(rows, 'updated_desc', page, 30, 'items');
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    return (
+      <InventoryTable
+        items={plan.pageIds.map((id) => byId.get(id)!)}
+        lookups={LOOKUPS}
+        total={rows.length}
+        initialQuery={initialQuery}
+        pageSize={30}
+        canUngroup
+        page={plan.page}
+        plannedPage={plan}
+      />
+    );
+  }
+
+  it('a list paged on the server: the dialog gets the "Show it" address for the group joined', async () => {
+    at('sort=updated_desc&page=3');
+    render(serverPage(records(false), 3));
+    await openAddToGroup();
+    expect(addDialog.props?.showGroupHref).toBeTypeOf('function');
+    expect(addDialog.props!.showGroupHref!(G2)).toBe(
+      `/dashboard/inventory?sort=updated_desc&group=${G2}`,
+    );
+  });
+
+  it('no "Show it" address during a search: the list shows its matches, not pages', async () => {
+    // The server search never answers here: the page's own matches are what
+    // the list shows.
+    vi.spyOn(globalThis, 'fetch').mockImplementation(() => new Promise<Response>(() => {}));
+    at('page=3&q=pad');
+    render(serverPage(records(false), 3, 'pad'));
+    await openAddToGroup();
+    expect(addDialog.props?.showGroupHref).toBeUndefined();
+  });
+
+  it('no "Show it" address without a planned page (fixed slices over the instant-mode cap)', async () => {
+    at('page=3');
+    const plan = planGroupAwarePage(records(false), 'updated_desc', 3, 30, 'items');
+    const byId = new Map(records(false).map((r) => [r.id, r]));
+    render(
+      <InventoryTable
+        items={plan.pageIds.map((id) => byId.get(id)!)}
+        lookups={LOOKUPS}
+        total={95}
+        initialQuery=""
+        pageSize={30}
+        canUngroup
+        page={3}
+      />,
+    );
+    await openAddToGroup();
+    expect(addDialog.props?.showGroupHref).toBeUndefined();
   });
 });
 

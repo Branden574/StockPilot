@@ -165,4 +165,14 @@ describe('the ?group= parameter reaches the state on the server and in the brows
     expect(instantStateFromSearchParams(sp).group).toBe(G);
     expect(instantStateFromSearchParams(new URLSearchParams('page=2')).group).toBeNull();
   });
+
+  it('a repeated parameter is no group in the browser, as its array is on the server', () => {
+    // The server's page params hand a repeated ?group= over as an array.
+    expect(instantStateFromPageParams({ group: [G, OTHER] }).group).toBeNull();
+    for (const search of [`group=${G}&group=${OTHER}`, `group=${G}&group=${G}`]) {
+      const state = instantStateFromSearchParams(new URLSearchParams(`${search}&page=2`));
+      expect(state.group).toBeNull();
+      expect(state.page).toBe(2);
+    }
+  });
 });
